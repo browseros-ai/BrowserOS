@@ -463,8 +463,8 @@ try { await page.click('#go') } catch (error) { return error.message }";
 }
 
 /// The realm builds the agent's code with the `AsyncFunction` constructor, which QuickJS names
-/// `<input>` and reports two lines low; neo-sdk finds the innermost `<input>` frame and
-/// subtracts realm.rs's `AGENT_LINE_OFFSET`. This pins both facts (probe P4): a QuickJS upgrade
+/// `<input>` and reports two lines low; neo-quickjs-injected finds the innermost `<input>` frame
+/// and subtracts realm.rs's `AGENT_LINE_OFFSET`. This pins both facts (probe P4): a QuickJS upgrade
 /// that moves them fails here.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_call_records_the_agents_line_and_column() {

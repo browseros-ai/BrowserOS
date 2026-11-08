@@ -42,7 +42,7 @@ async fn check(hold_right: bool) {
         Fixture {
             pages: vec![(
                 "/drag.html".into(),
-                include_str!("../../neo-sdk/tests/pages/drag.html").into(),
+                include_str!("../../neo-quickjs-injected/tests/pages/drag.html").into(),
             )],
             ..Fixture::default()
         },

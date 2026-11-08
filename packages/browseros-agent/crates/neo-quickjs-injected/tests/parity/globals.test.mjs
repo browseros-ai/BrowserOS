@@ -9,7 +9,7 @@
 // The REAL regression is staynb-1 (REAL_BENCH_TESTING results/staynb-1/feedback.md, item 2):
 // `await page.goto(new URL(href, page.url()).href)` threw `ReferenceError: URL is not defined`.
 //
-// Not served, so not compared: `Intl` and `fetch` (neo-sdk `src/globals.ts` says why).
+// Not served, so not compared: `Intl` and `fetch` (neo-quickjs-injected `src/globals.ts` says why).
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs).
 

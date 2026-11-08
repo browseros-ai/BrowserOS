@@ -1,4 +1,4 @@
-//! The utility world in a frame, where neo-runtime-injected's glue (Playwright's
+//! The utility world in a frame, where neo-playwright-injected's glue (Playwright's
 //! injected script behind Neo's typed table) answers page calls, and the one way Rust calls the
 //! page: [`World::call`], typed by the spec's `InjectedCall`.
 //!
@@ -23,11 +23,11 @@
 //! glue is always called through that object id, never a cached context id, so a call can only
 //! land in the world that returned it.
 //!
-//! A locator has two halves that must agree on names: neo-sdk builds the selector inside the
-//! realm, and the page's injected script matches it. [`TEST_ID_ATTRIBUTE`] is the one name both
-//! halves share.
+//! A locator has two halves that must agree on names: neo-quickjs-injected builds the selector
+//! inside the realm, and the page's injected script matches it. [`TEST_ID_ATTRIBUTE`] is the one
+//! name both halves share.
 //!
-//! Every byte of JavaScript sent here is a built artifact of neo-runtime-injected (`dist/*.js`);
+//! Every byte of JavaScript sent here is a built artifact of neo-playwright-injected (`dist/*.js`);
 //! this file writes none.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,37 +53,37 @@ use crate::click::PageError;
 pub(crate) const WORLD_NAME: &str = "__neo_utility_world__";
 
 /// The attribute `getByTestId` selects by. One constant for both halves: `realm.rs` hands it to
-/// neo-sdk's `createRun`, which sets Playwright's module-level test id attribute, and
+/// neo-quickjs-injected's `createRun`, which sets Playwright's module-level test id attribute, and
 /// [`initializer`] gives it to the page's `InjectedScript`. Two copies could drift into a
 /// `getByTestId` locator that never matches anything.
 pub(crate) const TEST_ID_ATTRIBUTE: &str = "data-testid";
 
 /// `(key) => glue | undefined`, about a kilobyte; it also hides BrowserOS's own page UI from
-/// the world (`neo-runtime-injected/src/browseros-ui.ts`).
+/// the world (`neo-playwright-injected/src/browseros-ui.ts`).
 const ATTACH: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/attach.js"
+    "/../neo-playwright-injected/dist/attach.js"
 ));
 /// `(key, specSha256, initializer) => glue`, the ~320 KB bundle.
 const INSTALL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/install.js"
+    "/../neo-playwright-injected/dist/install.js"
 ));
 /// `function (name, params, ...handles) { return this[name](params, ...handles) }`.
 const CALL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/call.js"
+    "/../neo-playwright-injected/dist/call.js"
 ));
 
-// A spec edit regenerates `neo_runtime_spec::SPEC_SHA256`; until neo-runtime-injected is rebuilt
+// A spec edit regenerates `neo_runtime_spec::SPEC_SHA256`; until neo-playwright-injected is rebuilt
 // and its dist committed, neo-runtime does not compile, so a page bundle built from another spec
 // can never answer this build's decode.
 const _: () = assert!(
     neo_runtime_spec::is_current(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../neo-runtime-injected/dist/spec-sha256"
+        "/../neo-playwright-injected/dist/spec-sha256"
     ))),
-    "neo-runtime-injected/dist was built from another spec: run `bun run build` in crates/neo-runtime-injected",
+    "neo-playwright-injected/dist was built from another spec: run `bun run build` in crates/neo-playwright-injected",
 );
 
 /// The run-long object group the glue handle lives in. Never released by Neo: Chromium frees
@@ -129,8 +129,8 @@ fn glue_key_named(test_id: &str) -> Result<String, PageError> {
 /// The run's test id attribute, [`TEST_ID_ATTRIBUTE`] until the script's
 /// `selectors.setTestIdAttribute` names another. Every world of the run's pages shares it, so a
 /// document the run attaches to from then on gets an injected script that names the attribute
-/// neo-sdk's `getByTestId` selects by (in the locators a strict mode violation suggests), as
-/// Playwright's injected script for a new document does.
+/// neo-quickjs-injected's `getByTestId` selects by (in the locators a strict mode violation
+/// suggests), as Playwright's injected script for a new document does.
 #[derive(Debug)]
 pub(crate) struct TestIdAttribute(RwLock<String>);
 
@@ -784,7 +784,7 @@ mod tests {
             format!(
                 "{SPEC_SHA256}/{{\"frameSeq\":0,\"testIdAttributeName\":\"data-testid\",\"stableRafCount\":1,\"isUtilityWorld\":true}}"
             ),
-            "neo-runtime-injected's load test builds the same key"
+            "neo-playwright-injected's load test builds the same key"
         );
     }
 

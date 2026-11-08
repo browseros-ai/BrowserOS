@@ -42,7 +42,7 @@ function skipSetups(prototype: object): void {
       InjectedScript.prototype as unknown as Record<string, unknown>
     )[setup]
     if (typeof own !== 'function')
-      throw new Error(`neo-runtime-injected: InjectedScript has no ${setup}`)
+      throw new Error(`neo-playwright-injected: InjectedScript has no ${setup}`)
     Object.defineProperty(prototype, setup, { value: () => {} })
   }
 }

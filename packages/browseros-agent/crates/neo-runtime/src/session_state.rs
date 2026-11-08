@@ -13,8 +13,8 @@
 //! ```
 //!
 //! `clearCookies` matches its filter in the SDK, whose `RegExp` is the script's own
-//! (neo-sdk `browser-context.ts`), and expires the matches through `addCookies`, as Playwright's
-//! server does: the user's other cookies are never touched.
+//! (neo-quickjs-injected `browser-context.ts`), and expires the matches through `addCookies`, as
+//! Playwright's server does: the user's other cookies are never touched.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};

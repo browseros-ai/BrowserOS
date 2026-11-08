@@ -33,4 +33,4 @@ bun run test
 
 - For server-specific guidance, see `apps/server/CLAUDE.md`.
 - For extension/app UI specifics, see `apps/app/CLAUDE.md`.
-- For the Neo runtime crates (`crates/neo-*`, `crates/neo-sdk`), see `crates/NEO_STYLE.md`.
+- For the Neo runtime crates (`crates/neo-*`, `crates/neo-quickjs-injected`), see `crates/NEO_STYLE.md`.

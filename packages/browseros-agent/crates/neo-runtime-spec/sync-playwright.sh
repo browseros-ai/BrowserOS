@@ -3,7 +3,7 @@
 # regenerates. Usage: ./sync-playwright.sh <playwright-checkout>
 #
 # Upgrading Playwright is: run this, read the diff of spec/playwright/ and of the generated
-# src/ and ts/ files, then fix whatever stops compiling in neo-runtime and neo-runtime-injected.
+# src/ and ts/ files, then fix whatever stops compiling in neo-runtime and neo-playwright-injected.
 set -eu
 
 checkout=${1:?usage: sync-playwright.sh <playwright-checkout>}

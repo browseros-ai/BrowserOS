@@ -9,7 +9,7 @@
 //!    resolve → the tab's input turn → focusElement / blurElement glue
 //!      detached → resolve again
 //!  dispatchEvent          eval's main-world element callback (`evaluate::call_on_element_main`)
-//!    eventInit as neo-sdk's `serializeArgument` left it, handles included; polls until the
+//!    eventInit as neo-quickjs-injected's `serializeArgument` left it, handles included; polls until the
 //!    selector matches, then `InjectedScript.dispatchEvent` on the first match, in the page's
 //!    own world, as Playwright's `mainWorld: true`
 //!    a selector with an `aria-ref` (Deviation): loop A resolves it in the utility world, where
@@ -93,7 +93,8 @@ pub(crate) static BOUNDING_BOX_META: MethodMeta = MethodMeta {
 };
 
 /// Neo: the params of `neo:scrollIntoViewIfNeeded` and `neo:boundingBox`, kept in step with
-/// neo-sdk's `NeoFrameCommands` and the wire tests. The timeout is in the call's metadata.
+/// neo-quickjs-injected's `NeoFrameCommands` and the wire tests. The timeout is in the call's
+/// metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NeoElementParams {
@@ -267,11 +268,11 @@ impl<T: ElementOpsTab> ElementAction<T> for Focus {
 // dispatchEvent.
 // ---------------------------------------------------------------------------------------------
 
-/// Neo: `Frame.dispatchEvent`'s params as neo-sdk sends them: Playwright's, with `eventInit`
-/// already in the page's format and its handles named by guid (`neo-sdk/src/js-handle.ts`
-/// `serializeArgument`). The generated `FrameDispatchEventParams` types `eventInit` in the
-/// protocol's format, so the frame route decodes these instead (`dispatch.rs`
-/// `route_frame_extension`).
+/// Neo: `Frame.dispatchEvent`'s params as neo-quickjs-injected sends them: Playwright's, with
+/// `eventInit` already in the page's format and its handles named by guid
+/// (`neo-quickjs-injected/src/js-handle.ts` `serializeArgument`). The generated
+/// `FrameDispatchEventParams` types `eventInit` in the protocol's format, so the frame route
+/// decodes these instead (`dispatch.rs` `route_frame_extension`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DispatchEventParams {
@@ -802,7 +803,7 @@ fn border_rect(quad: &Value) -> Option<Rect> {
 #[cfg(test)]
 mod tests {
     //! The pure step: the border box. The retries and the page side are covered by the
-    //! real-browser tests (`tests/element_ops_e2e.rs`, neo-sdk's parity).
+    //! real-browser tests (`tests/element_ops_e2e.rs`, neo-quickjs-injected's parity).
 
     use super::*;
 

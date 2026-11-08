@@ -1,12 +1,13 @@
 //! `textContent`, `innerText`, `getAttribute` and `ariaSnapshot` end to end on a real BrowserOS
-//! neo, through neo-sdk's `locator.textContent`, `page.textContent`, the locator, page and frame
-//! forms of `innerText` and `getAttribute` (on `crates/neo-sdk/tests/pages/element-text.html`)
-//! and page/locator `ariaSnapshot`, and `aria-ref=eN` refs from an `ai` snapshot driving the existing
-//! `locator.click` and `locator.textContent`: in the run that took the snapshot, in a later run
-//! on the same document, and not after the document navigated away.
-//! `crates/neo-sdk/tests/parity/textContent.test.mjs`, `innerText.test.mjs`,
-//! `getAttribute.test.mjs` and `ariaSnapshot.test.mjs` run the same reads through live
-//! Playwright beside Neo.
+//! neo, through neo-quickjs-injected's `locator.textContent`, `page.textContent`, the locator, page
+//! and frame forms of `innerText` and `getAttribute` (on
+//! `crates/neo-quickjs-injected/tests/pages/element-text.html`) and page/locator `ariaSnapshot`,
+//! and `aria-ref=eN` refs from an `ai` snapshot driving the existing `locator.click` and
+//! `locator.textContent`: in the run that took the snapshot, in a later run on the same document,
+//! and not after the document navigated away.
+//! `crates/neo-quickjs-injected/tests/parity/textContent.test.mjs`, `innerText.test.mjs`,
+//! `getAttribute.test.mjs` and `ariaSnapshot.test.mjs` run the same reads through live Playwright
+//! beside Neo.
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
 //! each test passes as a skip.
@@ -375,7 +376,7 @@ async fn tests_that_a_lone_surrogate_reads_as_a_replacement_character() {
 }
 
 /// A lone surrogate inside a thrown page error or a click's element preview reaches Rust
-/// well-formed too (`neo-runtime-injected/src/well-formed.ts`), so a strict mode violation that
+/// well-formed too (`neo-playwright-injected/src/well-formed.ts`), so a strict mode violation that
 /// lists the element fails at once and a click on it goes through.
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_a_lone_surrogate_in_an_error_or_a_click_preview_does_not_hang() {
@@ -417,9 +418,9 @@ async fn tests_that_a_lone_surrogate_in_an_error_or_a_click_preview_does_not_han
     tab.close().await;
 }
 
-/// `crates/neo-sdk/tests/pages/element-text.html`, which `innerText.test.mjs` and
+/// `crates/neo-quickjs-injected/tests/pages/element-text.html`, which `innerText.test.mjs` and
 /// `getAttribute.test.mjs` read through live Playwright too.
-const ELEMENT_TEXT: &str = include_str!("../../neo-sdk/tests/pages/element-text.html");
+const ELEMENT_TEXT: &str = include_str!("../../neo-quickjs-injected/tests/pages/element-text.html");
 
 /// A tab on `ELEMENT_TEXT`.
 async fn open_element_text() -> Option<Tab> {

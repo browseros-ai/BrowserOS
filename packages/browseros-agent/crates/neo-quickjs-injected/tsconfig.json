@@ -5,7 +5,7 @@
     "lib": ["ES2023"],
     "types": ["bun"],
     // Playwright's vendored utilityScriptSerializers.ts ends a function without a return, as
-    // neo-runtime-injected's tsconfig also allows for the same vendored code.
+    // neo-playwright-injected's tsconfig also allows for the same vendored code.
     "noImplicitReturns": false,
     "paths": {
       "@protocol/*": ["./vendor/playwright/protocol/src/*"]

@@ -15,7 +15,7 @@
 //! - character classes like `[\x7f-\x9f]` test code points below U+00A0, so UTF-16 units and
 //!   Rust `char`s agree on them.
 //!
-//! Pinned by `crates/neo-runtime-injected/tests/aria-yaml-goldens.json`, which the vendored
+//! Pinned by `crates/neo-playwright-injected/tests/aria-yaml-goldens.json`, which the vendored
 //! renderer itself writes (`scripts/aria-yaml-goldens.ts`); the tests below decode each case
 //! with the generated `AriaNode` types and compare the YAML byte for byte.
 
@@ -431,7 +431,7 @@ mod tests {
     /// reads this checkout's corpus.
     fn goldens() -> Goldens {
         let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets it"));
-        let path = crate_dir.join("../neo-runtime-injected/tests/aria-yaml-goldens.json");
+        let path = crate_dir.join("../neo-playwright-injected/tests/aria-yaml-goldens.json");
         let text = fs::read_to_string(&path).expect("the aria YAML goldens are committed");
         serde_json::from_str(&text).expect("every golden decodes with the generated types")
     }

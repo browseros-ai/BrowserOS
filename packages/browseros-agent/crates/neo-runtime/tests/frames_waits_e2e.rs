@@ -1,11 +1,11 @@
-//! Child-frame waits on a real BrowserOS neo, through neo-sdk's public `Frame.waitForLoadState`,
-//! `Frame.waitForURL` and `locator.waitFor` in frames: a same-origin frame (`pay`) and a
-//! cross-site out-of-process frame (OOPIF, `cross`: `localhost` under a `127.0.0.1` page). Each
-//! wait follows its own frame's document, not the page's; a navigation that moves the frame to
-//! another process mid-wait (same-origin to cross-site and back) keeps the wait going; a removed
-//! frame ends its wait with `Frame was detached` at once; a wait with no match times out.
-//! Frames report their `DOMContentLoaded` to the top page with `postMessage`, so a test can start
-//! a wait while a frame's own `load` is still pending (its image answers after
+//! Child-frame waits on a real BrowserOS neo, through neo-quickjs-injected's public
+//! `Frame.waitForLoadState`, `Frame.waitForURL` and `locator.waitFor` in frames: a same-origin
+//! frame (`pay`) and a cross-site out-of-process frame (OOPIF, `cross`: `localhost` under a
+//! `127.0.0.1` page). Each wait follows its own frame's document, not the page's; a navigation that
+//! moves the frame to another process mid-wait (same-origin to cross-site and back) keeps the wait
+//! going; a removed frame ends its wait with `Frame was detached` at once; a wait with no match
+//! times out. Frames report their `DOMContentLoaded` to the top page with `postMessage`, so a test
+//! can start a wait while a frame's own `load` is still pending (its image answers after
 //! [`SLOW_RESPONSE`]).
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise

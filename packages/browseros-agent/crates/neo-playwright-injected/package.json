@@ -1,5 +1,5 @@
 {
-  "name": "@browseros/neo-runtime-injected",
+  "name": "@browseros/neo-playwright-injected",
   "version": "0.0.0",
   "private": true,
   "type": "module",

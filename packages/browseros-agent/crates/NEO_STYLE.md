@@ -1,6 +1,6 @@
 # Neo crates: boundaries and style
 
-Applies to every `crates/neo-*` crate and to `crates/neo-sdk`. Run `scripts/neo-check.sh` (from `packages/browseros-agent`) before you commit; it is the gate for everything below that a tool can check.
+Applies to every `crates/neo-*` crate and to `crates/neo-quickjs-injected`. Run `scripts/neo-check.sh` (from `packages/browseros-agent`) before you commit; it is the gate for everything below that a tool can check.
 
 ## Crate map
 
@@ -8,10 +8,12 @@ Applies to every `crates/neo-*` crate and to `crates/neo-sdk`. Run `scripts/neo-
 | --- | --- | --- |
 | `neo-runtime-spec` | Rust, generated TS | Neo's cross-language contracts, translated from Playwright's protocol |
 | `neo-runtime` | Rust | Runs an agent's Playwright-style script in a QuickJS realm against one BrowserOS tab |
-| `neo-sdk` | TypeScript | The Playwright-shaped objects a script sees; `neo-runtime` embeds its `dist/sdk.js` |
-| `neo-runtime-injected` | TypeScript (page) | Playwright's injected script, vendored unchanged, behind Neo's typed glue table; `neo-runtime` embeds its `dist/*.js` and calls them over CDP in an isolated world |
+| `neo-quickjs-injected` | TypeScript | The Playwright-shaped objects a script sees; `neo-runtime` embeds its `dist/sdk.js` |
+| `neo-playwright-injected` | TypeScript (page) | Playwright's injected script, vendored unchanged, behind Neo's typed glue table; `neo-runtime` embeds its `dist/*.js` and calls them over CDP in an isolated world |
 
-Dependencies point one way: `neo-sdk` and `neo-runtime-injected` are embedded by `neo-runtime`, which talks to the browser through `browseros-cdp` and may use `neo-runtime-spec`. `neo-sdk` and `neo-runtime-injected` never import each other; both take types from `neo-runtime-spec`'s TypeScript. Rust neo crates depend on those plus ordinary crates (tokio, serde, rquickjs, thiserror, tracing).
+Renamed in November 2026: `neo-quickjs-injected` was `neo-sdk`, and `neo-playwright-injected` was `neo-runtime-injected`.
+
+Dependencies point one way: `neo-quickjs-injected` and `neo-playwright-injected` are embedded by `neo-runtime`, which talks to the browser through `browseros-cdp` and may use `neo-runtime-spec`. `neo-quickjs-injected` and `neo-playwright-injected` never import each other; both take types from `neo-runtime-spec`'s TypeScript. Rust neo crates depend on those plus ordinary crates (tokio, serde, rquickjs, thiserror, tracing).
 
 ## Page objects
 
@@ -37,7 +39,7 @@ Stable rustfmt skips three of the configured rules, so apply them by hand (or fo
 
 Two naming rules the lints do not catch: call free functions through their module (`time::sleep`, `task::block_in_place`), and import types to use them unqualified (`Duration`, not `std::time::Duration`).
 
-## TypeScript (`neo-sdk`)
+## TypeScript (`neo-quickjs-injected`)
 
 The bundle runs in QuickJS, not Node or a browser: ES2023 only, no DOM or Node APIs, and evaluating it defines no globals. Getters return plain values, never promises, as in Playwright. `src/runtime-bridge.ts` is the only file that touches `__neo_runtime`. Commit `dist/sdk.js` with every `src/` change (`bun run build`).
 

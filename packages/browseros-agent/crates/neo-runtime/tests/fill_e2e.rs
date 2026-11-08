@@ -15,7 +15,7 @@ use neo_runtime::{CallResult, Delivery, RunOutcome, RunStatus};
 use serde_json::json;
 use tokio::time;
 
-const FORM: &str = include_str!("../../neo-sdk/tests/pages/form-actions.html");
+const FORM: &str = include_str!("../../neo-quickjs-injected/tests/pages/form-actions.html");
 
 async fn open() -> Option<Tab> {
     let binary = browser::e2e_browser()?;

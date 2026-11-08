@@ -167,7 +167,8 @@ pub(crate) async fn navigate(
 }
 
 /// Neo extension on the Frame guid for the client's `waitForNavigation` with a glob or `RegExp`
-/// `url` (or none). Keep in sync with neo-sdk's `NeoFrameCommands` and the dispatch tests.
+/// `url` (or none). Keep in sync with neo-quickjs-injected's `NeoFrameCommands` and the dispatch
+/// tests.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct NeoWaitForNavigationParams {

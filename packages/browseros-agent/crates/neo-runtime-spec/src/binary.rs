@@ -2,7 +2,7 @@
 //! (screenshots, PDFs, response and download bodies, route bodies, `setInputFiles` buffers).
 //!
 //! ```text
-//!  neo-runtime                          wire (JSON)                     neo-sdk (QuickJS)
+//!  neo-runtime                          wire (JSON)                     neo-quickjs-injected (QuickJS)
 //!  Binary(Vec<u8>) ──serialize──▶ "iVBORw0KGgo…" (base64) ──▶ Buffer.fromBinary → Buffer
 //!  Binary(Vec<u8>) ◀─deserialize── "aGVsbG8="             ◀── toBinary(Uint8Array)
 //! ```

@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-const SCRIPT: &str = include_str!("../../neo-sdk/tests/scripts/hacker-news-best.js");
+const SCRIPT: &str = include_str!("../../neo-quickjs-injected/tests/scripts/hacker-news-best.js");
 const BEST: &str = "https://news.ycombinator.com/best";
 
 // DOM reads deliberately use a different CDP session, without SDK selectors or return values.

@@ -884,7 +884,7 @@ export class Frame {
           cursor = id
           if (index === undefined || url === undefined)
             throw new Error(
-              'neo-sdk: neo-runtime ended this navigation wait under it',
+              'neo-quickjs-injected: neo-runtime ended this navigation wait under it',
             )
           waiting = next()
           const parsed = urlFor(url)
@@ -1267,7 +1267,7 @@ export class Frame {
     )
     if (result === undefined)
       throw new Error(
-        'neo-sdk: Frame.queryCount contract error: missing result',
+        'neo-quickjs-injected: Frame.queryCount contract error: missing result',
       )
     return result.value
   }
@@ -1346,7 +1346,9 @@ export class Frame {
       this,
     )
     if (!handle)
-      throw new Error(`neo-sdk: Frame.${method} contract error: no element`)
+      throw new Error(
+        `neo-quickjs-injected: Frame.${method} contract error: no element`,
+      )
     return handle
   }
 
@@ -1522,7 +1524,7 @@ export class Frame {
     )
     if (!('handle' in result))
       throw new Error(
-        'neo-sdk: Frame.waitForFunction contract error: missing handle',
+        'neo-quickjs-injected: Frame.waitForFunction contract error: missing handle',
       )
     return handleFrom(this._connection, result.handle, this) as JSHandle<R>
   }
@@ -1611,7 +1613,8 @@ export class Frame {
       result?.element,
       this.parentFrame() ?? this,
     )
-    if (!element) throw new Error('neo-sdk: frameElement answered no element')
+    if (!element)
+      throw new Error('neo-quickjs-injected: frameElement answered no element')
     return element
   }
 
@@ -2002,7 +2005,7 @@ export class Frame {
     )
     if (result === undefined)
       throw new Error(
-        'neo-sdk: Frame.inputValue contract error: missing result',
+        'neo-quickjs-injected: Frame.inputValue contract error: missing result',
       )
     return result.value
   }
@@ -2032,7 +2035,9 @@ export class Frame {
       0,
     )
     if (result === undefined)
-      throw new Error('neo-sdk: Frame.isVisible contract error: missing result')
+      throw new Error(
+        'neo-quickjs-injected: Frame.isVisible contract error: missing result',
+      )
     return result.value
   }
 
@@ -2061,7 +2066,9 @@ export class Frame {
       0,
     )
     if (result === undefined)
-      throw new Error('neo-sdk: Frame.isHidden contract error: missing result')
+      throw new Error(
+        'neo-quickjs-injected: Frame.isHidden contract error: missing result',
+      )
     return result.value
   }
 
@@ -2089,7 +2096,9 @@ export class Frame {
       this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
-      throw new Error('neo-sdk: Frame.isChecked contract error: missing result')
+      throw new Error(
+        'neo-quickjs-injected: Frame.isChecked contract error: missing result',
+      )
     return result.value
   }
 
@@ -2117,7 +2126,9 @@ export class Frame {
       this._page._timeoutSettings.timeout(options ?? {}, apiName),
     )
     if (result === undefined)
-      throw new Error('neo-sdk: Frame.isEnabled contract error: missing result')
+      throw new Error(
+        'neo-quickjs-injected: Frame.isEnabled contract error: missing result',
+      )
     return result.value
   }
 
@@ -2146,7 +2157,7 @@ export class Frame {
     )
     if (result === undefined)
       throw new Error(
-        'neo-sdk: Frame.isDisabled contract error: missing result',
+        'neo-quickjs-injected: Frame.isDisabled contract error: missing result',
       )
     return result.value
   }
@@ -2177,7 +2188,7 @@ export class Frame {
     )
     if (result === undefined)
       throw new Error(
-        'neo-sdk: Frame.isEditable contract error: missing result',
+        'neo-quickjs-injected: Frame.isEditable contract error: missing result',
       )
     return result.value
   }
@@ -2259,7 +2270,7 @@ export class Frame {
     )
     if (result === undefined)
       throw new Error(
-        'neo-sdk: Frame.selectOption contract error: missing result',
+        'neo-quickjs-injected: Frame.selectOption contract error: missing result',
       )
     return result.values
   }

@@ -55,7 +55,7 @@ pub fn injected(module: &InjectedModule, sha256: &str) -> String {
     let kinds = format!("{interface}HandleKinds");
     for line in [
         "",
-        "// The page calls neo-runtime makes into neo-runtime-injected's glue table (spec/injected.yml),",
+        "// The page calls neo-runtime makes into neo-playwright-injected's glue table (spec/injected.yml),",
         "// with exactly what the page returns. Rust decodes each result with unknown fields rejected,",
         "// so an extra field fails the call.",
         "",
@@ -116,7 +116,7 @@ pub fn injected(module: &InjectedModule, sha256: &str) -> String {
     for line in [
         String::new(),
         "/**".to_owned(),
-        " * The glue table `neo-runtime-injected` implements, checked with".to_owned(),
+        " * The glue table `neo-playwright-injected` implements, checked with".to_owned(),
         format!(
             " * `export const glue = {{ ... }} satisfies {interface}Api<InjectedScript, Handles>`: a missing,"
         ),

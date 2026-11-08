@@ -376,7 +376,7 @@ test('the built bundle installs once per document and answers through call.js', 
     )
     assert.match(
       stale.exceptionDetails.exception.description,
-      /^Error: neo-runtime-injected was built from spec [0-9a-f]{64}, not 0{64}/,
+      /^Error: neo-playwright-injected was built from spec [0-9a-f]{64}, not 0{64}/,
     )
   } finally {
     for (const cleanup of cleanups.reverse()) await cleanup()
@@ -709,7 +709,7 @@ test('element-ops glue blurs, selects and highlights as Playwright does', {
     )
     assert.equal(await main('getSelection().toString()'), 'plain text')
 
-    // Main-world dispatchEvent is covered in crates/neo-sdk/tests/parity/{dispatchEvent,elementHandle-dispatchEvent}.test.mjs.
+    // Main-world dispatchEvent is covered in crates/neo-quickjs-injected/tests/parity/{dispatchEvent,elementHandle-dispatchEvent}.test.mjs.
 
     // setHighlights installs the overlay; an empty list keeps it; hideHighlight removes it.
     const glass = () => main("document.querySelectorAll('x-pw-glass').length")

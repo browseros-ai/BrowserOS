@@ -9,7 +9,7 @@
  * `@injected`, `@isomorphic` and `@protocol` aliases. The generated VENDOR.md names the commit
  * and lists every file with its sha256.
  *
- * Usage, from crates/neo-runtime-injected:
+ * Usage, from crates/neo-playwright-injected:
  *   bun run sync-vendor -- --from /Users/shadowfax/code/oss/playwright   # copy + VENDOR.md
  *   bun run test                                                         # sync-vendor --check
  *

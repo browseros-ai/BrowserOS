@@ -14,8 +14,8 @@ use crate::rules::{ENFORCED, Gate, Problem, REGISTER};
 
 const CLICK: &str = "neo-runtime/src/click.rs";
 const OWN: &str = "neo-runtime/src/own.rs";
-const GLUE: &str = "neo-runtime-injected/src/glue.ts";
-const LOCATOR: &str = "neo-sdk/src/locator.ts";
+const GLUE: &str = "neo-playwright-injected/src/glue.ts";
+const LOCATOR: &str = "neo-quickjs-injected/src/locator.ts";
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default())
@@ -123,11 +123,11 @@ fn the_register_lists_each_deviation_and_question_by_item() {
          with it. |",
         "| neo-runtime/src/click.rs | `click` | `server/frames.ts` `Frame.click` | The fixture \
          tries once and never retries. |",
-        "| neo-sdk/src/locator.ts | (file) | `server/frames.ts` `Frame.ariaSnapshot` | Absent: \
+        "| neo-quickjs-injected/src/locator.ts | (file) | `server/frames.ts` `Frame.ariaSnapshot` | Absent: \
          the fixture serves no snapshots. |",
         "| neo-runtime/src/click.rs | `MEMORY_LIMIT_BYTES` | why the realm gets 64 MiB; no \
          measurement is recorded. |",
-        "| neo-sdk/src/locator.ts | (file) | why the fixture's locator keeps no timeout of its \
+        "| neo-quickjs-injected/src/locator.ts | (file) | why the fixture's locator keeps no timeout of its \
          own. |",
         "## Deviations (3)",
         "## Unexplained: owner questions (2)",
@@ -502,28 +502,31 @@ fn an_enforced_path_that_is_missing_fails() {
     let tree = Tree::new();
     tree.edit(
         ENFORCED,
-        "neo-sdk/src/locator.ts\n",
-        "neo-sdk/src/locator.ts\nneo-sdk/src/gone.ts\n",
+        "neo-quickjs-injected/src/locator.ts\n",
+        "neo-quickjs-injected/src/locator.ts\nneo-quickjs-injected/src/gone.ts\n",
     );
     assert_flags(
         &tree.problems(),
         ENFORCED,
         tree.line(ENFORCED, "gone.ts"),
-        &["`neo-sdk/src/gone.ts` does not exist", "remove the line"],
+        &[
+            "`neo-quickjs-injected/src/gone.ts` does not exist",
+            "remove the line",
+        ],
     );
 }
 
 #[test]
 fn a_copy_of_the_pin_that_disagrees_fails() {
     let tree = Tree::new();
-    let sync_vendor = "neo-runtime-injected/scripts/sync-vendor.ts";
+    let sync_vendor = "neo-playwright-injected/scripts/sync-vendor.ts";
     tree.edit(
         sync_vendor,
         "26137face0500cacddf90c767dc1364da7262559",
         "36137face0500cacddf90c767dc1364da7262559",
     );
     tree.edit(
-        "neo-sdk/tests/goldens/selector-corpus.ts",
+        "neo-quickjs-injected/tests/goldens/selector-corpus.ts",
         "'26137face'",
         "'26137fac0'",
     );
@@ -539,7 +542,7 @@ fn a_copy_of_the_pin_that_disagrees_fails() {
     );
     assert_flags(
         &problems,
-        "neo-sdk/tests/goldens/selector-corpus.ts",
+        "neo-quickjs-injected/tests/goldens/selector-corpus.ts",
         2,
         &["pins Playwright at `26137fac0`"],
     );

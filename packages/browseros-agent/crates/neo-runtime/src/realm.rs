@@ -1,8 +1,8 @@
 //! One fresh QuickJS runtime per run: the script's whole world. It holds the host globals a
 //! Playwright script expects (`console`, `setTimeout`, `setInterval` and their `clear…`,
-//! `AbortController`, `AbortSignal`, and neo-sdk's `URL`, `URLSearchParams`, `Buffer`,
+//! `AbortController`, `AbortSignal`, and neo-quickjs-injected's `URL`, `URLSearchParams`, `Buffer`,
 //! `TextEncoder`, `TextDecoder`, `structuredClone` and `crypto`), `__neo_runtime`, and the `page`,
-//! `context` and `playwright` objects neo-sdk builds, and nothing survives the run.
+//! `context` and `playwright` objects neo-quickjs-injected builds, and nothing survives the run.
 //!
 //! The realm boundary is also where limits apply: a memory cap, an interrupt handler that
 //! stops running JS at the deadline or on cancellation, and a `select!` that ends the run when
@@ -32,15 +32,16 @@ const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 // before it can overflow the thread.
 const MAX_STACK_BYTES: usize = 512 * 1024;
 
-/// neo-sdk's bundle. Evaluating it defines no globals; its completion value is
+/// neo-quickjs-injected's bundle. Evaluating it defines no globals; its completion value is
 /// `{ createRun }`. `scripts/neo-check.sh` fails when it is stale.
 ///
 /// `ctx.eval` names its frames `eval_script`, and only the agent's code, built by the
-/// `AsyncFunction` constructor, has frames named `<input>`. neo-sdk's `captureLocation` relies on
-/// that to find the agent's call site in a stack (`tests/realm_limits.rs` pins it).
+/// `AsyncFunction` constructor, has frames named `<input>`. neo-quickjs-injected's
+/// `captureLocation` relies on that to find the agent's call site in a stack
+/// (`tests/realm_limits.rs` pins it).
 const SDK_BUNDLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-sdk/dist/sdk.js"
+    "/../neo-quickjs-injected/dist/sdk.js"
 ));
 
 /// The host globals a Playwright script finds in Node. Evaluates to a function that takes the
@@ -128,9 +129,10 @@ const HOST_GLOBALS: &str = r"(sleep) => {
   return uncaught
 }";
 
-/// Neo: puts neo-sdk's standard globals (`createRun`'s `globals`: `URL`, `Buffer`, `crypto`, …) on
-/// the realm's global object the way Node defines its own: writable, configurable, not enumerable.
-/// neo-sdk's bundle defines no globals when it is evaluated; this is the one place they appear.
+/// Neo: puts neo-quickjs-injected's standard globals (`createRun`'s `globals`: `URL`, `Buffer`,
+/// `crypto`, …) on the realm's global object the way Node defines its own: writable, configurable,
+/// not enumerable. neo-quickjs-injected's bundle defines no globals when it is evaluated; this is
+/// the one place they appear.
 const INSTALL_SDK_GLOBALS: &str = r"(globals) => {
   for (const [name, value] of Object.entries(globals))
     Object.defineProperty(globalThis, name, {
@@ -143,8 +145,8 @@ const INSTALL_SDK_GLOBALS: &str = r"(globals) => {
 
 /// Deviation: `client/eventEmitter.ts` `EventEmitter._handleListenerError`: `throw error;`
 /// A listener's throw, or its rejection with no `error` listener, is an uncaught exception in
-/// Node, which exits. QuickJS has no such exit, so neo-sdk reports the first one on its
-/// `uncaught` promise, and the run ends with that error at once instead of running on. The
+/// Node, which exits. QuickJS has no such exit, so neo-quickjs-injected reports the first one on
+/// its `uncaught` promise, and the run ends with that error at once instead of running on. The
 /// realm's own `abort` listeners and timer callbacks report theirs the same way
 /// (`abort::REALM_GLOBALS`, `HOST_GLOBALS`).
 const RACE_UNCAUGHT: &str =
@@ -160,7 +162,8 @@ const AGENT_LINE_OFFSET: u32 = 2;
 pub(crate) struct Script {
     pub(crate) code: String,
     pub(crate) page_guid: String,
-    /// The page's main frame, built once by neo-sdk so `page.mainFrame()` is one object.
+    /// The page's main frame, built once by neo-quickjs-injected so `page.mainFrame()` is one
+    /// object.
     pub(crate) frame_guid: String,
     /// The page's URL when the run started, which seeds `Page`'s memory of its last URL.
     pub(crate) url: String,
@@ -243,7 +246,7 @@ async fn evaluate(
 }
 
 /// Sets up the realm and starts the script, returning the promise of its async function and
-/// neo-sdk's `exportValue`, which [`to_json`] serializes its result with.
+/// neo-quickjs-injected's `exportValue`, which [`to_json`] serializes its result with.
 fn start<'js>(
     ctx: &Ctx<'js>,
     script: Script,
@@ -308,9 +311,9 @@ fn delay_from_millis(delay_ms: f64) -> Duration {
 /// The script's return value as JSON, through the realm's own `JSON.stringify` so the
 /// conversion is exactly JavaScript's. `undefined` (and anything else JSON drops) is `None`.
 ///
-/// Except binaries: neo-sdk's `exportValue` hands each `Uint8Array` to `ship`, which copies its
-/// bytes out of the realm here, outside its memory limit, and marks its place with this run's
-/// random marker key; [`lift_binaries`] then takes the marks out of the JSON. A page cannot
+/// Except binaries: neo-quickjs-injected's `exportValue` hands each `Uint8Array` to `ship`, which
+/// copies its bytes out of the realm here, outside its memory limit, and marks its place with this
+/// run's random marker key; [`lift_binaries`] then takes the marks out of the JSON. A page cannot
 /// forge a mark: it never sees the marker.
 fn to_json<'js>(
     ctx: &Ctx<'js>,

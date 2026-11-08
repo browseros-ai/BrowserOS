@@ -1,4 +1,4 @@
-# neo-sdk
+# neo-quickjs-injected
 
 The Playwright-shaped objects (`Page`, `Frame`, `Locator`, `BrowserContext`, `JSHandle`, `ElementHandle`) an agent script sees inside neo-runtime's QuickJS realm. Read `../NEO_STYLE.md` before changing anything here.
 

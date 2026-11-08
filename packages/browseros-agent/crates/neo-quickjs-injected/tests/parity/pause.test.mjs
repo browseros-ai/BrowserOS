@@ -6,8 +6,8 @@
 // debugger holds the call only when enabled (`tests/library/debugger.spec.ts` "DB-002 should
 // pause at pause call" enables it first, which Neo does not serve).
 //
-// Deviation (`neo-sdk/src/page.ts` `Page.pause`): with a headed browser Playwright opens its
-// Inspector and waits for a human; a Neo run is unattended and never waits.
+// Deviation (`neo-quickjs-injected/src/page.ts` `Page.pause`): with a headed browser Playwright
+// opens its Inspector and waits for a human; a Neo run is unattended and never waits.
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'

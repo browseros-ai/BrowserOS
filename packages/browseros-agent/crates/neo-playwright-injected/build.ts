@@ -32,11 +32,12 @@
  *
  * Each artifact is one function expression, because CDP's `Runtime.callFunctionOn` takes a
  * function declaration. Bun's ESM output is wrapped as
- * `(function (...args) { <bundle> return entry.apply(this, args) })`, much as neo-sdk's build.ts
- * wraps its bundle. That keeps every top-level name out of the world's globals and passes
- * `this` through for `call.js`, whose `this` is the glue object. There is no `'use strict'`:
- * Playwright evaluates its esbuild bundle as sloppy code (`server/dom.ts` wraps it in an arrow
- * function with no directive), and V8 rejects the directive in a function with a rest parameter.
+ * `(function (...args) { <bundle> return entry.apply(this, args) })`, much as
+ * neo-quickjs-injected's build.ts wraps its bundle. That keeps every top-level name out of the
+ * world's globals and passes `this` through for `call.js`, whose `this` is the glue object. There
+ * is no `'use strict'`: Playwright evaluates its esbuild bundle as sloppy code (`server/dom.ts`
+ * wraps it in an arrow function with no directive), and V8 rejects the directive in a function with
+ * a rest parameter.
  *
  * Bun, not esbuild: the repo's toolchain. A Bun plugin inlines `highlight.css?inline` as text,
  * as Playwright's esbuild plugin does (unminified, which changes no behaviour). Bun reads the
@@ -166,7 +167,7 @@ async function buildEntry(name: (typeof ENTRIES)[number]): Promise<string> {
   if (!result.success || result.outputs.length !== 1 || !output) {
     throw new AggregateError(
       result.logs,
-      `neo-runtime-injected: ${name} failed`,
+      `neo-playwright-injected: ${name} failed`,
     )
   }
   const esm = await output.text()
@@ -174,7 +175,7 @@ async function buildEntry(name: (typeof ENTRIES)[number]): Promise<string> {
   const entry = esm.match(exportStatement)?.[1]
   if (!entry || esm.match(/^export /gm)?.length !== 1) {
     throw new Error(
-      `neo-runtime-injected: ${name} must have exactly one export, its default function`,
+      `neo-playwright-injected: ${name} must have exactly one export, its default function`,
     )
   }
   const body = esm.replace(exportStatement, '').trimEnd()

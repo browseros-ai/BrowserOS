@@ -5,7 +5,7 @@
  * Playwright's server calls it) and `yaml.ts`'s escaping to Rust, and its tests decode every
  * snapshot below with the generated `AriaNode` types and compare the YAML byte for byte.
  *
- * Usage, from crates/neo-runtime-injected:
+ * Usage, from crates/neo-playwright-injected:
  *   bun scripts/aria-yaml-goldens.ts           # rewrites the JSON
  *   bun scripts/aria-yaml-goldens.ts --check   # fails when the committed JSON is stale
  *
@@ -689,7 +689,7 @@ if (process.argv.includes('--check')) {
   } catch {}
   if (JSON.stringify(committed) !== JSON.stringify(corpus)) {
     console.error(
-      `${out} is stale: run \`bun scripts/aria-yaml-goldens.ts\` in crates/neo-runtime-injected`,
+      `${out} is stale: run \`bun scripts/aria-yaml-goldens.ts\` in crates/neo-playwright-injected`,
     )
     process.exit(1)
   }

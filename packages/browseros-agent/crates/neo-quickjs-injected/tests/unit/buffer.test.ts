@@ -46,7 +46,7 @@ describe('binary transport', () => {
   test('tests that text that is not base64 is refused', () => {
     for (const text of ['%%%', 'QU*D', 'QUJD=QUJD']) {
       expect(() => NeoBuffer.fromBinary(text)).toThrow(
-        'neo-sdk: invalid base64 from Rust',
+        'neo-quickjs-injected: invalid base64 from Rust',
       )
     }
   })

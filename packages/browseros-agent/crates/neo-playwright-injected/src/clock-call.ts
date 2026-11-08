@@ -42,7 +42,7 @@ export default function clockCall(op: string, ...args: unknown[]): unknown {
     return undefined
   }
   if (!(OPS as readonly string[]).includes(op))
-    throw new Error(`neo-runtime-injected: no clock call ${op}`)
+    throw new Error(`neo-playwright-injected: no clock call ${op}`)
   const call = (
     clock.controller as unknown as Record<
       string,

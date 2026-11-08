@@ -2337,8 +2337,9 @@ fn call_location(metadata: &Metadata) -> Option<CallLocation> {
 /// Playwright's reply (`dispatcher.ts`): `{id}` or `{id, result}` on success, and
 /// `{id, error: {error: {message, name}}, log}` on failure. A served call's failure always
 /// carries its folded `log`; an early failure (unknown object, bad params) carries none, as in
-/// Playwright. Pure. Its outputs are pinned in `tests/fixtures/replies.json`, which neo-sdk's
-/// `rebuildError` test reads, so the envelope that both languages write is pinned once.
+/// Playwright. Pure. Its outputs are pinned in `tests/fixtures/replies.json`, which
+/// neo-quickjs-injected's `rebuildError` test reads, so the envelope that both languages write is
+/// pinned once.
 fn encode_reply(
     id: &Value,
     answer: Result<Option<&Value>, &PlaywrightError>,
@@ -3019,7 +3020,8 @@ mod tests {
 
     #[test]
     fn tests_that_the_navigation_wait_messages_decode_and_refuse() {
-        // The SDK's wire for these commands, which neo-sdk's tests/unit/history.test.ts pins.
+        // The SDK's wire for these commands, which neo-quickjs-injected's
+        // tests/unit/history.test.ts pins.
         for (method, params) in [
             (
                 "neo:waitForNavigation",
@@ -3636,8 +3638,8 @@ mod tests {
 
     /// The replies Neo sends for a click that succeeds, one the page refuses, one that times out
     /// and one whose tab closed, built from Neo's own errors, folding and envelope, and pinned
-    /// in `tests/fixtures/replies.json`. neo-sdk's `connection.test.ts` rebuilds each into the
-    /// error the script sees, so both halves of the reply path read one file.
+    /// in `tests/fixtures/replies.json`. neo-quickjs-injected's `connection.test.ts` rebuilds each
+    /// into the error the script sees, so both halves of the reply path read one file.
     /// Set `NEO_RUNTIME_WRITE_FIXTURES=1` to rewrite the file after a deliberate change.
     #[test]
     fn tests_that_replies_match_the_committed_fixture() {

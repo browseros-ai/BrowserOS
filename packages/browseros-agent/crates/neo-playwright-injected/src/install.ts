@@ -58,7 +58,7 @@ export default function install(
   // for a stale bundle that slipped past both.
   if (specSha256 !== SPEC_SHA256) {
     throw new Error(
-      `neo-runtime-injected was built from spec ${SPEC_SHA256}, not ${specSha256}`,
+      `neo-playwright-injected was built from spec ${SPEC_SHA256}, not ${specSha256}`,
     )
   }
   const world = globalThis as NeoWorld

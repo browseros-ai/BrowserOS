@@ -43,12 +43,12 @@ pub(crate) const RUNTIME: Tree = Tree {
 pub(crate) const TREES: [Tree; 4] = [
     RUNTIME,
     Tree {
-        dir: "neo-runtime-injected/vendor/playwright",
+        dir: "neo-playwright-injected/vendor/playwright",
         repo_prefix: "packages/",
         manifest: true,
     },
     Tree {
-        dir: "neo-sdk/vendor/playwright",
+        dir: "neo-quickjs-injected/vendor/playwright",
         repo_prefix: "packages/",
         manifest: true,
     },
@@ -79,27 +79,27 @@ const PIN_COPIES: [PinCopy; 6] = [
         prefix: false,
     },
     PinCopy {
-        file: "neo-runtime-injected/vendor/playwright/VENDOR.md",
+        file: "neo-playwright-injected/vendor/playwright/VENDOR.md",
         pattern: r"at commit `([0-9a-f]+)`",
         prefix: false,
     },
     PinCopy {
-        file: "neo-sdk/vendor/playwright/VENDOR.md",
+        file: "neo-quickjs-injected/vendor/playwright/VENDOR.md",
         pattern: r"at commit `([0-9a-f]+)`",
         prefix: false,
     },
     PinCopy {
-        file: "neo-runtime-injected/scripts/sync-vendor.ts",
+        file: "neo-playwright-injected/scripts/sync-vendor.ts",
         pattern: r"const PINNED_COMMIT = '([0-9a-f]+)'",
         prefix: false,
     },
     PinCopy {
-        file: "neo-sdk/tests/goldens/selector-corpus.ts",
+        file: "neo-quickjs-injected/tests/goldens/selector-corpus.ts",
         pattern: r"const EXPECTED_COMMIT = '([0-9a-f]+)'",
         prefix: true,
     },
     PinCopy {
-        file: "neo-runtime-injected/tests/aria-yaml-goldens.json",
+        file: "neo-playwright-injected/tests/aria-yaml-goldens.json",
         pattern: r#""source": "[^"]*\bPlaywright ([0-9a-f]{7,40})\b"#,
         prefix: true,
     },

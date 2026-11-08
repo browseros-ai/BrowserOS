@@ -90,7 +90,7 @@ pub fn injected(module: &InjectedModule, sha256: &str) -> String {
     let mut out = output::header(sha256);
     out.push(String::new());
     for line in [
-        "//! The page calls `neo-runtime` makes into `neo-runtime-injected`'s glue table",
+        "//! The page calls `neo-runtime` makes into `neo-playwright-injected`'s glue table",
         "//! (`spec/injected.yml`), with exactly what the page returns. A result that holds no",
         "//! handle crosses as JSON and rejects unknown fields on decode; one that holds a handle is",
         "//! read property by property and rejects unknown properties. The page bundle and this",

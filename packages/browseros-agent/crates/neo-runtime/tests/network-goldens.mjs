@@ -18,7 +18,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const harness = join(here, '../../neo-sdk/tests/parity/harness.mjs')
+const harness = join(
+  here,
+  '../../neo-quickjs-injected/tests/parity/harness.mjs',
+)
 const { chromium, launchBrowser, playwrightVersion, runCleanups, sleep } =
   await import(harness)
 

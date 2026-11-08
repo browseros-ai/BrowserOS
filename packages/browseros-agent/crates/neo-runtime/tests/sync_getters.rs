@@ -3,7 +3,7 @@
 //!
 //! - `watch-url.js` polls `page.url()` and `page.isClosed()` through a tab's lifetime. The
 //!   expected value is what real Playwright returns for the same script
-//!   (crates/neo-sdk/tests/parity checks that).
+//!   (crates/neo-quickjs-injected/tests/parity checks that).
 //! - A script polls `page.url()` back to back through ten cross-document navigations, so reads
 //!   land in every commit window, where BrowserOS briefly refuses navigation history.
 //!
@@ -21,7 +21,7 @@ use neo_runtime::RunStatus;
 use serde_json::json;
 use tokio::time;
 
-const WATCH_URL: &str = include_str!("../../neo-sdk/tests/scripts/watch-url.js");
+const WATCH_URL: &str = include_str!("../../neo-quickjs-injected/tests/scripts/watch-url.js");
 const STEP: Duration = Duration::from_millis(300);
 /// Long enough to sample `page.url()` many times while the navigation is in flight.
 const SLOW_RESPONSE: Duration = Duration::from_millis(2500);

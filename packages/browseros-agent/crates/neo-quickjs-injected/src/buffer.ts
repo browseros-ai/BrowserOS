@@ -10,8 +10,8 @@
  * ```
  *
  * `Buffer` is the part of Node's `Buffer` a script reads results with, moved unchanged in
- * behaviour from `neo-sdk/src/network.ts` (#3172). QuickJS has no `Buffer`; the realm's global
- * `Buffer` is this class, defined by `realm.rs` from `globals.ts`.
+ * behaviour from `neo-quickjs-injected/src/network.ts` (#3172). QuickJS has no `Buffer`; the
+ * realm's global `Buffer` is this class, defined by `realm.rs` from `globals.ts`.
  *
  * Platform: this QuickJS (quickjs-ng in rquickjs 0.12) has `Uint8Array.fromBase64` and
  * `Uint8Array.prototype.toBase64` (probes-bin.md B3: a 10 MiB result decodes in 6 ms and
@@ -222,7 +222,7 @@ export class Buffer extends Uint8Array {
     try {
       bytes = (Uint8Array as unknown as Base64Natives).fromBase64(text)
     } catch {
-      throw new Error('neo-sdk: invalid base64 from Rust')
+      throw new Error('neo-quickjs-injected: invalid base64 from Rust')
     }
     return new Buffer(
       bytes.buffer as ArrayBuffer,

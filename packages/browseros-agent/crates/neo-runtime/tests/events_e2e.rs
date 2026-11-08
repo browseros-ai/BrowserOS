@@ -1,8 +1,8 @@
-//! The run's event pipe on a real BrowserOS neo (`src/events.rs`, `src/page_events.rs`, neo-sdk
-//! `events.ts`): listeners run before the call that caused their event resolves, an idle script
-//! still gets its events, what the page logged before the run is history and never an event, a
-//! dialog a listener leaves open is answered when the run ends, an uncaught listener error ends
-//! the run with it, and a full queue drops events with one log note.
+//! The run's event pipe on a real BrowserOS neo (`src/events.rs`, `src/page_events.rs`,
+//! neo-quickjs-injected `events.ts`): listeners run before the call that caused their event
+//! resolves, an idle script still gets its events, what the page logged before the run is history
+//! and never an event, a dialog a listener leaves open is answered when the run ends, an uncaught
+//! listener error ends the run with it, and a full queue drops events with one log note.
 
 #[expect(
     dead_code,

@@ -131,7 +131,8 @@ impl WaitForSelectorOptions {
 }
 
 /// Neo extension on the Frame guid: the SDK sends one call because its bridge has no event
-/// channel. Keep this shape in sync with neo-sdk's `NeoFrameCommands` and the wire tests.
+/// channel. Keep this shape in sync with neo-quickjs-injected's `NeoFrameCommands` and the wire
+/// tests.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NeoWaitForUrlParams {

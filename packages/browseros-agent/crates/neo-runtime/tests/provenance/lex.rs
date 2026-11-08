@@ -1,5 +1,5 @@
 //! Tokenizers for the languages the gate reads: Rust (neo-runtime) and TypeScript or JavaScript
-//! (neo-runtime-injected, neo-sdk and Playwright's vendored sources).
+//! (neo-playwright-injected, neo-quickjs-injected and Playwright's vendored sources).
 //!
 //! Comments are kept apart from tokens, so a brace or a quote inside a comment, a string, a raw
 //! string or a regex never moves where an item ends, and a `const` written inside a string (the

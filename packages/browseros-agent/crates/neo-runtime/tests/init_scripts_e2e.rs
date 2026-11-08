@@ -1,10 +1,11 @@
-//! Init scripts end to end on a real BrowserOS neo, through neo-sdk's `page.addInitScript` and
-//! `browserContext.addInitScript`, for Neo's one deviation from Playwright here: a script lives
-//! as long as the run that added it (`Deviation:` in `src/init_scripts.rs`). A run's scripts run
-//! in every frame of its new documents, the cross-site out-of-process iframe included; once the
-//! run ends, by its script's return or by its deadline, no later document runs one, and no iframe
-//! is left held at its start. `crates/neo-sdk/tests/parity/addInitScript.test.mjs` compares the
-//! in-run behaviour with live Playwright.
+//! Init scripts end to end on a real BrowserOS neo, through neo-quickjs-injected's
+//! `page.addInitScript` and `browserContext.addInitScript`, for Neo's one deviation from Playwright
+//! here: a script lives as long as the run that added it (`Deviation:` in `src/init_scripts.rs`). A
+//! run's scripts run in every frame of its new documents, the cross-site out-of-process iframe
+//! included; once the run ends, by its script's return or by its deadline, no later document runs
+//! one, and no iframe is left held at its start.
+//! `crates/neo-quickjs-injected/tests/parity/addInitScript.test.mjs` compares the in-run behaviour
+//! with live Playwright.
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
 //! each test passes as a skip.

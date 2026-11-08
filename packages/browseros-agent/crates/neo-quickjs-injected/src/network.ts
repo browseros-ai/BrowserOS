@@ -510,7 +510,9 @@ export function responseFor(
 ): Response {
   const built = networkObject(connection, guid, frame._page)
   if (!(built instanceof Response))
-    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such response`)
+    throw new Error(
+      `neo-quickjs-injected: Rust's chain for ${guid} has no such response`,
+    )
   return built
 }
 
@@ -549,7 +551,9 @@ export function networkObject(
   }
   const built = connection._objects.get(guid)
   if (!built)
-    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such object`)
+    throw new Error(
+      `neo-quickjs-injected: Rust's chain for ${guid} has no such object`,
+    )
   return built
 }
 

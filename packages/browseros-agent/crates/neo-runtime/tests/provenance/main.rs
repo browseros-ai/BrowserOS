@@ -1,8 +1,9 @@
 //! The provenance gate (`crates/NEO_STYLE.md`, "Provenance"). It reads the neo crates'
-//! production sources (`neo-runtime/src`, `neo-runtime-injected/src`, `neo-sdk/src`) and checks
-//! every provenance line against Playwright's own sources, vendored unchanged at the pinned
-//! commit; checks coverage for the files listed in `tests/provenance-enforced.txt`; and keeps
-//! `crates/NEO_DEVIATIONS.md`, the generated register of deviations, current.
+//! production sources (`neo-runtime/src`, `neo-playwright-injected/src`,
+//! `neo-quickjs-injected/src`) and checks every provenance line against Playwright's own sources,
+//! vendored unchanged at the pinned commit; checks coverage for the files listed in
+//! `tests/provenance-enforced.txt`; and keeps `crates/NEO_DEVIATIONS.md`, the generated register of
+//! deviations, current.
 //!
 //! ```text
 //! neo sources ─scan─► items and tags ─► truth, every file: grammar, citation, quote, value

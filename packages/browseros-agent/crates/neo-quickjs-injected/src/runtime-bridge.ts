@@ -196,7 +196,8 @@ export function randomValues(length: number): Uint8Array {
 
 /**
  * Playwright's device descriptors, by name: the vendored data neo-runtime embeds
- * (`neo-sdk/vendor/playwright/isomorphic/deviceDescriptorsSource.json`), read once per run.
+ * (`neo-quickjs-injected/vendor/playwright/isomorphic/deviceDescriptorsSource.json`), read once per
+ * run.
  */
 export function devices(): Record<string, unknown> {
   return JSON.parse(__neo_runtime.get(JSON.stringify({ field: 'devices' })))

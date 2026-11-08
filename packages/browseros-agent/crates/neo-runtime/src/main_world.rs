@@ -1,7 +1,7 @@
 //! Neo: the only door from Rust into a frame's MAIN world, where Playwright runs every page
 //! evaluation (`page.evaluate`, `locator.evaluate`, `JSHandle.evaluate`), as opposed to the
 //! utility world (`world.rs`) where every Neo read and action runs. It runs exactly three built
-//! functions of neo-runtime-injected, never anything else: `dist/utility.js` builds Playwright's
+//! functions of neo-playwright-injected, never anything else: `dist/utility.js` builds Playwright's
 //! `UtilityScript`, and `dist/evaluate.js` / `dist/json-value.js` call it. The agent's code only
 //! ever travels as an argument value of `evaluate.js`.
 //!
@@ -56,40 +56,40 @@ use crate::world::{self, ObjectGroup};
 /// Playwright: `server/javascript.ts` `ExecutionContext._utilityScript`
 const UTILITY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/utility.js"
+    "/../neo-playwright-injected/dist/utility.js"
 ));
 /// `(utilityScript, ...args) => utilityScript.evaluate(...args)`.
 /// Playwright: `server/javascript.ts` `evaluateExpression`
 const EVALUATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/evaluate.js"
+    "/../neo-playwright-injected/dist/evaluate.js"
 ));
 /// `(utilityScript, ...args) => utilityScript.jsonValue(...args)`.
 /// Playwright: `server/javascript.ts` `JSHandle._jsonValue`
 const JSON_VALUE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/json-value.js"
+    "/../neo-playwright-injected/dist/json-value.js"
 ));
 
 /// Playwright: `server/javascript.ts` `JSHandle._getProperty`
 const GET_PROPERTY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/get-property.js"
+    "/../neo-playwright-injected/dist/get-property.js"
 ));
 /// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`
 const WAIT_FOR_FUNCTION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/wait-for-function.js"
+    "/../neo-playwright-injected/dist/wait-for-function.js"
 ));
 /// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`
 const WAIT_RESULT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/wait-result.js"
+    "/../neo-playwright-injected/dist/wait-result.js"
 ));
 /// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`
 const WAIT_ABORT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/wait-abort.js"
+    "/../neo-playwright-injected/dist/wait-abort.js"
 ));
 
 /// `(object) => object`, run on a page object an event named, with that object as its argument.
@@ -97,7 +97,7 @@ const WAIT_ABORT: &str = include_str!(concat!(
 /// in the run's handle group, which Neo releases at run end (`evaluate::handle_for_remote_object`).
 const RETAIN: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/retain.js"
+    "/../neo-playwright-injected/dist/retain.js"
 ));
 
 /// `(initializer) => InjectedScript`: the main world's own (`isUtilityWorld: false`), returned to
@@ -105,45 +105,45 @@ const RETAIN: &str = include_str!(concat!(
 /// Playwright: `server/dom.ts` `FrameExecutionContext.injectedScript`
 const MAIN_INJECTED: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/main-injected.js"
+    "/../neo-playwright-injected/dist/main-injected.js"
 ));
 /// Playwright: `server/frames.ts` `Frame._waitForFunctionOnSelector`
 const CALL_ON_ELEMENT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/call-on-element.js"
+    "/../neo-playwright-injected/dist/call-on-element.js"
 ));
 
 /// Playwright: `server/frames.ts` `Frame._addScriptTag`
 const ADD_TAG: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/add-tag.js"
+    "/../neo-playwright-injected/dist/add-tag.js"
 ));
 
 /// Playwright: `server/page.ts` `PageBinding.createInitScript`
 const BINDINGS_CONTROLLER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/bindings-controller.js"
+    "/../neo-playwright-injected/dist/bindings-controller.js"
 ));
 
 /// Playwright: `server/page.ts` `PageBinding.dispatch`
 const BINDINGS_CALL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/bindings-call.js"
+    "/../neo-playwright-injected/dist/bindings-call.js"
 ));
 
 /// Playwright: `server/clock.ts` `Clock._installIfNeeded`
 const CLOCK_INSTALL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/clock-install.js"
+    "/../neo-playwright-injected/dist/clock-install.js"
 ));
 
 /// Playwright: `server/clock.ts` `Clock.install`
 const CLOCK_CALL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../neo-runtime-injected/dist/clock-call.js"
+    "/../neo-playwright-injected/dist/clock-call.js"
 ));
 
-/// A page function of Playwright's server, built in neo-runtime-injected, that runs as the
+/// A page function of Playwright's server, built in neo-playwright-injected, that runs as the
 /// `expression` of `UtilityScript.evaluate` (`EVALUATE`), so its arguments arrive parsed with
 /// their handles, primitives included. Agent code never takes this path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

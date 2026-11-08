@@ -176,9 +176,10 @@ pub(crate) static HANDLE_DISPOSE_META: MethodMeta = MethodMeta {
     flags: &[],
 };
 
-/// Playwright's `SerializedArgument` after neo-sdk ran Playwright's client and server steps on
-/// it (`neo-sdk/src/js-handle.ts` `serializeArgument`): `value` is in the page's format and
-/// stays opaque here; `handles` are the guids its `{h: i}` references name, in order.
+/// Playwright's `SerializedArgument` after neo-quickjs-injected ran Playwright's client and server
+/// steps on it (`neo-quickjs-injected/src/js-handle.ts` `serializeArgument`): `value` is in the
+/// page's format and stays opaque here; `handles` are the guids its `{h: i}` references name, in
+/// order.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SerializedArgument {

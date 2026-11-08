@@ -1,4 +1,4 @@
-# neo-runtime-injected
+# neo-playwright-injected
 
 The page half of neo-runtime: Playwright's injected script, vendored unchanged, plus Neo's glue table. neo-runtime embeds `dist/*.js` and runs them over CDP in an isolated world of the run's page. Read `../NEO_STYLE.md` before changing anything here.
 

@@ -41,14 +41,14 @@ const result = await Bun.build({
 })
 const [output] = result.outputs
 if (!result.success || result.outputs.length !== 1 || !output) {
-  throw new AggregateError(result.logs, 'neo-sdk build failed')
+  throw new AggregateError(result.logs, 'neo-quickjs-injected build failed')
 }
 
 const exportStatement = /^export \{\s*createRun\s*\};\s*$/m
 const esm = await output.text()
 if (!exportStatement.test(esm) || esm.match(/^export /gm)?.length !== 1) {
   throw new Error(
-    'neo-sdk build: expected exactly one `export { createRun };` statement',
+    'neo-quickjs-injected build: expected exactly one `export { createRun };` statement',
   )
 }
 const body = esm.replace(exportStatement, '').trimEnd()

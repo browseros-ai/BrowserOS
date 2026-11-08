@@ -454,8 +454,8 @@ const SETUP_TRIES: usize = 2;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a helper may outlive a browser that closed gracefully before [`Browser::close`]
-/// reports it as a survivor and SIGKILLs it. `crates/neo-sdk/tests/parity/harness.mjs` uses the
-/// same value.
+/// reports it as a survivor and SIGKILLs it. `crates/neo-quickjs-injected/tests/parity/harness.mjs`
+/// uses the same value.
 const HELPER_GRACE: Duration = Duration::from_secs(5);
 
 /// How often [`Browser::close`] samples the processes left.
@@ -773,8 +773,8 @@ fn answers(port: u16) -> bool {
 /// `Default/Preferences` before the browser first reads them, and returns it. A download the
 /// browser saves itself (Neo's `behavior: 'default'`) goes to the profile's default folder,
 /// which a fresh profile puts at the user's ~/Downloads. "Ask where to save each file" is off, as
-/// a headless browser cancels a download that asks. `crates/neo-sdk/tests/parity/harness.mjs`
-/// seeds its profiles the same way.
+/// a headless browser cancels a download that asks.
+/// `crates/neo-quickjs-injected/tests/parity/harness.mjs` seeds its profiles the same way.
 fn seed_downloads(profile: &Path) -> PathBuf {
     let downloads = profile.join("downloads");
     let settings = profile.join("Default");
