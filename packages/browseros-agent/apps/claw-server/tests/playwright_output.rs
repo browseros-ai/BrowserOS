@@ -225,84 +225,152 @@ fn bounded(result: &Value) -> &Value {
     &result["structuredContent"]
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "Report opt-in browser skips and verification measurements"
-)]
+/// One isolated headless BrowserOS neo, the shipped server on it, and a >100 KB fixture page.
+struct Harness {
+    _root: TempDir,
+    browser: Process,
+    server: Process,
+    cdp: CdpClient,
+    client: Client,
+    base: String,
+    url: String,
+    fixture: tokio::task::JoinHandle<std::io::Result<()>>,
+}
+
+impl Harness {
+    #[expect(clippy::print_stderr, reason = "Report opt-in browser skips")]
+    async fn start() -> anyhow::Result<Option<Self>> {
+        let Some(binary) = env::var_os("NEO_E2E_BROWSER") else {
+            eprintln!("SKIP: set NEO_E2E_BROWSER to a real BrowserOS neo executable");
+            return Ok(None);
+        };
+        let root = TempDir::new()?;
+        fs::create_dir_all(root.path().join("home"))?;
+        let profile = root.path().join("browser-profile");
+        let mut command = Command::new(binary);
+        command
+            .args([
+                "--headless=new",
+                "--disable-browseros-server",
+                "--remote-debugging-port=0",
+                "--no-first-run",
+            ])
+            .arg(format!("--user-data-dir={}", profile.display()))
+            .arg("about:blank");
+        let mut browser = spawn(&mut command, root.path().join("browser.log"))?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let cdp_port = loop {
+            if let Ok(content) = fs::read_to_string(profile.join("DevToolsActivePort"))
+                && let Some(port) = content
+                    .lines()
+                    .next()
+                    .and_then(|line| line.parse::<u16>().ok())
+            {
+                break port;
+            }
+            anyhow::ensure!(
+                browser.child.try_wait()?.is_none() && Instant::now() < deadline,
+                "BrowserOS did not publish a debugging port"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let cdp = CdpClient::connect(ConnectOptions {
+            reconnect_policy: ReconnectPolicy::KeepTrying,
+            ..ConnectOptions::new(cdp_port)
+        })
+        .await?;
+        let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+        let (server, base) = start_server(root.path(), cdp_port, "1", &client).await?;
+        let stories = (1..=30)
+            .map(|i| format!("<article><a href='/article/{i}'>Story {i}</a></article>"))
+            .collect::<String>();
+        let products = (0..3500).map(|i| format!("<article><button onclick=\"document.getElementById('selection').textContent='selected {i}'\">Buy product {i:04} 漢字 🦀</button><p>Useful product details with a long description for item {i}</p></article>")).collect::<String>();
+        let html = format!(
+            "<!doctype html><html lang='en'><meta charset='utf-8'><title>Fixture shop</title><body><header>Outside header</header><main><section aria-label='Stories'>{stories}</section><section aria-label='Products'>{products}</section><p id='selection' role='status'>none</p></main><footer>Outside footer</footer></body></html>"
+        );
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let fixture = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route(
+                        "/",
+                        get(move || {
+                            let html = html.clone();
+                            async { axum::response::Html(html) }
+                        }),
+                    )
+                    .route(
+                        "/never",
+                        get(|| async {
+                            std::future::pending::<axum::response::Html<&'static str>>().await
+                        }),
+                    ),
+            )
+            .await
+        });
+        Ok(Some(Self {
+            _root: root,
+            browser,
+            server,
+            cdp,
+            client,
+            base,
+            url,
+            fixture,
+        }))
+    }
+
+    async fn run(&self, id: u64, args: Value) -> anyhow::Result<Value> {
+        run(&self.client, &self.base, id, args).await
+    }
+
+    /// Follows `next` until the stored text ends, checking every window's bounds and progress.
+    async fn follow(&self, mut next: Value, mut text: String) -> anyhow::Result<(String, u64)> {
+        let mut windows = 0;
+        while next.is_object() {
+            windows += 1;
+            anyhow::ensure!(windows < 100, "retrieval must make progress");
+            let window = self.run(1_000 + windows, next.clone()).await?;
+            let window = bounded(&window);
+            anyhow::ensure!(window["pages"] == json!([]), "retrieval touched pages");
+            anyhow::ensure!(
+                window["truncated"]["end"].as_u64() > next["offset"].as_u64(),
+                "window made no progress: {window}"
+            );
+            text.push_str(window["value"].as_str().expect("expected test value"));
+            next = window["truncated"]["next"].clone();
+        }
+        Ok((text, windows))
+    }
+
+    async fn stop(mut self) -> anyhow::Result<()> {
+        stop_server(&self.client, &self.base, &mut self.server).await?;
+        self.fixture.abort();
+        let _ = self.cdp.send("Browser.close", json!({}), None).await;
+        self.cdp.disconnect().await;
+        self.browser.wait().await
+    }
+}
+
+/// The realm's string hash, `(hash * 31 + code unit) >>> 0` over UTF-16 code units.
+fn js_hash(text: &str) -> u32 {
+    text.encode_utf16().fold(0_u32, |hash, ch| {
+        hash.wrapping_mul(31).wrapping_add(u32::from(ch))
+    })
+}
+
+const HASH_JS: &str = "let hash=0; for(let i=0;i<snap.length;i++) hash=(Math.imul(hash,31)+snap.charCodeAt(i))>>>0; console.log('hash:'+hash);";
+
+#[expect(clippy::print_stderr, reason = "Report verification measurements")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> anyhow::Result<()> {
-    let Some(binary) = env::var_os("NEO_E2E_BROWSER") else {
-        eprintln!("SKIP: set NEO_E2E_BROWSER to a real BrowserOS neo executable");
+    let Some(harness) = Harness::start().await? else {
         return Ok(());
     };
-    let root = TempDir::new()?;
-    fs::create_dir_all(root.path().join("home"))?;
-    let profile = root.path().join("browser-profile");
-    let mut command = Command::new(binary);
-    command
-        .args([
-            "--headless=new",
-            "--disable-browseros-server",
-            "--remote-debugging-port=0",
-            "--no-first-run",
-        ])
-        .arg(format!("--user-data-dir={}", profile.display()))
-        .arg("about:blank");
-    let mut browser = spawn(&mut command, root.path().join("browser.log"))?;
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let cdp_port = loop {
-        if let Ok(content) = fs::read_to_string(profile.join("DevToolsActivePort"))
-            && let Some(port) = content
-                .lines()
-                .next()
-                .and_then(|line| line.parse::<u16>().ok())
-        {
-            break port;
-        }
-        anyhow::ensure!(
-            browser.child.try_wait()?.is_none() && Instant::now() < deadline,
-            "BrowserOS did not publish a debugging port"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    let cdp = CdpClient::connect(ConnectOptions {
-        reconnect_policy: ReconnectPolicy::KeepTrying,
-        ..ConnectOptions::new(cdp_port)
-    })
-    .await?;
-    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
-    let (mut server, base) = start_server(root.path(), cdp_port, "1", &client).await?;
-    let stories = (1..=30)
-        .map(|i| format!("<article><a href='/article/{i}'>Story {i}</a></article>"))
-        .collect::<String>();
-    let products = (0..3500).map(|i| format!("<article><button onclick=\"document.getElementById('selection').textContent='selected {i}'\">Buy product {i:04} 漢字 🦀</button><p>Useful product details with a long description for item {i}</p></article>")).collect::<String>();
-    let html = format!(
-        "<!doctype html><html lang='en'><meta charset='utf-8'><title>Fixture shop</title><body><header>Outside header</header><main><section aria-label='Stories'>{stories}</section><section aria-label='Products'>{products}</section><p id='selection' role='status'>none</p></main><footer>Outside footer</footer></body></html>"
-    );
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let url = format!("http://{}/", listener.local_addr()?);
-    let fixture = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            Router::new()
-                .route(
-                    "/",
-                    get(move || {
-                        let html = html.clone();
-                        async { axum::response::Html(html) }
-                    }),
-                )
-                .route(
-                    "/never",
-                    get(|| async {
-                        std::future::pending::<axum::response::Html<&'static str>>().await
-                    }),
-                ),
-        )
-        .await
-    });
-
-    let scoped = run(&client, &base, 1, json!({"code":format!(
+    let (client, base, url) = (&harness.client, harness.base.as_str(), harness.url.as_str());
+    let scoped = run(client, base, 1, json!({"code":format!(
         "await page.goto({}); return await page.getByRole('region', {{name:'Stories'}}).ariaSnapshot({{mode:'ai'}});", serde_json::to_string(&url)?)})).await?;
     let report = bounded(&scoped);
     assert_eq!(report["status"], "ok");
@@ -313,7 +381,7 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
     let page = report["pages"][0]["id"]
         .as_str()
         .expect("expected test value");
-    let full = run(&client, &base, 2, json!({"page":page,"code":
+    let full = run(client, base, 2, json!({"page":page,"code":
         "const tree = await page.ariaSnapshot({mode:'ai'}); if (tree.length < 100000) throw new Error('fixture too small'); let hash=0; for(let i=0;i<tree.length;i++) hash=(Math.imul(hash,31)+tree.charCodeAt(i))>>>0; console.log('hash:'+hash); console.log('pages:'+(await context.pages()).length); return tree;"})).await?;
     let report = bounded(&full);
     assert_eq!(report["status"], "ok");
@@ -335,7 +403,7 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
     while next.is_object() {
         windows += 1;
         assert!(windows < 100, "retrieval must make progress");
-        let window = run(&client, &base, 10 + windows, next.clone()).await?;
+        let window = run(client, base, 10 + windows, next.clone()).await?;
         let window = bounded(&window);
         assert!(
             window["pages"]
@@ -380,7 +448,7 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
     );
     assert!(text[prefix..].contains("Buy product 3499"));
     let reference = last_ref.expect("expected test value");
-    let clicked = run(&client, &base, 150, json!({"page":page,"code":format!(
+    let clicked = run(client, base, 150, json!({"page":page,"code":format!(
         "await page.locator('aria-ref={reference}').click(); return {{ selected: await page.getByRole('status').textContent(), url:page.url(), count:(await context.pages()).length }};")})).await?;
     let clicked = bounded(&clicked);
     assert_eq!(clicked["status"], "ok");
@@ -406,8 +474,8 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
         json!({}),
     ] {
         let reply = rpc(
-            &client,
-            &base,
+            client,
+            base,
             160,
             "tools/call",
             json!({"name":"run","arguments":args}),
@@ -415,7 +483,7 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
         .await?;
         assert_eq!(reply["error"]["code"], -32602);
     }
-    let expired = run(&client, &base, 161, json!({"result":"missing"})).await?;
+    let expired = run(client, base, 161, json!({"result":"missing"})).await?;
     assert_eq!(expired["isError"], true);
     assert!(
         bounded(&expired)["pages"]
@@ -424,7 +492,7 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
             .is_empty()
     );
 
-    let failed = run(&client, &base, 170, json!({"timeout":5000,"code":format!(
+    let failed = run(client, base, 170, json!({"timeout":5000,"code":format!(
         "console.log('large log\\n'.repeat(20000)); await page.goto({}, {{timeout:200}});", serde_json::to_string(&format!("{url}never"))?)})).await?;
     let failed_report = bounded(&failed);
     assert_eq!(failed["isError"], true);
@@ -445,10 +513,89 @@ async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> a
             .expect("expected test value")
             .len()
     );
-    stop_server(&client, &base, &mut server).await?;
-    fixture.abort();
-    let _ = cdp.send("Browser.close", json!({}), None).await;
-    cdp.disconnect().await;
-    browser.wait().await?;
-    Ok(())
+    harness.stop().await
+}
+
+#[expect(clippy::print_stderr, reason = "Report verification measurements")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tests_that_object_and_array_returns_keep_their_type_through_mcp() -> anyhow::Result<()> {
+    let Some(harness) = Harness::start().await? else {
+        return Ok(());
+    };
+    // The REAL regression (topwork-7, opendining-2): an object around a big snapshot showed
+    // only `{\n  "n": …,\n` of the 24 KB budget and hid the snapshot.
+    let reply = harness.run(1, json!({"code":format!(
+        "await page.goto({}); const snap = await page.locator('body').first().ariaSnapshot({{mode:'ai'}}); {HASH_JS} return {{snap, n: snap.length}};",
+        serde_json::to_string(&harness.url)?)})).await?;
+    let report = bounded(&reply);
+    assert_eq!(report["status"], "ok");
+    let n = report["value"]["n"]
+        .as_u64()
+        .expect("n stays a whole number");
+    assert!(n > 100_000, "fixture snapshot has {n} code units");
+    let prefix = report["value"]["snap"]
+        .as_str()
+        .expect("snap stays a string");
+    assert!(prefix.len() > 15_000, "snap shows {} bytes", prefix.len());
+    let meta = &report["truncated"]["value"];
+    assert_eq!(meta["type"], "object");
+    assert_eq!(meta["cut"][0]["path"], "/snap");
+    assert_eq!(meta["cut"][0]["shown"], prefix.len());
+    let (snap, leaf_windows) = harness
+        .follow(meta["cut"][0]["next"].clone(), prefix.to_string())
+        .await?;
+    assert_eq!(snap.encode_utf16().count() as u64, n);
+    assert!(
+        report["logs"]
+            .as_array()
+            .expect("expected test value")
+            .contains(&json!(format!("hash:{}", js_hash(&snap))))
+    );
+    // Clients that follow the whole-field link still get the same pretty JSON.
+    let (whole, _) = harness.follow(meta["next"].clone(), String::new()).await?;
+    assert_eq!(
+        serde_json::from_str::<Value>(&whole)?,
+        json!({"snap":snap, "n":n})
+    );
+    let page = report["pages"][0]["id"]
+        .as_str()
+        .expect("expected test value");
+
+    // staynb-9: an array came back as a pretty-JSON string.
+    let reply = harness
+        .run(
+            2,
+            json!({"page":page,"code":"return await page.locator('article button').allInnerTexts();"}),
+        )
+        .await?;
+    let report = bounded(&reply);
+    let shown = report["value"].as_array().expect("array keeps its type");
+    let expected = (0..3500)
+        .map(|i| format!("Buy product {i:04} 漢字 🦀"))
+        .collect::<Vec<_>>();
+    assert!(shown.len() > 300, "kept {} elements", shown.len());
+    assert_eq!(
+        *shown,
+        json!(expected[..shown.len()])
+            .as_array()
+            .expect("array")
+            .clone()
+    );
+    let cut = &report["truncated"]["value"]["cut"][0];
+    assert_eq!((&cut["path"], &cut["type"]), (&json!(""), &json!("array")));
+    assert_eq!(
+        (cut["kept"].as_u64(), cut["length"].as_u64()),
+        (Some(shown.len() as u64), Some(3500))
+    );
+    let (tail, _) = harness.follow(cut["next"].clone(), String::new()).await?;
+    let rest: Vec<String> = serde_json::from_str(&format!("[\n{tail}"))?;
+    assert_eq!(rest, expected[shown.len()..]);
+    eprintln!(
+        "PASS MCP object/array: snap {} bytes, {} shown, {leaf_windows} leaf windows; array kept {} of 3500, tail {} bytes",
+        snap.len(),
+        prefix.len(),
+        shown.len(),
+        tail.len()
+    );
+    harness.stop().await
 }

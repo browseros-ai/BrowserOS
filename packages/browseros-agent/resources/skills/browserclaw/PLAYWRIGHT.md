@@ -28,7 +28,7 @@ return await section.ariaSnapshot({ mode: 'ai', depth: 4 });
 
 AI mode needs an existing match. `depth` limits nesting; many siblings can still produce a large result. Snapshot refs replace the previous snapshot's refs for that document.
 
-`run` uses a 24,000-byte compact JSON response budget. Small results keep their types. Large results include `truncated`; strings become prefixes, other values become pretty JSON text with their original `type` in metadata. In-run values stay complete. Logs and call traces may be shortened; check `callsDropped` and `truncated.calls.dropped` before retrying input with uncertain delivery.
+`run` uses a 24,000-byte compact JSON response budget. Small results keep their types. Large results include `truncated`. A string becomes a prefix. An object or array keeps its type: small keys stay whole, long strings inside it become prefixes, and long arrays keep their first elements. In-run values stay complete. Logs and call traces may be shortened; check `callsDropped` and `truncated.calls.dropped` before retrying input with uncertain delivery.
 
 Follow a field's `truncated.<field>.next` as the next `run` arguments:
 
@@ -36,7 +36,15 @@ Follow a field's `truncated.<field>.next` as the next `run` arguments:
 {"result":"r0123456789ab","field":"value","offset":18000}
 ```
 
-Use `result` instead of `code`, without `page` or `timeout`. Fields are `value` (default), `logs`, `calls`, and `error`. Offsets count UTF-8 bytes. Retrieval returns text and `truncated.next` until complete; append `value` windows, keeping optional ancestor `context` separate. Logs/calls/errors retrieve as pretty JSON, starting at offset zero.
+Use `result` instead of `code`, without `page` or `timeout`. Fields are `value` (default), `logs`, `calls`, and `error`. Offsets count UTF-8 bytes. Retrieval returns text and `truncated.next` until complete; append `value` windows, keeping optional ancestor `context` separate. Logs/calls/errors, and an object or array `value`, retrieve as pretty JSON, starting at offset zero.
+
+For an object or array, `truncated.value.cut` lists each shortened part by JSON Pointer `path`: a string with `shown`/`total` bytes, an array or object with `kept`/`length` entries. Its `next` adds `path` and reads only that part:
+
+```json
+{"result":"r0123456789ab","field":"value","path":"/snap","offset":22555}
+```
+
+Append a string's windows to its shown prefix. An array's or object's windows are its pretty JSON from the first omitted entry, or from offset zero. `cutOmitted` counts parts not listed.
 
 Retrieval reads the stored original without touching the browser, so refs remain valid. The server keeps 16 recently used truncated results, up to 64 MiB of serialized JSON, across MCP sessions; restart or eviction loses them.
 

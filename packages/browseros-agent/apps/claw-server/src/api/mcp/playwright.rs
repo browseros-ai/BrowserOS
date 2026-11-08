@@ -34,7 +34,7 @@ const DEFAULT_TIMEOUT: u64 = 30_000;
 const MAX_TIMEOUT: u64 = 120_000;
 const INSTRUCTIONS: &str = concat!(
     "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).",
-    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,offset}) to read the stored original without changing refs."
+    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,path,offset}) to read the stored original without changing refs. A large object or array keeps its type: small keys stay whole, and truncated.value.cut lists each shortened part by JSON Pointer path with its own next."
 );
 
 struct Browser {
@@ -68,6 +68,7 @@ struct RequestArguments {
     timeout: Option<u64>,
     result: Option<String>,
     field: Option<String>,
+    path: Option<String>,
     offset: Option<usize>,
 }
 
@@ -308,7 +309,7 @@ fn tool() -> Tool {
         ("type".into(), json!("object")),
         ("additionalProperties".into(), json!(false)),
         ("oneOf".into(), json!([
-            {"required":["code"],"not":{"anyOf":[{"required":["result"]},{"required":["field"]},{"required":["offset"]}]}},
+            {"required":["code"],"not":{"anyOf":[{"required":["result"]},{"required":["field"]},{"required":["path"]},{"required":["offset"]}]}},
             {"required":["result"],"not":{"anyOf":[{"required":["code"]},{"required":["page"]},{"required":["timeout"]}]}}
         ])),
         ("properties".into(), json!({
@@ -317,6 +318,7 @@ fn tool() -> Tool {
             "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT,"default":DEFAULT_TIMEOUT,"description":"Whole-run timeout in milliseconds."},
             "result":{"type":"string","minLength":1,"description":"Stored truncated result ID. Use instead of code, without page or timeout; retrieval never touches the browser. Process-local LRU: 16 results, 64 MiB; cleared on restart."},
             "field":{"type":"string","enum":["value","logs","calls","error"],"default":"value","description":"Original field to retrieve. Strings are raw text; other values and logs/calls/error use pretty JSON. Follow truncated.next verbatim."},
+            "path":{"type":"string","description":"JSON Pointer (RFC 6901) to one node inside the field, such as /snap or /items/0; offset then counts into that node's text (raw for a string, pretty JSON otherwise). Copy it from a truncated.value.cut[].next."},
             "offset":{"type":"integer","minimum":0,"default":0,"description":"UTF-8 byte offset into the original field text. Prefer the next arguments returned with truncation metadata."}
         })),
     ])))
@@ -406,6 +408,7 @@ impl ServerHandler for PlaywrightService {
                 .retrieve(
                     &id,
                     args.field.as_deref().unwrap_or("value"),
+                    args.path.as_deref(),
                     args.offset.unwrap_or(0),
                 )
                 .map_err(|error| McpError::invalid_params(error, None))?;
@@ -422,9 +425,9 @@ impl ServerHandler for PlaywrightService {
                 None,
             ));
         };
-        if args.field.is_some() || args.offset.is_some() {
+        if args.field.is_some() || args.path.is_some() || args.offset.is_some() {
             return Err(McpError::invalid_params(
-                "field and offset require result",
+                "field, path and offset require result",
                 None,
             ));
         }
