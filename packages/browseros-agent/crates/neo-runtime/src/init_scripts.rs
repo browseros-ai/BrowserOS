@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, MutexGuard, OnceLock, Weak};
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
+use futures_util::future;
 use neo_runtime_spec::{MethodGroup, MethodMeta};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -673,9 +674,12 @@ impl InitScripts {
         if let Some(cdp) = self.cdp.get().cloned() {
             // On a task of its own, so a run end cut short still removes every script.
             let removal = tokio::spawn(async move {
-                for installed in installed.iter().rev() {
+                // Send every removal before waiting: one held acknowledgement must not leave
+                // later scripts installed, including those that recreate exposed bindings.
+                future::join_all(installed.iter().rev().map(|installed| async {
                     remove_script(&cdp, &installed.link, &installed.identifier).await;
-                }
+                }))
+                .await;
                 // The iframes' sessions first: turning auto-attach off on the tab's detaches them.
                 for link in attaching.iter().rev() {
                     set_auto_attach(&cdp, link, false).await;
