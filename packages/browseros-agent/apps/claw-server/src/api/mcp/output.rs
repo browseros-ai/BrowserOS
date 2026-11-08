@@ -1,8 +1,10 @@
 //! Bounds model-visible run reports; retained originals are shared across MCP sessions.
 
 use std::collections::VecDeque;
+use std::io;
 
-use serde_json::{Value, json};
+use serde::{Serialize, Serializer};
+use serde_json::{Map, Value, json};
 
 pub(super) const BUDGET: usize = 24_000;
 const LOG_BUDGET: usize = 2_000;
@@ -11,6 +13,15 @@ const ERROR_BUDGET: usize = 4_000;
 const CONTEXT_BUDGET: usize = 2_000;
 const MAX_RESULTS: usize = 16;
 const STORE_BUDGET: usize = 64 * 1024 * 1024;
+/// A big array element or object entry kept beside cut siblings shows at least this many
+/// encoded bytes, or a `MIN_SHARE_PARTS`th of a smaller container's budget, so a nested
+/// record still splits its share among its fields.
+const MIN_SHARE: usize = 2_000;
+const MIN_SHARE_PARTS: usize = 8;
+/// Listed cuts cost about 150 bytes each, so the list stays near 3 KB of the budget.
+const MAX_CUTS: usize = 20;
+/// Metadata grows with the cuts it lists; each attempt shrinks the value by the overshoot.
+const FIT_ATTEMPTS: usize = 8;
 
 struct Retained {
     id: String,
@@ -57,10 +68,12 @@ impl Store {
         bounded
     }
 
+    /// Reads one window of a stored field, or of the node `path` (RFC 6901) names in it.
     pub(super) fn retrieve(
         &mut self,
         id: &str,
         field: &str,
+        path: Option<&str>,
         offset: usize,
     ) -> Result<Value, String> {
         if !matches!(field, "value" | "logs" | "calls" | "error") {
@@ -75,11 +88,18 @@ impl Store {
             self.entries.push_back(entry);
         }
         let entry = &self.entries[self.entries.len() - 1];
-        let value = entry
+        let root = entry
             .original
             .get(field)
             .ok_or_else(|| format!("result has no {field} field"))?;
-        let text = field_text(field, value);
+        let value = match path {
+            None => root,
+            Some(path) => root.pointer(path).ok_or_else(|| {
+                format!("{field} has no node at path {path:?}; path is a JSON Pointer such as /snap or /items/0")
+            })?,
+        };
+        // A string node reads as raw text, like a string value; other nodes as pretty JSON.
+        let text = node_text(value, field == "value" || path.is_some());
         if offset > text.len() || !text.is_char_boundary(offset) || inside_ref(&text, offset) {
             return Err(
                 "offset must be a UTF-8 byte boundary within the field, outside a [ref=…] token"
@@ -88,6 +108,9 @@ impl Store {
         }
         let mut out = json!({"status":"ok", "value":"", "logs":[], "calls":[], "pages":[],
             "truncated":{"result":id, "field":field, "offset":offset,"end":offset,"total":text.len(), "type":value_type(value)}});
+        if let Some(path) = path {
+            out["truncated"]["path"] = json!(path);
+        }
         if field == "value" && value.is_string() {
             let (context, clipped) = ancestors(&text, offset);
             if !context.is_empty() {
@@ -102,7 +125,7 @@ impl Store {
             out["value"] = json!(&text[offset..end]);
             out["truncated"]["end"] = json!(end);
             if end < text.len() {
-                out["truncated"]["next"] = next(id, field, end);
+                out["truncated"]["next"] = next(id, field, path, end);
             } else if let Some(meta) = out["truncated"].as_object_mut() {
                 meta.remove("next");
             }
@@ -116,9 +139,11 @@ impl Store {
 }
 
 fn field_text(field: &str, value: &Value) -> String {
-    if field == "value"
-        && let Some(text) = value.as_str()
-    {
+    node_text(value, field == "value")
+}
+
+fn node_text(value: &Value, raw_strings: bool) -> String {
+    if raw_strings && let Some(text) = value.as_str() {
         return text.to_owned();
     }
     // Values already crossed serde successfully; pretty JSON is a reversible text view.
@@ -136,14 +161,18 @@ fn value_type(value: &Value) -> &'static str {
     }
 }
 
-fn next(id: &str, field: &str, offset: usize) -> Value {
-    json!({"result":id, "field":field, "offset":offset})
+fn next(id: &str, field: &str, path: Option<&str>, offset: usize) -> Value {
+    let mut next = json!({"result":id, "field":field, "offset":offset});
+    if let Some(path) = path {
+        next["path"] = json!(path);
+    }
+    next
 }
 
-fn metadata(id: &str, field: &str, shown: usize, text: &str, value: &Value) -> Value {
-    let mut meta = json!({"shown":shown,"total":text.len(),"type":value_type(value)});
-    if shown < text.len() {
-        meta["next"] = next(id, field, shown);
+fn metadata(id: &str, field: &str, shown: usize, total: usize, value: &Value) -> Value {
+    let mut meta = json!({"shown":shown,"total":total,"type":value_type(value)});
+    if shown < total {
+        meta["next"] = next(id, field, None, shown);
     }
     meta
 }
@@ -205,18 +234,26 @@ fn bound(original: &Value, id: &str, retained: bool) -> Value {
         mark_changed(&mut out, original, id, "logs");
         mark_calls(&mut out, original, id);
     }
-    if let Some(value) = original.get("value") {
-        let text = field_text("value", value);
-        fit_prefix(&text, |shown| {
-            out["value"] = json!(&text[..shown]);
-            out["truncated"]["value"] = metadata(id, "value", shown, &text, value);
-            out.to_string().len() <= BUDGET
-        });
+    match original.get("value") {
+        Some(value @ Value::String(text)) => {
+            fit_prefix(text, |shown| {
+                out["value"] = json!(&text[..shown]);
+                out["truncated"]["value"] = metadata(id, "value", shown, text.len(), value);
+                out.to_string().len() <= BUDGET
+            });
+        }
+        Some(value) => fit_value(&mut out, value, id),
+        None => {}
     }
     if !retained {
         for field in ["value", "logs", "calls", "error"] {
             if let Some(meta) = out["truncated"][field].as_object_mut() {
                 meta.remove("next");
+            }
+        }
+        if let Some(cuts) = out["truncated"]["value"]["cut"].as_array_mut() {
+            for cut in cuts.iter_mut().filter_map(Value::as_object_mut) {
+                cut.remove("next");
             }
         }
     }
@@ -232,7 +269,7 @@ fn mark_changed(out: &mut Value, original: &Value, id: &str, field: &str) {
     if out[field] != original[field] {
         let text = field_text(field, &original[field]);
         // Array excerpts and clipped errors are not byte prefixes of their original JSON.
-        out["truncated"][field] = metadata(id, field, 0, &text, &original[field]);
+        out["truncated"][field] = metadata(id, field, 0, text.len(), &original[field]);
     }
 }
 
@@ -259,6 +296,327 @@ fn mark_calls(out: &mut Value, original: &Value, id: &str) {
         dropped["delivery"] = json!(delivery);
     }
     out["truncated"]["calls"]["dropped"] = dropped;
+}
+
+/// Bounds a non-string value without changing its JSON type. Small leaves stay whole; the
+/// room goes to oversized strings, arrays and objects, each listed in `cut` with its own
+/// `next`. Nothing shown is a byte prefix of the field's pretty JSON, so the whole-field
+/// `next` reads that text from offset 0, as for clipped logs and calls.
+fn fit_value(out: &mut Value, value: &Value, id: &str) {
+    out["value"] = Value::Null;
+    let mut room = (BUDGET + "null".len()).saturating_sub(out.to_string().len());
+    let size = encoded_len(value);
+    if size <= room {
+        out["value"] = value.clone();
+        return;
+    }
+    let total = pretty_len(value);
+    for attempt in 1..=FIT_ATTEMPTS {
+        // A value that keeps missing gives up its content, never the recovery metadata.
+        if attempt == FIT_ATTEMPTS {
+            room = 0;
+        }
+        let mut cuts = Vec::new();
+        out["value"] = shrink(value, size, room, &mut String::new(), &mut cuts);
+        let mut meta = metadata(id, "value", 0, total, value);
+        meta["cut"] = cuts
+            .iter()
+            .take(MAX_CUTS)
+            .map(|cut| cut.metadata(id))
+            .collect();
+        if cuts.len() > MAX_CUTS {
+            meta["cutOmitted"] = json!(cuts.len() - MAX_CUTS);
+        }
+        out["truncated"]["value"] = meta;
+        let len = out.to_string().len();
+        if len <= BUDGET {
+            return;
+        }
+        // Shrink from what was shown, not the room: a value can leave slack under its room.
+        room = encoded_len(&out["value"]).saturating_sub(len - BUDGET);
+    }
+}
+
+/// One oversized node of a bounded value, addressed by its RFC 6901 JSON Pointer.
+struct Cut {
+    path: String,
+    kind: Kind,
+}
+
+enum Kind {
+    /// The value shows the first `shown` of `total` UTF-8 bytes.
+    Text { shown: usize, total: usize },
+    /// The value keeps the first `kept` of `length` elements or entries; the omitted ones
+    /// start at byte `offset` of the node's pretty JSON.
+    Entries {
+        array: bool,
+        kept: usize,
+        length: usize,
+        offset: usize,
+    },
+}
+
+impl Cut {
+    fn metadata(&self, id: &str) -> Value {
+        let path = Some(self.path.as_str());
+        match self.kind {
+            Kind::Text { shown, total } => json!({"path":self.path, "type":"string",
+                "shown":shown, "total":total, "next":next(id, "value", path, shown)}),
+            Kind::Entries {
+                array,
+                kept,
+                length,
+                offset,
+            } => json!({"path":self.path, "type":if array {"array"} else {"object"},
+                "kept":kept, "length":length, "next":next(id, "value", path, offset)}),
+        }
+    }
+}
+
+/// Fits `value` (`size` encoded bytes) into `budget` encoded bytes, recording each cut node in
+/// document order. Only a budget below a node's smallest form (`""`, `[]`, `{}` or a scalar)
+/// can overshoot, and `fit_value` reports that as metadata over budget.
+fn shrink(
+    value: &Value,
+    size: usize,
+    budget: usize,
+    path: &mut String,
+    cuts: &mut Vec<Cut>,
+) -> Value {
+    if size <= budget {
+        return value.clone();
+    }
+    let entries: Vec<(Option<&String>, &Value)> = match value {
+        Value::String(text) => {
+            let shown = leaf_end(text, budget.saturating_sub(2));
+            cuts.push(Cut {
+                path: path.clone(),
+                kind: Kind::Text {
+                    shown,
+                    total: text.len(),
+                },
+            });
+            return json!(&text[..shown]);
+        }
+        Value::Array(items) => items.iter().map(|item| (None, item)).collect(),
+        Value::Object(map) => map.iter().map(|(key, item)| (Some(key), item)).collect(),
+        Value::Null | Value::Bool(_) | Value::Number(_) => return value.clone(),
+    };
+    let array = value.is_array();
+    let sizes: Vec<usize> = entries.iter().map(|(_, item)| encoded_len(item)).collect();
+    let least: Vec<usize> = entries
+        .iter()
+        .zip(&sizes)
+        .map(|((_, item), &size)| match item {
+            Value::String(_) | Value::Array(_) | Value::Object(_) => size.min(2),
+            Value::Null | Value::Bool(_) | Value::Number(_) => size,
+        })
+        .collect();
+    // `"key":` for an object entry; a separator precedes every kept entry but the first.
+    let costs: Vec<usize> = entries
+        .iter()
+        .map(|(key, _)| key.map_or(0, |key| quoted_len(key) + 1))
+        .collect();
+    // A big entry kept beside cut siblings shows at least `floor` bytes, so a container drops
+    // entries rather than showing many unreadable fragments.
+    let floor = MIN_SHARE.min(budget / MIN_SHARE_PARTS);
+    let order: Vec<usize> = if array {
+        // A tail, never a middle element: kept indices must still match the original.
+        (0..entries.len()).collect()
+    } else {
+        // Small sibling keys identify a record, so they go before any big entry.
+        let (small, big): (Vec<usize>, Vec<usize>) =
+            (0..entries.len()).partition(|&index| sizes[index] <= floor);
+        small.into_iter().chain(big).collect()
+    };
+    let mut keep = vec![false; entries.len()];
+    let mut used = 2;
+    let mut kept: usize = 0;
+    for index in order {
+        let add = usize::from(kept > 0) + costs[index] + floor.max(least[index]).min(sizes[index]);
+        if used + add > budget {
+            break;
+        }
+        used += add;
+        keep[index] = true;
+        kept += 1;
+    }
+    let chosen: Vec<usize> = (0..entries.len()).filter(|&index| keep[index]).collect();
+    let fixed =
+        2 + kept.saturating_sub(1) + chosen.iter().map(|&index| costs[index]).sum::<usize>();
+    let level = water_level(
+        &chosen.iter().map(|&index| sizes[index]).collect::<Vec<_>>(),
+        &chosen.iter().map(|&index| least[index]).collect::<Vec<_>>(),
+        budget.saturating_sub(fixed),
+    );
+    if kept < entries.len() {
+        // Only a kept prefix leaves the omitted entries contiguous in the pretty JSON.
+        let prefix = chosen.last().is_none_or(|&last| last + 1 == kept);
+        cuts.push(Cut {
+            path: path.clone(),
+            kind: Kind::Entries {
+                array,
+                kept,
+                length: entries.len(),
+                offset: if prefix {
+                    omitted_offset(value, kept)
+                } else {
+                    0
+                },
+            },
+        });
+    }
+    let depth = path.len();
+    let mut shown = Vec::with_capacity(kept);
+    for index in chosen {
+        let (key, item) = entries[index];
+        match key {
+            Some(key) => push_token(path, key),
+            None => push_token(path, &index.to_string()),
+        }
+        let share = level.max(least[index]).min(sizes[index]);
+        shown.push((key, shrink(item, sizes[index], share, path, cuts)));
+        path.truncate(depth);
+    }
+    if array {
+        Value::Array(shown.into_iter().map(|(_, item)| item).collect())
+    } else {
+        Value::Object(
+            shown
+                .into_iter()
+                .filter_map(|(key, item)| key.map(|key| (key.clone(), item)))
+                .collect(),
+        )
+    }
+}
+
+/// The highest per-entry share whose total fits `room`: entries smaller than it stay whole,
+/// larger ones get exactly it, and none goes below its smallest form.
+fn water_level(sizes: &[usize], least: &[usize], room: usize) -> usize {
+    let used = |level: usize| {
+        sizes
+            .iter()
+            .zip(least)
+            .map(|(&size, &least)| level.max(least).min(size))
+            .sum::<usize>()
+    };
+    let (mut low, mut high) = (0, sizes.iter().copied().max().unwrap_or(0));
+    while low < high {
+        let middle = low + (high - low).div_ceil(2);
+        if used(middle) <= room {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    low
+}
+
+/// Where the first omitted entry starts in the node's pretty JSON. The first `kept` entries
+/// print the same on their own, except that their closing `\n]` is `,\n` in the original.
+/// Falls back to 0 when retrieval would read the offset as inside a ref token.
+fn omitted_offset(value: &Value, kept: usize) -> usize {
+    if kept == 0 {
+        // After the opening `[\n` or `{\n`.
+        return 2;
+    }
+    let head = match value {
+        Value::Array(items) => serde_json::to_string_pretty(&items[..kept]),
+        Value::Object(map) => serde_json::to_string_pretty(&Entries(map, kept)),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => return 0,
+    }
+    .unwrap_or_default();
+    let shared = head.get(..head.len().saturating_sub(2)).unwrap_or_default();
+    let open_ref = shared.rfind('[').is_some_and(|start| {
+        shared[start..].starts_with("[ref=") && !shared[start..].contains(']')
+    });
+    if open_ref { 0 } else { head.len() }
+}
+
+/// The first entries of an object, serialized as an object of their own.
+struct Entries<'a>(&'a Map<String, Value>, usize);
+
+impl Serialize for Entries<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(self.0.iter().take(self.1))
+    }
+}
+
+/// The longest prefix whose JSON escaping fits `room` bytes, ending outside a ref token and
+/// after a complete line when that keeps at least half of it. Unlike a top-level string, a
+/// leaf never shrinks to its first line: one early newline must not hide the rest.
+fn leaf_end(text: &str, room: usize) -> usize {
+    let mut used = 0;
+    let mut end = text.len();
+    for (index, ch) in text.char_indices() {
+        used += escaped_len(ch);
+        if used > room {
+            end = index;
+            break;
+        }
+    }
+    if end < text.len()
+        && let Some(newline) = text[..end].rfind('\n')
+        && newline + 1 >= end / 2
+    {
+        end = newline + 1;
+    }
+    if let Some(start) = ref_start(text, end) {
+        end = start;
+    }
+    end
+}
+
+fn quoted_len(text: &str) -> usize {
+    2 + text.chars().map(escaped_len).sum::<usize>()
+}
+
+/// Bytes `ch` takes inside a JSON string as serde_json writes it.
+fn escaped_len(ch: char) -> usize {
+    match ch {
+        '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+        '\0'..='\u{1f}' => 6,
+        _ => ch.len_utf8(),
+    }
+}
+
+fn push_token(path: &mut String, token: &str) {
+    path.push('/');
+    for ch in token.chars() {
+        match ch {
+            '~' => path.push_str("~0"),
+            '/' => path.push_str("~1"),
+            _ => path.push(ch),
+        }
+    }
+}
+
+/// Counts serialized bytes without building the text.
+#[derive(Default)]
+struct Count(usize);
+
+impl io::Write for Count {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn encoded_len(value: &Value) -> usize {
+    let mut count = Count::default();
+    // A counter never fails a write, and a Value always serializes.
+    let _ = serde_json::to_writer(&mut count, value);
+    count.0
+}
+
+fn pretty_len(value: &Value) -> usize {
+    let mut count = Count::default();
+    let _ = serde_json::to_writer_pretty(&mut count, value);
+    count.0
 }
 
 /// Maximize the encoded envelope, then prefer a complete line and keep ref tokens whole.
@@ -362,6 +720,7 @@ mod tests {
                 .retrieve(
                     next["result"].as_str().expect("expected test value"),
                     next["field"].as_str().expect("expected test value"),
+                    next["path"].as_str(),
                     next["offset"].as_u64().expect("expected test value") as usize,
                 )
                 .expect("expected test value");
@@ -410,6 +769,7 @@ mod tests {
             .retrieve(
                 next["result"].as_str().expect("expected test value"),
                 "value",
+                None,
                 prefix.len(),
             )
             .expect("expected test value");
@@ -421,15 +781,29 @@ mod tests {
 
         let object = json!({"items":["quoted \" \\ \n 🦀".repeat(12_000)]});
         let bounded = store.limit(report(object.clone()));
+        assert!(bounded.to_string().len() <= BUDGET);
         assert_eq!(bounded["truncated"]["value"]["type"], "object");
+        let shown = bounded["value"]["items"][0]
+            .as_str()
+            .expect("escaped leaf keeps its type");
+        assert!(
+            shown.len() > 10_000,
+            "escaped leaf shows {} bytes",
+            shown.len()
+        );
+        assert_eq!(
+            remainder(
+                &mut store,
+                bounded["truncated"]["value"]["cut"][0]["next"].clone(),
+                shown.into()
+            ),
+            object["items"][0]
+        );
         assert_eq!(
             remainder(
                 &mut store,
                 bounded["truncated"]["value"]["next"].clone(),
-                bounded["value"]
-                    .as_str()
-                    .expect("expected test value")
-                    .into()
+                String::new()
             ),
             serde_json::to_string_pretty(&object).expect("expected test value")
         );
@@ -490,30 +864,30 @@ mod tests {
                     .to_string(),
             );
         }
-        assert!(store.retrieve(&ids[0], "value", 1).is_err());
-        assert!(store.retrieve(&ids[0], "value", 40_001).is_err());
+        assert!(store.retrieve(&ids[0], "value", None, 1).is_err());
+        assert!(store.retrieve(&ids[0], "value", None, 40_001).is_err());
         assert_eq!(
             store
-                .retrieve(&ids[0], "value", 0)
+                .retrieve(&ids[0], "value", None, 0)
                 .expect("expected test value")["status"],
             "ok"
         );
         store.limit(report(json!("x".repeat(40_000))));
         assert_eq!(
             store
-                .retrieve(&ids[1], "value", 0)
+                .retrieve(&ids[1], "value", None, 0)
                 .expect("expected test value")["status"],
             "error"
         );
         assert_eq!(
             store
-                .retrieve(&ids[0], "value", 0)
+                .retrieve(&ids[0], "value", None, 0)
                 .expect("expected test value")["status"],
             "ok"
         );
         assert_eq!(
             store
-                .retrieve("missing", "value", 0)
+                .retrieve("missing", "value", None, 0)
                 .expect("expected test value")["status"],
             "error"
         );
@@ -530,7 +904,7 @@ mod tests {
                 .as_str()
                 .expect("expected test value");
             for offset in padding + 1..padding + 10 {
-                assert!(store.retrieve(id, "value", offset).is_err());
+                assert!(store.retrieve(id, "value", None, offset).is_err());
             }
             let prefix = bounded["value"].as_str().expect("expected test value");
             assert!(!((padding + 1..padding + 10).contains(&prefix.len())));
@@ -557,5 +931,456 @@ mod tests {
         failed["status"] = json!("error");
         failed["error"] = json!({"name":"Error", "message":"\u{1}".repeat(40_000)});
         assert!(store.limit(failed).to_string().len() <= BUDGET);
+    }
+
+    fn aria(items: usize) -> String {
+        format!(
+            "- main [ref=e1]:\n  - list [ref=e2]:\n{}",
+            (0..items)
+                .map(|i| format!("    - button \"商品 {i} 🦀\" [ref=e{}]\n", i + 3))
+                .collect::<String>()
+        )
+    }
+
+    fn pretty(value: &Value) -> String {
+        serde_json::to_string_pretty(value).expect("expected test value")
+    }
+
+    #[test]
+    fn tests_that_an_object_keeps_small_keys_and_gives_the_budget_to_its_big_leaf() {
+        let snap = aria(3000);
+        assert!(snap.len() > 100_000);
+        let original = json!({"snap":snap, "n":snap.len(), "url":"https://example.com/a"});
+        let mut store = Store::default();
+        let bounded = store.limit(report(original.clone()));
+        assert!(bounded.to_string().len() <= BUDGET);
+        assert_eq!(bounded["pages"][0]["id"], "p1");
+        assert_eq!(bounded["value"]["n"], original["n"]);
+        assert_eq!(bounded["value"]["url"], original["url"]);
+        let prefix = bounded["value"]["snap"].as_str().expect("string leaf");
+        assert!(prefix.len() > 20_000, "leaf shows {} bytes", prefix.len());
+        assert!(snap.starts_with(prefix) && prefix.ends_with('\n'));
+        let meta = &bounded["truncated"]["value"];
+        let id = bounded["truncated"]["result"].clone();
+        assert_eq!(meta["type"], "object");
+        assert_eq!(meta["shown"], 0);
+        assert_eq!(meta["total"], pretty(&original).len());
+        assert_eq!(
+            meta["next"],
+            json!({"result":id, "field":"value", "offset":0})
+        );
+        assert_eq!(
+            meta["cut"],
+            json!([{"path":"/snap", "type":"string", "shown":prefix.len(), "total":snap.len(),
+                "next":{"result":id, "field":"value", "path":"/snap", "offset":prefix.len()}}])
+        );
+        let window = store
+            .retrieve(
+                id.as_str().expect("expected test value"),
+                "value",
+                Some("/snap"),
+                prefix.len(),
+            )
+            .expect("expected test value");
+        assert_eq!(window["truncated"]["path"], "/snap");
+        assert_eq!(
+            window["truncated"]["context"],
+            "- main [ref=e1]:\n  - list [ref=e2]:\n"
+        );
+        assert_eq!(
+            remainder(&mut store, meta["cut"][0]["next"].clone(), prefix.into()),
+            snap
+        );
+        // The whole-field continuation reads the same pretty JSON as before.
+        assert_eq!(
+            remainder(&mut store, meta["next"].clone(), String::new()),
+            pretty(&original)
+        );
+    }
+
+    #[test]
+    fn tests_that_a_long_array_keeps_whole_leading_elements_and_its_tail_stays_retrievable() {
+        let items = (0..5000)
+            .map(|i| format!("Buy product {i:04} 漢字 🦀"))
+            .collect::<Vec<_>>();
+        let mut store = Store::default();
+        let bounded = store.limit(report(json!(items)));
+        assert!(bounded.to_string().len() <= BUDGET);
+        let shown = bounded["value"].as_array().expect("array keeps its type");
+        assert!(shown.len() > 500, "kept {} elements", shown.len());
+        assert_eq!(
+            *shown,
+            json!(items[..shown.len()])
+                .as_array()
+                .expect("array")
+                .clone()
+        );
+        let meta = &bounded["truncated"]["value"];
+        assert_eq!(meta["type"], "array");
+        let cut = &meta["cut"][0];
+        assert_eq!(meta["cut"].as_array().expect("cut list").len(), 1);
+        assert_eq!(cut["path"], "");
+        assert_eq!(cut["type"], "array");
+        assert_eq!(cut["kept"], shown.len());
+        assert_eq!(cut["length"], 5000);
+        assert_eq!(cut["next"]["path"], "");
+        let tail = remainder(&mut store, cut["next"].clone(), String::new());
+        assert!(tail.starts_with(&format!("  \"Buy product {:04}", shown.len())));
+        let rest: Vec<String> =
+            serde_json::from_str(&format!("[\n{tail}")).expect("tail is the omitted elements");
+        assert_eq!(
+            [
+                json!(shown).as_array().expect("array").clone(),
+                json!(rest).as_array().expect("array").clone()
+            ]
+            .concat(),
+            json!(items).as_array().expect("array").clone()
+        );
+        assert_eq!(
+            remainder(&mut store, meta["next"].clone(), String::new()),
+            pretty(&json!(items))
+        );
+    }
+
+    #[test]
+    fn tests_that_nested_big_leaves_share_the_budget_under_escaped_paths() {
+        let original = json!({"a/b":{"m~n":["x".repeat(60_000), "y".repeat(60_000), "short"]},
+            "count":3, "ok":true, "none":null});
+        let mut store = Store::default();
+        let bounded = store.limit(report(original.clone()));
+        assert!(bounded.to_string().len() <= BUDGET);
+        let value = &bounded["value"];
+        assert_eq!(
+            (&value["count"], &value["ok"], &value["none"]),
+            (&json!(3), &json!(true), &Value::Null)
+        );
+        let list = &value["a/b"]["m~n"];
+        assert_eq!(list[2], "short");
+        let cuts = bounded["truncated"]["value"]["cut"]
+            .as_array()
+            .expect("cut list");
+        assert_eq!(
+            cuts.iter()
+                .map(|cut| cut["path"].clone())
+                .collect::<Vec<_>>(),
+            [json!("/a~1b/m~0n/0"), json!("/a~1b/m~0n/1")]
+        );
+        for (index, cut) in cuts.iter().enumerate() {
+            let shown = list[index].as_str().expect("string leaf");
+            assert!(
+                shown.len() > 9_000,
+                "leaf {index} shows {} bytes",
+                shown.len()
+            );
+            assert_eq!(
+                remainder(&mut store, cut["next"].clone(), shown.into()),
+                original["a/b"]["m~n"][index]
+            );
+        }
+        let id = bounded["truncated"]["result"]
+            .as_str()
+            .expect("expected test value");
+        let small = store
+            .retrieve(id, "value", Some("/a~1b/m~0n/2"), 0)
+            .expect("expected test value");
+        assert_eq!(small["value"], "short");
+        assert!(small["truncated"].get("next").is_none());
+        for path in ["snap", "/missing", "/a~1b/m~0n/9"] {
+            assert!(store.retrieve(id, "value", Some(path), 0).is_err());
+        }
+    }
+
+    #[test]
+    fn tests_that_records_keep_small_fields_and_drop_whole_entries_instead_of_fragments() {
+        let records = (0..400)
+            .map(|i| json!({"id":i, "description":format!("{i} ").repeat(900)}))
+            .collect::<Vec<_>>();
+        let mut wide = (0..30)
+            .map(|i| (format!("a{i:02}"), json!("w".repeat(10_000))))
+            .collect::<serde_json::Map<_, _>>();
+        wide.insert("z".into(), json!(1));
+        let links = (0..3000)
+            .map(|i| {
+                (
+                    format!("link {i:04}"),
+                    json!(format!("https://example.com/{i}")),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let mut store = Store::default();
+        for original in [json!(records), Value::Object(wide), Value::Object(links)] {
+            let bounded = store.limit(report(original.clone()));
+            assert!(bounded.to_string().len() <= BUDGET);
+            let meta = &bounded["truncated"]["value"];
+            let cuts = meta["cut"].as_array().expect("cut list");
+            assert!(cuts.len() <= 20);
+            for cut in cuts {
+                if cut["type"] == "string" {
+                    assert!(
+                        cut["shown"].as_u64().expect("shown") >= 1_000,
+                        "fragment: {cut}"
+                    );
+                }
+                let path = cut["path"].as_str().expect("path");
+                let text = remainder(&mut store, cut["next"].clone(), String::new());
+                let node = original.pointer(path).expect("cut path names a node");
+                let full = if cut["type"] == "string" {
+                    node.as_str().expect("string").to_string()
+                } else {
+                    pretty(node)
+                };
+                assert!(
+                    full.ends_with(&text),
+                    "{path} continuation is a suffix of the node"
+                );
+            }
+        }
+        let wide = store.limit(report(
+            json!({"z":1, "a":"w".repeat(30_000), "b":"w".repeat(30_000)}),
+        ));
+        assert_eq!(wide["value"]["z"], 1);
+    }
+
+    #[test]
+    fn tests_that_leaf_cuts_stay_outside_ref_tokens_and_survive_an_early_newline() {
+        let mut store = Store::default();
+        let probe = store.limit(report(json!({"n":1, "snap":"x".repeat(40_000)})));
+        let room = probe["value"]["snap"].as_str().expect("string leaf").len();
+        for padding in room - 12..room + 3 {
+            let text = format!("{}[ref=e999]{}", "x".repeat(padding), "z".repeat(20_000));
+            let bounded = store.limit(report(json!({"n":1, "snap":text})));
+            assert!(bounded.to_string().len() <= BUDGET);
+            let shown = bounded["value"]["snap"].as_str().expect("string leaf");
+            assert!(!(padding + 1..padding + 10).contains(&shown.len()));
+            assert_eq!(
+                remainder(
+                    &mut store,
+                    bounded["truncated"]["value"]["cut"][0]["next"].clone(),
+                    shown.into()
+                ),
+                text
+            );
+        }
+        let text = format!("\n{}", "a".repeat(50_000));
+        let bounded = store.limit(report(json!({"n":1, "snap":text})));
+        assert!(
+            bounded["value"]["snap"]
+                .as_str()
+                .expect("string leaf")
+                .len()
+                > 20_000
+        );
+    }
+
+    #[test]
+    fn tests_that_values_beside_large_traces_keep_their_type_and_bare_strings_their_shape() {
+        let calls = (0..200)
+            .map(|i| {
+                json!({"callId":i, "method":"click", "title":"Click",
+                "params":{"text":"x".repeat(1000)}, "result":{"kind":"ok"}, "delivery":"done"})
+            })
+            .collect::<Vec<_>>();
+        let mut store = Store::default();
+        for value in [
+            json!({"guests":"32 Guests", "count":32}),
+            json!([1, 2]),
+            Value::Null,
+            json!(7),
+        ] {
+            let mut original = report(value.clone());
+            original["calls"] = json!(calls);
+            let bounded = store.limit(original);
+            assert!(bounded.to_string().len() <= BUDGET);
+            assert_eq!(bounded["value"], value);
+            assert!(bounded["truncated"].get("value").is_none());
+        }
+        // A bare string keeps today's shape: a prefix and byte-offset metadata, no cut list.
+        let bounded = store.limit(report(json!("abc".repeat(30_000))));
+        let shown = bounded["value"].as_str().expect("string prefix").len();
+        let id = bounded["truncated"]["result"].clone();
+        assert_eq!(
+            bounded["truncated"]["value"],
+            json!({"shown":shown, "total":90_000, "type":"string",
+                "next":{"result":id, "field":"value", "offset":shown}})
+        );
+    }
+
+    #[test]
+    fn tests_that_escape_costs_match_serde() {
+        let text = format!(
+            "{}\u{7f}é🦀\\\"",
+            (0..0x20_u8).map(char::from).collect::<String>()
+        );
+        assert_eq!(super::quoted_len(&text), json!(text).to_string().len());
+        let value = json!({"a":[text, 1.5, null], "b/c":{"d":true}});
+        assert_eq!(super::encoded_len(&value), value.to_string().len());
+        assert_eq!(super::pretty_len(&value), pretty(&value).len());
+    }
+
+    /// Deterministic generator, so a failure names a reproducible case.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn below(&mut self, bound: usize) -> usize {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((self.0 >> 33) % bound as u64) as usize
+        }
+
+        /// A random value of about `room` bytes at most, so cases stay retained and quick.
+        fn tree(&mut self, depth: usize, room: &mut usize) -> Value {
+            let pieces = [
+                "x",
+                "\n",
+                "  - link \"商品 🦀\" [ref=e12]\n",
+                "\"",
+                "\\",
+                "\u{1}",
+                "é",
+            ];
+            let leaf = depth == 0 || *room < 100;
+            match self.below(if leaf { 3 } else { 6 }) {
+                0 => {
+                    let len = [3, 40, 1_500, 9_000, 70_000][self.below(5)].min(*room);
+                    *room = room.saturating_sub(len);
+                    let mut text = String::new();
+                    while text.len() < len {
+                        text.push_str(pieces[self.below(pieces.len())]);
+                    }
+                    json!(text)
+                }
+                1 => json!(self.below(1_000_000)),
+                2 => [Value::Null, json!(true), json!(-1.5)][self.below(3)].clone(),
+                3 | 4 => {
+                    let len = [2, 5, 40, 2_000][self.below(4)];
+                    Value::Array((0..len).map(|_| self.tree(depth - 1, room)).collect())
+                }
+                _ => {
+                    let len = [1, 3, 8, 300][self.below(4)];
+                    Value::Object(
+                        (0..len)
+                            .map(|i| {
+                                (
+                                    format!("k{i}{}", ["", "/", "~"][self.below(3)]),
+                                    self.tree(depth - 1, room),
+                                )
+                            })
+                            .collect(),
+                    )
+                }
+            }
+        }
+    }
+
+    /// Checks that `shown` is `original` with only listed nodes cut, each the way its kind cuts.
+    fn same_but_cut(original: &Value, shown: &Value, path: &str, cuts: Option<&[Value]>) {
+        let listed = |kind: &str| {
+            cuts.is_none_or(|cuts| {
+                cuts.iter()
+                    .any(|cut| cut["path"] == path && cut["type"] == kind)
+            })
+        };
+        match (original, shown) {
+            (Value::String(original), Value::String(shown)) => {
+                assert!(
+                    original.starts_with(shown.as_str()),
+                    "{path} is not a prefix"
+                );
+                assert!(
+                    shown == original || listed("string"),
+                    "{path} cut but not listed"
+                );
+            }
+            (Value::Array(original), Value::Array(shown)) => {
+                assert!(
+                    shown.len() == original.len() || listed("array"),
+                    "{path} shortened but not listed"
+                );
+                for (index, item) in shown.iter().enumerate() {
+                    same_but_cut(&original[index], item, &format!("{path}/{index}"), cuts);
+                }
+            }
+            (Value::Object(original), Value::Object(shown)) => {
+                assert!(
+                    shown.len() == original.len() || listed("object"),
+                    "{path} lost keys but not listed"
+                );
+                for (key, item) in shown {
+                    let token = key.replace('~', "~0").replace('/', "~1");
+                    same_but_cut(&original[key], item, &format!("{path}/{token}"), cuts);
+                }
+            }
+            _ => assert_eq!(original, shown, "{path} changed"),
+        }
+    }
+
+    #[test]
+    fn tests_that_random_values_stay_in_budget_keep_their_types_and_reassemble() {
+        let mut random = Lcg(7);
+        let mut store = Store::default();
+        let mut bounded_count = 0;
+        for case in 0..80 {
+            let original = random.tree(3, &mut 150_000);
+            let bounded = store.limit(report(original.clone()));
+            assert!(bounded.to_string().len() <= BUDGET, "case {case}");
+            assert_eq!(
+                super::value_type(&bounded["value"]),
+                super::value_type(&original)
+            );
+            let Some(meta) = bounded["truncated"].get("value") else {
+                assert_eq!(bounded["value"], original, "case {case}");
+                continue;
+            };
+            bounded_count += 1;
+            if original.is_string() {
+                continue;
+            }
+            let cuts = meta["cut"].as_array().expect("cut list");
+            let listed = meta.get("cutOmitted").is_none().then_some(cuts.as_slice());
+            same_but_cut(&original, &bounded["value"], "", listed);
+            for cut in cuts {
+                let node = original
+                    .pointer(cut["path"].as_str().expect("path"))
+                    .expect("cut path names a node");
+                if let Some(text) = node.as_str() {
+                    let shown = bounded["value"]
+                        .pointer(cut["path"].as_str().expect("path"))
+                        .and_then(Value::as_str)
+                        .expect("cut string is shown");
+                    assert_eq!(
+                        remainder(&mut store, cut["next"].clone(), shown.into()),
+                        text,
+                        "case {case}"
+                    );
+                } else {
+                    let tail = remainder(&mut store, cut["next"].clone(), String::new());
+                    assert!(pretty(node).ends_with(&tail), "case {case}");
+                }
+            }
+            assert_eq!(
+                remainder(&mut store, meta["next"].clone(), String::new()),
+                pretty(&original),
+                "case {case}"
+            );
+        }
+        assert!(
+            bounded_count > 20,
+            "only {bounded_count} cases exceeded the budget"
+        );
+    }
+
+    #[test]
+    fn tests_that_an_unretained_value_lists_its_cuts_without_continuations() {
+        let original = report(json!({"n":1, "snap":"x".repeat(40_000), "rows":vec!["row"; 9_000]}));
+        let bounded = super::bound(&original, "r000000000000", false);
+        assert!(bounded.to_string().len() <= BUDGET);
+        assert!(bounded["truncated"]["unavailable"].is_string());
+        let meta = &bounded["truncated"]["value"];
+        assert!(meta.get("next").is_none());
+        let cuts = meta["cut"].as_array().expect("cut list");
+        assert_eq!(cuts.len(), 2);
+        assert!(cuts.iter().all(|cut| cut.get("next").is_none()));
     }
 }
