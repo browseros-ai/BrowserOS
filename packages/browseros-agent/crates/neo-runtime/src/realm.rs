@@ -7,12 +7,15 @@
 //! stops running JS at the deadline or on cancellation, and a `select!` that ends the run when
 //! the script is parked on a timer or a promise instead of running.
 
+use std::hash::{BuildHasher, RandomState};
+use std::mem;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rquickjs::function::{Async, Func};
 use rquickjs::{
     AsyncContext, AsyncRuntime, CatchResultExt, CaughtError, Coerced, Constructor, Ctx, FromJs,
-    Function, Object, Promise,
+    Function, Object, Promise, TypedArray,
 };
 use serde_json::Value;
 
@@ -20,7 +23,7 @@ use crate::bridge::{Getters, Logs};
 use crate::deadline::Deadline;
 use crate::dispatch::Dispatcher;
 use crate::events::EventHub;
-use crate::run::{RunError, RunOutcome};
+use crate::run::{RunBinary, RunError, RunOutcome};
 use crate::{abort, bridge, browser_calls, world};
 
 const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
@@ -127,10 +130,13 @@ pub(crate) async fn run(
         return RunOutcome::stopped(stop, deadline.timeout(), logs.take());
     }
     match result {
-        Ok(value) => RunOutcome::returned(value, logs.take()),
+        Ok((value, binaries)) => RunOutcome::returned(value, logs.take()).with_binaries(binaries),
         Err(error) => RunOutcome::failed(error, logs.take()),
     }
 }
+
+/// The script's return value as JSON, and the bytes of each binary in it ([`to_json`]).
+type Returned = (Option<Value>, Vec<RunBinary>);
 
 async fn evaluate(
     script: Script,
@@ -138,7 +144,7 @@ async fn evaluate(
     logs: Logs,
     dispatcher: Dispatcher,
     deadline: Deadline,
-) -> Result<Option<Value>, RunError> {
+) -> Result<Returned, RunError> {
     let runtime = AsyncRuntime::new().map_err(|error| engine_error(&error))?;
     runtime.set_memory_limit(MEMORY_LIMIT_BYTES).await;
     runtime.set_max_stack_size(MAX_STACK_BYTES).await;
@@ -151,7 +157,7 @@ async fn evaluate(
         .map_err(|error| engine_error(&error))?;
     context
         .async_with(async |ctx| {
-            let returned = start(&ctx, script, getters, logs, dispatcher, deadline)
+            let (returned, export) = start(&ctx, script, getters, logs, dispatcher, deadline)
                 .catch(&ctx)
                 .map_err(|error| script_error(&ctx, error))?;
             let value: rquickjs::Value<'_> = returned
@@ -159,12 +165,13 @@ async fn evaluate(
                 .await
                 .catch(&ctx)
                 .map_err(|error| script_error(&ctx, error))?;
-            to_json(&ctx, value)
+            to_json(&ctx, &export, value)
         })
         .await
 }
 
-/// Sets up the realm and starts the script, returning the promise of its async function.
+/// Sets up the realm and starts the script, returning the promise of its async function and
+/// neo-sdk's `exportValue`, which [`to_json`] serializes its result with.
 fn start<'js>(
     ctx: &Ctx<'js>,
     script: Script,
@@ -172,7 +179,7 @@ fn start<'js>(
     logs: Logs,
     dispatcher: Dispatcher,
     deadline: Deadline,
-) -> rquickjs::Result<Promise<'js>> {
+) -> rquickjs::Result<(Promise<'js>, Function<'js>)> {
     bridge::install(ctx, getters, logs, dispatcher)?;
     let sleep = Func::from(Async(move |delay_ms: f64| {
         let deadline = deadline.clone();
@@ -201,6 +208,7 @@ fn start<'js>(
     // browser types, `devices`, `errors`, `selectors`, `request`.
     let playwright: rquickjs::Value<'js> = objects.get("playwright")?;
     let uncaught: rquickjs::Value<'js> = objects.get("uncaught")?;
+    let export: Function<'js> = objects.get("exportValue")?;
 
     // The AsyncFunction constructor, as Playwright users write `new AsyncFunction(...)`: the
     // code is a function body that cannot close the wrapper early, and a syntax error in it
@@ -210,7 +218,7 @@ fn start<'js>(
         async_function.construct(("page", "context", "playwright", script.code))?;
     let script: Promise<'js> = agent_function.call((page, context, playwright))?;
     let race: Function<'js> = ctx.eval(RACE_UNCAUGHT)?;
-    race.call((script, uncaught, abort_uncaught))
+    Ok((race.call((script, uncaught, abort_uncaught))?, export))
 }
 
 /// `setTimeout` delays in JS milliseconds. A delay too large for a `Duration` is due after
@@ -221,17 +229,107 @@ fn delay_from_millis(delay_ms: f64) -> Duration {
 
 /// The script's return value as JSON, through the realm's own `JSON.stringify` so the
 /// conversion is exactly JavaScript's. `undefined` (and anything else JSON drops) is `None`.
-fn to_json<'js>(ctx: &Ctx<'js>, value: rquickjs::Value<'js>) -> Result<Option<Value>, RunError> {
-    let text = match ctx.json_stringify(value).catch(ctx) {
-        Ok(Some(text)) => text
-            .to_string()
-            .map_err(|error| RunError::new("Error", error.to_string()))?,
-        Ok(None) => return Ok(None),
+///
+/// Except binaries: neo-sdk's `exportValue` hands each `Uint8Array` to `ship`, which copies its
+/// bytes out of the realm here, outside its memory limit, and marks its place with this run's
+/// random marker key; [`lift_binaries`] then takes the marks out of the JSON. A page cannot
+/// forge a mark: it never sees the marker.
+fn to_json<'js>(
+    ctx: &Ctx<'js>,
+    export: &Function<'js>,
+    value: rquickjs::Value<'js>,
+) -> Result<Returned, RunError> {
+    let shipped = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let sink = Arc::clone(&shipped);
+    let ship = Function::new(
+        ctx.clone(),
+        move |bytes: TypedArray<'js, u8>| -> rquickjs::Result<f64> {
+            let Some(bytes) = bytes.as_bytes() else {
+                return Err(rquickjs::Error::new_from_js_message(
+                    "Uint8Array",
+                    "bytes",
+                    "its buffer is detached",
+                ));
+            };
+            let mut shipped = sink.lock().map_err(|_| {
+                rquickjs::Error::new_from_js_message("Uint8Array", "bytes", "poisoned")
+            })?;
+            shipped.push(bytes.to_vec());
+            // Exact: a realm cannot hold 2^53 binaries.
+            #[expect(clippy::cast_precision_loss, reason = "a count far below 2^53")]
+            Ok((shipped.len() - 1) as f64)
+        },
+    )
+    .map_err(|error| RunError::new("Error", error.to_string()))?;
+    let marker = format!("neo:binary:{:016x}", RandomState::new().hash_one(0_u8));
+    let text: Option<String> = match export.call((value, ship, marker.as_str())).catch(ctx) {
+        Ok(text) => text,
         Err(error) => return Err(script_error(ctx, error)),
     };
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|error| RunError::new("Error", format!("return value is not JSON: {error}")))
+    let Some(text) = text else {
+        return Ok((None, Vec::new()));
+    };
+    let mut value: Value = serde_json::from_str(&text)
+        .map_err(|error| RunError::new("Error", format!("return value is not JSON: {error}")))?;
+    let shipped = shipped
+        .lock()
+        .map(|mut shipped| mem::take(&mut *shipped))
+        .map_err(|_| RunError::new("Error", "returned binaries were lost".to_string()))?;
+    let binaries = lift_binaries(&mut value, &marker, shipped);
+    Ok((Some(value), binaries))
+}
+
+/// Takes `marker` out of every object of `value` that carries it, pairing each with the bytes
+/// `shipped` holds at its index and its JSON pointer, in the order JSON wrote them. Recursion is
+/// bounded by `serde_json`'s parse depth (128).
+fn lift_binaries(value: &mut Value, marker: &str, shipped: Vec<Vec<u8>>) -> Vec<RunBinary> {
+    fn walk(
+        value: &mut Value,
+        marker: &str,
+        shipped: &mut [Option<Vec<u8>>],
+        pointer: &mut String,
+        out: &mut Vec<RunBinary>,
+    ) {
+        match value {
+            Value::Object(map) => {
+                if let Some(index) = map.remove(marker) {
+                    let bytes = index
+                        .as_u64()
+                        .and_then(|index| usize::try_from(index).ok())
+                        .and_then(|index| shipped.get_mut(index))
+                        .and_then(Option::take);
+                    if let Some(bytes) = bytes {
+                        out.push(RunBinary {
+                            pointer: pointer.clone(),
+                            bytes,
+                        });
+                    }
+                    return;
+                }
+                for (key, child) in map.iter_mut() {
+                    let at = pointer.len();
+                    pointer.push('/');
+                    pointer.push_str(&key.replace('~', "~0").replace('/', "~1"));
+                    walk(child, marker, shipped, pointer, out);
+                    pointer.truncate(at);
+                }
+            }
+            Value::Array(items) => {
+                for (index, child) in items.iter_mut().enumerate() {
+                    let at = pointer.len();
+                    pointer.push('/');
+                    pointer.push_str(&index.to_string());
+                    walk(child, marker, shipped, pointer, out);
+                    pointer.truncate(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut shipped: Vec<Option<Vec<u8>>> = shipped.into_iter().map(Some).collect();
+    let mut out = Vec::new();
+    walk(value, marker, &mut shipped, &mut String::new(), &mut out);
+    out
 }
 
 /// Names a thrown value the way the script saw it: an `Error`'s own `name` and `message`,
@@ -254,4 +352,44 @@ fn script_error<'js>(ctx: &Ctx<'js>, error: CaughtError<'js>) -> RunError {
 
 fn engine_error(error: &rquickjs::Error) -> RunError {
     RunError::new("Error", format!("QuickJS failed to start: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// Marks leave the JSON, their bytes pair with escaped pointers in document order, and a
+    /// mark naming no shipped binary (or one already taken) yields nothing.
+    #[test]
+    fn tests_that_binaries_are_lifted_with_their_pointers() {
+        let marker = "neo:binary:test";
+        let mut value = json!({
+            "a/b": {"type":"Buffer","bytes":1,"neo:binary:test":1},
+            "list": [{"type":"Uint8Array","bytes":2,"neo:binary:test":0}, "kept"],
+            "m~": {"type":"Buffer","bytes":0,"neo:binary:test":7},
+            "again": {"type":"Buffer","bytes":2,"neo:binary:test":0},
+        });
+        let binaries = lift_binaries(&mut value, marker, vec![vec![1, 2], vec![3]]);
+        assert_eq!(
+            binaries,
+            [
+                RunBinary {
+                    pointer: "/a~1b".to_string(),
+                    bytes: vec![3],
+                },
+                RunBinary {
+                    pointer: "/again".to_string(),
+                    bytes: vec![1, 2],
+                },
+            ]
+        );
+        assert!(!value.to_string().contains(marker), "{value}");
+        assert_eq!(value["list"][1], "kept");
+        assert_eq!(value["list"][0], json!({"type":"Uint8Array","bytes":2}));
+        let mut whole = json!({"type":"Buffer","bytes":1,"neo:binary:test":0});
+        let top = lift_binaries(&mut whole, marker, vec![vec![9]]);
+        assert_eq!(top[0].pointer, "");
+    }
 }

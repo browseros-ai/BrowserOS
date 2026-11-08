@@ -1,5 +1,6 @@
 import { Browser } from './browser'
 import { BrowserContext } from './browser-context'
+import { exportValue } from './buffer'
 import { Connection } from './connection'
 import { EventPipe, onUncaughtListenerError } from './events'
 import { setTestIdAttribute } from './locator'
@@ -37,13 +38,15 @@ export interface RunInit {
  * `context.pages()` returns this very object for it, and the context is the first of
  * `context.browser().contexts()`. `uncaught` rejects with the first listener error nobody
  * handled; neo-runtime races it with the script, so such an error ends the run as it would end a
- * Node process.
+ * Node process. `exportValue` is how neo-runtime turns the script's return value into JSON
+ * (`buffer.ts`).
  */
 export function createRun(init: RunInit): {
   page: Page
   context: BrowserContext
   playwright: Playwright
   uncaught: Promise<never>
+  exportValue: typeof exportValue
 } {
   setTestIdAttribute(init.testIdAttribute)
   const connection = new Connection(init.lineOffset)
@@ -61,5 +64,5 @@ export function createRun(init: RunInit): {
   browser._didCreateContext(context)
   playwright.selectors._attach(connection, init.context)
   const page = context._addRunPage(init.page, init.mainFrame, init.url)
-  return { page, context, playwright, uncaught: pipe.uncaught }
+  return { page, context, playwright, uncaught: pipe.uncaught, exportValue }
 }
