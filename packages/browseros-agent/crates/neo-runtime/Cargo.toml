@@ -9,11 +9,13 @@ description = "Runs an agent's Playwright-style script in a QuickJS realm agains
 
 # browseros-cdp and neo-runtime-spec are the only first-party dependencies; see
 # crates/NEO_STYLE.md. futures-util's `join_all` writes a click's pipelined mouse events in order.
+# rand's OS-seeded `ThreadRng` backs the realm's `crypto.getRandomValues` and `randomUUID`.
 [dependencies]
 base64.workspace = true
 browseros-cdp.workspace = true
 futures-util.workspace = true
 neo-runtime-spec.workspace = true
+rand.workspace = true
 rquickjs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -15,6 +15,7 @@ import {
   parseResult,
   serializeArgument,
 } from '../../src/js-handle'
+import { URL as RealmURL } from '../../src/url'
 import { atob, btoa, URL } from '../../src/vendor-shims'
 
 const handle = (guid: string) =>
@@ -108,10 +109,6 @@ test('the base64 stand-ins agree with the platform for every byte', () => {
   expect(() => btoa('Ā')).toThrow()
 })
 
-test('the URL stand-in keeps the text Playwright returns', () => {
-  const url = new URL('https://a.test/x?y=1#z')
-  expect(String(url)).toBe('https://a.test/x?y=1#z')
-  expect(url.href).toBe('https://a.test/x?y=1#z')
-  expect(JSON.stringify({ url })).toBe('{"url":"https://a.test/x?y=1#z"}')
-  expect(Object.prototype.toString.call(url)).toBe('[object URL]')
+test("the serializers' URL is the realm's global URL", () => {
+  expect(URL).toBe(RealmURL)
 })

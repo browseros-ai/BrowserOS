@@ -14,7 +14,13 @@
 //! Rust writes the bytes, only inside the directory the host gave the run
 //! ([`crate::RunRequest::artifacts`]), and lists every file in
 //! [`crate::RunOutcome::artifacts`] for the host to serve.
+//!
+//! An absolute `path` is refused unless the host opts its runtime into [`AbsolutePaths::Redirect`]
+//! (`Runtime::with_absolute_paths`): then one inside the directory names that file, and a write
+//! outside it lands at `<artifact directory>/<file name>` instead, listed with the path the script
+//! asked for and noted in the run's logs. Nothing is ever written or read outside the directory.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{self, Component, Path, PathBuf};
@@ -36,10 +42,28 @@ pub(crate) const MAX_BINARY_RESULT_BYTES: usize = 16 * 1024 * 1024;
 /// One file a run wrote into its artifact directory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RunArtifact {
-    /// Relative to the artifact directory, with `/` separators, as the script named it.
+    /// Relative to the artifact directory, with `/` separators.
     pub path: String,
     /// Its size after the run's last write to it.
     pub bytes: u64,
+    /// The absolute path the script asked for, when it lay outside the artifact directory and
+    /// Neo wrote the file at `path` instead ([`AbsolutePaths::Redirect`]). Absent from the JSON
+    /// otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested: Option<String>,
+}
+
+/// How a run's `path` options treat an absolute path. A host picks one for every run of its
+/// runtime (`Runtime::with_absolute_paths`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AbsolutePaths {
+    /// Every absolute path is refused with an Error naming the option.
+    #[default]
+    Refuse,
+    /// An absolute path inside the artifact directory names that file, for writes and reads. A
+    /// write outside it lands at `<artifact directory>/<file name>`, is listed with
+    /// [`RunArtifact::requested`] and noted in the run's logs; a read outside it is refused.
+    Redirect,
 }
 
 /// A run's artifact directory and what the run wrote into it. Shared by every call of the run
@@ -47,7 +71,10 @@ pub struct RunArtifact {
 #[derive(Debug, Default)]
 pub(crate) struct Artifacts {
     dir: Option<PathBuf>,
+    absolute: AbsolutePaths,
     written: Mutex<Vec<RunArtifact>>,
+    /// One line per redirected file, for the run's logs.
+    notes: Mutex<Vec<String>>,
 }
 
 /// A file or directory a script named for `setInputFiles` or `drop`, found inside the artifact
@@ -65,7 +92,8 @@ pub(crate) struct ExistingPath {
     pub(crate) modified_ms: Option<f64>,
 }
 
-/// A `path` option [`Artifacts::check`] accepted: still relative, without `.` or `..`.
+/// A `path` option [`Artifacts::check`] accepted: relative to the artifact directory, without
+/// `.` or `..`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArtifactPath {
     /// The option's name, for errors.
@@ -74,14 +102,23 @@ pub(crate) struct ArtifactPath {
     relative: PathBuf,
     /// `relative` with `/` separators, as the outcome lists it.
     display: String,
+    /// The script's absolute path, when it lay outside the directory ([`AbsolutePaths::Redirect`]).
+    requested: Option<String>,
 }
 
 impl Artifacts {
     pub(crate) fn new(dir: Option<PathBuf>) -> Self {
         Self {
             dir,
+            absolute: AbsolutePaths::Refuse,
             written: Mutex::new(Vec::new()),
+            notes: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The same directory, treating absolute paths as `absolute` says.
+    pub(crate) fn with_absolute_paths(self, absolute: AbsolutePaths) -> Self {
+        Self { absolute, ..self }
     }
 
     /// Accepts `path` for the option `option` (`path` for screenshots and PDFs) or explains
@@ -91,11 +128,14 @@ impl Artifacts {
         option: &'static str,
         path: &str,
     ) -> Result<ArtifactPath, PlaywrightError> {
-        if self.dir.is_none() {
+        let Some(dir) = &self.dir else {
             return Err(PlaywrightError::error(format!(
                 "{option}: this run has no artifact directory, so Neo cannot write \"{path}\"; \
                  the host sets one per run (RunRequest.artifacts)"
             )));
+        };
+        if self.absolute == AbsolutePaths::Redirect && Path::new(path).is_absolute() {
+            return redirected(option, path, dir);
         }
         let Relative {
             path: relative,
@@ -114,6 +154,7 @@ impl Artifacts {
             option,
             relative,
             display: parts.join("/"),
+            requested: None,
         })
     }
 
@@ -177,17 +218,44 @@ impl Artifacts {
         })
     }
 
-    /// Lists `path` in the outcome with its size, once, the last size winning.
+    /// Lists `path` in the outcome with its size, once, the last write winning, and notes a
+    /// redirected one for the run's logs.
     fn list(&self, path: &ArtifactPath, size: u64) {
         if let Ok(mut written) = self.written.lock() {
             match written.iter_mut().find(|file| file.path == path.display) {
-                Some(file) => file.bytes = size,
+                Some(file) => {
+                    file.bytes = size;
+                    file.requested.clone_from(&path.requested);
+                }
                 None => written.push(RunArtifact {
                     path: path.display.clone(),
                     bytes: size,
+                    requested: path.requested.clone(),
                 }),
             }
         }
+        if let (Some(requested), Some(dir)) = (&path.requested, &self.dir) {
+            let at = absolute_dir(dir);
+            let note = format!(
+                "neo: {}: \"{requested}\" is outside the run's artifact directory, so the file \
+                 was written to \"{}\" instead",
+                path.option,
+                at.join(&path.relative).display()
+            );
+            if let Ok(mut notes) = self.notes.lock()
+                && !notes.contains(&note)
+            {
+                notes.push(note);
+            }
+        }
+    }
+
+    /// The notes for redirected files, in the order first written.
+    pub(crate) fn notes(&self) -> Vec<String> {
+        self.notes
+            .lock()
+            .map(|notes| notes.clone())
+            .unwrap_or_default()
     }
 
     /// Deviation: `client/elementHandle.ts` `resolvePathsAndDirectoryForInputFiles`: `const stat = await fs.promises.stat(item as string);` Playwright's client reads any path on its host, relative to its working directory. A Neo script has no file system, and the host must not hand an agent's script its disk, so Rust reads a file to upload or drop only inside the run's artifact directory, at a relative path without `..`, refusing a symbolic link on the way, and a run without one names the option.
@@ -214,11 +282,29 @@ impl Artifacts {
         if path.is_empty() {
             return Err(refused(option, path, "names no file"));
         }
+        let spelled = if self.absolute == AbsolutePaths::Redirect && Path::new(path).is_absolute() {
+            match within(&dir, path) {
+                Some(rest) => rest,
+                None => {
+                    return Err(refused(
+                        option,
+                        path,
+                        &format!(
+                            "is outside the run's artifact directory \"{}\", the only place Neo \
+                             reads files",
+                            absolute_dir(&dir).display()
+                        ),
+                    ));
+                }
+            }
+        } else {
+            path.to_string()
+        };
         let Relative {
             path: relative,
             parts,
             directory,
-        } = relative_path(option, path)?;
+        } = relative_path(option, &spelled)?;
         let display = if parts.is_empty() {
             ".".to_string()
         } else {
@@ -313,8 +399,83 @@ fn relative_path(option: &str, path: &str) -> Result<Relative, PlaywrightError> 
     Ok(Relative {
         path: relative,
         parts,
-        directory: path == "." || path.ends_with('/') || path.ends_with("/."),
+        directory: names_directory(path),
     })
+}
+
+/// Deviation: `client/page.ts` `Page.screenshot`: `await fs.promises.writeFile(options.path, result.binary);` Playwright writes an absolute path anywhere on its host. Under [`AbsolutePaths::Redirect`] Neo writes one inside the artifact directory as that file, and one outside it at `<artifact directory>/<file name>`, so an agent's script still never writes the host's disk; the script carries on as Playwright's does, and the outcome lists the file with the path asked for (`RunArtifact::requested`) and a log line says where it went. Two such paths with one file name share the file, the last write winning.
+///
+/// The write target for the absolute `path`, under the artifact directory `dir`.
+fn redirected(
+    option: &'static str,
+    path: &str,
+    dir: &Path,
+) -> Result<ArtifactPath, PlaywrightError> {
+    // Node's `fs` refuses to write a file at `capture.png/`; so does Neo, wherever it points.
+    if names_directory(path) {
+        return Err(refused(option, path, "names a directory, not a file"));
+    }
+    if let Some(rest) = within(dir, path) {
+        let Relative {
+            path: relative,
+            parts,
+            ..
+        } = relative_path(option, &rest)?;
+        if parts.is_empty() {
+            return Err(refused(option, path, "names a directory, not a file"));
+        }
+        return Ok(ArtifactPath {
+            option,
+            relative,
+            display: parts.join("/"),
+            requested: None,
+        });
+    }
+    let Some(name) = Path::new(path).file_name().and_then(OsStr::to_str) else {
+        return Err(refused(option, path, "names no file"));
+    };
+    Ok(ArtifactPath {
+        option,
+        relative: PathBuf::from(name),
+        display: name.to_string(),
+        requested: Some(path.to_string()),
+    })
+}
+
+/// `dir` made absolute against the working directory, as an absolute path a script names is
+/// compared with it. Lexical only: a symbolic link in `dir`'s own path is not resolved, so a
+/// script names the directory as the host reports it.
+fn absolute_dir(dir: &Path) -> PathBuf {
+    path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf())
+}
+
+/// The absolute `path` relative to `dir` (`/`-separated), when it lies inside it: it starts
+/// with `dir`'s components and only normal or `.` components follow.
+fn within(dir: &Path, path: &str) -> Option<String> {
+    let rest = Path::new(path).strip_prefix(absolute_dir(dir)).ok()?;
+    let mut parts = Vec::new();
+    for component in rest.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_str()?),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    // Keep directory intent (`…/shots/`), which `relative_path` reads from the spelling.
+    let mut rest = if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    };
+    if names_directory(path) && !parts.is_empty() {
+        rest.push('/');
+    }
+    Some(rest)
+}
+
+/// The spelling names a directory: `.` itself, or a trailing `/` or `/.`.
+fn names_directory(path: &str) -> bool {
+    path == "." || path.ends_with('/') || path.ends_with("/.")
 }
 
 fn refused(option: &str, path: &str, why: &str) -> PlaywrightError {
@@ -460,11 +621,13 @@ mod tests {
             [
                 RunArtifact {
                     path: "shots/day/a.png".to_string(),
-                    bytes: 7
+                    bytes: 7,
+                    requested: None,
                 },
                 RunArtifact {
                     path: "b.pdf".to_string(),
-                    bytes: 5
+                    bytes: 5,
+                    requested: None,
                 },
             ]
         );
@@ -515,6 +678,7 @@ mod tests {
             vec![RunArtifact {
                 path: "a/b/saved.txt".to_string(),
                 bytes: 11,
+                requested: None,
             }],
             "listed once, with its last size"
         );
@@ -619,6 +783,126 @@ mod tests {
                 .expect_err("a link");
             assert!(error.message.contains("symbolic link"), "{error:?}");
         }
+    }
+
+    fn redirecting() -> (tempfile::TempDir, PathBuf, Artifacts) {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let root = dir.path().join("run");
+        let artifacts =
+            Artifacts::new(Some(root.clone())).with_absolute_paths(AbsolutePaths::Redirect);
+        (dir, root, artifacts)
+    }
+
+    /// Under `Redirect`, an absolute path inside the directory names that file; one outside it
+    /// lands at `<dir>/<file name>`, listed with what was asked for and noted once; nothing is
+    /// written outside.
+    #[tokio::test]
+    async fn tests_that_redirected_absolute_paths_write_only_inside_the_directory() {
+        let (dir, root, artifacts) = redirecting();
+        let inside = root.join("shots/a.png");
+        let path = artifacts
+            .check("path", inside.to_str().expect("UTF-8"))
+            .expect("inside");
+        assert_eq!(
+            (path.display.as_str(), &path.requested),
+            ("shots/a.png", &None)
+        );
+        artifacts.write(&path, b"in").await.expect("written");
+        assert_eq!(fs::read(&inside).expect("the file"), b"in");
+
+        let outside = dir.path().join("elsewhere/columns.png");
+        let asked = outside.to_str().expect("UTF-8");
+        for _ in 0..2 {
+            let path = artifacts.check("path", asked).expect("redirected");
+            artifacts.write(&path, b"out").await.expect("written");
+        }
+        assert!(!outside.exists(), "nothing written where the script asked");
+        assert_eq!(
+            fs::read(root.join("columns.png")).expect("the file"),
+            b"out"
+        );
+        assert_eq!(
+            artifacts.written(),
+            [
+                RunArtifact {
+                    path: "shots/a.png".to_string(),
+                    bytes: 2,
+                    requested: None,
+                },
+                RunArtifact {
+                    path: "columns.png".to_string(),
+                    bytes: 3,
+                    requested: Some(asked.to_string()),
+                },
+            ]
+        );
+        let notes = artifacts.notes();
+        assert_eq!(notes.len(), 1, "one note per redirected file: {notes:?}");
+        assert!(
+            notes[0].contains(asked)
+                && notes[0].contains(&format!("{}", root.join("columns.png").display())),
+            "{notes:?}"
+        );
+    }
+
+    /// Redirect keeps the write refusals: a directory spelling, no file name, `..` inside the
+    /// directory that climbs out (then redirected by file name), and relative paths as before.
+    #[test]
+    fn tests_that_redirect_keeps_directory_and_climb_refusals() {
+        let (_dir, root, artifacts) = redirecting();
+        let text = |path: PathBuf| path.to_str().expect("UTF-8").to_string();
+        for (path, why) in [
+            ("/tmp/shots/".to_string(), "names a directory"),
+            ("/tmp/shots/.".to_string(), "names a directory"),
+            ("/".to_string(), "names a directory"),
+            ("/tmp/..".to_string(), "names no file"),
+            (text(root.clone()), "names a directory"),
+            (format!("{}/", text(root.clone())), "names a directory"),
+            (
+                "../escape.png".to_string(),
+                "leaves the run's artifact directory",
+            ),
+        ] {
+            let error = artifacts.check("path", &path).expect_err(&path);
+            assert!(error.message.contains(why), "{path}: {error:?}");
+        }
+        let climbed = artifacts
+            .check("path", &format!("{}/../escape.png", text(root.clone())))
+            .expect("redirected");
+        assert_eq!(climbed.display, "escape.png");
+        assert!(climbed.requested.is_some(), "{climbed:?}");
+        let refused = Artifacts::new(Some(root))
+            .check("path", "/tmp/a.png")
+            .expect_err("the default refuses absolute paths");
+        assert!(refused.message.contains("must be relative"), "{refused:?}");
+    }
+
+    /// Reads under `Redirect`: an absolute path inside the directory is found; outside it is
+    /// refused naming the directory.
+    #[tokio::test]
+    async fn tests_that_redirect_reads_absolute_paths_inside_only() {
+        let (dir, root, artifacts) = redirecting();
+        fs::create_dir_all(root.join("uploads")).expect("uploads");
+        fs::write(root.join("uploads/a.txt"), b"a").expect("a file");
+        let inside = root.join("uploads/a.txt");
+        let found = artifacts
+            .existing("files", inside.to_str().expect("UTF-8"))
+            .await
+            .expect("found");
+        assert_eq!(found.display, "uploads/a.txt");
+        assert!(!found.is_dir);
+        fs::write(dir.path().join("secret.txt"), b"s").expect("outside");
+        let outside = dir.path().join("secret.txt");
+        let error = artifacts
+            .existing("files", outside.to_str().expect("UTF-8"))
+            .await
+            .expect_err("outside");
+        assert!(
+            error
+                .message
+                .contains("outside the run's artifact directory"),
+            "{error:?}"
+        );
     }
 
     #[test]

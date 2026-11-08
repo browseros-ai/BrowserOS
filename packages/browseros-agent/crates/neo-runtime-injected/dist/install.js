@@ -8947,6 +8947,74 @@ function elementList(elements) {
 function webStorage(kind) {
   return kind === "local" ? localStorage : sessionStorage;
 }
+var disarmRelease;
+function judgeRelease(injected, node, action, interceptor) {
+  const judged = {
+    mouse: [
+      "mousedown",
+      "mouseup",
+      "pointerdown",
+      "pointerup",
+      "click",
+      "auxclick",
+      "dblclick",
+      "contextmenu"
+    ],
+    tap: ["pointerdown", "pointerup", "touchstart", "touchend", "touchcancel"]
+  }[action];
+  const element = injected.retarget(node, "button-link");
+  if (!judged || !element)
+    return interceptor;
+  disarmRelease?.();
+  const releases = new Set(["pointerup", "mouseup", "touchend"]);
+  let released = false;
+  let moved;
+  const listener = (event) => {
+    if (!event.isTrusted)
+      return;
+    if (moved) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (released || !releases.has(event.type))
+      return;
+    released = true;
+    const point = "changedTouches" in event ? event.changedTouches[0] : event;
+    if (!point || !element.isConnected)
+      return;
+    const box = element.getBoundingClientRect();
+    if (!box.width || !box.height)
+      return;
+    const { clientX: x, clientY: y } = point;
+    if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom)
+      return;
+    const hit = injected.expectHitTarget({ x, y }, element);
+    if (hit === "done")
+      return;
+    moved = hit;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  };
+  const disarm = () => {
+    for (const type of judged)
+      window.removeEventListener(type, listener, { capture: true });
+    if (disarmRelease === disarm)
+      disarmRelease = undefined;
+  };
+  for (const type of judged)
+    window.addEventListener(type, listener, { capture: true, passive: false });
+  disarmRelease = disarm;
+  return {
+    stop: () => {
+      disarm();
+      const verdict = interceptor.stop();
+      return verdict === "done" && moved ? moved : verdict;
+    }
+  };
+}
 var glue = {
   title: () => ({ value: document.title }),
   selectorState: (injected, { selector, strict }) => {
@@ -9169,9 +9237,12 @@ var glue = {
   expectHitTarget: (injected, { point }, element) => ({
     outcome: injected.expectHitTarget(point, element)
   }),
-  setupHitTargetInterceptor: (injected, { action, hitPoint, blockAllEvents }, element) => ({
-    outcome: injected.setupHitTargetInterceptor(element, action, hitPoint, blockAllEvents)
-  }),
+  setupHitTargetInterceptor: (injected, { action, hitPoint, blockAllEvents }, element) => {
+    const outcome = injected.setupHitTargetInterceptor(element, action, hitPoint, blockAllEvents);
+    return {
+      outcome: typeof outcome === "string" ? outcome : judgeRelease(injected, element, action, outcome)
+    };
+  },
   setupDragListeners: () => {
     let didStartDrag = Promise.resolve(false);
     let dragEvent = null;

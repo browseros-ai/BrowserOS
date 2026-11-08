@@ -13,6 +13,7 @@
  */
 
 import type { InjectedScript } from '../vendor/playwright/injected/src/injectedScript'
+import { withBrowserOSUiHidden } from './browseros-ui'
 
 type Callback = (
   injected: InjectedScript,
@@ -52,7 +53,10 @@ export default function callOnElement(
   ...data: unknown[]
 ): 0 | 1 | string {
   const parsed = injected.parseSelector(selector)
-  const elements = injected.querySelectorAll(parsed, scope || document)
+  // Deviation: `server/frameSelectors.ts` `FrameSelectors._callOnSelectorInternal`: `const elements = injected.querySelectorAll(params.info.parsed, params.scope || document);` the query skips BrowserOS's own UI roots (`browseros-ui.ts`), as every Neo read in the utility world does.
+  const elements = withBrowserOSUiHidden(globalThis, () =>
+    injected.querySelectorAll(parsed, scope || document),
+  )
   if (elements.length) injected.markTargetElements(new Set([elements[0]]))
   else injected.markTargetElements(new Set())
   injected.checkDeprecatedSelectorUsage(parsed, elements)

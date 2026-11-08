@@ -53,7 +53,11 @@ pub async fn serve(
     signal: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let shutdown = CancellationToken::new();
-    let service = PlaywrightService::new(config.cdp_port, shutdown.clone());
+    let service = PlaywrightService::new(
+        config.cdp_port,
+        shutdown.clone(),
+        config.browserclaw_dir.clone(),
+    );
     if stdio_mode {
         let running = serve_server(service.clone(), stdio()).await?;
         let cancellation = running.cancellation_token();

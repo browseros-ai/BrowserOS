@@ -61,6 +61,8 @@ url = "2"
 base64 = "0.22"
 bytes = "1"
 imagesize = "0.15"
+# PNG and JPEG only: the `run` tool downscales returned screenshots into MCP image blocks.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 regex = "1"
 # The page JavaScript guards (`tests/page_js_guard.rs`) read Rust literals as the compiler does.
@@ -96,6 +98,23 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# Unoptimized, decoding and scaling a full-page screenshot takes seconds; the `run` tool does it
+# on every returned image, in tests and dev servers too.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
 
 [profile.release]
 lto = "thin"

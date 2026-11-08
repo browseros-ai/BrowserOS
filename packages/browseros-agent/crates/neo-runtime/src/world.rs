@@ -58,7 +58,8 @@ pub(crate) const WORLD_NAME: &str = "__neo_utility_world__";
 /// `getByTestId` locator that never matches anything.
 pub(crate) const TEST_ID_ATTRIBUTE: &str = "data-testid";
 
-/// `(key) => glue | undefined`, a few hundred bytes.
+/// `(key) => glue | undefined`, about a kilobyte; it also hides BrowserOS's own page UI from
+/// the world (`neo-runtime-injected/src/browseros-ui.ts`).
 const ATTACH: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../neo-runtime-injected/dist/attach.js"

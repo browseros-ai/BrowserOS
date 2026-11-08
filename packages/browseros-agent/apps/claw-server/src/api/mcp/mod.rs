@@ -1,3 +1,5 @@
+mod artifacts;
+mod binary;
 pub mod captcha;
 pub mod dispatch;
 pub mod distill;
