@@ -16,7 +16,7 @@ import {
 
 const noTakeover = `<script>new MutationObserver(()=>document.querySelector('browseros-neo-takeover')?.remove()).observe(document.documentElement,{childList:true,subtree:true})</script>`
 
-test('review: a shared graph expanding past 100k values fails before dispatch', {
+test('review: a large shared graph dispatches before a small event', {
   skip,
   timeout: 120_000,
 }, async (t) => {
@@ -34,11 +34,11 @@ test('review: a shared graph expanding past 100k values fails before dispatch', 
         before: '1',
         after: '2',
       })
-      assert.deepEqual(neo, { large: 'Error', before: '0', after: '1' })
+      assert.deepEqual(neo, playwright)
     },
     effects: ({ playwright, neo }) => {
       assert.equal(playwright, '2')
-      assert.equal(neo, '1')
+      assert.equal(neo, playwright)
     },
   })
   t.diagnostic(JSON.stringify(outcome.value))
