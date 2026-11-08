@@ -2,10 +2,15 @@
 //! runtime owns browser calls and cleanup, while page ids alone provide continuity. One
 //! shared runtime preserves its per-tab input ordering across MCP transport connections.
 
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use neo_runtime::{PageId, RunOutcome, RunPage, RunRequest, RunStatus, Runtime};
+use neo_runtime::{AbsolutePaths, PageId, RunOutcome, RunPage, RunRequest, RunStatus, Runtime};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
@@ -28,14 +33,17 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::output::Store;
+use super::{artifacts, output::Store};
 
 const DEFAULT_TIMEOUT: u64 = 30_000;
 const MAX_TIMEOUT: u64 = 120_000;
 const INSTRUCTIONS: &str = concat!(
     "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).",
-    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,offset}) to read the stored original without changing refs."
+    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,offset}) to read the stored original without changing refs.",
+    " A `path` option (screenshot, pdf, storageState, download.saveAs) writes into one artifact directory shared by all runs: relative paths resolve there, and an absolute path outside it is written there under its file name; the result's artifacts[] gives each file's absolute `file` path (and `requested` when redirected). setInputFiles reads from the same directory."
 );
+/// Neo: how often, at most, a run that wrote files prunes the artifact directory again.
+const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
 struct Browser {
     cdp: CdpClient,
@@ -50,6 +58,9 @@ pub struct PlaywrightService {
     shutdown: CancellationToken,
     runs: TaskTracker,
     output: Arc<Mutex<Store>>,
+    state_dir: PathBuf,
+    /// When the artifact directory was last pruned; `None` before the first prune.
+    pruned: Arc<std::sync::Mutex<Option<Instant>>>,
 }
 
 #[derive(Deserialize)]
@@ -73,14 +84,57 @@ struct RequestArguments {
 
 impl PlaywrightService {
     #[must_use]
-    pub fn new(cdp_port: u16, shutdown: CancellationToken) -> Self {
-        Self {
+    pub fn new(cdp_port: u16, shutdown: CancellationToken, state_dir: PathBuf) -> Self {
+        let service = Self {
             cdp_port,
             browser: Arc::new(OnceCell::new()),
             shutdown,
             runs: TaskTracker::new(),
             output: Arc::new(Mutex::new(Store::default())),
+            state_dir,
+            pruned: Arc::new(std::sync::Mutex::new(None)),
+        };
+        service.prune_artifacts();
+        service
+    }
+
+    /// Every run's artifact directory, `<state_dir>/artifacts` (`artifacts.rs`).
+    fn artifact_dir(&self) -> PathBuf {
+        artifacts::dir(&self.state_dir)
+    }
+
+    /// Prunes the artifact directory in the background (`artifacts::prune`), at boot and then
+    /// at most once per [`PRUNE_INTERVAL`]. Outside a tokio runtime (no task to own the walk)
+    /// it waits for the next run that writes a file.
+    fn prune_artifacts(&self) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        {
+            let Ok(mut pruned) = self.pruned.lock() else {
+                return;
+            };
+            let now = Instant::now();
+            if pruned.is_some_and(|at| now.duration_since(at) < PRUNE_INTERVAL) {
+                return;
+            }
+            *pruned = Some(now);
         }
+        let dir = self.artifact_dir();
+        // The walk blocks on the file system; the shutdown drain (`runs`) waits for it.
+        self.runs.spawn_blocking_on(
+            move || match artifacts::prune(&dir, SystemTime::now(), artifacts::BOUNDS) {
+                Ok(pruned) if pruned.files > 0 => tracing::info!(
+                    files = pruned.files,
+                    bytes = pruned.bytes,
+                    dir = %dir.display(),
+                    "pruned the run artifact directory"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, dir = %dir.display(), "artifact prune failed"),
+            },
+            &handle,
+        );
     }
 
     async fn browser(&self) -> Result<Arc<Browser>, String> {
@@ -111,7 +165,12 @@ impl PlaywrightService {
                         .await
                         .map_err(|error| error.to_string())?;
                         match Runtime::connect(cdp.clone()).await {
-                            Ok(runtime) => Ok(Arc::new(Browser { cdp, runtime })),
+                            // Agents name paths on their own machine; Neo writes them only
+                            // inside the artifact directory (`artifacts.rs`).
+                            Ok(runtime) => Ok(Arc::new(Browser {
+                                cdp,
+                                runtime: runtime.with_absolute_paths(AbsolutePaths::Redirect),
+                            })),
                             Err(error) => {
                                 cdp.disconnect().await;
                                 Err(error.to_string())
@@ -196,9 +255,12 @@ impl PlaywrightService {
                 page: PageId::new(page.clone()),
                 timeout: deadline.saturating_duration_since(Instant::now()),
                 cancel,
-                artifacts: None,
+                artifacts: Some(self.artifact_dir()),
             })
             .await;
+        if !outcome.artifacts.is_empty() {
+            self.prune_artifacts();
+        }
         if created {
             if let Some(entry) = outcome.pages.iter_mut().find(|entry| entry.id == page) {
                 entry.created = true;
@@ -220,7 +282,9 @@ impl PlaywrightService {
         {
             error.message = format!("Timeout {timeout_ms}ms exceeded.");
         }
-        report(outcome)
+        let mut report = report(outcome);
+        artifacts::locate(&mut report, &self.artifact_dir());
+        report
     }
 }
 

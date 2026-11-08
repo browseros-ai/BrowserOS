@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (134)
+## Deviations (135)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -17,6 +17,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/abort.rs | `REALM_GLOBALS` | `client/connection.ts` `Connection.sendMessageToServer` | Node's signal is an `EventTarget` whose listeners get an `Event`; the realm has neither class, so a listener gets a plain object with the `Event` fields a listener reads (`type`, `target`, `currentTarget`, `isTrusted`, `stopImmediatePropagation`), and `dispatchEvent` is not served. |
 | neo-runtime/src/artifacts.rs | `Artifacts::existing` | `client/elementHandle.ts` `resolvePathsAndDirectoryForInputFiles` | Playwright's client reads any path on its host, relative to its working directory. A Neo script has no file system, and the host must not hand an agent's script its disk, so Rust reads a file to upload or drop only inside the run's artifact directory, at a relative path without `..`, refusing a symbolic link on the way, and a run without one names the option. |
 | neo-runtime/src/artifacts.rs | `MAX_BINARY_RESULT_BYTES` | `client/page.ts` `Page.screenshot` | returns a buffer of any size. A binary result reaches the script as base64 JSON that the 64 MiB realm holds twice while it parses (probes-bin.md B3: 16 MiB fits, 20 MiB ends the run with `InternalError: out of memory`), so a larger one is refused with an Error naming its size. |
+| neo-runtime/src/artifacts.rs | `redirected` | `client/page.ts` `Page.screenshot` | Playwright writes an absolute path anywhere on its host. Under [`AbsolutePaths::Redirect`] Neo writes one inside the artifact directory as that file, and one outside it at `<artifact directory>/<file name>`, so an agent's script still never writes the host's disk; the script carries on as Playwright's does, and the outcome lists the file with the path asked for (`RunArtifact::requested`) and a log line says where it went. Two such paths with one file name share the file, the last write winning. |
 | neo-runtime/src/bindings.rs | `Bindings::close` | `server/page.ts` `Page.removeExposedBinding` | Playwright's bindings live as long as their page or context; Neo's live as long as the run. |
 | neo-runtime/src/browser_calls.rs | (file) | `server/chromium/crBrowser.ts` `CRBrowserContext.doClose` | Playwright keeps a context until the script closes it; a run's realm is gone when it ends, so Neo disposes every context the run created then, with its pages. |
 | neo-runtime/src/browser_calls.rs | `context` | `client/browserContext.ts` `BrowserContext.route` | Neo serves context routes only on the run's own context; a created context's page routes remain available. |

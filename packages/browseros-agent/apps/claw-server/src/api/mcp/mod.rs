@@ -1,3 +1,4 @@
+mod artifacts;
 pub mod captcha;
 pub mod dispatch;
 pub mod distill;
