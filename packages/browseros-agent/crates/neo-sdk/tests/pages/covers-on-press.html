@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Covers on press</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  button { margin: 40px; }
+  #list { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.1); }
+</style>
+</head>
+<body>
+<button id="choose">Choose</button>
+<button id="dismiss">Dismiss</button>
+<div id="list" role="listbox" aria-label="Options"><div role="option">Option</div></div>
+<script>
+  // Two buttons that act on their own `mousedown`, as a select or a menu item does: `Choose`
+  // opens a listbox over the whole page, so its release lands on the listbox; `Dismiss` hides
+  // itself. Neither moves, so each press counts once.
+  window.__chosen = 0
+  window.__dismissed = 0
+  const list = document.getElementById('list')
+  const dismiss = document.getElementById('dismiss')
+  document.getElementById('choose').addEventListener('mousedown', () => {
+    window.__chosen++
+    list.style.display = 'block'
+  })
+  dismiss.addEventListener('mousedown', () => {
+    window.__dismissed++
+    dismiss.style.display = 'none'
+  })
+</script>
+</body>
+</html>
