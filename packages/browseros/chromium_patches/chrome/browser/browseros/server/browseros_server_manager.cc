@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..19919de8931b03b7ae7cf772f9e98b0d907259cd
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1558 @@
+@@ -0,0 +1,1564 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -692,13 +692,18 @@ index 0000000000000000000000000000000000000000..19919de8931b03b7ae7cf772f9e98b0d
 +      FROM_HERE, base::BindOnce(
 +                     [](BrowserOSServerProxy* proxy, int http_port,
 +                        int https_port, bool allow_remote) {
++                       // SetAllowRemote() documents that it must run before
++                       // Start(): it decides whether the listeners bind
++                       // loopback or the wildcard address. Calling it after
++                       // Start() meant the pref was ignored on every first
++                       // bind, i.e. the bind that matters on launch.
++                       proxy->SetAllowRemote(allow_remote);
 +                       if (!proxy->Start(http_port, https_port)) {
 +                         LOG(ERROR)
 +                             << "browseros: Failed to start MCP proxy on port "
 +                             << http_port;
 +                         return;
 +                       }
-+                       proxy->SetAllowRemote(allow_remote);
 +                     },
 +                     server_proxy_.get(), ports_.proxy, proxy_https_port_,
 +                     allow_remote_in_mcp_));
@@ -1417,16 +1422,17 @@ index 0000000000000000000000000000000000000000..19919de8931b03b7ae7cf772f9e98b0d
 +  if (new_value != allow_remote_in_mcp_) {
 +    LOG(INFO) << "browseros: allow_remote_in_mcp preference changed from "
 +              << (allow_remote_in_mcp_ ? "true" : "false") << " to "
-+              << (new_value ? "true" : "false") << ", restarting server...";
++              << (new_value ? "true" : "false")
++              << ", rebinding proxy and restarting server...";
 +
 +    allow_remote_in_mcp_ = new_value;
 +
-+    if (server_proxy_) {
-+      content::GetIOThreadTaskRunner({})->PostTask(
-+          FROM_HERE,
-+          base::BindOnce(&BrowserOSServerProxy::SetAllowRemote,
-+                         base::Unretained(server_proxy_.get()), new_value));
-+    }
++    // The bind address is fixed when the listeners are created, so a running
++    // proxy has to be recreated for the new pref to take effect. Posting both
++    // to the IO thread keeps Stop() ahead of the next Start(), which then
++    // applies the pref before binding.
++    StopProxy();
++    StartProxy();
 +
 +    RestartBrowserOSProcess();
 +  }

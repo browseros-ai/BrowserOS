@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000000..0e62a9f7995e1
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_proxy.h
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,96 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -51,10 +51,13 @@ index 0000000000000..0e62a9f7995e1
 +  BrowserOSServerProxy& operator=(const BrowserOSServerProxy&) = delete;
 +
 +  // Binds the stable HTTP proxy port and starts accepting TCP connections.
++  // The listener binds loopback unless SetAllowRemote(true) already ran.
 +  bool Start(int http_port, int https_port);
 +  void Stop();
 +
 +  void SetBackendPort(int port);
++  // Opens the listener to non-loopback peers and lets Start() bind the
++  // wildcard address. Must be called before Start().
 +  void SetAllowRemote(bool allow);
 +
 +  int GetPort() const { return bound_http_port_; }
