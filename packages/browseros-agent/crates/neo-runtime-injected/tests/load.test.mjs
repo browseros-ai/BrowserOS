@@ -630,7 +630,7 @@ test('forms glue preserves Playwright values, state checks, targeting and errors
   }
 })
 
-test('element-ops glue blurs, selects, dispatches and highlights as Playwright does', {
+test('element-ops glue blurs, selects and highlights as Playwright does', {
   skip: browserBinary ? false : 'NEO_E2E_BROWSER is unset',
   timeout: 180_000,
 }, async () => {
@@ -709,80 +709,7 @@ test('element-ops glue blurs, selects, dispatches and highlights as Playwright d
     )
     assert.equal(await main('getSelection().toString()'), 'plain text')
 
-    // dispatchEvent: the first match, Playwright's event classes and defaults.
-    assert.deepEqual(
-      await page('dispatchEvent', {
-        selector: '#go',
-        strict: true,
-        type: 'click',
-        eventInit: JSON.stringify({ detail: 3 }),
-      }),
-      { value: { preview: '<button id="go">Go</button>' } },
-    )
-    assert.deepEqual(
-      await page('dispatchEvent', {
-        selector: '#go',
-        strict: true,
-        type: 'ping',
-        eventInit: JSON.stringify({ detail: 'x', bubbles: false }),
-      }),
-      { value: { preview: '<button id="go">Go</button>' } },
-    )
-    assert.deepEqual(
-      await page('dispatchEvent', {
-        selector: '.dup',
-        strict: false,
-        type: 'click',
-        eventInit: 'null',
-      }),
-      { value: { preview: '<button class="dup">A</button>' } },
-    )
-    assert.deepEqual(
-      await page('dispatchEvent', {
-        selector: '#missing',
-        strict: true,
-        type: 'click',
-        eventInit: '{}',
-      }),
-      { value: {} },
-    )
-    assert.match(
-      (
-        await page('dispatchEvent', {
-          selector: '.dup',
-          strict: true,
-          type: 'click',
-          eventInit: '{}',
-        })
-      ).exception.description,
-      /strict mode violation/,
-    )
-    assert.deepEqual(await main('seen'), [
-      {
-        type: 'click',
-        detail: 3,
-        isTrusted: false,
-        bubbles: true,
-        mouse: true,
-        target: 'go',
-      },
-      // An unknown type is a plain Event (Playwright's `default:` case): no detail.
-      {
-        type: 'ping',
-        isTrusted: false,
-        bubbles: false,
-        custom: false,
-        target: 'go',
-      },
-      {
-        type: 'click',
-        detail: 0,
-        isTrusted: false,
-        bubbles: true,
-        mouse: true,
-        target: 'dup',
-      },
-    ])
+    // Main-world dispatchEvent is covered in crates/neo-sdk/tests/parity/{dispatchEvent,elementHandle-dispatchEvent}.test.mjs.
 
     // setHighlights installs the overlay; an empty list keeps it; hideHighlight removes it.
     const glass = () => main("document.querySelectorAll('x-pw-glass').length")

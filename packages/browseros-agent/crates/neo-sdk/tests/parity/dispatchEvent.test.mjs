@@ -128,6 +128,44 @@ test('dispatchEvent dispatches the event Playwright builds, on the element it na
   })
 })
 
+test('dispatchEvent uses a plain non-bubbling Event for an unknown type', {
+  skip,
+  timeout: 120_000,
+}, async (t) => {
+  const outcome = await compareMethod(t, {
+    html: `<button id="button">Button</button>
+<script>
+window.__seen = []
+document.getElementById('button').addEventListener('ping', (event) => {
+  window.__seen.push({
+    kind: event.constructor.name,
+    custom: event instanceof CustomEvent,
+    bubbles: event.bubbles,
+    isTrusted: event.isTrusted,
+    hasDetail: 'detail' in event,
+    detail: event.detail ?? null,
+  })
+})
+</script>`,
+    source: `return await page.locator('#button').dispatchEvent('ping', { detail: 'x', bubbles: false }) === undefined`,
+    probe: 'window.__seen',
+    effects: ({ playwright, neo }) => {
+      assert.deepEqual(playwright, [
+        {
+          kind: 'Event',
+          custom: false,
+          bubbles: false,
+          isTrusted: false,
+          hasDetail: false,
+          detail: null,
+        },
+      ])
+      assert.deepEqual(neo, playwright, 'what the page saw')
+    },
+  })
+  assert.equal(outcome.value, true)
+})
+
 const MAIN_WORLD = `<title>dispatch-main</title>
 <button id="button">Button</button><div id="circle">Circle</div>
 <script>
