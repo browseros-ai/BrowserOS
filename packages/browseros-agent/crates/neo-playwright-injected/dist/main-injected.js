@@ -8930,7 +8930,7 @@ function skipSetups(prototype) {
   for (const setup of SKIPPED_SETUPS) {
     const own = InjectedScript.prototype[setup];
     if (typeof own !== "function")
-      throw new Error(`neo-runtime-injected: InjectedScript has no ${setup}`);
+      throw new Error(`neo-playwright-injected: InjectedScript has no ${setup}`);
     Object.defineProperty(prototype, setup, { value: () => {} });
   }
 }

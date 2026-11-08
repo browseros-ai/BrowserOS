@@ -109,7 +109,7 @@ class Buffer extends Uint8Array {
     try {
       bytes = Uint8Array.fromBase64(text);
     } catch {
-      throw new Error("neo-sdk: invalid base64 from Rust");
+      throw new Error("neo-quickjs-injected: invalid base64 from Rust");
     }
     return new Buffer(bytes.buffer, bytes.byteOffset, bytes.length);
   }
@@ -2697,7 +2697,7 @@ class Response {
 function responseFor(connection, guid, frame) {
   const built = networkObject(connection, guid, frame._page);
   if (!(built instanceof Response))
-    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such response`);
+    throw new Error(`neo-quickjs-injected: Rust's chain for ${guid} has no such response`);
   return built;
 }
 function networkObject(connection, guid, page) {
@@ -2719,7 +2719,7 @@ function networkObject(connection, guid, page) {
   }
   const built = connection._objects.get(guid);
   if (!built)
-    throw new Error(`neo-sdk: Rust's chain for ${guid} has no such object`);
+    throw new Error(`neo-quickjs-injected: Rust's chain for ${guid} has no such object`);
   return built;
 }
 function requestFromRecord(connection, record, page) {
@@ -6593,7 +6593,7 @@ class Frame {
           const { cursor: id, index, url } = step.reply;
           cursor = id;
           if (index === undefined || url === undefined)
-            throw new Error("neo-sdk: neo-runtime ended this navigation wait under it");
+            throw new Error("neo-quickjs-injected: neo-runtime ended this navigation wait under it");
           waiting = next();
           const parsed2 = urlFor(url);
           if (!parsed2)
@@ -6735,7 +6735,7 @@ class Frame {
   async _queryCount(apiName, selector) {
     const result = await this._connection.send(apiName, this._guid, "queryCount", pickParams(FRAME_QUERY_COUNT_KEYS, { selector }), 0);
     if (result === undefined)
-      throw new Error("neo-sdk: Frame.queryCount contract error: missing result");
+      throw new Error("neo-quickjs-injected: Frame.queryCount contract error: missing result");
     return result.value;
   }
   async _allTextContents(apiName, selector) {
@@ -6767,7 +6767,7 @@ class Frame {
     const result = await this._connection.sendEval(apiName, this._guid, method, params, 0);
     const handle = ElementHandle.fromNullable(this._connection, result.element, this);
     if (!handle)
-      throw new Error(`neo-sdk: Frame.${method} contract error: no element`);
+      throw new Error(`neo-quickjs-injected: Frame.${method} contract error: no element`);
     return handle;
   }
   async _allInnerTexts(apiName, selector) {
@@ -6827,7 +6827,7 @@ class Frame {
     });
     const result = await this._connection.sendEval(apiName, this._guid, "waitForFunction", pollingInterval === undefined ? params : { ...params, pollingInterval }, this._page._timeoutSettings.timeout(options, apiName));
     if (!("handle" in result))
-      throw new Error("neo-sdk: Frame.waitForFunction contract error: missing handle");
+      throw new Error("neo-quickjs-injected: Frame.waitForFunction contract error: missing handle");
     return handleFrom(this._connection, result.handle, this);
   }
   async _waitForFunctionOnSelector(apiName, selector, pageFunction, arg, options) {
@@ -6849,7 +6849,7 @@ class Frame {
     const result = await this._connection.sendNeo("frame.frameElement", this._guid, "frameElement", {}, 0);
     const element = ElementHandle.fromNullable(this._connection, result?.element, this.parentFrame() ?? this);
     if (!element)
-      throw new Error("neo-sdk: frameElement answered no element");
+      throw new Error("neo-quickjs-injected: frameElement answered no element");
     return element;
   }
   async _waitForSelectorElement(apiName, selector, options) {
@@ -6994,7 +6994,7 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
-      throw new Error("neo-sdk: Frame.inputValue contract error: missing result");
+      throw new Error("neo-quickjs-injected: Frame.inputValue contract error: missing result");
     return result.value;
   }
   async isVisible(selector, options = {}) {
@@ -7006,7 +7006,7 @@ class Frame {
       ...options
     }), 0);
     if (result === undefined)
-      throw new Error("neo-sdk: Frame.isVisible contract error: missing result");
+      throw new Error("neo-quickjs-injected: Frame.isVisible contract error: missing result");
     return result.value;
   }
   async isHidden(selector, options = {}) {
@@ -7018,7 +7018,7 @@ class Frame {
       ...options
     }), 0);
     if (result === undefined)
-      throw new Error("neo-sdk: Frame.isHidden contract error: missing result");
+      throw new Error("neo-quickjs-injected: Frame.isHidden contract error: missing result");
     return result.value;
   }
   async isChecked(selector, options = {}) {
@@ -7030,7 +7030,7 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
-      throw new Error("neo-sdk: Frame.isChecked contract error: missing result");
+      throw new Error("neo-quickjs-injected: Frame.isChecked contract error: missing result");
     return result.value;
   }
   async isEnabled(selector, options = {}) {
@@ -7042,7 +7042,7 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
-      throw new Error("neo-sdk: Frame.isEnabled contract error: missing result");
+      throw new Error("neo-quickjs-injected: Frame.isEnabled contract error: missing result");
     return result.value;
   }
   async isDisabled(selector, options = {}) {
@@ -7054,7 +7054,7 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
-      throw new Error("neo-sdk: Frame.isDisabled contract error: missing result");
+      throw new Error("neo-quickjs-injected: Frame.isDisabled contract error: missing result");
     return result.value;
   }
   async isEditable(selector, options = {}) {
@@ -7066,7 +7066,7 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
-      throw new Error("neo-sdk: Frame.isEditable contract error: missing result");
+      throw new Error("neo-quickjs-injected: Frame.isEditable contract error: missing result");
     return result.value;
   }
   async check(selector, options = {}) {
@@ -7097,7 +7097,7 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
     if (result === undefined)
-      throw new Error("neo-sdk: Frame.selectOption contract error: missing result");
+      throw new Error("neo-quickjs-injected: Frame.selectOption contract error: missing result");
     return result.values;
   }
   async setInputFiles(selector, files, options = {}) {

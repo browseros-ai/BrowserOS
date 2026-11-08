@@ -28,7 +28,7 @@ function clockCall(op, ...args) {
     return;
   }
   if (!OPS.includes(op))
-    throw new Error(`neo-runtime-injected: no clock call ${op}`);
+    throw new Error(`neo-playwright-injected: no clock call ${op}`);
   const call = clock.controller[op];
   return call.apply(clock.controller, args);
 }
