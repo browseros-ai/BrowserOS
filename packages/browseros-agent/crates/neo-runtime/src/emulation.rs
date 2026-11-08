@@ -11,15 +11,16 @@
 //!  OOPIF session attached    child_attached(): the context's per-frame options and media
 //! ```
 //!
-//! Lifetime: Chromium drops a session's `Emulation.*` overrides when that session detaches
-//! (probe P-E1 on BrowserOS neo 155.0.8318.26, `report-pwe-plat.md`), and a run's session on a
-//! tab detaches when the run ends. So an override lasts for the run, where Playwright's lasts
-//! for the page's life. A failed update restores the previous state and re-sends it in the
-//! background, as Playwright does, so the page never keeps half of a rejected change.
+//! Lifetime: the run explicitly clears viewport and media overrides on the tabs it leaves
+//! open, awaiting a bounded cleanup before its outcome (`Tabs::release_run_scoped`). A detach
+//! also clears them, but runs in the background and cannot serve as that completion barrier.
+//! A failed update restores the previous state and re-sends it in the background, as
+//! Playwright does, so the page never keeps half of a rejected change.
 
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::Duration;
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
 use futures_util::future;
@@ -33,9 +34,11 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::time;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
+use crate::dispatch::PAGE_END_WAIT;
 use crate::frames::Host;
 use crate::page::PageSession;
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -68,6 +71,9 @@ const NO_OVERRIDE: &str = "no-override";
 /// emulated keeps the browser's own value, as in a Playwright context created with
 /// `colorScheme: null` (and the others `null`).
 const ATTACHED_CONTEXT_MEDIA: &str = NO_OVERRIDE;
+
+/// Neo: observe a pending native resize without busy-polling the browser's layout engine.
+const RESTORE_POLL: Duration = Duration::from_millis(10);
 
 /// A viewport or screen size, Playwright's `types.Size`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,6 +172,13 @@ struct State {
     /// Playwright's `FrameSession._windowId`: set only for a created context's page with a
     /// viewport, as Playwright reads it only without `noDefaultViewport`.
     window: Option<i64>,
+    /// Written before sending, even when cancellation hides the command's acknowledgement.
+    restore_viewport: bool,
+    restore_media: bool,
+    /// Native layout dimensions before this run first changed the viewport.
+    original_viewport: Option<Value>,
+    /// Retires setters and late frame attachment before cleanup waits for the update lock.
+    released: bool,
 }
 
 impl PageEmulation {
@@ -327,7 +340,9 @@ impl PageEmulation {
     /// context is the user's browser, whose frames Neo never holds paused: Neo attaches one when a
     /// call first reaches it, so a frame no call reached keeps the browser's own media.
     pub(crate) async fn child_attached(&self, host: &Host) {
+        let _turn = self.updates.lock().await;
         let (context, media_set) = match self.state.lock() {
+            Ok(state) if state.released => return,
             Ok(state) => (
                 state.context.clone(),
                 state.media != EmulatedMedia::default(),
@@ -362,6 +377,7 @@ impl PageEmulation {
         progress: &Progress,
     ) -> Result<(), CallError> {
         let _turn = progress.race(self.updates.lock()).await?;
+        self.ensure_live()?;
         // Playwright: `server/page.ts` `Page.setViewportSize`: `this._setEmulatedSize({ viewport: { ...viewportSize }, screen: { ...viewportSize } });`
         let old = self.swap(|state| state.size.replace((size, size)))?;
         let updated = progress.race(self.update_viewport(page)).await;
@@ -384,6 +400,7 @@ impl PageEmulation {
         progress: &Progress,
     ) -> Result<(), CallError> {
         let _turn = progress.race(self.updates.lock()).await?;
+        self.ensure_live()?;
         let old = self.swap(|state| {
             let old = state.media;
             // Playwright: `server/page.ts` `Page.emulateMedia`: `if (options.media !== undefined)`
@@ -426,6 +443,91 @@ impl PageEmulation {
             })
     }
 
+    fn ensure_live(&self) -> Result<(), CallError> {
+        if self.swap(|state| state.released)? {
+            return Err(PlaywrightError::target_closed().into());
+        }
+        Ok(())
+    }
+
+    /// Neo: an ended run (or disconnected context) puts back the browser's own viewport and
+    /// media at cleanup. The caller bounds its wait, but this tracked task keeps
+    /// going; a slow reset is not discarded. No later setter, resync or frame attachment
+    /// can reapply the retired state. Created contexts are disposed instead.
+    pub(crate) async fn release(&self, page: &PageSession) {
+        if let Ok(mut state) = self.state.lock() {
+            state.released = true;
+        }
+        let _turn = self.updates.lock().await;
+        let (viewport, media) = match self.state.lock() {
+            Ok(mut state) => {
+                state.size = None;
+                state.media = EmulatedMedia::default();
+                (state.restore_viewport, state.restore_media)
+            }
+            Err(_) => return,
+        };
+        if viewport {
+            let previous = layout_size(page).await.ok();
+            let restored = match page
+                .send("Emulation.clearDeviceMetricsOverride", json!({}))
+                .await
+            {
+                Ok(_) => self.viewport_restored(page, previous).await,
+                Err(error) => Err(error),
+            };
+            match restored {
+                Ok(()) | Err(CdpError::SessionGone) => {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.restore_viewport = false;
+                        state.metrics = None;
+                    }
+                }
+                Err(error) => debug!(%error, "restoring the page's viewport failed"),
+            }
+        }
+        if media {
+            let children = page.frames.child_hosts();
+            match self.send_media(page, &children).await {
+                Ok(()) | Err(CdpError::SessionGone) => {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.restore_media = false;
+                    }
+                }
+                Err(error) => debug!(%error, "restoring the page's media failed"),
+            }
+        }
+    }
+
+    /// Neo: Chromium can acknowledge `clearDeviceMetricsOverride` before its native view's
+    /// resize reaches the renderer (a held setter acknowledgement reproduces this). Observe
+    /// layout until it is native again, or reflects a window resize since the run began.
+    /// Media is reset afterward, so a scrollbar change cannot masquerade as that resize.
+    async fn viewport_restored(
+        &self,
+        page: &PageSession,
+        previous: Option<Value>,
+    ) -> Result<(), CdpError> {
+        let original = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| state.original_viewport.clone());
+        let deadline = time::Instant::now() + PAGE_END_WAIT;
+        loop {
+            let current = layout_size(page).await?;
+            if original.as_ref() == Some(&current) || previous.as_ref() != Some(&current) {
+                return Ok(());
+            }
+            if time::Instant::now() >= deadline {
+                return Err(CdpError::Timeout {
+                    method: "Page.getLayoutMetrics".to_string(),
+                });
+            }
+            time::sleep(RESTORE_POLL).await;
+        }
+    }
+
     /// Playwright's background re-send after a failed update: `this.delegate.updateEmulateMedia().catch(() => {});`
     fn resync(page: &Arc<PageSession>, what: Resync) {
         let owner = Arc::clone(page);
@@ -433,6 +535,9 @@ impl PageEmulation {
             let page = owner;
             let emulation = &page.emulation;
             let _turn = emulation.updates.lock().await;
+            if emulation.ensure_live().is_err() {
+                return;
+            }
             let children = page.frames.child_hosts();
             let resent = match what {
                 Resync::Viewport => emulation.update_viewport(&page).await,
@@ -448,14 +553,23 @@ impl PageEmulation {
     /// device metrics override, after the window around it when the page has one, skipped when
     /// it is the override already sent.
     async fn update_viewport(&self, page: &PageSession) -> Result<(), CdpError> {
-        let Some((metrics, window)) = self
-            .state
-            .lock()
-            .ok()
-            .and_then(|state| state.metrics_update())
-        else {
+        let Some((metrics, window)) = self.state.lock().ok().and_then(|mut state| {
+            let update = state.metrics_update()?;
+            state.restore_viewport = true;
+            Some(update)
+        }) else {
             return Ok(());
         };
+        let needs_original = self
+            .state
+            .lock()
+            .is_ok_and(|state| state.context.is_none() && state.original_viewport.is_none());
+        if needs_original {
+            let original = layout_size(page).await?;
+            if let Ok(mut state) = self.state.lock() {
+                state.original_viewport = Some(original);
+            }
+        }
         if let Some((window, width, height)) = window {
             // Playwright: `server/chromium/crPage.ts` `FrameSession.setWindowBounds`: `return await this._client.send('Browser.setWindowBounds', {`
             page.send(
@@ -475,6 +589,9 @@ impl PageEmulation {
     /// Playwright's `CRPage.updateEmulateMedia`: the page's media on its main session and on each
     /// out-of-process frame session in `children`, where a closed session is skipped.
     async fn send_media(&self, page: &PageSession, children: &[Arc<Host>]) -> Result<(), CdpError> {
+        if let Ok(mut state) = self.state.lock() {
+            state.restore_media = true;
+        }
         let params = self.media_params();
         let main = page.send("Emulation.setEmulatedMedia", params.clone());
         let frames = children.iter().map(|host| {
@@ -525,6 +642,15 @@ impl PageEmulation {
             .unwrap_or_default();
         media_params(&media)
     }
+}
+
+/// Neo: native CDP layout reads avoid adding a page script to viewport cleanup.
+async fn layout_size(page: &PageSession) -> Result<Value, CdpError> {
+    let layout = page.send("Page.getLayoutMetrics", json!({})).await?;
+    Ok(json!([
+        layout["cssLayoutViewport"]["clientWidth"],
+        layout["cssLayoutViewport"]["clientHeight"]
+    ]))
 }
 
 /// What a failed update re-sends.

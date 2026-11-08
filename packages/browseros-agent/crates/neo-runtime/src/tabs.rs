@@ -775,11 +775,12 @@ impl Tabs {
     /// back, in one place that each area adding such state releases it from: the run's init
     /// scripts (`init_scripts.rs`) and exposed bindings (`bindings.rs`), its session overrides (extra headers, offline mode,
     /// geolocation; HTTP credentials hold none while `setHTTPCredentials` is pending), its
-    /// permission grants (`session_state.rs`) and its routes' paused requests (`routes.rs`). `context.close()` awaits it before it resolves and
+    /// permission grants (`session_state.rs`), its routes' paused requests (`routes.rs`), and
+    /// viewport/media emulation (`emulation.rs`). `context.close()` awaits it before it resolves and
     /// `Dispatcher::finish` runs it, so a closed context and an ended run let go the same way.
     /// Each part marks itself released before it waits, so an attach or a call still running
     /// installs nothing after it, and waits [`PAGE_END_WAIT`] at most: the overrides' resets
-    /// finish on the run's tracker and the grants' on the cleanup tracker regardless, so none
+    /// and emulation finish on the run's tracker and the grants' on the cleanup tracker, so none
     /// is given up. Idempotent: a run that closed its context finds nothing left at its end,
     /// but what its close could not take back yet.
     pub(crate) async fn release_run_scoped(&self, run: &RunScope) {
@@ -819,6 +820,18 @@ impl Tabs {
             &self.0.tokio,
         );
         let _routes = time::timeout(PAGE_END_WAIT, releasing).await;
+        let sessions: Vec<_> = self
+            .own_attached()
+            .into_iter()
+            .map(|(_, page)| page)
+            .collect();
+        let releasing = self.0.tasks.spawn_on(
+            async move {
+                future::join_all(sessions.iter().map(|page| page.emulation.release(page))).await;
+            },
+            &self.0.tokio,
+        );
+        let _emulation = time::timeout(PAGE_END_WAIT, releasing).await;
     }
 
     /// Records the run's end on every tab it attached to (`PageSession::mark_input_ended`): no

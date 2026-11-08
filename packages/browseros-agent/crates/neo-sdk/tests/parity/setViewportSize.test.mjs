@@ -6,8 +6,8 @@
 // "VP-002 should set the proper viewport size" (the size takes effect), and its validator
 // rejecting a fractional size before any effect.
 //
-// Deviation, asserted: Neo's override ends with the run (Chromium drops it when the run's
-// session detaches); Playwright's lasts while it is connected.
+// Deviation, asserted: Neo's override is restored at run end; Playwright's lasts while it
+// is connected.
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -20,7 +20,7 @@ const cases = [
   {
     name: 'sets the viewport and screen',
     source: `const returned = await page.setViewportSize({ width: 500, height: 400 })
-const s = await settle((s) => s.innerWidth === 500 && s.innerHeight === 400)
+const s = await settle((s) => s.innerWidth === 500 && s.innerHeight === 400 && s.screen[0] === 500 && s.screen[1] === 400)
 return { returned: returned === undefined, size: [s.innerWidth, s.innerHeight], screen: s.screen,
   narrow: s.media['(max-width: 600px)'], viewport: page.viewportSize() }`,
     expected: {
