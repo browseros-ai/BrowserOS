@@ -7,6 +7,8 @@ description: Use BrowserOS neo for browser tasks. Write Playwright JavaScript th
 
 Write Playwright JavaScript with the `run` MCP tool. `page` and `context` are provided; await browser calls and return a value. Send the body of an async function, without imports or a wrapper.
 
+Node's common globals work: `URL`, `URLSearchParams`, `Buffer`, `TextEncoder`, `TextDecoder`, `structuredClone`, `crypto.randomUUID()`, `crypto.getRandomValues()`, `setTimeout`, `setInterval`, `AbortController`. Not available: `fetch`, `Intl`, `require`, `process`.
+
 ```js
 await page.goto('https://example.com');
 return await page.locator('h1').textContent();
