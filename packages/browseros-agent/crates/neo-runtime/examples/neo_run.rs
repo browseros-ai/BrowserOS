@@ -5,6 +5,8 @@
 //! cargo run -p neo-runtime --example neo_run -- --cdp-port 9222 --page <targetId> script.js
 //! cargo run -p neo-runtime --example neo_run -- --cdp-port 9222 --page <targetId> \
 //!   --artifacts /tmp/run-artifacts script.js   # page.screenshot({ path: 'a.png' }) writes here
+//! cargo run -p neo-runtime --example neo_run -- --cdp-port 9222 --page <targetId> \
+//!   --artifacts /tmp/run-artifacts --redirect-absolute-paths script.js   # as the MCP host runs
 //! ```
 //!
 //! Once connected it writes `connected` on stderr, so a harness driving the tab knows the run
@@ -18,7 +20,7 @@ use std::{fs, io};
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use clap::Parser;
-use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{AbsolutePaths, PageId, RunRequest, RunStatus, Runtime};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -40,6 +42,10 @@ struct Args {
     /// `page.pdf({ path })`) write, relative to it. Without it they are refused.
     #[arg(long)]
     artifacts: Option<PathBuf>,
+    /// Take absolute `path` options as the MCP host does (`AbsolutePaths::Redirect`): inside the
+    /// artifact directory as that file, outside it at `<artifacts>/<file name>`.
+    #[arg(long)]
+    redirect_absolute_paths: bool,
     /// A file holding the body of an async function of `(page, context, playwright)`.
     script: PathBuf,
 }
@@ -71,7 +77,12 @@ async fn run(args: Args) -> Result<RunStatus, String> {
         .map_err(|error| format!("connecting to port {}: {error}", args.cdp_port))?;
     let runtime = Runtime::connect(cdp.clone())
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?
+        .with_absolute_paths(if args.redirect_absolute_paths {
+            AbsolutePaths::Redirect
+        } else {
+            AbsolutePaths::Refuse
+        });
     writeln!(io::stderr(), "connected").map_err(|error| error.to_string())?;
 
     let outcome = runtime

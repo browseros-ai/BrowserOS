@@ -43,8 +43,9 @@ pub struct RunRequest {
     pub cancel: CancellationToken,
     /// The directory the run's `path` options write into (`page.screenshot({ path })`,
     /// `page.pdf({ path })`), created on first write. A `path` must be relative to it and stay
-    /// inside it. `None` refuses every `path` with an Error naming the option; the bytes a
-    /// script asked for are still returned. Files written are listed in
+    /// inside it; a runtime opted into `AbsolutePaths::Redirect` also takes absolute paths
+    /// (`Runtime::with_absolute_paths`). `None` refuses every `path` with an Error naming the
+    /// option; the bytes a script asked for are still returned. Files written are listed in
     /// [`RunOutcome::artifacts`].
     pub artifacts: Option<PathBuf>,
 }
@@ -123,7 +124,9 @@ pub struct RunOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls_dropped: Option<DroppedCalls>,
     /// The files the run wrote into its artifact directory ([`RunRequest::artifacts`]), in the
-    /// order first written, each once with its last size. Absent from the JSON when empty.
+    /// order first written, each once with its last size. Absent from the JSON when empty. A
+    /// file written somewhere other than the absolute path the script named also leaves a
+    /// `neo:` line in `logs` saying where it went.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<RunArtifact>,
 }
@@ -190,8 +193,15 @@ impl RunOutcome {
         Self { pages, ..self }
     }
 
-    pub(crate) fn with_artifacts(self, artifacts: Vec<RunArtifact>) -> Self {
-        Self { artifacts, ..self }
+    /// Attaches the files the run wrote, and appends the notes for redirected ones to `logs`.
+    pub(crate) fn with_artifacts(self, artifacts: Vec<RunArtifact>, notes: Vec<String>) -> Self {
+        let mut logs = self.logs;
+        logs.extend(notes);
+        Self {
+            logs,
+            artifacts,
+            ..self
+        }
     }
 }
 

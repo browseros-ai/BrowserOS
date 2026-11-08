@@ -123,7 +123,7 @@ mod waits;
 mod web_storage;
 mod world;
 
-pub use artifacts::RunArtifact;
+pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{
     CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunEnd, RunError,
     RunOutcome, RunPage, RunRequest, RunStatus,
