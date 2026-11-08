@@ -210,11 +210,15 @@ async fn stop_server(client: &Client, base: &str, process: &mut Process) -> anyh
 }
 
 fn bounded(result: &Value) -> &Value {
+    bounded_by(result, 24_000)
+}
+
+fn bounded_by(result: &Value, cap: usize) -> &Value {
     let text = result["content"][0]["text"]
         .as_str()
         .expect("expected test value");
     assert!(
-        text.len() <= 24_000,
+        text.len() <= cap,
         "model-visible JSON: {} bytes",
         text.len()
     );
@@ -227,7 +231,7 @@ fn bounded(result: &Value) -> &Value {
 
 /// One isolated headless BrowserOS neo, the shipped server on it, and a >100 KB fixture page.
 struct Harness {
-    _root: TempDir,
+    root: TempDir,
     browser: Process,
     server: Process,
     cdp: CdpClient,
@@ -311,7 +315,7 @@ impl Harness {
             .await
         });
         Ok(Some(Self {
-            _root: root,
+            root,
             browser,
             server,
             cdp,
@@ -333,7 +337,10 @@ impl Harness {
             windows += 1;
             anyhow::ensure!(windows < 100, "retrieval must make progress");
             let window = self.run(1_000 + windows, next.clone()).await?;
-            let window = bounded(&window);
+            let cap = next["limit"]
+                .as_u64()
+                .map_or(24_000, |limit| limit as usize);
+            let window = bounded_by(&window, cap);
             anyhow::ensure!(window["pages"] == json!([]), "retrieval touched pages");
             anyhow::ensure!(
                 window["truncated"]["end"].as_u64() > next["offset"].as_u64(),
@@ -596,6 +603,81 @@ async fn tests_that_object_and_array_returns_keep_their_type_through_mcp() -> an
         prefix.len(),
         shown.len(),
         tail.len()
+    );
+    harness.stop().await
+}
+
+#[expect(clippy::print_stderr, reason = "Report verification measurements")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tests_that_large_results_are_saved_to_files_and_read_in_larger_windows_through_mcp()
+-> anyhow::Result<()> {
+    let Some(harness) = Harness::start().await? else {
+        return Ok(());
+    };
+    // gocalendar-9: a 594 KB `/finish` text took 27 continuation calls.
+    let reply = harness.run(1, json!({"code":format!(
+        "await page.goto({}); const snap = await page.ariaSnapshot({{mode:'ai'}}); {HASH_JS} return snap;",
+        serde_json::to_string(&harness.url)?)})).await?;
+    let report = bounded(&reply);
+    let meta = &report["truncated"]["value"];
+    let total = meta["total"].as_u64().expect("expected test value");
+    assert!(total > 500_000, "fixture snapshot is {total} bytes");
+    let file = PathBuf::from(
+        meta["file"]
+            .as_str()
+            .expect("truncated value links its file"),
+    );
+    assert!(file.is_absolute());
+    assert!(file.starts_with(harness.root.path().join("state").join("run-results")));
+    let saved = fs::read_to_string(&file)?;
+    assert_eq!(saved.len() as u64, total);
+    assert!(
+        report["logs"]
+            .as_array()
+            .expect("expected test value")
+            .contains(&json!(format!("hash:{}", js_hash(&saved))))
+    );
+    let prefix = report["value"].as_str().expect("string prefix");
+    let mut next = meta["next"].clone();
+    next["limit"] = json!(100_000);
+    let window = harness.run(2, next.clone()).await?;
+    let window_text = window["content"][0]["text"]
+        .as_str()
+        .expect("expected test value")
+        .len();
+    assert!(
+        (90_000..=100_000).contains(&window_text),
+        "limit window is {window_text} bytes"
+    );
+    let (text, windows) = harness.follow(next, prefix.to_string()).await?;
+    assert_eq!(text, saved);
+    // A larger window than the cap, or one on a code run, is refused.
+    for args in [
+        json!({"result":meta["next"]["result"],"limit":100_001}),
+        json!({"code":"return 1","limit":50_000}),
+    ] {
+        let reply = rpc(
+            &harness.client,
+            &harness.base,
+            3,
+            "tools/call",
+            json!({"name":"run","arguments":args}),
+        )
+        .await?;
+        assert_eq!(reply["error"]["code"], -32602);
+    }
+    let reply = harness
+        .run(4, json!({"code":"return 'abc'.repeat(30000);"}))
+        .await?;
+    let report = bounded(&reply);
+    let file = report["truncated"]["value"]["file"]
+        .as_str()
+        .expect("truncated value links its file");
+    assert_eq!(fs::read_to_string(file)?, "abc".repeat(30_000));
+    eprintln!(
+        "PASS MCP bulk: {total}-byte value saved to {}; {windows} windows at limit 100000 (24000-byte windows need {})",
+        file,
+        total.div_ceil(24_000)
     );
     harness.stop().await
 }

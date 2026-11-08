@@ -2,7 +2,7 @@
 //! runtime owns browser calls and cleanup, while page ids alone provide continuity. One
 //! shared runtime preserves its per-tab input ordering across MCP transport connections.
 
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::{borrow::Cow, path::PathBuf, sync::Arc, time::Duration};
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use neo_runtime::{PageId, RunOutcome, RunPage, RunRequest, RunStatus, Runtime};
@@ -28,13 +28,13 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::output::Store;
+use super::output::{BUDGET, LIMIT_MAX, LIMIT_MIN, RESULTS_DIR, Store};
 
 const DEFAULT_TIMEOUT: u64 = 30_000;
 const MAX_TIMEOUT: u64 = 120_000;
 const INSTRUCTIONS: &str = concat!(
     "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).",
-    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,path,offset}) to read the stored original without changing refs. A large object or array keeps its type: small keys stay whole, and truncated.value.cut lists each shortened part by JSON Pointer path with its own next."
+    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,path,offset,limit}) to read the stored original without changing refs; limit raises a window to at most 100000 bytes, and truncated.<field>.file names a local file holding the field's full text. A large object or array keeps its type: small keys stay whole, and truncated.value.cut lists each shortened part by JSON Pointer path with its own next."
 );
 
 struct Browser {
@@ -50,6 +50,7 @@ pub struct PlaywrightService {
     shutdown: CancellationToken,
     runs: TaskTracker,
     output: Arc<Mutex<Store>>,
+    state_dir: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -70,17 +71,19 @@ struct RequestArguments {
     field: Option<String>,
     path: Option<String>,
     offset: Option<usize>,
+    limit: Option<usize>,
 }
 
 impl PlaywrightService {
     #[must_use]
-    pub fn new(cdp_port: u16, shutdown: CancellationToken) -> Self {
+    pub fn new(cdp_port: u16, shutdown: CancellationToken, state_dir: PathBuf) -> Self {
         Self {
             cdp_port,
             browser: Arc::new(OnceCell::new()),
             shutdown,
             runs: TaskTracker::new(),
             output: Arc::new(Mutex::new(Store::default())),
+            state_dir,
         }
     }
 
@@ -309,7 +312,7 @@ fn tool() -> Tool {
         ("type".into(), json!("object")),
         ("additionalProperties".into(), json!(false)),
         ("oneOf".into(), json!([
-            {"required":["code"],"not":{"anyOf":[{"required":["result"]},{"required":["field"]},{"required":["path"]},{"required":["offset"]}]}},
+            {"required":["code"],"not":{"anyOf":[{"required":["result"]},{"required":["field"]},{"required":["path"]},{"required":["offset"]},{"required":["limit"]}]}},
             {"required":["result"],"not":{"anyOf":[{"required":["code"]},{"required":["page"]},{"required":["timeout"]}]}}
         ])),
         ("properties".into(), json!({
@@ -319,7 +322,8 @@ fn tool() -> Tool {
             "result":{"type":"string","minLength":1,"description":"Stored truncated result ID. Use instead of code, without page or timeout; retrieval never touches the browser. Process-local LRU: 16 results, 64 MiB; cleared on restart."},
             "field":{"type":"string","enum":["value","logs","calls","error"],"default":"value","description":"Original field to retrieve. Strings are raw text; other values and logs/calls/error use pretty JSON. Follow truncated.next verbatim."},
             "path":{"type":"string","description":"JSON Pointer (RFC 6901) to one node inside the field, such as /snap or /items/0; offset then counts into that node's text (raw for a string, pretty JSON otherwise). Copy it from a truncated.value.cut[].next."},
-            "offset":{"type":"integer","minimum":0,"default":0,"description":"UTF-8 byte offset into the original field text. Prefer the next arguments returned with truncation metadata."}
+            "offset":{"type":"integer","minimum":0,"default":0,"description":"UTF-8 byte offset into the original field text. Prefer the next arguments returned with truncation metadata."},
+            "limit":{"type":"integer","minimum":LIMIT_MIN,"maximum":LIMIT_MAX,"default":BUDGET,"description":"Window size in bytes of compact JSON. Later next arguments keep it. For the whole text at once, read truncated.<field>.file."}
         })),
     ])))
     .with_title("Run Playwright code")
@@ -401,6 +405,13 @@ impl ServerHandler for PlaywrightService {
                     None,
                 ));
             }
+            let limit = args.limit.unwrap_or(BUDGET);
+            if !(LIMIT_MIN..=LIMIT_MAX).contains(&limit) {
+                return Err(McpError::invalid_params(
+                    format!("limit must be {LIMIT_MIN}..{LIMIT_MAX} bytes"),
+                    None,
+                ));
+            }
             let result = self
                 .output
                 .lock()
@@ -410,6 +421,7 @@ impl ServerHandler for PlaywrightService {
                     args.field.as_deref().unwrap_or("value"),
                     args.path.as_deref(),
                     args.offset.unwrap_or(0),
+                    limit,
                 )
                 .map_err(|error| McpError::invalid_params(error, None))?;
             return Ok(if result["status"] == "ok" {
@@ -425,9 +437,13 @@ impl ServerHandler for PlaywrightService {
                 None,
             ));
         };
-        if args.field.is_some() || args.path.is_some() || args.offset.is_some() {
+        if args.field.is_some()
+            || args.path.is_some()
+            || args.offset.is_some()
+            || args.limit.is_some()
+        {
             return Err(McpError::invalid_params(
-                "field, path and offset require result",
+                "field, path, offset and limit require result",
                 None,
             ));
         }
@@ -469,7 +485,17 @@ impl ServerHandler for PlaywrightService {
             })
             .await
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
-        let result = self.output.lock().await.limit(result);
+        let files = self.state_dir.join(RESULTS_DIR);
+        // Links in the reply must stay valid if the client resolves them from another cwd.
+        let files = std::path::absolute(&files).unwrap_or(files);
+        let (result, disk) = self.output.lock().await.limit(result, Some(&files));
+        // An owned task, so a dropped request still deletes evicted files and finishes writes;
+        // the reply waits for it to learn which file links survived.
+        let result = self
+            .runs
+            .spawn(disk.apply(result))
+            .await
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
         Ok(if result["status"] == "ok" {
             CallToolResult::structured(result)
         } else {

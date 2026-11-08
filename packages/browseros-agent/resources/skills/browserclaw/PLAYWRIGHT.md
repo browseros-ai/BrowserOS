@@ -46,6 +46,8 @@ For an object or array, `truncated.value.cut` lists each shortened part by JSON 
 
 Append a string's windows to its shown prefix. An array's or object's windows are its pretty JSON from the first omitted entry, or from offset zero. `cutOmitted` counts parts not listed.
 
-Retrieval reads the stored original without touching the browser, so refs remain valid. The server keeps 16 recently used truncated results, up to 64 MiB of serialized JSON, across MCP sessions; restart or eviction loses them.
+Add `"limit": 100000` (bytes, 1000–100000, default 24000) for bigger windows; later `next` arguments keep it. For the whole text at once, read the local file `truncated.<field>.file`: it holds exactly the text offsets count into (raw for a string value, pretty JSON otherwise). A file is missing when the server could not save it.
 
-Recovery metadata takes priority: `truncated.metadataOverBudget` flags page identities or errors that alone exceed the budget. An original larger than the retention limit has `truncated.unavailable` and no retrieval link. Oversized ref tokens cannot be split across windows. `contextTruncated` marks omitted ancestor context.
+Retrieval reads the stored original without touching the browser, so refs remain valid. The server keeps 16 recently used truncated results, up to 64 MiB of serialized JSON, across MCP sessions; restart or eviction loses them and deletes their files.
+
+Recovery metadata takes priority: `truncated.metadataOverBudget` flags page identities or errors that alone exceed the budget. An original larger than the retention limit has `truncated.unavailable` and no retrieval link or file. Oversized ref tokens cannot be split across windows. `contextTruncated` marks omitted ancestor context.

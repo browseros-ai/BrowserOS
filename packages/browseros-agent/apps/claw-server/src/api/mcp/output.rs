@@ -1,12 +1,35 @@
 //! Bounds model-visible run reports; retained originals are shared across MCP sessions.
+//! Each truncated field of a retained original is also saved as a file the LRU deletes.
 
 use std::collections::VecDeque;
 use std::io;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use futures_util::future;
+use tokio::io::AsyncWriteExt;
 
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value, json};
 
 pub(super) const BUDGET: usize = 24_000;
+/// Largest continuation window (the med-fix-b decision asks for at least 100 000). Prose runs
+/// about 4 bytes per token, so this is near Claude Code's default 25 000-token MCP output cap;
+/// denser text (base64, minified code) costs more tokens per byte and may be cut by such a
+/// client, which then wants a smaller window or the saved `file`.
+pub(super) const LIMIT_MAX: usize = 100_000;
+/// Smallest continuation window: the ancestor `context` (`CONTEXT_BUDGET`) and window metadata
+/// must still leave room for text.
+pub(super) const LIMIT_MIN: usize = 4_000;
+/// Directory under the host's state dir that holds saved originals.
+pub(super) const RESULTS_DIR: &str = "run-results";
+/// A slow disk may drop a reply's `file` links, never delay the reply past this.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Saved files older than this are swept, whichever process wrote them. Eviction deletes a
+/// process's own files; the sweep catches files of crashed processes and writes that
+/// finished after their entry was evicted, without touching another live process's
+/// recent results (stdio servers can share one state dir).
+const STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 const LOG_BUDGET: usize = 2_000;
 const CALL_BUDGET: usize = 4_000;
 const ERROR_BUDGET: usize = 4_000;
@@ -26,7 +49,9 @@ const FIT_ATTEMPTS: usize = 8;
 struct Retained {
     id: String,
     original: Value,
+    /// Serialized JSON plus the saved files' text: the store budget bounds memory and disk.
     bytes: usize,
+    files: Vec<PathBuf>,
 }
 
 /// Process-local LRU. Its owner shares one mutex across transport-local service clones.
@@ -36,11 +61,130 @@ pub(super) struct Store {
     bytes: usize,
 }
 
+/// Disk work for one bounded reply. The store stays free of IO; its owner applies this after
+/// releasing the store, so disk speed never stalls other sessions' replies or retrievals.
+#[derive(Default)]
+#[must_use]
+pub(super) struct Disk {
+    dir: Option<PathBuf>,
+    removes: Vec<PathBuf>,
+    writes: Vec<(&'static str, PathBuf, String)>,
+}
+
+impl Disk {
+    /// Saves each truncated field's full text, deletes evicted results' files and sweeps
+    /// stale ones, all within one `WRITE_TIMEOUT`. A failed or late write drops that field's
+    /// `file` link and logs a warning; it never fails the reply. A write still running at the
+    /// deadline may finish after its entry's eviction; the stale sweep removes that file.
+    pub(super) async fn apply(self, mut result: Value) -> Value {
+        let deadline = tokio::time::Instant::now() + WRITE_TIMEOUT;
+        let cleanup = async {
+            for path in &self.removes {
+                if let Err(error) = tokio::fs::remove_file(path).await
+                    && error.kind() != io::ErrorKind::NotFound
+                {
+                    tracing::warn!(path = %path.display(), %error, "could not delete an evicted run result");
+                }
+            }
+            if let Some(dir) = &self.dir {
+                sweep(dir).await;
+            }
+        };
+        let saves = future::join_all(self.writes.into_iter().map(
+            |(field, path, text)| async move {
+                let saved = tokio::time::timeout_at(deadline, save(&path, text)).await;
+                (field, path, saved)
+            },
+        ));
+        let (cleaned, saved) = tokio::join!(tokio::time::timeout_at(deadline, cleanup), saves);
+        if cleaned.is_err() {
+            tracing::warn!("run result cleanup timed out after {WRITE_TIMEOUT:?}");
+        }
+        for (field, path, saved) in saved {
+            let error = match saved {
+                Ok(Ok(())) => continue,
+                Ok(Err(error)) => error.to_string(),
+                Err(_) => format!("timed out after {WRITE_TIMEOUT:?}"),
+            };
+            tracing::warn!(path = %path.display(), %error, "could not save a truncated run result");
+            if let Some(meta) = result["truncated"][field].as_object_mut() {
+                meta.remove("file");
+            }
+        }
+        result
+    }
+}
+
+/// Writes `text` readable only by this user: results can hold logged-in pages.
+async fn save(path: &Path, text: String) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        let mut builder = tokio::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder.create(dir).await?;
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).await?;
+    file.write_all(text.as_bytes()).await?;
+    // Platform: tokio::fs::File finishes writes in the background unless flushed before drop.
+    file.flush().await
+}
+
+/// Deletes saved files older than `STALE_AFTER`. Only files it judged stale, never the folder,
+/// so a sweep that outlives its deadline cannot remove a fresh write.
+async fn sweep(dir: &Path) {
+    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let stale = entry.metadata().await.is_ok_and(|meta| {
+            meta.is_file()
+                && meta
+                    .modified()
+                    .ok()
+                    .and_then(|modified| modified.elapsed().ok())
+                    .is_some_and(|age| age > STALE_AFTER)
+        });
+        if stale
+            && let Err(error) = tokio::fs::remove_file(entry.path()).await
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %entry.path().display(), %error, "could not sweep a stale run result");
+        }
+    }
+}
+
+/// What truncation metadata links to: the stored result and, when the host saves them, the
+/// absolute directory of its files.
+struct Link<'a> {
+    id: &'a str,
+    files: Option<&'a Path>,
+}
+
+impl Link<'_> {
+    fn file(&self, field: &str, value: &Value) -> Option<PathBuf> {
+        // The file holds exactly the text continuation offsets count into.
+        let extension = if field == "value" && value.is_string() {
+            "txt"
+        } else {
+            "json"
+        };
+        self.files
+            .map(|dir| dir.join(format!("{}-{field}.{extension}", self.id)))
+    }
+}
+
 impl Store {
-    pub(super) fn limit(&mut self, original: Value) -> Value {
+    /// Bounds `original` to the reply budget. With `files`, an absolute directory, each truncated
+    /// field of a retained original also gets a `file` link that the returned `Disk` writes.
+    pub(super) fn limit(&mut self, original: Value, files: Option<&Path>) -> (Value, Disk) {
         let bytes = original.to_string().len();
         if bytes <= BUDGET {
-            return original;
+            return (original, Disk::default());
         }
         let id = loop {
             let id = format!("r{:012x}", rand::random::<u64>() & 0xffff_ffff_ffff);
@@ -49,11 +193,43 @@ impl Store {
             }
         };
         let retained = bytes <= STORE_BUDGET;
-        let bounded = bound(&original, &id, retained);
+        // Only an LRU entry can delete its files, so an unretained original gets none.
+        let files = files.filter(|_| retained);
+        let link = Link { id: &id, files };
+        let mut bounded = bound(&original, &link, retained);
+        let mut disk = Disk {
+            dir: files.map(Path::to_path_buf),
+            ..Disk::default()
+        };
+        for field in ["value", "logs", "calls", "error"] {
+            if bounded["truncated"][field].get("file").is_some()
+                && let Some(path) = link.file(field, &original[field])
+            {
+                disk.writes
+                    .push((field, path, field_text(field, &original[field])));
+            }
+        }
+        let saved = disk
+            .writes
+            .iter()
+            .map(|(_, _, text)| text.len())
+            .sum::<usize>();
+        let bytes = if bytes + saved <= STORE_BUDGET {
+            bytes + saved
+        } else {
+            // Files would push this result past the store budget; keep it retrievable only.
+            for (field, _, _) in disk.writes.drain(..) {
+                if let Some(meta) = bounded["truncated"][field].as_object_mut() {
+                    meta.remove("file");
+                }
+            }
+            bytes
+        };
         if retained {
             while self.entries.len() >= MAX_RESULTS || self.bytes + bytes > STORE_BUDGET {
                 if let Some(old) = self.entries.pop_front() {
                     self.bytes -= old.bytes;
+                    disk.removes.extend(old.files);
                 } else {
                     break;
                 }
@@ -63,18 +239,25 @@ impl Store {
                 id,
                 original,
                 bytes,
+                files: disk
+                    .writes
+                    .iter()
+                    .map(|(_, path, _)| path.clone())
+                    .collect(),
             });
         }
-        bounded
+        (bounded, disk)
     }
 
-    /// Reads one window of a stored field, or of the node `path` (RFC 6901) names in it.
+    /// Reads one window of at most `limit` bytes of a stored field, or of the node `path`
+    /// (RFC 6901) names in it.
     pub(super) fn retrieve(
         &mut self,
         id: &str,
         field: &str,
         path: Option<&str>,
         offset: usize,
+        limit: usize,
     ) -> Result<Value, String> {
         if !matches!(field, "value" | "logs" | "calls" | "error") {
             return Err("field must be value, logs, calls or error".into());
@@ -120,16 +303,20 @@ impl Store {
                 out["truncated"]["contextTruncated"] = json!(true);
             }
         }
-        let end = fit_window(&text[offset..], |shown| {
+        let end = fit_window(&text[offset..], limit, |shown| {
             let end = offset + shown;
             out["value"] = json!(&text[offset..end]);
             out["truncated"]["end"] = json!(end);
             if end < text.len() {
                 out["truncated"]["next"] = next(id, field, path, end);
+                // Following `next` verbatim keeps the window size the client asked for.
+                if limit != BUDGET {
+                    out["truncated"]["next"]["limit"] = json!(limit);
+                }
             } else if let Some(meta) = out["truncated"].as_object_mut() {
                 meta.remove("next");
             }
-            out.to_string().len() <= BUDGET
+            out.to_string().len() <= limit
         });
         if end == 0 && offset < text.len() {
             return Err("a single ref token cannot fit in a retrieval window".into());
@@ -169,15 +356,19 @@ fn next(id: &str, field: &str, path: Option<&str>, offset: usize) -> Value {
     next
 }
 
-fn metadata(id: &str, field: &str, shown: usize, total: usize, value: &Value) -> Value {
+fn metadata(link: &Link, field: &str, shown: usize, total: usize, value: &Value) -> Value {
     let mut meta = json!({"shown":shown,"total":total,"type":value_type(value)});
     if shown < total {
-        meta["next"] = next(id, field, None, shown);
+        meta["next"] = next(link.id, field, None, shown);
+        if let Some(file) = link.file(field, value) {
+            meta["file"] = json!(file.to_string_lossy());
+        }
     }
     meta
 }
 
-fn bound(original: &Value, id: &str, retained: bool) -> Value {
+fn bound(original: &Value, link: &Link, retained: bool) -> Value {
+    let id = link.id;
     let mut out = original.clone();
     out["truncated"] = json!({"result":id});
     if !retained {
@@ -193,7 +384,7 @@ fn bound(original: &Value, id: &str, retained: bool) -> Value {
             }
         }
         out["logs"] = json!(kept);
-        mark_changed(&mut out, original, id, "logs");
+        mark_changed(&mut out, original, link, "logs");
     }
     if let Some(calls) = original["calls"].as_array() {
         let mut kept = Vec::new();
@@ -210,19 +401,19 @@ fn bound(original: &Value, id: &str, retained: bool) -> Value {
         }
         kept.reverse();
         out["calls"] = json!(kept);
-        mark_calls(&mut out, original, id);
+        mark_calls(&mut out, original, link);
     }
     if let Some(message) = original["error"]["message"].as_str()
         && message.len() > ERROR_BUDGET
     {
-        let end = fit_prefix(message, |shown| {
+        let end = fit_prefix(message, BUDGET, |shown| {
             serde_json::to_string(&message[..shown])
                 .unwrap_or_default()
                 .len()
                 <= ERROR_BUDGET
         });
         out["error"]["message"] = json!(&message[..end]);
-        mark_changed(&mut out, original, id, "error");
+        mark_changed(&mut out, original, link, "error");
     }
     if original.get("value").is_some() {
         out["value"] = json!("");
@@ -231,18 +422,18 @@ fn bound(original: &Value, id: &str, retained: bool) -> Value {
     if out.to_string().len() > BUDGET {
         out["logs"] = json!([]);
         out["calls"] = json!([]);
-        mark_changed(&mut out, original, id, "logs");
-        mark_calls(&mut out, original, id);
+        mark_changed(&mut out, original, link, "logs");
+        mark_calls(&mut out, original, link);
     }
     match original.get("value") {
         Some(value @ Value::String(text)) => {
-            fit_prefix(text, |shown| {
+            fit_prefix(text, BUDGET, |shown| {
                 out["value"] = json!(&text[..shown]);
-                out["truncated"]["value"] = metadata(id, "value", shown, text.len(), value);
+                out["truncated"]["value"] = metadata(link, "value", shown, text.len(), value);
                 out.to_string().len() <= BUDGET
             });
         }
-        Some(value) => fit_value(&mut out, value, id),
+        Some(value) => fit_value(&mut out, value, link),
         None => {}
     }
     if !retained {
@@ -265,16 +456,16 @@ fn bound(original: &Value, id: &str, retained: bool) -> Value {
     out
 }
 
-fn mark_changed(out: &mut Value, original: &Value, id: &str, field: &str) {
+fn mark_changed(out: &mut Value, original: &Value, link: &Link, field: &str) {
     if out[field] != original[field] {
         let text = field_text(field, &original[field]);
         // Array excerpts and clipped errors are not byte prefixes of their original JSON.
-        out["truncated"][field] = metadata(id, field, 0, text.len(), &original[field]);
+        out["truncated"][field] = metadata(link, field, 0, text.len(), &original[field]);
     }
 }
 
-fn mark_calls(out: &mut Value, original: &Value, id: &str) {
-    mark_changed(out, original, id, "calls");
+fn mark_calls(out: &mut Value, original: &Value, link: &Link) {
+    mark_changed(out, original, link, "calls");
     let Some(calls) = original["calls"].as_array() else {
         return;
     };
@@ -302,7 +493,7 @@ fn mark_calls(out: &mut Value, original: &Value, id: &str) {
 /// room goes to oversized strings, arrays and objects, each listed in `cut` with its own
 /// `next`. Nothing shown is a byte prefix of the field's pretty JSON, so the whole-field
 /// `next` reads that text from offset 0, as for clipped logs and calls.
-fn fit_value(out: &mut Value, value: &Value, id: &str) {
+fn fit_value(out: &mut Value, value: &Value, link: &Link) {
     out["value"] = Value::Null;
     let mut room = (BUDGET + "null".len()).saturating_sub(out.to_string().len());
     let size = encoded_len(value);
@@ -318,11 +509,11 @@ fn fit_value(out: &mut Value, value: &Value, id: &str) {
         }
         let mut cuts = Vec::new();
         out["value"] = shrink(value, size, room, &mut String::new(), &mut cuts);
-        let mut meta = metadata(id, "value", 0, total, value);
+        let mut meta = metadata(link, "value", 0, total, value);
         meta["cut"] = cuts
             .iter()
             .take(MAX_CUTS)
-            .map(|cut| cut.metadata(id))
+            .map(|cut| cut.metadata(link.id))
             .collect();
         if cuts.len() > MAX_CUTS {
             meta["cutOmitted"] = json!(cuts.len() - MAX_CUTS);
@@ -611,21 +802,21 @@ fn pretty_len(value: &Value) -> usize {
 }
 
 /// Maximize the encoded envelope, then prefer a complete line and keep ref tokens whole.
-fn fit_prefix(text: &str, fits: impl FnMut(usize) -> bool) -> usize {
-    fit(text, false, fits)
+fn fit_prefix(text: &str, cap: usize, fits: impl FnMut(usize) -> bool) -> usize {
+    fit(text, cap, false, fits)
 }
 
 /// Like `fit_prefix`, but ends after a line only when that keeps half the window, so one
 /// early newline (pretty JSON's `{\n`) cannot shrink a retrieval window to a few bytes.
-fn fit_window(text: &str, fits: impl FnMut(usize) -> bool) -> usize {
-    fit(text, true, fits)
+fn fit_window(text: &str, cap: usize, fits: impl FnMut(usize) -> bool) -> usize {
+    fit(text, cap, true, fits)
 }
 
-fn fit(text: &str, half_lines: bool, mut fits: impl FnMut(usize) -> bool) -> usize {
-    if text.len() <= BUDGET && fits(text.len()) {
+fn fit(text: &str, cap: usize, half_lines: bool, mut fits: impl FnMut(usize) -> bool) -> usize {
+    if text.len() <= cap && fits(text.len()) {
         return text.len();
     }
-    let (mut low, mut high) = (0, text.len().min(BUDGET));
+    let (mut low, mut high) = (0, text.len().min(cap));
     while low < high {
         let middle = low + (high - low).div_ceil(2);
         if fits(char_boundary(text, middle)) {
@@ -710,6 +901,10 @@ fn ancestors(text: &str, offset: usize) -> (String, bool) {
     reason = "Assertions fail the test on malformed results"
 )]
 mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+
     use serde_json::{Value, json};
 
     use super::{BUDGET, Store};
@@ -721,15 +916,19 @@ mod tests {
 
     fn remainder(store: &mut Store, mut next: Value, mut text: String) -> String {
         while next.is_object() {
+            let limit = next["limit"]
+                .as_u64()
+                .map_or(BUDGET, |limit| limit as usize);
             let window = store
                 .retrieve(
                     next["result"].as_str().expect("expected test value"),
                     next["field"].as_str().expect("expected test value"),
                     next["path"].as_str(),
                     next["offset"].as_u64().expect("expected test value") as usize,
+                    limit,
                 )
                 .expect("expected test value");
-            assert!(window.to_string().len() <= BUDGET);
+            assert!(window.to_string().len() <= limit);
             assert!(
                 window["pages"]
                     .as_array()
@@ -751,7 +950,7 @@ mod tests {
     #[test]
     fn tests_that_small_results_are_unchanged() {
         let original = report(json!({"count":3,"active":true}));
-        assert_eq!(Store::default().limit(original.clone()), original);
+        assert_eq!(Store::default().limit(original.clone(), None).0, original);
     }
 
     #[test]
@@ -763,7 +962,7 @@ mod tests {
                 .collect::<String>()
         );
         let mut store = Store::default();
-        let bounded = store.limit(report(json!(text)));
+        let bounded = store.limit(report(json!(text)), None).0;
         assert!(bounded.to_string().len() <= BUDGET);
         assert_eq!(bounded["pages"][0]["id"], "p1");
         assert_eq!(bounded["pages"][0]["url"], "https://example.com");
@@ -776,6 +975,7 @@ mod tests {
                 "value",
                 None,
                 prefix.len(),
+                BUDGET,
             )
             .expect("expected test value");
         assert_eq!(
@@ -785,7 +985,7 @@ mod tests {
         assert_eq!(remainder(&mut store, next, prefix.into()), text);
 
         let object = json!({"items":["quoted \" \\ \n 🦀".repeat(12_000)]});
-        let bounded = store.limit(report(object.clone()));
+        let bounded = store.limit(report(object.clone()), None).0;
         assert!(bounded.to_string().len() <= BUDGET);
         assert_eq!(bounded["truncated"]["value"]["type"], "object");
         let shown = bounded["value"]["items"][0]
@@ -828,7 +1028,7 @@ mod tests {
             "result":{"kind":"ok"},"delivery":if i == 0 {"unknown"} else {"done"}
         })).collect::<Vec<_>>());
         original["callsDropped"] = json!({"count":7,"delivery":"notSent"});
-        let bounded = store.limit(original.clone());
+        let bounded = store.limit(original.clone(), None).0;
         assert!(bounded.to_string().len() <= BUDGET);
         assert_eq!(bounded["status"], "error");
         assert_eq!(bounded["pages"], original["pages"]);
@@ -863,36 +1063,40 @@ mod tests {
         let mut ids = Vec::new();
         for _ in 0..16 {
             ids.push(
-                store.limit(report(json!("🦀".repeat(10_000))))["truncated"]["result"]
+                store.limit(report(json!("🦀".repeat(10_000))), None).0["truncated"]["result"]
                     .as_str()
                     .expect("expected test value")
                     .to_string(),
             );
         }
-        assert!(store.retrieve(&ids[0], "value", None, 1).is_err());
-        assert!(store.retrieve(&ids[0], "value", None, 40_001).is_err());
+        assert!(store.retrieve(&ids[0], "value", None, 1, BUDGET).is_err());
+        assert!(
+            store
+                .retrieve(&ids[0], "value", None, 40_001, BUDGET)
+                .is_err()
+        );
         assert_eq!(
             store
-                .retrieve(&ids[0], "value", None, 0)
+                .retrieve(&ids[0], "value", None, 0, BUDGET)
                 .expect("expected test value")["status"],
             "ok"
         );
-        store.limit(report(json!("x".repeat(40_000))));
+        let _ = store.limit(report(json!("x".repeat(40_000))), None);
         assert_eq!(
             store
-                .retrieve(&ids[1], "value", None, 0)
+                .retrieve(&ids[1], "value", None, 0, BUDGET)
                 .expect("expected test value")["status"],
             "error"
         );
         assert_eq!(
             store
-                .retrieve(&ids[0], "value", None, 0)
+                .retrieve(&ids[0], "value", None, 0, BUDGET)
                 .expect("expected test value")["status"],
             "ok"
         );
         assert_eq!(
             store
-                .retrieve("missing", "value", None, 0)
+                .retrieve("missing", "value", None, 0, BUDGET)
                 .expect("expected test value")["status"],
             "error"
         );
@@ -904,12 +1108,12 @@ mod tests {
         // Every possible cut near a token, including its opening characters, stays outside it.
         for padding in 23_000..23_030 {
             let text = format!("{}[ref=e999]{}", "x".repeat(padding), "z".repeat(2000));
-            let bounded = store.limit(report(json!(text)));
+            let bounded = store.limit(report(json!(text)), None).0;
             let id = bounded["truncated"]["result"]
                 .as_str()
                 .expect("expected test value");
             for offset in padding + 1..padding + 10 {
-                assert!(store.retrieve(id, "value", None, offset).is_err());
+                assert!(store.retrieve(id, "value", None, offset, BUDGET).is_err());
             }
             let prefix = bounded["value"].as_str().expect("expected test value");
             assert!(!((padding + 1..padding + 10).contains(&prefix.len())));
@@ -923,7 +1127,7 @@ mod tests {
             );
         }
         let text = format!("ordinary text [ref={}", "x".repeat(40_000));
-        let bounded = store.limit(report(json!(text)));
+        let bounded = store.limit(report(json!(text)), None).0;
         assert_eq!(
             remainder(
                 &mut store,
@@ -935,7 +1139,7 @@ mod tests {
         let mut failed = report(Value::Null);
         failed["status"] = json!("error");
         failed["error"] = json!({"name":"Error", "message":"\u{1}".repeat(40_000)});
-        assert!(store.limit(failed).to_string().len() <= BUDGET);
+        assert!(store.limit(failed, None).0.to_string().len() <= BUDGET);
     }
 
     fn aria(items: usize) -> String {
@@ -957,7 +1161,7 @@ mod tests {
         assert!(snap.len() > 100_000);
         let original = json!({"snap":snap, "n":snap.len(), "url":"https://example.com/a"});
         let mut store = Store::default();
-        let bounded = store.limit(report(original.clone()));
+        let bounded = store.limit(report(original.clone()), None).0;
         assert!(bounded.to_string().len() <= BUDGET);
         assert_eq!(bounded["pages"][0]["id"], "p1");
         assert_eq!(bounded["value"]["n"], original["n"]);
@@ -985,6 +1189,7 @@ mod tests {
                 "value",
                 Some("/snap"),
                 prefix.len(),
+                BUDGET,
             )
             .expect("expected test value");
         assert_eq!(window["truncated"]["path"], "/snap");
@@ -1009,7 +1214,7 @@ mod tests {
             .map(|i| format!("Buy product {i:04} 漢字 🦀"))
             .collect::<Vec<_>>();
         let mut store = Store::default();
-        let bounded = store.limit(report(json!(items)));
+        let bounded = store.limit(report(json!(items)), None).0;
         assert!(bounded.to_string().len() <= BUDGET);
         let shown = bounded["value"].as_array().expect("array keeps its type");
         assert!(shown.len() > 500, "kept {} elements", shown.len());
@@ -1052,7 +1257,7 @@ mod tests {
         let original = json!({"a/b":{"m~n":["x".repeat(60_000), "y".repeat(60_000), "short"]},
             "count":3, "ok":true, "none":null});
         let mut store = Store::default();
-        let bounded = store.limit(report(original.clone()));
+        let bounded = store.limit(report(original.clone()), None).0;
         assert!(bounded.to_string().len() <= BUDGET);
         let value = &bounded["value"];
         assert_eq!(
@@ -1086,12 +1291,12 @@ mod tests {
             .as_str()
             .expect("expected test value");
         let small = store
-            .retrieve(id, "value", Some("/a~1b/m~0n/2"), 0)
+            .retrieve(id, "value", Some("/a~1b/m~0n/2"), 0, BUDGET)
             .expect("expected test value");
         assert_eq!(small["value"], "short");
         assert!(small["truncated"].get("next").is_none());
         for path in ["snap", "/missing", "/a~1b/m~0n/9"] {
-            assert!(store.retrieve(id, "value", Some(path), 0).is_err());
+            assert!(store.retrieve(id, "value", Some(path), 0, BUDGET).is_err());
         }
     }
 
@@ -1114,7 +1319,7 @@ mod tests {
             .collect::<serde_json::Map<_, _>>();
         let mut store = Store::default();
         for original in [json!(records), Value::Object(wide), Value::Object(links)] {
-            let bounded = store.limit(report(original.clone()));
+            let bounded = store.limit(report(original.clone()), None).0;
             assert!(bounded.to_string().len() <= BUDGET);
             let meta = &bounded["truncated"]["value"];
             let cuts = meta["cut"].as_array().expect("cut list");
@@ -1140,20 +1345,25 @@ mod tests {
                 );
             }
         }
-        let wide = store.limit(report(
-            json!({"z":1, "a":"w".repeat(30_000), "b":"w".repeat(30_000)}),
-        ));
+        let wide = store
+            .limit(
+                report(json!({"z":1, "a":"w".repeat(30_000), "b":"w".repeat(30_000)})),
+                None,
+            )
+            .0;
         assert_eq!(wide["value"]["z"], 1);
     }
 
     #[test]
     fn tests_that_leaf_cuts_stay_outside_ref_tokens_and_survive_an_early_newline() {
         let mut store = Store::default();
-        let probe = store.limit(report(json!({"n":1, "snap":"x".repeat(40_000)})));
+        let probe = store
+            .limit(report(json!({"n":1, "snap":"x".repeat(40_000)})), None)
+            .0;
         let room = probe["value"]["snap"].as_str().expect("string leaf").len();
         for padding in room - 12..room + 3 {
             let text = format!("{}[ref=e999]{}", "x".repeat(padding), "z".repeat(20_000));
-            let bounded = store.limit(report(json!({"n":1, "snap":text})));
+            let bounded = store.limit(report(json!({"n":1, "snap":text})), None).0;
             assert!(bounded.to_string().len() <= BUDGET);
             let shown = bounded["value"]["snap"].as_str().expect("string leaf");
             assert!(!(padding + 1..padding + 10).contains(&shown.len()));
@@ -1167,7 +1377,7 @@ mod tests {
             );
         }
         let text = format!("\n{}", "a".repeat(50_000));
-        let bounded = store.limit(report(json!({"n":1, "snap":text})));
+        let bounded = store.limit(report(json!({"n":1, "snap":text})), None).0;
         assert!(
             bounded["value"]["snap"]
                 .as_str()
@@ -1194,13 +1404,13 @@ mod tests {
         ] {
             let mut original = report(value.clone());
             original["calls"] = json!(calls);
-            let bounded = store.limit(original);
+            let bounded = store.limit(original, None).0;
             assert!(bounded.to_string().len() <= BUDGET);
             assert_eq!(bounded["value"], value);
             assert!(bounded["truncated"].get("value").is_none());
         }
         // A bare string keeps today's shape: a prefix and byte-offset metadata, no cut list.
-        let bounded = store.limit(report(json!("abc".repeat(30_000))));
+        let bounded = store.limit(report(json!("abc".repeat(30_000))), None).0;
         let shown = bounded["value"].as_str().expect("string prefix").len();
         let id = bounded["truncated"]["result"].clone();
         assert_eq!(
@@ -1328,7 +1538,7 @@ mod tests {
         let mut bounded_count = 0;
         for case in 0..80 {
             let original = random.tree(3, &mut 150_000);
-            let bounded = store.limit(report(original.clone()));
+            let bounded = store.limit(report(original.clone()), None).0;
             assert!(bounded.to_string().len() <= BUDGET, "case {case}");
             assert_eq!(
                 super::value_type(&bounded["value"]),
@@ -1379,7 +1589,14 @@ mod tests {
     #[test]
     fn tests_that_an_unretained_value_lists_its_cuts_without_continuations() {
         let original = report(json!({"n":1, "snap":"x".repeat(40_000), "rows":vec!["row"; 9_000]}));
-        let bounded = super::bound(&original, "r000000000000", false);
+        let bounded = super::bound(
+            &original,
+            &super::Link {
+                id: "r000000000000",
+                files: None,
+            },
+            false,
+        );
         assert!(bounded.to_string().len() <= BUDGET);
         assert!(bounded["truncated"]["unavailable"].is_string());
         let meta = &bounded["truncated"]["value"];
@@ -1389,10 +1606,167 @@ mod tests {
         assert!(cuts.iter().all(|cut| cut.get("next").is_none()));
     }
 
+    async fn bounded_with_files(store: &mut Store, original: Value, dir: &Path) -> Value {
+        let (bounded, disk) = store.limit(original, Some(dir));
+        let bounded = disk.apply(bounded).await;
+        assert!(bounded.to_string().len() <= BUDGET);
+        bounded
+    }
+
+    fn file(bounded: &Value, field: &str) -> PathBuf {
+        PathBuf::from(
+            bounded["truncated"][field]["file"]
+                .as_str()
+                .expect("truncated field links its file"),
+        )
+    }
+
+    #[tokio::test]
+    async fn tests_that_truncated_fields_are_saved_as_files_that_leave_with_their_results() {
+        let root = tempfile::TempDir::new().expect("expected test value");
+        let dir = root.path().join("run-results");
+        fs::create_dir_all(&dir).expect("expected test value");
+        let stale = dir.join("r000000000000-value.txt");
+        fs::write(&stale, "left by a crashed process").expect("expected test value");
+        fs::File::options()
+            .write(true)
+            .open(&stale)
+            .and_then(|file| {
+                file.set_modified(SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60))
+            })
+            .expect("expected test value");
+        // Another live server sharing the state dir keeps its recent file.
+        let foreign = dir.join("r111111111111-value.txt");
+        fs::write(&foreign, "another live process").expect("expected test value");
+        let mut store = Store::default();
+        let text = aria(3000);
+        let mut original = report(json!(text));
+        original["logs"] = json!(["log line\n".repeat(3000)]);
+        let first = bounded_with_files(&mut store, original.clone(), &dir).await;
+        assert!(!stale.exists() && foreign.exists());
+        let (value, logs) = (file(&first, "value"), file(&first, "logs"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&value)
+                .expect("expected test value")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert!(value.is_absolute() && value.starts_with(&dir));
+        assert_eq!(value.extension().and_then(|ext| ext.to_str()), Some("txt"));
+        assert_eq!(fs::read_to_string(&value).expect("saved value"), text);
+        assert_eq!(
+            fs::read_to_string(&logs).expect("saved logs"),
+            pretty(&original["logs"])
+        );
+        // An object's file is the pretty JSON its whole-field continuation reads.
+        let object = json!({"snap":text, "n":1});
+        let second = bounded_with_files(&mut store, report(object.clone()), &dir).await;
+        assert_eq!(
+            fs::read_to_string(file(&second, "value")).expect("saved object"),
+            pretty(&object)
+        );
+        // A whole small string still links no file.
+        let mut traced = report(json!("small"));
+        traced["logs"] = json!(["log line\n".repeat(3000)]);
+        let third = bounded_with_files(&mut store, traced, &dir).await;
+        assert!(third["truncated"]["value"].get("file").is_none());
+        // 16 results fit; the 17th evicts only the first.
+        for _ in 0..14 {
+            bounded_with_files(&mut store, report(json!("x".repeat(30_000))), &dir).await;
+        }
+        assert!(!value.exists() && !logs.exists());
+        assert!(file(&second, "value").exists());
+        assert_eq!(
+            fs::read_dir(&dir).expect("expected test value").count(),
+            16 + 1,
+            "one file per retained result (the third keeps only its logs), plus the foreign one"
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_failed_write_drops_only_its_file_link() {
+        let root = tempfile::TempDir::new().expect("expected test value");
+        let blocker = root.path().join("not-a-directory");
+        fs::write(&blocker, "").expect("expected test value");
+        let mut store = Store::default();
+        let (bounded, disk) = store.limit(
+            report(json!("x".repeat(30_000))),
+            Some(&blocker.join("run-results")),
+        );
+        assert!(bounded["truncated"]["value"]["file"].is_string());
+        let bounded = disk.apply(bounded).await;
+        assert!(bounded["truncated"]["value"].get("file").is_none());
+        let next = bounded["truncated"]["value"]["next"].clone();
+        let shown = bounded["value"]
+            .as_str()
+            .expect("string prefix")
+            .to_string();
+        assert_eq!(remainder(&mut store, next, shown), "x".repeat(30_000));
+    }
+
+    #[test]
+    fn tests_that_a_larger_limit_returns_a_bigger_window_and_keeps_it_in_next() {
+        let text = format!("{}{}", aria(3000), "abc".repeat(100_000));
+        let mut store = Store::default();
+        let (bounded, _) = store.limit(report(json!(text)), None);
+        let prefix = bounded["value"].as_str().expect("string prefix");
+        let id = bounded["truncated"]["result"]
+            .as_str()
+            .expect("expected test value");
+        let window = store
+            .retrieve(id, "value", None, prefix.len(), super::LIMIT_MAX)
+            .expect("expected test value");
+        let size = window.to_string().len();
+        assert!(
+            (90_000..=super::LIMIT_MAX).contains(&size),
+            "window {size} bytes"
+        );
+        assert_eq!(window["truncated"]["next"]["limit"], super::LIMIT_MAX);
+        assert_eq!(
+            remainder(
+                &mut store,
+                window["truncated"]["next"].clone(),
+                format!("{prefix}{}", window["value"].as_str().expect("window text"))
+            ),
+            text
+        );
+        let small = store
+            .retrieve(id, "value", None, 0, super::LIMIT_MIN)
+            .expect("expected test value");
+        assert!(small.to_string().len() <= super::LIMIT_MIN);
+        assert!(small["truncated"]["end"].as_u64() > Some(0));
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_new_folder_is_private_and_files_count_toward_the_store_budget() {
+        let root = tempfile::TempDir::new().expect("expected test value");
+        let dir = root.path().join("run-results");
+        let mut store = Store::default();
+        let small = bounded_with_files(&mut store, report(json!("x".repeat(30_000))), &dir).await;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&dir)
+                .expect("expected test value")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        // A 33 MiB string fits the 64 MiB store, but not together with its 33 MiB file.
+        let big = bounded_with_files(&mut store, report(json!("y".repeat(33 << 20))), &dir).await;
+        assert!(big["truncated"]["value"].get("file").is_none());
+        assert!(big["truncated"]["value"]["next"].is_object());
+        assert!(file(&small, "value").exists());
+        assert_eq!(fs::read_dir(&dir).expect("expected test value").count(), 1);
+    }
+
     #[test]
     fn tests_that_an_early_newline_does_not_shrink_a_retrieval_window() {
         let mut store = Store::default();
-        let bounded = store.limit(report(json!({"n":1, "snap":"z".repeat(90_000)})));
+        let (bounded, _) = store.limit(report(json!({"n":1, "snap":"z".repeat(90_000)})), None);
         let next = &bounded["truncated"]["value"]["next"];
         let window = store
             .retrieve(
@@ -1400,6 +1774,7 @@ mod tests {
                 "value",
                 None,
                 0,
+                BUDGET,
             )
             .expect("expected test value");
         let shown = window["value"].as_str().expect("window text").len();
