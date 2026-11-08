@@ -754,6 +754,7 @@ mod tests {
             vec![RunArtifact {
                 path: "out/report.csv".to_string(),
                 bytes: 4,
+                requested: None,
             }],
             "listed in the outcome"
         );

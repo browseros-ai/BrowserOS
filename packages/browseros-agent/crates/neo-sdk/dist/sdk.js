@@ -1764,6 +1764,20 @@ class Disposable {
 function toBinary(bytes) {
   return bytes.toBase64();
 }
+var exporting = false;
+var stringify = JSON.stringify;
+function exportValue(value, ship, marker) {
+  exporting = true;
+  try {
+    return stringify(value, (_key, field) => field instanceof Uint8Array ? {
+      type: field instanceof Buffer3 ? "Buffer" : "Uint8Array",
+      bytes: field.length,
+      [marker]: ship(field)
+    } : field);
+  } finally {
+    exporting = false;
+  }
+}
 
 class Buffer3 extends Uint8Array {
   static fromBinary(text) {
@@ -1821,6 +1835,8 @@ class Buffer3 extends Uint8Array {
     }
   }
   toJSON() {
+    if (exporting)
+      return this;
     return { type: "Buffer", data: [...this] };
   }
   equals(other) {
@@ -9024,7 +9040,7 @@ function createRun(init) {
   browser._didCreateContext(context);
   playwright.selectors._attach(connection, init.context);
   const page = context._addRunPage(init.page, init.mainFrame, init.url);
-  return { page, context, playwright, uncaught: pipe.uncaught };
+  return { page, context, playwright, uncaught: pipe.uncaught, exportValue };
 }
 return { createRun };
 })();

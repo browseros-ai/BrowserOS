@@ -19,7 +19,7 @@ use serde_json::Value;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio_util::task::TaskTracker;
 
-use crate::artifacts::Artifacts;
+use crate::artifacts::{AbsolutePaths, Artifacts};
 use crate::bridge;
 use crate::bridge::Getters;
 use crate::deadline::Deadline;
@@ -59,6 +59,8 @@ pub struct Runtime {
     switches: Switches,
     /// The runs' permission grants on `cdp`, reset once no run holds one (`session_state.rs`).
     permissions: Permissions,
+    /// How every run's `path` options treat an absolute path (`artifacts.rs`).
+    absolute_paths: AbsolutePaths,
     cleanup: TaskTracker,
 }
 
@@ -112,6 +114,7 @@ impl Runtime {
                     screenshots: TabScreenshots::default(),
                     switches: Switches::new(cleanup.clone()),
                     permissions: Permissions::new(cleanup.clone()),
+                    absolute_paths: AbsolutePaths::default(),
                     cleanup,
                 })
             }
@@ -120,6 +123,18 @@ impl Runtime {
             }
             Err(error) => Err(RuntimeError::Cdp(error)),
             Ok(reply) => Err(RuntimeError::UnsupportedBrowser(reply.to_string())),
+        }
+    }
+
+    /// The same runtime, whose runs treat an absolute `path` option as `absolute_paths` says.
+    /// The default, [`AbsolutePaths::Refuse`], refuses it; a host whose agents name paths on
+    /// their own machine opts into [`AbsolutePaths::Redirect`], which still writes only inside
+    /// each run's artifact directory ([`RunRequest::artifacts`]).
+    #[must_use]
+    pub fn with_absolute_paths(self, absolute_paths: AbsolutePaths) -> Self {
+        Self {
+            absolute_paths,
+            ..self
         }
     }
 
@@ -191,7 +206,8 @@ impl Runtime {
         };
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
         // group-release tasks the page spawns, so `finish` waits for them all.
-        let artifacts = Arc::new(Artifacts::new(artifacts));
+        let artifacts =
+            Arc::new(Artifacts::new(artifacts).with_absolute_paths(self.absolute_paths));
         let run = RunScope::new(deadline.clone(), tasks).with_artifacts(Arc::clone(&artifacts));
         let getters = Getters::new(
             tabs.clone(),
@@ -215,7 +231,7 @@ impl Runtime {
         outcome
             .with_calls(calls, dropped)
             .with_pages(tabs.outcome())
-            .with_artifacts(artifacts.written())
+            .with_artifacts(artifacts.written(), artifacts.notes())
     }
 }
 

@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -43,8 +45,9 @@ pub struct RunRequest {
     pub cancel: CancellationToken,
     /// The directory the run's `path` options write into (`page.screenshot({ path })`,
     /// `page.pdf({ path })`), created on first write. A `path` must be relative to it and stay
-    /// inside it. `None` refuses every `path` with an Error naming the option; the bytes a
-    /// script asked for are still returned. Files written are listed in
+    /// inside it; a runtime opted into `AbsolutePaths::Redirect` also takes absolute paths
+    /// (`Runtime::with_absolute_paths`). `None` refuses every `path` with an Error naming the
+    /// option; the bytes a script asked for are still returned. Files written are listed in
     /// [`RunOutcome::artifacts`].
     pub artifacts: Option<PathBuf>,
 }
@@ -122,8 +125,16 @@ pub struct RunOutcome {
     pub pages: Vec<RunPage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls_dropped: Option<DroppedCalls>,
+    /// Every `Uint8Array` (a `Buffer` included) in `value`, in the order JSON writes them. Its
+    /// place in `value` holds `{"type":"Buffer"|"Uint8Array","bytes":<length>}`; its bytes are
+    /// here, never spread one number per byte as Node's `Buffer.toJSON` would. Absent from the
+    /// JSON when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub binaries: Vec<RunBinary>,
     /// The files the run wrote into its artifact directory ([`RunRequest::artifacts`]), in the
-    /// order first written, each once with its last size. Absent from the JSON when empty.
+    /// order first written, each once with its last size. Absent from the JSON when empty. A
+    /// file written somewhere other than the absolute path the script named also leaves a
+    /// `neo:` line in `logs` saying where it went.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<RunArtifact>,
 }
@@ -138,6 +149,7 @@ impl RunOutcome {
             calls: Vec::new(),
             pages: Vec::new(),
             calls_dropped: None,
+            binaries: Vec::new(),
             artifacts: Vec::new(),
         }
     }
@@ -151,6 +163,7 @@ impl RunOutcome {
             calls: Vec::new(),
             pages: Vec::new(),
             calls_dropped: None,
+            binaries: Vec::new(),
             artifacts: Vec::new(),
         }
     }
@@ -168,6 +181,7 @@ impl RunOutcome {
             calls: Vec::new(),
             pages: Vec::new(),
             calls_dropped: None,
+            binaries: Vec::new(),
             artifacts: Vec::new(),
         }
     }
@@ -186,13 +200,36 @@ impl RunOutcome {
         }
     }
 
+    /// Attaches the bytes of the binaries the returned `value` holds (`realm.rs` `to_json`).
+    pub(crate) fn with_binaries(self, binaries: Vec<RunBinary>) -> Self {
+        Self { binaries, ..self }
+    }
+
     pub(crate) fn with_pages(self, pages: Vec<RunPage>) -> Self {
         Self { pages, ..self }
     }
 
-    pub(crate) fn with_artifacts(self, artifacts: Vec<RunArtifact>) -> Self {
-        Self { artifacts, ..self }
+    /// Attaches the files the run wrote, and appends the notes for redirected ones to `logs`.
+    pub(crate) fn with_artifacts(self, artifacts: Vec<RunArtifact>, notes: Vec<String>) -> Self {
+        let mut logs = self.logs;
+        logs.extend(notes);
+        Self {
+            logs,
+            artifacts,
+            ..self
+        }
     }
+}
+
+/// One binary of a run's returned value ([`RunOutcome::binaries`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RunBinary {
+    /// Its place in [`RunOutcome::value`] as an RFC 6901 JSON pointer: `""` when the value
+    /// itself is the binary, `/shot` or `/0` for a property or element.
+    pub pointer: String,
+    /// Its bytes, as standard base64 in the outcome's JSON.
+    #[serde(serialize_with = "serialize_base64")]
+    pub bytes: Vec<u8>,
 }
 
 /// A page identity handed out or created by the run, and the lifecycle changes it made.
@@ -301,6 +338,11 @@ pub struct DroppedCalls {
     /// The least safe delivery among the dropped input calls; `None` if none was an input call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<Delivery>,
+}
+
+/// Bytes as standard base64, the encoding Playwright's protocol gives `binary`.
+fn serialize_base64<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&STANDARD.encode(bytes))
 }
 
 /// A duration as whole milliseconds, as the rest of the outcome's JSON counts time.

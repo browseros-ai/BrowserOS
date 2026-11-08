@@ -2,15 +2,20 @@
 //! runtime owns browser calls and cleanup, while page ids alone provide continuity. One
 //! shared runtime preserves its per-tab input ordering across MCP transport connections.
 
-use std::{borrow::Cow, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use neo_runtime::{PageId, RunOutcome, RunPage, RunRequest, RunStatus, Runtime};
+use neo_runtime::{AbsolutePaths, PageId, RunOutcome, RunPage, RunRequest, RunStatus, Runtime};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, Implementation,
-        InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
+        CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+        Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
         ServerCapabilities, SubscriptionFilter, Tool, ToolAnnotations,
     },
     service::RequestContext,
@@ -28,14 +33,21 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::output::{BUDGET, LIMIT_MAX, LIMIT_MIN, RESULTS_DIR, Store};
+use super::{
+    artifacts, binary,
+    output::{BUDGET, LIMIT_MAX, LIMIT_MIN, RESULTS_DIR, Store},
+};
 
 const DEFAULT_TIMEOUT: u64 = 30_000;
 const MAX_TIMEOUT: u64 = 120_000;
 const INSTRUCTIONS: &str = concat!(
     "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).",
-    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,path,offset,limit}) to read the stored original without changing refs; limit raises a window to at most 100000 bytes, and truncated.<field>.file names a local file holding the field's full text. A large object or array keeps its type: small keys stay whole, and truncated.value.cut lists each shortened part by JSON Pointer path with its own next."
+    " Scope large reads with locator.ariaSnapshot({mode:'ai'}); responses use a 24000-byte JSON budget and truncated fields include next arguments for run({result,field,path,offset,limit}) to read the stored original without changing refs; limit raises a window to at most 100000 bytes, and truncated.<field>.file names a local file holding the field's full text. A large object or array keeps its type: small keys stay whole, and truncated.value.cut lists each shortened part by JSON Pointer path with its own next.",
+    " A `path` option (screenshot, pdf, storageState, download.saveAs) writes into one artifact directory shared by all runs: relative paths resolve there, and an absolute path outside it is written there under its file name; the result's artifacts[] gives each file's absolute `file` path (and `requested` when redirected). setInputFiles reads from the same directory.",
+    " A returned Buffer (return await page.screenshot()), alone or nested, is saved there in full and described in value as {type, mimeType, bytes, width, height, file}; a PNG or JPEG is also returned as an image content block, scaled to at most 1568 px and 1.15 megapixels."
 );
+/// Neo: how often, at most, a run that wrote files prunes the artifact directory again.
+const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
 struct Browser {
     cdp: CdpClient,
@@ -51,6 +63,23 @@ pub struct PlaywrightService {
     runs: TaskTracker,
     output: Arc<Mutex<Store>>,
     state_dir: PathBuf,
+    /// When the artifact directory was last pruned; `None` before the first prune.
+    pruned: Arc<std::sync::Mutex<Option<Instant>>>,
+}
+
+/// A run's report and the image blocks of the binaries it returned (`binary.rs`).
+struct Reply {
+    report: Value,
+    images: Vec<binary::Image>,
+}
+
+impl From<Value> for Reply {
+    fn from(report: Value) -> Self {
+        Self {
+            report,
+            images: Vec::new(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -77,14 +106,56 @@ struct RequestArguments {
 impl PlaywrightService {
     #[must_use]
     pub fn new(cdp_port: u16, shutdown: CancellationToken, state_dir: PathBuf) -> Self {
-        Self {
+        let service = Self {
             cdp_port,
             browser: Arc::new(OnceCell::new()),
             shutdown,
             runs: TaskTracker::new(),
             output: Arc::new(Mutex::new(Store::default())),
             state_dir,
+            pruned: Arc::new(std::sync::Mutex::new(None)),
+        };
+        service.prune_artifacts();
+        service
+    }
+
+    /// Every run's artifact directory, `<state_dir>/artifacts` (`artifacts.rs`).
+    fn artifact_dir(&self) -> PathBuf {
+        artifacts::dir(&self.state_dir)
+    }
+
+    /// Prunes the artifact directory in the background (`artifacts::prune`), at boot and then
+    /// at most once per [`PRUNE_INTERVAL`]. Outside a tokio runtime (no task to own the walk)
+    /// it waits for the next run that writes a file.
+    fn prune_artifacts(&self) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        {
+            let Ok(mut pruned) = self.pruned.lock() else {
+                return;
+            };
+            let now = Instant::now();
+            if pruned.is_some_and(|at| now.duration_since(at) < PRUNE_INTERVAL) {
+                return;
+            }
+            *pruned = Some(now);
         }
+        let dir = self.artifact_dir();
+        // The walk blocks on the file system; the shutdown drain (`runs`) waits for it.
+        self.runs.spawn_blocking_on(
+            move || match artifacts::prune(&dir, SystemTime::now(), artifacts::BOUNDS) {
+                Ok(pruned) if pruned.files > 0 => tracing::info!(
+                    files = pruned.files,
+                    bytes = pruned.bytes,
+                    dir = %dir.display(),
+                    "pruned the run artifact directory"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, dir = %dir.display(), "artifact prune failed"),
+            },
+            &handle,
+        );
     }
 
     async fn browser(&self) -> Result<Arc<Browser>, String> {
@@ -115,7 +186,12 @@ impl PlaywrightService {
                         .await
                         .map_err(|error| error.to_string())?;
                         match Runtime::connect(cdp.clone()).await {
-                            Ok(runtime) => Ok(Arc::new(Browser { cdp, runtime })),
+                            // Agents name paths on their own machine; Neo writes them only
+                            // inside the artifact directory (`artifacts.rs`).
+                            Ok(runtime) => Ok(Arc::new(Browser {
+                                cdp,
+                                runtime: runtime.with_absolute_paths(AbsolutePaths::Redirect),
+                            })),
                             Err(error) => {
                                 cdp.disconnect().await;
                                 Err(error.to_string())
@@ -166,15 +242,15 @@ impl PlaywrightService {
         )
     }
 
-    async fn execute(&self, args: Arguments, cancel: CancellationToken) -> Value {
+    async fn execute(&self, args: Arguments, cancel: CancellationToken) -> Reply {
         let timeout_ms = args.timeout.unwrap_or(DEFAULT_TIMEOUT);
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let browser = tokio::select! {
-            () = cancel.cancelled() => return stopped("cancelled", timeout_ms),
+            () = cancel.cancelled() => return stopped("cancelled", timeout_ms).into(),
             result = tokio::time::timeout_at(deadline, self.browser()) => match result {
                 Ok(Ok(browser)) => browser,
-                Ok(Err(error)) => return failure("Error", &error),
-                Err(_) => return stopped("timeout", timeout_ms),
+                Ok(Err(error)) => return failure("Error", &error).into(),
+                Err(_) => return stopped("timeout", timeout_ms).into(),
             },
         };
         let created = args.page.is_none();
@@ -190,7 +266,7 @@ impl PlaywrightService {
             .await
             {
                 Ok(page) => page,
-                Err(result) => return result,
+                Err(result) => return result.into(),
             },
         };
         let mut outcome = browser
@@ -200,9 +276,13 @@ impl PlaywrightService {
                 page: PageId::new(page.clone()),
                 timeout: deadline.saturating_duration_since(Instant::now()),
                 cancel,
-                artifacts: None,
+                artifacts: Some(self.artifact_dir()),
             })
             .await;
+        if !outcome.artifacts.is_empty() || !outcome.binaries.is_empty() {
+            self.prune_artifacts();
+        }
+        let binaries = std::mem::take(&mut outcome.binaries);
         if created {
             if let Some(entry) = outcome.pages.iter_mut().find(|entry| entry.id == page) {
                 entry.created = true;
@@ -224,7 +304,20 @@ impl PlaywrightService {
         {
             error.message = format!("Timeout {timeout_ms}ms exceeded.");
         }
-        report(outcome)
+        let mut report = report(outcome);
+        let dir = self.artifact_dir();
+        artifacts::locate(&mut report, &dir);
+        if binaries.is_empty() {
+            return report.into();
+        }
+        // Writing, decoding and scaling block; the shutdown drain (`runs`) waits for them.
+        self.runs
+            .spawn_blocking(move || {
+                let images = binary::present(&mut report, binaries, &dir);
+                Reply { report, images }
+            })
+            .await
+            .unwrap_or_else(|error| failure("Error", &error.to_string()).into())
     }
 }
 
@@ -470,7 +563,7 @@ impl ServerHandler for PlaywrightService {
         let _cancel_on_drop = cancel.clone().drop_guard();
         // A transport dropping its handler cancels the request, while this owned task
         // keeps Runtime::run alive until it has drained calls and detached its sessions.
-        let result = self
+        let Reply { report, images } = self
             .runs
             .spawn(async move {
                 let execution = service.execute(args, cancel.clone());
@@ -488,7 +581,7 @@ impl ServerHandler for PlaywrightService {
         let files = self.state_dir.join(RESULTS_DIR);
         // Links in the reply must stay valid if the client resolves them from another cwd.
         let files = std::path::absolute(&files).unwrap_or(files);
-        let (result, disk) = self.output.lock().await.limit(result, Some(&files));
+        let (result, disk) = self.output.lock().await.limit(report, Some(&files));
         // An owned task, so a dropped request still deletes evicted files and finishes writes;
         // the reply waits for it to learn which file links survived.
         let result = self
@@ -496,11 +589,17 @@ impl ServerHandler for PlaywrightService {
             .spawn(disk.apply(result))
             .await
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
-        Ok(if result["status"] == "ok" {
+        let mut result = if result["status"] == "ok" {
             CallToolResult::structured(result)
         } else {
             CallToolResult::structured_error(result)
-        }
-        .into())
+        };
+        // After the text block, which stays the JSON of `structuredContent`.
+        result.content.extend(
+            images
+                .into_iter()
+                .map(|image| ContentBlock::image(image.data, image.mime_type)),
+        );
+        Ok(result.into())
     }
 }
