@@ -709,7 +709,7 @@ test('element-ops glue blurs, selects and highlights as Playwright does', {
     )
     assert.equal(await main('getSelection().toString()'), 'plain text')
 
-    // Main-world dispatchEvent is covered in crates/neo-sdk/tests/parity/{dispatchEvent,elementHandle-dispatchEvent}.test.mjs and crates/neo-runtime/tests/element_ops_e2e.rs.
+    // Main-world dispatchEvent is covered in crates/neo-sdk/tests/parity/{dispatchEvent,elementHandle-dispatchEvent}.test.mjs.
 
     // setHighlights installs the overlay; an empty list keeps it; hideHighlight removes it.
     const glass = () => main("document.querySelectorAll('x-pw-glass').length")
