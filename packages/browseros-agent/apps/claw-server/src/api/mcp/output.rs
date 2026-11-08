@@ -120,7 +120,7 @@ impl Store {
                 out["truncated"]["contextTruncated"] = json!(true);
             }
         }
-        let end = fit_prefix(&text[offset..], |shown| {
+        let end = fit_window(&text[offset..], |shown| {
             let end = offset + shown;
             out["value"] = json!(&text[offset..end]);
             out["truncated"]["end"] = json!(end);
@@ -555,16 +555,7 @@ fn leaf_end(text: &str, room: usize) -> usize {
             break;
         }
     }
-    if end < text.len()
-        && let Some(newline) = text[..end].rfind('\n')
-        && newline + 1 >= end / 2
-    {
-        end = newline + 1;
-    }
-    if let Some(start) = ref_start(text, end) {
-        end = start;
-    }
-    end
+    prefix_end(text, end, end / 2)
 }
 
 fn quoted_len(text: &str) -> usize {
@@ -620,7 +611,17 @@ fn pretty_len(value: &Value) -> usize {
 }
 
 /// Maximize the encoded envelope, then prefer a complete line and keep ref tokens whole.
-fn fit_prefix(text: &str, mut fits: impl FnMut(usize) -> bool) -> usize {
+fn fit_prefix(text: &str, fits: impl FnMut(usize) -> bool) -> usize {
+    fit(text, false, fits)
+}
+
+/// Like `fit_prefix`, but ends after a line only when that keeps half the window, so one
+/// early newline (pretty JSON's `{\n`) cannot shrink a retrieval window to a few bytes.
+fn fit_window(text: &str, fits: impl FnMut(usize) -> bool) -> usize {
+    fit(text, true, fits)
+}
+
+fn fit(text: &str, half_lines: bool, mut fits: impl FnMut(usize) -> bool) -> usize {
     if text.len() <= BUDGET && fits(text.len()) {
         return text.len();
     }
@@ -633,7 +634,7 @@ fn fit_prefix(text: &str, mut fits: impl FnMut(usize) -> bool) -> usize {
             high = middle - 1;
         }
     }
-    let end = prefix_end(text, low);
+    let end = prefix_end(text, low, if half_lines { low / 2 } else { 0 });
     fits(end);
     end
 }
@@ -658,12 +659,16 @@ fn ref_start(text: &str, offset: usize) -> Option<usize> {
     })
 }
 
-fn prefix_end(text: &str, limit: usize) -> usize {
+/// Cuts at `limit`, or after the last line ending at or past `min_line`, then before any ref
+/// token the cut would split.
+fn prefix_end(text: &str, limit: usize, min_line: usize) -> usize {
     let mut end = char_boundary(text, limit.min(text.len()));
     if end == text.len() {
         return end;
     }
-    if let Some(newline) = text[..end].rfind('\n') {
+    if let Some(newline) = text[..end].rfind('\n')
+        && newline + 1 >= min_line
+    {
         end = newline + 1;
     }
     if let Some(start) = ref_start(text, end) {
@@ -1382,5 +1387,25 @@ mod tests {
         let cuts = meta["cut"].as_array().expect("cut list");
         assert_eq!(cuts.len(), 2);
         assert!(cuts.iter().all(|cut| cut.get("next").is_none()));
+    }
+
+    #[test]
+    fn tests_that_an_early_newline_does_not_shrink_a_retrieval_window() {
+        let mut store = Store::default();
+        let bounded = store.limit(report(json!({"n":1, "snap":"z".repeat(90_000)})));
+        let next = &bounded["truncated"]["value"]["next"];
+        let window = store
+            .retrieve(
+                next["result"].as_str().expect("expected test value"),
+                "value",
+                None,
+                0,
+            )
+            .expect("expected test value");
+        let shown = window["value"].as_str().expect("window text").len();
+        assert!(
+            shown > 20_000,
+            "first pretty-JSON window shows {shown} bytes"
+        );
     }
 }
