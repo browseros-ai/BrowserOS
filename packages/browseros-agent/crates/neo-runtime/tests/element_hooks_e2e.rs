@@ -85,6 +85,13 @@ const NEXT_OR_PAY: &str = "<!doctype html><title>Checkout</title>\
 const CHECKBOXES: &str = "<!doctype html><title>Sign up</title>\
     <label><input id=terms type=checkbox> Terms</label>\
     <label><input id=news type=checkbox> News</label>";
+/// Neo: a custom-styled checkbox: the real input is transparent, under a span that draws the
+/// box, both inside the label. Playwright's own advice for such boxes is `force: true`.
+const CUSTOM_CHECKBOX: &str = "<!doctype html><title>Terms</title>\
+    <label id=lab style='position:relative;display:inline-block;width:20px;height:20px'>\
+    <input id=cb type=checkbox style='position:absolute;opacity:0;left:0;top:0;width:20px;height:20px;margin:0'>\
+    <span style='position:absolute;left:0;top:0;width:20px;height:20px;background:#ccc'></span>\
+    </label> Accept";
 /// Neo: a click policy that asks about each clicked element by its page and label, and holds
 /// "Next" for a while (as a hook asking the owner would); it blocks "Pay".
 const ASK_PAY: &str = "
@@ -929,5 +936,110 @@ return { terms };
         (before(checks[1]), checks[1].delivery),
         (Some(BeforeHookResult::Blocked), Some(Delivery::NotSent))
     );
+    tab.close().await;
+}
+
+/// Review R2-1: a login hook fills the password itself when the script clicks "Sign in" (no
+/// placeholder at all). On the mirroring page, the script's next `press` log and a strict-mode
+/// error it keeps name the box: neither may hold the password.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_secret_a_hook_types_itself_never_reaches_later_logs() {
+    let Some(tab) = open_page(MIRROR).await else {
+        return;
+    };
+    let hooks = "
+neo.on('beforeAction', { kinds: ['click'] }, async (event) => {
+  if (await event.element.evaluate((e) => e.id) === 'submit') await event.page.fill('#pw', SECRET);
+});
+";
+    let code = "
+await page.click('#submit');
+await page.press('#pw', 'Enter');
+const strict = await page.locator('input').click({ timeout: 1000 }).then(() => 'clicked', (e) => e.message);
+return { strict };
+";
+    let outcome = run(&tab, code, &[hooks]).await;
+    assert_eq!(
+        tab.evaluate("document.getElementById('pw').getAttribute('value')")
+            .await,
+        json!(SECRET),
+        "the hook typed it and the page mirrored it, so the checks below mean something"
+    );
+    assert!(
+        only_agent_call(&outcome, "press")
+            .log
+            .iter()
+            .any(|line| line.contains("<input")),
+        "the press's log names the box"
+    );
+    assert_no_secret(&outcome);
+    tab.close().await;
+}
+
+/// Review R2-2: a 3-character secret (a card's code) swapped in on the mirroring page never shows
+/// in the next call's log.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_short_swapped_secret_is_scrubbed_too() {
+    let Some(tab) = open_page(MIRROR).await else {
+        return;
+    };
+    let hooks = "
+neo.on('beforeAction', { kinds: ['fill'] }, async (event) => {
+  if (event.args.value === '{{cvv}}') return { replaceArgs: { ...event.args, value: 'Qz7' } };
+});
+";
+    let code = "
+await page.fill('#pw', '{{cvv}}');
+await page.press('#pw', 'Enter');
+return 'done';
+";
+    let outcome = run(&tab, code, &[hooks]).await;
+    assert_eq!(
+        value_of(&tab, "pw").await,
+        json!("Qz7"),
+        "the code was typed"
+    );
+    let press = only_agent_call(&outcome, "press");
+    assert!(
+        press.log.iter().any(|line| line.contains("<input")),
+        "{press:?}"
+    );
+    assert!(
+        !json_text(&outcome).contains("Qz7"),
+        "the code reached the outcome: {:?}",
+        press.log
+    );
+    tab.close().await;
+}
+
+/// Review R2-3: `check({ force: true })` on a custom checkbox (Playwright's advice for these). A
+/// hooked element keeps its hit check under force, and a hit inside the box's label passes: the
+/// box is checked, as without hooks.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_forced_check_of_a_custom_checkbox_works_with_a_hook() {
+    let Some(tab) = open_page(CUSTOM_CHECKBOX).await else {
+        return;
+    };
+    let code = "
+const forced = await page.check('#cb', { force: true, timeout: 3000 }).then(() => 'checked', (e) => e.name);
+const state = await page.isChecked('#cb');
+await page.uncheck('#cb', { force: true, timeout: 3000 }).catch(() => {});
+return { forced, state };
+";
+    let unhooked = run(&tab, code, &[GOTO_ONLY]).await;
+    assert_eq!(
+        unhooked.value,
+        Some(json!({ "forced": "checked", "state": true }))
+    );
+    let hooked = "neo.on('beforeAction', { kinds: ['check', 'uncheck'] }, () => {});";
+    let outcome = run(&tab, code, &[hooked]).await;
+    assert_eq!(
+        outcome.value,
+        Some(json!({ "forced": "checked", "state": true })),
+        "{:?}",
+        agent_calls(&outcome, "check")
+    );
+    let check = only_agent_call(&outcome, "check");
+    assert_eq!(before(check), Some(BeforeHookResult::Allowed), "{check:?}");
     tab.close().await;
 }
