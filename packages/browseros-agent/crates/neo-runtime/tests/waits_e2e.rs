@@ -128,6 +128,7 @@ fn request(
         timeout,
         cancel,
         artifacts: None,
+        hooks: None,
     }
 }
 

@@ -44,6 +44,7 @@ async fn directory_upload_never_reads_through_an_outside_symlink() {
         timeout: Duration::from_secs(15),
         cancel: CancellationToken::new(),
         artifacts: Some(artifacts),
+        hooks: None,
     }).await;
     runtime.drain().await;
     tab.close().await;

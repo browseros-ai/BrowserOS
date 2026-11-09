@@ -38,6 +38,7 @@ async fn cancel_and_reuse_runtime() {
                     timeout: Duration::from_secs(30),
                     cancel,
                     artifacts: None,
+                    hooks: None,
                 })
                 .await
         }

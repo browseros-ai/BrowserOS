@@ -537,6 +537,7 @@ mod tests {
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::{CallEntry, CallStart, RunScope};
+    use crate::run::CallOrigin;
     use crate::run::PageId;
 
     fn progress(guid: &str, state: &str, file_path: Option<&str>) -> DownloadProgress {
@@ -695,6 +696,8 @@ mod tests {
             guid: "download@G".to_string(),
             method: "saveAs".to_string(),
             title: None,
+            origin: CallOrigin::Agent,
+            action: None,
             params: json!({}),
             location: None,
             input: false,

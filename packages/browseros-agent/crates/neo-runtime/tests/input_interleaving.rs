@@ -69,6 +69,7 @@ fn request(tab: &Tab, code: &str, timeout: Duration, cancel: CancellationToken) 
         timeout,
         cancel,
         artifacts: None,
+        hooks: None,
     }
 }
 

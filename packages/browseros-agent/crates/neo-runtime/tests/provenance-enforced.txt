@@ -57,6 +57,10 @@ neo-quickjs-injected/src/web-error.ts
 neo-quickjs-injected/src/web-storage.ts
 neo-runtime-spec/src/binary.rs
 neo-runtime/src/abort.rs
+neo-runtime/src/action_hooks.rs
+neo-runtime/src/action_hooks/element.rs
+neo-runtime/src/action_hooks/swapped.rs
+neo-runtime/src/actions.rs
 neo-runtime/src/artifacts.rs
 neo-runtime/src/browser_representations/bindings.rs
 neo-runtime/src/browser_representations/clock.rs
@@ -79,6 +83,10 @@ neo-runtime/src/chromium_bridge/network_events.rs
 neo-runtime/src/chromium_bridge/page_events.rs
 neo-runtime/src/debugger.rs
 neo-runtime/src/events.rs
+neo-runtime/src/hooks.rs
+neo-runtime/src/hooks/decision.rs
+neo-runtime/src/hooks/host.rs
+neo-runtime/src/hooks/realm.rs
 neo-runtime/src/mime.rs
 neo-runtime/src/playwright_methods/browser_methods.rs
 neo-runtime/src/playwright_methods/capture.rs

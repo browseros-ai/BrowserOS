@@ -281,6 +281,7 @@ impl PlaywrightService {
                 timeout: deadline.saturating_duration_since(Instant::now()),
                 cancel,
                 artifacts: Some(self.artifact_dir()),
+                hooks: None,
             })
             .await;
         if !outcome.artifacts.is_empty() || !outcome.binaries.is_empty() {

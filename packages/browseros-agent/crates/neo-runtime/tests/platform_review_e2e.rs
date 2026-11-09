@@ -57,6 +57,7 @@ await new Promise(() => {});"
         timeout: Duration::from_secs(30),
         cancel: cancel.clone(),
         artifacts: None,
+        hooks: None,
     };
     let worker = runtime.clone();
     let running = tokio::spawn(async move { worker.run(request).await });

@@ -395,6 +395,9 @@ async function call(message) {
 function abort(id, reason) {
   __neo_runtime.abort(id, reason);
 }
+function log(line) {
+  __neo_runtime.log(line);
+}
 function subscribe(guid, event, enabled) {
   __neo_runtime.subscribe(JSON.stringify({ guid, event, enabled }));
 }
@@ -403,6 +406,9 @@ function drain(until) {
 }
 function nextEvents() {
   return __neo_runtime.nextEvents();
+}
+async function host(request) {
+  return await __neo_runtime.host(request);
 }
 
 // src/url.ts
@@ -695,6 +701,300 @@ function hexDigit(byte) {
 }
 function formEncode(text) {
   return encodeURIComponent(text).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+// src/structured-clone.ts
+var ERRORS = {
+  Error,
+  EvalError,
+  RangeError,
+  ReferenceError,
+  SyntaxError,
+  TypeError,
+  URIError
+};
+var TYPED_ARRAYS = [
+  Int8Array,
+  Uint8Array,
+  Uint8ClampedArray,
+  Int16Array,
+  Uint16Array,
+  Int32Array,
+  Uint32Array,
+  Float32Array,
+  Float64Array,
+  BigInt64Array,
+  BigUint64Array
+];
+function structuredClone(...args) {
+  if (args.length === 0)
+    throw new TypeError('The "value" argument must be specified');
+  const [value, options] = args;
+  if (options?.transfer !== undefined && [...options.transfer].length > 0)
+    throw cannotClone("Neo's structuredClone cannot transfer");
+  return clone(value, new Map);
+}
+function clone(value, memory) {
+  if (typeof value === "function" || typeof value === "symbol")
+    throw cannotClone(`${String(value)} could not be cloned.`);
+  if (typeof value !== "object" || value === null)
+    return value;
+  const seen = memory.get(value);
+  if (seen !== undefined)
+    return seen;
+  const remember = (copy2) => {
+    memory.set(value, copy2);
+    return copy2;
+  };
+  if (value instanceof Boolean)
+    return remember(Object(value.valueOf()));
+  if (value instanceof Number)
+    return remember(Object(value.valueOf()));
+  if (value instanceof String)
+    return remember(Object(value.valueOf()));
+  if (value instanceof BigInt)
+    return remember(Object(value.valueOf()));
+  if (value instanceof Date)
+    return remember(new Date(value.getTime()));
+  if (value instanceof RegExp)
+    return remember(new RegExp(value.source, value.flags));
+  if (value instanceof ArrayBuffer)
+    return remember(value.slice(0));
+  if (ArrayBuffer.isView(value)) {
+    const buffer = clone(value.buffer, memory);
+    if (value instanceof DataView)
+      return remember(new DataView(buffer, value.byteOffset, value.byteLength));
+    const kind = typedArrayKind(value);
+    const length = value.byteLength / kind.BYTES_PER_ELEMENT;
+    return remember(new kind(buffer, value.byteOffset, length));
+  }
+  if (value instanceof Map) {
+    const copy2 = remember(new Map);
+    for (const [key, entry] of value)
+      copy2.set(clone(key, memory), clone(entry, memory));
+    return copy2;
+  }
+  if (value instanceof Set) {
+    const copy2 = remember(new Set);
+    for (const entry of value)
+      copy2.add(clone(entry, memory));
+    return copy2;
+  }
+  if (value instanceof Error) {
+    const kind = ERRORS[value.name] ?? Error;
+    const copy2 = remember(new kind(value.message));
+    if (value.stack !== undefined)
+      Object.defineProperty(copy2, "stack", {
+        value: value.stack,
+        writable: true,
+        configurable: true
+      });
+    return copy2;
+  }
+  if (value instanceof Promise || value instanceof WeakMap || value instanceof WeakSet || value instanceof WeakRef || value instanceof URL || value instanceof URLSearchParams)
+    throw cannotClone(`${Object.prototype.toString.call(value)} could not be cloned.`);
+  const copy = remember(Array.isArray(value) ? new Array(value.length) : {});
+  for (const key of Object.keys(value))
+    Object.defineProperty(copy, key, {
+      value: clone(value[key], memory),
+      writable: true,
+      enumerable: true,
+      configurable: true
+    });
+  return copy;
+}
+function typedArrayKind(view) {
+  return TYPED_ARRAYS.find((kind) => view instanceof kind) ?? view.constructor;
+}
+function cannotClone(message) {
+  return new DOMException(message, "DataCloneError");
+}
+
+// src/text.ts
+var UTF8_LABELS = [
+  "unicode-1-1-utf-8",
+  "unicode11utf8",
+  "unicode20utf8",
+  "utf-8",
+  "utf8",
+  "x-unicode20utf8"
+];
+
+class TextEncoder {
+  get encoding() {
+    return "utf-8";
+  }
+  encode(input = "") {
+    return encodeUtf8(String(input));
+  }
+  encodeInto(source, destination) {
+    const text = String(source);
+    let read = 0;
+    let written = 0;
+    while (read < text.length) {
+      let code = text.codePointAt(read);
+      const units = code > 65535 ? 2 : 1;
+      if (code >= 55296 && code <= 57343)
+        code = 65533;
+      const size = code < 128 ? 1 : code < 2048 ? 2 : code < 65536 ? 3 : 4;
+      if (written + size > destination.length)
+        break;
+      if (size === 1)
+        destination[written] = code;
+      else {
+        const lead = [192, 224, 240][size - 2];
+        destination[written] = lead | code >> 6 * (size - 1);
+        for (let k = 1;k < size; k++)
+          destination[written + k] = 128 | code >> 6 * (size - 1 - k) & 63;
+      }
+      written += size;
+      read += units;
+    }
+    return { read, written };
+  }
+  get [Symbol.toStringTag]() {
+    return "TextEncoder";
+  }
+}
+
+class TextDecoder {
+  #fatal;
+  #ignoreBOM;
+  #held = new Uint8Array(0);
+  #started = false;
+  constructor(label = "utf-8", options = {}) {
+    if (!UTF8_LABELS.includes(String(label).trim().toLowerCase()))
+      throw new RangeError(`The "${label}" encoding is not supported`);
+    this.#fatal = Boolean(options?.fatal);
+    this.#ignoreBOM = Boolean(options?.ignoreBOM);
+  }
+  get encoding() {
+    return "utf-8";
+  }
+  get fatal() {
+    return this.#fatal;
+  }
+  get ignoreBOM() {
+    return this.#ignoreBOM;
+  }
+  decode(input, options) {
+    const fresh = bytesOf(input);
+    let bytes = fresh;
+    if (this.#held.length > 0) {
+      bytes = new Uint8Array(this.#held.length + fresh.length);
+      bytes.set(this.#held);
+      bytes.set(fresh, this.#held.length);
+    }
+    const stream = Boolean(options?.stream);
+    const cut = stream ? openTail(bytes) : 0;
+    const whole = bytes.subarray(0, bytes.length - cut);
+    this.#held = bytes.slice(bytes.length - cut);
+    if (this.#fatal && !isUtf8(whole)) {
+      this.#reset();
+      throw new TypeError("The encoded data was not valid for encoding utf-8");
+    }
+    let text = decodeUtf8(whole);
+    if (!this.#started && !this.#ignoreBOM && text.startsWith("\uFEFF"))
+      text = text.slice(1);
+    if (whole.length > 0)
+      this.#started = true;
+    if (!stream)
+      this.#reset();
+    return text;
+  }
+  get [Symbol.toStringTag]() {
+    return "TextDecoder";
+  }
+  #reset() {
+    this.#held = new Uint8Array(0);
+    this.#started = false;
+  }
+}
+function bytesOf(input) {
+  if (input === undefined)
+    return new Uint8Array(0);
+  if (input instanceof ArrayBuffer || input instanceof SharedArrayBuffer)
+    return new Uint8Array(input);
+  if (ArrayBuffer.isView(input))
+    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  throw new TypeError('The "input" argument must be an instance of ArrayBuffer or ArrayBufferView.');
+}
+function openTail(bytes) {
+  for (let back = 1;back <= Math.min(3, bytes.length); back++) {
+    const byte = bytes[bytes.length - back];
+    if (byte < 128)
+      return 0;
+    if (byte < 192)
+      continue;
+    const sequence = utf8Lead(byte);
+    if (!sequence || back > sequence.needed)
+      return 0;
+    const second = bytes[bytes.length - back + 1];
+    const fits = second === undefined || second >= sequence.lower && second <= sequence.upper;
+    return fits ? back : 0;
+  }
+  return 0;
+}
+function isUtf8(bytes) {
+  for (let i = 0;i < bytes.length; i++) {
+    const byte = bytes[i];
+    if (byte < 128)
+      continue;
+    const sequence = utf8Lead(byte);
+    if (!sequence)
+      return false;
+    for (let k = 1;k <= sequence.needed; k++) {
+      const next = bytes[i + k];
+      const [lower, upper] = k === 1 ? [sequence.lower, sequence.upper] : [128, 191];
+      if (next === undefined || next < lower || next > upper)
+        return false;
+    }
+    i += sequence.needed;
+  }
+  return true;
+}
+
+// src/web-crypto.ts
+var MAX_RANDOM_BYTES = 65536;
+var INTEGER_ARRAYS = [
+  Int8Array,
+  Uint8Array,
+  Uint8ClampedArray,
+  Int16Array,
+  Uint16Array,
+  Int32Array,
+  Uint32Array,
+  BigInt64Array,
+  BigUint64Array
+];
+function getRandomValues(array) {
+  if (!INTEGER_ARRAYS.some((kind) => array instanceof kind))
+    throw new DOMException("The data argument must be an integer-type TypedArray", "TypeMismatchError");
+  if (array.byteLength > MAX_RANDOM_BYTES)
+    throw new DOMException(`The ArrayBufferView's byte length (${array.byteLength}) exceeds the number of bytes of entropy available via this API (${MAX_RANDOM_BYTES})`, "QuotaExceededError");
+  new Uint8Array(array.buffer, array.byteOffset, array.byteLength).set(randomValues(array.byteLength));
+  return array;
+}
+function randomUUID() {
+  const bytes = randomValues(16);
+  bytes[6] = bytes[6] & 15 | 64;
+  bytes[8] = bytes[8] & 63 | 128;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+var crypto = { getRandomValues, randomUUID };
+
+// src/globals.ts
+function standardGlobals() {
+  return {
+    URL,
+    URLSearchParams,
+    Buffer,
+    TextEncoder,
+    TextDecoder,
+    structuredClone,
+    crypto
+  };
 }
 
 // src/vendor-shims.ts
@@ -1147,9 +1447,9 @@ function innerSerializeValue(value, handleSerializer, visitorInfo, accessChain) 
     return { u: value.toJSON() };
   if (isRegExp2(value))
     return { r: { p: value.source, f: value.flags } };
-  const typedArrayKind = constructorToTypedArrayKind.get(value.constructor);
-  if (typedArrayKind)
-    return { ta: { b: Buffer2.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind } };
+  const typedArrayKind2 = constructorToTypedArrayKind.get(value.constructor);
+  if (typedArrayKind2)
+    return { ta: { b: Buffer2.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind2 } };
   const id = visitorInfo.visited.get(value);
   if (id)
     return { ref: id };
@@ -1420,20 +1720,20 @@ function agentLocation(stack, lineOffset) {
   }
   return { file: SCRIPT_FILE };
 }
-function rebuildError(apiName, error, log, signal) {
+function rebuildError(apiName, error, log2, signal) {
   const rebuilt = parseError(error);
   if (signal?.aborted && rebuilt instanceof AbortError)
     rebuilt.cause = signal.reason;
-  rebuilt.log = log || [];
-  rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`;
+  rebuilt.log = log2 || [];
+  rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log2)}`;
   return rebuilt;
 }
-function formatCallLog(log) {
-  if (!log?.some((line) => !!line))
+function formatCallLog(log2) {
+  if (!log2?.some((line) => !!line))
     return "";
   return `
 Call log:
-${log.join(`
+${log2.join(`
 `)}
 `;
 }
@@ -7508,8 +7808,8 @@ function waitForTimeout(timeout) {
   const dispose = () => clearTimeout(timeoutId);
   return { promise, dispose };
 }
-function formatLogRecording(log) {
-  if (!log.length)
+function formatLogRecording(log2) {
+  if (!log2.length)
     return "";
   const header = " logs ";
   const headerLength = 60;
@@ -7517,7 +7817,7 @@ function formatLogRecording(log) {
   const rightLength = headerLength - header.length - leftLength;
   return `
 ${"=".repeat(leftLength)}${header}${"=".repeat(rightLength)}
-${log.join(`
+${log2.join(`
 `)}
 ${"=".repeat(headerLength)}`;
 }
@@ -9257,300 +9557,6 @@ function headersObjectToArray3(headers) {
   return result;
 }
 
-// src/structured-clone.ts
-var ERRORS = {
-  Error,
-  EvalError,
-  RangeError,
-  ReferenceError,
-  SyntaxError,
-  TypeError,
-  URIError
-};
-var TYPED_ARRAYS = [
-  Int8Array,
-  Uint8Array,
-  Uint8ClampedArray,
-  Int16Array,
-  Uint16Array,
-  Int32Array,
-  Uint32Array,
-  Float32Array,
-  Float64Array,
-  BigInt64Array,
-  BigUint64Array
-];
-function structuredClone(...args) {
-  if (args.length === 0)
-    throw new TypeError('The "value" argument must be specified');
-  const [value, options] = args;
-  if (options?.transfer !== undefined && [...options.transfer].length > 0)
-    throw cannotClone("Neo's structuredClone cannot transfer");
-  return clone(value, new Map);
-}
-function clone(value, memory) {
-  if (typeof value === "function" || typeof value === "symbol")
-    throw cannotClone(`${String(value)} could not be cloned.`);
-  if (typeof value !== "object" || value === null)
-    return value;
-  const seen = memory.get(value);
-  if (seen !== undefined)
-    return seen;
-  const remember = (copy2) => {
-    memory.set(value, copy2);
-    return copy2;
-  };
-  if (value instanceof Boolean)
-    return remember(Object(value.valueOf()));
-  if (value instanceof Number)
-    return remember(Object(value.valueOf()));
-  if (value instanceof String)
-    return remember(Object(value.valueOf()));
-  if (value instanceof BigInt)
-    return remember(Object(value.valueOf()));
-  if (value instanceof Date)
-    return remember(new Date(value.getTime()));
-  if (value instanceof RegExp)
-    return remember(new RegExp(value.source, value.flags));
-  if (value instanceof ArrayBuffer)
-    return remember(value.slice(0));
-  if (ArrayBuffer.isView(value)) {
-    const buffer = clone(value.buffer, memory);
-    if (value instanceof DataView)
-      return remember(new DataView(buffer, value.byteOffset, value.byteLength));
-    const kind = typedArrayKind(value);
-    const length = value.byteLength / kind.BYTES_PER_ELEMENT;
-    return remember(new kind(buffer, value.byteOffset, length));
-  }
-  if (value instanceof Map) {
-    const copy2 = remember(new Map);
-    for (const [key, entry] of value)
-      copy2.set(clone(key, memory), clone(entry, memory));
-    return copy2;
-  }
-  if (value instanceof Set) {
-    const copy2 = remember(new Set);
-    for (const entry of value)
-      copy2.add(clone(entry, memory));
-    return copy2;
-  }
-  if (value instanceof Error) {
-    const kind = ERRORS[value.name] ?? Error;
-    const copy2 = remember(new kind(value.message));
-    if (value.stack !== undefined)
-      Object.defineProperty(copy2, "stack", {
-        value: value.stack,
-        writable: true,
-        configurable: true
-      });
-    return copy2;
-  }
-  if (value instanceof Promise || value instanceof WeakMap || value instanceof WeakSet || value instanceof WeakRef || value instanceof URL || value instanceof URLSearchParams)
-    throw cannotClone(`${Object.prototype.toString.call(value)} could not be cloned.`);
-  const copy = remember(Array.isArray(value) ? new Array(value.length) : {});
-  for (const key of Object.keys(value))
-    Object.defineProperty(copy, key, {
-      value: clone(value[key], memory),
-      writable: true,
-      enumerable: true,
-      configurable: true
-    });
-  return copy;
-}
-function typedArrayKind(view) {
-  return TYPED_ARRAYS.find((kind) => view instanceof kind) ?? view.constructor;
-}
-function cannotClone(message) {
-  return new DOMException(message, "DataCloneError");
-}
-
-// src/text.ts
-var UTF8_LABELS = [
-  "unicode-1-1-utf-8",
-  "unicode11utf8",
-  "unicode20utf8",
-  "utf-8",
-  "utf8",
-  "x-unicode20utf8"
-];
-
-class TextEncoder {
-  get encoding() {
-    return "utf-8";
-  }
-  encode(input = "") {
-    return encodeUtf8(String(input));
-  }
-  encodeInto(source, destination) {
-    const text2 = String(source);
-    let read = 0;
-    let written = 0;
-    while (read < text2.length) {
-      let code = text2.codePointAt(read);
-      const units = code > 65535 ? 2 : 1;
-      if (code >= 55296 && code <= 57343)
-        code = 65533;
-      const size = code < 128 ? 1 : code < 2048 ? 2 : code < 65536 ? 3 : 4;
-      if (written + size > destination.length)
-        break;
-      if (size === 1)
-        destination[written] = code;
-      else {
-        const lead = [192, 224, 240][size - 2];
-        destination[written] = lead | code >> 6 * (size - 1);
-        for (let k = 1;k < size; k++)
-          destination[written + k] = 128 | code >> 6 * (size - 1 - k) & 63;
-      }
-      written += size;
-      read += units;
-    }
-    return { read, written };
-  }
-  get [Symbol.toStringTag]() {
-    return "TextEncoder";
-  }
-}
-
-class TextDecoder {
-  #fatal;
-  #ignoreBOM;
-  #held = new Uint8Array(0);
-  #started = false;
-  constructor(label = "utf-8", options = {}) {
-    if (!UTF8_LABELS.includes(String(label).trim().toLowerCase()))
-      throw new RangeError(`The "${label}" encoding is not supported`);
-    this.#fatal = Boolean(options?.fatal);
-    this.#ignoreBOM = Boolean(options?.ignoreBOM);
-  }
-  get encoding() {
-    return "utf-8";
-  }
-  get fatal() {
-    return this.#fatal;
-  }
-  get ignoreBOM() {
-    return this.#ignoreBOM;
-  }
-  decode(input, options) {
-    const fresh = bytesOf(input);
-    let bytes = fresh;
-    if (this.#held.length > 0) {
-      bytes = new Uint8Array(this.#held.length + fresh.length);
-      bytes.set(this.#held);
-      bytes.set(fresh, this.#held.length);
-    }
-    const stream = Boolean(options?.stream);
-    const cut = stream ? openTail(bytes) : 0;
-    const whole = bytes.subarray(0, bytes.length - cut);
-    this.#held = bytes.slice(bytes.length - cut);
-    if (this.#fatal && !isUtf8(whole)) {
-      this.#reset();
-      throw new TypeError("The encoded data was not valid for encoding utf-8");
-    }
-    let text2 = decodeUtf8(whole);
-    if (!this.#started && !this.#ignoreBOM && text2.startsWith("\uFEFF"))
-      text2 = text2.slice(1);
-    if (whole.length > 0)
-      this.#started = true;
-    if (!stream)
-      this.#reset();
-    return text2;
-  }
-  get [Symbol.toStringTag]() {
-    return "TextDecoder";
-  }
-  #reset() {
-    this.#held = new Uint8Array(0);
-    this.#started = false;
-  }
-}
-function bytesOf(input) {
-  if (input === undefined)
-    return new Uint8Array(0);
-  if (input instanceof ArrayBuffer || input instanceof SharedArrayBuffer)
-    return new Uint8Array(input);
-  if (ArrayBuffer.isView(input))
-    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
-  throw new TypeError('The "input" argument must be an instance of ArrayBuffer or ArrayBufferView.');
-}
-function openTail(bytes) {
-  for (let back = 1;back <= Math.min(3, bytes.length); back++) {
-    const byte = bytes[bytes.length - back];
-    if (byte < 128)
-      return 0;
-    if (byte < 192)
-      continue;
-    const sequence = utf8Lead(byte);
-    if (!sequence || back > sequence.needed)
-      return 0;
-    const second = bytes[bytes.length - back + 1];
-    const fits = second === undefined || second >= sequence.lower && second <= sequence.upper;
-    return fits ? back : 0;
-  }
-  return 0;
-}
-function isUtf8(bytes) {
-  for (let i = 0;i < bytes.length; i++) {
-    const byte = bytes[i];
-    if (byte < 128)
-      continue;
-    const sequence = utf8Lead(byte);
-    if (!sequence)
-      return false;
-    for (let k = 1;k <= sequence.needed; k++) {
-      const next = bytes[i + k];
-      const [lower, upper] = k === 1 ? [sequence.lower, sequence.upper] : [128, 191];
-      if (next === undefined || next < lower || next > upper)
-        return false;
-    }
-    i += sequence.needed;
-  }
-  return true;
-}
-
-// src/web-crypto.ts
-var MAX_RANDOM_BYTES = 65536;
-var INTEGER_ARRAYS = [
-  Int8Array,
-  Uint8Array,
-  Uint8ClampedArray,
-  Int16Array,
-  Uint16Array,
-  Int32Array,
-  Uint32Array,
-  BigInt64Array,
-  BigUint64Array
-];
-function getRandomValues(array) {
-  if (!INTEGER_ARRAYS.some((kind) => array instanceof kind))
-    throw new DOMException("The data argument must be an integer-type TypedArray", "TypeMismatchError");
-  if (array.byteLength > MAX_RANDOM_BYTES)
-    throw new DOMException(`The ArrayBufferView's byte length (${array.byteLength}) exceeds the number of bytes of entropy available via this API (${MAX_RANDOM_BYTES})`, "QuotaExceededError");
-  new Uint8Array(array.buffer, array.byteOffset, array.byteLength).set(randomValues(array.byteLength));
-  return array;
-}
-function randomUUID() {
-  const bytes = randomValues(16);
-  bytes[6] = bytes[6] & 15 | 64;
-  bytes[8] = bytes[8] & 63 | 128;
-  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-var crypto = { getRandomValues, randomUUID };
-
-// src/globals.ts
-function standardGlobals() {
-  return {
-    URL,
-    URLSearchParams,
-    Buffer,
-    TextEncoder,
-    TextDecoder,
-    structuredClone,
-    crypto
-  };
-}
-
 // src/browser-type.ts
 var ATTACHED_REFUSAL = "Neo runs attached to BrowserOS; use the provided context / context.browser()";
 var CHROMIUM_ONLY_REFUSAL = "Neo drives BrowserOS (Chromium) only; firefox and webkit are not available";
@@ -9629,8 +9635,8 @@ class Playwright {
   }
 }
 
-// src/index.ts
-function createRun(init) {
+// src/run-objects.ts
+function connectRun(init) {
   setTestIdAttribute(init.testIdAttribute);
   const connection = new Connection(init.lineOffset);
   const pipe = new EventPipe;
@@ -9642,6 +9648,460 @@ function createRun(init) {
   browser._didCreateContext(context);
   playwright.selectors._attach(connection, init.context);
   const page = context._addRunPage(init.page, init.mainFrame, init.url);
+  return { connection, pipe, playwright, browser, context, page };
+}
+
+// src/hooks.ts
+var HOOK_EVENTS = [
+  "beforeRun",
+  "afterRun",
+  "beforeAction",
+  "afterAction"
+];
+var stringify2 = JSON.stringify;
+var parse = JSON.parse;
+function createHooks(init) {
+  const realm = new HookRealm(init);
+  return {
+    neo: Object.freeze({
+      on: (event, second, third) => realm.on(event, second, third)
+    }),
+    globals: standardGlobals(),
+    exportValue,
+    uncaught: realm.uncaught,
+    finishLoading: () => realm.finishLoading(),
+    invoke: (id, event, payload, ship, marker) => realm.invoke(id, event, payload, ship, marker),
+    abort: (id, reason) => realm.abort(id, reason)
+  };
+}
+
+class HookRealm {
+  uncaught;
+  #objects;
+  #meta;
+  #state = {};
+  #registrations = [];
+  #loading = true;
+  #live = new Map;
+  #broken;
+  #contexts = new Map;
+  #trace = (...values) => {
+    log(values.map(describe).join(" "));
+  };
+  constructor(init) {
+    this.#objects = connectRun(init);
+    this.#contexts.set(init.context, this.#objects.context);
+    this.#meta = frozenCopy(init.meta);
+    this.uncaught = this.#objects.pipe.uncaught;
+    this.uncaught.catch((error) => {
+      this.#broken = { error };
+      for (const invocation of this.#live.values())
+        invocation.settle(failure(brokenBy(error)));
+    });
+  }
+  on(event, second, third) {
+    if (!this.#loading)
+      throw new TypeError("neo.on works only while the hook file loads");
+    if (!isHookEvent(event))
+      throw new TypeError(`neo.on: unknown hook event ${describe(event)}; expected one of ${HOOK_EVENTS.join(", ")}`);
+    const [filter, handler] = typeof second === "function" && third === undefined ? [undefined, second] : [second, third];
+    if (typeof handler !== "function")
+      throw new TypeError(`neo.on('${event}'): the handler must be a function`);
+    this.#registrations.push(Object.freeze({
+      event,
+      ...readFilter(event, filter),
+      handler,
+      index: this.#registrations.length + 1
+    }));
+  }
+  finishLoading() {
+    this.#loading = false;
+    return stringify2(this.#registrations.map(({ event, kinds, groups }) => ({
+      event,
+      kinds,
+      groups
+    })));
+  }
+  invoke(id, event, payload, ship, marker) {
+    this.#loading = false;
+    return new Promise((resolve) => {
+      if (this.#broken) {
+        resolve(failure(brokenBy(this.#broken.error)));
+        return;
+      }
+      let invocation;
+      try {
+        invocation = {
+          active: true,
+          controller: new AbortController,
+          settle: (decision) => {
+            invocation.active = false;
+            resolve(decision);
+          }
+        };
+      } catch (error) {
+        resolve(failure(`${event}: ${describe(error)}`));
+        return;
+      }
+      this.#live.set(id, invocation);
+      this.#decide(event, payload, invocation, ship, marker).then(invocation.settle, (error) => invocation.settle(failure(`${event}: ${describe(error)}`))).finally(() => {
+        if (this.#live.get(id) === invocation)
+          this.#live.delete(id);
+      });
+    });
+  }
+  abort(id, reason) {
+    const invocation = this.#live.get(id);
+    if (!invocation)
+      return;
+    const error = new Error(String(reason));
+    error.name = "AbortError";
+    invocation.controller.abort(error);
+  }
+  async#host(invocation, name, args) {
+    if (typeof name !== "string" || !name.length)
+      throw new TypeError("ctx.host needs a non-empty name");
+    let encoded;
+    try {
+      encoded = stringify2(args === undefined ? null : args);
+    } catch {
+      throw new TypeError("ctx.host args must be JSON");
+    }
+    if (encoded === undefined)
+      throw new TypeError("ctx.host args must be JSON");
+    const check = () => {
+      if (!invocation.active || invocation.controller.signal.aborted)
+        throw new Error("the hook invocation ended");
+    };
+    check();
+    try {
+      const answer = await host(`{"name":${stringify2(name)},"args":${encoded}}`);
+      check();
+      return parse(answer);
+    } catch (error) {
+      throw error instanceof Error ? error : new Error(describe(error));
+    }
+  }
+  async#decide(event, payloadText, invocation, ship, marker) {
+    if (!isHookEvent(event))
+      return failure(`unknown hook event ${describe(event)}`);
+    const payload = readPayload(payloadText);
+    const action = event === "beforeAction" || event === "afterAction";
+    const kind = action ? nullableText(payload, "kind") : null;
+    const group = action ? nullableText(payload, "group") : null;
+    const handlers = this.#registrations.filter((registration) => registration.event === event && wants(registration, kind, group));
+    const objects = this.#objectsFor(action, payload);
+    const ctx = Object.freeze({
+      meta: this.#meta,
+      state: this.#state,
+      signal: invocation.controller.signal,
+      trace: this.#trace,
+      host: (name, args) => this.#host(invocation, name, args)
+    });
+    const exporter = typeof ship === "function" && typeof marker === "string" ? (value) => exportValue(value, ship, marker) : (value) => stringify2(value);
+    if (event === "beforeRun" || event === "beforeAction")
+      return await this.#before(event, handlers, payloadText, objects, ctx);
+    return await this.#after(event, handlers, payloadText, payload, objects, ctx, exporter);
+  }
+  async#before(event, handlers, payloadText, objects, ctx) {
+    let args;
+    for (const registration of handlers) {
+      const stopped = this.#stopped(ctx.signal, registration);
+      if (stopped)
+        return failure(stopped);
+      const data = parse(payloadText);
+      if (args !== undefined)
+        data.args = parse(args);
+      const view = this.#view(event, data, objects);
+      const checked = await run(registration, view, ctx, (returned) => checkBefore(returned, event === "beforeAction"));
+      if (typeof checked === "string")
+        return failure(checked);
+      if ("block" in checked)
+        return stringify2({ decision: "block", reason: checked.block });
+      if ("replaceArgs" in checked)
+        args = checked.replaceArgs;
+    }
+    return args === undefined ? stringify2({ decision: "allow" }) : `{"decision":"replaceArgs","args":${args}}`;
+  }
+  async#after(event, handlers, payloadText, payload, objects, ctx, exporter) {
+    let replaced;
+    const notes = [];
+    for (const registration of handlers) {
+      const stopped = this.#stopped(ctx.signal, registration);
+      if (stopped)
+        return failure(stopped);
+      const view = this.#view(event, parse(payloadText), objects, replaced);
+      const checked = await run(registration, view, ctx, checkAfter);
+      if (typeof checked === "string")
+        return failure(checked);
+      if (checked.replace) {
+        if (event === "afterRun" && payload.status !== "ok")
+          return failure(`${label(registration)} replaced the result of a run that ended ${describe(payload.status)}`);
+        replaced = checked.replace;
+      }
+      if (checked.note !== undefined)
+        notes.push(checked.note);
+    }
+    if (!replaced)
+      return stringify2({ decision: "keep", notes });
+    let value;
+    try {
+      value = exporter(replaced.value);
+    } catch (error) {
+      return failure(`${event}: the replacement cannot be exported: ${describe(error)}`);
+    }
+    const field = value === undefined ? "" : `"value":${value},`;
+    return `{"decision":"replace",${field}"notes":${stringify2(notes)}}`;
+  }
+  #stopped(signal, next) {
+    if (this.#broken)
+      return brokenBy(this.#broken.error);
+    if (signal.aborted)
+      return `aborted before ${label(next)}: ${describe(signal.reason)}`;
+    return;
+  }
+  #view(event, data, objects, replaced) {
+    const view = {};
+    if (event === "beforeRun")
+      view.script = data.script;
+    else if (event === "afterRun") {
+      view.status = data.status;
+      if (replaced)
+        view.value = replaced.value;
+      else if (Object.hasOwn(data, "value"))
+        view.value = data.value;
+      if (Object.hasOwn(data, "error"))
+        view.error = data.error;
+    } else {
+      view.kind = data.kind ?? null;
+      view.group = data.group ?? null;
+      view.method = data.method;
+      view.args = data.args;
+      if (Object.hasOwn(data, "location"))
+        view.location = data.location;
+      if (event === "afterAction") {
+        if (replaced)
+          view.result = replaced.value;
+        else if (Object.hasOwn(data, "result"))
+          view.result = data.result;
+        if (Object.hasOwn(data, "error"))
+          view.error = data.error;
+      }
+    }
+    if (objects.page)
+      view.page = objects.page;
+    if (objects.frame)
+      view.frame = objects.frame;
+    view.context = objects.context;
+    if (objects.locator)
+      view.locator = objects.locator;
+    if (objects.element)
+      view.element = objects.element;
+    view.meta = this.#meta;
+    return view;
+  }
+  #objectsFor(action, payload) {
+    const context = this.#contextFor(text2(payload, "context"));
+    if (!action)
+      return { context, page: this.#pageFor(text2(payload, "page"), context) };
+    const objects = { context };
+    if (payload.page !== undefined)
+      objects.page = this.#pageFor(text2(payload, "page"), context);
+    if (payload.frame !== undefined)
+      objects.frame = this.#frameFor(text2(payload, "frame"), context);
+    if (payload.locator !== undefined) {
+      const locator = record(payload, "locator");
+      objects.locator = this.#frameFor(text2(locator, "frame"), context).locator(text2(locator, "selector"));
+    }
+    if (payload.element !== undefined) {
+      const element = record(payload, "element");
+      objects.element = new ElementHandle(this.#objects.connection, text2(element, "guid"), { preview: text2(element, "preview") }, objects.frame);
+    }
+    return objects;
+  }
+  #contextFor(guid) {
+    let context = this.#contexts.get(guid);
+    if (!context) {
+      context = new BrowserContext(guid, this.#objects.connection, this.#objects.pipe);
+      this.#objects.browser._didCreateContext(context);
+      this.#contexts.set(guid, context);
+    }
+    return context;
+  }
+  #pageFor(guid, context) {
+    return this.#objects.browser._knownPage(guid) ?? context._pageFrom(get(guid, "initializer"));
+  }
+  #frameFor(guid, context) {
+    return this.#pageFor(pageGuidOf(guid), context)._frameForGuid(guid);
+  }
+}
+async function run(registration, view, ctx, check) {
+  const { handler } = registration;
+  let returned;
+  try {
+    returned = await handler(view, ctx);
+  } catch (error) {
+    return `${label(registration)} threw ${describe(error)}`;
+  }
+  try {
+    return check(returned);
+  } catch (error) {
+    return `${label(registration)} returned an invalid decision: ${describe(error)}`;
+  }
+}
+function checkBefore(returned, action) {
+  if (returned === undefined)
+    return { allow: true };
+  const [key, ...others] = ownKeys(returned);
+  if (key === undefined || others.length)
+    throw new TypeError("expected exactly one of allow, block, replaceArgs");
+  const value = returned[key];
+  if (key === "allow") {
+    if (value !== true)
+      throw new TypeError("allow must be true");
+    return { allow: true };
+  }
+  if (key === "block") {
+    if (typeof value !== "string" || value === "")
+      throw new TypeError("block must be a non-empty string");
+    return { block: value };
+  }
+  if (key === "replaceArgs" && action) {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      throw new TypeError("replaceArgs must be an object");
+    const args = stringify2(value);
+    if (typeof args !== "string" || !args.startsWith("{"))
+      throw new TypeError("replaceArgs must be a JSON object");
+    return { replaceArgs: args };
+  }
+  throw new TypeError(`unexpected key ${describe(String(key))}`);
+}
+function checkAfter(returned) {
+  if (returned === undefined)
+    return {};
+  const keys = ownKeys(returned);
+  if (!keys.length)
+    throw new TypeError("expected replace, note or both");
+  for (const key of keys)
+    if (key !== "replace" && key !== "note")
+      throw new TypeError(`unexpected key ${describe(String(key))}`);
+  const decision = returned;
+  const after = {};
+  if (Object.hasOwn(decision, "replace"))
+    after.replace = { value: decision.replace };
+  if (Object.hasOwn(decision, "note")) {
+    if (typeof decision.note !== "string")
+      throw new TypeError("note must be a string");
+    after.note = decision.note;
+  }
+  return after;
+}
+function ownKeys(returned) {
+  if (typeof returned !== "object" || returned === null || Array.isArray(returned))
+    throw new TypeError(`expected undefined or an object, got ${describe(returned)}`);
+  return Reflect.ownKeys(returned);
+}
+function readFilter(event, filter) {
+  if (filter === undefined || filter === null)
+    return {};
+  if (event !== "beforeAction" && event !== "afterAction")
+    throw new TypeError(`neo.on('${event}'): only action events take a filter`);
+  if (typeof filter !== "object" || Array.isArray(filter))
+    throw new TypeError(`neo.on('${event}'): a filter is an object { kinds?, groups? }`);
+  for (const key of Reflect.ownKeys(filter))
+    if (key !== "kinds" && key !== "groups")
+      throw new TypeError(`neo.on('${event}'): unknown filter key ${describe(String(key))}`);
+  const { kinds, groups } = filter;
+  const read = {
+    kinds: filterNames(event, "kinds", kinds),
+    groups: filterNames(event, "groups", groups)
+  };
+  if (!read.kinds && !read.groups)
+    throw new TypeError(`neo.on('${event}'): a filter names kinds, groups or both`);
+  return read;
+}
+function filterNames(event, key, names) {
+  if (names === undefined)
+    return;
+  if (!Array.isArray(names) || !names.every((name) => typeof name === "string"))
+    throw new TypeError(`neo.on('${event}'): filter ${key} must be an array of strings`);
+  return Object.freeze([...names]);
+}
+function wants(registration, kind, group) {
+  const { kinds, groups } = registration;
+  if (!kinds && !groups)
+    return true;
+  return kind !== null && !!kinds?.includes(kind) || group !== null && !!groups?.includes(group);
+}
+function isHookEvent(event) {
+  return HOOK_EVENTS.includes(event);
+}
+function readPayload(payloadText) {
+  const payload = parse(payloadText);
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload))
+    throw new TypeError("the payload is not a JSON object");
+  return payload;
+}
+function text2(object, key) {
+  const value = object[key];
+  if (typeof value !== "string")
+    throw new TypeError(`payload ${key}: expected a string`);
+  return value;
+}
+function nullableText(object, key) {
+  const value = object[key];
+  if (value === undefined || value === null)
+    return null;
+  if (typeof value !== "string")
+    throw new TypeError(`payload ${key}: expected a string or null`);
+  return value;
+}
+function record(object, key) {
+  const value = object[key];
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new TypeError(`payload ${key}: expected an object`);
+  return value;
+}
+function frozenCopy(meta) {
+  const json = meta === undefined ? undefined : stringify2(meta);
+  return json === undefined ? null : deepFreeze(parse(json));
+}
+function deepFreeze(value) {
+  if (typeof value === "object" && value !== null) {
+    for (const child of Object.values(value))
+      deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+function failure(error) {
+  return stringify2({ decision: "fail", error });
+}
+function brokenBy(error) {
+  return `a listener error went unhandled in the hook realm: ${describe(error)}`;
+}
+function label(registration) {
+  return `${registration.event} handler #${registration.index}`;
+}
+function describe(value) {
+  try {
+    if (value instanceof Error)
+      return `${value.name}: ${value.message}`;
+    if (typeof value === "string")
+      return value;
+    return stringify2(value) ?? String(value);
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return "a value that cannot be printed";
+    }
+  }
+}
+
+// src/index.ts
+function createRun(init) {
+  const { page, context, playwright, pipe } = connectRun(init);
   return {
     page,
     context,
@@ -9651,5 +10111,5 @@ function createRun(init) {
     globals: standardGlobals()
   };
 }
-return { createRun };
+return { createRun, createHooks };
 })();
