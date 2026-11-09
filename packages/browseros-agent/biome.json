@@ -26,6 +26,7 @@
       "!crates/neo-runtime/tests/fixtures/provenance",
       "!crates/neo-quickjs-injected/tests/scripts",
       "!crates/neo-quickjs-injected/tests/goldens",
+      "!crates/neo-quickjs-injected/tests/pages",
       "!crates/neo-quickjs-injected/vendor",
       "!apps/server/src/lib/db/migrations"
     ]

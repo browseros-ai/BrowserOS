@@ -27,6 +27,10 @@ files, so the runner allows two files concurrently; tests within a file remain
 sequential. This bounds browser pressure while letting the expanded suite fit a
 foreground timeout without dropping cases.
 
+Root Biome excludes `tests/pages`: these fixtures intentionally omit attributes and
+contain unusual or invalid DOM to exercise browser behavior. Preserve their markup;
+source files and parity test scripts remain linted.
+
 ```sh
 NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo" bun run test:parity
 ```
