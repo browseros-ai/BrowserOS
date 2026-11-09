@@ -349,13 +349,12 @@ pub(crate) async fn capture_still(
     } else {
         1.0
     };
-    // Playwright: `server/helper.ts` `Helper.enclosingIntSize`: `return { width: Math.floor(size.width + 1e-3), height: Math.floor(size.height + 1e-3) };`
-    // Unexplained: why the host viewport clip uses ceil instead of Playwright's floor(size + 1e-3); the original port records no rationale for the fractional-edge difference.
+    // Playwright: `server/chromium/crPage.ts` `CRPage.takeScreenshot`: `width: viewportRect!.width / visualViewport.scale,`
     let clip = page::Viewport {
         x: visual.page_x,
         y: visual.page_y,
-        width: (visual.client_width / visual.scale).ceil(),
-        height: (visual.client_height / visual.scale).ceil(),
+        width: visual.client_width / visual.scale,
+        height: visual.client_height / visual.scale,
         scale: visual.scale * fit / device_scale,
     };
     // Neo: audit rows use JPEG at the ladder rung's quality, trading image detail for a useful still within the partner's byte cap.

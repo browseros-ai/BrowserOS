@@ -145,8 +145,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/playwright_methods/screenshot.rs | `screenshot_locator` | `server/frames.ts` `Frame.waitForSelector` | is the element Playwright's wait returns; Neo resolves it again with click's `resolve`, which also marks it as a target (`markTargets: 'all'`), and waits again if it detached in between. |
 | neo-runtime/src/quickjs.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-quickjs-injected reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. The realm's own `abort` listeners and timer callbacks report theirs the same way (`abort::REALM_GLOBALS`, `HOST_GLOBALS`). |
 
-## Unexplained: owner questions (1)
+## Unexplained: owner questions (0)
 
 | File | Item | What is unknown |
 | --- | --- | --- |
-| neo-runtime/src/host/cdp.rs | `capture_still` | why the host viewport clip uses ceil instead of Playwright's floor(size + 1e-3); the original port records no rationale for the fractional-edge difference. |
