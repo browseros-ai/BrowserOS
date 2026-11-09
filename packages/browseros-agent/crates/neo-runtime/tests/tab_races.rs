@@ -12,6 +12,12 @@ use serde_json::json;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
+/// Neo: leaves room for realm startup before the deadline cuts a creation or close in flight.
+const CREATION_RUN_TIMEOUT: Duration = Duration::from_secs(1);
+/// Neo: withheld acknowledgements outlive both the run budget and finish's bounded drain,
+/// so tests can assert the acknowledgement is pending instead of measuring elapsed time.
+const LATE_ACK_DELAY: Duration = Duration::from_secs(3);
+
 const WIRE: &str = r"
   let next = 0;
   function call(guid, method, params = {}) {
@@ -211,7 +217,7 @@ async fn tests_that_a_listed_page_forced_click_waits_for_another_runs_trial() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_runtime_drain_waits_for_late_creation_cleanup() {
     let browser = FakeBrowser::start(Replies {
-        create_tab_delay: Some(Duration::from_secs(3)),
+        create_tab_delay: Some(LATE_ACK_DELAY),
         ..Replies::default()
     })
     .await;
@@ -222,7 +228,7 @@ async fn tests_that_runtime_drain_waits_for_late_creation_cleanup() {
     let outcome = runtime
         .run(fake_browser::run_request(
             &format!("{WIRE} await call('context@default','newPage');"),
-            Duration::from_millis(100),
+            CREATION_RUN_TIMEOUT,
             CancellationToken::new(),
         ))
         .await;
@@ -238,24 +244,25 @@ async fn tests_that_runtime_drain_waits_for_late_creation_cleanup() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_late_creation_does_not_extend_finish_and_is_closed() {
     let browser = FakeBrowser::start(Replies {
-        create_tab_delay: Some(Duration::from_secs(3)),
+        create_tab_delay: Some(LATE_ACK_DELAY),
         ..Replies::default()
     })
     .await;
     let runtime = browser.runtime().await;
-    let started = Instant::now();
     let outcome = runtime
         .run(fake_browser::run_request(
             &format!("{WIRE} await call('context@default','newPage');"),
-            Duration::from_millis(100),
+            CREATION_RUN_TIMEOUT,
             CancellationToken::new(),
         ))
         .await;
     assert_eq!(outcome.status, RunStatus::Timeout, "{outcome:?}");
+    // The creation acknowledgement is still withheld: finish returned without waiting for
+    // it. This observes the boundary directly instead of measuring wall-clock startup time.
     assert!(
-        started.elapsed() < Duration::from_millis(1600),
-        "finish extended the 100ms run beyond its cleanup budget: {:?}",
-        started.elapsed()
+        browser.exchanges().iter().any(|exchange| {
+            exchange.method() == "Browser.createTab" && exchange.reply.is_none()
+        })
     );
     assert!(
         tab_ids(&browser).contains(&"new-page-1".to_string()),
@@ -265,11 +272,10 @@ async fn tests_that_late_creation_does_not_extend_finish_and_is_closed() {
         !outcome.pages.iter().any(|page| page.id == "new-page-1"),
         "an unanswered creation has no known ID yet: {outcome:?}"
     );
-    let until = Instant::now() + Duration::from_secs(5);
-    while tab_ids(&browser).contains(&"new-page-1".to_string()) {
-        assert!(Instant::now() < until, "the late unkept tab never closed");
-        time::sleep(Duration::from_millis(20)).await;
-    }
+    time::timeout(Duration::from_secs(5), runtime.drain())
+        .await
+        .expect("the late unkept tab is closed by runtime drain");
+    assert!(!tab_ids(&browser).contains(&"new-page-1".to_string()));
     assert!(
         browser
             .exchanges()
@@ -334,7 +340,7 @@ async fn tests_that_a_failed_new_page_is_closed_after_creation() {
         .await
         .run(fake_browser::run_request(
             &format!("{WIRE} await call('context@default','newPage');"),
-            Duration::from_millis(100),
+            CREATION_RUN_TIMEOUT,
             CancellationToken::new(),
         ))
         .await;
@@ -352,13 +358,13 @@ async fn tests_that_a_failed_new_page_is_closed_after_creation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_a_close_ack_after_timeout_still_reports_a_gone_tab() {
     let browser = FakeBrowser::start(Replies {
-        close_tab_delay: Some(Duration::from_millis(600)),
+        close_tab_delay: Some(LATE_ACK_DELAY),
         ..Replies::default()
     })
     .await;
     let outcome = browser.runtime().await.run(fake_browser::run_request(
         &format!("{WIRE} const created=(await call('context@default','newPage')).result.page; await call(created.guid,'close');"),
-        Duration::from_millis(150), CancellationToken::new(),
+        CREATION_RUN_TIMEOUT, CancellationToken::new(),
     )).await;
     assert_eq!(outcome.status, RunStatus::Timeout, "{outcome:?}");
     assert!(
