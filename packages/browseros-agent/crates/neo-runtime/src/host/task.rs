@@ -905,6 +905,7 @@ async fn watch_directory(
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
     use std::slice;
     use std::time::SystemTime;
 
@@ -925,6 +926,32 @@ mod tests {
     use crate::host::store::{HostStore, MemoryStore, StoreError, WithheldSessions};
     use crate::host::{LiveError, Quality, RunEmitter};
     use crate::run::{CallResult, RunId, RunStatus};
+
+    /// Neo: fail host test handshakes within thirty seconds, beyond the production shutdown budget so a deliberately blocked store can exercise that budget first.
+    const TEST_WAIT: Duration = Duration::from_secs(30);
+
+    async fn bounded<T>(purpose: &str, work: impl Future<Output = T>) -> T {
+        time::timeout(TEST_WAIT, work)
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for {purpose}"))
+    }
+
+    async fn wait_unblocked(blocked: &AtomicBool, release: &Notify, purpose: &str) {
+        bounded(purpose, async {
+            loop {
+                // Register before reading the gate: a release from another worker must not
+                // land between the atomic check and registering a notify_waiters waiter.
+                let notified = release.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if !blocked.load(Ordering::SeqCst) {
+                    break;
+                }
+                notified.await;
+            }
+        })
+        .await;
+    }
 
     #[derive(Default)]
     struct Store {
@@ -958,9 +985,12 @@ mod tests {
                     && self.admission_blocked.load(Ordering::SeqCst)
                 {
                     self.admission_waiting.notify_one();
-                    while self.admission_blocked.load(Ordering::SeqCst) {
-                        self.admission_release.notified().await;
-                    }
+                    wait_unblocked(
+                        &self.admission_blocked,
+                        &self.admission_release,
+                        "store admission release",
+                    )
+                    .await;
                 }
                 if key.as_str().len() == 8 && self.collide.swap(false, Ordering::SeqCst) {
                     return Ok(true);
@@ -971,9 +1001,7 @@ mod tests {
         fn flushed(&self) -> BoxFuture<'_, Result<(), StoreError>> {
             Box::pin(async move {
                 self.flushes.fetch_add(1, Ordering::SeqCst);
-                while self.blocked.load(Ordering::SeqCst) {
-                    self.release.notified().await;
-                }
+                wait_unblocked(&self.blocked, &self.release, "store flush release").await;
                 Ok(())
             })
         }
@@ -985,9 +1013,12 @@ mod tests {
         ) -> BoxFuture<'a, Result<(), StoreError>> {
             Box::pin(async move {
                 self.write_waiting.notify_one();
-                while self.write_blocked.load(Ordering::SeqCst) {
-                    self.write_release.notified().await;
-                }
+                wait_unblocked(
+                    &self.write_blocked,
+                    &self.write_release,
+                    "artifact write release",
+                )
+                .await;
                 let result = self.memory.put_artifacts(run, call, value).await;
                 self.written.fetch_add(1, Ordering::SeqCst);
                 result
@@ -996,9 +1027,12 @@ mod tests {
         fn withhold<'a>(&'a self, key: &'a SessionKey) -> BoxFuture<'a, Result<(), StoreError>> {
             Box::pin(async move {
                 self.withhold_waiting.notify_one();
-                while self.withhold_blocked.load(Ordering::SeqCst) {
-                    self.withhold_release.notified().await;
-                }
+                wait_unblocked(
+                    &self.withhold_blocked,
+                    &self.withhold_release,
+                    "privacy write release",
+                )
+                .await;
                 self.memory.withhold(key).await
             })
         }
@@ -1058,10 +1092,9 @@ mod tests {
             }
         }
         async fn job(&mut self) -> Work {
-            time::timeout(Duration::from_secs(5), self.jobs.waiting.recv())
+            bounded("after-call job", self.jobs.waiting.recv())
                 .await
-                .unwrap()
-                .unwrap()
+                .expect("after-call job channel closed before the expected job")
         }
         async fn settled(&mut self, count: usize) {
             for _ in 0..count {
@@ -1082,10 +1115,12 @@ mod tests {
         predicate: impl Fn(&SessionView) -> bool,
     ) -> SessionView {
         let mut changes = host.0.published.lock().unwrap().subscribe(key).unwrap();
-        let view = time::timeout(Duration::from_secs(10), changes.wait_for(predicate))
-            .await
-            .unwrap()
-            .unwrap();
+        let view = bounded(
+            &format!("session {key} state transition"),
+            changes.wait_for(predicate),
+        )
+        .await
+        .expect("session watch closed before the expected transition");
         view.clone()
     }
 
@@ -1123,10 +1158,9 @@ mod tests {
         h.store.admission_blocked.store(false, Ordering::SeqCst);
         h.store.admission_release.notify_one();
         drop(
-            time::timeout(Duration::from_secs(5), blocked)
+            bounded("store-blocked admission", blocked)
                 .await
-                .unwrap()
-                .unwrap(),
+                .expect("admission task failed"),
         );
         // A command barrier crosses refresh before the queued touch need be consumed.
         drop(h.host.admit_run(None).await);
@@ -1184,7 +1218,11 @@ mod tests {
         time::timeout(Duration::from_secs(15), host.stopped())
             .await
             .expect("shutdown did not finish after writes were released");
-        assert!(withheld.await.is_ok());
+        assert!(
+            bounded("privacy durability acknowledgement", withheld)
+                .await
+                .is_ok()
+        );
         assert!(store.written.load(Ordering::SeqCst) > 0);
         assert!(store.flushes.load(Ordering::SeqCst) > 0);
         assert!(host.view(&key).unwrap().complete);
@@ -1409,8 +1447,8 @@ mod tests {
         emitter.page_created(1, &PageId::new("new".to_string()), TabId::parse(3));
         time::timeout(Duration::from_secs(5), follow.changed())
             .await
-            .unwrap()
-            .unwrap();
+            .expect("created-page notification did not arrive")
+            .expect("follower watch closed before page creation");
         assert_eq!(
             follow.borrow_and_update().tabs[0].tab.get(),
             3,
@@ -1459,7 +1497,9 @@ mod tests {
         let done = until(&h.host, &key, |view| view.complete).await;
         assert!(!done.live);
         assert!(done.ended_at.is_some());
-        follow.changed().await.unwrap();
+        bounded("follower idle-end notification", follow.changed())
+            .await
+            .expect("follower watch closed");
         assert!(!follow.borrow().live);
     }
 
@@ -1524,11 +1564,13 @@ mod tests {
         time::advance(RETAIN_SETTLED + Duration::from_secs(1)).await;
         time::timeout(Duration::from_secs(5), async {
             while h.host.view(&key).is_some() {
-                task::yield_now().await;
+                // A yield-only loop keeps a paused clock busy forever. Sleeping lets the
+                // clock advance, so the eviction deadline also fires when eviction breaks.
+                time::sleep(Duration::from_millis(1)).await;
             }
         })
         .await
-        .unwrap();
+        .expect("settled session was never evicted");
         assert!(h.host.view(&key).is_none());
         let next = h.host.admit_run(Some(&key)).await;
         assert_ne!(next.session(), &key);
@@ -1622,7 +1664,11 @@ mod tests {
                     .await
             }
         });
-        h.store.admission_waiting.notified().await;
+        bounded(
+            "store admission barrier",
+            h.store.admission_waiting.notified(),
+        )
+        .await;
         h.browser
             .set_tabs(vec![FakeHostCdp::tab("one", 1, "reseeded")]);
         for _ in 0..8192 {
@@ -1632,10 +1678,14 @@ mod tests {
         h.browser.detach(marker.session.as_str());
         time::timeout(Duration::from_secs(20), marker.gone())
             .await
-            .unwrap();
+            .expect("detach marker did not reach the host link");
         h.store.admission_blocked.store(false, Ordering::SeqCst);
         h.store.admission_release.notify_one();
-        drop(blocked.await.unwrap());
+        drop(
+            bounded("blocked admission task", blocked)
+                .await
+                .expect("admission task failed"),
+        );
         h.browser.wait_for("Browser.getTabs", 2).await;
         until(&h.host, pass.session(), |view| {
             view.current_tab
@@ -1677,8 +1727,8 @@ mod tests {
         h.browser.frame(&capture, b"fresh", Some(1.0));
         let frame = time::timeout(Duration::from_secs(10), frames.next())
             .await
-            .unwrap()
-            .unwrap();
+            .expect("fresh-epoch frame did not arrive")
+            .expect("stream ended before a fresh-epoch frame");
         assert_eq!(frame.url, "fresh-epoch");
     }
 
@@ -1693,7 +1743,7 @@ mod tests {
             .await;
         h.store.memory.withhold(&old).await.unwrap();
         h.host.shutdown();
-        h.host.stopped().await;
+        bounded("old host shutdown", h.host.stopped()).await;
         let shutdown = CancellationToken::new();
         let link = HostLink::connect(h.browser.port(), shutdown.clone())
             .await
@@ -1725,8 +1775,8 @@ mod tests {
         ending.ended(RunStatus::Ok);
         let facts = time::timeout(Duration::from_secs(5), jobs.waiting.recv())
             .await
-            .unwrap()
-            .unwrap();
+            .expect("restored host did not produce its facts job")
+            .expect("restored host job channel closed");
         assert_eq!(facts.job.kind, JobKind::Facts);
         assert!(
             host.follow(pass.session())
@@ -1745,7 +1795,7 @@ mod tests {
             "a restored tainted tab gets no still job"
         );
         host.shutdown();
-        host.stopped().await;
+        bounded("restored host shutdown", host.stopped()).await;
     }
 
     #[tokio::test(start_paused = true)]
@@ -1795,7 +1845,7 @@ mod tests {
         assert!(
             time::timeout(Duration::from_secs(5), first.next())
                 .await
-                .unwrap()
+                .expect("withheld stream did not close")
                 .is_none()
         );
         assert!(
@@ -1820,11 +1870,17 @@ mod tests {
             let label = label.clone();
             async move { host.admit_run(Some(&label)).await }
         });
-        h.store.admission_waiting.notified().await;
+        bounded(
+            "store admission barrier",
+            h.store.admission_waiting.notified(),
+        )
+        .await;
         h.host.end_session(&label);
         h.store.admission_blocked.store(false, Ordering::SeqCst);
         h.store.admission_release.notify_one();
-        let next = admitting.await.unwrap();
+        let next = bounded("admission after session end", admitting)
+            .await
+            .expect("admission task failed");
         assert_ne!(
             next.session(),
             first.session(),
@@ -1859,7 +1915,11 @@ mod tests {
                     .await
             }
         });
-        h.store.admission_waiting.notified().await;
+        bounded(
+            "store admission barrier",
+            h.store.admission_waiting.notified(),
+        )
+        .await;
 
         // A private run may emit RunStarted and execute its first input while the actor is
         // awaiting unrelated store I/O. The emitter must taint before that queued marker is read.
@@ -1869,7 +1929,11 @@ mod tests {
         let received = time::timeout(Duration::from_millis(100), frames.next()).await;
         h.store.admission_blocked.store(false, Ordering::SeqCst);
         h.store.admission_release.notify_one();
-        drop(blocked.await.unwrap());
+        drop(
+            bounded("blocked admission task", blocked)
+                .await
+                .expect("admission task failed"),
+        );
         assert!(
             !matches!(received, Ok(Some(_))),
             "another session must not receive pixels after a private run touches its tab"
@@ -1930,7 +1994,11 @@ mod tests {
                     .await
             }
         });
-        h.store.admission_waiting.notified().await;
+        bounded(
+            "store admission barrier",
+            h.store.admission_waiting.notified(),
+        )
+        .await;
 
         // RunStarted touches another tab. The real dispatcher's later CallStarted, emitted
         // before its input task, must revoke the watched tab while the host actor is blocked.
@@ -1950,7 +2018,11 @@ mod tests {
         let shown_after = h.host.view(watching.session()).unwrap().current_tab;
         h.store.admission_blocked.store(false, Ordering::SeqCst);
         h.store.admission_release.notify_one();
-        drop(blocked.await.unwrap());
+        drop(
+            bounded("blocked admission task", blocked)
+                .await
+                .expect("admission task failed"),
+        );
         assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
         assert_eq!(outcome.value, Some(json!("clicked")));
         assert_eq!(
