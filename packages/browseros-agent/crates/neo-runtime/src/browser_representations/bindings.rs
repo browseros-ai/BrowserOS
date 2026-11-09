@@ -32,6 +32,7 @@
 //! The page JavaScript guard allows this file, and only it, to send `Runtime.addBinding` and
 //! `Runtime.removeBinding`; it runs no script itself.
 
+use neo_runtime_spec::{ParamKind, ParamShape};
 use std::collections::hash_map::RandomState;
 use std::collections::{HashMap, HashSet};
 use std::future;
@@ -91,7 +92,10 @@ pub(crate) static PAGE_EXPOSE_BINDING_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
-    params: &[],
+    params: &[ParamShape {
+        path: "name",
+        kind: ParamKind::Plain,
+    }],
 };
 /// Neo: `BrowserContext.exposeBinding`'s trace metadata
 /// (`neo-runtime-spec/spec/playwright/browserContext.yml`).
@@ -104,7 +108,10 @@ pub(crate) static CONTEXT_EXPOSE_BINDING_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
-    params: &[],
+    params: &[ParamShape {
+        path: "name",
+        kind: ParamKind::Plain,
+    }],
 };
 /// Neo: `BindingCall.resolve`'s trace metadata (`neo-runtime-spec/spec/playwright/playwright.yml`).
 pub(crate) static BINDING_CALL_RESOLVE_META: MethodMeta = MethodMeta {

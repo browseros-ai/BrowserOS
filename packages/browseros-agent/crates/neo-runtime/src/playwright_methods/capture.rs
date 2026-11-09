@@ -15,6 +15,7 @@
 //! Playwright's client writes `path` itself and its protocol has no such field, so the SDK sends
 //! it next to Playwright's params and only this module reads it.
 
+use neo_runtime_spec::{ParamKind, ParamShape};
 use std::fmt::Display;
 use std::sync::Arc;
 
@@ -51,7 +52,10 @@ pub(crate) static NEO_SCREENSHOT_META: MethodMeta = MethodMeta {
     render_params: &["type"],
     internal: false,
     flags: &[],
-    params: &[],
+    params: &[ParamShape {
+        path: "selector",
+        kind: ParamKind::Selector,
+    }],
 };
 
 /// Neo: `ElementHandle.screenshot`'s trace metadata, as `neo-runtime-spec/spec/playwright/handles.yml`

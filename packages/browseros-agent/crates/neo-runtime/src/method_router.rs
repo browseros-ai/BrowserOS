@@ -32,6 +32,7 @@
 //! call starts inside the native call itself, not when the realm first polls the returned
 //! future, so a call the script never awaits still runs.
 
+use neo_runtime_spec::{ParamKind, ParamShape};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -171,7 +172,16 @@ static WAIT_FOR_URL_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
-    params: &[],
+    params: &[
+        ParamShape {
+            path: "url",
+            kind: ParamKind::Url,
+        },
+        ParamShape {
+            path: "url.glob",
+            kind: ParamKind::Url,
+        },
+    ],
 };
 static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
     interface: "Frame",
@@ -196,7 +206,16 @@ static WAIT_FOR_NAVIGATION_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
-    params: &[],
+    params: &[
+        ParamShape {
+            path: "url",
+            kind: ParamKind::Url,
+        },
+        ParamShape {
+            path: "url.glob",
+            kind: ParamKind::Url,
+        },
+    ],
 };
 static NEXT_NAVIGATION_META: MethodMeta = MethodMeta {
     interface: "Frame",

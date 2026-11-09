@@ -206,20 +206,64 @@ interfaces:
 types:
   - Metadata
 
-# What a trace may keep of a served command's params (`MethodMeta.params`). The translator gives
-# every param a kind from its Playwright type: booleans, numbers and enums are kept, a `selector`
-# is a selector, a `url` or `referer` a URL, `binary` is bytes, and any other string is a secret,
-# of which a trace keeps only the length. List a param here, by its path in the params, only when
-# its string names what the call reads or picks rather than what it writes. Kinds: plain,
-# selector, url, key, secret, binary. A path the command does not have fails the translator.
+# Trace shapes default to Secret for free text. Overrides describe script-authored intent:
+# identifiers, selectors, URLs (whose credentials and query values are still scrubbed), and
+# named keyboard keys. Values, payloads and page content must never be made Plain here.
 trace:
   Frame:
     press:
       key: key
     getAttribute:
       name: plain
-    # An option's value or label picks an option the page offers; it is not a secret.
     selectOption:
       "options[].valueOrLabel": plain
       "options[].value": plain
       "options[].label": plain
+      "options[].index": plain
+    dispatchEvent:
+      type: plain
+    dragAndDrop:
+      source: selector
+      target: selector
+  Page:
+    keyboardDown:
+      key: key
+    keyboardUp:
+      key: key
+    keyboardPress:
+      key: key
+    setExtraHTTPHeaders:
+      "headers[].name": plain
+    webStorageGetItem:
+      name: plain
+    webStorageSetItem:
+      name: plain
+    webStorageRemoveItem:
+      name: plain
+  BrowserContext:
+    setTestIdAttributeName:
+      testIdAttributeName: plain
+    addCookies:
+      "cookies[].name": plain
+      "cookies[].domain": plain
+      "cookies[].path": plain
+    cookies:
+      "urls[]": url
+    setExtraHTTPHeaders:
+      "headers[].name": plain
+    grantPermissions:
+      "permissions[]": plain
+      origin: url
+  Browser:
+    newContext:
+      "extraHTTPHeaders[].name": plain
+      "permissions[]": plain
+      baseURL: url
+  Route:
+    abort:
+      errorCode: plain
+    continue:
+      method: plain
+      "headers[].name": plain
+    fulfill:
+      "headers[].name": plain

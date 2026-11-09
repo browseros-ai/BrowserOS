@@ -27,6 +27,7 @@
 //! None of these writes `Input.*`, so none has a delivery cell; focus, blur and selectText still
 //! take the tab's input turn, so they never land between another call's focus and its keys.
 
+use neo_runtime_spec::{ParamKind, ParamShape};
 use std::future::Future;
 use std::time::Duration;
 
@@ -68,7 +69,10 @@ pub(crate) static SCROLL_INTO_VIEW_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot],
-    params: &[],
+    params: &[ParamShape {
+        path: "selector",
+        kind: ParamKind::Selector,
+    }],
 };
 
 /// Neo: the trace record of `neo:selectText`, titled as Playwright's `ElementHandle.selectText`.
@@ -81,7 +85,10 @@ pub(crate) static SELECT_TEXT_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot],
-    params: &[],
+    params: &[ParamShape {
+        path: "selector",
+        kind: ParamKind::Selector,
+    }],
 };
 
 /// Neo: the trace record of `neo:boundingBox`, titled as Playwright's `ElementHandle.boundingBox`.
@@ -94,7 +101,10 @@ pub(crate) static BOUNDING_BOX_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
-    params: &[],
+    params: &[ParamShape {
+        path: "selector",
+        kind: ParamKind::Selector,
+    }],
 };
 
 /// Neo: the params of `neo:scrollIntoViewIfNeeded` and `neo:boundingBox`, kept in step with
