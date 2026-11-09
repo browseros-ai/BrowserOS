@@ -8,7 +8,7 @@
     "build": "bun build.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test tests/unit",
-    "test:parity": "node --test --test-concurrency=1 'tests/parity/*.test.mjs'"
+    "test:parity": "node --test --test-concurrency=2 'tests/parity/*.test.mjs'"
   },
   "dependencies": {
     "@browseros/neo-runtime-spec": "workspace:*"
