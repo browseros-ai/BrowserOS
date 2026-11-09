@@ -257,19 +257,24 @@ async fn capture_image(
     let full_page = options.full_page.unwrap_or(false);
     let params = screenshot_params(format, options.quality, full_page, options.clip);
 
-    // 部分 Windows 云桌面最小化后，Chromium 的 Surface 截图可能一直不返回。
-    // 仅对 JPEG 视口截图设置短等待，正常路径保持原有格式、裁剪和 CDP 行为。
+    // Some minimized Windows cloud desktops never return from Chromium's surface capture.
+    // Only JPEG viewport captures get the short wait and the fallback; every other format
+    // keeps the original format, clip, and CDP behavior.
     if format != ScreenshotFormat::Jpeg || full_page {
         return page_session.send("Page.captureScreenshot", params).await;
     }
-    match timeout(
-        SCREENSHOT_CAPTURE_DEADLINE,
-        page_session.send("Page.captureScreenshot", params),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => capture_screencast_frame(page_session, options).await,
+    let native = page_session.send::<_, CaptureScreenshotResult>("Page.captureScreenshot", params);
+    tokio::pin!(native);
+    if let Ok(result) = timeout(SCREENSHOT_CAPTURE_DEADLINE, &mut native).await {
+        return result;
+    }
+    // The native capture is slow, not necessarily stuck. Race it against the screencast
+    // fallback and take whichever finishes first, so a slow-but-successful capture is used
+    // rather than discarded. `biased` lets the real capture win a tie.
+    tokio::select! {
+        biased;
+        native_result = &mut native => native_result,
+        screencast = capture_screencast_frame(page_session, options) => screencast,
     }
 }
 
@@ -283,7 +288,8 @@ async fn capture_screencast_frame(
         "maxFramesInFlight": 1
     });
     if let Some(clip) = options.clip {
-        // Screencast 返回的是完整视口，不支持任意子区域裁剪，不能悄悄返回错误图片。
+        // A screencast returns the whole viewport and cannot honor an arbitrary sub-rect
+        // clip, so reject a partial clip rather than silently returning the wrong image.
         let metrics: Value = page_session
             .send("Page.getLayoutMetrics", json!({}))
             .await?;
@@ -307,7 +313,7 @@ async fn capture_screencast_frame(
         params["maxHeight"] = json!((clip.height * clip.scale).round().max(1.0) as u32);
     }
 
-    // 在发送开始命令前订阅，防止 Chromium 的第一帧在订阅前丢失。
+    // Subscribe before sending the start command so Chromium's first frame is not lost.
     let mut events = page_session.subscribe_events();
     timeout(
         SCREENCAST_FRAME_DEADLINE,
@@ -344,13 +350,13 @@ async fn capture_screencast_frame(
     .await
     .map_err(|_| CoreError::Message("timed out waiting for screenshot screencast frame".into()));
 
-    // 无论有没有得到帧都停止 screencast，且不能再被 60 秒的 CDP 默认超时拖住。
-    timeout(
+    // Always stop the screencast, best effort, and never let it hang on the 60s CDP
+    // default. A slow or failing stop must not discard a frame we already captured.
+    let _ = timeout(
         Duration::from_millis(500),
         page_session.send::<_, Value>("Page.stopScreencast", json!({})),
     )
-    .await
-    .map_err(|_| CoreError::Message("timed out stopping screenshot screencast".into()))??;
+    .await;
     frame?
 }
 
@@ -796,8 +802,8 @@ fn annotation_number(ref_id: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ScreenshotCaptureOptions, ScreenshotFormat, capture_plain_screenshot,
-        capture_screencast_frame,
+        ScreenshotCaptureOptions, ScreenshotFormat, Viewport, capture_image,
+        capture_plain_screenshot, capture_screencast_frame,
     };
     use crate::{ProtocolSession, test_support::TestConnection};
     use browseros_cdp::CdpEvent;
@@ -878,7 +884,7 @@ mod tests {
         {
             tokio::task::yield_now().await;
         }
-        // 其他 CDP 会话的帧不能被当成当前标签页的截图。
+        // A frame from another CDP session must not count as this tab's screenshot.
         connection.publish_event(CdpEvent {
             method: "Page.screencastFrame".into(),
             params: json!({ "data": "wrong-tab" }),
@@ -922,6 +928,60 @@ mod tests {
         assert_eq!(
             calls.last().map(|call| call.method.as_str()),
             Some("Page.stopScreencast")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn non_jpeg_capture_skips_the_screencast_fallback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let connection =
+            TestConnection::new([("Page.captureScreenshot", json!({ "data": "png-bytes" }))]);
+        let session = ProtocolSession::root(connection.clone());
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Png),
+            ..Default::default()
+        };
+        let result = capture_image(&session, &options).await?;
+        assert_eq!(result.data, "png-bytes");
+        let calls = connection.calls()?;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].method, "Page.captureScreenshot");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_clip_rejects_the_screencast_fallback() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let connection = TestConnection::new([(
+            "Page.getLayoutMetrics",
+            json!({ "cssLayoutViewport": { "clientWidth": 800, "clientHeight": 600 } }),
+        )]);
+        let session = ProtocolSession::root(connection.clone());
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Jpeg),
+            clip: Some(Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 300.0,
+                scale: 1.0,
+            }),
+            ..Default::default()
+        };
+        let result = capture_screencast_frame(&session, &options).await;
+        assert!(result.is_err(), "a partial clip must be rejected");
+        let message = result
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(message.contains("partial clip"));
+        // Rejected before any screencast command is sent.
+        let calls = connection.calls()?;
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.method == "Page.getLayoutMetrics")
         );
         Ok(())
     }
