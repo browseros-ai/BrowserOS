@@ -270,6 +270,11 @@ pub struct CallRecord {
     #[serde(serialize_with = "serialize_millis")]
     pub duration: Duration,
     pub result: CallResult,
+    /// What the run's action hooks decided about the call; absent when none ran. Never holds a
+    /// value a hook swapped in: a call whose arguments a hook replaced keeps the script's
+    /// `params` and no `log`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook: Option<CallHookRecord>,
     /// Set for methods Playwright's spec flags `input`, `None` for reads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<Delivery>,
@@ -292,6 +297,43 @@ impl From<Action> for CallAction {
             group: action.group(),
         }
     }
+}
+
+/// The action hooks' decisions about one call (hooks design D11), each absent when that hook
+/// did not decide: `{"before":"argsReplaced","after":"kept"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CallHookRecord {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<BeforeHookResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<AfterHookResult>,
+}
+
+/// What `beforeAction` decided before the call ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BeforeHookResult {
+    /// The call ran as the script made it.
+    Allowed,
+    /// The hook blocked it: it never ran, and its input was never sent.
+    Blocked,
+    /// It ran with the hook's arguments; its record keeps the script's.
+    ArgsReplaced,
+    /// The hook failed (threw, ran out of time, decided nothing usable, or replaced the
+    /// arguments with ones the call refuses), so the call was blocked.
+    Failed,
+}
+
+/// What `afterAction` decided once the call had run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AfterHookResult {
+    /// The script got the call's own result.
+    Kept,
+    /// The script got the hook's replacement.
+    Replaced,
+    /// The hook failed, so the call failed after it ran; its delivery says what it sent.
+    Failed,
 }
 
 /// `metadata.location` of a call, without its file, which is always the agent's `run.js`.

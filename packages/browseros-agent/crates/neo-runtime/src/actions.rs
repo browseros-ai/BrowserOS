@@ -679,13 +679,6 @@ impl ServedMethod {
     /// # Errors
     ///
     /// When the replacement does not have the shape; the message is for the hook trace.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the F3 hook call path calls it; until then only tests do"
-        )
-    )]
     pub(crate) fn replacement_result(
         self,
         replaced: Value,

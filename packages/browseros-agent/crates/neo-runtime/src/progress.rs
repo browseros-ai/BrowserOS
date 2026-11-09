@@ -36,6 +36,7 @@ use tokio_util::task::TaskTracker;
 use tracing::info;
 
 use crate::abort::CallAbort;
+use crate::action_hooks::{ActionHooks, HookLedger};
 use crate::artifacts::Artifacts;
 use crate::browser_representations::bindings::Bindings;
 use crate::browser_representations::clock::Clock;
@@ -43,7 +44,8 @@ use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
 use crate::playwright_methods::evaluate::Handles;
 use crate::run::{
-    CallAction, CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd,
+    AfterHookResult, BeforeHookResult, CallAction, CallHookRecord, CallLocation, CallRecord,
+    CallResult, Delivery, DroppedCalls, RunEnd,
 };
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
@@ -163,6 +165,11 @@ pub(crate) struct RunScope {
     pub(crate) bindings: Arc<Bindings>,
     /// The run's fake clock (`clock.rs`); uninstalled in every frame at run end.
     pub(crate) clock: Arc<Clock>,
+    /// The run's action hooks (`action_hooks.rs`), set once when its hooks are ready; never set
+    /// for a run without hooks, whose calls then pay one `get()` each and nothing else.
+    pub(crate) action_hooks: Arc<OnceLock<Arc<dyn ActionHooks>>>,
+    /// What the run's action hooks left: notes for the model, trace lines for the host only.
+    pub(crate) hook_ledger: Arc<HookLedger>,
 }
 
 impl RunScope {
@@ -178,6 +185,8 @@ impl RunScope {
             artifacts: Arc::default(),
             bindings: Arc::default(),
             clock: Arc::default(),
+            action_hooks: Arc::default(),
+            hook_ledger: Arc::default(),
         }
     }
 
@@ -594,6 +603,10 @@ pub(crate) struct CallEntry {
     abort: CallAbort,
     /// Set once by whoever ends the call; absent while it runs.
     end: OnceLock<CallEnd>,
+    /// What `beforeAction` decided, once it has (`action_hooks.rs`).
+    hook_before: OnceLock<BeforeHookResult>,
+    /// What `afterAction` decided, once it has.
+    hook_after: OnceLock<AfterHookResult>,
     /// Test-only: how long `abort` holds between waking the call and logging, in ms.
     #[cfg(test)]
     abort_pause_ms: AtomicU64,
@@ -607,6 +620,9 @@ struct CallLog {
     lines: Vec<String>,
     /// Lines past [`MAX_CALL_LOG_LINES`], counted.
     dropped: usize,
+    /// Set when the call runs with a hook's arguments ([`CallEntry::hide_log`]): it keeps no
+    /// line from then on, and reads as empty.
+    hidden: bool,
 }
 
 struct CallEnd {
@@ -656,6 +672,8 @@ impl CallEntry {
             delivery: input.then(Arc::default),
             abort: CallAbort::default(),
             end: OnceLock::new(),
+            hook_before: OnceLock::new(),
+            hook_after: OnceLock::new(),
             #[cfg(test)]
             abort_pause_ms: AtomicU64::new(0),
         }
@@ -698,6 +716,34 @@ impl CallEntry {
         self.abort.error()
     }
 
+    /// Resolves with the call's `AbortError` once the script aborts it, for a wait the call
+    /// makes before its `Progress` exists (its hook gate, `action_hooks.rs`).
+    pub(crate) async fn aborted(&self) -> PlaywrightError {
+        self.abort.aborted().await
+    }
+
+    /// Records what `beforeAction` decided; only the first decision counts.
+    pub(crate) fn hook_before(&self, result: BeforeHookResult) {
+        let _first = self.hook_before.set(result);
+    }
+
+    /// Records what `afterAction` decided; only the first decision counts.
+    pub(crate) fn hook_after(&self, result: AfterHookResult) {
+        let _first = self.hook_after.set(result);
+    }
+
+    /// The call runs with a hook's arguments: its log would name them (a typed value, a URL),
+    /// so it keeps no log from now on, neither in its reply nor in its record (hooks design
+    /// D11). Call before the call runs, so no line is ever written.
+    pub(crate) fn hide_log(&self) {
+        if let Ok(mut log) = self.log.lock() {
+            *log = CallLog {
+                hidden: true,
+                ..CallLog::default()
+            };
+        }
+    }
+
     /// Ends the call with `result` and returns its folded log, which the reply carries. Only
     /// the first end counts.
     pub(crate) fn finish(&self, result: CallResult) -> Vec<String> {
@@ -716,6 +762,9 @@ impl CallEntry {
         let Ok(log) = self.log.lock() else {
             return Vec::new();
         };
+        if log.hidden {
+            return Vec::new();
+        }
         let note = (log.dropped > 0).then(|| log.dropped_note());
         let mut raw: Vec<&str> = log.header.iter().map(String::as_str).collect();
         raw.extend(log.lines.iter().map(String::as_str));
@@ -726,7 +775,9 @@ impl CallEntry {
     /// Changes the raw log. A poisoned lock (a panic while logging) drops the change: logging
     /// never fails a call, as `console.log` never fails the script.
     fn update_log(&self, change: impl FnOnce(&mut CallLog)) {
-        if let Ok(mut log) = self.log.lock() {
+        if let Ok(mut log) = self.log.lock()
+            && !log.hidden
+        {
             change(&mut log);
         }
     }
@@ -757,9 +808,17 @@ impl CallEntry {
             started_at_ms,
             duration,
             result,
+            hook: self.hook_record(),
             delivery: self.delivery.as_ref().map(|cell| cell.delivery()),
             log,
         }
+    }
+
+    /// The hooks' decisions for the record; `None` when no hook decided anything.
+    fn hook_record(&self) -> Option<CallHookRecord> {
+        let before = self.hook_before.get().copied();
+        let after = self.hook_after.get().copied();
+        (before.is_some() || after.is_some()).then_some(CallHookRecord { before, after })
     }
 
     /// What a kept record's log costs against [`MAX_TRACE_BYTES`], on top of its params.
@@ -773,6 +832,9 @@ impl CallEntry {
 
 impl CallLog {
     fn push(&mut self, line: String) {
+        if self.hidden {
+            return;
+        }
         if self.lines.len() < MAX_CALL_LOG_LINES {
             self.lines.push(line);
         } else {

@@ -12,6 +12,7 @@
 //!             │                          page_events.rs (one tab's watcher), frame_events.rs
 //!             │                          (its frame tree), discovery.rs (new tabs, popups)
 //!             └─ Dispatcher::call        method_router.rs: target routing, task, trace, reply
+//!                  ├─ action_hooks       a call with no element: beforeAction, afterAction
 //!                  ├─ page_and_context_methods  context/page lifecycle; tracked creation and cleanup
 //!                  ├─ browser_methods    the run's Browser: created contexts, close, disposal
 //!                  ├─ debugger           context.debugger: holds a call before it starts
@@ -55,6 +56,7 @@ extern crate self as neo_runtime;
 mod fake_browser;
 
 mod abort;
+mod action_hooks;
 pub mod actions;
 mod artifacts;
 mod browser_representations;
@@ -75,7 +77,8 @@ mod url_match;
 pub use actions::{ActionGroup, ActionKind};
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{
-    CallAction, CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunBinary,
-    RunEnd, RunError, RunOutcome, RunPage, RunRequest, RunStatus,
+    AfterHookResult, BeforeHookResult, CallAction, CallHookRecord, CallLocation, CallRecord,
+    CallResult, Delivery, DroppedCalls, PageId, RunBinary, RunEnd, RunError, RunOutcome, RunPage,
+    RunRequest, RunStatus,
 };
 pub use runtime::{Runtime, RuntimeError};

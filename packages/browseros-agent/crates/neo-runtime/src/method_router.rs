@@ -12,11 +12,13 @@
 //!         ├─ Trace += CallEntry                 every message with an id leaves a record
 //!         ├─ early failure → reply now, no call log (Playwright's dispatcher does the same)
 //!         ├─ admit against the in-flight caps   past them → an early failure too
+//!         ├─ HookPlan, its place in CallOrder   a run with action hooks (`action_hooks.rs`)
 //!         ├─ Aborts += message id               `__neo_runtime.abort(id, reason)` reaches it
 //!         └─ run.tasks.spawn(serve)             runs while JS spins, outlives the realm
+//!              ├─ CallHooks::before             beforeAction of a call with no element
 //!              ├─ events.ready(page)            what the page's subscriptions switched on
 //!              ├─ click::click(&page, &options, &progress)   prepares the tab first
-//!              ├─ entry.finish(…)
+//!              ├─ AfterHook::apply; entry.finish(…)
 //!              └─ events.barrier(); reply ({id} | {id, error:{error:{message,name}}, log}, W)
 //!  run end: Dispatcher::finish(reason)
 //!    record the reason → cancel `ended` → mark the run's input ended on every tab
@@ -70,6 +72,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
+use crate::action_hooks::{ActionEvent, ActionHooks, AfterHook, CallOrder, Gated, HookPlan};
 use crate::actions::{ActionKind, NeoMethod, ServedMethod, SpecCommand};
 use crate::browser_representations::bindings::{self, Answering, BindingRoute, Outcome};
 use crate::browser_representations::clock::{self, ClockRoute};
@@ -129,6 +132,7 @@ use crate::playwright_methods::waits::{
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
+use crate::quickjs_bridge;
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
@@ -286,11 +290,14 @@ struct Inner {
     /// The admitted calls a script's `signal` can still abort, by message id (`abort.rs`).
     aborts: Arc<Aborts>,
     next_call_id: AtomicU64,
-    /// The `setContent` writes into each frame, in arrival order (`content.rs`).
-    write_order: WriteOrder,
+    /// The `setContent` writes into each frame, in arrival order (`content.rs`). Shared with
+    /// the tasks of calls held at their hook gate, which take their turn once decided.
+    write_order: Arc<WriteOrder>,
     /// Each page's `localStorage` and `sessionStorage` calls, in arrival order (`web_storage.rs`):
     /// Playwright's server sends them in the order the script made them.
-    storage_order: WriteOrder,
+    storage_order: Arc<WriteOrder>,
+    /// The run's `beforeAction` invocations, in call order (`action_hooks.rs`).
+    hook_order: Arc<CallOrder>,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
     _ending: DropGuard,
@@ -387,16 +394,27 @@ impl Inner {
 
     /// A `setContent` call takes its place in its frame's write order as it arrives, and a
     /// storage call its place in its page's storage order.
-    fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
-        match &mut call {
-            ObjectCall::Frame(Route::FrameSetContent(_, turn)) => {
-                *turn = Some(self.write_order.turn(guid));
-            }
-            ObjectCall::Storage(_, turn) => *turn = Some(self.storage_order.turn(guid)),
-            _ => {}
-        }
-        call
+    fn ordered(&self, guid: &str, call: ObjectCall) -> ObjectCall {
+        take_turn(&self.write_order, &self.storage_order, guid, call)
     }
+}
+
+/// `call` with its place in `guid`'s write order (`setContent`) or storage order (web storage);
+/// any other call as it is.
+fn take_turn(
+    write_order: &WriteOrder,
+    storage_order: &WriteOrder,
+    guid: &str,
+    mut call: ObjectCall,
+) -> ObjectCall {
+    match &mut call {
+        ObjectCall::Frame(Route::FrameSetContent(_, turn)) => {
+            *turn = Some(write_order.turn(guid));
+        }
+        ObjectCall::Storage(_, turn) => *turn = Some(storage_order.turn(guid)),
+        _ => {}
+    }
+    call
 }
 
 /// Playwright's client message, `{id, guid, method, params, metadata}` (`connection.ts`).
@@ -608,14 +626,19 @@ impl Dispatcher {
             cursors: Arc::default(),
             aborts: Arc::default(),
             next_call_id: AtomicU64::new(1),
-            write_order: WriteOrder::default(),
-            storage_order: WriteOrder::default(),
+            write_order: Arc::default(),
+            storage_order: Arc::default(),
+            hook_order: Arc::default(),
         }))
     }
 
     /// `__neo_runtime.call`: one Playwright message in, one Playwright reply out, as JSON text.
     /// Synchronous so the call starts before the realm polls anything. Every message with a
     /// readable envelope gets a reply, failures included, and a trace record.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one native call routes, records, admits, orders and spawns a call in sequence"
+    )]
     pub(crate) fn call(&self, message: &str) -> PendingReply {
         let inner = &self.0;
         let Message {
@@ -642,16 +665,53 @@ impl Dispatcher {
             .platform_object(&guid)
             .unwrap_or_else(|| object_kind(&guid, target.is_some()));
         let debugged = debugger_context(&object, target.as_ref(), &inner.run.init_scripts);
+        // A run with action hooks keeps the object, to route a hook's replacement arguments as
+        // the script's own (`Regate::reroute`).
+        let hooks = self.action_hooks();
+        let object_kept = hooks.map(|_| object.clone());
+        let frame_call = matches!(object, ObjectKind::Frame);
         let Routed { meta, route } = route(object, &method, params.clone());
-        let route = route.map(|call| inner.ordered(&guid, call));
+        let plan = hooks
+            .zip(meta)
+            .and_then(|(hooks, served)| HookPlan::new(hooks, served));
+        // A call held at its hook gate settles nothing in call order before its hook decides.
+        let gated = plan.as_ref().is_some_and(HookPlan::gates);
+        let route = if gated {
+            route
+        } else {
+            route.map(|call| inner.ordered(&guid, call))
+        };
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
             title: None,
             internal: None,
             timeout: None,
         });
+        let call_id = inner.next_call_id.fetch_add(1, Ordering::Relaxed);
+        let event = plan.as_ref().zip(meta).map(|(_, served)| {
+            call_event(
+                served,
+                &guid,
+                &method,
+                params.clone().unwrap_or_else(|| json!({})),
+                call_location(&metadata),
+                target.as_ref(),
+                debugged.as_deref(),
+            )
+        });
+        let regate = meta
+            .zip(object_kept)
+            .filter(|_| gated)
+            .map(|(served, object)| Regate {
+                object,
+                method: method.clone(),
+                served,
+                guid: guid.clone(),
+                write_order: Arc::clone(&inner.write_order),
+                storage_order: Arc::clone(&inner.storage_order),
+            });
         let entry = Arc::new(CallEntry::new(CallStart {
-            call_id: inner.next_call_id.fetch_add(1, Ordering::Relaxed),
+            call_id,
             guid,
             method,
             title: meta.and_then(|meta| meta.title),
@@ -677,10 +737,21 @@ impl Dispatcher {
         let closed = closed_token(&route, target.as_ref());
         let held = self.in_call_order(
             &route,
+            gated,
             meta.map(ServedMethod::meta).zip(debugged),
             &metadata,
             &entry,
         );
+        // Its place in the hooks' call order, now: a later call's hook must not decide first.
+        let hooks = plan.zip(event).map(|(plan, event)| {
+            plan.admitted(
+                event,
+                call_id,
+                frame_call,
+                &inner.hook_order,
+                held.is_some(),
+            )
+        });
         // The run's disconnection outlives the stop it gives every other call of the run.
         let disconnecting = disconnects(&route);
         // Registered before the call returns to JS, so the abort listener the SDK adds right
@@ -698,12 +769,14 @@ impl Dispatcher {
             share: admission.share,
             release: admission.release,
             abortable,
+            after: None,
         };
         let timeout = metadata.timeout.unwrap_or(0.0);
         let run = inner.run.clone();
         let tabs = inner.tabs.clone();
         let cursors = Arc::clone(&inner.cursors);
         inner.run.tasks.spawn(async move {
+            let mut call_reply = call_reply;
             if let Some(resumed) = held
                 && let Err(stopped) = released(&run, resumed).await
             {
@@ -712,6 +785,25 @@ impl Dispatcher {
                 }
                 return;
             }
+            let mut hooks = hooks;
+            // After the debugger's hold, before the call's own timeout starts: beforeAction.
+            let route = match (hooks.as_mut(), regate.as_ref()) {
+                (Some(gate), Some(regate)) if gate.gates() => {
+                    let reroute = |args| regate.reroute(args);
+                    let settle = |call| regate.settle(&tabs, call);
+                    match gate.before(&run, &entry, route, reroute, settle).await {
+                        Gated::Run(route) => route,
+                        Gated::Refused(error) => {
+                            finish_reply(Err(error.into()), call_reply).await;
+                            return;
+                        }
+                        Gated::Stopped => return,
+                    }
+                }
+                _ => route,
+            };
+            // The call runs from here: its afterAction sees how it ends, whatever stops it.
+            call_reply.after = hooks.and_then(|hooks| hooks.after(&run)).map(Box::new);
             let progress = Progress::new(entry, timeout, run, closed);
             let progress = if disconnecting {
                 progress.closing_the_context()
@@ -723,21 +815,30 @@ impl Dispatcher {
         PendingReply(PendingInner::Waiting(receiver))
     }
 
+    /// The run's action hooks, when it has any (`action_hooks.rs`).
+    ///
+    /// Phase 2: a call the hook realm's own dispatcher sends (feature 2's `Dispatcher::origin`
+    /// is `CallOrigin::Hook`) skips them here (hooks design D7), decided by which dispatcher
+    /// holds the call, never by a field of the message.
+    fn action_hooks(&self) -> Option<&Arc<dyn ActionHooks>> {
+        self.0.run.action_hooks.get()
+    }
+
     /// What a call settles in call order, before its task starts, however the call tasks
     /// interleave: every call after `setTestIdAttribute` sees the new attribute, and the
-    /// debugger of the call's context decides whether it waits before it starts.
+    /// debugger of the call's context decides whether it waits before it starts. A call
+    /// `gated` by its hook sets the attribute only once allowed, with the arguments it runs
+    /// with (`Regate::settle`); its debugger still decides now.
     fn in_call_order(
         &self,
         route: &ObjectCall,
+        gated: bool,
         debugged: Option<(&'static MethodMeta, String)>,
         metadata: &Metadata,
         entry: &CallEntry,
     ) -> Option<oneshot::Receiver<()>> {
-        if let ObjectCall::Context(BrowserContextCall::SetTestIdAttributeName(params))
-        | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(params)) =
-            route
-        {
-            self.0.tabs.test_id().set(&params.test_id_attribute_name);
+        if !gated {
+            set_test_id(&self.0.tabs, route);
         }
         let (meta, context) = debugged?;
         self.hold(meta, &context, metadata, entry)
@@ -1657,6 +1758,9 @@ struct CallReply {
     release: Option<ReleaseClaim>,
     /// The call's place in the abort registry; `None` for an id that is not an integer.
     abortable: Option<Registration>,
+    /// The call's `afterAction`, set once the call passed its gate and runs (`action_hooks.rs`).
+    /// Boxed, as its future is below: only a hooked call pays for either.
+    after: Option<Box<AfterHook>>,
 }
 
 /// Attachment can block or be cancelled independently of a frame handler. Once attached,
@@ -2140,14 +2244,28 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         share,
         release,
         abortable,
+        after,
     } = target;
     // The outcome is decided: an abort from now on is ignored, as Playwright drops a call's
     // controller before it replies.
     drop(abortable);
-    let (record, answer) = match result {
+    let answer = match result {
         Err(CallError::RunEnded(_)) => return,
-        Ok(value) => (CallResult::Ok, Ok(value)),
-        Err(CallError::Playwright(error)) => (error.to_result(), Err(error)),
+        Ok(value) => Ok(value),
+        Err(CallError::Playwright(error)) => Err(error),
+    };
+    // afterAction sees the outcome first and may swap it or fail the call closed. A run that
+    // ends meanwhile gets no reply and leaves the entry open, as any call the run ended.
+    let answer = match after {
+        Some(after) => match Box::pin(after.apply(&entry, answer)).await {
+            Some(answer) => answer,
+            None => return,
+        },
+        None => answer,
+    };
+    let record = match &answer {
+        Ok(_) => CallResult::Ok,
+        Err(error) => error.to_result(),
     };
     let log = entry.finish(record);
     trace.finished(&entry);
@@ -2160,6 +2278,92 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
+}
+
+/// What a call gated by its hook needs once the hook decides (`CallHooks::before`): how to
+/// route the hook's arguments as the script's own, and where to take its ordered turns.
+struct Regate {
+    object: ObjectKind,
+    method: String,
+    served: ServedMethod,
+    guid: String,
+    write_order: Arc<WriteOrder>,
+    storage_order: Arc<WriteOrder>,
+}
+
+impl Regate {
+    /// A hook's replacement arguments routed exactly as the script's params were: the same
+    /// object and method. Arguments that do not decode, or that route to another command, are
+    /// refused, and the call fails closed; the reason, which may quote them, is for the
+    /// host-only trace.
+    fn reroute(&self, args: Value) -> Result<ObjectCall, String> {
+        let Routed { meta, route } = route(self.object.clone(), &self.method, Some(args));
+        let call = route.map_err(|error| format!("they do not decode: {}", error.message))?;
+        match meta {
+            Some(rerouted) if same_command(rerouted, self.served) => Ok(call),
+            _ => Err(format!(
+                "they route to another command than {}.{}",
+                self.served.interface, self.served.method
+            )),
+        }
+    }
+
+    /// What an allowed call settles in call order, before the next call's hook decides: its
+    /// write or storage turn, a new test id attribute.
+    fn settle(&self, tabs: &Tabs, call: ObjectCall) -> ObjectCall {
+        let call = take_turn(&self.write_order, &self.storage_order, &self.guid, call);
+        set_test_id(tabs, &call);
+        call
+    }
+}
+
+/// Whether `a` and `b` are one command: the same interface, method and action.
+fn same_command(a: ServedMethod, b: ServedMethod) -> bool {
+    a.interface == b.interface && a.method == b.method && a.action() == b.action()
+}
+
+/// `setTestIdAttribute`'s new attribute, for every call after it.
+fn set_test_id(tabs: &Tabs, route: &ObjectCall) {
+    if let ObjectCall::Context(BrowserContextCall::SetTestIdAttributeName(params))
+    | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(params)) = route
+    {
+        tabs.test_id().set(&params.test_id_attribute_name);
+    }
+}
+
+/// What a call's action hooks see of it as it arrives: its labels, method, object and `args`,
+/// where the script made it, and the guids of its page, frame and context, from which the hook
+/// realm builds real Playwright objects (`action_hooks.rs`).
+fn call_event(
+    served: ServedMethod,
+    guid: &str,
+    method: &str,
+    args: Value,
+    location: Option<CallLocation>,
+    target: Option<&(Arc<PageEntry>, FrameScope)>,
+    debugged: Option<&str>,
+) -> ActionEvent {
+    let action = served.action();
+    let (page, frame) = target.map_or((None, None), |(page, scope)| {
+        let frame = match scope {
+            FrameScope::Main => quickjs_bridge::frame_guid(&page.id),
+            FrameScope::Frame(frame) => quickjs_bridge::frame_guid_of(&page.id, frame),
+        };
+        (Some(quickjs_bridge::page_guid(&page.id)), Some(frame))
+    });
+    ActionEvent {
+        kind: Some(action.kind().as_str()),
+        group: Some(action.group().as_str()),
+        method: method.to_string(),
+        guid: guid.to_string(),
+        args,
+        location,
+        page,
+        frame,
+        context: format!("context@{}", debugged.unwrap_or(DEFAULT_CONTEXT)),
+        locator: None,
+        element: None,
+    }
 }
 
 /// The typed handler dispatch, also used by the skeleton's tests with click's existing fake.
@@ -2511,6 +2715,7 @@ mod tests {
                 share: None,
                 release: None,
                 abortable: None,
+                after: None,
             },
         );
         run.end(RunEnd::Settled);
@@ -3633,6 +3838,7 @@ mod tests {
                 share: Some(in_flight.admit(10).expect("under the caps")),
                 release: None,
                 abortable: None,
+                after: None,
             },
         ));
         let _reply = receiver.await.expect("the call replied");
@@ -3974,6 +4180,7 @@ mod review_abort_priority {
                 share: None,
                 release: None,
                 abortable: None,
+                after: None,
             },
         );
         // Neither stop can race scheduling: the handler future has never been polled.
