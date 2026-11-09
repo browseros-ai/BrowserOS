@@ -57,8 +57,6 @@ fn crate_dir() -> PathBuf {
 /// the lists are the door's whole surface (`cdp.rs`), and an integration test cannot see the
 /// `#[cfg(test)]` lists the macros build inside the crate.
 fn declared() -> BTreeSet<Declared> {
-    let line = Regex::new(r#"^\s*\w+\s*=>\s*"(\w+)\.(\w+)""#)
-        .unwrap_or_else(|error| panic!("the declaration pattern: {error}"));
     let folder = crate_dir().join("src/chromium_bridge/cdp");
     let entries =
         fs::read_dir(&folder).unwrap_or_else(|error| panic!("read {}: {error}", folder.display()));
@@ -72,17 +70,41 @@ fn declared() -> BTreeSet<Declared> {
         }
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        let mut list = None;
-        for text in source.lines() {
-            match text.trim() {
-                "command! {" => list = Some(Kind::Command),
-                "event! {" => list = Some(Kind::Event),
-                "}" => list = None,
-                _ => {
-                    if let (Some(kind), Some(captures)) = (list, line.captures(text)) {
-                        found.insert((kind, captures[1].to_string(), captures[2].to_string()));
-                    }
+        found.extend(declarations(&path.display().to_string(), &source));
+    }
+    found
+}
+
+/// One domain file's declarations, read from its `command!` and `event!` lists. A line in a
+/// list that is neither blank, a comment, nor a declaration panics with its place, so a
+/// declaration of a shape this reader does not know fails here instead of going unchecked.
+fn declarations(file: &str, source: &str) -> Vec<Declared> {
+    // `Type => "Domain.method"`, the type with or without its generic arguments
+    // (`InsertText<'_>`).
+    let declaration = Regex::new(r#"^\s*\w+(?:<[^<>]*>)?\s*=>\s*"(\w+)\.(\w+)""#)
+        .unwrap_or_else(|error| panic!("the declaration pattern: {error}"));
+    let mut found = Vec::new();
+    let mut list = None;
+    for (index, text) in source.lines().enumerate() {
+        let line = text.trim();
+        match line {
+            "command! {" => list = Some(Kind::Command),
+            "event! {" => list = Some(Kind::Event),
+            "}" => list = None,
+            _ => {
+                let Some(kind) = list else {
+                    continue;
+                };
+                if line.is_empty() || line.starts_with("//") {
+                    continue;
                 }
+                let captures = declaration.captures(text).unwrap_or_else(|| {
+                    panic!(
+                        "{file}:{}: a line in a declaration list this test cannot read: {line}",
+                        index + 1
+                    )
+                });
+                found.push((kind, captures[1].to_string(), captures[2].to_string()));
             }
         }
     }
@@ -326,6 +348,21 @@ fn the_door_declares_commands_and_events() {
     assert!(
         !has(Kind::Command, "Page", "frameNavigated"),
         "{declared:?}"
+    );
+    // Declared on types with generic arguments, `DispatchDragEvent<'_>` and `InsertText<'_>`.
+    assert!(
+        has(Kind::Command, "Input", "dispatchDragEvent"),
+        "{declared:?}"
+    );
+    assert!(has(Kind::Command, "Input", "insertText"), "{declared:?}");
+}
+
+#[test]
+#[should_panic(expected = "cdp/x.rs:3: a line in a declaration list this test cannot read")]
+fn a_declaration_list_line_it_cannot_read_fails() {
+    declarations(
+        "cdp/x.rs",
+        "command! {\n    // Neo: a reason.\n    (Pair, Of) => \"Page.reload\", OnSession, Ignored;\n}\n",
     );
 }
 
