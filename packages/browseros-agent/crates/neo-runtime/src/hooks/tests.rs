@@ -112,6 +112,7 @@ const BUDGET: Duration = Duration::from_millis(300);
 fn sandbox_with(code: &str, budget: Duration, sdk: &'static str) -> (HookRun, TaskTracker) {
     let tasks = TaskTracker::new();
     let setup = Setup {
+        host: host::Host::new(None, far(), tasks.clone()),
         code: code.to_string(),
         meta: json!({"who": "owner"}),
         page_guid: "page@T".to_string(),

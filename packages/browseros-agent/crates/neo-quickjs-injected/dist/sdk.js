@@ -407,6 +407,9 @@ function drain(until) {
 function nextEvents() {
   return __neo_runtime.nextEvents();
 }
+async function host(request) {
+  return await __neo_runtime.host(request);
+}
 
 // src/url.ts
 var linkParams;
@@ -9685,9 +9688,6 @@ class HookRealm {
   #trace = (...values) => {
     log(values.map(describe).join(" "));
   };
-  #host = async () => {
-    throw new Error("ctx.host is not available yet");
-  };
   constructor(init) {
     this.#objects = connectRun(init);
     this.#contexts.set(init.context, this.#objects.context);
@@ -9731,13 +9731,20 @@ class HookRealm {
       }
       let invocation;
       try {
-        invocation = { controller: new AbortController, settle: resolve };
+        invocation = {
+          active: true,
+          controller: new AbortController,
+          settle: (decision) => {
+            invocation.active = false;
+            resolve(decision);
+          }
+        };
       } catch (error) {
         resolve(failure(`${event}: ${describe(error)}`));
         return;
       }
       this.#live.set(id, invocation);
-      this.#decide(event, payload, invocation.controller.signal, ship, marker).then(resolve, (error) => resolve(failure(`${event}: ${describe(error)}`))).finally(() => {
+      this.#decide(event, payload, invocation, ship, marker).then(invocation.settle, (error) => invocation.settle(failure(`${event}: ${describe(error)}`))).finally(() => {
         if (this.#live.get(id) === invocation)
           this.#live.delete(id);
       });
@@ -9751,7 +9758,31 @@ class HookRealm {
     error.name = "AbortError";
     invocation.controller.abort(error);
   }
-  async#decide(event, payloadText, signal, ship, marker) {
+  async#host(invocation, name, args) {
+    if (typeof name !== "string" || !name.length)
+      throw new TypeError("ctx.host needs a non-empty name");
+    let encoded;
+    try {
+      encoded = stringify2(args === undefined ? null : args);
+    } catch {
+      throw new TypeError("ctx.host args must be JSON");
+    }
+    if (encoded === undefined)
+      throw new TypeError("ctx.host args must be JSON");
+    const check = () => {
+      if (!invocation.active || invocation.controller.signal.aborted)
+        throw new Error("the hook invocation ended");
+    };
+    check();
+    try {
+      const answer = await host(`{"name":${stringify2(name)},"args":${encoded}}`);
+      check();
+      return parse(answer);
+    } catch (error) {
+      throw error instanceof Error ? error : new Error(describe(error));
+    }
+  }
+  async#decide(event, payloadText, invocation, ship, marker) {
     if (!isHookEvent(event))
       return failure(`unknown hook event ${describe(event)}`);
     const payload = readPayload(payloadText);
@@ -9763,9 +9794,9 @@ class HookRealm {
     const ctx = Object.freeze({
       meta: this.#meta,
       state: this.#state,
-      signal,
+      signal: invocation.controller.signal,
       trace: this.#trace,
-      host: this.#host
+      host: (name, args) => this.#host(invocation, name, args)
     });
     const exporter = typeof ship === "function" && typeof marker === "string" ? (value) => exportValue(value, ship, marker) : (value) => stringify2(value);
     if (event === "beforeRun" || event === "beforeAction")

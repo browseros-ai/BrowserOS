@@ -11,6 +11,7 @@
 mod fake_browser;
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use fake_browser::{FakeBrowser, Replies};
@@ -361,4 +362,24 @@ async fn after_run_runs_after_a_cancel() {
         outcome.hook_trace
     );
     assert_eq!(outcome.notes, ["after cancelled"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_the_agent_bridge_has_no_host_even_when_hooks_have_one() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let hooks =
+        RunHooks::new("neo.on('beforeRun', async (_event, ctx) => { await ctx.host('check') })")
+            .with_host(Arc::new(|_| Box::pin(async { Ok(json!(true)) })));
+    let outcome = browser
+        .runtime()
+        .await
+        .run(request(
+            "return ['host' in __neo_runtime, typeof __neo_runtime.host]",
+            TIMEOUT,
+            Some(hooks),
+        ))
+        .await;
+    assert_eq!(outcome.status, RunStatus::Ok);
+    assert_eq!(outcome.value, Some(json!([false, "undefined"])));
+    assert!(outcome.calls.is_empty());
 }

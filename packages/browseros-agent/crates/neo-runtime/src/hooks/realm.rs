@@ -16,7 +16,9 @@
 //! between jobs the realm is frozen: work a hook left behind (a timer, a call it never awaited)
 //! resumes in a later job, under that job's budget. The values a job needs again (the SDK's
 //! `invoke` and `abort`) stay inside the realm, under a global with a random name: rquickjs's
-//! `Persistent` would keep them in Rust, but it is not `Send`, and this task must be.
+//! `Persistent` would keep them in Rust, but it is not `Send`, and this task must be. Host calls
+//! are different: each job holds a cancellation guard, so its callbacks end with it even
+//! while the realm is frozen, and their replies cannot resolve in a later job.
 //!
 //! Time has two guards, both armed per job ([`Watch`]): JS that spins is stopped by the realm's
 //! interrupt handler, which QuickJS calls while JS runs, once the job's budget (or the run's
@@ -48,6 +50,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::deadline::{Deadline, Stop};
+use crate::hooks::host::Host;
 use crate::hooks::{HookEvent, HookFailure};
 use crate::method_router::Dispatcher;
 use crate::quickjs;
@@ -90,6 +93,7 @@ const ABANDONED: &str = "nobody waits for this hook any more";
 
 /// Everything the realm is built from, handed over once, to the load job.
 pub(crate) struct Setup {
+    pub(crate) host: Host,
     /// The hook file: the body of an async function of `neo`.
     pub(crate) code: String,
     /// The run's `meta`, `ctx.meta` in every handler.
@@ -243,6 +247,7 @@ struct Realm {
 
 /// The actor's state; owned by its task alone.
 pub(crate) struct Actor {
+    host: Host,
     setup: Option<Setup>,
     budget: Duration,
     /// The hook trace, which the realm's bridge writes.
@@ -264,6 +269,7 @@ impl Actor {
         close: CancellationToken,
     ) -> Self {
         Self {
+            host: setup.host.clone(),
             setup: Some(setup),
             budget,
             trace,
@@ -318,6 +324,7 @@ impl Actor {
             return Loaded::Failed("the hooks were loaded twice".to_string());
         };
         let until = self.until();
+        let host_job = self.host.arm(until, &self.close);
         self.watch.arm(until, Some(race.clone()));
         let loading = build(
             setup,
@@ -343,6 +350,7 @@ impl Actor {
                 },
             },
         };
+        drop(host_job);
         self.watch.disarm();
         loaded
     }
@@ -362,6 +370,7 @@ impl Actor {
         let Some(realm) = &self.realm else {
             return Invoked::Failed(HookFailure::Realm("the hooks did not load".to_string()));
         };
+        let host_job = self.host.arm(until, &self.close);
         self.watch.arm(until, race.cloned());
         let key = realm.key.as_str();
         let shipped = quickjs::Shipped::default();
@@ -397,6 +406,7 @@ impl Actor {
             () = reply.closed() => Invoked::Failed(HookFailure::Realm(ABANDONED.to_string())),
             () = time::sleep_until(until) => Invoked::Failed(HookFailure::Timeout),
             entered = entered => match entered {
+                Ok(_) if Instant::now() >= until => Invoked::Failed(HookFailure::Timeout),
                 Ok(text) => match shipped.take() {
                     Some(shipped) => Invoked::Decided(Decision {
                         text,
@@ -414,6 +424,7 @@ impl Actor {
                 },
             },
         };
+        drop(host_job);
         self.watch.disarm();
         let reason = match &invoked {
             Invoked::Decided(_) => None,
@@ -509,11 +520,12 @@ fn start<'js>(
             getters,
             dispatcher,
         } => {
-            quickjs_bridge::install_hooks(ctx, getters, trace, dispatcher)?;
+            quickjs_bridge::install_hooks(ctx, getters, trace, dispatcher, setup.host)?;
         }
         #[cfg(test)]
         Bridge::Bare => {
             let bridge = Object::new(ctx.clone())?;
+            quickjs_bridge::install_host(&bridge, setup.host)?;
             bridge.set(
                 "log",
                 Function::new(ctx.clone(), move |line: String| trace.push(line))?,

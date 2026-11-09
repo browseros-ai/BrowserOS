@@ -46,6 +46,7 @@ use crate::quickjs_bridge::{Getters, LogKind, Logs};
 use crate::run::{CallLocation, RunBinary, RunError, RunHooks, RunOutcome, RunStatus};
 
 mod decision;
+pub(crate) mod host;
 mod realm;
 
 use decision::Decided;
@@ -261,7 +262,9 @@ impl HookSandbox {
         } = parts;
         let run = dispatcher.run_scope();
         let (tasks, slot) = (run.tasks.clone(), Arc::clone(&run.hooks));
+        let host = host::Host::new(hooks.host, run.deadline.clone(), tasks.clone());
         let setup = Setup {
+            host,
             code: hooks.code,
             meta: hooks.meta,
             page_guid,
@@ -597,3 +600,6 @@ fn checked(event: HookEvent, decided: Decision) -> Result<Decided, HookFailure> 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod host_tests;

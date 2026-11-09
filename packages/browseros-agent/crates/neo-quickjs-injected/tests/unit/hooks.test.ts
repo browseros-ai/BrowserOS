@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { Buffer, exportValue } from '../../src/buffer'
-import type { Hooks, NeoHooks, Ship } from '../../src/hooks'
+import type { HookContext, Hooks, NeoHooks, Ship } from '../../src/hooks'
 import { createHooks } from '../../src/index'
 import { Locator } from '../../src/locator'
 import { Page } from '../../src/page'
@@ -28,7 +28,18 @@ function startHooks(...args: [meta?: unknown]) {
   const fake = new FakeRuntime(tabs)
   for (const tab of tabs) fake.handed.add(`page@${tab.id}`)
   const logs: string[] = []
+  const hostRequests: unknown[] = []
+  const host = {
+    answer: async (_request: unknown): Promise<unknown> => {
+      throw new Error('no host')
+    },
+  }
   const stub = {
+    host: async (text: string) => {
+      const request: unknown = JSON.parse(text)
+      hostRequests.push(request)
+      return JSON.stringify(await host.answer(request))
+    },
     get: fake.get.bind(fake),
     call: fake.call.bind(fake),
     abort: fake.abort.bind(fake),
@@ -47,7 +58,7 @@ function startHooks(...args: [meta?: unknown]) {
     lineOffset: 2,
     meta,
   })
-  return { fake, hooks, logs }
+  return { fake, hooks, logs, host, hostRequests }
 }
 
 /** Runs a hook file's body and ends loading: the registrations JSON, parsed. */
@@ -1052,6 +1063,94 @@ describe('ctx', () => {
       decision: 'allow',
     })
     expect(rejected).toBeInstanceOf(Error)
+  })
+
+  test('host exchanges JSON and defaults args to null', async () => {
+    const { hooks, host, hostRequests } = startHooks()
+    host.answer = async (request) => ({ request, items: [true, null, '答'] })
+    const answers: unknown[] = []
+    await load(hooks, (neo) =>
+      neo.on('beforeRun', async (_event, ctx) => {
+        answers.push(
+          await ctx.host('vault.login', { origin: 'https://bank.test' }),
+        )
+        answers.push(await ctx.host('empty'))
+      }),
+    )
+    expect((await decide(hooks, 'beforeRun', BEFORE_RUN)).decision).toBe(
+      'allow',
+    )
+    expect(hostRequests).toEqual([
+      { name: 'vault.login', args: { origin: 'https://bank.test' } },
+      { name: 'empty', args: null },
+    ])
+    expect(answers).toEqual(
+      hostRequests.map((request) => ({ request, items: [true, null, '答'] })),
+    )
+  })
+
+  test('host rejects invalid names and non-JSON args before sending them', async () => {
+    const { hooks, hostRequests } = startHooks()
+    const cyclic: Record<string, unknown> = {}
+    cyclic.self = cyclic
+    const errors: unknown[] = []
+    await load(hooks, (neo) =>
+      neo.on('beforeRun', async (_event, ctx) => {
+        for (const [name, args] of [
+          [null, null],
+          ['', null],
+          [7, null],
+          ['x', 1n],
+          ['x', cyclic],
+          ['x', () => {}],
+          ['x', Symbol('x')],
+        ]) {
+          try {
+            await ctx.host(name as string, args)
+          } catch (error) {
+            errors.push(error)
+          }
+        }
+      }),
+    )
+    await decide(hooks, 'beforeRun', BEFORE_RUN)
+    expect(errors).toHaveLength(7)
+    for (const error of errors) expect(error).toBeInstanceOf(TypeError)
+    expect(hostRequests).toEqual([])
+  })
+
+  test('host turns a native rejection into an Error', async () => {
+    const { hooks, host } = startHooks()
+    host.answer = async () => {
+      throw 'host refused'
+    }
+    let rejected: unknown
+    await load(hooks, (neo) =>
+      neo.on('beforeRun', async (_event, ctx) => {
+        try {
+          await ctx.host('x')
+        } catch (error) {
+          rejected = error
+        }
+      }),
+    )
+    await decide(hooks, 'beforeRun', BEFORE_RUN)
+    expect(rejected).toBeInstanceOf(Error)
+  })
+
+  test('a saved context cannot ask the host after its invocation ends', async () => {
+    const { hooks, host, hostRequests } = startHooks()
+    host.answer = async () => null
+    let saved: HookContext | undefined
+    await load(hooks, (neo) =>
+      neo.on('beforeRun', (_event, ctx) => {
+        saved = ctx
+      }),
+    )
+    await decide(hooks, 'beforeRun', BEFORE_RUN)
+    if (!saved) throw new Error('the hook did not run')
+    await expect(saved.host('late')).rejects.toBeInstanceOf(Error)
+    expect(hostRequests).toEqual([])
   })
 
   test('ctx is frozen, one per invocation and shared by its handlers', async () => {

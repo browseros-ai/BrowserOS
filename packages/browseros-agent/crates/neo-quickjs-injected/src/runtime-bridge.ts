@@ -15,6 +15,7 @@
  * - `drain` takes queued events; `nextEvents` resolves once one is queued (the idle wake).
  * - `get` also serves the pure platform reads QuickJS lacks: URL parses and setters, device
  *   descriptors, random bytes.
+ * - `host` exchanges JSON with the run's host callback, only in a hook realm.
  * - `log` appends one line to the realm's log, where its `console` writes too: the run's logs in
  *   the agent's realm, the host-only hook trace in a hook realm (`hooks.ts` `ctx.trace`).
  */
@@ -32,6 +33,7 @@ import type { CreatedChain, Timing } from './network'
 
 declare const __neo_runtime: {
   get(request: string): string
+  host(request: string): Promise<string>
   log(line: string): void
   callWithEvents(message: string): Promise<{ reply: string; events: number }>
   abort(id: number, reason: string): void
@@ -244,4 +246,9 @@ export function drain(until: number): RawEvent[] {
 /** Resolves once an undelivered event is queued. */
 export function nextEvents(): Promise<void> {
   return __neo_runtime.nextEvents()
+}
+
+/** Neo: JSON request and answer for the hook realm only; the agent bridge has no host member. */
+export async function host(request: string): Promise<string> {
+  return await __neo_runtime.host(request)
 }

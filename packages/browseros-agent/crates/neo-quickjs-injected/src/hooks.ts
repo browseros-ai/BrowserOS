@@ -32,7 +32,7 @@ import { standardGlobals } from './globals'
 import type { Locator } from './locator'
 import type { Page } from './page'
 import { connectRun, type RunInit, type RunObjects } from './run-objects'
-import { get, log } from './runtime-bridge'
+import { get, host, log } from './runtime-bridge'
 
 /** What neo-runtime hands `createHooks`: `createRun`'s init plus the run's `meta`. */
 export interface HooksInit extends RunInit {
@@ -64,7 +64,7 @@ export interface HookContext {
   readonly signal: AbortSignal
   /** Appends one line to the run's hook trace, which only the host reads. */
   trace(...values: unknown[]): void
-  /** Asks whoever started the run (design D9, F5). Until F5 it always rejects with an `Error`. */
+  /** Asks whoever started the run, with JSON args and answer. Failures reject with an Error. */
   host(name: string, args?: unknown): Promise<unknown>
 }
 
@@ -176,6 +176,7 @@ interface Registration {
 
 /** An invocation whose handlers may still run. */
 interface Invocation {
+  active: boolean
   readonly controller: AbortController
   /** Decides the invocation now; a no-op once it is decided. */
   readonly settle: (decision: string) => void
@@ -217,9 +218,6 @@ class HookRealm {
   readonly #contexts = new Map<string, BrowserContext>()
   readonly #trace = (...values: unknown[]): void => {
     log(values.map(describe).join(' '))
-  }
-  readonly #host = async (): Promise<unknown> => {
-    throw new Error('ctx.host is not available yet')
   }
 
   constructor(init: HooksInit) {
@@ -285,15 +283,22 @@ class HookRealm {
       }
       let invocation: Invocation
       try {
-        invocation = { controller: new AbortController(), settle: resolve }
+        invocation = {
+          active: true,
+          controller: new AbortController(),
+          settle: (decision) => {
+            invocation.active = false
+            resolve(decision)
+          },
+        }
       } catch (error) {
         resolve(failure(`${event}: ${describe(error)}`))
         return
       }
       this.#live.set(id, invocation)
-      this.#decide(event, payload, invocation.controller.signal, ship, marker)
-        .then(resolve, (error: unknown) =>
-          resolve(failure(`${event}: ${describe(error)}`)),
+      this.#decide(event, payload, invocation, ship, marker)
+        .then(invocation.settle, (error: unknown) =>
+          invocation.settle(failure(`${event}: ${describe(error)}`)),
         )
         .finally(() => {
           if (this.#live.get(id) === invocation) this.#live.delete(id)
@@ -309,12 +314,41 @@ class HookRealm {
     invocation.controller.abort(error)
   }
 
+  async #host(
+    invocation: Invocation,
+    name: string,
+    args?: unknown,
+  ): Promise<unknown> {
+    if (typeof name !== 'string' || !name.length)
+      throw new TypeError('ctx.host needs a non-empty name')
+    let encoded: string | undefined
+    try {
+      encoded = stringify(args === undefined ? null : args)
+    } catch {
+      throw new TypeError('ctx.host args must be JSON')
+    }
+    if (encoded === undefined) throw new TypeError('ctx.host args must be JSON')
+    const check = () => {
+      if (!invocation.active || invocation.controller.signal.aborted)
+        throw new Error('the hook invocation ended')
+    }
+    check()
+    try {
+      const answer = await host(`{"name":${stringify(name)},"args":${encoded}}`)
+      // An unawaited answer must not reach a continuation in a later invocation.
+      check()
+      return parse(answer)
+    } catch (error) {
+      throw error instanceof Error ? error : new Error(describe(error))
+    }
+  }
+
   /** The decision JSON for one invocation. Throws only for what no handler caused (a payload
    * it cannot read, a guid Rust does not know), which `invoke` turns into `fail`. */
   async #decide(
     event: string,
     payloadText: string,
-    signal: AbortSignal,
+    invocation: Invocation,
     ship: Ship | undefined,
     marker: string | undefined,
   ): Promise<string> {
@@ -332,9 +366,10 @@ class HookRealm {
     const ctx: HookContext = Object.freeze({
       meta: this.#meta,
       state: this.#state,
-      signal,
+      signal: invocation.controller.signal,
       trace: this.#trace,
-      host: this.#host,
+      host: (name: string, args?: unknown) =>
+        this.#host(invocation, name, args),
     })
     const exporter =
       typeof ship === 'function' && typeof marker === 'string'

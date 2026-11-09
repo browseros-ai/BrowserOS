@@ -30,13 +30,14 @@
 //! the wait, never the call. The reply carries the event watermark W (`events.rs`): the SDK runs
 //! the listeners of every event up to W before the call's caller continues, Playwright's order.
 //!
-//! A run with hooks has a second realm (`hooks.rs`) with its own `__neo_runtime` of the same
-//! shape ([`install_hooks`]), every closure bound to that realm's state: its own getters, its
+//! A run with hooks has a second realm (`hooks.rs`) with its own `__neo_runtime`
+//! ([`install_hooks`]), every closure bound to that realm's state: its own getters, its
 //! `log` writing the hook trace, its own dispatcher (origin hook, own abort registry), and no
 //! events: `subscribe` does nothing, `drain` is always empty, `nextEvents` never resolves. It never
 //! touches the agent's `EventHub` or `Logs`. The realm boundary is the trust boundary: each
 //! bridge holds exactly one dispatcher, so which bridge a call came through, not anything in its
-//! message, decides whose call it is.
+//! message, decides whose call it is. Only this bridge has `host`: JSON in and out, on a task
+//! tied to the current invocation (`hooks/host.rs`), with no browser call record.
 
 use std::future;
 use std::future::Future;
@@ -59,6 +60,7 @@ use crate::chromium_bridge::page_events;
 use crate::deadline::{Deadline, Stop};
 use crate::debugger;
 use crate::events::{self, CONTEXT_GUID};
+use crate::hooks::host::Host;
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::browser_methods::{self, BROWSER_GUID};
 use crate::playwright_methods::evaluate::Handles;
@@ -152,9 +154,11 @@ pub(crate) fn install_hooks(
     getters: Getters,
     trace: Logs,
     dispatcher: Dispatcher,
+    host: Host,
 ) -> rquickjs::Result<()> {
     let bridge = Object::new(ctx.clone())?;
     install_calls(&bridge, getters, trace, dispatcher, Watermark::None)?;
+    install_host(&bridge, host)?;
     bridge.set("subscribe", Func::from(|_request: String| {}))?;
     bridge.set("drain", Func::from(|_until: i64| "[]".to_string()))?;
     bridge.set(
@@ -163,6 +167,22 @@ pub(crate) fn install_hooks(
         Func::from(Async(future::pending::<rquickjs::Result<()>>)),
     )?;
     ctx.globals().set("__neo_runtime", bridge)
+}
+
+/// Neo: only hook bridges install this member. The future waited on here is a oneshot, so
+/// freezing QuickJS never freezes the callback or its cancellation.
+pub(crate) fn install_host<'js>(bridge: &Object<'js>, host: Host) -> rquickjs::Result<()> {
+    bridge.set(
+        "host",
+        Func::from(Async(move |ctx: Ctx<'js>, request: String| {
+            let reply = host.call(&request);
+            async move {
+                reply
+                    .await
+                    .map_err(|message| throw_named(&ctx, "Error", &message))
+            }
+        })),
+    )
 }
 
 /// Whether a call's answer carries the run's event watermark (the agent's realm) or always 0

@@ -63,8 +63,8 @@ pub struct RunRequest {
 /// another ([`RunHooks::with_budget`]). The hooks design's assumed per-invocation budget.
 pub const HOOK_BUDGET: Duration = Duration::from_secs(5);
 
-/// What a hook's `ctx.host(name, args)` asks the run's host. Hooks feature 5 calls the
-/// callback; until then `ctx.host` rejects inside the hook and the callback is never called.
+/// Answers a hook's `ctx.host(name, args)`. Its future is dropped when the invocation ends
+/// or the run stops. Errors reject inside the hook; values cross as JSON.
 pub type HostCallback =
     Arc<dyn Fn(HostRequest) -> BoxFuture<'static, Result<Value, String>> + Send + Sync>;
 
