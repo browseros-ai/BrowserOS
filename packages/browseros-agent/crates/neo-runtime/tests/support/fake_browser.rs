@@ -22,6 +22,10 @@ use std::time::Duration;
 use browseros_cdp::page::{
     Frame, FrameNavigatedEvent, LifecycleEventEvent, NavigatedWithinDocumentEvent,
 };
+#[expect(
+    clippy::disallowed_types,
+    reason = "the fixture imports the client it connects and hands into Runtime's typed CDP door"
+)]
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use futures_util::{SinkExt, StreamExt};
 use neo_runtime::{PageId, RunRequest, Runtime};
@@ -307,6 +311,10 @@ impl FakeBrowser {
         }
     }
 
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the fixture connects a client for tests to hand into Runtime's typed CDP door"
+    )]
     pub async fn cdp(&self) -> CdpClient {
         CdpClient::connect(ConnectOptions {
             host: Some("127.0.0.1".to_string()),

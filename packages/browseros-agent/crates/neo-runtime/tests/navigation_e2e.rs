@@ -1,4 +1,8 @@
 //! Navigation, titles and document freshness on an isolated real BrowserOS neo profile.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(
     dead_code,

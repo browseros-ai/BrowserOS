@@ -1,6 +1,11 @@
 //! Regression for context bindings owned by concurrent runs in different browser contexts.
 //! Matches the Playwright control in binding-two-context-runs.test.mjs: disposing A leaves
 //! A's name undefined while B's independent same-named binding still answers B.
+#![expect(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[path = "support/browser.rs"]
 #[expect(dead_code, reason = "only the browser fixture is used")]

@@ -14,6 +14,10 @@
 
 use std::sync::Arc;
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "imports the host's client type for Runtime::connect, which hands it into chromium_bridge/cdp.rs"
+)]
 use browseros_cdp::{CdpClient, CdpError};
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio_util::task::TaskTracker;
@@ -97,6 +101,10 @@ impl Runtime {
     ///
     /// [`RuntimeError::UnsupportedBrowser`] when `Browser.getTabInfo` is missing or reports
     /// an unknown tab differently, and [`RuntimeError::Cdp`] when the check itself fails.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the runtime hands its host's connected client straight into chromium_bridge/cdp.rs"
+    )]
     pub async fn connect(cdp: CdpClient) -> Result<Self, RuntimeError> {
         let browser = Browser::new(cdp);
         let probe = browser

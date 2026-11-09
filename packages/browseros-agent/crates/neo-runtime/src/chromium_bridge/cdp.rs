@@ -41,6 +41,11 @@
 //! Neo: Neo's own door. It types every send by its method, as Playwright's `CRSession.send`
 //! does; browseros-cdp's generated `pub async fn`s take a concrete client and cannot bind a write
 //! to the socket a session belongs to.
+#![expect(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the CDP door owns browseros-cdp's client, raw sends and event decoding"
+)]
 
 pub(crate) mod browser;
 pub(crate) mod dom;
@@ -811,6 +816,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_client_ban_names_every_way_to_send_and_subscribe() {
+        // Read the transport's current API at run time: a new raw entry point must extend
+        // the ban instead of silently bypassing this module's typed commands and events.
+        let client = crate_file("../browseros-cdp/src/client.rs");
+        let banned = crate_file("clippy.toml");
+        let ways: Vec<&str> = client
+            .lines()
+            .map(str::trim_start)
+            .filter_map(|line| {
+                line.strip_prefix("pub async fn ")
+                    .or_else(|| line.strip_prefix("pub fn "))
+            })
+            .filter_map(|signature| signature.split(['(', '<']).next())
+            .filter(|name| {
+                ["send", "dispatch", "events", "on_event", "subscribe"]
+                    .iter()
+                    .any(|way| name.starts_with(way))
+            })
+            .collect();
+        assert!(
+            ways.contains(&"send") && ways.contains(&"events"),
+            "client.rs's API was read: {ways:?}"
+        );
+        for way in ways {
+            assert!(
+                banned.contains(&format!("\"browseros_cdp::CdpClient::{way}\"")),
+                "clippy.toml denies CdpClient::{way} outside chromium_bridge/cdp.rs"
+            );
+        }
+        assert!(
+            banned.contains("\"browseros_cdp::CdpEvent\""),
+            "clippy.toml denies raw CdpEvents outside chromium_bridge/cdp.rs"
+        );
+        assert!(
+            banned.contains("\"browseros_cdp::CdpClient\""),
+            "clippy.toml denies client holders outside chromium_bridge/cdp.rs"
+        );
     }
 
     #[test]

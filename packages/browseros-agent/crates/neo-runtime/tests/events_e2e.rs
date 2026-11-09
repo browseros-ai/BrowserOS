@@ -3,6 +3,10 @@
 //! resolves, an idle script still gets its events, what the page logged before the run is history
 //! and never an event, a dialog a listener leaves open is answered when the run ends, an uncaught
 //! listener error ends the run with it, and a full queue drops events with one log note.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(
     dead_code,

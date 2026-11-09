@@ -27,6 +27,11 @@
 //!
 //! Test crates include this file with `#[path]`. Cargo builds only top-level `tests/*.rs` files
 //! as test crates, so it is never one on its own.
+#![expect(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the browser fixture drives an independent CDP session as the test oracle"
+)]
 
 use std::collections::BTreeSet;
 use std::env;

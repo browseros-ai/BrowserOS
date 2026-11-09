@@ -3,6 +3,10 @@
 //! (Playwright's border-box placement, pinned in numbers). Everything Neo shares with Playwright
 //! is also compared against it in neo-quickjs-injected's parity tests; `dispatchEvent`'s
 //! `eventInit` is Playwright's own now (`dispatchEvent.test.mjs`).
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(
     dead_code,

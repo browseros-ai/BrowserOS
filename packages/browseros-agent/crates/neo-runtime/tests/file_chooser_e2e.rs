@@ -4,6 +4,11 @@
 //!
 //! The fixture's `Runtime` shares the test's CDP client, so the test sees every session's
 //! `Page.fileChooserOpened` on it, the run's included.
+#![expect(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(
     dead_code,

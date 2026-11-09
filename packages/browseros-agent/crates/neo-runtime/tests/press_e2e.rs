@@ -3,6 +3,10 @@
 //! `code`, `keyCode` and the modifier flags), and each call's delivery. Wording, call logs, CDP
 //! traffic and timing are never compared; `neo-quickjs-injected/tests/parity/press.test.mjs`
 //! compares the same methods with Playwright on one browser.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(
     dead_code,

@@ -14,6 +14,11 @@
 //!   page.
 //!
 //! Behaviour only: no call logs, and time only as generous bounds.
+#![expect(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(
     dead_code,

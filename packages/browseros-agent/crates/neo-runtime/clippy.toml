@@ -2,9 +2,25 @@
 disallowed-methods = [
   { path = "std::panic::catch_unwind", reason = "Google Rust style: don't call panic::catch_unwind" },
   { path = "std::sync::PoisonError::into_inner", reason = "Google Rust style: never reach inside a poisoned mutex" },
+  # Neo-specific bans follow the shared style entries. The typed door binds input to its
+  # session's socket incarnation and decodes commands and events against the pinned protocol.
+  { path = "browseros_cdp::CdpClient::send", reason = "send through chromium_bridge/cdp.rs: cdp::Browser::send or cdp::Session::send" },
+  { path = "browseros_cdp::CdpClient::send_typed", reason = "send through chromium_bridge/cdp.rs: cdp::Browser::send or cdp::Session::send" },
+  { path = "browseros_cdp::CdpClient::send_at_epoch", reason = "write input through chromium_bridge/cdp.rs: cdp::Session::write" },
+  { path = "browseros_cdp::CdpClient::send_raw_json", reason = "send through chromium_bridge/cdp.rs: cdp::Browser::send or cdp::Session::send" },
+  { path = "browseros_cdp::CdpClient::send_raw_json_at_epoch", reason = "write input through chromium_bridge/cdp.rs: cdp::Session::write" },
+  { path = "browseros_cdp::CdpClient::events", reason = "read events through chromium_bridge/cdp.rs: cdp::Browser::events or cdp::Session::events" },
+  { path = "browseros_cdp::CdpClient::on_event", reason = "read events through chromium_bridge/cdp.rs: cdp::Browser::events or cdp::Session::events" },
+  { path = "browseros_cdp::CdpClient::events_targeted", reason = "read events through chromium_bridge/cdp.rs: cdp::Browser::events or cdp::Session::events" },
 ]
 # The crate denies `unwrap_used` and `expect_used`; tests may still assert with them.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 # Product names that `doc_markdown` would otherwise ask to wrap in backticks.
 doc-valid-idents = ["BrowserOS", "QuickJS", ".."]
+
+# Clients enter only at construction; the door alone owns them and their raw events.
+disallowed-types = [
+  { path = "browseros_cdp::CdpClient", reason = "pass clients into chromium_bridge/cdp.rs through Runtime::connect; send only through the typed door" },
+  { path = "browseros_cdp::CdpEvent", reason = "decode events through chromium_bridge/cdp.rs: cdp::Raw::decode" },
+]

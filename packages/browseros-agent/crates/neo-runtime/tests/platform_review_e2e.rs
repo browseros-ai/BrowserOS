@@ -1,4 +1,8 @@
 //! Independent review probes for the platform slice's cancellation and dropped-run cleanup.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[path = "support/browser.rs"]
 #[expect(

@@ -604,7 +604,6 @@ fn split_properties(descriptors: Vec<PropertyDescriptor>) -> Result<Properties, 
 
 #[cfg(test)]
 mod tests {
-    use browseros_cdp::SessionId;
     use neo_runtime_spec::injected::{
         HitTargetSetup, InjectedResolveResult, InjectedSetupHitTargetInterceptorResult,
     };
@@ -683,22 +682,12 @@ mod tests {
             ..Replies::default()
         })
         .await;
-        let cdp = browser.cdp().await;
-        let attached = cdp
-            .send(
-                "Target.attachToTarget",
-                json!({"targetId":PAGE,"flatten":true}),
-                None,
-            )
+        let attached = cdp::Browser::new(browser.cdp().await)
+            .attach(PAGE)
             .await
             .unwrap();
         let gone = CancellationToken::new();
-        let world = World::on_host(
-            cdp::Browser::new(cdp).adopt(SessionId::from(attached["sessionId"].as_str().unwrap())),
-            PAGE.to_string(),
-            true,
-            gone.clone(),
-        );
+        let world = World::on_host(attached, PAGE.to_string(), true, gone.clone());
         let pending = world.call(None, &InjectedTitleParams {});
         tokio::pin!(pending);
         tokio::select! { biased; result = &mut pending => panic!("world should be pending: {result:?}"), () = task::yield_now() => {} }
