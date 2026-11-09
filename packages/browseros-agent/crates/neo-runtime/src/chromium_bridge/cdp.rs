@@ -25,8 +25,8 @@
 //!
 //! An event is declared with [`event!`], on browseros-cdp's generated `…Event` type. Events and
 //! replies decode with every field the protocol requires, as Chromium's builders always send
-//! them; an event that does not decode reads as `None` and is logged at debug, not dropped
-//! silently ([`Raw::decode`]). The types come from browseros-cdp's pinned
+//! them; an event that does not decode reads as `None` and is logged as a warning, since a
+//! dropped `frameNavigated` is a protocol skew worth seeing ([`Raw::decode`]). The types come from browseros-cdp's pinned
 //! `protocol/protocol.json`. The door's tests check every declaration against it, and
 //! `tests/protocol_e2e.rs` checks it against the browser's own protocol.
 //!
@@ -72,7 +72,7 @@ use serde::de::{DeserializeOwned, IgnoredAny};
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
-use tracing::debug;
+use tracing::warn;
 
 use crate::progress::InputTicket;
 
@@ -414,7 +414,7 @@ impl Raw {
     }
 
     /// `Some` when this is an `E` and its params decode. A known event that does not decode
-    /// reads as `None` and is logged at debug.
+    /// reads as `None` and is logged as a warning.
     pub(crate) fn decode<E: Event>(&self) -> Option<E> {
         decode(&self.0)
     }
@@ -435,7 +435,7 @@ pub(crate) fn decode<E: Event>(event: &CdpEvent) -> Option<E> {
     match E::deserialize(&event.params) {
         Ok(decoded) => Some(decoded),
         Err(error) => {
-            debug!(method = E::METHOD, %error, "a CDP event did not decode; ignoring it");
+            warn!(method = E::METHOD, %error, "a CDP event did not decode; ignoring it");
             None
         }
     }
