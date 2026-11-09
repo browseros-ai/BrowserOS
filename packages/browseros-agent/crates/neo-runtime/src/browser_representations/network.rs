@@ -2077,7 +2077,10 @@ mod tests {
     use super::*;
 
     /// `tests/network-goldens.mjs`'s recording: each goto's CDP events and Playwright's answer.
-    const GOLDENS: &str = include_str!("../tests/fixtures/network-goldens.json");
+    const GOLDENS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/network-goldens.json"
+    ));
 
     struct Golden {
         name: String,

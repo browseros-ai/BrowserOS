@@ -55,73 +55,36 @@ extern crate self as neo_runtime;
 mod fake_browser;
 
 mod abort;
-mod aria_yaml;
 mod artifacts;
-mod bindings;
 mod bridge;
-mod browser_calls;
-mod capture;
-mod check;
-mod click;
-mod clock;
-mod console;
-mod content;
-mod contexts;
+mod browser_representations;
+mod chromium_bridge;
 mod deadline;
 mod debugger;
-mod devices;
-mod dialogs;
-mod discovery;
 mod dispatch;
-mod downloads;
-mod drag;
-mod drop_on;
-mod element_ops;
-mod emulation;
-mod evaluate;
 mod events;
-mod fill;
-mod forms;
-mod frame_element;
-mod frame_events;
-mod frame_selector;
-mod frames;
-mod getters;
-mod highlight;
-mod history;
-mod init_scripts;
-mod input_devices;
-mod keyboard;
-mod lists;
-mod locator_handlers;
-mod main_world;
 mod mime;
-mod navigate;
-mod network;
-mod network_events;
-mod network_idle;
-mod page;
-mod page_events;
-mod pdf;
-mod press;
+mod playwright_methods;
 mod progress;
-mod reads;
 mod realm;
-mod responses;
-mod routes;
 mod run;
 mod runtime;
-mod screenshot;
-mod session_state;
-mod set_input_files;
-mod states;
-mod switch;
-mod tab_calls;
-mod tabs;
 mod url_match;
-mod waits;
-mod web_storage;
-mod world;
+
+// Folder move, round 1: every module keeps its old `crate::<name>` path until the renames.
+use browser_representations::{
+    bindings, clock, console, dialogs, downloads, emulation, init_scripts, locator_handlers,
+    network, page, responses, routes, session_state, tabs, web_storage,
+};
+use chromium_bridge::{
+    contexts, discovery, frame_events, frame_selector, frames, input_devices, keyboard, main_world,
+    network_events, page_events, switch, world,
+};
+use playwright_methods::{
+    aria_yaml, browser_calls, capture, check, click, content, devices, drag, drop_on, element_ops,
+    evaluate, fill, forms, frame_element, getters, highlight, history, lists, navigate,
+    network_idle, pdf, press, reads, screenshot, set_input_files, states, tab_calls, waits,
+};
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{

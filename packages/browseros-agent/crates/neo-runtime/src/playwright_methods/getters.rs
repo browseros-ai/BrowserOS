@@ -1365,8 +1365,11 @@ mod tests {
 
     #[test]
     fn tests_that_url_matching_reuses_all_recorded_playwright_cases() {
-        let goldens: Value =
-            serde_json::from_str(include_str!("../tests/fixtures/url-match-goldens.json")).unwrap();
+        let goldens: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/url-match-goldens.json"
+        )))
+        .unwrap();
         for golden in goldens["globs"].as_array().unwrap() {
             let matcher: SerializedUrlMatch =
                 serde_json::from_value(json!({"glob": golden["glob"]})).unwrap();
