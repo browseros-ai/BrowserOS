@@ -898,7 +898,15 @@ struct Harness {
 
 impl Harness {
     async fn start(hooks: Option<Arc<dyn ActionHooks>>, run_timeout: Duration) -> Self {
-        let browser = FakeBrowser::start(Replies::default()).await;
+        Self::start_with(&Replies::default(), hooks, run_timeout).await
+    }
+
+    async fn start_with(
+        replies: &Replies,
+        hooks: Option<Arc<dyn ActionHooks>>,
+        run_timeout: Duration,
+    ) -> Self {
+        let browser = FakeBrowser::start(*replies).await;
         let tasks = TaskTracker::new();
         let run = RunScope::new(
             Deadline::new(run_timeout, CancellationToken::new()),
@@ -1554,6 +1562,22 @@ async fn tests_that_a_set_content_held_at_its_gate_lets_the_hooks_own_write_go_f
     );
 }
 
+/// `wants`: true for the first `wanted` questions (one call's Before and After), false after.
+fn first_asks(wanted: usize) -> impl Fn(ActionHook, &str) -> bool + Send + Sync + 'static {
+    let asks = AtomicUsize::new(0);
+    move |_, _| asks.fetch_add(1, Ordering::SeqCst) < wanted
+}
+
+fn set_content(id: u64, html: &str) -> Value {
+    message(
+        id,
+        &frame_guid(),
+        "setContent",
+        json!({ "html": html, "waitUntil": "commit" }),
+        json!({}),
+    )
+}
+
 /// A hook that replaces every call's arguments with `args`, and wants no `afterAction`.
 fn replacing(timeline: &Timeline, args: &Value) -> Arc<FakeHooks> {
     let args = args.clone();
@@ -1655,4 +1679,287 @@ async fn tests_that_a_call_that_never_ran_gets_no_after_action() {
     assert_eq!(reply.finish(&entry, aborted.clone()).await, Some(aborted));
     assert!(fake.events(ActionHook::After).is_empty());
     assert_eq!(record(&entry).hook, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_errors_quoting_replaced_arguments_never_reach_the_script() {
+    let timeline = Timeline::default();
+    // Neo refuses the permission by name: `Unknown permission: <value>`.
+    let cases = [(
+        message(
+            1,
+            "context@default",
+            "grantPermissions",
+            json!({ "permissions": ["geolocation"] }),
+            json!({}),
+        ),
+        json!({ "permissions": ["s3cret"] }),
+    )];
+    for (call, swapped) in cases {
+        let fake = replacing(&timeline, &swapped);
+        let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+        let reply = harness.call(&call).await.unwrap();
+        assert_eq!(reply["error"]["error"]["name"], "Error", "{reply}");
+        assert!(!reply.to_string().contains("s3cret"), "{reply}");
+        let record = harness.records(RunEnd::Settled).await.remove(0);
+        assert_eq!(record.params, call["params"]);
+        assert_eq!(
+            record.hook,
+            Some(before_record(BeforeHookResult::ArgsReplaced))
+        );
+        let CallResult::Error { name, message } = &record.result else {
+            panic!("{call}: the call fails: {:?}", record.result);
+        };
+        assert_eq!(name, "Error");
+        assert!(!message.contains("s3cret"), "{message}");
+        let trace = harness.run.hook_ledger.take_trace();
+        assert!(
+            trace.iter().any(|line| line.contains("s3cret")),
+            "{call}: the host reads the real text: {trace:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_failed_goto_to_a_replaced_url_never_names_it() {
+    let timeline = Timeline::default();
+    let replies = Replies {
+        navigate_error: Some("net::ERR_NAME_NOT_RESOLVED"),
+        ..Replies::default()
+    };
+    let goto = message(
+        1,
+        &frame_guid(),
+        "goto",
+        json!({ "url": "https://example.test/public", "waitUntil": "load" }),
+        json!({ "timeout": 2000 }),
+    );
+    // Without a swap, the error names the URL the script gave.
+    let allow = Arc::new(FakeHooks::new(&timeline));
+    let allowed =
+        Harness::start_with(&replies, Some(hooks_of(&allow)), Duration::from_secs(30)).await;
+    let reply = allowed.call(&goto).await.unwrap();
+    let message = reply["error"]["error"]["message"].as_str().unwrap();
+    assert!(message.contains("https://example.test/public"), "{reply}");
+
+    let swap = replacing(
+        &timeline,
+        &json!({ "url": "https://example.test/s3cret", "waitUntil": "load" }),
+    );
+    let swapped =
+        Harness::start_with(&replies, Some(hooks_of(&swap)), Duration::from_secs(30)).await;
+    let reply = swapped.call(&goto).await.unwrap();
+    assert_eq!(reply["error"]["error"]["name"], "Error");
+    assert!(!reply.to_string().contains("s3cret"), "{reply}");
+    let record = swapped.records(RunEnd::Settled).await.remove(0);
+    assert!(!format!("{:?}", record.result).contains("s3cret"));
+    let trace = swapped.run.hook_ledger.take_trace();
+    assert!(
+        trace
+            .iter()
+            .any(|line| line.contains("https://example.test/s3cret")),
+        "{trace:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_replaced_or_withheld_result_leaves_no_page_preview_behind() {
+    let timeline = Timeline::default();
+    let bounding_box = message(
+        1,
+        &frame_guid(),
+        "neo:boundingBox",
+        json!({ "selector": "#go", "strict": true }),
+        json!({ "timeout": 2000 }),
+    );
+    let decisions = [
+        (Ok(kept(Vec::new())), Some(AfterHookResult::Kept)),
+        (
+            Ok(replaced(json!({ "value": {} }))),
+            Some(AfterHookResult::Replaced),
+        ),
+        (Ok(replaced(json!(null))), Some(AfterHookResult::Failed)),
+    ];
+    for (decision, after) in decisions {
+        let fake = Arc::new(
+            FakeHooks::new(&timeline)
+                .wanting(|hook, _| hook == ActionHook::After)
+                .after(move |_, _| decided(decision.clone())),
+        );
+        let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+        let reply = harness.call(&bounding_box).await.unwrap();
+        let record = harness.records(RunEnd::Settled).await.remove(0);
+        assert_eq!(record.hook.and_then(|hook| hook.after), after);
+        let previews = record.log.iter().any(|line| line.contains("<button"));
+        assert_eq!(
+            previews,
+            after == Some(AfterHookResult::Kept),
+            "{:?}",
+            record.log
+        );
+        if after == Some(AfterHookResult::Failed) {
+            assert_eq!(reply["log"], json!([]), "{reply}");
+        }
+    }
+
+    // A failed afterAction withholds the log too, whether the read found its element or not.
+    for (selector, timeout) in [("#go", 2000), ("#nothing", 300)] {
+        let fake = Arc::new(
+            FakeHooks::new(&timeline)
+                .wanting(|hook, _| hook == ActionHook::After)
+                .after(|_, _| decided(Err(HookFailure::Threw("redactor broke".to_string())))),
+        );
+        let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+        let read = message(
+            1,
+            &frame_guid(),
+            "textContent",
+            json!({ "selector": selector, "strict": true }),
+            json!({ "timeout": timeout }),
+        );
+        let reply = harness.call(&read).await.unwrap();
+        assert_eq!(
+            reply["error"]["error"]["name"], "Error",
+            "{selector}: {reply}"
+        );
+        assert_eq!(reply["log"], json!([]), "{selector}: {reply}");
+        assert!(
+            harness.records(RunEnd::Settled).await[0].log.is_empty(),
+            "{selector}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_call_waiting_for_its_after_action_holds_no_write_turn() {
+    let timeline = Timeline::default();
+    let (release, released) = oneshot::channel::<()>();
+    let released = Mutex::new(Some(released));
+    // The agent's write is hooked after it runs; the second stands in for the hook realm's own.
+    let fake = Arc::new(
+        FakeHooks::new(&timeline)
+            .wanting(first_asks(2))
+            .after(move |_, _| match released.lock().unwrap().take() {
+                Some(released) => async move {
+                    let _released = released.await;
+                    Ok(kept(Vec::new()))
+                }
+                .boxed(),
+                None => decided(Ok(kept(Vec::new()))),
+            }),
+    );
+    let harness = Arc::new(Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await);
+    let agent = {
+        let harness = Arc::clone(&harness);
+        tokio::spawn(async move { harness.call(&set_content(1, "<p>agent</p>")).await })
+    };
+    while fake.events(ActionHook::After).is_empty() {
+        task::yield_now().await;
+    }
+    let hook_write = time::timeout(
+        Duration::from_secs(10),
+        harness.call(&set_content(2, "<p>hook</p>")),
+    )
+    .await;
+    assert!(matches!(hook_write, Ok(Ok(_))), "{hook_write:?}");
+    assert!(
+        !agent.is_finished(),
+        "the agent's write is still in its afterAction"
+    );
+    release.send(()).unwrap();
+    let agent_reply = time::timeout(Duration::from_secs(10), agent).await;
+    assert!(matches!(agent_reply, Ok(Ok(Ok(_)))), "{agent_reply:?}");
+    assert_eq!(
+        harness.writes(),
+        [json!("<p>agent</p>"), json!("<p>hook</p>")]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_call_aborted_as_its_hook_allows_it_never_runs_its_after_action() {
+    let timeline = Timeline::default();
+    let slot: Arc<Mutex<Option<Dispatcher>>> = Arc::default();
+    let aborter = Arc::clone(&slot);
+    let fake = Arc::new(
+        FakeHooks::new(&timeline)
+            .wanting(first_asks(2))
+            .before(move |_, _| {
+                let aborter = Arc::clone(&aborter);
+                async move {
+                    // Inside the decision's own poll: the gate's race saw no abort, and returns
+                    // this decision; the call's task then finds the abort before its handler.
+                    let dispatcher = aborter.lock().unwrap().clone().unwrap();
+                    dispatcher.abort(1, "aborted as it was decided".to_string());
+                    Ok(ActionDecision::Allow)
+                }
+                .boxed()
+            }),
+    );
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    *slot.lock().unwrap() = Some(harness.dispatcher.clone());
+    let agent_reply = harness.call(&set_content(1, "<p>agent</p>")).await.unwrap();
+    assert_eq!(agent_reply["error"]["error"]["name"], "AbortError");
+    assert!(
+        fake.events(ActionHook::After).is_empty(),
+        "the call never ran"
+    );
+    let hook_write = time::timeout(
+        Duration::from_secs(10),
+        harness.call(&set_content(2, "<p>hook</p>")),
+    )
+    .await;
+    assert!(matches!(hook_write, Ok(Ok(_))), "{hook_write:?}");
+    assert_eq!(
+        harness.writes(),
+        [json!("<p>hook</p>")],
+        "the aborted write never ran"
+    );
+    let record = harness.records(RunEnd::Settled).await.remove(0);
+    assert_eq!(record.hook, Some(before_record(BeforeHookResult::Allowed)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_replaced_arguments_are_admitted_like_the_scripts() {
+    let timeline = Timeline::default();
+    // Past the in-flight byte cap on their own.
+    let padded = json!({ "padding": "x".repeat(9 << 20) });
+    let fake = replacing(&timeline, &padded);
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let reply = harness
+        .call(&message(1, &frame_guid(), "title", json!({}), json!({})))
+        .await
+        .unwrap();
+    assert_eq!(reply["error"]["error"]["name"], "Error", "{reply}");
+    let record = harness.records(RunEnd::Settled).await.remove(0);
+    assert_eq!(record.hook, Some(before_record(BeforeHookResult::Failed)));
+
+    // A replacement may not change what the call ends among the calls in flight.
+    let release = |cursor: u64| {
+        message(
+            1,
+            &frame_guid(),
+            "neo:releaseNavigation",
+            json!({ "cursor": cursor }),
+            json!({}),
+        )
+    };
+    for (cursor, before) in [
+        (6, BeforeHookResult::Failed),
+        (5, BeforeHookResult::ArgsReplaced),
+    ] {
+        let fake = replacing(&timeline, &json!({ "cursor": cursor }));
+        let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+        let reply = harness.call(&release(5)).await.unwrap();
+        let record = harness.records(RunEnd::Settled).await.remove(0);
+        assert_eq!(
+            record.hook,
+            Some(before_record(before)),
+            "cursor {cursor}: {reply}"
+        );
+        assert_eq!(
+            reply.get("error").is_some(),
+            before == BeforeHookResult::Failed,
+            "cursor {cursor}: {reply}"
+        );
+    }
 }
