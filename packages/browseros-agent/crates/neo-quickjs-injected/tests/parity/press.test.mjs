@@ -46,16 +46,18 @@ test('press returns undefined and types through ordinary key events', {
     `,
     probe: 'window.__facts()',
   })
+  // Record params follow the trace key policy; compareMethod above still compares the
+  // script's values and the page's key events directly with Playwright.
   const deliveries = outcome.calls.map((c) => [c.params.key, c.delivery])
   assert.deepEqual(deliveries.slice(0, 8), [
     ['End', 'done'],
-    ['Shift+A', 'done'],
-    ['x', 'done'],
+    ['Shift+[redacted 1]', 'done'],
+    ['[redacted 1]', 'done'],
     ['ControlOrMeta+a', 'done'],
     ['Backspace', 'done'],
     ['Enter', 'done'],
     ['Foo', 'notSent'],
-    ['', 'notSent'],
+    ['[redacted 0]', 'notSent'],
   ])
 })
 

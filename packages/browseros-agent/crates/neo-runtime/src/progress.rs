@@ -45,8 +45,9 @@ use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
 use crate::playwright_methods::evaluate::Handles;
 use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
+use crate::trace;
 use crate::trace::redact::{self, Scrubber};
-use crate::trace::{PageRef, RunEvent, RunTap, micros, unix_ms};
+use crate::trace::{PageRef, RunEvent, RunTap};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
 /// Every handler returns this; `?` on [`Progress::race`] is how a handler gives up.
@@ -848,7 +849,7 @@ impl CallEntry {
             params: summary.params,
             location: self.location,
             timeout_ms: self.timeout_ms,
-            started_at_ms: unix_ms(self.started_at),
+            started_at_ms: trace::unix_ms(self.started_at),
             duration,
             result: scrubbed_result(result, &scrubber),
             delivery: self.delivery.as_ref().map(|cell| cell.delivery()),
@@ -931,8 +932,8 @@ impl CallEntry {
                     .and_then(Value::as_str)
                     .map(|text| scrubber.scrub_cut(text, redact::MAX_SUMMARY_BYTES)),
                 location: self.location,
-                started_at_ms: unix_ms(self.started_at),
-                offset_us: micros(self.started.duration_since(self.tap.start())),
+                started_at_ms: trace::unix_ms(self.started_at),
+                offset_us: trace::micros(self.started.duration_since(self.tap.start())),
             }
         });
     }

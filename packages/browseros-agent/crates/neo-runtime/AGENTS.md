@@ -41,3 +41,7 @@ Try a script by hand with `cargo run -p neo-runtime --example neo_run -- --help`
 Live website scenarios are in `integration-tests/`, registered in Cargo.toml. They are ignored
 by default; their module docs give opt-in commands. They use temporary profiles, including for
 Amazon's anonymous cart write, and keep one Rust `Runtime` across submitted scripts.
+
+Operations are recorded only through `method_router.rs`'s `CallEntry` or the getter door
+(`Getters::get`), never from a handler. Every record goes through `src/trace/redact.rs`;
+new free-text params are secret unless their metadata explicitly classifies them.

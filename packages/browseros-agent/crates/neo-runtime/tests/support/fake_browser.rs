@@ -107,6 +107,8 @@ pub struct Replies {
     /// that element.
     pub press_lands_elsewhere: bool,
     pub title: Reply,
+    /// The mutating fill evaluation can outlive the call's own timeout.
+    pub fill: Reply,
     pub world: Reply,
     /// A commit after the named operation starts, before its delayed answer is delivered.
     pub commit_during: Option<CommitDuring>,
@@ -195,7 +197,7 @@ impl Default for Page {
         Self {
             drag_listeners: false,
             tabs: vec![json!({
-                "targetId": PAGE, "url": PAGE_URL, "windowId": 1,
+                "targetId": PAGE, "tabId": 11, "url": PAGE_URL, "windowId": 1,
                 "liveBrowserContextId": "profile", "isActive": true,
             })],
             frames: None,
@@ -215,7 +217,7 @@ impl Page {
     fn add_tab(&mut self, window: i64, url: &str) -> Value {
         self.next_tab += 1;
         let tab = json!({
-            "targetId":format!("new-page-{}",self.next_tab), "url":url, "windowId":window,
+            "targetId":format!("new-page-{}",self.next_tab), "tabId":11+self.next_tab, "url":url, "windowId":window,
             "liveBrowserContextId":"profile", "isActive":false,
         });
         self.tabs.push(tab.clone());
@@ -372,6 +374,7 @@ struct Calls {
     mouse: usize,
     arm: usize,
     title: usize,
+    fill: usize,
     world: usize,
     committed: bool,
     /// Which document the current utility world belongs to, for stale-read behavior tests.
@@ -863,6 +866,7 @@ fn glue_delay(params: &Value, calls: &mut Calls, replies: &Replies) -> Option<Du
     let (counter, reply) = match params["arguments"][0]["value"].as_str() {
         Some("setupHitTargetInterceptor") => (&mut calls.arm, replies.arm),
         Some("title") => (&mut calls.title, replies.title),
+        Some("fill") => (&mut calls.fill, replies.fill),
         _ => return Some(Duration::ZERO),
     };
     let call = *counter;

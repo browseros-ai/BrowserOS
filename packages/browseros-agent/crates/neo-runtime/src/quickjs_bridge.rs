@@ -62,8 +62,9 @@ use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunError};
 #[cfg(feature = "test-host")]
 use crate::test_host::TestHost;
+use crate::trace;
 use crate::trace::redact;
-use crate::trace::{ConsoleLine, GetterResult, RunEvent, RunTap, micros};
+use crate::trace::{ConsoleLine, GetterResult, RunEvent, RunTap};
 use crate::url_match::{self, SerializedUrlMatch, UrlPart};
 
 /// The guid the realm gives a run's page, in the `<type>@<id>` form Playwright's protocol uses.
@@ -399,7 +400,7 @@ impl Logs {
 
 impl LogLines {
     fn push(&mut self, text: String) {
-        let offset_us = micros(self.start.elapsed());
+        let offset_us = trace::micros(self.start.elapsed());
         if let Some(overflow) = &mut self.overflow {
             overflow.dropped += 1;
             return;
@@ -681,7 +682,7 @@ impl Getters {
         };
         let no = self.next.fetch_add(1, Ordering::Relaxed);
         let answer = self.answer(request);
-        let duration_us = micros(started.elapsed());
+        let duration_us = trace::micros(started.elapsed());
         if let Ok(value) = &answer {
             redact::register_getter_secrets(field, value, self.tap.secrets());
         }
@@ -706,7 +707,7 @@ impl Getters {
                 field,
                 page: self.tabs.resolve(&object).map(|(page, _)| page.reference()),
                 result,
-                offset_us: micros(started.duration_since(self.tap.start())),
+                offset_us: trace::micros(started.duration_since(self.tap.start())),
                 duration_us,
             }
         });

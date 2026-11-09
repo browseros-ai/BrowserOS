@@ -286,22 +286,34 @@ async fn tests_that_cancellation_during_creation_records_and_closes_the_tab() {
         ..Replies::default()
     })
     .await;
+    let runtime = browser.runtime().await;
     let cancel = CancellationToken::new();
-    let trigger = cancel.clone();
-    let canceller = tokio::spawn(async move {
-        time::sleep(Duration::from_millis(100)).await;
-        trigger.cancel();
-    });
-    let outcome = browser
-        .runtime()
+    let cancellation = async {
+        // Cancellation must land while creation is in flight, not during runtime startup.
+        // A timer could fire before QuickJS made any call on a loaded machine, which never
+        // exercises creation ownership or its cleanup.
+        time::timeout(Duration::from_secs(5), async {
+            loop {
+                if browser.exchanges().iter().any(|exchange| {
+                    exchange.method() == "Browser.createTab" && exchange.reply.is_none()
+                }) {
+                    break;
+                }
+                time::sleep(Duration::from_millis(1)).await;
+            }
+        })
         .await
-        .run(fake_browser::run_request(
+        .unwrap();
+        cancel.cancel();
+    };
+    let (outcome, ()) = tokio::join!(
+        runtime.run(fake_browser::run_request(
             &format!("{WIRE} await call('context@default','newPage');"),
             Duration::from_secs(5),
-            cancel,
-        ))
-        .await;
-    canceller.await.unwrap();
+            cancel.clone(),
+        )),
+        cancellation,
+    );
     assert_eq!(outcome.status, RunStatus::Cancelled, "{outcome:?}");
     assert!(
         outcome.pages.iter().any(|page| page.created && page.closed),

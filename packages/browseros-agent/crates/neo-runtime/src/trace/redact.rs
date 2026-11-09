@@ -187,12 +187,12 @@ pub(crate) fn getter_summary(field: GetterField, value: &Value) -> Value {
         match value {
             Value::Null => Value::Null,
             Value::String(id) => Value::String(id.clone()),
-            Value::Array(items) => Value::Array(items.iter().take(100).map(identity).collect()),
+            Value::Array(items) => Value::Array(items.iter().map(identity).collect()),
             Value::Object(fields) => fields.get("guid").cloned().unwrap_or(Value::Null),
             Value::Bool(_) | Value::Number(_) => value.clone(),
         }
     }
-    match field {
+    let summary = match field {
         GetterField::Url => value
             .as_str()
             .map_or(Value::Null, |url| json!(redact_url(url))),
@@ -223,6 +223,11 @@ pub(crate) fn getter_summary(field: GetterField, value: &Value) -> Value {
         GetterField::Name | GetterField::Failure | GetterField::ParseUrl | GetterField::SetUrl => {
             summarize(value, &[]).params
         }
+    };
+    if json_len(&summary) > MAX_SUMMARY_BYTES {
+        Value::Null
+    } else {
+        summary
     }
 }
 
@@ -871,6 +876,73 @@ mod tests {
             run.register(secret);
         }
         run.scrubber()
+    }
+
+    #[test]
+    fn expanded_getter_summaries_keep_state_and_ids_without_page_data() {
+        let secret = "getter-page-data-do-not-store";
+        let record =
+            json!({"guid":"handle@run.1", "initializer":{"preview":secret,"value":secret}});
+        for field in [
+            GetterField::Initializer,
+            GetterField::Opener,
+            GetterField::ParentFrame,
+            GetterField::Element,
+        ] {
+            assert_eq!(getter_summary(field, &record), json!("handle@run.1"));
+        }
+        for field in [
+            GetterField::Pages,
+            GetterField::Frames,
+            GetterField::ChildFrames,
+            GetterField::Args,
+        ] {
+            assert_eq!(
+                getter_summary(field, &json!([record])),
+                json!(["handle@run.1"])
+            );
+        }
+        for field in [
+            GetterField::Name,
+            GetterField::Failure,
+            GetterField::ParseUrl,
+            GetterField::SetUrl,
+        ] {
+            assert!(
+                !getter_summary(field, &json!(secret))
+                    .to_string()
+                    .contains(secret)
+            );
+        }
+        assert_eq!(
+            getter_summary(
+                GetterField::Chain,
+                &json!([{"headers":secret,"url":secret}])
+            ),
+            json!({"count":1})
+        );
+        assert_eq!(
+            getter_summary(GetterField::PausedDetails, &json!({"params":secret})),
+            json!({"paused":true})
+        );
+        for field in [
+            GetterField::IsClosed,
+            GetterField::IsDetached,
+            GetterField::IsConnected,
+            GetterField::MatchesUrl,
+        ] {
+            assert_eq!(getter_summary(field, &json!(false)), json!(false));
+        }
+        assert_eq!(
+            getter_summary(GetterField::Timing, &json!({"startTime":123})),
+            json!({"startTime":123})
+        );
+        assert_eq!(
+            getter_summary(GetterField::RandomValues, &json!("YQ==")),
+            json!({"bytes":1})
+        );
+        let huge = json!([{"guid":"x".repeat(MAX_SUMMARY_BYTES)}]);
+        assert_eq!(getter_summary(GetterField::Args, &huge), Value::Null);
     }
 
     #[test]
