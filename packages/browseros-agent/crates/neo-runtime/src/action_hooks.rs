@@ -24,13 +24,12 @@
 //!
 //! Every failure fails closed (hooks design D8): a beforeAction that throws, times out or decides
 //! nothing usable blocks the call, an afterAction that does fails it after it ran. The script
-//! gets a generic error; the failure's own text, which may hold a secret, goes to the host-only
-//! trace of the run's [`HookLedger`].
+//! gets a generic error; the failure's own text, which may hold a secret, goes to the run's
+//! host-only hook trace, and a hook's notes to the run's outcome, both kept by the sandbox.
 //!
-//! The hooks themselves (feature 2's hook sandbox) are reached through [`ActionHooks`]. Until that
-//! sandbox merges here, the types it publishes are mirrored below under the same names and
-//! fields, each marked as a mirror; phase 2 replaces them with `crate::hooks`'s and implements
-//! [`ActionHooks`] for its `HookSandbox`.
+//! The hooks are the run's hook sandbox (feature 2, `hooks.rs`), reached through
+//! [`ActionHooks`], which only the agent's dispatcher holds: the hook realm's dispatcher has no
+//! hooks, so a hook's own calls are never hooked, whatever their message says (hooks design D7).
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -39,14 +38,16 @@ use std::pin::pin;
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
-use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::Notify;
 
 use crate::actions::{ResultShapeError, ServedMethod};
+use crate::hooks::{
+    ActionDecision, ActionEnd, ActionEvent, ActionHook, AfterDecision, HookFailure, HookSandbox,
+    LocatorRef, Replaced,
+};
 use crate::progress::{CallEntry, PlaywrightError, RunScope};
-use crate::quickjs_bridge::Logs;
-use crate::run::{AfterHookResult, BeforeHookResult, CallLocation, RunBinary, RunError};
+use crate::run::{AfterHookResult, BeforeHookResult, RunError};
 
 #[cfg(test)]
 mod tests;
@@ -68,10 +69,9 @@ const AFTER_ACTION_FAILED: &str = "a hook failed after the action ran; its resul
 const REPLACED_ARGS_FAILED: &str =
     "the action failed with arguments a hook replaced; its message is withheld";
 
-/// The run's action hooks, as the call path calls them. Dyn-compatible, so a run holds them as
-/// `Arc<dyn ActionHooks>` in [`RunScope::action_hooks`], set once they are ready.
-///
-/// Phase 2: feature 2's `HookSandbox` implements it, each method forwarding to its own.
+/// The run's action hooks, as the call path calls them: the run's [`HookSandbox`], or a test's
+/// scripted fake. Dyn-compatible, so the agent's dispatcher holds them as `Arc<dyn ActionHooks>`,
+/// set once when the run's hooks start (`Dispatcher::set_action_hooks`).
 pub(crate) trait ActionHooks: Send + Sync + 'static {
     /// Whether a registration wants `event` for an action of `kind` and `group`. It never enters
     /// the hook realm: a call no hook wants costs only this.
@@ -90,183 +90,56 @@ pub(crate) trait ActionHooks: Send + Sync + 'static {
         event: ActionEvent,
         ended: ActionEnd,
     ) -> BoxFuture<'static, Result<AfterDecision, HookFailure>>;
+
+    /// Adds notes a hook left for the model; the run's outcome carries them
+    /// (`RunOutcome::notes`), never a method's return value.
+    fn add_notes(&self, notes: Vec<String>);
+
+    /// Adds one line on why a hook failed to the run's host-only hook trace
+    /// (`RunOutcome::hook_trace`): its text may hold a secret.
+    fn add_failure(&self, line: String);
 }
 
-/// An action event, before or after the action.
-///
-/// Mirror of `crate::hooks::ActionHook` (hooks feature 2); replaced by it when that merges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ActionHook {
-    Before,
-    After,
-}
+/// Neo: the run's hook sandbox is the run's action hooks: each call goes to its own, so its one
+/// FIFO actor, its budget and its registrations, fixed at load, apply unchanged.
+impl ActionHooks for HookSandbox {
+    fn wants(&self, event: ActionHook, kind: Option<&str>, group: Option<&str>) -> bool {
+        HookSandbox::wants(self, event, kind, group)
+    }
 
-/// What an action hook's handlers receive about the action. The hook realm builds real
-/// Playwright objects from its guids (hooks design D5).
-///
-/// Mirror of `crate::hooks::ActionEvent` (hooks feature 2); replaced by it when that merges.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct ActionEvent {
-    /// The action's kind (`goto`, `keyboard`, …), feature 1's label.
-    pub(crate) kind: Option<&'static str>,
-    /// The action's group (`navigate`, `type`, …), feature 1's label.
-    pub(crate) group: Option<&'static str>,
-    pub(crate) method: String,
-    /// The object the call named.
-    pub(crate) guid: String,
-    /// The params the call runs with: the script's, or the hook's once it replaced them.
-    pub(crate) args: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) location: Option<CallLocation>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) page: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) frame: Option<String>,
-    pub(crate) context: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) locator: Option<LocatorRef>,
-    /// The pinned element's handle guid (hooks feature 4); always `None` here.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) element: Option<String>,
-}
+    fn before_action(
+        &self,
+        event: ActionEvent,
+    ) -> BoxFuture<'static, Result<ActionDecision, HookFailure>> {
+        let sandbox = self.clone();
+        Box::pin(async move { sandbox.before_action(event).await })
+    }
 
-/// The locator a call names: its frame and selector.
-///
-/// Mirror of `crate::hooks::LocatorRef` (hooks feature 2); replaced by it when that merges.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct LocatorRef {
-    pub(crate) frame: String,
-    pub(crate) selector: String,
-}
+    fn after_action(
+        &self,
+        event: ActionEvent,
+        ended: ActionEnd,
+    ) -> BoxFuture<'static, Result<AfterDecision, HookFailure>> {
+        let sandbox = self.clone();
+        Box::pin(async move { sandbox.after_action(event, ended).await })
+    }
 
-/// How an action ended, for `afterAction`.
-///
-/// Mirror of `crate::hooks::ActionEnd` (hooks feature 2); replaced by it when that merges.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum ActionEnd {
-    /// The call's reply `result`; `null` for a command that answers none.
-    Result(Value),
-    Error(RunError),
-}
+    fn add_notes(&self, notes: Vec<String>) {
+        HookSandbox::add_notes(self, notes);
+    }
 
-/// What `beforeAction`'s handlers decided.
-///
-/// Mirror of `crate::hooks::ActionDecision` (hooks feature 2); replaced by it when that merges.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "phase 2: the hook sandbox decides; until then only the tests' fake does"
-    )
-)]
-pub(crate) enum ActionDecision {
-    Allow,
-    Block(String),
-    /// New arguments, which the call re-checks like the script's own.
-    ReplaceArgs(Value),
-}
-
-/// What `afterAction`'s handlers decided.
-///
-/// Mirror of `crate::hooks::AfterDecision` (hooks feature 2); replaced by it when that merges.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct AfterDecision {
-    /// What replaces the result, when a handler replaced it.
-    pub(crate) replace: Option<Replaced>,
-    /// Every handler's note, in order.
-    pub(crate) notes: Vec<String>,
-}
-
-/// A result a hook put in place of the action's own.
-///
-/// Mirror of `crate::hooks::Replaced` (hooks feature 2); replaced by it when that merges.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Replaced {
-    /// The replacement as JSON; `None` for `{ replace: undefined }`.
-    pub(crate) value: Option<Value>,
-    /// Its binaries, lifted out of it; an action's reply cannot carry any.
-    pub(crate) binaries: Vec<RunBinary>,
-}
-
-/// Why an invocation decided nothing usable. Every one fails closed.
-///
-/// Mirror of `crate::hooks::HookFailure` (hooks feature 2); replaced by it when that merges.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "phase 2: the hook sandbox fails; until then only the tests' fake does"
-    )
-)]
-pub(crate) enum HookFailure {
-    /// A handler threw or rejected; the detail is for the hook trace only.
-    Threw(String),
-    /// The invocation ran past its budget.
-    Timeout,
-    /// The decision was unreadable, or not one its event allows.
-    BadDecision(String),
-    /// The realm cannot answer: the hooks did not load, the run ended, or nobody waits.
-    Realm(String),
-}
-
-impl HookFailure {
-    /// The failure as the host-only trace words it.
-    fn detail(&self) -> String {
-        match self {
-            Self::Threw(detail) => format!("threw: {detail}"),
-            Self::Timeout => "ran past its budget".to_string(),
-            Self::BadDecision(detail) => format!("decided nothing usable: {detail}"),
-            Self::Realm(detail) => format!("could not run: {detail}"),
-        }
+    fn add_failure(&self, line: String) {
+        HookSandbox::add_failure(self, line);
     }
 }
 
-/// What a run's action hooks left: notes for the model (the hooks design keeps them out of
-/// every method's return value) and trace lines for the host only, among them why a hook
-/// failed, whose text may hold a secret. Each is capped as a run's `console` lines are.
-///
-/// Phase 2: the run moves them into feature 2's `RunOutcome::notes` and `hook_trace`.
-#[derive(Default)]
-pub(crate) struct HookLedger {
-    notes: Logs,
-    trace: Logs,
-}
-
-impl HookLedger {
-    /// Adds one of a hook's notes for the model.
-    pub(crate) fn note(&self, note: String) {
-        self.notes.push(note);
-    }
-
-    /// Adds one line to the host-only trace.
-    pub(crate) fn trace(&self, line: String) {
-        self.trace.push(line);
-    }
-
-    /// The notes so far, in order, and forgets them.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "phase 2 moves the notes into the run's outcome (feature 2's `notes`)"
-        )
-    )]
-    pub(crate) fn take_notes(&self) -> Vec<String> {
-        self.notes.take()
-    }
-
-    /// The trace so far, in order, and forgets it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "phase 2 moves the trace into the run's outcome (feature 2's `hook_trace`)"
-        )
-    )]
-    pub(crate) fn take_trace(&self) -> Vec<String> {
-        self.trace.take()
+/// `failure` as the host-only trace words it.
+fn failure_detail(failure: &HookFailure) -> String {
+    match failure {
+        HookFailure::Threw(detail) => format!("threw: {detail}"),
+        HookFailure::Timeout => "ran past its budget".to_string(),
+        HookFailure::BadDecision(detail) => format!("decided nothing usable: {detail}"),
+        HookFailure::Realm(detail) => format!("could not run: {detail}"),
     }
 }
 
@@ -506,7 +379,7 @@ impl<G: CallRoute> CallHooks<G> {
             Ok(decided) => decided,
             Err(halt) => return halt,
         };
-        let gated = self.decided(run, entry, decided, call, &route);
+        let gated = self.decided(entry, decided, call, &route);
         // Only now may the next call's beforeAction start: this call's ordered turns are taken.
         drop(place);
         gated
@@ -515,7 +388,6 @@ impl<G: CallRoute> CallHooks<G> {
     /// What `decided` means for the call; records it on the entry.
     fn decided(
         &mut self,
-        run: &RunScope,
         entry: &CallEntry,
         decided: Result<ActionDecision, HookFailure>,
         call: G::Call,
@@ -547,27 +419,23 @@ impl<G: CallRoute> CallHooks<G> {
                     }
                     Err(detail) => {
                         entry.hook_before(BeforeHookResult::Failed);
-                        self.trace(
-                            run,
-                            "beforeAction",
-                            &format!("replaced arguments: {detail}"),
-                        );
+                        self.trace("beforeAction", &format!("replaced arguments: {detail}"));
                         Gated::Refused(before_failed())
                     }
                 }
             }
             Err(failure) => {
                 entry.hook_before(BeforeHookResult::Failed);
-                self.trace(run, "beforeAction", &failure.detail());
+                self.trace("beforeAction", &failure_detail(&failure));
                 Gated::Refused(before_failed())
             }
         }
     }
 
     /// One host-only trace line about this call's `event` hook.
-    fn trace(&self, run: &RunScope, event: &str, detail: &str) {
-        run.hook_ledger
-            .trace(trace_line(event, self.call_id, &self.event.method, detail));
+    fn trace(&self, event: &str, detail: &str) {
+        self.hooks
+            .add_failure(trace_line(event, self.call_id, &self.event.method, detail));
     }
 }
 
@@ -591,10 +459,11 @@ impl<G> CallHooks<G> {
         let method = event.method.clone();
         Some(ReplyHooks {
             after: after.then(|| AfterHook {
-                hooks,
+                hooks: Arc::clone(&hooks),
                 served,
                 event,
             }),
+            hooks,
             args_replaced,
             call_id,
             method,
@@ -607,6 +476,8 @@ impl<G> CallHooks<G> {
 /// entry ends.
 pub(crate) struct ReplyHooks {
     after: Option<AfterHook>,
+    /// Where the redaction's trace line goes.
+    hooks: Arc<dyn ActionHooks>,
     /// The call runs with a hook's arguments: an error it replies is redacted.
     args_replaced: bool,
     call_id: u64,
@@ -636,6 +507,7 @@ impl ReplyHooks {
     ) -> Option<Result<Option<Value>, PlaywrightError>> {
         let Self {
             after,
+            hooks,
             args_replaced,
             call_id,
             method,
@@ -658,7 +530,7 @@ impl ReplyHooks {
         match outcome {
             // A failed afterAction's error is Neo's own already.
             Err(error) if args_replaced && decided != Some(AfterHookResult::Failed) => {
-                run.hook_ledger.trace(format!(
+                hooks.add_failure(format!(
                     "neo: call {call_id} ({method}) failed with replaced arguments: {}: {}",
                     error.name.as_str(),
                     error.message
@@ -720,20 +592,17 @@ impl AfterHook {
                 notes,
             }) => replacement(served, outcome, replaced)
                 .map(|result| (AfterHookResult::Replaced, Ok(result), notes)),
-            Err(failure) => Err(failure.detail()),
+            Err(failure) => Err(failure_detail(&failure)),
         };
         match applied {
             Ok((decided, outcome, notes)) => {
                 entry.hook_after(decided);
-                for note in notes {
-                    run.hook_ledger.note(note);
-                }
+                hooks.add_notes(notes);
                 Some((outcome, decided))
             }
             Err(detail) => {
                 entry.hook_after(AfterHookResult::Failed);
-                run.hook_ledger
-                    .trace(trace_line("afterAction", call_id, method, &detail));
+                hooks.add_failure(trace_line("afterAction", call_id, method, &detail));
                 Some((
                     Err(PlaywrightError::error(AFTER_ACTION_FAILED)),
                     AfterHookResult::Failed,

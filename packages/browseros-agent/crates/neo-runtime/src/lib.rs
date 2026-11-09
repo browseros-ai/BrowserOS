@@ -5,6 +5,9 @@
 //! ```text
 //! Runtime::run                           runtime.rs: starting tab, run lifetime, outcome
 //!   ├─ Tabs::open                        tabs.rs: context scope, ordered page registry
+//!   ├─ HookSandbox                       hooks.rs: only for a run with hooks; a second realm on
+//!   │                                    its own actor task: load, beforeRun, afterRun; its
+//!   │                                    bridge holds Dispatcher::for_hooks (origin hook)
 //!   └─ quickjs::run                        quickjs.rs: fresh QuickJS and embedded neo-quickjs-injected
 //!        └─ __neo_runtime                quickjs_bridge.rs: JS/Rust boundary
 //!             ├─ get → Tabs              live pages, URL, initializer, opener and closed state
@@ -64,6 +67,7 @@ mod chromium_bridge;
 mod deadline;
 mod debugger;
 mod events;
+mod hooks;
 mod method_router;
 mod mime;
 mod playwright_methods;
@@ -77,8 +81,8 @@ mod url_match;
 pub use actions::{ActionGroup, ActionKind};
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{
-    AfterHookResult, BeforeHookResult, CallAction, CallHookRecord, CallLocation, CallRecord,
-    CallResult, Delivery, DroppedCalls, PageId, RunBinary, RunEnd, RunError, RunOutcome, RunPage,
-    RunRequest, RunStatus,
+    AfterHookResult, BeforeHookResult, CallAction, CallHookRecord, CallLocation, CallOrigin,
+    CallRecord, CallResult, Delivery, DroppedCalls, HOOK_BUDGET, HostCallback, HostRequest, PageId,
+    RunBinary, RunEnd, RunError, RunHooks, RunOutcome, RunPage, RunRequest, RunStatus,
 };
 pub use runtime::{Runtime, RuntimeError};

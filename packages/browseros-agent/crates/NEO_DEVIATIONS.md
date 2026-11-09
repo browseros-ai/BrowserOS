@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (132)
+## Deviations (133)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -112,6 +112,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/debugger.rs | `format_param` | `isomorphic/protocolFormatter.ts` `_formatProtocolParam` | Playwright shows a selector as the JavaScript locator that builds it (`locator('div')`); Rust has no locator generator, so a paused call's title shows the selector itself (`div`). |
 | neo-runtime/src/events.rs | `MAX_QUEUED_BYTES` | `client/connection.ts` `Connection.dispatch` | The same bound in bytes of queued JSON, so a few huge payloads cannot pin the server's memory. |
 | neo-runtime/src/events.rs | `MAX_QUEUED_EVENTS` | `client/connection.ts` `Connection.dispatch` | Playwright's client dispatches every event its server sends; Neo's queue lives outside the realm's memory limit, so a run holds at most this many undelivered events and counts the rest. |
+| neo-runtime/src/method_router.rs | `HOOKS_REFUSE` | `client/page.ts` `Page.route` | Playwright sets a page's route patterns for whoever calls it, as it exposes bindings, adds locator handlers and sets the test id attribute; Neo refuses those calls to a run's hooks with this message ([`refused_for_hooks`]): the run's state they would replace belongs to the agent's script, and the events they rely on never reach the hook realm. |
 | neo-runtime/src/method_router.rs | `released` | `server/debugger.ts` `Debugger._pause` | Playwright's held call waits for a resume even after its browser disconnected, and never settles (measured on BrowserOS neo with pinned Playwright); Neo's fails as closed, as every call the disconnection stopped does, and never runs. |
 | neo-runtime/src/method_router.rs | `released` | `server/progress.ts` `ProgressController.run` | Playwright's timeout already runs while its debugger holds a call (one that fires meanwhile is dropped); Neo starts the call, and its own timeout, once the debugger lets it go. |
 | neo-runtime/src/playwright_methods/browser_methods.rs | (file) | `server/chromium/crBrowser.ts` `CRBrowserContext.doClose` | Playwright keeps a context until the script closes it; a run's realm is gone when it ends, so Neo disposes every context the run created then, with its pages. |

@@ -918,7 +918,7 @@ mod tests {
     use crate::deadline::Deadline;
     use crate::playwright_methods::navigate::{Navigation, NavigationState, Observation};
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope};
-    use crate::run::RunEnd;
+    use crate::run::{CallOrigin, RunEnd};
 
     const START: &str = "https://a.test/start";
     const MATCH: &str = "https://a.test/match";
@@ -1176,6 +1176,7 @@ mod tests {
                 guid: "frame@T".to_string(),
                 method: "wait".to_string(),
                 title: None,
+                origin: CallOrigin::Agent,
                 action: None,
                 params: json!({}),
                 location: None,

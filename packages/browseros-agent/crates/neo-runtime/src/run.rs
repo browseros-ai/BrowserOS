@@ -1,10 +1,13 @@
 //! A script, its starting tab, and the outcome with every created or handed-out page.
 
+use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use futures_util::future::BoxFuture;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -51,6 +54,84 @@ pub struct RunRequest {
     /// option; the bytes a script asked for are still returned. Files written are listed in
     /// [`RunOutcome::artifacts`].
     pub artifacts: Option<PathBuf>,
+    /// The run's hook file, run in a sandbox of its own next to the script (`hooks.rs`). `None`
+    /// creates no sandbox and costs nothing.
+    pub hooks: Option<RunHooks>,
+}
+
+/// Neo: how long one hook invocation may take, its loading included, unless the host sets
+/// another ([`RunHooks::with_budget`]). The hooks design's assumed per-invocation budget.
+pub const HOOK_BUDGET: Duration = Duration::from_secs(5);
+
+/// What a hook's `ctx.host(name, args)` asks the run's host. Hooks feature 5 calls the
+/// callback; until then `ctx.host` rejects inside the hook and the callback is never called.
+pub type HostCallback =
+    Arc<dyn Fn(HostRequest) -> BoxFuture<'static, Result<Value, String>> + Send + Sync>;
+
+/// One `ctx.host(name, args)` request from a hook.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HostRequest {
+    pub name: String,
+    pub args: Value,
+}
+
+/// A run's hook file: the body of an async function that receives `neo` and registers handlers
+/// with `neo.on(event, handler)`. Neo runs it once, in a second QuickJS realm of the run's own,
+/// before the script starts. `beforeRun` may stop the script; `afterRun` may replace its result
+/// or add a note. The script can neither see nor reach the hooks.
+#[derive(Clone)]
+pub struct RunHooks {
+    pub code: String,
+    /// The run's `meta`, handed to every handler as `ctx.meta` (`null` when the host sends none).
+    pub meta: Value,
+    /// Who answers `ctx.host`; `None` makes every `ctx.host` reject.
+    pub host: Option<HostCallback>,
+    /// Each invocation's budget, loading included ([`HOOK_BUDGET`] by default). A hook that
+    /// spins or waits past it fails, and a failed hook fails closed.
+    pub budget: Duration,
+}
+
+impl RunHooks {
+    /// Hooks with no `meta`, no host and the default budget.
+    #[must_use]
+    pub fn new(code: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            meta: Value::Null,
+            host: None,
+            budget: HOOK_BUDGET,
+        }
+    }
+
+    #[must_use]
+    pub fn with_meta(self, meta: Value) -> Self {
+        Self { meta, ..self }
+    }
+
+    #[must_use]
+    pub fn with_host(self, host: HostCallback) -> Self {
+        Self {
+            host: Some(host),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_budget(self, budget: Duration) -> Self {
+        Self { budget, ..self }
+    }
+}
+
+impl fmt::Debug for RunHooks {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RunHooks")
+            .field("code", &self.code)
+            .field("meta", &self.meta)
+            .field("host", &self.host.is_some())
+            .field("budget", &self.budget)
+            .finish()
+    }
 }
 
 /// How a run ended.
@@ -61,6 +142,9 @@ pub enum RunStatus {
     Error,
     Timeout,
     Cancelled,
+    /// The run's hooks stopped the script before it started: a `beforeRun` handler blocked it,
+    /// or the hooks failed to load or to decide (they fail closed).
+    Blocked,
 }
 
 /// A script failure, named the way Playwright names it where Playwright has a name
@@ -97,8 +181,8 @@ impl RunError {
 }
 
 /// The result of a run. `value` is set only for [`RunStatus::Ok`] when the script returned
-/// something other than `undefined`; `error` is set for [`RunStatus::Error`] and
-/// [`RunStatus::Timeout`]. `logs` holds the script's `console` lines, including those written
+/// something other than `undefined`; `error` is set for [`RunStatus::Error`],
+/// [`RunStatus::Timeout`] and [`RunStatus::Blocked`]. `logs` holds the script's `console` lines, including those written
 /// before a failure, up to 1000 lines and 1 MiB of text; past that, the run keeps no more lines
 /// and the last entry is a note from neo-runtime saying how many it dropped.
 ///
@@ -138,6 +222,16 @@ pub struct RunOutcome {
     /// `neo:` line in `logs` saying where it went.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<RunArtifact>,
+    /// The notes the run's `afterRun` hooks added, in the order they were added, for the model
+    /// to read, capped as `logs` is (1000 lines and 1 MiB, then a note saying how many were
+    /// dropped). Absent from the JSON when empty, so a run without hooks reads as before.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+    /// The hook trace, for the host only and never in the outcome's JSON: every `ctx.trace` and
+    /// hook `console` line, and why a hook failed (a hook's error text may hold a secret, so the
+    /// model-visible `error` names no detail). Capped as `logs` is.
+    #[serde(skip)]
+    pub hook_trace: Vec<String>,
 }
 
 impl RunOutcome {
@@ -152,6 +246,8 @@ impl RunOutcome {
             calls_dropped: None,
             binaries: Vec::new(),
             artifacts: Vec::new(),
+            notes: Vec::new(),
+            hook_trace: Vec::new(),
         }
     }
 
@@ -166,6 +262,8 @@ impl RunOutcome {
             calls_dropped: None,
             binaries: Vec::new(),
             artifacts: Vec::new(),
+            notes: Vec::new(),
+            hook_trace: Vec::new(),
         }
     }
 
@@ -184,7 +282,28 @@ impl RunOutcome {
             calls_dropped: None,
             binaries: Vec::new(),
             artifacts: Vec::new(),
+            notes: Vec::new(),
+            hook_trace: Vec::new(),
         }
+    }
+
+    /// The run's hooks stopped the script before it started, with `error` saying why.
+    pub(crate) fn blocked(error: RunError) -> Self {
+        Self {
+            status: RunStatus::Blocked,
+            error: Some(error),
+            ..Self::returned(None, Vec::new())
+        }
+    }
+
+    /// Attaches the notes the run's hooks left for the model, already capped (`hooks.rs`).
+    pub(crate) fn with_notes(self, notes: Vec<String>) -> Self {
+        Self { notes, ..self }
+    }
+
+    /// Attaches the run's host-only hook trace.
+    pub(crate) fn with_hook_trace(self, hook_trace: Vec<String>) -> Self {
+        Self { hook_trace, ..self }
     }
 
     /// Attaches the run's call records. `Runtime::run` calls it last, after the realm is gone
@@ -260,9 +379,14 @@ pub struct CallRecord {
     /// Playwright's trace title for the method, such as `Click`; `None` when the call named no
     /// method Neo serves on that object. Neo records no `apiName`: it never crosses the wire.
     pub title: Option<String>,
-    /// The params exactly as the SDK sent them.
+    /// Who made the call: the agent's script, or one of the run's hooks. Absent from the JSON
+    /// for the script's calls, so a run without hooks reads as before.
+    #[serde(skip_serializing_if = "CallOrigin::is_agent")]
+    pub origin: CallOrigin,
+    /// The params exactly as the SDK sent them; `null` for a hook's call, which may type a
+    /// secret the model must never read back.
     pub params: Value,
-    /// Where the agent's script made the call.
+    /// Where the agent's script made the call; `None` for a hook's call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<CallLocation>,
     /// Wall clock at arrival, in Unix milliseconds.
@@ -279,8 +403,26 @@ pub struct CallRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<Delivery>,
     /// The call log folded as Playwright's error messages show it, kept for successful calls
-    /// too.
+    /// too; empty for a hook's call, whose log may echo what it typed.
     pub log: Vec<String>,
+}
+
+/// Which realm sent a browser call. Decided by the realm's bridge the call came through (the
+/// hook realm's holds a dispatcher of its own, `Dispatcher::for_hooks`), never by a field of the
+/// message: the agent's script can call its bridge directly with any message it likes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CallOrigin {
+    Agent,
+    Hook,
+}
+
+impl CallOrigin {
+    /// Whether the agent's script made the call.
+    #[must_use]
+    pub fn is_agent(&self) -> bool {
+        matches!(self, Self::Agent)
+    }
 }
 
 /// The action label serialized in a call record. Its group is derived from its kind.

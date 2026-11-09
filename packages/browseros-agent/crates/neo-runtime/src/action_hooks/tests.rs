@@ -3,6 +3,7 @@
 //! sandbox; then real calls go through the run's dispatcher to the fake browser.
 
 use std::future;
+use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -28,7 +29,10 @@ use crate::fake_browser::{FakeBrowser, PAGE, Replies};
 use crate::method_router::{BridgeError, Dispatcher};
 use crate::playwright_methods::screenshot::TabScreenshots;
 use crate::progress::{CallStart, ErrorName, Progress, Trace};
-use crate::run::{CallHookRecord, CallRecord, CallResult, Delivery, PageId, RunEnd};
+use crate::run::{
+    CallHookRecord, CallLocation, CallOrigin, CallRecord, CallResult, Delivery, PageId, RunBinary,
+    RunEnd,
+};
 
 type BeforeScript = Box<
     dyn Fn(usize, ActionEvent) -> BoxFuture<'static, Result<ActionDecision, HookFailure>>
@@ -69,6 +73,9 @@ struct FakeHooks {
     befores: AtomicUsize,
     /// Every event an invocation received, with how the action ended for `afterAction`.
     events: Mutex<Vec<(ActionHook, ActionEvent, Option<ActionEnd>)>>,
+    /// What the call path left with the hooks, as the run's sandbox keeps it.
+    notes: Mutex<Vec<String>>,
+    failures: Mutex<Vec<String>>,
 }
 
 impl FakeHooks {
@@ -82,6 +89,8 @@ impl FakeHooks {
             asked: AtomicUsize::new(0),
             befores: AtomicUsize::new(0),
             events: Mutex::default(),
+            notes: Mutex::default(),
+            failures: Mutex::default(),
         }
     }
 
@@ -131,6 +140,16 @@ impl FakeHooks {
     fn invocations(&self) -> usize {
         self.events.lock().unwrap().len()
     }
+
+    /// The notes the call path left so far, taken.
+    fn take_notes(&self) -> Vec<String> {
+        mem::take(&mut *self.notes.lock().unwrap())
+    }
+
+    /// The failure lines the call path left so far, taken.
+    fn take_failures(&self) -> Vec<String> {
+        mem::take(&mut *self.failures.lock().unwrap())
+    }
 }
 
 impl ActionHooks for FakeHooks {
@@ -163,6 +182,14 @@ impl ActionHooks for FakeHooks {
             .unwrap()
             .push((ActionHook::After, event.clone(), Some(ended.clone())));
         (self.after)(event, ended)
+    }
+
+    fn add_notes(&self, notes: Vec<String>) {
+        self.notes.lock().unwrap().extend(notes);
+    }
+
+    fn add_failure(&self, line: String) {
+        self.failures.lock().unwrap().push(line);
     }
 }
 
@@ -235,6 +262,7 @@ fn entry() -> Arc<CallEntry> {
         guid: "frame@T".to_string(),
         method: "title".to_string(),
         title: Some("Get page title"),
+        origin: CallOrigin::Agent,
         action: None,
         params: json!({}),
         location: None,
@@ -663,7 +691,7 @@ async fn tests_that_replaced_arguments_the_call_refuses_block_it() {
         record(&entry).hook,
         Some(before_record(BeforeHookResult::Failed))
     );
-    let trace = run.hook_ledger.take_trace();
+    let trace = fake.take_failures();
     assert!(
         trace.iter().any(|line| line.contains("s3cret")),
         "{trace:?}"
@@ -695,7 +723,7 @@ async fn tests_that_a_failed_before_hook_blocks_the_call_and_tells_only_the_host
             record(&entry).hook,
             Some(before_record(BeforeHookResult::Failed))
         );
-        let trace = run.hook_ledger.take_trace();
+        let trace = fake.take_failures();
         assert_eq!(trace.len(), 1, "{failure:?}: {trace:?}");
         if let HookFailure::Threw(detail) | HookFailure::BadDecision(detail) = &failure {
             assert!(trace[0].contains(detail.as_str()), "{trace:?}");
@@ -725,7 +753,7 @@ async fn tests_that_after_action_keeps_or_replaces_the_result_and_takes_notes() 
         record(&entry_kept).hook,
         Some(after_record(AfterHookResult::Kept))
     );
-    assert_eq!(run.hook_ledger.take_notes(), ["saw a title", "twice"]);
+    assert_eq!(keep.take_notes(), ["saw a title", "twice"]);
     let (_, ended) = keep.events(ActionHook::After).remove(0);
     assert_eq!(ended, Some(ActionEnd::Result(actual.clone())));
 
@@ -788,8 +816,8 @@ async fn tests_that_a_failed_after_hook_fails_the_call_and_tells_only_the_host()
             record(&entry).hook,
             Some(after_record(AfterHookResult::Failed))
         );
-        assert_eq!(run.hook_ledger.take_trace().len(), 1, "{failure:?}");
-        assert!(run.hook_ledger.take_notes().is_empty());
+        assert_eq!(fake.take_failures().len(), 1, "{failure:?}");
+        assert!(fake.take_notes().is_empty());
     }
 }
 
@@ -842,8 +870,8 @@ async fn tests_that_a_replacement_without_the_commands_shape_fails_the_call() {
             Some(after_record(AfterHookResult::Failed)),
             "{shown}"
         );
-        assert!(run.hook_ledger.take_notes().is_empty(), "{shown}");
-        assert_eq!(run.hook_ledger.take_trace().len(), 1, "{shown}");
+        assert!(fake.take_notes().is_empty(), "{shown}");
+        assert_eq!(fake.take_failures().len(), 1, "{shown}");
     }
 }
 
@@ -893,7 +921,8 @@ async fn tests_that_after_action_races_the_run_but_not_an_abort() {
 struct Harness {
     browser: FakeBrowser,
     dispatcher: Dispatcher,
-    run: RunScope,
+    /// The run's hook realm's dispatcher (`Dispatcher::for_hooks`).
+    hook_realm: Dispatcher,
 }
 
 impl Harness {
@@ -912,9 +941,6 @@ impl Harness {
             Deadline::new(run_timeout, CancellationToken::new()),
             tasks.clone(),
         );
-        if let Some(hooks) = hooks {
-            assert!(run.action_hooks.set(hooks).is_ok());
-        }
         let (tabs, _) = Tabs::open(
             browser.cdp().await,
             Handle::current(),
@@ -927,12 +953,23 @@ impl Harness {
         )
         .await
         .unwrap_or_else(|error| panic!("opening the fake tab: {error:?}"));
-        let dispatcher = Dispatcher::new(tabs, run.clone());
+        let dispatcher = Dispatcher::new(tabs, run);
+        if let Some(hooks) = hooks {
+            assert!(dispatcher.set_action_hooks(hooks));
+        }
+        let hook_realm = dispatcher.for_hooks();
         Self {
             browser,
             dispatcher,
-            run,
+            hook_realm,
         }
+    }
+
+    /// The reply to a message the hook realm sends: through the run's hook dispatcher, which
+    /// has no action hooks.
+    async fn hook_call(&self, message: &Value) -> Result<Value, BridgeError> {
+        let (text, _) = self.hook_realm.call(&message.to_string()).await?;
+        Ok(serde_json::from_str(&text).unwrap())
     }
 
     /// The reply to a message the script sends straight to its bridge, as JSON.
@@ -1227,10 +1264,7 @@ async fn tests_that_a_replaced_result_and_a_note_reach_the_script_and_the_ledger
         .await
         .unwrap();
     assert_eq!(reply, json!({ "id": 1, "result": { "value": "Hooked" } }));
-    assert_eq!(
-        harness.run.hook_ledger.take_notes(),
-        ["the title was redacted"]
-    );
+    assert_eq!(fake.take_notes(), ["the title was redacted"]);
     let record = harness.records(RunEnd::Settled).await.remove(0);
     assert_eq!(record.result, CallResult::Ok);
     assert_eq!(
@@ -1259,7 +1293,7 @@ async fn tests_that_a_replacement_of_the_wrong_shape_fails_the_call() {
         record.hook.and_then(|hook| hook.after),
         Some(AfterHookResult::Failed)
     );
-    assert_eq!(harness.run.hook_ledger.take_trace().len(), 1);
+    assert_eq!(fake.take_failures().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1283,7 +1317,7 @@ async fn tests_that_failing_hooks_fail_closed_around_an_input_call() {
         let record = harness.records(RunEnd::Settled).await.remove(0);
         assert_eq!(record.delivery, Some(Delivery::NotSent), "{failure:?}");
         assert_eq!(record.hook, Some(before_record(BeforeHookResult::Failed)));
-        assert_eq!(harness.run.hook_ledger.take_trace().len(), 1);
+        assert_eq!(fake.take_failures().len(), 1);
 
         // After: the click ran; it fails, and its delivery still says it was sent.
         let failed = failure.clone();
@@ -1320,7 +1354,7 @@ async fn tests_that_replaced_arguments_the_command_refuses_block_the_call() {
     assert_eq!(record.delivery, Some(Delivery::NotSent));
     assert_eq!(record.hook, Some(before_record(BeforeHookResult::Failed)));
     assert_eq!(record.params, json!({ "x": 10.0, "y": 20.0 }));
-    let trace = harness.run.hook_ledger.take_trace();
+    let trace = fake.take_failures();
     assert_eq!(trace.len(), 1, "{trace:?}");
 }
 
@@ -1510,14 +1544,10 @@ async fn tests_that_a_set_content_held_at_its_gate_lets_the_hooks_own_write_go_f
     let timeline = Timeline::default();
     let (release, released) = oneshot::channel::<()>();
     let released = Mutex::new(Some(released));
-    // Only the agent's write is hooked; the second stands in for the hook realm's own call,
-    // which phase 2 skips by its origin.
-    let first_ask = AtomicBool::new(true);
+    // The hook realm's own write goes through its own dispatcher, which has no hooks.
     let fake = Arc::new(
         FakeHooks::new(&timeline)
-            .wanting(move |hook, _| {
-                hook == ActionHook::Before && first_ask.swap(false, Ordering::SeqCst)
-            })
+            .wanting(|hook, _| hook == ActionHook::Before)
             .before(move |_, _| match released.lock().unwrap().take() {
                 Some(released) => async move {
                     let _released = released.await;
@@ -1547,7 +1577,7 @@ async fn tests_that_a_set_content_held_at_its_gate_lets_the_hooks_own_write_go_f
     }
     let hook_write = time::timeout(
         Duration::from_secs(10),
-        harness.call(&write(2, "<p>hook</p>")),
+        harness.hook_call(&write(2, "<p>hook</p>")),
     )
     .await;
     assert!(
@@ -1565,12 +1595,6 @@ async fn tests_that_a_set_content_held_at_its_gate_lets_the_hooks_own_write_go_f
         harness.writes(),
         [json!("<p>hook</p>"), json!("<p>agent</p>")]
     );
-}
-
-/// `wants`: true for the first `wanted` questions (one call's Before and After), false after.
-fn first_asks(wanted: usize) -> impl Fn(ActionHook, &str) -> bool + Send + Sync + 'static {
-    let asks = AtomicUsize::new(0);
-    move |_, _| asks.fetch_add(1, Ordering::SeqCst) < wanted
 }
 
 fn set_content(id: u64, html: &str) -> Value {
@@ -1626,7 +1650,7 @@ async fn tests_that_a_call_run_with_replaced_arguments_replies_none_of_its_error
         };
         assert_eq!(replied.name, failure.name, "the error keeps its name");
         assert!(!replied.message.contains("s3cret"), "{replied:?}");
-        let trace = run.hook_ledger.take_trace();
+        let trace = fake.take_failures();
         assert!(
             trace.iter().any(|line| line.contains(&failure.message)),
             "the host still reads the real text: {trace:?}"
@@ -1727,7 +1751,7 @@ async fn tests_that_errors_quoting_replaced_arguments_never_reach_the_script() {
         };
         assert_eq!(name, "Error");
         assert!(!message.contains("s3cret"), "{message}");
-        let trace = harness.run.hook_ledger.take_trace();
+        let trace = fake.take_failures();
         assert!(
             trace.iter().any(|line| line.contains("s3cret")),
             "{call}: the host reads the real text: {trace:?}"
@@ -1768,7 +1792,7 @@ async fn tests_that_a_failed_goto_to_a_replaced_url_never_names_it() {
     assert!(!reply.to_string().contains("s3cret"), "{reply}");
     let record = swapped.records(RunEnd::Settled).await.remove(0);
     assert!(!format!("{:?}", record.result).contains("s3cret"));
-    let trace = swapped.run.hook_ledger.take_trace();
+    let trace = swap.take_failures();
     assert!(
         trace
             .iter()
@@ -1850,19 +1874,17 @@ async fn tests_that_a_call_waiting_for_its_after_action_holds_no_write_turn() {
     let timeline = Timeline::default();
     let (release, released) = oneshot::channel::<()>();
     let released = Mutex::new(Some(released));
-    // The agent's write is hooked after it runs; the second stands in for the hook realm's own.
-    let fake = Arc::new(
-        FakeHooks::new(&timeline)
-            .wanting(first_asks(2))
-            .after(move |_, _| match released.lock().unwrap().take() {
-                Some(released) => async move {
-                    let _released = released.await;
-                    Ok(kept(Vec::new()))
-                }
-                .boxed(),
-                None => decided(Ok(kept(Vec::new()))),
-            }),
-    );
+    // The agent's write is hooked after it runs; the second is the hook realm's own.
+    let fake = Arc::new(FakeHooks::new(&timeline).after(move |_, _| {
+        match released.lock().unwrap().take() {
+            Some(released) => async move {
+                let _released = released.await;
+                Ok(kept(Vec::new()))
+            }
+            .boxed(),
+            None => decided(Ok(kept(Vec::new()))),
+        }
+    }));
     let harness = Arc::new(Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await);
     let agent = {
         let harness = Arc::clone(&harness);
@@ -1873,7 +1895,7 @@ async fn tests_that_a_call_waiting_for_its_after_action_holds_no_write_turn() {
     }
     let hook_write = time::timeout(
         Duration::from_secs(10),
-        harness.call(&set_content(2, "<p>hook</p>")),
+        harness.hook_call(&set_content(2, "<p>hook</p>")),
     )
     .await;
     assert!(matches!(hook_write, Ok(Ok(_))), "{hook_write:?}");
@@ -1895,21 +1917,17 @@ async fn tests_that_a_call_aborted_as_its_hook_allows_it_never_runs_its_after_ac
     let timeline = Timeline::default();
     let slot: Arc<Mutex<Option<Dispatcher>>> = Arc::default();
     let aborter = Arc::clone(&slot);
-    let fake = Arc::new(
-        FakeHooks::new(&timeline)
-            .wanting(first_asks(2))
-            .before(move |_, _| {
-                let aborter = Arc::clone(&aborter);
-                async move {
-                    // Inside the decision's own poll: the gate's race saw no abort, and returns
-                    // this decision; the call's task then finds the abort before its handler.
-                    let dispatcher = aborter.lock().unwrap().clone().unwrap();
-                    dispatcher.abort(1, "aborted as it was decided".to_string());
-                    Ok(ActionDecision::Allow)
-                }
-                .boxed()
-            }),
-    );
+    let fake = Arc::new(FakeHooks::new(&timeline).before(move |_, _| {
+        let aborter = Arc::clone(&aborter);
+        async move {
+            // Inside the decision's own poll: the gate's race saw no abort, and returns
+            // this decision; the call's task then finds the abort before its handler.
+            let dispatcher = aborter.lock().unwrap().clone().unwrap();
+            dispatcher.abort(1, "aborted as it was decided".to_string());
+            Ok(ActionDecision::Allow)
+        }
+        .boxed()
+    }));
     let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
     *slot.lock().unwrap() = Some(harness.dispatcher.clone());
     let agent_reply = harness.call(&set_content(1, "<p>agent</p>")).await.unwrap();
@@ -1920,7 +1938,7 @@ async fn tests_that_a_call_aborted_as_its_hook_allows_it_never_runs_its_after_ac
     );
     let hook_write = time::timeout(
         Duration::from_secs(10),
-        harness.call(&set_content(2, "<p>hook</p>")),
+        harness.hook_call(&set_content(2, "<p>hook</p>")),
     )
     .await;
     assert!(matches!(hook_write, Ok(Ok(_))), "{hook_write:?}");
@@ -2009,10 +2027,10 @@ async fn tests_that_a_storage_call_held_at_its_gate_lets_the_hooks_own_storage_c
     let timeline = Timeline::default();
     let (release, released) = oneshot::channel::<()>();
     let released = Mutex::new(Some(released));
-    // Only the agent's call is hooked; the second stands in for the hook realm's own call.
+    // The hook realm's own call goes through its own dispatcher, which has no hooks.
     let fake = Arc::new(
         FakeHooks::new(&timeline)
-            .wanting(first_asks(1))
+            .wanting(|hook, _| hook == ActionHook::Before)
             .before(move |_, _| match released.lock().unwrap().take() {
                 Some(released) => async move {
                     let _released = released.await;
@@ -2030,8 +2048,11 @@ async fn tests_that_a_storage_call_held_at_its_gate_lets_the_hooks_own_storage_c
     while fake.invocations() == 0 {
         task::yield_now().await;
     }
-    let hook_call =
-        time::timeout(Duration::from_secs(10), harness.call(&set_item(2, "hook"))).await;
+    let hook_call = time::timeout(
+        Duration::from_secs(10),
+        harness.hook_call(&set_item(2, "hook")),
+    )
+    .await;
     assert!(matches!(hook_call, Ok(Ok(_))), "{hook_call:?}");
     assert!(
         !agent.is_finished(),

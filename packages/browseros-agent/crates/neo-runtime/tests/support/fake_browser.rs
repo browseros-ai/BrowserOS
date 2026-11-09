@@ -340,6 +340,7 @@ pub fn run_request(code: &str, timeout: Duration, cancel: CancellationToken) -> 
         timeout,
         cancel,
         artifacts: None,
+        hooks: None,
     }
 }
 
@@ -682,6 +683,9 @@ const EMPTY_RESULTS: &[&str] = &[
     "Emulation.setFocusEmulationEnabled",
     "Runtime.releaseObjectGroup",
     "DOM.scrollIntoViewIfNeeded",
+    "Fetch.enable",
+    "Network.setCacheDisabled",
+    "Fetch.disable",
 ];
 
 fn answer(

@@ -88,6 +88,7 @@ return [chooser.isMultiple(), await chooser.element().evaluate((input) => input.
             timeout: Duration::from_secs(30),
             cancel: CancellationToken::new(),
             artifacts: None,
+            hooks: None,
         })
         .await;
     assert_eq!(

@@ -368,6 +368,7 @@ mod tests {
 
     use super::*;
     use crate::progress::{CallStart, ErrorName};
+    use crate::run::CallOrigin;
 
     fn entry() -> Arc<CallEntry> {
         Arc::new(CallEntry::new(CallStart {
@@ -375,6 +376,7 @@ mod tests {
             guid: "frame@T".to_string(),
             method: "click".to_string(),
             title: Some("Click"),
+            origin: CallOrigin::Agent,
             action: None,
             params: Value::Null,
             location: None,

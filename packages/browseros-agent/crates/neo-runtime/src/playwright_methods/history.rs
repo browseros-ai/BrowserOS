@@ -789,6 +789,7 @@ mod tests {
     use crate::deadline::Deadline;
     use crate::playwright_methods::navigate::{NavigateReply, NavigationState};
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope};
+    use crate::run::CallOrigin;
 
     const START: &str = "https://a.test/start";
 
@@ -1017,6 +1018,7 @@ mod tests {
             guid: "page@T".to_string(),
             method: "goBack".to_string(),
             title: Some("Go back"),
+            origin: CallOrigin::Agent,
             action: None,
             params: json!({}),
             location: None,

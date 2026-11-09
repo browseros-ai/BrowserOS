@@ -37,6 +37,7 @@ async fn run(tab: &Tab, target: &str, code: &str) -> RunOutcome {
             timeout: Duration::from_secs(15),
             cancel: CancellationToken::new(),
             artifacts: None,
+            hooks: None,
         })
         .await
 }
@@ -204,6 +205,7 @@ async fn tests_that_sdk_created_pages_keep_their_targets_across_runs() {
         timeout: Duration::from_secs(15),
         cancel: CancellationToken::new(),
         artifacts: None,
+        hooks: None,
     };
     let running = tokio::spawn({
         let runtime = runtime.clone();
@@ -250,6 +252,7 @@ async fn tests_that_sdk_created_pages_keep_their_targets_across_runs() {
     let next=runtime.run(RunRequest {
         code:"await page.locator('html').click(); return {url:page.url(),closed:page.isClosed()};".to_string(),
         page:PageId::new(second.id.clone()), timeout:Duration::from_secs(10), cancel:CancellationToken::new(), artifacts:None,
+        hooks: None,
     }).await;
     assert_eq!(next.status, RunStatus::Ok, "{next:?}");
     assert_eq!(
