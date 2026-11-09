@@ -7,6 +7,7 @@ use jsonc_parser::{
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value as toml_value};
 
 use crate::{
+    AgentId,
     catalog::{ConfigFormat, HttpShape, InjectValue, KeyTransform, StdioShape},
     error::Error,
 };
@@ -67,9 +68,13 @@ impl Emitter {
         let key = transform_key(name, self.surface.stdio);
         let entry = build_entry(spec, self.surface.stdio, self.surface.http)?;
         match self.surface.mcp.format {
-            ConfigFormat::Json | ConfigFormat::Jsonc => {
-                json_add(raw, self.surface.stdio, &key, entry)
-            }
+            ConfigFormat::Json | ConfigFormat::Jsonc => json_add(
+                raw,
+                self.surface.stdio,
+                self.surface.harness.id,
+                &key,
+                entry,
+            ),
             ConfigFormat::Toml => toml_add(raw, self.surface.stdio.top_level_key, &key, entry),
         }
     }
@@ -287,7 +292,19 @@ fn json_container_or_set(object: &CstObject, shape: StdioShape) -> CstObject {
 /// OpenCode before it nested servers under `mcp.servers`). Once the harness nests entries
 /// under `servers_key`, a leftover sibling at `top_level_key.<name>` is a stale duplicate
 /// that some agents reject, so drop it. Never touches the servers container itself.
-fn heal_legacy_entry(object: &CstObject, container: &CstObject, shape: StdioShape, name: &str) {
+fn heal_legacy_entry(
+    object: &CstObject,
+    container: &CstObject,
+    shape: StdioShape,
+    agent: AgentId,
+    name: &str,
+) {
+    // Self-healing of a pre-servers entry is OpenCode-specific. Gate it on the agent by name
+    // so it never runs for any other harness, even one that later nests servers under the
+    // same `servers` key.
+    if agent != AgentId::OpenCode {
+        return;
+    }
     let Some(servers_key) = shape.servers_key else {
         return;
     };
@@ -397,6 +414,7 @@ fn json_entry_value(value: serde_json::Value) -> Option<EntryValue> {
 fn json_add(
     raw: &str,
     shape: StdioShape,
+    agent: AgentId,
     name: &str,
     entry: Vec<(String, EntryValue)>,
 ) -> Result<String, Error> {
@@ -416,7 +434,7 @@ fn json_add(
             container.append(name, value);
         }
     }
-    heal_legacy_entry(&object, &container, shape, name);
+    heal_legacy_entry(&object, &container, shape, agent, name);
     Ok(with_bom(root.to_string(), had_bom))
 }
 
