@@ -27,6 +27,7 @@
         "activateTab",
         "activateWindow",
         "addTabsToGroup",
+        "cancelDownload",
         "close",
         "closeTab",
         "closeTabGroup",
@@ -41,14 +42,20 @@
         "getTabInfo",
         "getTabs",
         "getVersion",
+        "getWindowForTarget",
         "getWindows",
+        "grantPermissions",
         "loadProfile",
         "moveTab",
         "removeTabsFromGroup",
+        "resetPermissions",
+        "setDownloadBehavior",
+        "setWindowBounds",
         "setWindowVisibility",
         "showTab",
         "updateTabGroup"
-      ]
+      ],
+      "events": ["downloadProgress", "downloadWillBegin"]
     },
     {
       "domain": "DOM",
@@ -67,13 +74,90 @@
       ]
     },
     {
+      "domain": "DOMStorage",
+      "commands": ["clear", "enable", "getDOMStorageItems", "setDOMStorageItem"]
+    },
+    {
+      "domain": "Emulation",
+      "commands": [
+        "clearGeolocationOverride",
+        "setDefaultBackgroundColorOverride",
+        "setDeviceMetricsOverride",
+        "setEmulatedMedia",
+        "setFocusEmulationEnabled",
+        "setGeolocationOverride",
+        "setLocaleOverride",
+        "setScriptExecutionDisabled",
+        "setTimezoneOverride",
+        "setTouchEmulationEnabled",
+        "setUserAgentOverride"
+      ]
+    },
+    {
+      "domain": "Fetch",
+      "commands": [
+        "continueRequest",
+        "disable",
+        "enable",
+        "failRequest",
+        "fulfillRequest",
+        "getResponseBody"
+      ],
+      "events": ["requestPaused"]
+    },
+    {
+      "domain": "HeapProfiler",
+      "commands": ["collectGarbage"]
+    },
+    {
       "domain": "History",
       "types": ["HistoryEntry"],
       "commands": ["deleteRange", "deleteUrl", "getRecent", "search"]
     },
     {
+      "domain": "IO",
+      "commands": ["close", "read"]
+    },
+    {
       "domain": "Input",
-      "commands": ["dispatchKeyEvent", "dispatchMouseEvent"]
+      "commands": [
+        "dispatchDragEvent",
+        "dispatchKeyEvent",
+        "dispatchMouseEvent",
+        "dispatchTouchEvent",
+        "insertText",
+        "setInterceptDrags"
+      ],
+      "events": ["dragIntercepted"]
+    },
+    {
+      "domain": "Inspector",
+      "events": ["detached", "targetCrashed"]
+    },
+    {
+      "domain": "Log",
+      "commands": ["enable"],
+      "events": ["entryAdded"]
+    },
+    {
+      "domain": "Network",
+      "commands": [
+        "emulateNetworkConditions",
+        "enable",
+        "getResponseBody",
+        "loadNetworkResource",
+        "setCacheDisabled",
+        "setExtraHTTPHeaders"
+      ],
+      "events": [
+        "loadingFailed",
+        "loadingFinished",
+        "requestServedFromCache",
+        "requestWillBeSent",
+        "requestWillBeSentExtraInfo",
+        "responseReceived",
+        "responseReceivedExtraInfo"
+      ]
     },
     {
       "domain": "Page",
@@ -87,24 +171,43 @@
         "VisualViewport"
       ],
       "commands": [
+        "addScriptToEvaluateOnNewDocument",
+        "bringToFront",
         "captureScreenshot",
+        "close",
+        "createIsolatedWorld",
+        "disable",
         "enable",
         "getFrameTree",
         "getLayoutMetrics",
+        "getNavigationHistory",
         "handleJavaScriptDialog",
         "navigate",
+        "navigateToHistoryEntry",
         "printToPDF",
         "reload",
+        "removeScriptToEvaluateOnNewDocument",
         "screencastFrameAck",
+        "setBypassCSP",
         "setDownloadBehavior",
+        "setInterceptFileChooserDialog",
+        "setLifecycleEventsEnabled",
         "startScreencast",
         "stopScreencast"
       ],
       "events": [
         "downloadProgress",
         "downloadWillBegin",
+        "fileChooserOpened",
+        "frameAttached",
+        "frameDetached",
+        "frameNavigated",
+        "frameRequestedNavigation",
+        "frameStoppedLoading",
         "javascriptDialogClosed",
         "javascriptDialogOpening",
+        "lifecycleEvent",
+        "navigatedWithinDocument",
         "screencastFrame"
       ]
     },
@@ -118,22 +221,44 @@
         "StackTrace"
       ],
       "commands": [
+        "addBinding",
         "callFunctionOn",
         "enable",
         "evaluate",
         "getProperties",
         "releaseObject",
         "releaseObjectGroup",
+        "removeBinding",
         "runIfWaitingForDebugger"
       ],
-      "events": ["consoleAPICalled", "exceptionThrown"]
+      "events": [
+        "bindingCalled",
+        "consoleAPICalled",
+        "exceptionThrown",
+        "executionContextCreated",
+        "executionContextDestroyed",
+        "executionContextsCleared"
+      ]
+    },
+    {
+      "domain": "Security",
+      "commands": ["setIgnoreCertificateErrors"]
+    },
+    {
+      "domain": "Storage",
+      "commands": ["getCookies", "setCookies"]
     },
     {
       "domain": "Target",
       "types": ["FilterEntry", "TargetInfo"],
       "commands": [
         "attachToTarget",
+        "closeTarget",
+        "createBrowserContext",
+        "createTarget",
         "detachFromTarget",
+        "disposeBrowserContext",
+        "getTargetInfo",
         "getTargets",
         "setAutoAttach",
         "setDiscoverTargets"

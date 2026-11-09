@@ -28,7 +28,7 @@ fn protocol_source_matches_pinned_chromium_input() -> Result<(), Box<dyn Error>>
         );
     }
     let surface: Value = serde_json::from_slice(SURFACE)?;
-    assert_eq!(surface["domains"].as_array().map(Vec::len), Some(9));
+    assert_eq!(surface["domains"].as_array().map(Vec::len), Some(19));
     // Generated types derive Debug, which would print passwords and card
     // numbers. Core sends these domains as JSON through its own types instead.
     for name in ["Passwords", "Payments"] {
