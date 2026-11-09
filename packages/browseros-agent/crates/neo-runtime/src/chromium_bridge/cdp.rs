@@ -1,12 +1,13 @@
 //! The one door between neo-runtime and the browser: CDP commands and events cross here, typed.
 //!
 //! ```text
-//!  chromium_bridge/, runtime.rs, method_router.rs
+//!  every caller in neo-runtime
 //!    ├─ cdp::Browser::send(command)    browser-wide: `Browser.*`, `Target.*`, …, no session
 //!    ├─ cdp::Browser::attach(target)   a `cdp::Session` on a tab, bound to the socket
 //!    ├─ cdp::Session::send(command)    on a tab's or a frame's session: `Page.*`, `DOM.*`, …
-//!    ├─ cdp::Session::write(&command, &ticket)   input, at the session's socket incarnation
-//!    └─ cdp::{Browser, Session}::events()        the client's event ring, as `Raw`
+//!    ├─ cdp::Session::write(&input, &ticket)   input, at the session's socket incarnation
+//!    ├─ cdp::Session::release(&release)        a run end's releases, at that incarnation
+//!    └─ cdp::{Browser, Session}::events()      the client's event ring, as `Raw`
 //!         browseros_cdp::CdpClient     transport: one socket, one reader, a FIFO send lock
 //! ```
 //!
@@ -15,9 +16,8 @@
 //! `page::Navigate`): its `METHOD`, its `Reply` (the generated `…Result`, `serde_json::Value`
 //! where several readers walk the JSON, or [`Ignored`]), and `Via`, which picks the one method
 //! of the door that may send it. [`Command`] is sealed, so no type outside `cdp/` becomes a
-//! command, and no caller writes a method string. `browser_representations/` and
-//! `playwright_methods/` still call the client directly; their commands and events are declared
-//! here already, so moving them onto the door touches only their own files.
+//! command, and no caller writes a method string: an error that names a method reads the
+//! command's `METHOD`.
 //!
 //! Input is written only at the session's socket incarnation and only with the call's delivery
 //! record in hand. After a reconnect a write is refused before any byte goes out
@@ -26,9 +26,10 @@
 //! An event is declared with [`event!`], on browseros-cdp's generated `…Event` type. Events and
 //! replies decode with every field the protocol requires, as Chromium's builders always send
 //! them; an event that does not decode reads as `None` and is logged as a warning, since a
-//! dropped `frameNavigated` is a protocol skew worth seeing ([`Raw::decode`]). The types come from browseros-cdp's pinned
-//! `protocol/protocol.json`. The door's tests check every declaration against it, and
-//! `tests/protocol_e2e.rs` checks it against the browser's own protocol.
+//! dropped `frameNavigated` is a protocol skew worth seeing ([`Raw::decode`]). The types come
+//! from browseros-cdp's pinned `protocol/protocol.json`. The door's tests check every
+//! declaration against it, and `tests/protocol_e2e.rs` checks it against the browser's own
+//! protocol.
 //!
 //! A domain file keeps a local type only where its doc says why: a command that takes no params
 //! (browseros-cdp generates no type for one), a second declaration of a method, a write whose
@@ -303,12 +304,6 @@ impl Browser {
         self.client.is_connected()
     }
 
-    /// The connection itself, for the code in `playwright_methods/` that still sends by method
-    /// name.
-    pub(crate) fn client(&self) -> &CdpClient {
-        &self.client
-    }
-
     /// A session the door did not attach: one Chromium auto-attached under a session Neo holds
     /// (`Target.attachedToTarget`), or a tab's or frame's session handed around by its id.
     ///
@@ -560,6 +555,15 @@ impl Raw {
             params,
             session_id: session.map(SessionId::from),
         })
+    }
+}
+
+#[cfg(test)]
+impl Browser {
+    /// Drops the connection, as a browser that went away does: for the tests of what a call
+    /// does once its browser is gone.
+    pub(crate) async fn disconnect(&self) {
+        self.client.disconnect().await;
     }
 }
 

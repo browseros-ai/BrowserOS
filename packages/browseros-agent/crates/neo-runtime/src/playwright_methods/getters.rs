@@ -12,9 +12,8 @@ use std::collections::HashSet;
 use std::sync::MutexGuard;
 use std::time::Duration;
 
-use browseros_cdp::{CdpError, SessionId, browser};
+use browseros_cdp::{CdpError, SessionId};
 use neo_runtime_spec::serve::{FrameChannel, FrameInitializer};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time;
@@ -23,7 +22,7 @@ use tokio::time::Instant;
 use crate::browser_representations::page;
 use crate::browser_representations::page::PageState;
 use crate::browser_representations::tabs::{PageEntry, Tabs};
-use crate::chromium_bridge::cdp;
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frames::{FrameInfo, FrameScope, Host};
 use crate::playwright_methods::click::PageError;
 use crate::progress::PlaywrightError;
@@ -285,7 +284,7 @@ async fn watch_frame_host(page: &PageEntry, host: &Host) -> Result<bool, Playwri
     if metadata(page)?.watched.contains(host.session_id()) {
         return Ok(false);
     }
-    let enabled = host.send("Page.enable", json!({})).await;
+    let enabled = host.send_command(cdp::page::Enable::default()).await;
     if host.is_child() && matches!(&enabled, Err(CdpError::SessionGone)) {
         return Ok(true);
     }
@@ -468,18 +467,6 @@ fn frame_tree_error(error: PageError) -> PlaywrightError {
 /// browser still says it before any run relies on it.
 pub(crate) const CLOSED_TAB_MESSAGE: &str = "No target with given id";
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NavigationHistory {
-    current_index: usize,
-    entries: Vec<NavigationEntry>,
-}
-
-#[derive(Deserialize)]
-struct NavigationEntry {
-    url: String,
-}
-
 /// How long `page.url()` keeps re-reading navigation history while the tab is still open. At
 /// every cross-document commit BrowserOS answers that read with "Not attached to an active
 /// page" for under 10 ms (1 to 8 ms, one to three calls), then with the new URL; measured on
@@ -524,20 +511,19 @@ pub(crate) async fn url(
 }
 
 async fn current_url(cdp: &cdp::Browser, session: &SessionId) -> Result<String, CdpError> {
-    let reply = cdp
-        .client()
-        .send("Page.getNavigationHistory", json!({}), Some(session))
+    let history = cdp
+        .adopt(session.clone())
+        .send(cdp::page::GetNavigationHistory {})
         .await?;
-    let history: NavigationHistory = serde_json::from_value(reply)?;
     let entry_count = history.entries.len();
-    history
-        .entries
-        .into_iter()
-        .nth(history.current_index)
+    usize::try_from(history.current_index)
+        .ok()
+        .and_then(|index| history.entries.into_iter().nth(index))
         .map(|entry| entry.url)
         .ok_or_else(|| {
             CdpError::Json(format!(
-                "Page.getNavigationHistory: currentIndex {} is outside its {entry_count} entries",
+                "{}: currentIndex {} is outside its {entry_count} entries",
+                cdp::page::GetNavigationHistory::METHOD,
                 history.current_index
             ))
         })
@@ -545,13 +531,11 @@ async fn current_url(cdp: &cdp::Browser, session: &SessionId) -> Result<String, 
 
 /// `page.isClosed()`: whether BrowserOS still has a tab for this target.
 pub(crate) async fn is_closed(cdp: &cdp::Browser, page: &PageId) -> Result<bool, CdpError> {
-    let params = browser::GetTabInfoParams {
-        target_id: Some(page.as_str().to_string()),
-        tab_id: None,
-    };
     let reply = cdp
-        .client()
-        .send_typed::<_, Value>("Browser.getTabInfo", params, None)
+        .send(cdp::browser::TabExists(cdp::browser::GetTabInfo {
+            target_id: Some(page.as_str().to_string()),
+            tab_id: None,
+        }))
         .await;
     match reply {
         Ok(_) => Ok(false),
@@ -840,7 +824,7 @@ mod tests {
             frame(&tabs, &page, &scope, FrameField::Name).await.unwrap(),
             ""
         );
-        cdp.client().disconnect().await;
+        cdp.disconnect().await;
         let error = frame(&tabs, &page, &scope, FrameField::Name)
             .await
             .unwrap_err();
@@ -870,8 +854,9 @@ mod tests {
         );
         page.request_close();
         tabs.cdp()
-            .client()
-            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .send(cdp::target::CloseTarget {
+                target_id: PAGE.to_string(),
+            })
             .await
             .unwrap();
         assert!(tabs.is_closed(&page).await.unwrap());
@@ -902,8 +887,9 @@ mod tests {
         let _events = lose_events(&page);
         page.request_close();
         tabs.cdp()
-            .client()
-            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .send(cdp::target::CloseTarget {
+                target_id: PAGE.to_string(),
+            })
             .await
             .unwrap();
         assert!(tabs.is_closed(&page).await.unwrap());
@@ -919,7 +905,7 @@ mod tests {
             "before"
         );
         let _events = lose_events(&page);
-        tabs.cdp().client().disconnect().await;
+        tabs.cdp().disconnect().await;
         let error = frame(&tabs, &page, &local, FrameField::Name)
             .await
             .unwrap_err();
@@ -1251,8 +1237,9 @@ mod tests {
         };
         page.request_close();
         tabs.cdp()
-            .client()
-            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .send(cdp::target::CloseTarget {
+                target_id: PAGE.to_string(),
+            })
             .await
             .unwrap();
         sender
@@ -1262,7 +1249,7 @@ mod tests {
                 json!({"frameId":"local","reason":"remove"}),
             ))
             .unwrap();
-        tabs.cdp().client().disconnect().await;
+        tabs.cdp().disconnect().await;
         assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
         page.closed.cancel();
         assert_eq!(
@@ -1284,8 +1271,9 @@ mod tests {
         let (sender, session) = metadata_events(&page);
         page.request_close();
         tabs.cdp()
-            .client()
-            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .send(cdp::target::CloseTarget {
+                target_id: PAGE.to_string(),
+            })
             .await
             .unwrap();
         {
@@ -1301,7 +1289,7 @@ mod tests {
                 .unwrap();
             assert!(!metadata.finish_snapshot(&tree, snapshot));
         }
-        tabs.cdp().client().disconnect().await;
+        tabs.cdp().disconnect().await;
         assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
         page.closed.cancel();
         assert_eq!(
@@ -1324,8 +1312,9 @@ mod tests {
         };
         page.request_close();
         tabs.cdp()
-            .client()
-            .send("Target.closeTarget", json!({"targetId":PAGE}), None)
+            .send(cdp::target::CloseTarget {
+                target_id: PAGE.to_string(),
+            })
             .await
             .unwrap();
         sender
@@ -1342,7 +1331,7 @@ mod tests {
                 .unwrap()
                 .finish_snapshot(&tree, snapshot)
         );
-        tabs.cdp().client().disconnect().await;
+        tabs.cdp().disconnect().await;
         assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
         page.closed.cancel();
         assert_eq!(
@@ -1374,7 +1363,7 @@ mod tests {
     #[tokio::test]
     async fn tests_that_child_host_setup_preserves_connection_failures() {
         let (_browser, tabs, page, host) = remote_fixture().await;
-        tabs.cdp().client().disconnect().await;
+        tabs.cdp().disconnect().await;
         assert!(watch_frame_host(&page, &host).await.is_err());
     }
 

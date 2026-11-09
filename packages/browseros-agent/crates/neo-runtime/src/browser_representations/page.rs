@@ -1055,16 +1055,6 @@ impl PageSession {
         async move { target.send_serialized(command).await }
     }
 
-    /// [`Self::send_command`] by method name and JSON params, for the callers in
-    /// `playwright_methods/` that do not send through the door yet.
-    pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
-        let door = &self.session.door;
-        door.browser()
-            .client()
-            .send(method, params, Some(door.id()))
-            .await
-    }
-
     /// Runs a cleanup or writer task on the run's tracker. Spawned on the session's runtime
     /// handle because it may be called from a `Drop`.
     pub(crate) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {

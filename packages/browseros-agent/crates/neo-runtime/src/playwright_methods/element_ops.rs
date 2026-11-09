@@ -27,6 +27,7 @@
 //! None of these writes `Input.*`, so none has a delivery cell; focus, blur and selectText still
 //! take the tab's input turn, so they never land between another call's focus and its keys.
 
+use browseros_cdp::CdpError;
 use std::future::Future;
 use std::time::Duration;
 
@@ -37,10 +38,11 @@ use neo_runtime_spec::injected::{
 use neo_runtime_spec::serve::{FrameBlurParams, FrameFocusParams};
 use neo_runtime_spec::{MethodFlag, MethodMeta};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::oneshot;
 
 use crate::browser_representations::page::{FrameTab, GroupGuard, InputPermit, ResolvedElement};
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frame_selector;
 use crate::playwright_methods::click::{
     self, ActionResult, ElementAction, NotReady, PageError, Resolved, Scroll, StatesCheck, Stop,
@@ -730,13 +732,19 @@ impl ElementOpsTab for FrameTab {
         let model = element
             .frame
             .host
-            .send(
-                "DOM.getBoxModel",
-                json!({ "objectId": element.handle().id().object_id() }),
-            )
+            .send_command(cdp::dom::GetBoxModel {
+                object_id: Some(element.handle().id().object_id().to_string()),
+                ..cdp::dom::GetBoxModel::default()
+            })
             .await;
         let model = match model {
             Ok(model) => model,
+            Err(CdpError::Json(message)) => {
+                return Err(PageError::Contract(format!(
+                    "{} answered: {message}",
+                    cdp::dom::GetBoxModel::METHOD
+                )));
+            }
             Err(error) => {
                 // Playwright's `_sendMayFail`: no box model is no box, unless the tab is gone.
                 let error = element.frame.host.classify(&error);
@@ -746,7 +754,7 @@ impl ElementOpsTab for FrameTab {
                 };
             }
         };
-        let Some(border) = border_rect(&model["model"]["border"]) else {
+        let Some(border) = border_rect(&model.model.border) else {
             return Err(PageError::Contract(
                 "DOM.getBoxModel answered no border quad".to_string(),
             ));
@@ -779,12 +787,7 @@ fn detached<R: Send + 'static>(
 }
 
 /// Playwright: `server/chromium/crPage.ts` `FrameSession._getBoundingBox`: `const x = Math.min(quad[0], quad[2], quad[4], quad[6]);`
-fn border_rect(quad: &Value) -> Option<Rect> {
-    let points: Vec<f64> = quad
-        .as_array()?
-        .iter()
-        .map(Value::as_f64)
-        .collect::<Option<_>>()?;
+fn border_rect(points: &[f64]) -> Option<Rect> {
     if points.len() != 8 {
         return None;
     }
@@ -812,7 +815,7 @@ mod tests {
     #[test]
     fn tests_that_a_border_quad_becomes_its_bounding_rect() {
         assert_eq!(
-            border_rect(&json!([10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0])),
+            border_rect(&[10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.0, 70.0]),
             Some(Rect {
                 x: 10.0,
                 y: 20.0,
@@ -820,6 +823,6 @@ mod tests {
                 height: 50.0
             })
         );
-        assert_eq!(border_rect(&json!([1.0, 2.0])), None);
+        assert_eq!(border_rect(&[1.0, 2.0]), None);
     }
 }

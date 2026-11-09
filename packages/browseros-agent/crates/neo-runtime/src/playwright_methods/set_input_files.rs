@@ -30,11 +30,11 @@ use neo_runtime_spec::injected::{
 };
 use neo_runtime_spec::serve::FrameSetInputFilesParams;
 use neo_runtime_spec::{Binary, Element, Handle};
-use serde_json::json;
 use tokio::sync::oneshot;
 
 use crate::artifacts::{Artifacts, ExistingPath};
 use crate::browser_representations::page::{FrameTab, GroupGuard, ResolvedElement};
+use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::frames::FrameContext;
 use crate::mime;
 use crate::playwright_methods::click::{self, ActionResult, ElementAction, PageError, Stop, Tab};
@@ -479,10 +479,11 @@ impl FilesTab for FrameTab {
             let set = input
                 .frame
                 .host
-                .send(
-                    "DOM.setFileInputFiles",
-                    json!({ "objectId": input.handle.id().object_id(), "files": paths }),
-                )
+                .send_command(cdp::dom::SetFileInputFiles {
+                    files: paths,
+                    object_id: Some(input.handle.id().object_id().to_string()),
+                    ..cdp::dom::SetFileInputFiles::default()
+                })
                 .await;
             let outcome = match set {
                 Ok(_) => {

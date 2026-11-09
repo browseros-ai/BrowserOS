@@ -147,18 +147,6 @@ impl Host {
         }
     }
 
-    /// [`Self::send_command`] by method name and JSON params, for the callers in
-    /// `playwright_methods/` that do not send through the door yet.
-    pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
-        let result = tokio::select! {
-            biased;
-            () = self.gone.cancelled() => Err(CdpError::SessionGone),
-            result = self.session.door.browser().client().send(method, params, Some(self.session.door.id())) => result,
-        };
-        self.forget_if_gone(&result);
-        result
-    }
-
     /// A send that found the session gone forgets every context on it, so the next call finds
     /// its frame's current host.
     fn forget_if_gone<T>(&self, result: &Result<T, CdpError>) {

@@ -41,12 +41,11 @@ use neo_runtime_spec::serve::{
     PageScreenshotParamsAnimations, PageScreenshotParamsCaret, PageScreenshotParamsScale,
     PageScreenshotParamsType, Rect,
 };
-use serde::Deserialize;
-use serde_json::{Value, json};
 use tokio::sync::{Mutex, OwnedMutexGuard, oneshot};
 use tracing::debug;
 
 use crate::browser_representations::page::{FrameTab, GroupGuard, PageSession, ResolvedElement};
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frame_selector;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::playwright_methods::capture;
@@ -555,10 +554,10 @@ async fn bounding_box(
     let model = element
         .frame
         .host
-        .send(
-            "DOM.getBoxModel",
-            json!({ "objectId": element.handle().id().object_id() }),
-        )
+        .send_command(cdp::dom::GetBoxModel {
+            object_id: Some(element.handle().id().object_id().to_string()),
+            ..cdp::dom::GetBoxModel::default()
+        })
         .await;
     let model = match model {
         Ok(model) => model,
@@ -569,10 +568,7 @@ async fn bounding_box(
             };
         }
     };
-    let Some(quad) = model["model"]["border"].as_array() else {
-        return Ok(None);
-    };
-    let values: Vec<f64> = quad.iter().filter_map(Value::as_f64).collect();
+    let values = model.model.border;
     if values.len() != 8 {
         return Ok(None);
     }
@@ -616,7 +612,10 @@ async fn capture(
             .await?
             .map_err(|_| PlaywrightError::target_closed())?
             .map_err(|error| {
-                capture::protocol_error("Emulation.setDefaultBackgroundColorOverride", &error)
+                capture::protocol_error(
+                    cdp::emulation::SetDefaultBackgroundColorOverride::METHOD,
+                    &error,
+                )
             })?;
         Some(background)
     } else {
@@ -648,28 +647,6 @@ async fn capture(
     Ok(bytes)
 }
 
-/// `Page.getLayoutMetrics`' answer, the deprecated device-pixel fields Playwright reads.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LayoutMetrics {
-    visual_viewport: VisualViewport,
-    content_size: ContentSize,
-    css_content_size: ContentSize,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct VisualViewport {
-    page_x: f64,
-    page_y: f64,
-    scale: f64,
-}
-
-#[derive(Deserialize)]
-struct ContentSize {
-    width: f64,
-}
-
 /// `CRPage.takeScreenshot`: the clip in document coordinates, scaled for `scale: 'css'`, and
 /// `captureBeyondViewport` when the area does not fit the viewport. Neo never emulates a
 /// device scale or touch, so the device scale is the content's ratio and no touch emulation
@@ -689,16 +666,16 @@ async fn take_screenshot(
     css_scale: bool,
     progress: &Progress,
 ) -> Result<Vec<u8>, CallError> {
+    // The deprecated device-pixel fields of the answer are the ones Playwright reads.
     let metrics = progress
-        .race(page.send("Page.getLayoutMetrics", json!({})))
+        .race(page.send_command(cdp::page::GetLayoutMetrics {}))
         .await?
-        .map_err(|error| capture::protocol_error("Page.getLayoutMetrics", &error))?;
-    let LayoutMetrics {
-        visual_viewport,
-        content_size,
-        css_content_size,
-    } = serde_json::from_value(metrics)
-        .map_err(|error| capture::malformed("Page.getLayoutMetrics", error))?;
+        .map_err(|error| capture::protocol_error(cdp::page::GetLayoutMetrics::METHOD, &error))?;
+    let (visual_viewport, content_size, css_content_size) = (
+        metrics.visual_viewport,
+        metrics.content_size,
+        metrics.css_content_size,
+    );
     let document_rect = match (document_rect, &viewport_rect) {
         (Some(rect), _) => rect,
         (None, Some(viewport)) => Rect {
@@ -731,28 +708,27 @@ async fn take_screenshot(
         };
         scale /= device_scale_factor;
     }
-    let mut params = json!({
-        "format": format.as_str(),
-        "clip": {
-            "x": document_rect.x,
-            "y": document_rect.y,
-            "width": document_rect.width,
-            "height": document_rect.height,
-            "scale": scale,
-        },
-        "captureBeyondViewport": !fits_viewport,
-    });
-    if let Some(quality) = quality {
-        params["quality"] = json!(quality);
-    }
+    let params = cdp::page::CaptureScreenshot {
+        format: Some(format.as_str().to_string()),
+        quality,
+        clip: Some(cdp::page::Viewport {
+            x: document_rect.x,
+            y: document_rect.y,
+            width: document_rect.width,
+            height: document_rect.height,
+            scale,
+        }),
+        capture_beyond_viewport: Some(!fits_viewport),
+        ..cdp::page::CaptureScreenshot::default()
+    };
     let shot = progress
-        .race(page.send("Page.captureScreenshot", params))
+        .race(page.send_command(params))
         .await?
-        .map_err(|error| capture::protocol_error("Page.captureScreenshot", &error))?;
-    let data = shot.get("data").and_then(Value::as_str).unwrap_or_default();
+        .map_err(|error| capture::protocol_error(cdp::page::CaptureScreenshot::METHOD, &error))?;
+    let data = shot.data.as_str().unwrap_or_default();
     STANDARD
         .decode(data.as_bytes())
-        .map_err(|error| capture::malformed("Page.captureScreenshot", error))
+        .map_err(|error| capture::malformed(cdp::page::CaptureScreenshot::METHOD, error))
 }
 
 /// The frames of this tab with a utility world Neo can reach, the main frame first. A frame
@@ -1034,21 +1010,23 @@ struct Background {
 /// Playwright: `server/screenshotter.ts` `Screenshotter._screenshot`: `await progress.race(this._page.delegate.setBackgroundColor({ r: 0, g: 0, b: 0, a: 0 }));`
 impl Background {
     /// Starts the override's task, and returns its guard with the override's answer.
-    fn set(
-        page: &Arc<PageSession>,
-        turn: Turn,
-    ) -> (Self, oneshot::Receiver<Result<Value, CdpError>>) {
+    fn set(page: &Arc<PageSession>, turn: Turn) -> (Self, oneshot::Receiver<Result<(), CdpError>>) {
         let (answer, answered) = oneshot::channel();
         let (release, released) = oneshot::channel::<()>();
         let (reset, was_reset) = oneshot::channel();
         let owner = Arc::clone(page);
         page.spawn_while_open(async move {
             let set = owner
-                .send(
-                    "Emulation.setDefaultBackgroundColorOverride",
-                    json!({ "color": { "r": 0, "g": 0, "b": 0, "a": 0 } }),
-                )
-                .await;
+                .send_command(cdp::emulation::SetDefaultBackgroundColorOverride {
+                    color: Some(cdp::emulation::Rgba {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: Some(0.0),
+                    }),
+                })
+                .await
+                .map(drop);
             let _unread = answer.send(set);
             // A dropped guard is a release too: the call stopped.
             let _released = released.await;
@@ -1079,7 +1057,7 @@ impl Background {
 /// Playwright: `server/chromium/crPage.ts` `CRPage.setBackgroundColor`
 async fn reset_background(page: &PageSession) {
     if let Err(error) = page
-        .send("Emulation.setDefaultBackgroundColorOverride", json!({}))
+        .send_command(cdp::emulation::SetDefaultBackgroundColorOverride { color: None })
         .await
     {
         debug!(%error, "resetting the screenshot background failed");
@@ -1164,6 +1142,8 @@ fn element_error(error: PageError) -> CallError {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     /// A run's session is gone but its cleanup still holds the tab's turn: the next run's session

@@ -954,10 +954,13 @@ fn navigation_history(
         }
         calls.new_page_history += 1;
     }
+    // Every field the pinned protocol's `Page.NavigationEntry` requires: the runtime decodes the
+    // reply strictly.
+    let entry = json!({
+        "id": 1, "url": url, "userTypedURL": url, "title": "", "transitionType": "typed",
+    });
     (
-        json!({
-            "result": { "currentIndex": 0, "entries": [{ "id": 1, "url": url }] },
-        }),
+        json!({ "result": { "currentIndex": 0, "entries": [entry] } }),
         replies.history.when(call),
     )
 }
