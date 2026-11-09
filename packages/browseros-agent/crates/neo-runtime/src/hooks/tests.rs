@@ -13,7 +13,16 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use super::*;
-use crate::run::{HOOK_BUDGET, RunBinary};
+use crate::browser_representations::cookies_and_storage::Permissions;
+use crate::browser_representations::page::TabInputs;
+use crate::browser_representations::tabs::Tabs;
+use crate::chromium_bridge::browser_connection_settings::Switches;
+use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+use crate::playwright_methods::screenshot::TabScreenshots;
+use crate::progress::RunScope;
+use crate::quickjs_bridge;
+use crate::run::{HOOK_BUDGET, PageId, RunBinary};
+use tokio::runtime::Handle;
 
 /// A stand-in for neo-quickjs-injected's `createHooks`, to the hooks contract: `neo.on` with
 /// filters, registrations fixed by `finishLoading`, handlers run in order (the first block wins,
@@ -120,7 +129,7 @@ fn sandbox(code: &str) -> (HookSandbox, TaskTracker) {
 }
 
 fn far() -> Deadline {
-    Deadline::new(Duration::from_secs(3600), CancellationToken::new())
+    Deadline::new(Duration::from_hours(1), CancellationToken::new())
 }
 
 fn action(method: &str, args: Value) -> ActionEvent {
@@ -316,7 +325,7 @@ async fn tests_that_the_run_deadline_and_cancel_end_loading_and_before_run_first
     assert_eq!(outcome.notes, ["timeout"]);
 
     let cancel = CancellationToken::new();
-    let deadline = Deadline::new(Duration::from_secs(60), cancel.clone());
+    let deadline = Deadline::new(Duration::from_mins(1), cancel.clone());
     let (hooks, _tasks) = sandbox("neo.on('beforeRun', () => new Promise(() => {}))");
     let gate = async { hooks.before_run("return 1", &deadline).await };
     let cancelling = async {
@@ -649,4 +658,69 @@ async fn tests_that_the_sdks_create_hooks_decides_through_the_realm() {
         }]
     );
     assert_eq!(outcome.notes, ["swapped"]);
+}
+
+/// The hook realm's bridge holds the run's hook dispatcher, and with it the run's dispatcher
+/// state: while the realm lives, the run's last dispatcher cannot drop. Closing the sandbox, as
+/// the run's end or its dropped future does, ends the realm, so the last dispatcher drops and
+/// cancels the run's end token (`Dispatcher`'s `_ending`).
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_closing_the_sandbox_lets_the_runs_last_dispatcher_go() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let tasks = TaskTracker::new();
+    let deadline = Deadline::new(Duration::from_mins(1), CancellationToken::new());
+    let run = RunScope::new(deadline.clone(), tasks.clone());
+    let ended = run.ended.clone();
+    let page = PageId::new(PAGE.to_string());
+    let (tabs, url) = Tabs::open(
+        browser.cdp().await,
+        Handle::current(),
+        TabInputs::default(),
+        TabScreenshots::default(),
+        Switches::default(),
+        Permissions::default(),
+        tasks,
+        &page,
+    )
+    .await
+    .unwrap();
+    let dispatcher = Dispatcher::new(tabs.clone(), run);
+    let getters = Getters::new(
+        tabs,
+        deadline.clone(),
+        Handle::current(),
+        Arc::clone(&dispatcher.run_scope().handles),
+    );
+    let sandbox = HookSandbox::start(
+        RunHooks::new("neo.on('beforeAction', () => {})"),
+        RealmParts {
+            page_guid: quickjs_bridge::page_guid(&page),
+            frame_guid: quickjs_bridge::frame_guid(&page),
+            url,
+            getters,
+            dispatcher: dispatcher.for_hooks(),
+            realms: Arc::default(),
+        },
+    );
+    assert!(matches!(
+        sandbox.before_run("return 1", &deadline).await,
+        Gate::Start
+    ));
+    assert!(
+        dispatcher.run_scope().hooks.get().is_some(),
+        "the call path finds the run's sandbox"
+    );
+    drop(dispatcher);
+    time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !ended.is_cancelled(),
+        "the live realm still holds the run's dispatcher state"
+    );
+    drop(sandbox.close_on_drop());
+    assert!(
+        time::timeout(Duration::from_secs(5), ended.cancelled())
+            .await
+            .is_ok(),
+        "closing the sandbox let the run's last dispatcher drop"
+    );
 }

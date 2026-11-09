@@ -244,12 +244,12 @@ async fn a_dropped_run_lets_go_of_its_hook_realm() {
     let browser = FakeBrowser::start(Replies::default()).await;
     let runtime = browser.runtime().await;
     let hooks = RunHooks::new("neo.on('beforeRun', () => new Promise(() => {}))")
-        .with_budget(Duration::from_secs(60));
+        .with_budget(Duration::from_mins(1));
     let running = {
         let runtime = runtime.clone();
         tokio::spawn(async move {
             runtime
-                .run(request("return 1", Duration::from_secs(60), Some(hooks)))
+                .run(request("return 1", Duration::from_mins(1), Some(hooks)))
                 .await
         })
     };

@@ -8,7 +8,8 @@
 //!    ├─ HookSandbox::start            the actor task (`hooks/realm.rs`) on the run's tracker
 //!    ├─ before_run: load, beforeRun   race the run's deadline; block or fail → `blocked`
 //!    ├─ quickjs::run                  the agent's script, as without hooks
-//!    ├─ after_run: afterRun           always, full budget: keep, replace (ok runs only), notes
+//!    ├─ after_run: afterRun           once loaded and not blocked, full budget: keep,
+//!    │                                replace (ok runs only), notes
 //!    ├─ close                         the actor ends and drops the realm
 //!    └─ Dispatcher::finish            records: a hook's calls are `origin: hook`
 //! ```
