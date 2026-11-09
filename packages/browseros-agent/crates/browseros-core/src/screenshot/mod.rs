@@ -263,18 +263,17 @@ async fn capture_image(
     if format != ScreenshotFormat::Jpeg || full_page {
         return page_session.send("Page.captureScreenshot", params).await;
     }
-    let native = page_session.send::<_, CaptureScreenshotResult>("Page.captureScreenshot", params);
-    tokio::pin!(native);
-    if let Ok(result) = timeout(SCREENSHOT_CAPTURE_DEADLINE, &mut native).await {
-        return result;
-    }
-    // The native capture is slow, not necessarily stuck. Race it against the screencast
-    // fallback and take whichever finishes first, so a slow-but-successful capture is used
-    // rather than discarded. `biased` lets the real capture win a tie.
-    tokio::select! {
-        biased;
-        native_result = &mut native => native_result,
-        screencast = capture_screencast_frame(page_session, options) => screencast,
+    // Bound the native capture, then fall back to the screencast. The two are not raced:
+    // the fallback owns a Page.startScreencast/stopScreencast pair, and dropping it
+    // mid-flight to take a late native result would leave the screencast running on the page.
+    match timeout(
+        SCREENSHOT_CAPTURE_DEADLINE,
+        page_session.send("Page.captureScreenshot", params),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => capture_screencast_frame(page_session, options).await,
     }
 }
 
@@ -288,76 +287,98 @@ async fn capture_screencast_frame(
         "maxFramesInFlight": 1
     });
     if let Some(clip) = options.clip {
-        // A screencast returns the whole viewport and cannot honor an arbitrary sub-rect
-        // clip, so reject a partial clip rather than silently returning the wrong image.
+        // A screencast returns the current viewport and cannot honor an arbitrary sub-rect
+        // clip, so reject a clip whose origin or size no longer matches the viewport (an
+        // offset clip, or a scroll during the native wait) rather than silently returning
+        // the wrong region.
         let metrics: Value = page_session
             .send("Page.getLayoutMetrics", json!({}))
             .await?;
-        let viewport = metrics
-            .get("cssLayoutViewport")
-            .or_else(|| metrics.get("layoutViewport"));
-        let width = viewport
-            .and_then(|value| value.get("clientWidth"))
-            .and_then(Value::as_f64);
-        let height = viewport
-            .and_then(|value| value.get("clientHeight"))
-            .and_then(Value::as_f64);
+        let css = metrics.get("cssLayoutViewport");
+        let device = metrics.get("layoutViewport");
+        let viewport = css.or(device);
+        let field = |source: Option<&Value>, key: &str| {
+            source
+                .and_then(|value| value.get(key))
+                .and_then(Value::as_f64)
+        };
+        let width = field(viewport, "clientWidth");
+        let height = field(viewport, "clientHeight");
+        let page_x = field(viewport, "pageX");
+        let page_y = field(viewport, "pageY");
         if width.is_none_or(|width| (width - clip.width).abs() > 1.0)
             || height.is_none_or(|height| (height - clip.height).abs() > 1.0)
+            || page_x.is_none_or(|x| (x - clip.x).abs() > 1.0)
+            || page_y.is_none_or(|y| (y - clip.y).abs() > 1.0)
         {
             return Err(CoreError::Message(
                 "CDP screenshot timed out; screencast cannot preserve a partial clip".into(),
             ));
         }
-        params["maxWidth"] = json!((clip.width * clip.scale).round().max(1.0) as u32);
-        params["maxHeight"] = json!((clip.height * clip.scale).round().max(1.0) as u32);
+        // captureScreenshot preserves device pixel density (clip scale 1 is 2x on Retina),
+        // so fold the device ratio into the caps or the fallback returns a lower-resolution
+        // image than the native path for the same request.
+        let dpr = match (field(device, "clientWidth"), field(css, "clientWidth")) {
+            (Some(device_width), Some(css_width)) if css_width > 0.0 => device_width / css_width,
+            _ => 1.0,
+        };
+        params["maxWidth"] = json!((clip.width * clip.scale * dpr).round().max(1.0) as u32);
+        params["maxHeight"] = json!((clip.height * clip.scale * dpr).round().max(1.0) as u32);
     }
 
     // Subscribe before sending the start command so Chromium's first frame is not lost.
     let mut events = page_session.subscribe_events();
-    timeout(
+    let started = timeout(
         SCREENCAST_FRAME_DEADLINE,
         page_session.send::<_, Value>("Page.startScreencast", params),
     )
-    .await
-    .map_err(|_| CoreError::Message("timed out starting screenshot screencast".into()))??;
+    .await;
 
-    let frame = timeout(SCREENCAST_FRAME_DEADLINE, async {
-        loop {
-            let event = match events.recv().await {
-                Ok(event) => event,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(error) => {
-                    return Err(CoreError::Message(format!(
-                        "screencast event stream: {error}"
-                    )));
+    // Once the start has been attempted, always stop before returning: a start whose reply
+    // timed out may still have begun the screencast on the page.
+    let frame = match started {
+        Err(_) => Err(CoreError::Message(
+            "timed out starting screenshot screencast".into(),
+        )),
+        Ok(Err(error)) => Err(error),
+        Ok(Ok(_)) => timeout(SCREENCAST_FRAME_DEADLINE, async {
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(error) => {
+                        return Err(CoreError::Message(format!(
+                            "screencast event stream: {error}"
+                        )));
+                    }
+                };
+                if event.method != "Page.screencastFrame"
+                    || event.session_id.as_ref() != page_session.session_id()
+                {
+                    continue;
                 }
-            };
-            if event.method != "Page.screencastFrame"
-                || event.session_id.as_ref() != page_session.session_id()
-            {
-                continue;
+                if let Some(data) = event.params.get("data").and_then(Value::as_str)
+                    && !data.is_empty()
+                {
+                    return Ok(CaptureScreenshotResult {
+                        data: data.to_string(),
+                    });
+                }
             }
-            if let Some(data) = event.params.get("data").and_then(Value::as_str)
-                && !data.is_empty()
-            {
-                return Ok(CaptureScreenshotResult {
-                    data: data.to_string(),
-                });
-            }
-        }
-    })
-    .await
-    .map_err(|_| CoreError::Message("timed out waiting for screenshot screencast frame".into()));
+        })
+        .await
+        .map_err(|_| CoreError::Message("timed out waiting for screenshot screencast frame".into()))
+        .and_then(|frame| frame),
+    };
 
-    // Always stop the screencast, best effort, and never let it hang on the 60s CDP
-    // default. A slow or failing stop must not discard a frame we already captured.
+    // Always stop the screencast, best effort, and never let it hang on the 60s CDP default.
+    // A slow or failing stop must not discard a frame we already captured.
     let _ = timeout(
         Duration::from_millis(500),
         page_session.send::<_, Value>("Page.stopScreencast", json!({})),
     )
     .await;
-    frame?
+    frame
 }
 
 fn screenshot_params(
@@ -955,7 +976,7 @@ mod tests {
     {
         let connection = TestConnection::new([(
             "Page.getLayoutMetrics",
-            json!({ "cssLayoutViewport": { "clientWidth": 800, "clientHeight": 600 } }),
+            json!({ "cssLayoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 800, "clientHeight": 600 } }),
         )]);
         let session = ProtocolSession::root(connection.clone());
         let options = ScreenshotCaptureOptions {
@@ -983,6 +1004,95 @@ mod tests {
                 .iter()
                 .all(|call| call.method == "Page.getLayoutMetrics")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn offset_clip_rejects_the_screencast_fallback() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let connection = TestConnection::new([(
+            "Page.getLayoutMetrics",
+            json!({ "cssLayoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 800, "clientHeight": 600 } }),
+        )]);
+        let session = ProtocolSession::root(connection.clone());
+        // Same size as the viewport but a different origin (a scroll during the native wait).
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Jpeg),
+            clip: Some(Viewport {
+                x: 0.0,
+                y: 200.0,
+                width: 800.0,
+                height: 600.0,
+                scale: 1.0,
+            }),
+            ..Default::default()
+        };
+        let result = capture_screencast_frame(&session, &options).await;
+        assert!(result.is_err(), "an offset clip must be rejected");
+        let message = result
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(message.contains("partial clip"));
+        let calls = connection.calls()?;
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.method == "Page.getLayoutMetrics")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn matching_clip_scales_screencast_by_device_ratio()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let connection = TestConnection::new([
+            (
+                "Page.getLayoutMetrics",
+                json!({
+                    "cssLayoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 800, "clientHeight": 600 },
+                    "layoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 1600, "clientHeight": 1200 }
+                }),
+            ),
+            ("Page.startScreencast", json!({})),
+            ("Page.stopScreencast", json!({})),
+        ]);
+        let session = ProtocolSession::root(connection.clone());
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Jpeg),
+            clip: Some(Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+                scale: 1.0,
+            }),
+            ..Default::default()
+        };
+        let worker =
+            tokio::spawn(async move { capture_screencast_frame(&session, &options).await });
+        while !connection
+            .calls()?
+            .iter()
+            .any(|call| call.method == "Page.startScreencast")
+        {
+            tokio::task::yield_now().await;
+        }
+        connection.publish_event(CdpEvent {
+            method: "Page.screencastFrame".into(),
+            params: json!({ "data": "device-frame" }),
+            session_id: None,
+        });
+        let screenshot = worker.await??;
+        assert_eq!(screenshot.data, "device-frame");
+        let calls = connection.calls()?;
+        let start = calls
+            .iter()
+            .find(|call| call.method == "Page.startScreencast")
+            .ok_or("no Page.startScreencast call")?;
+        // Device ratio 1600/800 = 2 is folded into the caps so the fallback matches native.
+        assert_eq!(start.params["maxWidth"], 1600);
+        assert_eq!(start.params["maxHeight"], 1200);
         Ok(())
     }
 }
