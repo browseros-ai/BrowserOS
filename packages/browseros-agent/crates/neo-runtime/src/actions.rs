@@ -439,7 +439,9 @@ impl Serialize for ActionKind {
     }
 }
 
-/// A command's kind and whether its parameters require an element target.
+/// A command's kind and whether it targets an element: its params require a selector (or
+/// `source`/`target` selectors) that this call resolves, or its receiver is an `ElementHandle`.
+/// `registerLocatorHandler` requires a selector but only stores it, so it does not target one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Action {
     kind: ActionKind,
@@ -627,7 +629,8 @@ spec_actions!(PAGE_ACTIONS, PageCall {
     ClearConsoleMessages(PageClearConsoleMessagesParams) => ClearConsoleMessages;
     ClearPageErrors(PageClearPageErrorsParams) => ClearPageErrors;
     Requests(PageRequestsParams) => Requests;
-    RegisterLocatorHandler(PageRegisterLocatorHandlerParams) => LocatorHandler, element;
+    // Stores its selector for later; no element is resolved by this call.
+    RegisterLocatorHandler(PageRegisterLocatorHandlerParams) => LocatorHandler;
     ResolveLocatorHandlerNoReply(PageResolveLocatorHandlerNoReplyParams) => LocatorHandler;
     UnregisterLocatorHandler(PageUnregisterLocatorHandlerParams) => LocatorHandler;
     SetNetworkInterceptionPatterns(PageSetNetworkInterceptionPatternsParams) => Route;
@@ -1200,7 +1203,7 @@ mod tests {
             "registerLocatorHandler",
             "locatorHandler",
             "control",
-            true,
+            false,
         ),
         ("Page", "reload", "reload", "navigate", false),
         ("Page", "requestGC", "requestGC", "control", false),
