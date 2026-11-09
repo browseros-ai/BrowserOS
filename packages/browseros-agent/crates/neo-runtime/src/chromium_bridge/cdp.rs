@@ -27,7 +27,8 @@
 //! replies decode with every field the protocol requires, as Chromium's builders always send
 //! them; an event that does not decode reads as `None` and is logged at debug, not dropped
 //! silently ([`Raw::decode`]). The types come from browseros-cdp's pinned
-//! `protocol/protocol.json`, and the door's tests check every declaration against it.
+//! `protocol/protocol.json`. The door's tests check every declaration against it, and
+//! `tests/protocol_e2e.rs` checks it against the browser's own protocol.
 //!
 //! A domain file keeps a local type only where its doc says why: a command that takes no params
 //! (browseros-cdp generates no type for one), a second declaration of a method, a write whose

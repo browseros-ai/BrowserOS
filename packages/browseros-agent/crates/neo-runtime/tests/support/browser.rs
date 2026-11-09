@@ -231,6 +231,11 @@ impl Tab {
             .unwrap_or_else(|failure| panic!("{failure}"));
     }
 
+    /// The browser's CDP port, for a test that reads its HTTP endpoints, as `/json/protocol`.
+    pub fn port(&self) -> u16 {
+        self.browser.port
+    }
+
     /// Closes the browser ([`Browser::close`]), failing the test if any of its processes
     /// outlived it, or its download folder outlived the profile it lives in. The turn, still in
     /// `self`, is released when this returns.

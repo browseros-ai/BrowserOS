@@ -9,6 +9,10 @@
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
 //! each test passes as a skip.
 
+#[expect(
+    dead_code,
+    reason = "shared browser harness also serves protocol_e2e.rs, which reads the browser's port"
+)]
 #[path = "support/browser.rs"]
 mod browser;
 

@@ -3,6 +3,10 @@
 //! its own browser without it; `neo-quickjs-injected/tests/parity/history.mjs` compares the two
 //! there).
 
+#[expect(
+    dead_code,
+    reason = "shared browser harness also serves protocol_e2e.rs, which reads the browser's port"
+)]
 #[path = "support/browser.rs"]
 mod browser;
 

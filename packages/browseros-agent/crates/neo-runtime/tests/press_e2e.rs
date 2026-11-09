@@ -4,6 +4,10 @@
 //! traffic and timing are never compared; `neo-quickjs-injected/tests/parity/press.test.mjs`
 //! compares the same methods with Playwright on one browser.
 
+#[expect(
+    dead_code,
+    reason = "shared browser harness also serves protocol_e2e.rs, which reads the browser's port"
+)]
 #[path = "support/browser.rs"]
 mod browser;
 
