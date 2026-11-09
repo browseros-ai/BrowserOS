@@ -28,6 +28,7 @@
 //! take the tab's input turn, so they never land between another call's focus and its keys.
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use neo_runtime_spec::injected::{
@@ -40,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
+use crate::action_hooks::element;
 use crate::actions::{ActionKind, NeoMethod};
 use crate::browser_representations::page::{FrameTab, GroupGuard, InputPermit, ResolvedElement};
 use crate::chromium_bridge::frame_selector;
@@ -259,11 +261,14 @@ enum Focus {
 /// Playwright: `server/dom.ts` `ElementHandle._focus`: `injected.focusNode(node, resetSelectionIfNotFocused)`
 impl<T: ElementOpsTab> ElementAction<T> for Focus {
     type Output = ();
+    /// A focus or a blur takes nothing but its target, which a hook's arguments keep.
+    type Options = ElementTarget;
 
     async fn act(
         &self,
         tab: &T,
         element: &T::Element,
+        _replaced: Option<&ElementTarget>,
         progress: &Progress,
     ) -> Result<ActionResult<()>, Stop> {
         // The turn is taken after the element waits, and dropped with the answer.
@@ -471,7 +476,8 @@ pub(crate) async fn scroll_into_view_if_needed<T: ElementOpsTab>(
     target: &ElementTarget,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    let resolved = attached(tab, target, progress).await?;
+    // A hook's arguments keep the target, the only thing this command takes.
+    let (resolved, _replaced) = attached::<T, ElementTarget>(tab, target, progress).await?;
     let element = &resolved.element;
     retry_action(tab, progress, "scroll into view", false, || async {
         progress.log("  waiting for element to be stable");
@@ -507,7 +513,9 @@ pub(crate) async fn select_text<T: ElementOpsTab>(
     force: bool,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    let resolved = attached(tab, target, progress).await?;
+    let (resolved, replaced) = attached::<T, (ElementTarget, bool)>(tab, target, progress).await?;
+    // A hook's arguments may change `force`; they keep the target.
+    let force = replaced.map_or(force, |replaced| replaced.1);
     let element = &resolved.element;
     retry_action(tab, progress, "selectText", force, || async {
         if !force {
@@ -537,7 +545,8 @@ pub(crate) async fn bounding_box<T: ElementOpsTab>(
     target: &ElementTarget,
     progress: &Progress,
 ) -> Result<BoundingBoxResult, CallError> {
-    let resolved = attached(tab, target, progress).await?;
+    // A read: its hooks fire before it starts (hooks feature 3), so it has no element checkpoint.
+    let (resolved, _unhooked) = attached::<T, ElementTarget>(tab, target, progress).await?;
     let value = progress
         .race(tab.bounding_box(&resolved.element))
         .await?
@@ -559,11 +568,15 @@ pub(crate) async fn bounding_box<T: ElementOpsTab>(
 ///
 /// Playwright: `client/locator.ts` `Locator._withElement`: `const result = await this._frame._channel.waitForSelector({ selector: this._selector, strict: true, state: 'attached' }, { signal: options.signal, timeout });`
 /// Playwright: `server/frames.ts` `Frame._retryWithProgressIfNotConnected`: `markTargets: 'all'`
-async fn attached<T: ElementOpsTab>(
+///
+/// Neo: the element is the call's hooks' to decide on, once (hooks feature 4): the
+/// options a hook's arguments routed to for it (`O`, the command's route), or `None` for the
+/// script's. The command never resolves again, so the hooks are never asked twice.
+async fn attached<T: ElementOpsTab, O: Send + Sync + 'static>(
     tab: &T,
     target: &ElementTarget,
     progress: &Progress,
-) -> Result<Resolved<T::Element>, CallError> {
+) -> Result<(Resolved<T::Element>, Option<Arc<O>>), CallError> {
     progress.name_locator(&target.selector);
     let mut named = false;
     let mut waits = click::LoopAWaits::new(progress.timeout_ms());
@@ -590,11 +603,19 @@ async fn attached<T: ElementOpsTab>(
                 .await??)
         }
         .await;
-        match attempt {
+        let decided = match attempt {
             Ok(Some(resolved)) => {
                 progress.log(format!("  locator resolved to {}", resolved.preview));
-                return Ok(resolved);
+                element::checkpoint::<T, O>(tab, &resolved, progress)
+                    .await
+                    .map(|replaced| Some((resolved, replaced)))
             }
+            Ok(None) => Ok(None),
+            Err(stop) => Err(stop),
+        };
+        match decided {
+            Ok(Some(decided)) => return Ok(decided),
+            // The element went before its hooks decided: resolve again.
             Ok(None) | Err(Stop::Retry) => {}
             Err(Stop::End(error)) => return Err(error),
         }

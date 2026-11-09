@@ -24,10 +24,11 @@
 //! hook's own error text, which may hold a secret; that goes to the host-only hook trace.
 //!
 //! [`HookSandbox::wants`], [`HookSandbox::before_action`] and [`HookSandbox::after_action`] are
-//! the action hooks' API for the call path (hooks feature 3); the run reaches its sandbox from
-//! the call path through `RunScope::hooks`.
+//! the action hooks' API for the call path (hooks feature 3, `action_hooks.rs`): the sandbox is
+//! the run's `ActionHooks`, which `Runtime::run` hands to the agent's dispatcher only.
 
 use std::borrow::Cow;
+use std::mem;
 use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, OnceLock};
@@ -84,13 +85,6 @@ impl HookEvent {
 
 /// An action event, before or after the action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "hooks feature 3 fires the action hooks from the call path"
-    )
-)]
 pub(crate) enum ActionHook {
     Before,
     After,
@@ -118,9 +112,9 @@ pub(crate) struct ActionEvent {
     pub(crate) context: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) locator: Option<LocatorRef>,
-    /// The pinned element's handle guid (hooks feature 4).
+    /// The element an element action found, pinned for the run's hooks (hooks feature 4).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) element: Option<String>,
+    pub(crate) element: Option<ElementRef>,
 }
 
 /// The locator an element action targets: its frame and selector.
@@ -130,15 +124,17 @@ pub(crate) struct LocatorRef {
     pub(crate) selector: String,
 }
 
+/// The pinned element handle an element action's hooks receive (hooks feature 4): its guid,
+/// which only the hook realm can use, and its preview, from which the hook realm's SDK builds a
+/// real `ElementHandle`, as it builds one from any handle record Rust creates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ElementRef {
+    pub(crate) guid: String,
+    pub(crate) preview: String,
+}
+
 /// How an action ended, for `afterAction`.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "hooks feature 3 fires the action hooks from the call path"
-    )
-)]
 pub(crate) enum ActionEnd {
     Result(Value),
     Error(RunError),
@@ -199,6 +195,9 @@ pub(crate) struct HookSandbox {
     /// Neo's own lines on why a hook failed, kept apart from `trace` under caps of their own and
     /// appended to it, so a hook that fills its trace cannot hide them.
     failures: Logs,
+    /// Neo's lines about single calls' action hooks (`add_failure`), under caps of their own and
+    /// appended after `failures`, so many failed calls cannot push out why the run's hooks failed.
+    action_lines: Logs,
     /// The notes the run's hooks left for the model, capped as the script's `console` is.
     notes: Logs,
     /// Cancelled when the run is done with its hooks, or its future is dropped: the actor ends
@@ -232,7 +231,7 @@ pub(crate) struct RealmParts {
     pub(crate) url: String,
     pub(crate) getters: Getters,
     /// The run's hook dispatcher (`Dispatcher::for_hooks`), whose run scope gives the sandbox
-    /// the run's tracker and the slot the call path finds it in (`RunScope::hooks`).
+    /// the run's tracker. It has no action hooks of its own, so none of its calls is hooked.
     pub(crate) dispatcher: Dispatcher,
     /// Counts realms created on the run's `Runtime`.
     pub(crate) realms: Arc<AtomicU64>,
@@ -247,10 +246,10 @@ pub(crate) enum Gate {
 }
 
 impl HookSandbox {
-    /// Starts the actor of a run's hook realm, on the run's tracker, for `hooks`, and puts the
-    /// sandbox where the run's call path finds it (`RunScope::hooks`). Nothing runs until
-    /// [`HookSandbox::before_run`] loads the hook file. Dropping the returned [`HookRun`] closes
-    /// the sandbox.
+    /// Starts the actor of a run's hook realm, on the run's tracker, for `hooks`. Nothing runs
+    /// until [`HookSandbox::before_run`] loads the hook file; `Runtime::run` hands the sandbox to
+    /// the agent's dispatcher (`Dispatcher::set_action_hooks`). Dropping the returned
+    /// [`HookRun`] closes the sandbox.
     pub(crate) fn start(hooks: RunHooks, parts: RealmParts) -> HookRun {
         let RealmParts {
             page_guid,
@@ -261,7 +260,7 @@ impl HookSandbox {
             realms,
         } = parts;
         let run = dispatcher.run_scope();
-        let (tasks, slot) = (run.tasks.clone(), Arc::clone(&run.hooks));
+        let tasks = run.tasks.clone();
         let host = host::Host::new(hooks.host, run.deadline.clone(), tasks.clone());
         let setup = Setup {
             host,
@@ -277,9 +276,7 @@ impl HookSandbox {
             sdk: Cow::Borrowed(quickjs::SDK_BUNDLE),
             realms,
         };
-        let run = Self::spawn(setup, hooks.budget, &tasks);
-        let _first = slot.set(run.sandbox.clone());
-        run
+        Self::spawn(setup, hooks.budget, &tasks)
     }
 
     fn spawn(setup: Setup, budget: Duration, tasks: &TaskTracker) -> HookRun {
@@ -302,6 +299,7 @@ impl HookSandbox {
                 registrations: Arc::default(),
                 trace,
                 failures,
+                action_lines: Logs::of(LogKind::ActionHooks),
                 notes: Logs::of(LogKind::HookNotes),
                 close: close.clone(),
                 page_guid,
@@ -317,11 +315,31 @@ impl HookSandbox {
     }
 
     /// The hook trace so far, taken: what the run's outcome carries as `hook_trace`. The hook's
-    /// own lines come first, then Neo's lines on why a hook failed.
+    /// own lines come first, then Neo's lines on why a hook failed, then its lines about single
+    /// calls' action hooks.
     pub(crate) fn take_trace(&self) -> Vec<String> {
         let mut lines = self.trace.take();
         lines.extend(self.failures.take());
+        lines.extend(self.action_lines.take());
         lines
+    }
+
+    /// Whether the run is done with its hooks: the sandbox closed ([`HookSandbox::close`]). A
+    /// call that meets it then never gets a decision because the run ended, not because a hook
+    /// failed (`action_hooks.rs`).
+    pub(crate) fn closed(&self) -> bool {
+        self.close.is_cancelled()
+    }
+
+    /// What the run's hooks left after [`HookSandbox::end`] took their notes and trace, joined to
+    /// `outcome`'s: a call still running when the script returned ends during
+    /// `Dispatcher::finish`'s drain, after `end`. `Runtime::run` calls it after `finish`.
+    pub(crate) fn late(&self, mut outcome: RunOutcome) -> RunOutcome {
+        let mut notes = mem::take(&mut outcome.notes);
+        notes.extend(self.notes.take());
+        let mut hook_trace = mem::take(&mut outcome.hook_trace);
+        hook_trace.extend(self.take_trace());
+        outcome.with_notes(notes).with_hook_trace(hook_trace)
     }
 
     /// Adds notes a hook left for the model, which the outcome carries, capped
@@ -330,6 +348,12 @@ impl HookSandbox {
         for note in notes {
             self.notes.push(note);
         }
+    }
+
+    /// Adds one of Neo's lines about a single call's action hooks (`action_hooks.rs`) to the
+    /// host-only trace, under caps of its own.
+    pub(crate) fn add_failure(&self, line: String) {
+        self.action_lines.push(line);
     }
 
     /// The run's end for its hooks: `afterRun` ([`HookSandbox::after_run`]), then the sandbox
@@ -429,13 +453,6 @@ impl HookSandbox {
     /// Whether any `event` action registration matches an action of `kind` and `group`, read
     /// from the registrations fixed at load, without entering the realm: the call path skips the
     /// realm for every other action.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "hooks feature 3 fires the action hooks from the call path"
-        )
-    )]
     pub(crate) fn wants(&self, event: ActionHook, kind: Option<&str>, group: Option<&str>) -> bool {
         let event = match event {
             ActionHook::Before => HookEvent::BeforeAction,
@@ -451,13 +468,6 @@ impl HookSandbox {
     /// `beforeAction` for `event`, queued behind earlier invocations, within the budget. The
     /// caller races the run's deadline and the call's abort: dropping the future abandons the
     /// invocation, whose `ctx.signal` then fires.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "hooks feature 3 fires the action hooks from the call path"
-        )
-    )]
     pub(crate) async fn before_action(
         &self,
         event: ActionEvent,
@@ -474,13 +484,6 @@ impl HookSandbox {
     }
 
     /// `afterAction` for `event`, which `ended` so, as [`HookSandbox::before_action`].
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "hooks feature 3 fires the action hooks from the call path"
-        )
-    )]
     pub(crate) async fn after_action(
         &self,
         event: ActionEvent,
@@ -536,8 +539,9 @@ impl HookSandbox {
     }
 
     /// The run ends blocked before its script, after the hooks failed: `detail` goes to the
-    /// trace, the outcome names no detail.
-    fn blocked(&self, detail: &str) -> Gate {
+    /// trace, the outcome names no detail. `Runtime::run` also ends here a run whose action hooks
+    /// could not be put where its calls find them.
+    pub(crate) fn blocked(&self, detail: &str) -> Gate {
         self.failures.push(format!("neo: {detail}"));
         Gate::End(Box::new(RunOutcome::blocked(RunError::new(
             "Error",

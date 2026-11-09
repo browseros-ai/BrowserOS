@@ -105,17 +105,20 @@ struct CheckAction<'a> {
 
 impl<T: FormTab> ElementAction<T> for CheckAction<'_> {
     type Output = ();
+    type Options = CheckOptions;
 
     async fn act(
         &self,
         tab: &T,
         element: &T::Element,
+        replaced: Option<&CheckOptions>,
         progress: &Progress,
     ) -> Result<ActionResult<()>, Stop> {
+        let options = replaced.unwrap_or(self.options);
         let Some(state) = read_state(tab, element, progress).await? else {
             return Ok(ActionResult::NotConnected);
         };
-        if state.matches == self.options.checked {
+        if state.matches == options.checked {
             return Ok(ActionResult::Done(()));
         }
         // After a delivered click, a replacement is verification only. Another click could
@@ -123,7 +126,7 @@ impl<T: FormTab> ElementAction<T> for CheckAction<'_> {
         if self.delivery.delivery() == Delivery::Done {
             return Err(state_unchanged());
         }
-        if !self.options.checked && state.is_radio == Some(true) {
+        if !options.checked && state.is_radio == Some(true) {
             return Err(PlaywrightError::error(
                 "Cannot uncheck radio button. Radio buttons can only be unchecked by selecting another radio button in the same group.",
             ).into());
@@ -131,7 +134,7 @@ impl<T: FormTab> ElementAction<T> for CheckAction<'_> {
         match click::retry_pointer_action(
             tab,
             element,
-            &self.options.click,
+            &options.click,
             WaitAfter::Disabled,
             progress,
             self.delivery,
@@ -141,13 +144,13 @@ impl<T: FormTab> ElementAction<T> for CheckAction<'_> {
             ActionResult::NotConnected => return Ok(ActionResult::NotConnected),
             ActionResult::Done(()) => {}
         }
-        if self.options.click.trial {
+        if options.click.trial {
             return Ok(ActionResult::Done(()));
         }
         let Some(state) = read_state(tab, element, progress).await? else {
             return Ok(ActionResult::NotConnected);
         };
-        if state.matches != self.options.checked {
+        if state.matches != options.checked {
             return Err(state_unchanged());
         }
         Ok(ActionResult::Done(()))

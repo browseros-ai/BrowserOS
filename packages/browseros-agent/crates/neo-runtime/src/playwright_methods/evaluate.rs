@@ -44,14 +44,16 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use tokio::time;
 
+use crate::action_hooks::element::PinnedElement;
 use crate::actions::{ActionKind, NeoMethod};
-use crate::browser_representations::page::{FrameTab, GroupGuard, PageSession};
+use crate::browser_representations::page::{FrameTab, GroupGuard, PageSession, ResolvedElement};
 use crate::chromium_bridge::frame_selector;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::chromium_bridge::main_world::{
     self, BuiltExpression, Called, ContextPin, DocumentId, Installed, MainFunction,
 };
 use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup};
+use crate::hooks::ElementRef;
 use crate::playwright_methods::click::{self, LoopAWaits, PageError};
 use crate::playwright_methods::reads::SelectorTab;
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
@@ -3043,6 +3045,68 @@ pub(crate) async fn element_handle_for(
         true,
         format!("{NODE_PREVIEW_PREFIX}{preview}"),
     )
+}
+
+/// Neo: pins a resolved element for the run's hooks (hooks feature 4): [`element_handle_for`] in
+/// `handles`, the run's handles as its hook realm sees them, so the agent's script can never
+/// reach the handle; the pin keeps `element` (and its group) to compare later resolutions with.
+/// It adopts the node, nothing else: no snapshot runs and no `aria-ref` changes. Dropping the
+/// pin forgets its guid at once and releases its object on the page's tracker.
+///
+/// # Errors
+///
+/// `NotConnected` when the element or its document went away, so loop A resolves again.
+pub(crate) async fn pin_element(
+    tab: &FrameTab,
+    element: &ResolvedElement,
+    preview: &str,
+    handles: &Arc<Handles>,
+) -> Result<PinnedElement, PageError> {
+    let frame = &element.frame;
+    let created = element_handle_for(tab, frame, element.handle(), preview, handles).await?;
+    let release = PinRelease {
+        handles: Arc::clone(handles),
+        guid: created.guid.clone(),
+        page: Arc::clone(&tab.page),
+    };
+    Ok(PinnedElement::new(
+        ElementRef {
+            guid: created.guid,
+            preview: created.initializer.preview,
+        },
+        element.clone(),
+        Box::new(release),
+    ))
+}
+
+/// What releases a pin ([`pin_element`]) as it drops.
+struct PinRelease {
+    handles: Arc<Handles>,
+    guid: String,
+    page: Arc<PageSession>,
+}
+
+/// Neo: a pin outlives no call. Its guid goes at once, so a hook can never reach it after; its
+/// object is released on the page's tracker, fire and forget, as `Dispose` releases one. A run
+/// that ended first released every handle already (`Handles::close`).
+impl Drop for PinRelease {
+    fn drop(&mut self) {
+        let Some(entry) = self.handles.forget(&self.guid) else {
+            return;
+        };
+        let Remote::Object(id) = &entry.remote else {
+            return;
+        };
+        let object_id = id.object_id().to_string();
+        let frame = Arc::clone(&entry.frame);
+        self.page.spawn_while_open(async move {
+            // Playwright: `server/chromium/crProtocolHelper.ts` `releaseObject`: `await client.send('Runtime.releaseObject', { objectId }).catch(error => { });`
+            let _released = frame
+                .host
+                .send("Runtime.releaseObject", json!({ "objectId": object_id }))
+                .await;
+        });
+    }
 }
 
 /// Neo: [`element_handle_for`] for an element the caller already adopted into the main world in

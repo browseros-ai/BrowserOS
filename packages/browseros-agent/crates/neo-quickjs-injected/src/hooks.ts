@@ -27,6 +27,7 @@
 
 import { BrowserContext, pageGuidOf } from './browser-context'
 import { exportValue } from './buffer'
+import { ElementHandle } from './element-handle'
 import type { Frame } from './frame'
 import { standardGlobals } from './globals'
 import type { Locator } from './locator'
@@ -188,6 +189,8 @@ interface EventObjects {
   page?: Page
   frame?: Frame
   locator?: Locator
+  /** An element action's pinned element (F4): a handle only this realm can use. */
+  element?: ElementHandle
 }
 
 /** A payload JSON object (contract §3). Guids and `kind`/`group` are checked where read; every
@@ -503,6 +506,7 @@ class HookRealm {
     if (objects.frame) view.frame = objects.frame
     view.context = objects.context
     if (objects.locator) view.locator = objects.locator
+    if (objects.element) view.element = objects.element
     view.meta = this.#meta
     return view
   }
@@ -513,8 +517,9 @@ class HookRealm {
    * `initializer` getter, as `context.pages()` builds a page. A frame belongs to the page its
    * guid names (`frame@T/F` is `page@T`'s).
    *
-   * The payload's `element` (F4) is not read yet: an `ElementHandle` needs its handle's record
-   * (its preview), which the payload does not carry.
+   * An element action's `element` (F4) is the handle Rust pinned in this realm's view of the
+   * run's handles, `{guid, preview}`: an `ElementHandle` built from it, as from any handle record
+   * Rust creates, its timeouts the call's frame's page's. The agent's realm never sees its guid.
    */
   #objectsFor(action: boolean, payload: Payload): EventObjects {
     const context = this.#contextFor(text(payload, 'context'))
@@ -529,6 +534,15 @@ class HookRealm {
       const locator = record(payload, 'locator')
       objects.locator = this.#frameFor(text(locator, 'frame'), context).locator(
         text(locator, 'selector'),
+      )
+    }
+    if (payload.element !== undefined) {
+      const element = record(payload, 'element')
+      objects.element = new ElementHandle(
+        this.#objects.connection,
+        text(element, 'guid'),
+        { preview: text(element, 'preview') },
+        objects.frame,
       )
     }
     return objects

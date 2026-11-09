@@ -7,6 +7,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { Buffer, exportValue } from '../../src/buffer'
+import { ElementHandle } from '../../src/element-handle'
 import type { HookContext, Hooks, NeoHooks, Ship } from '../../src/hooks'
 import { createHooks } from '../../src/index'
 import { Locator } from '../../src/locator'
@@ -554,6 +555,35 @@ describe('beforeAction', () => {
         (params as { selector: string }).selector,
       ]),
     ).toEqual([['frame@RUN', 'fill', '#pw']])
+  })
+
+  test('an element action pins its element: a real ElementHandle on the pinned guid', async () => {
+    const { hooks, fake } = startHooks()
+    fake.answer = () => ({ result: { value: 'pw' } })
+    const events: Event[] = []
+    let id: unknown
+    await load(hooks, (neo) =>
+      neo.on('beforeAction', async (event) => {
+        events.push(event)
+        id = await (event.element as ElementHandle<{ id: string }>).evaluate(
+          (node) => node.id,
+        )
+      }),
+    )
+    const pinned = {
+      ...FILL,
+      element: { guid: 'handle@pin.1', preview: 'JSHandle@<input id="pw">' },
+    }
+    expect(await decide(hooks, 'beforeAction', pinned)).toEqual({
+      decision: 'allow',
+    })
+    const [event] = events as [Event]
+    expect(event.element).toBeInstanceOf(ElementHandle)
+    expect(String(event.element)).toBe('JSHandle@<input id="pw">')
+    expect(id).toBe('pw')
+    expect(fake.messages.map(({ guid, method }) => [guid, method])).toEqual([
+      ['handle@pin.1', 'evaluateExpression'],
+    ])
   })
 
   test('another page is built the way context.pages() builds it, and a frame belongs to its page', async () => {
@@ -1227,6 +1257,11 @@ describe('invoke never rejects', () => {
       'a locator without a selector',
       'beforeAction',
       JSON.stringify({ ...FILL, locator: { frame: 'frame@RUN' } }),
+    ],
+    [
+      'an element without a guid',
+      'beforeAction',
+      JSON.stringify({ ...FILL, element: { preview: 'JSHandle@node' } }),
     ],
   ])('%s fails', async (_, event, payload) => {
     const { hooks } = startHooks()
