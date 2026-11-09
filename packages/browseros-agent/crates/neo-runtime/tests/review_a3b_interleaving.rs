@@ -30,6 +30,7 @@ fn request(tab: &Tab, code: &str) -> RunRequest {
         timeout: Duration::from_secs(30),
         cancel: CancellationToken::new(),
         artifacts: None,
+        hooks: None,
     }
 }
 

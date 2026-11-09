@@ -67,6 +67,7 @@ async fn check_cleanup(cancel_run: bool) {
         timeout: Duration::from_secs(if cancel_run { 30 } else { 5 }),
         cancel: cancel.clone(),
         artifacts: None,
+        hooks: None,
     };
     let run = tokio::spawn({
         let runtime = runtime.clone();

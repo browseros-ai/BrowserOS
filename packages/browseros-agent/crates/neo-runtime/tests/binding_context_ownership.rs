@@ -84,6 +84,7 @@ async fn tests_that_a_binding_in_another_browser_context_does_not_keep_an_ended_
                 timeout: Duration::from_mins(1),
                 cancel,
                 artifacts: None,
+                hooks: None,
             }).await
         })
     };

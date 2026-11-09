@@ -92,6 +92,7 @@ async fn run(args: Args) -> Result<RunStatus, String> {
             timeout: Duration::from_millis(args.timeout_ms),
             cancel: CancellationToken::new(),
             artifacts: args.artifacts,
+            hooks: None,
         })
         .await;
     // A run's outcome does not settle its cleanup (a screenshot's late restore, a PDF stream's

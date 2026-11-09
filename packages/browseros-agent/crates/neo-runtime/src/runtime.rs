@@ -3,7 +3,9 @@
 //! A run's order, after the tab check and the attach:
 //!
 //! ```text
-//!  Tabs ─▶ PageEntry ─▶ Arc<PageSession> ─┬─▶ quickjs::run(…, dispatcher)   the deadline decides, as before
+//!  Tabs ─▶ PageEntry ─▶ Arc<PageSession> ─┬─▶ hooks: load + beforeRun        only with `RunRequest::hooks` (`hooks.rs`)
+//!                                             ├─▶ quickjs::run(…, dispatcher)   the deadline decides, as before
+//!                                             ├─▶ hooks: afterRun, then close   always once loaded, full budget
 //!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s (highlights ≤ 1 s more), records
 //!                                             └─▶ last Arc drops ─▶ Session::drop ─▶ detach in background
 //! ```
@@ -13,6 +15,7 @@
 //! caller drops the run's future. Browser tabs themselves survive the run.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use browseros_cdp::{CdpClient, CdpError, browser};
 use serde_json::Value;
@@ -25,6 +28,7 @@ use crate::browser_representations::page::TabInputs;
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::Switches;
 use crate::deadline::Deadline;
+use crate::hooks::{Gate, HookSandbox, RealmParts};
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
 use crate::playwright_methods::screenshot::TabScreenshots;
@@ -62,6 +66,8 @@ pub struct Runtime {
     /// How every run's `path` options treat an absolute path (`artifacts.rs`).
     absolute_paths: AbsolutePaths,
     cleanup: TaskTracker,
+    /// Hook realms created by this runtime's runs (`hooks.rs`), shared by its clones.
+    hook_realms: Arc<AtomicU64>,
 }
 
 /// Close the run's tracker on every exit, including a dropped future or failed tab open.
@@ -116,6 +122,7 @@ impl Runtime {
                     permissions: Permissions::new(cleanup.clone()),
                     absolute_paths: AbsolutePaths::default(),
                     cleanup,
+                    hook_realms: Arc::default(),
                 })
             }
             Err(CdpError::Protocol { message, .. }) => {
@@ -136,6 +143,15 @@ impl Runtime {
             absolute_paths,
             ..self
         }
+    }
+
+    /// How many hook realms this runtime's runs have created: one per run that carried hooks
+    /// (`RunRequest::hooks`), none for a run without. For tests that a run without hooks costs
+    /// nothing.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn hook_realms_created(&self) -> u64 {
+        self.hook_realms.load(Ordering::Relaxed)
     }
 
     /// Waits for every run's remaining browser work, including late creation replies and
@@ -164,6 +180,7 @@ impl Runtime {
             timeout,
             cancel,
             artifacts,
+            hooks,
         } = request;
         let deadline = Deadline::new(timeout, cancel);
         let tokio = match Handle::try_current() {
@@ -198,12 +215,8 @@ impl Runtime {
             }
         };
 
-        let script = Script {
-            code,
-            page_guid: quickjs_bridge::page_guid(&page),
-            frame_guid: quickjs_bridge::frame_guid(&page),
-            url,
-        };
+        let page_guid = quickjs_bridge::page_guid(&page);
+        let frame_guid = quickjs_bridge::frame_guid(&page);
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
         // group-release tasks the page spawns, so `finish` waits for them all.
         let artifacts =
@@ -212,7 +225,7 @@ impl Runtime {
         let getters = Getters::new(
             tabs.clone(),
             deadline.clone(),
-            tokio,
+            tokio.clone(),
             Arc::clone(&run.handles),
         );
         let dispatcher = Dispatcher::new(tabs.clone(), run);
@@ -224,8 +237,43 @@ impl Runtime {
             run: tabs.run_id(),
             released: false,
         };
-        let outcome = quickjs::run(script, getters, dispatcher.clone(), deadline, events).await;
-        let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
+        // The hook sandbox exists only for a run with hooks; without, nothing below costs a thing.
+        // Dropping it (this future dropped included) closes it, so its realm lets go of the run.
+        let sandbox = hooks.map(|hooks| {
+            let handles = Arc::clone(&dispatcher.run_scope().hook_handles);
+            let parts = RealmParts {
+                page_guid: page_guid.clone(),
+                frame_guid: frame_guid.clone(),
+                url: url.clone(),
+                getters: Getters::new(tabs.clone(), deadline.clone(), tokio.clone(), handles),
+                dispatcher: dispatcher.for_hooks(),
+                realms: Arc::clone(&self.hook_realms),
+            };
+            HookSandbox::start(hooks, parts)
+        });
+        let gate = match &sandbox {
+            Some(sandbox) => sandbox.before_run(&code, &deadline).await,
+            None => Gate::Start,
+        };
+        let outcome = match gate {
+            Gate::Start => {
+                let script = Script {
+                    code,
+                    page_guid,
+                    frame_guid,
+                    url,
+                };
+                quickjs::run(script, getters, dispatcher.clone(), deadline, events).await
+            }
+            Gate::End(outcome) => *outcome,
+        };
+        // How the script ended, for its unfinished calls, whatever afterRun does with the outcome.
+        let run_end = run_end_of(&outcome);
+        let outcome = match &sandbox {
+            Some(sandbox) => sandbox.end(outcome).await,
+            None => outcome,
+        };
+        let (calls, dropped) = dispatcher.finish(run_end).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
         grants.disarm();
         outcome
@@ -268,6 +316,6 @@ fn run_end_of(outcome: &RunOutcome) -> RunEnd {
     match outcome.status {
         RunStatus::Timeout => RunEnd::Timeout,
         RunStatus::Cancelled => RunEnd::Cancelled,
-        RunStatus::Ok | RunStatus::Error => RunEnd::Settled,
+        RunStatus::Ok | RunStatus::Error | RunStatus::Blocked => RunEnd::Settled,
     }
 }

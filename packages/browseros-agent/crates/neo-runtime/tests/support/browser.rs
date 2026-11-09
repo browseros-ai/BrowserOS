@@ -194,6 +194,7 @@ impl Tab {
                     timeout,
                     cancel,
                     artifacts: None,
+                    hooks: None,
                 })
                 .await
         })

@@ -50,6 +50,7 @@ fn cancellable(tab: &Tab, code: &str, cancel: &CancellationToken) -> RunRequest 
         timeout: Duration::from_secs(30),
         cancel: cancel.clone(),
         artifacts: None,
+        hooks: None,
     }
 }
 
