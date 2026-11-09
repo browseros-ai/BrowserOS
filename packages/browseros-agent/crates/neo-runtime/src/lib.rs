@@ -12,8 +12,8 @@
 //!             │                          page_events.rs (one tab's watcher), frame_events.rs
 //!             │                          (its frame tree), discovery.rs (new tabs, popups)
 //!             └─ Dispatcher::call        method_router.rs: target routing, task, trace, reply
-//!                  ├─ tab_calls          context/page lifecycle; tracked creation and cleanup
-//!                  ├─ browser_calls      the run's Browser: created contexts, close, disposal
+//!                  ├─ page_and_context_methods  context/page lifecycle; tracked creation and cleanup
+//!                  ├─ browser_methods    the run's Browser: created contexts, close, disposal
 //!                  ├─ debugger           context.debugger: holds a call before it starts
 //!                  └─ Tabs::session      one lazy session for the call's page
 //!                       ├─ click::click  click.rs: policy over the Tab seam
