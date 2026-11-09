@@ -2535,6 +2535,146 @@ mod tests {
         );
     }
 
+    /// Opens the fake browser's tab for a run with a 10 s deadline, and the run's two
+    /// dispatchers: the agent's and the hook realm's.
+    async fn agent_and_hooks(browser: &FakeBrowser) -> (Dispatcher, Dispatcher) {
+        let tasks = TaskTracker::new();
+        let run = RunScope::new(
+            Deadline::new(Duration::from_secs(10), CancellationToken::new()),
+            tasks.clone(),
+        );
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            TabScreenshots::default(),
+            Switches::default(),
+            Permissions::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap();
+        let agent = Dispatcher::new(tabs, run);
+        let hooks = agent.for_hooks();
+        (agent, hooks)
+    }
+
+    /// The reply text of a call through `dispatcher`, within 5 s.
+    async fn replied(dispatcher: &Dispatcher, message: &Value) -> Value {
+        let (reply, _) = time::timeout(Duration::from_secs(5), dispatcher.call(&message.to_string()))
+            .await
+            .expect("the call replies in time")
+            .expect("the call has a reply");
+        serde_json::from_str(&reply).unwrap()
+    }
+
+    /// A call's origin is its dispatcher's, never its message's: the hook dispatcher's record keeps
+    /// no params, location or log, the agent's keeps its own whatever its message claims, and the
+    /// two realms share call ids but not message ids, so neither aborts the other's call.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_a_calls_origin_is_its_dispatchers_and_a_hooks_record_keeps_no_secrets() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let (agent, hooks) = agent_and_hooks(&browser).await;
+        assert_eq!(agent.origin(), CallOrigin::Agent);
+        assert_eq!(hooks.origin(), CallOrigin::Hook);
+        // Both realms number their messages from 1, and the agent's claims to be a hook's.
+        let message = json!({
+            "id": 1,
+            "guid": format!("frame@{PAGE}"),
+            "method": "waitForTimeout",
+            "params": {"waitTimeout": 60_000},
+            "metadata": {"location": {"file": "run.js", "line": 3, "column": 7}, "internal": true, "origin": "hook"},
+            "origin": "hook",
+        });
+        let agent_reply = agent.call(&message.to_string());
+        let hook_reply = hooks.call(&message.to_string());
+        hooks.abort(1, "stop".to_string());
+        let (hook_reply, _) = time::timeout(Duration::from_secs(5), hook_reply)
+            .await
+            .expect("the hook's call stops at its abort")
+            .unwrap();
+        let hook_reply: Value = serde_json::from_str(&hook_reply).unwrap();
+        assert_eq!(hook_reply["error"]["error"]["name"], "AbortError");
+        let mut agent_reply = Box::pin(agent_reply);
+        assert!(
+            time::timeout(Duration::from_millis(100), &mut agent_reply)
+                .await
+                .is_err(),
+            "the hook realm's abort of its message 1 leaves the agent's message 1 running"
+        );
+        agent.abort(1, "stop".to_string());
+        let (agent_reply, _) = time::timeout(Duration::from_secs(5), agent_reply)
+            .await
+            .unwrap()
+            .unwrap();
+        let agent_reply: Value = serde_json::from_str(&agent_reply).unwrap();
+        assert_eq!(agent_reply["error"]["error"]["name"], "AbortError");
+
+        let (records, dropped) = agent.finish(RunEnd::Settled).await;
+        assert!(dropped.is_none());
+        let [agent_record, hook_record] = <[CallRecord; 2]>::try_from(records).unwrap();
+        assert_eq!((agent_record.call_id, hook_record.call_id), (1, 2), "one call id sequence");
+        assert_eq!(agent_record.origin, CallOrigin::Agent);
+        assert_eq!(agent_record.params, json!({"waitTimeout": 60_000}));
+        assert_eq!(
+            agent_record.location,
+            Some(CallLocation {
+                line: 3,
+                column: Some(7)
+            })
+        );
+        assert!(!agent_record.log.is_empty());
+        assert_eq!(hook_record.origin, CallOrigin::Hook);
+        assert_eq!(hook_record.params, Value::Null);
+        assert_eq!(hook_record.location, None);
+        assert!(hook_record.log.is_empty());
+        assert_eq!(
+            (hook_record.method.as_str(), hook_record.title.as_deref()),
+            ("waitForTimeout", agent_record.title.as_deref())
+        );
+        assert!(matches!(
+            hook_record.result,
+            CallResult::Error { ref name, .. } if name == "AbortError"
+        ));
+        let agent_json = serde_json::to_value(&agent_record).unwrap();
+        assert!(agent_json.get("origin").is_none(), "{agent_json}");
+        let hook_json = serde_json::to_value(&hook_record).unwrap();
+        assert_eq!(hook_json["origin"], "hook");
+        assert_eq!(hook_json["params"], Value::Null);
+        assert!(hook_json.get("location").is_none());
+    }
+
+    /// A paused debugger holds the agent's next call, never a hook's.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_no_debugger_holds_a_hooks_call() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let (agent, hooks) = agent_and_hooks(&browser).await;
+        let debugger = |id: u64, method: &str| {
+            json!({"id": id, "guid": "debugger@default", "method": method, "params": {}})
+        };
+        let pause = |id: u64| json!({"id": id, "guid": "context@default", "method": "pause", "params": {}});
+        assert!(replied(&agent, &debugger(1, "requestPause")).await.get("error").is_none());
+        assert!(replied(&hooks, &pause(1)).await.get("error").is_none());
+        assert_eq!(
+            agent.inner.tabs.debuggers().paused_details(DEFAULT_CONTEXT),
+            Value::Null,
+            "the hook's call went straight through"
+        );
+        let held = agent.call(&pause(2).to_string());
+        let mut held = Box::pin(held);
+        assert!(time::timeout(Duration::from_millis(100), &mut held).await.is_err());
+        assert_ne!(
+            agent.inner.tabs.debuggers().paused_details(DEFAULT_CONTEXT),
+            Value::Null,
+            "the pause still holds the agent's next call"
+        );
+        assert!(replied(&agent, &debugger(3, "resume")).await.get("error").is_none());
+        assert!(time::timeout(Duration::from_secs(5), held).await.is_ok());
+        let (records, _) = agent.finish(RunEnd::Settled).await;
+        assert_eq!(records.len(), 4);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn tests_that_closing_pages_share_one_finish_budget() {
         let browser = FakeBrowser::start(Replies::default()).await;

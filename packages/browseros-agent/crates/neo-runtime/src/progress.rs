@@ -1054,6 +1054,41 @@ pub(crate) fn js_number(value: f64) -> String {
 mod tests {
     use super::*;
 
+    /// A hook may type a secret: its entry never holds the params or location it was given, and
+    /// its record keeps no log, while the reply to the hook's own realm still carries the log.
+    #[test]
+    fn tests_that_a_hooks_entry_keeps_no_params_location_or_log() {
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: "frame@T".to_string(),
+            method: "fill".to_string(),
+            title: Some("Fill"),
+            origin: CallOrigin::Hook,
+            params: serde_json::json!({"selector": "#p", "value": "s3cret"}),
+            location: Some(CallLocation {
+                line: 2,
+                column: None,
+            }),
+            input: true,
+        }));
+        assert_eq!(entry.origin(), CallOrigin::Hook);
+        assert_eq!(entry.params(), &Value::Null);
+        entry.update_log(|log| log.push("fill(\"s3cret\")".to_string()));
+        let trace = Trace::default();
+        trace.push(Arc::clone(&entry));
+        let reply_log = entry.finish(CallResult::Ok);
+        trace.finished(&entry);
+        assert!(!reply_log.is_empty(), "the hook's realm reads its own call log");
+        let (records, dropped) = trace.take(RunEnd::Settled);
+        assert!(dropped.is_none());
+        let record = &records[0];
+        assert_eq!(record.origin, CallOrigin::Hook);
+        assert_eq!(record.params, Value::Null);
+        assert_eq!(record.location, None);
+        assert!(record.log.is_empty());
+        assert_eq!(record.delivery, Some(Delivery::NotSent));
+    }
+
     #[tokio::test]
     async fn tests_that_closing_the_context_stops_every_other_call_but_itself() {
         let run = RunScope::new(

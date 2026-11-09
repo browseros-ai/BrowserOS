@@ -381,29 +381,10 @@ pub(crate) fn to_json<'js>(
     export: &Function<'js>,
     value: rquickjs::Value<'js>,
 ) -> Result<Returned, RunError> {
-    let shipped = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
-    let sink = Arc::clone(&shipped);
-    let ship = Function::new(
-        ctx.clone(),
-        move |bytes: TypedArray<'js, u8>| -> rquickjs::Result<f64> {
-            let Some(bytes) = bytes.as_bytes() else {
-                return Err(rquickjs::Error::new_from_js_message(
-                    "Uint8Array",
-                    "bytes",
-                    "its buffer is detached",
-                ));
-            };
-            let mut shipped = sink.lock().map_err(|_| {
-                rquickjs::Error::new_from_js_message("Uint8Array", "bytes", "poisoned")
-            })?;
-            shipped.push(bytes.to_vec());
-            // Exact: a realm cannot hold 2^53 binaries.
-            #[expect(clippy::cast_precision_loss, reason = "a count far below 2^53")]
-            Ok((shipped.len() - 1) as f64)
-        },
-    )
-    .map_err(|error| RunError::new("Error", error.to_string()))?;
-    let marker = format!("neo:binary:{:016x}", RandomState::new().hash_one(0_u8));
+    let shipped = Shipped::default();
+    let ship =
+        ship(ctx, &shipped).map_err(|error| RunError::new("Error", error.to_string()))?;
+    let marker = binary_marker();
     let text: Option<String> = match export.call((value, ship, marker.as_str())).catch(ctx) {
         Ok(text) => text,
         Err(error) => return Err(script_error(ctx, error)),
@@ -414,17 +395,63 @@ pub(crate) fn to_json<'js>(
     let mut value: Value = serde_json::from_str(&text)
         .map_err(|error| RunError::new("Error", format!("return value is not JSON: {error}")))?;
     let shipped = shipped
-        .lock()
-        .map(|mut shipped| mem::take(&mut *shipped))
-        .map_err(|_| RunError::new("Error", "returned binaries were lost".to_string()))?;
+        .take()
+        .ok_or_else(|| RunError::new("Error", "returned binaries were lost".to_string()))?;
     let binaries = lift_binaries(&mut value, &marker, shipped);
     Ok((Some(value), binaries))
+}
+
+/// The bytes `exportValue`'s `ship` copied out of a realm, in the order it shipped them.
+#[derive(Clone, Default)]
+pub(crate) struct Shipped(Arc<Mutex<Vec<Vec<u8>>>>);
+
+impl Shipped {
+    /// Every binary shipped so far, taken; `None` if a panic while shipping poisoned the sink.
+    pub(crate) fn take(&self) -> Option<Vec<Vec<u8>>> {
+        self.0.lock().ok().map(|mut shipped| mem::take(&mut *shipped))
+    }
+}
+
+/// neo-quickjs-injected's `ship(bytes)`: copies a `Uint8Array`'s bytes into `shipped`, outside
+/// the realm's memory limit, and answers its index there, which `exportValue` writes under the
+/// marker ([`binary_marker`]).
+pub(crate) fn ship<'js>(ctx: &Ctx<'js>, shipped: &Shipped) -> rquickjs::Result<Function<'js>> {
+    let sink = shipped.clone();
+    Function::new(
+        ctx.clone(),
+        move |bytes: TypedArray<'js, u8>| -> rquickjs::Result<f64> {
+            let Some(bytes) = bytes.as_bytes() else {
+                return Err(rquickjs::Error::new_from_js_message(
+                    "Uint8Array",
+                    "bytes",
+                    "its buffer is detached",
+                ));
+            };
+            let mut shipped = sink.0.lock().map_err(|_| {
+                rquickjs::Error::new_from_js_message("Uint8Array", "bytes", "poisoned")
+            })?;
+            shipped.push(bytes.to_vec());
+            // Exact: a realm cannot hold 2^53 binaries.
+            #[expect(clippy::cast_precision_loss, reason = "a count far below 2^53")]
+            Ok((shipped.len() - 1) as f64)
+        },
+    )
+}
+
+/// A fresh random marker key for one export's binaries: the realm's code never sees it, so no
+/// value can forge a mark.
+pub(crate) fn binary_marker() -> String {
+    format!("neo:binary:{:016x}", RandomState::new().hash_one(0_u8))
 }
 
 /// Takes `marker` out of every object of `value` that carries it, pairing each with the bytes
 /// `shipped` holds at its index and its JSON pointer, in the order JSON wrote them. Recursion is
 /// bounded by `serde_json`'s parse depth (128).
-fn lift_binaries(value: &mut Value, marker: &str, shipped: Vec<Vec<u8>>) -> Vec<RunBinary> {
+pub(crate) fn lift_binaries(
+    value: &mut Value,
+    marker: &str,
+    shipped: Vec<Vec<u8>>,
+) -> Vec<RunBinary> {
     fn walk(
         value: &mut Value,
         marker: &str,

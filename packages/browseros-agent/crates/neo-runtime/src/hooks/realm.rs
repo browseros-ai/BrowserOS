@@ -63,15 +63,18 @@ const ABORT_GRACE: Duration = Duration::from_millis(100);
 const FAR_FUTURE: Duration = Duration::from_hours(24 * 365 * 30);
 
 /// Neo: keeps the SDK's `createHooks` result in the hook realm between jobs, under the global
-/// `key` (a random name, not enumerable, not writable): `invoke` and `finishLoading`'s promise
-/// race every uncaught-error promise of the realm, as the agent's script races them
+/// `key` (a random name, not enumerable, not writable): `invoke` and the hook file's promise race
+/// every uncaught-error promise of the realm, as the agent's script races them
 /// (`quickjs::RACE_UNCAUGHT`), so a hook's listener or timer that throws fails the job it runs in.
+/// `invoke` passes `ship` and `marker` on, so a `replace` value's binaries leave the realm as the
+/// agent's result's do (`quickjs::to_json`).
 const STASH: &str = r"(key, hooks, uncaught) => {
   const race = (promise) => Promise.race([promise, ...uncaught])
   Object.defineProperty(globalThis, key, {
     value: Object.freeze({
       race,
-      invoke: (id, event, payload) => race(hooks.invoke(id, event, payload)),
+      invoke: (id, event, payload, ship, marker) =>
+        race(hooks.invoke(id, event, payload, ship, marker)),
       abort: (id, reason) => hooks.abort(id, reason),
       finishLoading: () => hooks.finishLoading(),
     }),
@@ -149,11 +152,21 @@ pub(crate) enum Loaded {
 /// How one invocation ended.
 #[derive(Debug)]
 pub(crate) enum Invoked {
-    /// `invoke`'s decision JSON, not yet checked against the event (`decision.rs`).
-    Decided(String),
+    /// `invoke`'s decision, not yet checked against the event (`decision.rs`).
+    Decided(Decision),
     Failed(HookFailure),
     /// The run's deadline passed, or the host cancelled it, first.
     Stopped(Stop),
+}
+
+/// `invoke`'s decision JSON, and the binaries a `replace` value shipped while being exported:
+/// each one's place in `value` carries `marker` and its index in `shipped`
+/// (`quickjs::lift_binaries`).
+#[derive(Debug)]
+pub(crate) struct Decision {
+    pub(crate) text: String,
+    pub(crate) marker: String,
+    pub(crate) shipped: Vec<Vec<u8>>,
 }
 
 /// One `neo.on(...)` registration, as `finishLoading` lists it. Fixed once loading ends, so the
@@ -332,11 +345,16 @@ impl Actor {
         };
         self.watch.arm(until, race.cloned());
         let key = realm.key.as_str();
+        let shipped = quickjs::Shipped::default();
+        let marker = quickjs::binary_marker();
         // The realm boundary: the SDK's `invoke` runs the handlers, and its promise is awaited
         // here, which is when the realm's timers, call replies and promise jobs run.
         let entered = realm.context.async_with(async |ctx| {
-            let promise = stashed(&ctx, key, "invoke")
-                .and_then(|invoke| invoke.call::<_, Promise<'_>>((id, event.name(), payload)))
+            let promise = quickjs::ship(&ctx, &shipped)
+                .and_then(|ship| {
+                    let invoke = stashed(&ctx, key, "invoke")?;
+                    invoke.call::<_, Promise<'_>>((id, event.name(), payload, ship, marker.as_str()))
+                })
                 .catch(&ctx)
                 .map_err(|error| describe(&ctx, error))?;
             promise
@@ -354,7 +372,16 @@ impl Actor {
             () = reply.closed() => Invoked::Failed(HookFailure::Realm(ABANDONED.to_string())),
             () = time::sleep_until(until) => Invoked::Failed(HookFailure::Timeout),
             entered = entered => match entered {
-                Ok(decision) => Invoked::Decided(decision),
+                Ok(text) => match shipped.take() {
+                    Some(shipped) => Invoked::Decided(Decision {
+                        text,
+                        marker: marker.clone(),
+                        shipped,
+                    }),
+                    None => Invoked::Failed(HookFailure::Realm(
+                        "a replaced value's binaries were lost".to_string(),
+                    )),
+                },
                 Err(detail) => match race.and_then(Deadline::stop) {
                     Some(stop) => Invoked::Stopped(stop),
                     None if Instant::now() >= until => Invoked::Failed(HookFailure::Timeout),

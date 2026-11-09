@@ -41,13 +41,13 @@ use crate::deadline::Deadline;
 use crate::method_router::Dispatcher;
 use crate::quickjs;
 use crate::quickjs_bridge::{Getters, Logs};
-use crate::run::{CallLocation, RunError, RunHooks, RunOutcome, RunStatus};
+use crate::run::{CallLocation, RunBinary, RunError, RunHooks, RunOutcome, RunStatus};
 
 mod decision;
 mod realm;
 
 use decision::Decided;
-use realm::{Actor, Bridge, Invoked, Job, Loaded, Registration, Setup};
+use realm::{Actor, Bridge, Decision, Invoked, Job, Loaded, Registration, Setup};
 
 /// Neo: the model-visible error of a run whose hooks failed before its script started. The
 /// failure itself goes to the hook trace: a hook's error text may hold a secret.
@@ -150,6 +150,9 @@ pub(crate) struct AfterDecision {
     /// `Some` when a handler replaced the result: the replacement's JSON, or `None` inside for
     /// `{ replace: undefined }`, which replaces too (`'replace' in r` decides).
     pub(crate) replace: Option<Option<Value>>,
+    /// The replacement's binaries, lifted out of it as the agent's result's are: each one's place
+    /// holds `{type, bytes}` and its bytes are here (`RunOutcome::binaries`).
+    pub(crate) binaries: Vec<RunBinary>,
     /// Every handler's note, in order.
     pub(crate) notes: Vec<String>,
 }
@@ -292,7 +295,7 @@ impl HookSandbox {
             .invoke(HookEvent::BeforeRun, payload, Some(deadline.clone()))
             .await
         {
-            Invoked::Decided(text) => match decision::parse(HookEvent::BeforeRun, &text) {
+            Invoked::Decided(decided) => match decision::parse(HookEvent::BeforeRun, &decided.text) {
                 Ok(Decided::Allow) => Gate::Start,
                 Ok(Decided::Block(reason)) => {
                     Gate::End(RunOutcome::blocked(RunError::new("Error", reason)))
@@ -317,12 +320,16 @@ impl HookSandbox {
         }
         let payload = decision::after_run(&outcome, &self.page_guid);
         let decided = match self.invoke(HookEvent::AfterRun, payload, None).await {
-            Invoked::Decided(text) => decision::parse(HookEvent::AfterRun, &text),
+            Invoked::Decided(decided) => checked(HookEvent::AfterRun, decided),
             Invoked::Failed(failure) => Err(failure),
             Invoked::Stopped(_) => Err(HookFailure::Realm("the run stopped".to_string())),
         };
-        let (replace, notes) = match decided {
-            Ok(Decided::After(AfterDecision { replace, notes })) => (replace, notes),
+        let (replace, binaries, notes) = match decided {
+            Ok(Decided::After(AfterDecision {
+                replace,
+                binaries,
+                notes,
+            })) => (replace, binaries, notes),
             Ok(other) => {
                 return self.withheld(outcome, &format!("afterRun decided {other:?}"));
             }
@@ -330,10 +337,10 @@ impl HookSandbox {
         };
         let outcome = match replace {
             None => outcome,
+            // The script's binaries belong to the value it returned, so they go with it.
             Some(value) if outcome.status == RunStatus::Ok => RunOutcome {
                 value,
-                // The script's binaries belong to the value it returned.
-                binaries: Vec::new(),
+                binaries,
                 ..outcome
             },
             Some(_) => {
@@ -406,7 +413,7 @@ impl HookSandbox {
     /// An action invocation's checked decision.
     async fn decide(&self, event: HookEvent, payload: String) -> Result<Decided, HookFailure> {
         match self.invoke(event, payload, None).await {
-            Invoked::Decided(text) => decision::parse(event, &text),
+            Invoked::Decided(decided) => checked(event, decided),
             Invoked::Failed(failure) => Err(failure),
             Invoked::Stopped(_) => Err(HookFailure::Realm("the run stopped".to_string())),
         }
@@ -464,6 +471,30 @@ impl HookSandbox {
             ..outcome
         }
     }
+}
+
+/// `decided` checked against `event`, a replacement's binaries lifted out of its value.
+fn checked(event: HookEvent, decided: Decision) -> Result<Decided, HookFailure> {
+    let Decision {
+        text,
+        marker,
+        shipped,
+    } = decided;
+    Ok(match decision::parse(event, &text)? {
+        Decided::After(AfterDecision {
+            replace: Some(Some(mut value)),
+            notes,
+            ..
+        }) => {
+            let binaries = quickjs::lift_binaries(&mut value, &marker, shipped);
+            Decided::After(AfterDecision {
+                replace: Some(Some(value)),
+                binaries,
+                notes,
+            })
+        }
+        other => other,
+    })
 }
 
 #[cfg(test)]

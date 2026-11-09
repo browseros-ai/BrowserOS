@@ -425,6 +425,7 @@ async fn tests_that_action_hooks_decide_and_fold() {
             .await,
         Ok(AfterDecision {
             replace: Some(Some(json!({"value": "***"}))),
+            binaries: Vec::new(),
             notes: vec!["redacted".to_string()],
         })
     );
@@ -437,6 +438,7 @@ async fn tests_that_action_hooks_decide_and_fold() {
             .await,
         Ok(AfterDecision {
             replace: None,
+            binaries: Vec::new(),
             notes: Vec::new(),
         })
     );
@@ -575,4 +577,58 @@ async fn tests_that_a_spinning_hook_is_stopped_at_its_budget_and_the_realm_lives
         Ok(ActionDecision::Allow),
         "the realm still answers after an interrupt"
     );
+}
+
+/// neo-quickjs-injected's own `createHooks` loads in the hook realm, blocks, notes and traces,
+/// and a `replace` value's binaries leave the realm as the agent's result's do.
+#[tokio::test(start_paused = true)]
+async fn tests_that_the_sdks_create_hooks_decides_through_the_realm() {
+    let (hooks, _tasks) = sandbox_with(
+        "neo.on('beforeRun', (event, ctx) => {
+           ctx.trace('saw', event.script)
+           if (event.script.includes('checkout')) return { block: 'owner approval needed' }
+         })
+         neo.on('afterRun', (event, ctx) => ({
+           replace: { shot: Buffer.from([1, 2, 3]), seen: event.value, who: ctx.meta.who },
+           note: 'swapped',
+         }))",
+        BUDGET,
+        quickjs::SDK_BUNDLE,
+    );
+    let outcome = ended(hooks.before_run("await checkout()", &far()).await);
+    assert_eq!(outcome.status, RunStatus::Blocked);
+    assert_eq!(
+        outcome.error.map(|error| error.message),
+        Some("owner approval needed".to_string())
+    );
+    assert_eq!(hooks.take_trace(), ["saw await checkout()"]);
+
+    let (hooks, _tasks) = sandbox_with(
+        "neo.on('afterRun', (event, ctx) => ({
+           replace: { shot: Buffer.from([1, 2, 3]), seen: event.value, who: ctx.meta.who },
+           note: 'swapped',
+         }))",
+        BUDGET,
+        quickjs::SDK_BUNDLE,
+    );
+    assert!(matches!(
+        hooks.before_run("return 7", &far()).await,
+        Gate::Start
+    ));
+    let outcome = hooks
+        .after_run(RunOutcome::returned(Some(json!(7)), Vec::new()))
+        .await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{:?}", hooks.take_trace());
+    assert_eq!(
+        outcome.value,
+        Some(json!({"shot": {"type": "Buffer", "bytes": 3}, "seen": 7, "who": "owner"}))
+    );
+    assert_eq!(
+        outcome.binaries,
+        [RunBinary {
+            pointer: "/shot".to_string(),
+            bytes: vec![1, 2, 3],
+        }]
+    );
+    assert_eq!(outcome.notes, ["swapped"]);
 }

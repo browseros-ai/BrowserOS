@@ -67,10 +67,12 @@ pub(crate) fn parse(event: HookEvent, text: &str) -> Result<Decided, HookFailure
         }
         Wire::Keep { notes } if !before => Ok(Decided::After(AfterDecision {
             replace: None,
+            binaries: Vec::new(),
             notes,
         })),
         Wire::Replace { value, notes } if !before => Ok(Decided::After(AfterDecision {
             replace: Some(value),
+            binaries: Vec::new(),
             notes,
         })),
         wire => Err(HookFailure::BadDecision(format!(
@@ -147,6 +149,7 @@ mod tests {
     fn after(replace: Option<Option<Value>>, notes: &[&str]) -> Decided {
         Decided::After(AfterDecision {
             replace,
+            binaries: Vec::new(),
             notes: notes.iter().map(ToString::to_string).collect(),
         })
     }
