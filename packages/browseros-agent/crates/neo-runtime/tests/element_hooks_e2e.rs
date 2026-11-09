@@ -92,6 +92,13 @@ const CUSTOM_CHECKBOX: &str = "<!doctype html><title>Terms</title>\
     <input id=cb type=checkbox style='position:absolute;opacity:0;left:0;top:0;width:20px;height:20px;margin:0'>\
     <span style='position:absolute;left:0;top:0;width:20px;height:20px;background:#ccc'></span>\
     </label> Accept";
+/// Neo: a custom checkbox whose label also holds a "pay now" link.
+const LABEL_WITH_LINK: &str = "<!doctype html><title>Terms</title>\
+    <label id=lab for=cb style='display:inline-block;padding:4px'>\
+    <input id=cb type=checkbox style='opacity:0;position:absolute;left:8px;top:8px;width:20px;height:20px;margin:0'>\
+    <span id=box style='display:inline-block;width:20px;height:20px;background:#ccc'></span>\
+    I agree, and <a id=pay href='#' onclick='window.__pay=(window.__pay||0)+1;return false'>pay now</a>\
+    </label>";
 /// Neo: a click policy that asks about each clicked element by its page and label, and holds
 /// "Next" for a while (as a hook asking the owner would); it blocks "Pay".
 const ASK_PAY: &str = "
@@ -1041,5 +1048,93 @@ return { forced, state };
     );
     let check = only_agent_call(&outcome, "check");
     assert_eq!(before(check), Some(BeforeHookResult::Allowed), "{check:?}");
+    tab.close().await;
+}
+
+/// Review R3-1: the hook refuses clicks on `#pay`, by the pinned element. A forced click on the
+/// checkbox at a point over the link inside the checkbox's label never activates the link (a
+/// click on interactive content in a label is that content's, not the control's); a forced click
+/// on the label's plain box checks the box.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_forced_click_through_a_label_never_reaches_a_link_inside_it() {
+    let Some(tab) = open_page(LABEL_WITH_LINK).await else {
+        return;
+    };
+    let hooks = "
+neo.on('beforeAction', { kinds: ['click'] }, async (event) => {
+  if ((await event.element.evaluate((e) => e.id)) === 'pay') return { block: 'paying needs the owner' };
+});
+";
+    let code = "
+const direct = await page.click('#pay', { timeout: 2000 }).then(() => 'clicked', (e) => e.name);
+const at = async (target) => {
+  const cb = await page.locator('#cb').boundingBox();
+  const box = await page.locator(target).boundingBox();
+  return { x: box.x + box.width / 2 - cb.x, y: box.y + box.height / 2 - cb.y };
+};
+const onLink = await page.click('#cb', { force: true, position: await at('#pay'), timeout: 2000 })
+  .then(() => 'clicked', (e) => e.name);
+const linkChecked = await page.isChecked('#cb');
+const onBox = await page.click('#cb', { force: true, position: await at('#box'), timeout: 2000 })
+  .then(() => 'clicked', (e) => e.name);
+return { direct, onLink, linkChecked, onBox, boxChecked: await page.isChecked('#cb') };
+";
+    let outcome = run(&tab, code, &[hooks]).await;
+    assert_eq!(
+        tab.evaluate("window.__pay ?? 0").await,
+        json!(0),
+        "the link never fired: {:?}",
+        outcome.value
+    );
+    assert_eq!(
+        outcome.value,
+        Some(json!({
+            "direct": "Error",
+            "onLink": "TimeoutError",
+            "linkChecked": false,
+            "onBox": "clicked",
+            "boxChecked": true,
+        }))
+    );
+    tab.close().await;
+}
+
+/// Review R3-2: the hook sets the password on the box with its own page script (a hook holding only
+/// `event.element`, which has no `fill`, would); on the mirroring page the next `press` log never
+/// shows it.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_secret_a_hook_sets_by_script_never_reaches_later_logs() {
+    let Some(tab) = open_page(MIRROR).await else {
+        return;
+    };
+    let hooks = "
+neo.on('beforeAction', { kinds: ['click'] }, async (event) => {
+  if (await event.element.evaluate((e) => e.id) !== 'submit') return;
+  await event.page.locator('#pw').evaluate((e, s) => {
+    e.value = s;
+    e.dispatchEvent(new Event('input', { bubbles: true }));
+  }, SECRET);
+});
+";
+    let code = "
+await page.click('#submit');
+await page.press('#pw', 'Enter');
+return 'done';
+";
+    let outcome = run(&tab, code, &[hooks]).await;
+    assert_eq!(
+        tab.evaluate("document.getElementById('pw').getAttribute('value')")
+            .await,
+        json!(SECRET),
+        "the hook's script set it and the page mirrored it"
+    );
+    assert!(
+        only_agent_call(&outcome, "press")
+            .log
+            .iter()
+            .any(|line| line.contains("<input")),
+        "the press's log names the box"
+    );
+    assert_no_secret(&outcome);
     tab.close().await;
 }
