@@ -126,8 +126,6 @@ module.exports = async ({ github, context, core, getOctokit }) => {
   const { owner, repo } = context.repo
   const docUrl = `https://github.com/${owner}/${repo}/blob/main/CLA.md`
 
-  let signaturesCache = null
-
   async function readSignatures() {
     const { data } = await signaturesClient.rest.repos.getContent({
       owner: SIGNATURES.owner,
@@ -142,25 +140,15 @@ module.exports = async ({ github, context, core, getOctokit }) => {
     return { file, sha: data.sha }
   }
 
-  async function getSignatures() {
-    if (!signaturesCache) {
-      signaturesCache = (await readSignatures()).file.signedContributors
-    }
-    return signaturesCache
-  }
-
   // Appends records with an optimistic lock on the file sha, re-reading and
-  // retrying when another run wrote in between.
+  // retrying when another run wrote in between. Returns the updated list.
   async function recordSignatures(records, prNumber) {
     for (let attempt = 1; ; attempt++) {
       const { file, sha } = await readSignatures()
       const fresh = records.filter(
         (record) => !file.signedContributors.some((s) => s.id === record.id),
       )
-      if (fresh.length === 0) {
-        signaturesCache = file.signedContributors
-        return
-      }
+      if (fresh.length === 0) return file.signedContributors
       file.signedContributors.push(...fresh)
       const names = fresh.map((record) => `@${record.name}`).join(', ')
       try {
@@ -173,9 +161,8 @@ module.exports = async ({ github, context, core, getOctokit }) => {
           message: `${names} has signed the CLA in ${owner}/${repo}#${prNumber}`,
           content: Buffer.from(JSON.stringify(file, null, 2)).toString('base64'),
         })
-        signaturesCache = file.signedContributors
         core.info(`Recorded CLA signature for ${names} on #${prNumber}`)
-        return
+        return file.signedContributors
       } catch (error) {
         if (error.status === 409 && attempt < MAX_WRITE_ATTEMPTS) {
           core.info(`Signature write conflicted, retrying (${attempt})`)
@@ -277,7 +264,26 @@ module.exports = async ({ github, context, core, getOctokit }) => {
     })
   }
 
+  async function hasClaStatus(sha, state) {
+    const { data } = await github.rest.repos.getCombinedStatusForRef({
+      owner,
+      repo,
+      ref: sha,
+      per_page: 100,
+    })
+    return data.statuses.some(
+      (s) => s.context === STATUS_CONTEXT && (!state || s.state === state),
+    )
+  }
+
+  // Signatures are only ever appended, so a success on a commit is final. A
+  // run that read the signatures before another run recorded one must not
+  // turn that success back into a failure. Returns false when it skips.
   async function setStatus(sha, result) {
+    if (result.notSigned.length > 0 && (await hasClaStatus(sha, 'success'))) {
+      core.info(`${sha} already has a successful ${STATUS_CONTEXT} status`)
+      return false
+    }
     let description = 'All contributors have signed the CLA'
     if (result.notSigned.length > 0) {
       description = `CLA not signed by: ${result.notSigned.map((c) => c.name).join(', ')}`
@@ -292,6 +298,7 @@ module.exports = async ({ github, context, core, getOctokit }) => {
       description,
       target_url: docUrl,
     })
+    return true
   }
 
   async function checkPullRequest(pr) {
@@ -303,7 +310,11 @@ module.exports = async ({ github, context, core, getOctokit }) => {
       per_page: 100,
     })
 
-    let result = classify(committers, await getSignatures())
+    // Read per PR so signatures recorded by other runs are picked up.
+    let result = classify(
+      committers,
+      (await readSignatures()).file.signedContributors,
+    )
 
     // Any listed, unsigned author who has commented the sign phrase on this PR
     // gets recorded, using their earliest such comment.
@@ -323,11 +334,11 @@ module.exports = async ({ github, context, core, getOctokit }) => {
       })
     }
     if (records.length > 0) {
-      await recordSignatures(records, pr.number)
-      result = classify(committers, await getSignatures())
+      result = classify(committers, await recordSignatures(records, pr.number))
     }
 
-    await setStatus(pr.head.sha, result)
+    // A stale result must not rewrite the comment either.
+    if (!(await setStatus(pr.head.sha, result))) return
     await updateStickyComment(pr.number, comments, result)
     core.info(
       `#${pr.number} ${pr.head.sha}: ${
@@ -354,16 +365,6 @@ module.exports = async ({ github, context, core, getOctokit }) => {
       state: 'open',
       per_page: 100,
     })
-  }
-
-  async function hasClaStatus(sha) {
-    const { data } = await github.rest.repos.getCombinedStatusForRef({
-      owner,
-      repo,
-      ref: sha,
-      per_page: 100,
-    })
-    return data.statuses.some((s) => s.context === STATUS_CONTEXT)
   }
 
   // The PR is derived from the API, never from the triggering run's outputs.
