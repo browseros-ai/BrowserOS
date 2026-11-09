@@ -79,7 +79,7 @@ pub(crate) struct Attached {
     client: CdpClient,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub(crate) enum LinkError {
     /// The socket is down and has not come back yet.
     #[error("the host side's browser connection is down")]

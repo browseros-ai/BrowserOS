@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use tokio::sync::{Mutex, OnceCell};
@@ -31,12 +32,23 @@ use crate::host::cdp;
 use crate::host::link::{Attached, HostLink, LinkError};
 use crate::run::PageId;
 
-/// Every tab's presence, by target. A cell is empty while its attach is in flight or after it
-/// failed; a later [`Presences::ensure`] fills it.
+/// Every tab's presence, by target. An empty cell is attaching; a completed failure is
+/// explicit so pruning can evict it and a later ensure can retry.
 pub(crate) struct Presences {
     link: Arc<HostLink>,
     pub(super) holds: Arc<RunHolds>,
-    tabs: Mutex<HashMap<PageId, Arc<OnceCell<Arc<Presence>>>>>,
+    tabs: Arc<Cells>,
+}
+
+type Cells = Mutex<HashMap<PageId, Arc<Cell>>>;
+
+/// The attach result remains shared even when its original caller leaves. Once focus enable
+/// starts, the cell must stay registered until it answers: an orphaned emulating session's
+/// cleanup could otherwise clear focus under a run that started in the meantime.
+#[derive(Default)]
+struct Cell {
+    value: OnceCell<Result<Arc<Presence>, LinkError>>,
+    focusing: AtomicBool,
 }
 
 /// Synchronous run ownership, independent of tap consumption. A target is held once per run;
@@ -93,7 +105,7 @@ impl Presences {
         Self {
             link,
             holds: Arc::default(),
-            tabs: Mutex::new(HashMap::new()),
+            tabs: Arc::default(),
         }
     }
 
@@ -114,23 +126,27 @@ impl Presences {
         let cell = {
             let mut tabs = self.tabs.lock().await;
             let cell = tabs.entry(target.clone()).or_default();
-            if cell
-                .get()
-                .is_some_and(|presence| presence.session.is_gone())
-            {
+            let replace = match cell.value.get() {
+                Some(Ok(presence)) => presence.session.is_gone(),
+                Some(Err(_)) => true,
+                None => false,
+            };
+            if replace {
                 *cell = Arc::default();
             }
             Arc::clone(cell)
         };
         let link = Arc::clone(&self.link);
         let target = target.clone();
+        let tabs = Arc::clone(&self.tabs);
         // The attach runs on a task of its own, so a caller that gives up (a follower's switch
         // timeout, a viewer that left) cannot drop an attach the browser still answers: that
         // session would stay attached with nobody to detach it.
         let attaching = self.link.spawn(async move {
-            cell.get_or_try_init(|| attach(&link, &target))
+            cell.value
+                .get_or_init(|| attach(&link, &target, &tabs, &cell))
                 .await
-                .map(Arc::clone)
+                .clone()
         });
         // The task only fails to finish when the runtime is shutting down.
         attaching.await.unwrap_or(Err(LinkError::Down))
@@ -140,16 +156,22 @@ impl Presences {
     /// gone. `needed` is the ledger's rule: a live session touched the tab, or a run is in
     /// flight on it. Synchronous emitter holds protect queued/refused touches too, including
     /// during shutdown; the ledger alone cannot prove that no run is using a target.
-    /// A presence still attaching is left for the next prune.
+    /// An unneeded attach may leave before focus enable starts. Its late session is released
+    /// without enabling emulation; an enable already in flight stays owned until it replies.
     pub(crate) async fn prune(&self, needed: impl Fn(&PageId) -> bool) {
         let mut doomed = Vec::new();
         self.tabs
             .lock()
             .await
-            .retain(|target, cell| match cell.get() {
-                None => true,
-                Some(presence) if presence.session.is_gone() => false,
-                Some(presence) => {
+            .retain(|target, cell| match cell.value.get() {
+                None => {
+                    cell.focusing.load(Ordering::SeqCst)
+                        || self.holds.contains(target)
+                        || needed(target)
+                }
+                Some(Err(_)) => false,
+                Some(Ok(presence)) if presence.session.is_gone() => false,
+                Some(Ok(presence)) => {
                     let keep = self.holds.contains(target) || needed(target);
                     if !keep {
                         doomed.push(Arc::clone(presence));
@@ -172,8 +194,30 @@ impl Presence {
     }
 }
 
-async fn attach(link: &HostLink, target: &PageId) -> Result<Arc<Presence>, LinkError> {
+async fn attach(
+    link: &HostLink,
+    target: &PageId,
+    tabs: &Cells,
+    cell: &Arc<Cell>,
+) -> Result<Arc<Presence>, LinkError> {
     let session = link.attach(target).await?;
+    let owned = {
+        let tabs = tabs.lock().await;
+        let owned = tabs
+            .get(target)
+            .is_some_and(|current| Arc::ptr_eq(current, cell));
+        if owned {
+            cell.focusing.store(true, Ordering::SeqCst);
+        }
+        owned
+    };
+    // Pruning can retire an unneeded empty cell while attach awaits the browser. Check
+    // ownership before enabling focus, under the same map lock that makes that decision.
+    // The non-emulating late session can then detach without changing a running page's focus.
+    if !owned {
+        link.release(&session).await;
+        return Err(LinkError::Down);
+    }
     if let Err(error) = cdp::emulate_focus(&session).await {
         // The session never turned emulation on, so detaching it changes nothing on the page.
         // The next ensure tries again. A foreground tab paints anyway.
@@ -213,6 +257,46 @@ mod tests {
             .ensure(&page(target))
             .await
             .unwrap_or_else(|error| panic!("ensure the presence on {target}: {error}"))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_attach_is_evicted_even_if_the_target_is_still_needed() {
+        let browser = FakeHostCdp::start().await;
+        let presences = presences(&browser).await;
+        presences.link.stop();
+        assert!(presences.ensure(&page("closed-target")).await.is_err());
+        presences.prune(|_| true).await;
+        assert!(
+            presences.tabs.lock().await.is_empty(),
+            "a completed failed attach must not leave a permanent empty cache cell"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unneeded_empty_cell_releases_its_late_attach_without_enabling_focus() {
+        let browser = FakeHostCdp::start().await;
+        let presences = presences(&browser).await;
+        browser.delay_attaches(Duration::from_secs(2));
+        assert!(
+            time::timeout(
+                Duration::from_secs(1),
+                presences.ensure(&page("closing-target"))
+            )
+            .await
+            .is_err()
+        );
+        presences.prune(|_| false).await;
+        assert!(
+            presences.tabs.lock().await.is_empty(),
+            "an unneeded empty cell must leave the cache"
+        );
+        browser.wait_for("Target.detachFromTarget", 1).await;
+        assert!(
+            browser
+                .sent("Emulation.setFocusEmulationEnabled")
+                .is_empty(),
+            "a retired attach must be released before it can own focus"
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -316,6 +400,7 @@ mod tests {
         let target = page("target-1");
         let gave_up = time::timeout(Duration::from_secs(1), presences.ensure(&target)).await;
         assert!(gave_up.is_err(), "the attach was still in flight");
+        presences.prune(|_| true).await;
         browser.delay_attaches(Duration::ZERO);
         browser
             .wait_for("Emulation.setFocusEmulationEnabled", 1)
