@@ -21,9 +21,11 @@
 //! stop a grace period after their last viewer.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, OnceCell};
+use tokio::task::JoinHandle;
 
 use crate::host::cdp;
 use crate::host::link::{Attached, HostLink, LinkError};
@@ -49,6 +51,16 @@ impl Presences {
         }
     }
 
+    /// Keeps a screenshot operation owned after its caller times out, until the private
+    /// socket replies or shuts down. Its process-wide slot lives for that whole operation.
+    pub(super) fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.link.spawn(future)
+    }
+
     /// The tab's presence, attached and emulating focus; concurrent first uses share one
     /// attach. A presence whose session is gone (its tab closed, or the socket was replaced) is
     /// replaced.
@@ -69,7 +81,7 @@ impl Presences {
         // The attach runs on a task of its own, so a caller that gives up (a follower's switch
         // timeout, a viewer that left) cannot drop an attach the browser still answers: that
         // session would stay attached with nobody to detach it.
-        let attaching = tokio::spawn(async move {
+        let attaching = self.link.spawn(async move {
             cell.get_or_try_init(|| attach(&link, &target))
                 .await
                 .map(Arc::clone)
@@ -99,7 +111,8 @@ impl Presences {
             });
         for presence in doomed {
             let link = Arc::clone(&self.link);
-            tokio::spawn(async move { link.release(&presence.session).await });
+            self.link
+                .spawn(async move { link.release(&presence.session).await });
         }
     }
 }

@@ -49,13 +49,15 @@ struct Still {
 struct Worker {
     link: Arc<HostLink>,
     presences: Arc<Presences>,
-    jobs: Jobs,
     targets: HashMap<PageId, Target>,
     reads: FuturesUnordered<BoxFuture<'static, Read>>,
     pending: HashMap<SessionKey, Still>,
     stills: FuturesUnordered<BoxFuture<'static, Artifacts>>,
     shutdown: CancellationToken,
     refused: u64,
+    // The result sender closes last: the actor uses its closure as proof that every Work
+    // guard in targets, reads, pending and stills has already enqueued its settlement.
+    jobs: Jobs,
 }
 
 pub(super) fn spawn(
@@ -64,7 +66,8 @@ pub(super) fn spawn(
     jobs: Jobs,
     shutdown: CancellationToken,
 ) {
-    tokio::spawn(
+    let owner = Arc::clone(&link);
+    owner.spawn(
         Worker {
             link,
             presences,
@@ -214,7 +217,8 @@ async fn screenshot(
     // two actual screenshot commands.
     // Neo: claw-server's `SessionVisualService::capture_with_session` (`apps/claw-server/src/services/cockpit/visual.rs`) retains the worker's slot beyond its caller's timeout; otherwise timeout storms bypass the concurrency cap.
     let mut changes = work.taint.changes();
-    let mut operation = tokio::spawn(async move {
+    let owner = Arc::clone(&presences);
+    let mut operation = owner.spawn(async move {
         let _permit = permit;
         let presence = presences.ensure(&page).await.ok()?;
         let viewport = cdp::screenshot_viewport(presence.session()).await.ok()?;

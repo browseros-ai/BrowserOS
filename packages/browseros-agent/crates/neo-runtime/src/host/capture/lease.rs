@@ -94,6 +94,7 @@ pub(super) struct Capture {
     departures: AtomicU64,
     stop: CancellationToken,
     pub(super) ended: CancellationToken,
+    link: Arc<HostLink>,
     ready: watch::Sender<Option<Result<(), String>>>,
     /// The newest screencast frame: a viewer that joins, or falls behind, gets this one.
     frames: watch::Sender<Option<Arc<RawFrame>>>,
@@ -103,9 +104,10 @@ pub(super) struct Capture {
 }
 
 impl Capture {
-    fn new(key: CaptureKey) -> Arc<Self> {
+    fn new(key: CaptureKey, link: Arc<HostLink>) -> Arc<Self> {
         Arc::new(Self {
             key,
+            link,
             viewers: AtomicUsize::new(0),
             departures: AtomicU64::new(0),
             stop: CancellationToken::new(),
@@ -179,8 +181,8 @@ impl Drop for Lease {
             self.capture.departures.fetch_add(1, Ordering::SeqCst) + 1
         };
         match Handle::try_current() {
-            Ok(runtime) => {
-                runtime.spawn(stop_after_grace(
+            Ok(_) => {
+                self.capture.link.spawn(stop_after_grace(
                     Arc::clone(&self.registry),
                     Arc::clone(&self.capture),
                     departure,
@@ -230,11 +232,12 @@ pub(super) fn join_or_start(
             stop_on_release: false,
         });
     }
-    let capture = Capture::new(key.clone());
+    let capture = Capture::new(key.clone(), Arc::clone(&link));
     capture.viewers.store(1, Ordering::SeqCst);
     captures.insert(key, Arc::clone(&capture));
     drop(captures);
-    tokio::spawn(run(
+    let owner = Arc::clone(&link);
+    owner.spawn(run(
         link,
         Arc::clone(&capture),
         Arc::clone(registry),
@@ -246,6 +249,15 @@ pub(super) fn join_or_start(
         registry: Arc::clone(registry),
         stop_on_release: false,
     })
+}
+
+/// Stops every worker, including captures whose last viewer left during shutdown.
+pub(super) fn stop_all(registry: &Registry) {
+    if let Some(mut captures) = lock(registry) {
+        for (_, capture) in captures.drain() {
+            capture.stop.cancel();
+        }
+    }
 }
 
 /// Stops every capture of `target` now, without a grace period, whoever watches it.

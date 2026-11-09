@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio::task::JoinSet;
+use tokio::task::{self, JoinSet};
 use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -37,6 +37,8 @@ const RETAIN_SETTLED: Duration = Duration::from_hours(1);
 const SETTLED_SWEEP_INTERVAL: Duration = Duration::from_mins(1);
 /// Neo: bound derived-job ingress to 1024 rows; refusal finalizes a row's absence before completion can be flushed (design §6.5).
 pub(super) const JOB_INGRESS: usize = 1024;
+/// Neo: give host persistence and browser cleanup ten seconds total; a broken store or browser must not hang server shutdown.
+const SHUTDOWN_BUDGET: Duration = Duration::from_secs(10);
 
 type Durability = watch::Sender<Option<Result<(), HostError>>>;
 type WithholdReply = (watch::Receiver<Option<Result<(), HostError>>>, bool);
@@ -249,7 +251,7 @@ pub(super) async fn start(
     for (key, targets) in &withheld {
         hub.privacy.restore(key, targets);
     }
-    let (host, commands) = Host::build(options, Some(hub), shutdown.clone());
+    let (host, commands) = Host::build(options, Some(hub));
     if let Ok(mut published) = host.0.published.lock() {
         published.revoke_targets(&restored);
         for (key, _) in withheld {
@@ -263,7 +265,7 @@ pub(super) async fn start(
     let (settled, settlements) = mpsc::unbounded_channel();
     let (flush, flushes) = mpsc::unbounded_channel();
     let (directory, inputs) = mpsc::channel(JOB_INGRESS);
-    tokio::spawn(watch_directory(Arc::clone(&link), directory, shutdown));
+    link.spawn(watch_directory(Arc::clone(&link), directory, shutdown));
     let task = Task {
         host: host.clone(),
         ledger,
@@ -272,7 +274,7 @@ pub(super) async fn start(
         presences,
         commands,
         inputs,
-        jobs,
+        jobs: Some(jobs),
         artifacts,
         settled,
         settlements,
@@ -308,7 +310,7 @@ struct Task {
     presences: Arc<Presences>,
     commands: mpsc::UnboundedReceiver<Command>,
     inputs: mpsc::Receiver<DirectoryUpdate>,
-    jobs: mpsc::Sender<Work>,
+    jobs: Option<mpsc::Sender<Work>>,
     artifacts: mpsc::Receiver<Artifacts>,
     settled: mpsc::UnboundedSender<SessionKey>,
     settlements: mpsc::UnboundedReceiver<SessionKey>,
@@ -357,11 +359,24 @@ impl Task {
                 () = sleep_until(deadline) => {},
             }
         }
-        self.host.tap().close();
+        // The request token only stops admission. Services stay alive until tap consumption,
+        // job finalization, writes and the store barrier have completed in that order.
+        let deadline = Instant::now() + SHUTDOWN_BUDGET;
+        let drained = time::timeout_at(deadline, self.drain()).await;
+        if !matches!(drained, Ok(Ok(()))) {
+            warn!("host shutdown could not finish persistence within its budget");
+        }
+        self.writes.abort_all();
         if let Ok(mut published) = self.host.0.published.lock() {
-            let keys: Vec<_> = published.slots.keys().cloned().collect();
-            for key in keys {
-                published.end(&key);
+            for slot in published.slots.values_mut() {
+                slot.view.live = false;
+                slot.snapshot.send_modify(|view| {
+                    view.live = false;
+                    view.current_tab = None;
+                    // A failed flush or expired budget must never look like clean completion.
+                    view.damaged |= !view.complete;
+                });
+                slot.notify();
             }
             for durability in published.withholds.values() {
                 durability.send_if_modified(|value| {
@@ -374,8 +389,66 @@ impl Task {
                 });
             }
         }
-        self.presences.prune(|_| false).await;
+        // Even when the drain timed out, cancellation disconnects the private socket and
+        // wakes its commands. Every service task is tracked; none extends this deadline.
+        self.link.stop();
+        let _ = time::timeout_at(deadline, self.link.stopped()).await;
         self.host.0.stopped.cancel();
+    }
+
+    async fn drain(&mut self) -> Result<(), HostError> {
+        self.commands.close();
+        self.inputs.close();
+        while let Ok(command) = self.commands.try_recv() {
+            if !matches!(command, Command::Admit { .. }) {
+                self.command(command).await;
+            }
+        }
+        self.host.tap().close();
+        while let Some(event) = self.host.tap().recv().await {
+            self.event(event);
+            task::consume_budget().await;
+        }
+        for key in self.host.tap().take_damaged() {
+            self.ledger.damage(&key);
+        }
+        let keys: Vec<_> = self.ledger.keys().cloned().collect();
+        for key in &keys {
+            self.ledger.end(key, Instant::now());
+        }
+        self.controls();
+        self.publish();
+        // Closing ingress lets the worker finalize queued/unfinished browser reads and stills.
+        // Its result sender closes only after all its Work guards have been handed back or
+        // dropped; the actor must keep consuming results so a full result queue cannot deadlock.
+        self.jobs.take();
+        loop {
+            tokio::select! {
+                artifacts = self.artifacts.recv(), if self.writes.len() < 8 => match artifacts {
+                    Some(artifacts) => self.persist(artifacts),
+                    None => break,
+                },
+                _ = self.writes.join_next(), if !self.writes.is_empty() => {},
+            }
+        }
+        while self.writes.join_next().await.is_some() {}
+        while let Ok(key) = self.settlements.try_recv() {
+            self.ledger.job_settled(&key);
+        }
+        self.host.0.options.store.flushed().await?;
+        for key in keys {
+            if self.ledger.completion(&key) == Some(Completion::ReadyForFlush) {
+                self.completion.insert(key, Fence::Complete(Instant::now()));
+            }
+        }
+        self.publish();
+        // No run is allowed past Runtime::drain. Stop captures before releasing the focus
+        // owners, then close the socket only after their bounded cleanup has had its turn.
+        if let Some(hub) = &self.host.0.captures {
+            hub.stop();
+        }
+        self.presences.prune(|_| false).await;
+        Ok(())
     }
 
     fn event(&mut self, event: HostEvent) {
@@ -426,7 +499,11 @@ impl Task {
                 taint: Arc::clone(&self.host.0.privacy.taint),
                 settled: self.settled.clone(),
             };
-            if self.jobs.try_send(work).is_err() {
+            if self
+                .jobs
+                .as_ref()
+                .is_none_or(|jobs| jobs.try_send(work).is_err())
+            {
                 self.refused_jobs += 1;
                 warn!(
                     refused = self.refused_jobs,
@@ -482,7 +559,7 @@ impl Task {
                     .ok()
                     .and_then(|published| published.withholds.get(&key).cloned());
                 let store = Arc::clone(&self.host.0.options.store);
-                tokio::spawn(async move {
+                self.writes.spawn(async move {
                     let result = store.withhold(&key).await.map_err(HostError::from);
                     if let Some(durability) = durability {
                         durability.send_replace(Some(result));
@@ -577,7 +654,7 @@ impl Task {
                 self.completion.insert(key.clone(), Fence::Flushing);
                 let store = Arc::clone(&self.host.0.options.store);
                 let flush = self.flush.clone();
-                tokio::spawn(async move {
+                self.writes.spawn(async move {
                     let result = store.flushed().await;
                     if let Err(error) = &result {
                         warn!(%error, "host completion flush failed");
@@ -861,6 +938,13 @@ mod tests {
         admission_blocked: AtomicBool,
         admission_waiting: Notify,
         admission_release: Notify,
+        write_blocked: AtomicBool,
+        write_waiting: Notify,
+        write_release: Notify,
+        written: AtomicUsize,
+        withhold_blocked: AtomicBool,
+        withhold_waiting: Notify,
+        withhold_release: Notify,
     }
 
     impl HostStore for Store {
@@ -896,10 +980,24 @@ mod tests {
             call: Option<u64>,
             value: CallArtifacts,
         ) -> BoxFuture<'a, Result<(), StoreError>> {
-            self.memory.put_artifacts(run, call, value)
+            Box::pin(async move {
+                self.write_waiting.notify_one();
+                while self.write_blocked.load(Ordering::SeqCst) {
+                    self.write_release.notified().await;
+                }
+                let result = self.memory.put_artifacts(run, call, value).await;
+                self.written.fetch_add(1, Ordering::SeqCst);
+                result
+            })
         }
         fn withhold<'a>(&'a self, key: &'a SessionKey) -> BoxFuture<'a, Result<(), StoreError>> {
-            self.memory.withhold(key)
+            Box::pin(async move {
+                self.withhold_waiting.notify_one();
+                while self.withhold_blocked.load(Ordering::SeqCst) {
+                    self.withhold_release.notified().await;
+                }
+                self.memory.withhold(key).await
+            })
         }
         fn withheld(&self) -> BoxFuture<'_, Result<WithheldSessions, StoreError>> {
             self.memory.withheld()
@@ -984,6 +1082,118 @@ mod tests {
         let emitter = RunEmitter::new(Some(host), Some(key), &RunId::mint());
         let ending = emitter.run_started(&PageId::new(target.to_string()));
         (emitter, ending)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_waits_for_artifact_and_privacy_writes_before_flushing() {
+        let browser = FakeHostCdp::start().await;
+        browser.set_tabs(vec![FakeHostCdp::tab("one", 1, "https://one.test/")]);
+        let store = Arc::new(Store::default());
+        store.write_blocked.store(true, Ordering::SeqCst);
+        store.withhold_blocked.store(true, Ordering::SeqCst);
+        let host = Host::connect(HostOptions::new(
+            browser.port(),
+            8,
+            Arc::clone(&store) as Arc<dyn HostStore>,
+        ))
+        .await
+        .unwrap();
+        let pass = host.admit_run(None).await;
+        let key = pass.session().clone();
+        let (emitter, ending) = run(&host, &key, "one");
+        emitter.call_started(
+            1,
+            Some(&PageId::new("one".to_string())),
+            false,
+            SystemTime::now(),
+        );
+        emitter.call_ended(1, &CallResult::Ok);
+        time::timeout(Duration::from_secs(5), store.write_waiting.notified())
+            .await
+            .expect("artifact write did not start");
+        let withheld = host.withhold(&key);
+        time::timeout(Duration::from_secs(5), store.withhold_waiting.notified())
+            .await
+            .expect("privacy write did not start");
+        ending.ended(RunStatus::Ok);
+        drop(pass);
+        host.shutdown();
+        // Let the shutdown actor reach the write fence while both stores are held.
+        task::yield_now().await;
+        assert!(!host.0.stopped.is_cancelled());
+        assert_eq!(store.flushes.load(Ordering::SeqCst), 0);
+        store.write_blocked.store(false, Ordering::SeqCst);
+        store.write_release.notify_waiters();
+        store.withhold_blocked.store(false, Ordering::SeqCst);
+        store.withhold_release.notify_waiters();
+        time::timeout(Duration::from_secs(15), host.stopped())
+            .await
+            .expect("shutdown did not finish after writes were released");
+        assert!(withheld.await.is_ok());
+        assert!(store.written.load(Ordering::SeqCst) > 0);
+        assert!(store.flushes.load(Ordering::SeqCst) > 0);
+        assert!(host.view(&key).unwrap().complete);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_budget_marks_unflushed_sessions_damaged() {
+        let browser = FakeHostCdp::start().await;
+        let store = Arc::new(Store::default());
+        store.blocked.store(true, Ordering::SeqCst);
+        let host = Host::connect(HostOptions::new(
+            browser.port(),
+            8,
+            Arc::clone(&store) as Arc<dyn HostStore>,
+        ))
+        .await
+        .unwrap();
+        let pass = host.admit_run(None).await;
+        let key = pass.session().clone();
+        drop(pass);
+        host.shutdown();
+        time::timeout(Duration::from_secs(15), host.stopped())
+            .await
+            .expect("a hung store must not outlive the shutdown budget");
+        let view = host.view(&key).unwrap();
+        assert!(!view.complete);
+        assert!(
+            view.damaged,
+            "an unacknowledged flush must be visible as damaged"
+        );
+        assert_eq!(store.flushes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_consumes_queued_releases_and_acknowledges_the_store() {
+        let browser = FakeHostCdp::start().await;
+        let store = Arc::new(Store::default());
+        let host = Host::connect(HostOptions::new(
+            browser.port(),
+            8,
+            Arc::clone(&store) as Arc<dyn HostStore>,
+        ))
+        .await
+        .unwrap();
+        let pass = host.admit_run(None).await;
+        let key = pass.session().clone();
+        let (_, ending) = run(&host, &key, "one");
+        ending.ended(RunStatus::Ok);
+        drop(pass);
+        // No yield between the final events and shutdown: they must survive cancellation.
+        host.shutdown();
+        time::timeout(Duration::from_secs(15), host.stopped())
+            .await
+            .expect("host shutdown must finish within its budget");
+        let view = host.view(&key).unwrap();
+        assert!(
+            view.complete,
+            "queued releases and finalized jobs must precede the flush: {view:?}"
+        );
+        assert!(!view.damaged);
+        assert!(
+            store.flushes.load(Ordering::SeqCst) > 0,
+            "shutdown must acknowledge a store flush"
+        );
     }
 
     #[tokio::test(start_paused = true)]

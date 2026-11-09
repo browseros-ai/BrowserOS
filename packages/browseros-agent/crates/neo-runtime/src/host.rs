@@ -148,7 +148,7 @@ pub enum HostError {
 impl Host {
     #[cfg(test)]
     pub(crate) fn new(options: HostOptions) -> Self {
-        Self::build(options, None, CancellationToken::new()).0
+        Self::build(options, None).0
     }
 
     pub(crate) async fn connect(options: HostOptions) -> Result<Self, HostError> {
@@ -186,7 +186,6 @@ impl Host {
     fn build(
         options: HostOptions,
         captures: Option<Arc<CaptureHub>>,
-        shutdown: CancellationToken,
     ) -> (Self, mpsc::UnboundedReceiver<Command>) {
         let (commands, receiver) = mpsc::unbounded_channel();
         // Capture is constructed before the actor. Reuse its privacy context so Host, ledger
@@ -203,7 +202,7 @@ impl Host {
                 commands,
                 published: Arc::new(Mutex::new(published)),
                 captures,
-                shutdown,
+                shutdown: CancellationToken::new(),
                 stopped: CancellationToken::new(),
             })),
             receiver,

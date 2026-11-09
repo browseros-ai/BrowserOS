@@ -25,6 +25,7 @@
 //! before it is written: no stale session id ever reaches the replacement socket.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -32,8 +33,10 @@ use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, mpsc, watch};
+use tokio::task::JoinHandle;
 use tokio::time::{self, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::debug;
 
 use crate::host::cdp;
@@ -49,6 +52,7 @@ pub(crate) struct HostLink {
     /// detach finds its owner.
     sessions: Mutex<HashMap<SessionId, Route>>,
     shutdown: CancellationToken,
+    tasks: TaskTracker,
     directory_required: AtomicBool,
     directory_epoch: AtomicU64,
 }
@@ -92,13 +96,14 @@ impl HostLink {
         shutdown: CancellationToken,
     ) -> Result<Arc<Self>, CdpError> {
         let client = CdpClient::connect(cdp::connect_options(port)).await?;
-        let disconnect = client.clone();
-        let stop = shutdown.clone();
-        tokio::spawn(async move {
+        let link = Self::over(client, shutdown);
+        let disconnect = link.client.clone();
+        let stop = link.shutdown.clone();
+        link.spawn(async move {
             stop.cancelled().await;
             disconnect.disconnect().await;
         });
-        Ok(Self::over(client, shutdown))
+        Ok(link)
     }
 
     /// Starts the link on `client`, which must be the host side's alone: the link takes its
@@ -115,13 +120,33 @@ impl HostLink {
             generation: watch::Sender::new(Arc::new(first)),
             sessions: Mutex::new(HashMap::new()),
             shutdown,
+            tasks: TaskTracker::new(),
             directory_required: AtomicBool::new(false),
             directory_epoch: AtomicU64::new(0),
         });
-        tokio::spawn(route_frames(Arc::clone(&link), frames));
-        tokio::spawn(watch_detaches(Arc::clone(&link), events));
-        tokio::spawn(watchdog(Arc::clone(&link)));
+        link.spawn(route_frames(Arc::clone(&link), frames));
+        link.spawn(watch_detaches(Arc::clone(&link), events));
+        link.spawn(watchdog(Arc::clone(&link)));
         link
+    }
+
+    /// Every private-socket service, including abandoned attaches and late screenshots, stays
+    /// owned until shutdown. The actor waits on this tracker within its single shutdown budget.
+    pub(crate) fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.tasks.spawn(future)
+    }
+
+    pub(crate) fn stop(&self) {
+        self.shutdown.cancel();
+        self.tasks.close();
+    }
+
+    pub(crate) async fn stopped(&self) {
+        self.tasks.wait().await;
     }
 
     /// The integrated host requires a seed of this socket before a follower can re-lease.

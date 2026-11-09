@@ -138,6 +138,11 @@ impl CaptureHub {
         })
     }
 
+    /// Ends followers and all capture workers before presence teardown at host shutdown.
+    pub(super) fn stop(&self) {
+        lease::stop_all(&self.captures);
+    }
+
     /// Streams JPEG frames of the view's current tab, following it as the session moves to
     /// another tab, or of `tab` alone when given. Returns once the browser started the capture,
     /// so a caller can answer before any frame arrives. A new viewer first gets the newest frame
@@ -152,7 +157,7 @@ impl CaptureHub {
         let shown = pick(&view.borrow(), tab, &self.privacy.taint)?;
         let lease = self.lease(&shown, Kind::Screencast, quality).await?;
         let viewer = Viewer::new();
-        tokio::spawn(Arc::clone(self).follow(
+        self.link.spawn(Arc::clone(self).follow(
             view.clone(),
             quality,
             tab,
@@ -175,7 +180,7 @@ impl CaptureHub {
         let shown = pick(&view.borrow(), tab, &self.privacy.taint)?;
         let lease = self.lease(&shown, Kind::Video, quality).await?;
         let viewer = Viewer::new();
-        tokio::spawn(Arc::clone(self).play(
+        self.link.spawn(Arc::clone(self).play(
             view.clone(),
             shown.tab,
             lease,
