@@ -126,7 +126,7 @@ use crate::playwright_methods::history::{
 use crate::playwright_methods::lists;
 use crate::playwright_methods::navigate::{self, GotoOptions};
 use crate::playwright_methods::page_and_context_methods;
-use crate::playwright_methods::press::{self, PressOptions};
+use crate::playwright_methods::press::{self, KeyInput, PressOptions};
 use crate::playwright_methods::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::playwright_methods::set_input_files;
 use crate::playwright_methods::states::{self, StateOptions};
@@ -896,9 +896,15 @@ impl Dispatcher {
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
         }));
         // The agent's script reads its calls' logs and errors: none may name a value a hook
-        // swapped in (`action_hooks/swapped.rs`). A hook's own call needs the real values.
-        if origin == CallOrigin::Agent {
-            entry.scrub_with(Arc::clone(&inner.run.swapped));
+        // swapped in or typed itself (`action_hooks/swapped.rs`). A hook's own call needs the
+        // real values; what it types is remembered before it can reach the page.
+        match origin {
+            CallOrigin::Agent => entry.scrub_with(Arc::clone(&inner.run.swapped)),
+            CallOrigin::Hook => {
+                if let Ok(call) = &route {
+                    inner.run.swapped.remember_typed(typed_values(call));
+                }
+            }
         }
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
@@ -2722,6 +2728,35 @@ fn element_options(call: ObjectCall) -> Option<ElementOptions> {
         Route::FrameSelectText(target, force) => Arc::new((target, force)),
         _ => return None,
     })
+}
+
+/// What a call types into the page: a fill's value, a type's text, `keyboard.type` and
+/// `insertText`'s text, a select option's values. Never a selector or a key name. A hook's own
+/// such call is remembered for the scrub (`action_hooks/swapped.rs`), as a swap is.
+fn typed_values(call: &ObjectCall) -> Vec<&str> {
+    match call {
+        ObjectCall::Frame(Route::FrameFill(options)) => vec![options.value.as_str()],
+        ObjectCall::Frame(Route::FrameType(options)) => match &options.keys {
+            KeyInput::Type(text) => vec![text.as_str()],
+            KeyInput::Press(_) => Vec::new(),
+        },
+        ObjectCall::Frame(Route::FrameSelectOption(options)) => options
+            .options
+            .iter()
+            .flat_map(|option| {
+                [
+                    option.value_or_label.as_deref(),
+                    option.value.as_deref(),
+                    option.label.as_deref(),
+                ]
+            })
+            .flatten()
+            .collect(),
+        ObjectCall::Device(
+            DeviceCall::KeyboardType { text, .. } | DeviceCall::KeyboardInsertText { text },
+        ) => vec![text.as_str()],
+        _ => Vec::new(),
+    }
 }
 
 /// Whether `a` and `b` are one command: the same interface, method and action.
