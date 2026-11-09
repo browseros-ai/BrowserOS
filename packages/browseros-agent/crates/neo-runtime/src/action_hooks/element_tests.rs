@@ -445,6 +445,10 @@ async fn tests_that_the_hooks_wait_counts_against_the_actions_own_timeout() {
         call.progress.delivery().unwrap().delivery(),
         Delivery::NotSent
     );
+    assert!(
+        call.progress.element_gate().unwrap().refused(),
+        "stopped while its hook decided: it never acted, so no afterAction sees it"
+    );
 }
 
 #[tokio::test(start_paused = true)]

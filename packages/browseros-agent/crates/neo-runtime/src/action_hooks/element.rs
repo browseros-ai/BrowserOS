@@ -118,8 +118,8 @@ struct GateState {
     /// Set once any attempt was to run with a hook's arguments, and never cleared: the call's
     /// error is redacted even if a later element is allowed with the script's.
     replaced: bool,
-    /// Set when a decision ended the call (blocked, or a failure): it never acted, so no
-    /// afterAction sees it.
+    /// Set when the call ended at a question: blocked, a failed hook, or stopped (its timeout,
+    /// its abort) while the hook decided. It never acted there, so no afterAction sees it.
     refused: bool,
     /// The in-flight charge of the replacement in use.
     charge: Option<Box<dyn Any + Send + Sync>>,
@@ -171,7 +171,7 @@ impl ElementGate {
         self.lock().is_some_and(|state| state.replaced)
     }
 
-    /// Whether a decision ended the call before it acted.
+    /// Whether the call ended at a question about its element, before it acted on it.
     pub(crate) fn refused(&self) -> bool {
         self.lock().is_some_and(|state| state.refused)
     }
@@ -237,8 +237,16 @@ impl ElementGate {
             .await??;
         let mut event = self.event.clone();
         event.element = Some(element.reference.clone());
-        // Dropping this future (any of the race's stops) abandons the invocation.
-        let decided = progress.race(self.hooks.before_action(event)).await?;
+        // Dropping this future (any of the race's stops) abandons the invocation. A call that
+        // stops while its hook decides never acts on this element, so, as a call stopped at its
+        // gate, no afterAction sees it.
+        let decided = match progress.race(self.hooks.before_action(event)).await {
+            Ok(decided) => decided,
+            Err(stop) => {
+                self.refuse();
+                return Err(stop.into());
+            }
+        };
         self.decided(progress, element, decided)
     }
 
