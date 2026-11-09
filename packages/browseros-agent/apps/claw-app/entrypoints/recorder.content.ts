@@ -135,6 +135,8 @@ export default defineContentScript({
     }
 
     // Only a definite "off" skips recording; a missing answer keeps it on.
+    // The answer holds for this page: turning replays back on starts recording
+    // on its next navigation or reload, the same way a stopped recorder resumes.
     void recordingAllowed().then((allowed) => {
       // A stop or a newer script instance may land before the answer does.
       if (ctx.isInvalid || recorderStopped) return

@@ -70,3 +70,40 @@ describe('createSessionReplaysSetting', () => {
     expect(server.requests).toHaveLength(2)
   })
 })
+
+describe('createSessionReplaysSetting deadline', () => {
+  it('tests that a page records anyway when the server is slow to answer', async () => {
+    const stalled = Promise.withResolvers<Response>()
+    let requests = 0
+    let clock = 0
+    const setting = createSessionReplaysSetting({
+      resolveServerBaseUrl: async () => serverBaseUrl,
+      fetch: async () => {
+        requests += 1
+        return stalled.promise
+      },
+      now: () => clock,
+      deadlineMs: 5,
+    })
+
+    expect(await setting.enabled()).toBe(true)
+    expect(await setting.enabled()).toBe(true)
+    expect(requests).toBe(1)
+
+    // The late answer still reaches the pages that load after it.
+    stalled.resolve(
+      new Response(
+        JSON.stringify({
+          humanHelpEnabled: true,
+          taskCleanupTipEnabled: true,
+          sessionReplaysEnabled: false,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+    await Bun.sleep(0)
+    clock = 1_000
+    expect(await setting.enabled()).toBe(false)
+    expect(requests).toBe(1)
+  })
+})

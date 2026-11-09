@@ -48,10 +48,13 @@ export function useTaskDetailScreenData(
     variables: { sessionId },
     refetchInterval: isLive ? 3000 : false,
   })
-  const replay = useReplaySession(sessionId)
   const settings = useAgentSettings()
-
   const sessionReplaysEnabled = settings.data?.sessionReplaysEnabled ?? true
+  // Wait for settings before touching the recording, so a task opened with
+  // replays off never downloads one. Settings that fail to load keep replays on.
+  const replay = useReplaySession(sessionId, {
+    enabled: !settings.isPending && sessionReplaysEnabled,
+  })
 
   const dispatches = detailQuery.data?.dispatches ?? []
   const { steps, hiddenCount } = describeSteps(dispatches)
@@ -73,6 +76,7 @@ export function useTaskDetailScreenData(
     isPending:
       detailQuery.isPending ||
       screenshotsQuery.isPending ||
+      settings.isPending ||
       (sessionReplaysEnabled && replay.recordingState === 'checking'),
     isError: detailQuery.isError || screenshotsQuery.isError,
     error:
