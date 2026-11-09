@@ -1,13 +1,15 @@
 //! The `HeapProfiler` domain as neo-runtime uses it: `page.requestGC()`
 //! (`browser_representations/emulation.rs`).
 //!
-//! Neo: a local struct, since browseros-cdp's surface has no `HeapProfiler` domain.
+//! Neo: a local type, since its one command takes no params and browseros-cdp generates no
+//! params type for such a command.
 
 use serde::Serialize;
 
 use super::{Ignored, OnSession, command};
 
-/// `HeapProfiler.collectGarbage`, which takes no params.
+/// `HeapProfiler.collectGarbage`. Local: it takes no params, and browseros-cdp generates no
+/// params type for such a command.
 #[derive(Serialize)]
 pub(crate) struct CollectGarbage {}
 

@@ -3,94 +3,35 @@
 //! and the request events the network log and the page watcher read
 //! (`browser_representations/network.rs`, `page.rs`).
 //!
-//! Neo: local structs, since browseros-cdp's surface has no `Network` domain. Event payloads
-//! hold the fields the network log reads, as optional as it reads them; replies stay JSON where
-//! their readers decode them with their own errors.
+//! Neo: browseros-cdp's generated params, results and events, made from BrowserOS's pinned
+//! protocol, under each method's name, except where headers cross: browseros-cdp generates
+//! `Network.Headers`, a free-form object, as an empty struct that would drop every header, so the
+//! commands and events that carry headers are local, holding them as JSON.
 
+use browseros_cdp::network as generated;
+use generated::{GetResponseBodyResult, LoadNetworkResourceResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{Ignored, OnSession, command, event};
 
-/// `Network.emulateNetworkConditions`: offline or not, and no throttling (latency 0, throughput
-/// -1), as Playwright's `CRNetworkManager._setOfflineForSession` sends it.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EmulateNetworkConditions {
-    pub(crate) offline: bool,
-    pub(crate) latency: i64,
-    pub(crate) download_throughput: i64,
-    pub(crate) upload_throughput: i64,
-}
+pub(crate) use generated::{
+    EmulateNetworkConditionsParams as EmulateNetworkConditions, EnableParams as Enable,
+    GetResponseBodyParams as GetResponseBody, LoadNetworkResourceOptions,
+    LoadNetworkResourceParams as LoadNetworkResource, LoadingFailedEvent as LoadingFailed,
+    LoadingFinishedEvent as LoadingFinished, RequestServedFromCacheEvent as RequestServedFromCache,
+    SetCacheDisabledParams as SetCacheDisabled,
+};
 
-#[derive(Serialize)]
-pub(crate) struct Enable {}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct GetResponseBody {
-    pub(crate) request_id: String,
-}
-
-/// `Network.loadNetworkResource`: an empty body read again, as Playwright's
-/// `createResponseBodyCallback` refetches it.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct LoadNetworkResource {
-    pub(crate) url: String,
-    pub(crate) frame_id: String,
-    pub(crate) options: LoadNetworkResourceOptions,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct LoadNetworkResourceOptions {
-    pub(crate) disable_cache: bool,
-    pub(crate) include_credentials: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SetCacheDisabled {
-    pub(crate) cache_disabled: bool,
-}
-
-/// `Network.setExtraHTTPHeaders`: CDP's `Network.Headers`, one object, each name once.
+/// `Network.setExtraHTTPHeaders`: CDP's `Network.Headers`, one object, each name once. Local:
+/// headers cross ([module docs](self)).
 #[derive(Serialize)]
 pub(crate) struct SetExtraHttpHeaders {
     pub(crate) headers: Map<String, Value>,
 }
 
-/// `Network.loadingFailed`: a request failed. `canceled` tells a navigation the frame dropped.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct LoadingFailed {
-    pub(crate) request_id: String,
-    pub(crate) timestamp: f64,
-    #[serde(default)]
-    pub(crate) error_text: Option<String>,
-    #[serde(default)]
-    pub(crate) blocked_reason: Option<String>,
-    #[serde(default)]
-    pub(crate) canceled: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct LoadingFinished {
-    pub(crate) request_id: String,
-    pub(crate) timestamp: f64,
-    pub(crate) encoded_data_length: f64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct RequestServedFromCache {
-    pub(crate) request_id: String,
-}
-
 /// `Network.requestWillBeSent`: a request, or a redirect's next hop with the response that
-/// redirected it.
+/// redirected it. Local: headers cross ([module docs](self)).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestWillBeSent {
@@ -109,6 +50,7 @@ pub(crate) struct RequestWillBeSent {
     pub(crate) redirect_has_extra_info: bool,
 }
 
+/// CDP's `Network.Request`, as far as the network log reads it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestPayload {
@@ -126,6 +68,8 @@ pub(crate) struct PostDataEntry {
     pub(crate) bytes: Option<String>,
 }
 
+/// `Network.requestWillBeSentExtraInfo`: the headers the request actually went out with.
+/// Local: headers cross ([module docs](self)).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestWillBeSentExtraInfo {
@@ -134,6 +78,7 @@ pub(crate) struct RequestWillBeSentExtraInfo {
     pub(crate) headers: Map<String, Value>,
 }
 
+/// `Network.responseReceived`. Local: headers cross ([module docs](self)).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResponseReceived {
@@ -143,6 +88,8 @@ pub(crate) struct ResponseReceived {
     pub(crate) has_extra_info: bool,
 }
 
+/// `Network.responseReceivedExtraInfo`: the headers the response actually came with. Local:
+/// headers cross ([module docs](self)).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResponseReceivedExtraInfo {
@@ -153,6 +100,7 @@ pub(crate) struct ResponseReceivedExtraInfo {
     pub(crate) headers_text: Option<String>,
 }
 
+/// CDP's `Network.Response`, as far as the network log reads it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResponsePayload {
@@ -175,6 +123,7 @@ pub(crate) struct ResponsePayload {
     pub(crate) security_details: Option<SecurityPayload>,
 }
 
+/// CDP's `Network.ResourceTiming`, as far as the network log reads it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TimingPayload {
@@ -188,6 +137,7 @@ pub(crate) struct TimingPayload {
     pub(crate) receive_headers_end: f64,
 }
 
+/// CDP's `Network.SecurityDetails`, as far as the network log reads it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SecurityPayload {
@@ -209,9 +159,9 @@ command! {
     // Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager.addSession`: `session.send('Network.enable'),`
     Enable => "Network.enable", OnSession, Ignored;
     // Playwright: `server/chromium/crNetworkManager.ts` `InterceptableRequest.createResponseBodyCallback`: `const response = await session.send('Network.getResponseBody', { requestId: interceptable._requestId });`
-    GetResponseBody => "Network.getResponseBody", OnSession, Value;
+    GetResponseBody => "Network.getResponseBody", OnSession, GetResponseBodyResult;
     // Playwright: `server/chromium/crNetworkManager.ts` `InterceptableRequest.createResponseBodyCallback`: `const resource = await session.send('Network.loadNetworkResource', { url: request.url(), frameId: request.serviceWorker() ? undefined : request.frame()!._id, options: { disableCache: false, includeCredentials: true } });`
-    LoadNetworkResource => "Network.loadNetworkResource", OnSession, Value;
+    LoadNetworkResource => "Network.loadNetworkResource", OnSession, LoadNetworkResourceResult;
     // Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._updateProtocolRequestInterceptionForSession`: `const cachePromise = info.session.send('Network.setCacheDisabled', { cacheDisabled: enabled });`
     SetCacheDisabled => "Network.setCacheDisabled", OnSession, Ignored;
     // Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._setExtraHTTPHeadersForSession`: `await info.session.send('Network.setExtraHTTPHeaders', { headers: headersArrayToObject(this._extraHTTPHeaders, false /* lowerCase */) });`

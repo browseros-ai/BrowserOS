@@ -30,12 +30,11 @@
 //! Every byte of JavaScript sent here is a built artifact of neo-playwright-injected (`dist/*.js`);
 //! this file writes none.
 
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use browseros_cdp::runtime::{
-    CallFunctionOnResult, GetPropertiesResult, PropertyDescriptor, RemoteObject,
-};
+use browseros_cdp::runtime::{CallFunctionOnResult, PropertyDescriptor, RemoteObject};
 use browseros_cdp::{CdpClient, CdpError, SessionId};
 use neo_runtime_spec::injected::InjectedInitializer;
 use neo_runtime_spec::{
@@ -275,8 +274,7 @@ impl World {
         if self.document.load(Ordering::SeqCst) != attached.document {
             return Err(PageError::NotConnected);
         }
-        let object: RemoteObject = serde_json::from_value(reply["object"].clone())
-            .map_err(|error| PageError::Contract(format!("DOM.resolveNode answered: {error}")))?;
+        let object = reply.object;
         let id = object.object_id.ok_or_else(|| {
             PageError::Contract("DOM.resolveNode returned no objectId".to_string())
         })?;
@@ -337,22 +335,25 @@ impl World {
         let params_json = serde_json::to_value(params).map_err(|error| {
             PageError::Contract(format!("encoding page call {}: {error}", C::NAME))
         })?;
-        let mut arguments = vec![json!({ "value": C::NAME }), json!({ "value": params_json })];
+        let mut arguments = vec![argument(json!(C::NAME)), argument(params_json)];
         arguments.extend(
             params
                 .handles()
                 .into_iter()
-                .map(|handle| json!({ "objectId": handle.object_id() })),
+                .map(|handle| runtime::CallArgument {
+                    object_id: Some(handle.object_id().to_string()),
+                    ..runtime::CallArgument::default()
+                }),
         );
 
         let attached = self.attached().await?;
         let request = runtime::CallFunctionOn {
-            function_declaration: CALL,
-            object_id: Some(attached.glue.object_id()),
+            function_declaration: CALL.to_string(),
+            object_id: Some(attached.glue.object_id().to_string()),
             arguments: Some(arguments),
             await_promise: Some(true),
             return_by_value: Some(by_value),
-            object_group: group.map(|ObjectGroup(group)| group.as_str()),
+            object_group: group.map(|ObjectGroup(group)| group.clone()),
             ..runtime::CallFunctionOn::default()
         };
         let reply = match self.send(request).await {
@@ -380,17 +381,13 @@ impl World {
                     result.r#type
                 ))
             })?;
-            let reply = self
+            let properties = self
                 .send(runtime::GetProperties {
                     object_id,
                     own_properties: Some(true),
                     ..runtime::GetProperties::default()
                 })
                 .await?;
-            let properties: GetPropertiesResult =
-                serde_json::from_value(reply).map_err(|error| {
-                    PageError::Contract(format!("Runtime.getProperties answered: {error}"))
-                })?;
             <C::Result as PageResult>::from_properties(split_properties(properties.result)?)
         };
         let current = self.document.load(Ordering::SeqCst) == attached.document;
@@ -423,26 +420,25 @@ impl World {
         let key = glue_key_named(&test_id)?;
         let world = self
             .send(page::CreateIsolatedWorld {
-                frame_id: &self.frame_id,
-                world_name: WORLD_NAME,
-                grant_universal_access: true,
+                frame_id: self.frame_id.clone(),
+                world_name: Some(WORLD_NAME.to_string()),
+                grant_univeral_access: Some(true),
+                content_security_policy: None,
             })
             .await?;
-        let context = world["executionContextId"].as_i64().ok_or_else(|| {
-            PageError::Contract(format!("Page.createIsolatedWorld answered {world}"))
-        })?;
+        let context = world.execution_context_id;
         let found = self
-            .run_bundle(context, ATTACH, &[json!({ "value": key })])
+            .run_bundle(context, ATTACH, vec![argument(json!(key))])
             .await?;
         let glue = if let Some(glue) = found {
             glue
         } else {
-            let arguments = [
-                json!({ "value": key }),
-                json!({ "value": SPEC_SHA256 }),
-                json!({ "value": initializer_named(&test_id) }),
+            let arguments = vec![
+                argument(json!(key)),
+                argument(json!(SPEC_SHA256)),
+                argument(json!(initializer_named(&test_id))),
             ];
-            self.run_bundle(context, INSTALL, &arguments)
+            self.run_bundle(context, INSTALL, arguments)
                 .await?
                 .ok_or_else(|| {
                     PageError::Contract("install.js returned no glue object".to_string())
@@ -467,15 +463,15 @@ impl World {
         &self,
         context: i64,
         function: &str,
-        arguments: &[Value],
+        arguments: Vec<runtime::CallArgument>,
     ) -> Result<Option<HandleId>, PageError> {
         let reply = self
             .send(runtime::CallFunctionOn {
-                function_declaration: function,
+                function_declaration: function.to_string(),
                 execution_context_id: Some(context),
-                arguments: Some(arguments.to_vec()),
+                arguments: Some(arguments),
                 return_by_value: Some(false),
-                object_group: Some(GLUE_GROUP),
+                object_group: Some(GLUE_GROUP.to_string()),
                 ..runtime::CallFunctionOn::default()
             })
             .await?;
@@ -498,16 +494,31 @@ impl World {
     }
 
     /// Sends `command` on the world's session. A host whose session detached answers
-    /// `NotConnected` at once, and a CDP error is classified as for this world's host.
-    async fn send<C: cdp::Command<Via = cdp::OnSession>>(
+    /// `NotConnected` at once, and a CDP error is classified as for this world's host. The
+    /// command is serialized now, when the send is made ([`cdp::Serialized`]).
+    fn send<C: cdp::Command<Via = cdp::OnSession>>(
         &self,
         command: C,
-    ) -> Result<C::Reply, PageError> {
-        tokio::select! {
-            biased;
-            () = self.gone.cancelled() => Err(PageError::NotConnected),
-            result = self.cdp.send(command) => result.map_err(|error| classify_host(&error, self.child_host)),
+    ) -> impl Future<Output = Result<C::Reply, PageError>> {
+        let command = cdp::Serialized::new(command);
+        async move {
+            tokio::select! {
+                biased;
+                () = self.gone.cancelled() => Err(PageError::NotConnected),
+                result = self.cdp.send_serialized(command) => {
+                    result.map_err(|error| classify_host(&error, self.child_host))
+                }
+            }
         }
+    }
+}
+
+/// A `Runtime.callFunctionOn` argument by value. A JSON `null` stays a value: only an absent
+/// `value` is `undefined` to CDP.
+pub(crate) fn argument(value: Value) -> runtime::CallArgument {
+    runtime::CallArgument {
+        value: Some(value),
+        ..runtime::CallArgument::default()
     }
 }
 

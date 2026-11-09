@@ -3,21 +3,25 @@
 //! `keyboard_input.rs`). Every command here is a write ([`Write`]), bound to the session's
 //! socket incarnation.
 //!
-//! Neo: key events are local structs in Playwright's field order, written byte for byte as
-//! `crInput.ts` builds them; mouse events use browseros-cdp's generated params, written in their
-//! protocol order; touch and drag events are local structs whose fields are in alphabetical
-//! order, the order their JSON has always gone out in.
+//! Neo: browseros-cdp's generated params and events, made from BrowserOS's pinned protocol,
+//! under each method's name, written in their protocol order; a local type only where its doc
+//! says why.
 
 use browseros_cdp::input as generated;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 use super::{Ignored, Write, command, event};
 
-pub(crate) use generated::DispatchMouseEventParams as DispatchMouseEvent;
+pub(crate) use generated::{
+    DispatchMouseEventParams as DispatchMouseEvent, DragInterceptedEvent as DragIntercepted,
+    SetInterceptDragsParams as SetInterceptDrags,
+};
 
-/// One `Input.dispatchDragEvent`, as Playwright's `DragManager` builds it: the event, the
-/// intercepted drag's data, its point, and the held modifiers (none for a cancel).
+/// One `Input.dispatchDragEvent`, as Playwright's `DragManager` builds it: the event, its point,
+/// the held modifiers (none for a cancel), and the drag's data. Local: the data is the JSON the
+/// tab's drag state holds (`InputDevices::drag`), written back unchanged, where the generated
+/// `DragData` would re-encode it.
 #[derive(Serialize)]
 pub(crate) struct DispatchDragEvent<'a> {
     pub(crate) data: &'a Value,
@@ -29,7 +33,9 @@ pub(crate) struct DispatchDragEvent<'a> {
     pub(crate) y: f64,
 }
 
-/// One `Input.dispatchKeyEvent`, serialized exactly as `crInput.ts` builds it.
+/// One `Input.dispatchKeyEvent`, serialized exactly as `crInput.ts` builds it. Local: the
+/// generated params would write their protocol order and leave out empty fields, where key
+/// events keep Playwright's bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub(crate) enum KeyEvent {
@@ -73,7 +79,9 @@ pub(crate) struct KeyUp {
 }
 
 /// One `Input.dispatchTouchEvent` of Playwright's `RawTouchscreenImpl.tap`: a start with one
-/// point, or an end with none.
+/// point, or an end with none. Local, as the key events are ([`KeyEvent`]): a touch write keeps
+/// the bytes Neo writes, keys in this order, where the generated params would write the
+/// protocol's order.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DispatchTouchEvent {
@@ -83,30 +91,18 @@ pub(crate) struct DispatchTouchEvent {
     pub(crate) kind: &'static str,
 }
 
+/// A touch point of [`DispatchTouchEvent`]: where it touches, nothing else.
 #[derive(Serialize)]
 pub(crate) struct TouchPoint {
     pub(crate) x: f64,
     pub(crate) y: f64,
 }
 
-/// `Input.insertText {text}`. No `Debug`: the text may be a secret that a fill types.
+/// `Input.insertText {text}`. Local: the generated params derive `Debug`, and the text may be a
+/// secret that a fill types.
 #[derive(Serialize)]
 pub(crate) struct InsertText<'a> {
     pub(crate) text: &'a str,
-}
-
-/// `Input.setInterceptDrags`, on for one move of a drag and off again.
-#[derive(Serialize)]
-pub(crate) struct SetInterceptDrags {
-    pub(crate) enabled: bool,
-}
-
-/// `Input.dragIntercepted`: the drag Chromium handed over, kept as JSON for the drag events
-/// that carry it on.
-#[derive(Deserialize)]
-pub(crate) struct DragIntercepted {
-    #[serde(default)]
-    pub(crate) data: Value,
 }
 
 command! {

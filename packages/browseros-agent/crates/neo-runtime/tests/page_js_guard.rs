@@ -16,10 +16,10 @@
 //!
 //! The CDP door's declaration files (`src/chromium_bridge/cdp/page.rs` and `cdp/runtime.rs`)
 //! name these methods too: each declares its command's method and params, and sends nothing. A
-//! command type is the method under another name, so the type of a guarded command
-//! ([`GUARDED_COMMANDS`]) may appear only where its method may, and a declaration file defines a
-//! `function_declaration` field without building one: the built-const rule applies where a
-//! command is built.
+//! command type is the method under another name, so the type of a guarded command, as the door
+//! names it and as browseros-cdp generates it ([`GUARDED_COMMANDS`]), may appear only where its
+//! method may. A typed command takes its declaration as an owned string, `BUILT.to_string()`,
+//! which the built-const rule reads as the const itself.
 //!
 //! In both, every `functionDeclaration` is a `const` whose initializer is exactly
 //! `include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
@@ -112,14 +112,26 @@ const GUARDED_COMMANDS: &[(&str, &str)] = &[
         "Page.addScriptToEvaluateOnNewDocument",
         "AddScriptToEvaluateOnNewDocument",
     ),
+    (
+        "Page.addScriptToEvaluateOnNewDocument",
+        "AddScriptToEvaluateOnNewDocumentParams",
+    ),
     ("Page.createIsolatedWorld", "CreateIsolatedWorld"),
+    ("Page.createIsolatedWorld", "CreateIsolatedWorldParams"),
     (
         "Page.removeScriptToEvaluateOnNewDocument",
         "RemoveScriptToEvaluateOnNewDocument",
     ),
+    (
+        "Page.removeScriptToEvaluateOnNewDocument",
+        "RemoveScriptToEvaluateOnNewDocumentParams",
+    ),
     ("Runtime.addBinding", "AddBinding"),
+    ("Runtime.addBinding", "AddBindingParams"),
     ("Runtime.callFunctionOn", "CallFunctionOn"),
+    ("Runtime.callFunctionOn", "CallFunctionOnParams"),
     ("Runtime.removeBinding", "RemoveBinding"),
+    ("Runtime.removeBinding", "RemoveBindingParams"),
 ];
 
 /// The init scripts' file: its scripts run in the page's own world, so it never names a world.
@@ -264,20 +276,34 @@ fn tests_that_a_guarded_command_type_is_refused_outside_its_file() {
 
 #[test]
 fn tests_that_the_door_declares_its_guarded_commands_without_building_one() {
-    let declaration = "pub(crate) struct CallFunctionOn<'a> { pub(crate) function_declaration: &'a str }\n\
-                       command! { CallFunctionOn<'_> => \"Runtime.callFunctionOn\", OnSession, Value; }\n";
+    let declaration = "pub(crate) use generated::CallFunctionOnParams as CallFunctionOn;\n\
+                       command! { CallFunctionOn => \"Runtime.callFunctionOn\", OnSession, Value; }\n";
     assert!(check(DOOR_RUNTIME, declaration).is_empty());
     assert!(
         !check(DOOR_PAGE, declaration).is_empty(),
         "the Page declarations name no Runtime command"
     );
+    let generated = "let p = browseros_cdp::runtime::CallFunctionOnParams::default();";
+    assert!(!check("neo-runtime/src/playwright_methods/evaluate.rs", generated).is_empty());
     let built = "const GLUE: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../neo-playwright-injected/dist/call.js\"));\n";
-    let literal = format!(
-        "{built}fn f() {{ runtime::CallFunctionOn {{ function_declaration: GLUE, ..Default::default() }}; }}\n"
-    );
-    assert!(check("neo-runtime/src/chromium_bridge/main_world.rs", &literal).is_empty());
-    let unbuilt = "fn f(js: &str) { runtime::CallFunctionOn { function_declaration: js, ..Default::default() }; }\n";
-    assert!(!check("neo-runtime/src/chromium_bridge/main_world.rs", unbuilt).is_empty());
+    for value in ["GLUE", "GLUE.to_string()"] {
+        let literal = format!(
+            "{built}fn f() {{ runtime::CallFunctionOn {{ function_declaration: {value}, ..Default::default() }}; }}\n"
+        );
+        assert!(
+            check("neo-runtime/src/chromium_bridge/main_world.rs", &literal).is_empty(),
+            "{value}"
+        );
+    }
+    for value in ["js", "js.to_string()", "GLUE.to_string() + js"] {
+        let unbuilt = format!(
+            "{built}fn f(js: &str) {{ runtime::CallFunctionOn {{ function_declaration: {value}, ..Default::default() }}; }}\n"
+        );
+        assert!(
+            !check("neo-runtime/src/chromium_bridge/main_world.rs", &unbuilt).is_empty(),
+            "{value}"
+        );
+    }
 }
 
 #[test]
@@ -441,10 +467,8 @@ fn check(relative: &str, source: &str) -> Vec<String> {
             }
         }
     }
-    if relative != DOOR_PAGE && relative != DOOR_RUNTIME {
-        let built = built_consts(source, &tokens);
-        problems.extend(declarations(relative, &tokens, !allowed.is_empty(), &built));
-    }
+    let built = built_consts(source, &tokens);
+    problems.extend(declarations(relative, &tokens, !allowed.is_empty(), &built));
     problems
 }
 
@@ -525,7 +549,16 @@ fn declarations(relative: &str, tokens: &[Token], door: bool, built: &[String]) 
             ));
             continue;
         };
-        let after = tokens.get(index + 3);
+        // The generated params own the declaration: `BUILT.to_string()` is the const itself.
+        let owned = [".", "to_string", "(", ")"]
+            .iter()
+            .enumerate()
+            .all(|(offset, text)| {
+                tokens
+                    .get(index + 3 + offset)
+                    .is_some_and(|token| token.is(text))
+            });
+        let after = tokens.get(index + if owned { 7 } else { 3 });
         let ends = matches!(
             after,
             Some(Token::Punct {

@@ -133,18 +133,22 @@ impl Host {
 
     /// Sends `command` on this host's session. A host whose session detached answers
     /// `SessionGone` at once instead of waiting out CDP's request timeout (Chromium never
-    /// answers some requests after removing an OOPIF); see [`Self::forget_if_gone`].
-    pub(crate) async fn send_command<C: cdp::Command<Via = cdp::OnSession>>(
+    /// answers some requests after removing an OOPIF); see [`Self::forget_if_gone`]. The
+    /// command is serialized now, when the send is made ([`cdp::Serialized`]).
+    pub(crate) fn send_command<C: cdp::Command<Via = cdp::OnSession>>(
         &self,
         command: C,
-    ) -> Result<C::Reply, CdpError> {
-        let result = tokio::select! {
-            biased;
-            () = self.gone.cancelled() => Err(CdpError::SessionGone),
-            result = self.cdp.send(command) => result,
-        };
-        self.forget_if_gone(&result);
-        result
+    ) -> impl Future<Output = Result<C::Reply, CdpError>> {
+        let command = cdp::Serialized::new(command);
+        async move {
+            let result = tokio::select! {
+                biased;
+                () = self.gone.cancelled() => Err(CdpError::SessionGone),
+                result = self.cdp.send_serialized(command) => result,
+            };
+            self.forget_if_gone(&result);
+            result
+        }
     }
 
     /// [`Self::send_command`] by method name and JSON params, for the callers in
@@ -559,9 +563,7 @@ impl Frames {
                 })
                 .await
                 .map_err(|error| parent.classify(&error))?;
-            let backend = owner["backendNodeId"].as_i64().ok_or_else(|| {
-                PageError::Contract("DOM.getFrameOwner returned no backendNodeId".to_string())
-            })?;
+            let backend = owner.backend_node_id;
             let model = parent
                 .send_command(dom::GetBoxModel {
                     backend_node_id: Some(backend),
@@ -569,10 +571,10 @@ impl Frames {
                 })
                 .await
                 .map_err(|error| parent.classify(&error))?;
-            let x = model["model"]["content"][0].as_f64().ok_or_else(|| {
+            let x = model.model.content.first().copied().ok_or_else(|| {
                 PageError::Contract("Frame content box has no x origin".to_string())
             })?;
-            let y = model["model"]["content"][1].as_f64().ok_or_else(|| {
+            let y = model.model.content.get(1).copied().ok_or_else(|| {
                 PageError::Contract("Frame content box has no y origin".to_string())
             })?;
             offset.0 += x;
@@ -609,9 +611,7 @@ impl Frames {
                 })
                 .await
                 .map_err(|error| parent.classify(&error))?;
-            let backend = owner["backendNodeId"].as_i64().ok_or_else(|| {
-                PageError::Contract("DOM.getFrameOwner returned no backendNodeId".to_string())
-            })?;
+            let backend = owner.backend_node_id;
             // Playwright's `_sendMayFail`: an owner with no box gives no position.
             let Ok(model) = parent
                 .send_command(dom::GetBoxModel {
@@ -622,7 +622,7 @@ impl Frames {
             else {
                 return Ok(None);
             };
-            let Some((x, y)) = quad_origin(&model["model"]["border"]) else {
+            let Some((x, y)) = quad_origin(&model.model.border) else {
                 return Ok(None);
             };
             offset.0 += x;
@@ -657,12 +657,7 @@ impl Frames {
 /// Playwright: `server/chromium/crPage.ts` `FrameSession._getBoundingBox`: `const x = Math.min(quad[0], quad[2], quad[4], quad[6]);`
 ///
 /// The top-left corner of a quad: the smallest x and y of its four points.
-fn quad_origin(quad: &Value) -> Option<(f64, f64)> {
-    let points: Vec<f64> = quad
-        .as_array()?
-        .iter()
-        .map(Value::as_f64)
-        .collect::<Option<_>>()?;
+fn quad_origin(points: &[f64]) -> Option<(f64, f64)> {
     if points.len() != 8 {
         return None;
     }
@@ -763,9 +758,7 @@ async fn watch_host(
             Ok(event)
                 if event
                     .decode::<target::DetachedFromTarget>()
-                    .is_some_and(|detached| {
-                        detached.session_id.as_deref() == Some(session.as_str())
-                    }) =>
+                    .is_some_and(|detached| detached.session_id == session.as_str()) =>
             {
                 break;
             }

@@ -216,7 +216,10 @@ impl PageEvents {
         let switched = time::timeout(
             CHILD_ENABLE_WAIT,
             self.on(&self.session)
-                .send(page::SetInterceptFileChooserDialog { enabled: wanted }),
+                .send(page::SetInterceptFileChooserDialog {
+                    enabled: wanted,
+                    cancel: None,
+                }),
         )
         .await;
         match switched {
@@ -254,7 +257,10 @@ impl PageEvents {
                 frame.send(page::Enable::default()).await?;
             }
             frame
-                .send(page::SetInterceptFileChooserDialog { enabled })
+                .send(page::SetInterceptFileChooserDialog {
+                    enabled,
+                    cancel: None,
+                })
                 .await
         };
         match time::timeout(CHILD_ENABLE_WAIT, switch).await {
@@ -443,16 +449,14 @@ impl PageEvents {
         };
         if let Some(created) = cdp::decode::<runtime::ExecutionContextCreated>(event) {
             let context = created.context;
-            let page_world = context.aux_data.is_default == Some(true);
-            if let (Some(id), Some(frame), true) =
-                (context.id, context.aux_data.frame_id, page_world)
-            {
-                contexts.insert((session.clone(), id), frame);
+            // `auxData` is free-form in the protocol: Chromium's frame and page-world flags.
+            let aux = context.aux_data.unwrap_or_default();
+            let page_world = aux["isDefault"].as_bool() == Some(true);
+            if let (Some(frame), true) = (aux["frameId"].as_str(), page_world) {
+                contexts.insert((session.clone(), context.id), frame.to_string());
             }
         } else if let Some(destroyed) = cdp::decode::<runtime::ExecutionContextDestroyed>(event) {
-            if let Some(id) = destroyed.execution_context_id {
-                contexts.remove(&(session.clone(), id));
-            }
+            contexts.remove(&(session.clone(), destroyed.execution_context_id));
         } else if cdp::is::<runtime::ExecutionContextsCleared>(event) {
             contexts.retain(|(of, _), _| of != session);
         }
@@ -646,7 +650,7 @@ impl PageEvents {
         let Some((index, record)) = self.dialogs.opened(
             &self.target,
             &self.page_guid,
-            &opening.kind,
+            &opening.r#type,
             &opening.message,
             opening.default_prompt.as_deref().unwrap_or(""),
         ) else {
@@ -664,7 +668,7 @@ impl PageEvents {
             return None;
         }
         self.dialogs.answered_by_default(index);
-        Some(answer.unwrap_or_else(|| dialogs::default_answer(&opening.kind)))
+        Some(answer.unwrap_or_else(|| dialogs::default_answer(&opening.r#type)))
     }
 
     /// Playwright: `server/page.ts` `Page._onFileChooserOpened`: `if (!this.listenerCount(Page.Events.FileChooser)) {`
@@ -1058,6 +1062,7 @@ pub(crate) fn enable(tabs: &Tabs, entry: Arc<PageEntry>, needs: Needs) {
 
 #[cfg(test)]
 mod tests {
+    use browseros_cdp::runtime::ExecutionContextDescription;
     use neo_runtime_spec::serve::PageConsoleMessagesResultMessagesItemLocation;
 
     use super::*;
@@ -1183,18 +1188,23 @@ mod tests {
             params,
             session_id: Some(SessionId::from("s")),
         };
+        // As Chromium sends it: every field the pinned protocol requires.
+        let created = |id: i64, default: bool| {
+            serde_json::to_value(runtime::ExecutionContextCreated {
+                context: ExecutionContextDescription {
+                    id,
+                    aux_data: Some(json!({ "frameId": "CHILD", "isDefault": default })),
+                    ..ExecutionContextDescription::default()
+                },
+            })
+            .unwrap()
+        };
         events.track_context(
-            &context(
-                "Runtime.executionContextCreated",
-                json!({ "context": { "id": 7, "auxData": { "frameId": "CHILD", "isDefault": true } } }),
-            ),
+            &context("Runtime.executionContextCreated", created(7, true)),
             &SessionId::from("s"),
         );
         events.track_context(
-            &context(
-                "Runtime.executionContextCreated",
-                json!({ "context": { "id": 8, "auxData": { "frameId": "CHILD", "isDefault": false } } }),
-            ),
+            &context("Runtime.executionContextCreated", created(8, false)),
             &SessionId::from("s"),
         );
         let frame_of = |id: i64| {

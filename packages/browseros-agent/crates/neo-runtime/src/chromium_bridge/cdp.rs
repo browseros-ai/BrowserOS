@@ -10,20 +10,31 @@
 //!         browseros_cdp::CdpClient     transport: one socket, one reader, a FIFO send lock
 //! ```
 //!
-//! A command is a type declared with [`command!`] in `cdp/<domain>.rs`: its `METHOD`, its params
-//! as the struct serializes, the `Reply` decoded no stricter than Neo reads it, and `Via`, which
-//! picks the one method of the door that may send it. [`Command`] is sealed, so no type outside
-//! `cdp/` becomes a command, and no caller writes a method string. `browser_representations/`
-//! and `playwright_methods/` still call the client directly; their commands and events are
-//! declared here already, so moving them onto the door touches only their own files.
+//! A command is declared with [`command!`] in `cdp/<domain>.rs`, on browseros-cdp's params type
+//! for its method under the method's name (`browseros_cdp::page::NavigateParams` as
+//! `page::Navigate`): its `METHOD`, its `Reply` (the generated `…Result`, `serde_json::Value`
+//! where several readers walk the JSON, or [`Ignored`]), and `Via`, which picks the one method
+//! of the door that may send it. [`Command`] is sealed, so no type outside `cdp/` becomes a
+//! command, and no caller writes a method string. `browser_representations/` and
+//! `playwright_methods/` still call the client directly; their commands and events are declared
+//! here already, so moving them onto the door touches only their own files.
 //!
 //! Input is written only at the session's socket incarnation and only with the call's delivery
 //! record in hand. After a reconnect a write is refused before any byte goes out
 //! (`ConnectionEpochChanged`), which is what lets a writer prove `notSent`.
 //!
-//! An event is a payload declared with [`event!`], holding only the fields Neo reads. Events stay
-//! lenient on purpose: one that does not decode reads as `None`, as JavaScript's `undefined`
-//! reads in Playwright, and is logged at debug instead of vanishing silently.
+//! An event is declared with [`event!`], on browseros-cdp's generated `…Event` type. Events and
+//! replies decode with every field the protocol requires, as Chromium's builders always send
+//! them; an event that does not decode reads as `None` and is logged at debug, not dropped
+//! silently ([`Raw::decode`]). The types come from browseros-cdp's pinned
+//! `protocol/protocol.json`, and the door's tests check every declaration against it.
+//!
+//! A domain file keeps a local type only where its doc says why: a command that takes no params
+//! (browseros-cdp generates no type for one), a second declaration of a method, a write whose
+//! field order or `Debug` output matters, a payload the generated type would lose
+//! (`Network.Headers`, which browseros-cdp generates as an empty struct), or one Neo already
+//! reads through its own type (the console's remote objects, which keep `"value": null` apart
+//! from no value).
 //!
 //! Neo: Neo's own door. It types every send by its method, as Playwright's `CRSession.send`
 //! does; browseros-cdp's generated `pub async fn`s take a concrete client and cannot bind a write
@@ -52,10 +63,12 @@ pub(crate) mod storage;
 pub(crate) mod target;
 
 use std::future::Future;
+use std::marker::PhantomData;
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
 use serde::Serialize;
 use serde::de::{DeserializeOwned, IgnoredAny};
+use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tracing::debug;
@@ -95,8 +108,8 @@ impl Via for Write {}
 pub(crate) trait Command: Serialize + sealed::Sealed {
     /// `Domain.method`, as the protocol names it.
     const METHOD: &'static str;
-    /// The reply, decoded no stricter than Neo reads it: a generated `…Result`, a local struct
-    /// of only the fields Neo reads, `serde_json::Value`, or [`Ignored`].
+    /// The reply: the generated `…Result`, `serde_json::Value` where several readers walk the
+    /// JSON, or [`Ignored`].
     type Reply: DeserializeOwned;
     /// [`OnBrowser`], [`OnSession`] or [`Write`]: which method of the door sends it.
     type Via: Via;
@@ -126,8 +139,8 @@ macro_rules! command {
 }
 pub(crate) use command;
 
-/// A CDP event neo-runtime reads, declared with [`event!`] in `cdp/<domain>.rs`. The payload
-/// holds only the fields Neo reads, each optional unless Neo cannot act without it.
+/// A CDP event neo-runtime reads, declared with [`event!`] in `cdp/<domain>.rs`: the generated
+/// `…Event`, every field the protocol requires present, or a local type whose doc says why.
 pub(crate) trait Event: DeserializeOwned + sealed::Sealed {
     /// `Domain.event`, as the protocol names it.
     const METHOD: &'static str;
@@ -154,6 +167,27 @@ macro_rules! event {
 }
 pub(crate) use event;
 
+/// A command serialized when its send is made: its JSON, or why it would not serialize, typed
+/// by the command so the reply still decodes as declared. Only [`Serialized::new`] makes one.
+///
+/// A send's future holds this, not the command. A generated params struct runs to a few hundred
+/// bytes, and a command held by a future is held twice there (an `async fn`'s arguments live on
+/// both as its captures and as its locals), then again by each future that awaits it, up call
+/// paths already near clippy's `large_futures` bound (`method_router.rs` `serve_call`).
+pub(crate) struct Serialized<C> {
+    params: Result<Value, serde_json::Error>,
+    command: PhantomData<fn() -> C>,
+}
+
+impl<C: Command> Serialized<C> {
+    pub(crate) fn new(command: C) -> Self {
+        Self {
+            params: serde_json::to_value(command),
+            command: PhantomData,
+        }
+    }
+}
+
 /// The browser end of the door, over the `Runtime`'s one connection. Cheap to clone.
 #[derive(Clone)]
 pub(crate) struct Browser {
@@ -165,14 +199,20 @@ impl Browser {
         Self { client }
     }
 
-    /// Sends a browser-wide command and decodes its reply. Serializing consumes the command, so
-    /// the future holds its JSON across the await, not the command too.
-    pub(crate) async fn send<C: Command<Via = OnBrowser>>(
+    /// Sends a browser-wide command and decodes its reply. The command is serialized now, when
+    /// the send is made, and the future holds only its JSON ([`Serialized`]).
+    pub(crate) fn send<C: Command<Via = OnBrowser>>(
         &self,
         command: C,
+    ) -> impl Future<Output = Result<C::Reply, CdpError>> {
+        self.send_serialized(Serialized::new(command))
+    }
+
+    async fn send_serialized<C: Command<Via = OnBrowser>>(
+        &self,
+        command: Serialized<C>,
     ) -> Result<C::Reply, CdpError> {
-        let params = serde_json::to_value(command)?;
-        let reply = self.client.send(C::METHOD, params, None).await?;
+        let reply = self.client.send(C::METHOD, command.params?, None).await?;
         serde_json::from_value(reply).map_err(CdpError::from)
     }
 
@@ -249,16 +289,26 @@ impl Session {
         &self.browser
     }
 
-    /// Sends a command on this session and decodes its reply ([`Browser::send`]).
-    pub(crate) async fn send<C: Command<Via = OnSession>>(
+    /// Sends a command on this session and decodes its reply. The command is serialized now, when
+    /// the send is made ([`Serialized`]).
+    pub(crate) fn send<C: Command<Via = OnSession>>(
         &self,
         command: C,
+    ) -> impl Future<Output = Result<C::Reply, CdpError>> {
+        self.send_serialized(Serialized::new(command))
+    }
+
+    /// [`Self::send`] of a command serialized earlier, for a caller that races the send against
+    /// something else: it serializes before its own future, then makes this one inside it, so
+    /// neither holds the command.
+    pub(crate) async fn send_serialized<C: Command<Via = OnSession>>(
+        &self,
+        command: Serialized<C>,
     ) -> Result<C::Reply, CdpError> {
-        let params = serde_json::to_value(command)?;
         let reply = self
             .browser
             .client
-            .send(C::METHOD, params, Some(&self.id))
+            .send(C::METHOD, command.params?, Some(&self.id))
             .await?;
         serde_json::from_value(reply).map_err(CdpError::from)
     }
@@ -623,25 +673,38 @@ mod tests {
     }
 
     #[test]
-    fn events_decode_as_leniently_as_neo_reads_them() {
+    fn events_decode_with_what_the_pinned_protocol_requires() {
+        let frame = json!({
+            "id": "F", "loaderId": "L", "url": "https://a.test/", "domainAndRegistry": "a.test",
+            "securityOrigin": "https://a.test", "mimeType": "text/html",
+            "secureContextType": "Secure", "crossOriginIsolatedContextType": "NotIsolated",
+            "gatedAPIFeatures": [],
+        });
         let commit = Raw::fixture(
             "Page.frameNavigated",
             Some("S"),
-            json!({"frame": {"id": "F", "url": "https://a.test/", "mimeType": "text/html"}}),
+            json!({ "frame": frame, "type": "Navigation" }),
         );
         let decoded = commit
             .decode::<page::FrameNavigated>()
-            .expect("a commit without type, loaderId or urlFragment decodes");
-        assert_eq!((decoded.frame.loader_id, decoded.kind), (None, None));
+            .expect("a commit with every field the protocol requires decodes");
+        assert_eq!(
+            (decoded.frame.id.as_str(), decoded.frame.parent_id),
+            ("F", None)
+        );
         assert!(
             commit.decode::<page::LifecycleEvent>().is_none(),
             "another event's payload never decodes from it"
         );
-        let broken = Raw::fixture("Page.lifecycleEvent", Some("S"), json!({"frameId": "F"}));
-        assert!(broken.is::<page::LifecycleEvent>());
+        let partial = Raw::fixture(
+            "Page.frameNavigated",
+            Some("S"),
+            json!({ "frame": { "id": "F", "url": "https://a.test/" }, "type": "Navigation" }),
+        );
+        assert!(partial.is::<page::FrameNavigated>());
         assert!(
-            broken.decode::<page::LifecycleEvent>().is_none(),
-            "a known event that does not decode reads as None"
+            partial.decode::<page::FrameNavigated>().is_none(),
+            "a known event missing a required field reads as None, logged"
         );
     }
 

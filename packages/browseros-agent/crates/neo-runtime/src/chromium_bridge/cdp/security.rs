@@ -1,16 +1,13 @@
 //! The `Security` domain as neo-runtime uses it: a created context's `ignoreHTTPSErrors` on each
 //! of its frame sessions (`browser_representations/emulation.rs`).
 //!
-//! Neo: a local struct, since browseros-cdp's surface has no `Security` domain.
+//! Neo: browseros-cdp's generated params, made from BrowserOS's pinned protocol.
 
-use serde::Serialize;
+use browseros_cdp::security as generated;
 
 use super::{Ignored, OnSession, command};
 
-#[derive(Serialize)]
-pub(crate) struct SetIgnoreCertificateErrors {
-    pub(crate) ignore: bool,
-}
+pub(crate) use generated::SetIgnoreCertificateErrorsParams as SetIgnoreCertificateErrors;
 
 command! {
     // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._client.send('Security.setIgnoreCertificateErrors', { ignore: true }));`

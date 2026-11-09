@@ -64,7 +64,34 @@ fn discovery_params(on: bool, _scope: Option<&str>) -> Value {
     .unwrap_or_default()
 }
 
-pub(crate) use crate::chromium_bridge::cdp::target::TargetInfo;
+/// Neo's record of a page target: what discovery reports and `tabs.rs` keeps. Read from
+/// `Target.getTargets`' JSON for the baseline, and from a target event's generated `TargetInfo`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TargetInfo {
+    pub(crate) target_id: String,
+    #[serde(rename = "type")]
+    pub(crate) kind: String,
+    #[serde(default)]
+    pub(crate) url: String,
+    /// The target whose frame opened this one, set even for `noopener` (measured).
+    #[serde(default)]
+    pub(crate) opener_id: Option<String>,
+    #[serde(default)]
+    pub(crate) browser_context_id: Option<String>,
+}
+
+impl From<target::TargetInfo> for TargetInfo {
+    fn from(info: target::TargetInfo) -> Self {
+        Self {
+            target_id: info.target_id,
+            kind: info.r#type,
+            url: info.url,
+            opener_id: info.opener_id,
+            browser_context_id: info.browser_context_id,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -206,14 +233,15 @@ impl Targets {
             return None;
         }
         if event.is::<target::TargetCreated>() || event.is::<target::TargetInfoChanged>() {
-            let info = event
+            let info: TargetInfo = event
                 .decode::<target::TargetCreated>()
                 .map(|created| created.target_info)
                 .or_else(|| {
                     event
                         .decode::<target::TargetInfoChanged>()
                         .map(|changed| changed.target_info)
-                })?;
+                })?
+                .into();
             if info.kind != "page" || self.known.contains(&info.target_id) {
                 return None;
             }
@@ -263,7 +291,7 @@ mod tests {
             None,
             json!({
                 "targetInfo": {
-                    "targetId": "POPUP", "type": "page", "url": "", "openerId": "OPENER",
+                    "targetId": "POPUP", "type": "page", "title": "", "url": "", "openerId": "OPENER",
                     "canAccessOpener": false, "openerFrameId": "OPENER", "attached": false,
                     "browserContextId": "CONTEXT",
                 }
@@ -310,8 +338,8 @@ mod tests {
             method,
             session,
             json!({ "targetInfo": {
-                "targetId": target, "type": kind, "url": url, "openerId": "OPENER",
-                "browserContextId": "CONTEXT",
+                "targetId": target, "type": kind, "title": "", "url": url, "attached": false,
+                "openerId": "OPENER", "canAccessOpener": false, "browserContextId": "CONTEXT",
             }}),
         )
     }

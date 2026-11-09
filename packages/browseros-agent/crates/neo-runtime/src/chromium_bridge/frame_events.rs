@@ -93,7 +93,8 @@ impl FrameModel {
         let mut changes = Vec::new();
         if let Some(page::FrameAttached {
             frame_id,
-            parent_frame_id: Some(parent_frame_id),
+            parent_frame_id,
+            ..
         }) = cdp::decode(event)
         {
             if !self.frames.contains_key(&frame_id) {
@@ -107,7 +108,7 @@ impl FrameModel {
                 changes.push(self.change("frameAttached", "frameattached", &frame_id));
             }
         } else if let Some(page::FrameDetached { frame_id, reason }) = cdp::decode(event) {
-            if reason.as_deref() != Some("swap") && frame_id != self.target {
+            if reason != "swap" && frame_id != self.target {
                 self.detach(&frame_id, true, &mut changes);
             }
         } else if let Some(page::FrameNavigated { frame, .. }) = cdp::decode(event) {
@@ -125,10 +126,7 @@ impl FrameModel {
                 known.parent = parent;
             }
             changes.push(self.navigated(&frame.id));
-        } else if let Some(page::NavigatedWithinDocument {
-            frame_id,
-            url: Some(url),
-        }) = cdp::decode(event)
+        } else if let Some(page::NavigatedWithinDocument { frame_id, url, .. }) = cdp::decode(event)
             && let Some(known) = self.frames.get_mut(&frame_id)
         {
             known.url = url;
@@ -200,6 +198,7 @@ impl FrameModel {
 #[cfg(test)]
 mod tests {
     use browseros_cdp::SessionId;
+    use browseros_cdp::page::Frame;
 
     use super::*;
 
@@ -211,6 +210,21 @@ mod tests {
             params,
             session_id: Some(SessionId::from("s")),
         }
+    }
+
+    /// A frame of `Page.frameNavigated`, every field the pinned protocol requires filled.
+    fn frame(id: &str, parent: Option<&str>, name: Option<&str>, url: &str) -> Frame {
+        Frame {
+            id: id.to_string(),
+            parent_id: parent.map(str::to_string),
+            name: name.map(str::to_string),
+            url: url.to_string(),
+            ..Frame::default()
+        }
+    }
+
+    fn params(event: impl serde::Serialize) -> Value {
+        serde_json::to_value(event).expect("the event serializes")
     }
 
     fn names(changes: &[FrameChange]) -> Vec<(String, String)> {
@@ -230,7 +244,11 @@ mod tests {
         let mut model = FrameModel::new(TAB);
         let attached = model.apply(&event(
             "Page.frameAttached",
-            json!({"frameId": "A", "parentFrameId": TAB}),
+            params(page::FrameAttached {
+                frame_id: "A".to_string(),
+                parent_frame_id: TAB.to_string(),
+                stack: None,
+            }),
         ));
         assert_eq!(
             names(&attached),
@@ -242,29 +260,42 @@ mod tests {
         );
         let navigated = model.apply(&event(
             "Page.frameNavigated",
-            json!({"frame": {"id": "A", "parentId": TAB, "name": "x", "url": "https://a.test/", "urlFragment": "#f"}}),
+            params(page::FrameNavigated {
+                frame: Frame {
+                    url_fragment: Some("#f".to_string()),
+                    ..frame("A", Some(TAB), Some("x"), "https://a.test/")
+                },
+                r#type: "Navigation".to_string(),
+            }),
         ));
         assert_eq!(navigated[0].params["url"], "https://a.test/#f");
         assert_eq!(navigated[0].params["name"], "x");
         let within = model.apply(&event(
             "Page.navigatedWithinDocument",
-            json!({"frameId": "A", "url": "https://a.test/#g"}),
+            params(page::NavigatedWithinDocument {
+                frame_id: "A".to_string(),
+                url: "https://a.test/#g".to_string(),
+                navigation_type: "fragment".to_string(),
+            }),
         ));
         assert_eq!(within[0].params["url"], "https://a.test/#g");
-        let swapped = model.apply(&event(
-            "Page.frameDetached",
-            json!({"frameId": "A", "reason": "swap"}),
-        ));
+        let detach = |reason: &str| {
+            event(
+                "Page.frameDetached",
+                params(page::FrameDetached {
+                    frame_id: "A".to_string(),
+                    reason: reason.to_string(),
+                }),
+            )
+        };
+        let swapped = model.apply(&detach("swap"));
         assert!(swapped.is_empty(), "a process swap is no detach");
-        let detached = model.apply(&event(
-            "Page.frameDetached",
-            json!({"frameId": "A", "reason": "remove"}),
-        ));
+        let detached = model.apply(&detach("remove"));
         assert_eq!(
             names(&detached),
             [("frameDetached".into(), "frame@TAB/A".into())]
         );
-        let again = model.apply(&event("Page.frameDetached", json!({"frameId": "A"})));
+        let again = model.apply(&detach("remove"));
         assert!(again.is_empty(), "a frame detaches once");
     }
 
@@ -293,7 +324,10 @@ mod tests {
         ]);
         let changes = model.apply(&event(
             "Page.frameNavigated",
-            json!({"frame": {"id": TAB, "url": "https://a.test/next"}}),
+            params(page::FrameNavigated {
+                frame: frame(TAB, None, None, "https://a.test/next"),
+                r#type: "Navigation".to_string(),
+            }),
         ));
         assert_eq!(
             names(&changes),

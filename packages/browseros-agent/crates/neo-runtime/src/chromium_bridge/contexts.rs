@@ -83,24 +83,21 @@ impl ContextFrames {
         };
         if let Some(created) = cdp::decode::<runtime::ExecutionContextCreated>(event) {
             let context = created.context;
-            if let (Some(id), Some(frame), Some(true)) = (
-                context.id,
-                context.aux_data.frame_id,
-                context.aux_data.is_default,
-            ) {
+            // `auxData` is free-form in the protocol: Chromium's frame and page-world flags.
+            let aux = context.aux_data.unwrap_or_default();
+            if let (Some(frame), Some(true)) = (aux["frameId"].as_str(), aux["isDefault"].as_bool())
+            {
                 contexts.frames.insert(
-                    (session.to_string(), id),
+                    (session.to_string(), context.id),
                     Context {
-                        frame,
-                        unique: context.unique_id,
+                        frame: frame.to_string(),
+                        unique: Some(context.unique_id),
                         died: None,
                     },
                 );
             }
         } else if let Some(destroyed) = cdp::decode::<runtime::ExecutionContextDestroyed>(event) {
-            if let Some(id) = destroyed.execution_context_id {
-                contexts.kill((session.to_string(), id));
-            }
+            contexts.kill((session.to_string(), destroyed.execution_context_id));
         } else if cdp::is::<runtime::ExecutionContextsCleared>(event) {
             let owned: Vec<(String, i64)> = contexts
                 .frames
@@ -164,6 +161,36 @@ impl ContextFrames {
     }
 }
 
+/// Execution-context events as Chromium sends them, every field the pinned protocol requires
+/// filled.
+#[cfg(test)]
+mod fixtures {
+    use browseros_cdp::runtime::ExecutionContextDescription;
+    use serde_json::{Value, json};
+
+    use crate::chromium_bridge::cdp::runtime;
+
+    pub(super) fn created(id: i64, frame: &str, default: bool, unique: &str) -> Value {
+        serde_json::to_value(runtime::ExecutionContextCreated {
+            context: ExecutionContextDescription {
+                id,
+                unique_id: unique.to_string(),
+                aux_data: Some(json!({ "frameId": frame, "isDefault": default })),
+                ..ExecutionContextDescription::default()
+            },
+        })
+        .expect("the event serializes")
+    }
+
+    pub(super) fn destroyed(id: i64) -> Value {
+        serde_json::to_value(runtime::ExecutionContextDestroyed {
+            execution_context_id: id,
+            execution_context_unique_id: format!("unique.{id}"),
+        })
+        .expect("the event serializes")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
@@ -185,7 +212,7 @@ mod tests {
             event(
                 "Runtime.executionContextCreated",
                 session,
-                json!({"context": {"id": id, "auxData": {"frameId": frame, "isDefault": default}}}),
+                fixtures::created(id, frame, default, &format!("unique.{id}")),
             )
         };
         contexts.apply(&created("tab", 1, "main", true));
@@ -202,7 +229,7 @@ mod tests {
         contexts.apply(&event(
             "Runtime.executionContextDestroyed",
             "tab",
-            json!({"executionContextId": 2}),
+            fixtures::destroyed(2),
         ));
         assert_eq!(
             contexts.frame_of("tab", 2).as_deref(),
@@ -230,12 +257,12 @@ mod tests {
             contexts.apply(&event(
                 "Runtime.executionContextCreated",
                 "tab",
-                json!({"context": {"id": id, "auxData": {"frameId": "frame", "isDefault": true}}}),
+                fixtures::created(id, "frame", true, &format!("unique.{id}")),
             ));
             contexts.apply(&event(
                 "Runtime.executionContextDestroyed",
                 "tab",
-                json!({"executionContextId": id}),
+                fixtures::destroyed(id),
             ));
         }
         assert_eq!(contexts.frame_of("tab", 0), None, "the oldest went first");
@@ -253,11 +280,7 @@ mod unique_tests {
     fn created(session: &str, id: i64, frame: &str, unique: &str) -> CdpEvent {
         CdpEvent {
             method: "Runtime.executionContextCreated".to_string(),
-            params: json!({"context": {
-                "id": id,
-                "uniqueId": unique,
-                "auxData": {"frameId": frame, "isDefault": true},
-            }}),
+            params: fixtures::created(id, frame, true, unique),
             session_id: Some(SessionId::from(session)),
         }
     }

@@ -339,11 +339,13 @@ impl MainWorld {
                 let reply = frame
                     .host
                     .send_command(runtime::CallFunctionOn {
-                        function_declaration: MAIN_INJECTED,
-                        object_id: Some(installed.utility.object_id()),
-                        arguments: Some(vec![json!({ "value": main_initializer() })]),
+                        function_declaration: MAIN_INJECTED.to_string(),
+                        object_id: Some(installed.utility.object_id().to_string()),
+                        arguments: Some(vec![playwright_injected_methods::argument(json!(
+                            main_initializer()
+                        ))]),
                         return_by_value: Some(false),
-                        object_group: Some(MAIN_WORLD_GROUP),
+                        object_group: Some(MAIN_WORLD_GROUP.to_string()),
                         ..runtime::CallFunctionOn::default()
                     })
                     .await
@@ -391,10 +393,10 @@ impl MainWorld {
         let reply = frame
             .host
             .send_command(runtime::CallFunctionOn {
-                function_declaration: UTILITY,
-                object_id: Some(&object_id),
+                function_declaration: UTILITY.to_string(),
+                object_id: Some(object_id),
                 return_by_value: Some(false),
-                object_group: Some(MAIN_WORLD_GROUP),
+                object_group: Some(MAIN_WORLD_GROUP.to_string()),
                 ..runtime::CallFunctionOn::default()
             })
             .await
@@ -592,8 +594,7 @@ impl MainWorld {
             })
             .await
             .map_err(|error| frame.host.classify(&error))?;
-        serde_json::from_value(reply["object"].clone())
-            .map_err(|error| PageError::Contract(format!("DOM.resolveNode answered: {error}")))
+        Ok(reply.object)
     }
 }
 
@@ -606,25 +607,28 @@ impl MainWorld {
 /// `NotConnected` when the object or its context is gone; `Closed` when the session is.
 /// One `Runtime.callFunctionOn` of a built function on `utility` (the `UtilityScript`'s object
 /// id, always the first argument): on that object, or in the execution context `context`.
-fn call_request<'a>(
-    utility: &'a str,
-    context: Option<&'a ContextPin>,
+fn call_request(
+    utility: &str,
+    context: Option<&ContextPin>,
     function: MainFunction,
     arguments: Vec<Value>,
     return_by_value: bool,
-    group: Option<&'a ObjectGroup>,
-) -> runtime::CallFunctionOn<'a> {
+    group: Option<&ObjectGroup>,
+) -> runtime::CallFunctionOn {
     let mut all = Vec::with_capacity(arguments.len() + 1);
-    all.push(json!({ "objectId": utility }));
-    all.extend(arguments);
+    all.push(runtime::CallArgument {
+        object_id: Some(utility.to_string()),
+        ..runtime::CallArgument::default()
+    });
+    all.extend(arguments.into_iter().map(call_argument));
     // Each declaration is named at its key, so the page JS guard can see it is built.
     let mut request = match function {
         MainFunction::Evaluate => runtime::CallFunctionOn {
-            function_declaration: EVALUATE,
+            function_declaration: EVALUATE.to_string(),
             ..runtime::CallFunctionOn::default()
         },
         MainFunction::JsonValue => runtime::CallFunctionOn {
-            function_declaration: JSON_VALUE,
+            function_declaration: JSON_VALUE.to_string(),
             ..runtime::CallFunctionOn::default()
         },
     };
@@ -632,18 +636,36 @@ fn call_request<'a>(
         Some(ContextPin {
             unique: Some(unique),
             ..
-        }) => request.unique_context_id = Some(unique),
+        }) => request.unique_context_id = Some(unique.clone()),
         Some(pin) => request.execution_context_id = Some(pin.id),
-        None => request.object_id = Some(utility),
+        None => request.object_id = Some(utility.to_string()),
     }
     request.arguments = Some(all);
     request.return_by_value = Some(return_by_value);
     request.await_promise = Some(true);
     request.user_gesture = Some(true);
     if let Some(ObjectGroup(group)) = group {
-        request.object_group = Some(group);
+        request.object_group = Some(group.clone());
     }
     request
+}
+
+/// An argument a caller built as CDP's JSON (`{"value": …}`, `{"objectId": …}` or
+/// `{"unserializableValue": …}`), as the generated type. A `"value": null` stays a value, as CDP
+/// reads it; only an absent one is `undefined`.
+fn call_argument(argument: Value) -> runtime::CallArgument {
+    let Value::Object(mut fields) = argument else {
+        return runtime::CallArgument::default();
+    };
+    let text = |value: Option<Value>| match value {
+        Some(Value::String(text)) => Some(text),
+        _ => None,
+    };
+    runtime::CallArgument {
+        value: fields.remove("value"),
+        unserializable_value: text(fields.remove("unserializableValue")),
+        object_id: text(fields.remove("objectId")),
+    }
 }
 
 pub(crate) async fn retain(
@@ -654,10 +676,13 @@ pub(crate) async fn retain(
     let reply = frame
         .host
         .send_command(runtime::CallFunctionOn {
-            function_declaration: RETAIN,
-            object_id: Some(object_id),
-            arguments: Some(vec![json!({ "objectId": object_id })]),
-            object_group: Some(&group.0),
+            function_declaration: RETAIN.to_string(),
+            object_id: Some(object_id.to_string()),
+            arguments: Some(vec![runtime::CallArgument {
+                object_id: Some(object_id.to_string()),
+                ..runtime::CallArgument::default()
+            }]),
+            object_group: Some(group.0.clone()),
             return_by_value: Some(false),
             ..runtime::CallFunctionOn::default()
         })
@@ -681,9 +706,7 @@ async fn describe(frame: &FrameContext, object_id: &str) -> Result<i64, PageErro
         })
         .await
         .map_err(|error| frame.host.classify(&error))?;
-    reply["node"]["backendNodeId"]
-        .as_i64()
-        .ok_or_else(|| PageError::Contract("DOM.describeNode returned no backendNodeId".into()))
+    Ok(reply.node.backend_node_id)
 }
 
 /// Playwright: `server/chromium/crProtocolHelper.ts` `getExceptionMessage`: `return exceptionDetails.exception.description || String(exceptionDetails.exception.value);`

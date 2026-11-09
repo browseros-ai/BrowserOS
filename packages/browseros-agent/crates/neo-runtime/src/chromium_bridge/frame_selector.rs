@@ -456,9 +456,7 @@ pub(crate) async fn direct_owners(
             .send_command(dom::GetFrameOwner { frame_id: child })
             .await
             .map_err(|error| parent.host.classify(&error))?;
-        let backend = owner["backendNodeId"].as_i64().ok_or_else(|| {
-            PageError::Contract("DOM.getFrameOwner returned no backendNodeId".to_string())
-        })?;
+        let backend = owner.backend_node_id;
         let element = parent.element(group.group(), backend).await?;
         owners.push(FrameOwner {
             frame: parent,
@@ -588,7 +586,7 @@ impl Hops for Resolver<'_> {
                 }
                 error
             })?;
-        let Some(id) = described["node"]["frameId"].as_str() else {
+        let Some(id) = described.node.frame_id.as_deref() else {
             return Ok(None);
         };
         let child = self.tab.frames.context(id, Some(&frame.host)).await?;

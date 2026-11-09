@@ -18,6 +18,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use browseros_cdp::page::{
+    Frame, FrameNavigatedEvent, LifecycleEventEvent, NavigatedWithinDocumentEvent,
+};
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use futures_util::{SinkExt, StreamExt};
 use neo_runtime::{PageId, RunRequest, Runtime};
@@ -511,7 +514,7 @@ fn navigation_events(
         for name in ["init", "DOMContentLoaded", "load"] {
             let _ = outgoing.send(
                 json!({"sessionId":session,"method":"Page.lifecycleEvent",
-                "params":{"frameId":PAGE,"loaderId":"initial","name":name}})
+                "params":lifecycle_event("initial", name)})
                 .to_string(),
             );
         }
@@ -548,10 +551,13 @@ fn commit_during_call(
     };
     if commit && !calls.committed {
         calls.committed = true;
-        let _ = outgoing.send(json!({
-            "sessionId":command["sessionId"], "method":"Page.frameNavigated",
-            "params":{"frame":{"id":PAGE,"loaderId":"next","url":"https://example.test/next"},"type":"Navigation"}
-        }).to_string());
+        let _ = outgoing.send(
+            json!({
+                "sessionId":command["sessionId"], "method":"Page.frameNavigated",
+                "params":frame_navigated("next", "https://example.test/next", "Navigation")
+            })
+            .to_string(),
+        );
     }
 }
 
@@ -593,13 +599,20 @@ async fn emit_navigation(
     let (method, params) = if script.same_document {
         (
             "Page.navigatedWithinDocument",
-            json!({"frameId":PAGE,"url":url}),
+            to_json(&NavigatedWithinDocumentEvent {
+                frame_id: PAGE.to_string(),
+                url: url.as_str().unwrap_or_default().to_string(),
+                navigation_type: "fragment".to_string(),
+            }),
         )
     } else {
-        (
-            "Page.frameNavigated",
-            json!({"frame":{"id":PAGE,"loaderId":"new","url":url},"type":if script.restored_from_bfcache { "BackForwardCacheRestore" } else { "Navigation" }}),
-        )
+        let kind = if script.restored_from_bfcache {
+            "BackForwardCacheRestore"
+        } else {
+            "Navigation"
+        };
+        let url = url.as_str().unwrap_or_default();
+        ("Page.frameNavigated", frame_navigated("new", url, kind))
     };
     send(method, params);
     if script.stop_loading {
@@ -611,7 +624,7 @@ async fn emit_navigation(
             } else {
                 "new"
             };
-            let _ = outgoing.send(json!({"sessionId":session,"method":"Page.lifecycleEvent","params":{"frameId":PAGE,"loaderId":loader,"name":name}}).to_string());
+            let _ = outgoing.send(json!({"sessionId":session,"method":"Page.lifecycleEvent","params":lifecycle_event(loader, name)}).to_string());
         }
     }
 }
@@ -828,6 +841,35 @@ fn input_command(
         }
         _ => None,
     }
+}
+
+/// An event as BrowserOS sends it: browseros-cdp's generated payload, so every field the pinned
+/// protocol requires is there, as the door decodes it.
+fn to_json(event: &impl serde::Serialize) -> Value {
+    serde_json::to_value(event).unwrap_or_default()
+}
+
+/// The tab's main frame committing document `loader` at `url`.
+fn frame_navigated(loader: &str, url: &str, kind: &str) -> Value {
+    to_json(&FrameNavigatedEvent {
+        frame: Frame {
+            id: PAGE.to_string(),
+            loader_id: loader.to_string(),
+            url: url.to_string(),
+            ..Frame::default()
+        },
+        r#type: kind.to_string(),
+    })
+}
+
+/// The tab's main frame's document `loader` reaching lifecycle point `name`.
+fn lifecycle_event(loader: &str, name: &str) -> Value {
+    to_json(&LifecycleEventEvent {
+        frame_id: PAGE.to_string(),
+        loader_id: loader.to_string(),
+        name: name.to_string(),
+        timestamp: 0.0,
+    })
 }
 
 fn box_model() -> Value {
