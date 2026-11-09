@@ -14,6 +14,7 @@ use std::time::Duration;
 use browser::{Fixture, Tab, e2e_browser};
 use neo_runtime::{RunOutcome, RunStatus};
 use serde_json::{Value, json};
+use tokio::time;
 
 /// Long enough to create a context and a page on a loaded machine, short enough for a test.
 const SHORT_RUN: Duration = Duration::from_secs(8);
@@ -76,6 +77,20 @@ async fn emulation_lasts_for_the_run() {
     .await;
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
     assert_eq!(outcome.value, Some(json!({ "width": 333, "height": 222 })));
+    // Session::drop detaches in the background. The outcome does not await that CDP
+    // acknowledgement, so observe the reset before asserting the tab's restored state.
+    time::timeout(SHORT_RUN, async {
+        loop {
+            if tab.evaluate("innerWidth").await == width
+                && tab.evaluate("matchMedia('print').matches").await == json!(false)
+            {
+                break;
+            }
+            time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the detached session releases its emulation");
     assert_eq!(
         tab.evaluate("innerWidth").await,
         width,
