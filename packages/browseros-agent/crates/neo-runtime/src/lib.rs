@@ -55,6 +55,7 @@ extern crate self as neo_runtime;
 mod fake_browser;
 
 mod abort;
+pub mod actions;
 mod artifacts;
 mod browser_representations;
 mod chromium_bridge;
@@ -71,9 +72,10 @@ mod run;
 mod runtime;
 mod url_match;
 
+pub use actions::{ActionGroup, ActionKind};
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{
-    CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunBinary, RunEnd,
-    RunError, RunOutcome, RunPage, RunRequest, RunStatus,
+    CallAction, CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunBinary,
+    RunEnd, RunError, RunOutcome, RunPage, RunRequest, RunStatus,
 };
 pub use runtime::{Runtime, RuntimeError};

@@ -40,6 +40,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
+use crate::actions::{ActionKind, NeoMethod};
 use crate::browser_representations::page::{FrameTab, GroupGuard, InputPermit, ResolvedElement};
 use crate::chromium_bridge::frame_selector;
 use crate::playwright_methods::click::{
@@ -59,40 +60,52 @@ use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// Neo: the trace record of `neo:scrollIntoViewIfNeeded`, titled as Playwright's
 /// `ElementHandle.scrollIntoViewIfNeeded`.
-pub(crate) static SCROLL_INTO_VIEW_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "neo:scrollIntoViewIfNeeded",
-    title: Some("Scroll into view"),
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: false,
-    flags: &[MethodFlag::Snapshot],
-};
+pub(crate) static SCROLL_INTO_VIEW_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "neo:scrollIntoViewIfNeeded",
+        title: Some("Scroll into view"),
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: false,
+        flags: &[MethodFlag::Snapshot],
+    },
+    ActionKind::ScrollIntoView,
+    true,
+);
 
 /// Neo: the trace record of `neo:selectText`, titled as Playwright's `ElementHandle.selectText`.
-pub(crate) static SELECT_TEXT_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "neo:selectText",
-    title: Some("Select text"),
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: false,
-    flags: &[MethodFlag::Snapshot],
-};
+pub(crate) static SELECT_TEXT_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "neo:selectText",
+        title: Some("Select text"),
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: false,
+        flags: &[MethodFlag::Snapshot],
+    },
+    ActionKind::SelectText,
+    true,
+);
 
 /// Neo: the trace record of `neo:boundingBox`, titled as Playwright's `ElementHandle.boundingBox`.
-pub(crate) static BOUNDING_BOX_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "neo:boundingBox",
-    title: Some("Get bounding box"),
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
+pub(crate) static BOUNDING_BOX_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "neo:boundingBox",
+        title: Some("Get bounding box"),
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::BoundingBox,
+    true,
+);
 
 /// Neo: the params of `neo:scrollIntoViewIfNeeded` and `neo:boundingBox`, kept in step with
 /// neo-quickjs-injected's `NeoFrameCommands` and the wire tests. The timeout is in the call's

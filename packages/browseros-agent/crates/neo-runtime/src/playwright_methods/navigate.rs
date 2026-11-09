@@ -455,6 +455,7 @@ mod tests {
             guid: "frame@T".to_string(),
             method: "goto".to_string(),
             title: Some("Navigate"),
+            action: None,
             params: json!({}),
             location: None,
             input: false,

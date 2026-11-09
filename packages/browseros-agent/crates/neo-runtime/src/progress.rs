@@ -42,7 +42,9 @@ use crate::browser_representations::clock::Clock;
 use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
 use crate::playwright_methods::evaluate::Handles;
-use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
+use crate::run::{
+    CallAction, CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd,
+};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
 /// Every handler returns this; `?` on [`Progress::race`] is how a handler gives up.
@@ -423,6 +425,7 @@ impl Progress {
             guid: "frame@T".to_string(),
             method: "click".to_string(),
             title: Some("Click"),
+            action: None,
             params: Value::Null,
             location: None,
             input: true,
@@ -577,6 +580,7 @@ pub(crate) struct CallEntry {
     guid: String,
     method: String,
     title: Option<&'static str>,
+    action: Option<CallAction>,
     params: Value,
     /// `params` as JSON text, in bytes: what keeping the record costs before any log.
     params_bytes: usize,
@@ -618,6 +622,7 @@ pub(crate) struct CallStart {
     pub(crate) guid: String,
     pub(crate) method: String,
     pub(crate) title: Option<&'static str>,
+    pub(crate) action: Option<CallAction>,
     pub(crate) params: Value,
     pub(crate) location: Option<CallLocation>,
     /// Whether the method writes input, so its delivery is tracked.
@@ -631,6 +636,7 @@ impl CallEntry {
             guid,
             method,
             title,
+            action,
             params,
             location,
             input,
@@ -640,6 +646,7 @@ impl CallEntry {
             guid,
             method,
             title,
+            action,
             params_bytes: params.to_string().len(),
             params,
             location,
@@ -744,6 +751,7 @@ impl CallEntry {
             guid: self.guid.clone(),
             method: self.method.clone(),
             title: self.title.map(str::to_string),
+            action: self.action,
             params: self.params.clone(),
             location: self.location,
             started_at_ms,
@@ -1028,6 +1036,7 @@ mod tests {
                 guid: "frame@T".to_string(),
                 method: "click".to_string(),
                 title: Some("Click"),
+                action: None,
                 params: Value::Null,
                 location: None,
                 input: true,
@@ -1064,6 +1073,7 @@ mod tests {
             guid: "frame@T".to_string(),
             method: "click".to_string(),
             title: Some("Click"),
+            action: None,
             params,
             location: None,
             input,

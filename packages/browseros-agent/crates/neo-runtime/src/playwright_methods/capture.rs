@@ -28,6 +28,7 @@ use neo_runtime_spec::{Binary, MethodFlag, MethodMeta};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::actions::{ActionKind, NeoMethod};
 use crate::artifacts::{self, ArtifactPath, Artifacts};
 use crate::browser_representations::page::{FrameTab, PageSession};
 use crate::browser_representations::tabs::{PageEntry, Tabs};
@@ -42,30 +43,38 @@ use crate::progress::{CallError, PlaywrightError, Progress};
 /// `locator.screenshot`'s call, with Playwright's `ElementHandle.screenshot` title.
 /// Neo: one call stands for Playwright's `waitForSelector` and `ElementHandle.screenshot`, under
 /// one deadline and without minting a handle; its record names the method `neo:screenshot`.
-pub(crate) static NEO_SCREENSHOT_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "neo:screenshot",
-    title: Some("Screenshot"),
-    subtitle: None,
-    group: None,
-    render_params: &["type"],
-    internal: false,
-    flags: &[],
-};
+pub(crate) static NEO_SCREENSHOT_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "neo:screenshot",
+        title: Some("Screenshot"),
+        subtitle: None,
+        group: None,
+        render_params: &["type"],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::Screenshot,
+    true,
+);
 
 /// Neo: `ElementHandle.screenshot`'s trace metadata, as `neo-runtime-spec/spec/playwright/handles.yml`
 /// declares it. Handle calls are routed by hand (`evaluate.rs` `route_handle`), not by the
 /// generated serve spec.
-pub(crate) static ELEMENT_HANDLE_SCREENSHOT_META: MethodMeta = MethodMeta {
-    interface: "ElementHandle",
-    method: "screenshot",
-    title: Some("Screenshot"),
-    subtitle: None,
-    group: None,
-    render_params: &["type"],
-    internal: false,
-    flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-};
+pub(crate) static ELEMENT_HANDLE_SCREENSHOT_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "ElementHandle",
+        method: "screenshot",
+        title: Some("Screenshot"),
+        subtitle: None,
+        group: None,
+        render_params: &["type"],
+        internal: false,
+        flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    },
+    ActionKind::Screenshot,
+    true,
+);
 
 /// The calls this module serves, routed by `method_router::route`.
 #[derive(Debug)]
