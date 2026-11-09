@@ -1,6 +1,12 @@
 /** Neo: compile a hook author's file, including returns that must be rejected. */
 /// <reference path="../../hooks.d.ts" />
-import type { BrowserContext, Frame, Locator, Page } from 'playwright-core'
+import type {
+  BrowserContext,
+  ElementHandle,
+  Frame,
+  Locator,
+  Page,
+} from 'playwright-core'
 import type { HookFilter, HookGroup, HookKind } from '../../hooks'
 
 neo.on('beforeRun', async (event, ctx) => {
@@ -25,7 +31,6 @@ neo.on('afterRun', (event, ctx) => {
   }
 })
 
-// Coming registrations: typechecked without implying current action enforcement.
 neo.on(
   'beforeAction',
   { kinds: ['fill'], groups: ['type'] },
@@ -82,6 +87,16 @@ neo.on('beforeRun', (_event, ctx) => {
   void ctx.host('policy.canRun', () => true)
 })
 neo.on('beforeAction', (event) => {
-  // @ts-expect-error a pinned element is not exposed yet.
-  void event.element
+  const element: ElementHandle | undefined = event.element
+  void element?.getAttribute('type')
+})
+
+neo.on('afterAction', (event) => {
+  const message: string | undefined = event.error?.message
+  void message
+  const decision: import('../../hooks').AfterActionDecision = {
+    // @ts-expect-error afterAction cannot replace arguments.
+    replaceArgs: {},
+  }
+  void decision
 })

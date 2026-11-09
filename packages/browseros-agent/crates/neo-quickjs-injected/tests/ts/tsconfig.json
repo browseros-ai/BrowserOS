@@ -6,7 +6,15 @@
     "skipLibCheck": false,
     "exactOptionalPropertyTypes": true,
     "types": ["node"],
-    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "allowJs": true,
+    "checkJs": true,
+    "rootDir": "../../.."
   },
-  "include": ["../../hooks.d.ts", "../../hooks-kinds.d.ts", "./*.ts"]
+  "include": [
+    "../../hooks.d.ts",
+    "../../hooks-kinds.d.ts",
+    "./*.ts",
+    "../../../neo-runtime/examples/hooks/zuzu-auth.js"
+  ]
 }

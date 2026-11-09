@@ -1,9 +1,14 @@
 /**
  * Neo: author-facing declarations for a hook file's injected `neo` parameter.
  * Reference this file for editor/typecheck support; it is not a runtime import.
- * Action events can register today but are not fired by the current call path.
  */
-import type { BrowserContext, Frame, Locator, Page } from 'playwright-core'
+import type {
+  BrowserContext,
+  ElementHandle,
+  Frame,
+  Locator,
+  Page,
+} from 'playwright-core'
 import type { HookGroup, HookKind } from './hooks-kinds'
 
 export type { HookGroup, HookKind } from './hooks-kinds'
@@ -17,7 +22,7 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue }
 
-/** At least one list; kinds OR groups match. Empty lists match nothing. */
+/** At least one list; kinds OR groups match. Every supplied list must be non-empty; unknown names fail loading. */
 export type HookFilter =
   | { kinds: readonly HookKind[]; groups?: readonly HookGroup[] }
   | { kinds?: readonly HookKind[]; groups: readonly HookGroup[] }
@@ -55,23 +60,26 @@ export interface AfterRunEvent {
   readonly meta: JsonValue
 }
 
-/** Coming: the sandbox accepts this event; browser calls do not fire it yet. */
+/** A served browser call; element input is checked after its target resolves. */
 export interface BeforeActionEvent {
   kind: HookKind | null
   group: HookGroup | null
   method: string
   /** Wire arguments, not positional Playwright arguments. */
-  args: Record<string, unknown>
+  args: { [key: string]: JsonValue }
   /** One-based location in the agent script, when supplied. */
   location?: { line: number; column?: number }
   page?: Page
   frame?: Frame
   context: BrowserContext
+  /** Selector-based description; querying it can resolve a different node. */
   locator?: Locator
+  /** Exact input target, hook-only; valid only while this call is alive. */
+  element?: ElementHandle
   readonly meta: JsonValue
 }
 
-/** Coming; `element` is intentionally absent until pinned-element support lands. */
+/** Wire reply, before the SDK unwraps it. A failed/void call has no replaceable result. */
 export interface AfterActionEvent extends BeforeActionEvent {
   result?: unknown
   error?: HookError
@@ -103,10 +111,15 @@ export type ReplaceArgs = {
 export type BeforeRunDecision = undefined | Allow | Block
 export type BeforeActionDecision = BeforeRunDecision | ReplaceArgs
 /** Key presence matters: `{ replace: undefined }` replaces; `{}` is invalid. */
-export type AfterDecision =
+export type AfterRunDecision =
   | undefined
   | ({ replace: unknown; note?: string } & AfterOnly)
   | ({ note: string; replace?: unknown } & AfterOnly)
+
+/** Successful, non-void wire results only; runtime checks the method-specific shape. */
+export type AfterActionDecision = AfterRunDecision
+/** Shared after-event syntax, retained for author tooling. */
+export type AfterDecision = AfterRunDecision
 
 interface AfterOnly {
   allow?: never
@@ -126,7 +139,7 @@ export interface NeoHooks {
   ): void
   on(
     event: 'afterRun',
-    handler: HookHandler<AfterRunEvent, AfterDecision>,
+    handler: HookHandler<AfterRunEvent, AfterRunDecision>,
   ): void
   /** Null/undefined mean no filter; run events do not accept a filter object. */
   on(
@@ -137,16 +150,15 @@ export interface NeoHooks {
   on(
     event: 'afterRun',
     filter: null | undefined,
-    handler: HookHandler<AfterRunEvent, AfterDecision>,
+    handler: HookHandler<AfterRunEvent, AfterRunDecision>,
   ): void
-  /** Coming: accepted registrations, no action enforcement yet. */
   on(
     event: 'beforeAction',
     handler: HookHandler<BeforeActionEvent, BeforeActionDecision>,
   ): void
   on(
     event: 'afterAction',
-    handler: HookHandler<AfterActionEvent, AfterDecision>,
+    handler: HookHandler<AfterActionEvent, AfterActionDecision>,
   ): void
   on(
     event: 'beforeAction',
@@ -156,7 +168,7 @@ export interface NeoHooks {
   on(
     event: 'afterAction',
     filter: HookFilter | null | undefined,
-    handler: HookHandler<AfterActionEvent, AfterDecision>,
+    handler: HookHandler<AfterActionEvent, AfterActionDecision>,
   ): void
 }
 
