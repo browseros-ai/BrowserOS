@@ -174,12 +174,20 @@ static WAIT_FOR_URL_META: MethodMeta = MethodMeta {
     flags: &[],
     params: &[
         ParamShape {
-            path: "url",
+            path: "url.glob",
             kind: ParamKind::Url,
         },
         ParamShape {
-            path: "url.glob",
+            path: "url.regexSource",
             kind: ParamKind::Url,
+        },
+        ParamShape {
+            path: "url.regexFlags",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "waitUntil",
+            kind: ParamKind::Plain,
         },
     ],
 };
@@ -193,7 +201,10 @@ static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
-    params: &[],
+    params: &[ParamShape {
+        path: "state",
+        kind: ParamKind::Plain,
+    }],
 };
 // Playwright's client `waitForNavigation` (`@apiCall({ title: 'Wait for navigation' })`). A
 // glob or RegExp `url` is one call; a predicate is a cursor the realm steps through
@@ -210,14 +221,53 @@ static WAIT_FOR_NAVIGATION_META: MethodMeta = MethodMeta {
     flags: &[],
     params: &[
         ParamShape {
-            path: "url",
-            kind: ParamKind::Url,
-        },
-        ParamShape {
             path: "url.glob",
             kind: ParamKind::Url,
         },
+        ParamShape {
+            path: "url.regexSource",
+            kind: ParamKind::Url,
+        },
+        ParamShape {
+            path: "url.regexFlags",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "waitUntil",
+            kind: ParamKind::Plain,
+        },
     ],
+};
+/// Neo: the SDK flattens `SerializedArgument` handles to guids before dispatch. Keep that
+/// identity field readable without giving page-originated event data a plain container.
+static FRAME_DISPATCH_EVENT_META: MethodMeta = MethodMeta {
+    params: &[
+        ParamShape {
+            path: "selector",
+            kind: ParamKind::Selector,
+        },
+        ParamShape {
+            path: "type",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "eventInit.handles[]",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "eventInit.value.v",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "eventInit.value.ta.k",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "eventInit.value.ta.b",
+            kind: ParamKind::Binary,
+        },
+    ],
+    ..*FrameDispatchEventParams::META
 };
 /// Neo: trace metadata for the SDK navigation wait and its cursor lifecycle.
 static NEXT_NAVIGATION_META: MethodMeta = MethodMeta {
@@ -241,7 +291,10 @@ static FINISH_NAVIGATION_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
-    params: &[],
+    params: &[ParamShape {
+        path: "waitUntil",
+        kind: ParamKind::Plain,
+    }],
 };
 /// Neo: trace metadata for the SDK navigation wait and its cursor lifecycle.
 static RELEASE_NAVIGATION_META: MethodMeta = MethodMeta {
@@ -1348,10 +1401,10 @@ fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed>
     if method == FrameDispatchEventParams::META.method {
         // Playwright: `server/dispatchers/frameDispatcher.ts` `FrameDispatcher.dispatchEvent`: `return this._frame.dispatchEvent(progress, params, params.type, parseArgument(params.eventInit));`
         return Some(Routed {
-            meta: Some(FrameDispatchEventParams::META),
+            meta: Some(&FRAME_DISPATCH_EVENT_META),
             route: decode_neo_params::<DispatchEventParams>(
                 params.cloned(),
-                FrameDispatchEventParams::META,
+                &FRAME_DISPATCH_EVENT_META,
             )
             .map(|params| ObjectCall::Frame(Route::FrameDispatchEvent(params.into()))),
         });
@@ -2426,6 +2479,126 @@ mod tests {
     use crate::trace::RunTap;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
+
+    #[test]
+    fn custom_navigation_records_keep_lifecycle_choices_and_hide_url_secrets() {
+        use crate::trace::redact::{RunSecrets, register_secrets, summarize};
+
+        for meta in [&WAIT_FOR_URL_META, &WAIT_FOR_NAVIGATION_META] {
+            let params = json!({
+                "url": {"glob": "https://user:matcher-password@example.test/a?token=matcher-token#fragment"},
+                "waitUntil": "domcontentloaded",
+            });
+            let secrets = RunSecrets::default();
+            register_secrets(&params, meta.params, &secrets);
+            let summary = summarize(&params, meta.params).params;
+            assert_eq!(summary["waitUntil"], "domcontentloaded");
+            assert_eq!(
+                summary["url"]["glob"],
+                "https://example.test/a?token=[redacted]"
+            );
+            let scrubber = secrets.scrubber();
+            assert_eq!(scrubber.scrub("domcontentloaded"), "domcontentloaded");
+            assert!(
+                !scrubber
+                    .scrub("matcher-password matcher-token")
+                    .contains("matcher-")
+            );
+            let regex = json!({"url":{"regexSource":"https://example.test/a", "regexFlags":"i"},"waitUntil":"load"});
+            assert_eq!(summarize(&regex, meta.params).params, regex);
+        }
+        for (meta, params) in [
+            (&WAIT_FOR_LOAD_STATE_META, json!({"state":"load"})),
+            (
+                &FINISH_NAVIGATION_META,
+                json!({"cursor":1,"index":2,"waitUntil":"load"}),
+            ),
+        ] {
+            let secrets = RunSecrets::default();
+            register_secrets(&params, meta.params, &secrets);
+            assert_eq!(summarize(&params, meta.params).params, params);
+            assert_eq!(secrets.scrubber().scrub("load"), "load");
+        }
+    }
+
+    #[test]
+    fn custom_argument_records_preserve_handle_identity_and_hide_page_values() {
+        use crate::trace::redact::{RunSecrets, register_secrets, summarize};
+
+        for meta in [
+            &evaluate::FRAME_EVALUATE_META,
+            &evaluate::FRAME_EVALUATE_HANDLE_META,
+            &evaluate::HANDLE_EVALUATE_META,
+            &evaluate::HANDLE_EVALUATE_HANDLE_META,
+            &evaluate::FRAME_WAIT_FOR_FUNCTION_META,
+            &evaluate::FRAME_EVAL_ON_SELECTOR_META,
+            &evaluate::FRAME_EVAL_ON_SELECTOR_ALL_META,
+            &evaluate::ELEMENT_EVAL_ON_SELECTOR_META,
+            &evaluate::ELEMENT_EVAL_ON_SELECTOR_ALL_META,
+        ] {
+            let params = json!({"expression":"node => node.textContent", "arg":{
+                "handles":["handle@run.42"], "value":{"a":[{"s":"page-value-secret"},{"h":0}]}
+            }});
+            let secrets = RunSecrets::default();
+            register_secrets(&params, meta.params, &secrets);
+            let summary = summarize(&params, meta.params).params;
+            assert_eq!(summary["expression"], params["expression"]);
+            assert_eq!(summary["arg"]["handles"], params["arg"]["handles"]);
+            assert_eq!(summary["arg"]["value"]["a"][0]["s"], "[redacted 17]");
+            assert_eq!(secrets.scrubber().scrub("handle@run.42"), "handle@run.42");
+            assert!(
+                !secrets
+                    .scrubber()
+                    .scrub("page-value-secret")
+                    .contains("page-value-secret")
+            );
+        }
+        for meta in [
+            &FRAME_DISPATCH_EVENT_META,
+            &evaluate::HANDLE_DISPATCH_EVENT_META,
+        ] {
+            let params = json!({"type":"custom-event", "eventInit":{
+                "handles":["handle@run.43"], "value":{"s":"event-data-secret"}
+            }});
+            let summary = summarize(&params, meta.params).params;
+            assert_eq!(summary["type"], params["type"]);
+            assert_eq!(
+                summary["eventInit"]["handles"],
+                params["eventInit"]["handles"]
+            );
+            assert_eq!(summary["eventInit"]["value"]["s"], "[redacted 17]");
+        }
+    }
+
+    #[test]
+    fn custom_capture_and_fetch_records_keep_options_without_payloads() {
+        use crate::trace::redact::summarize;
+
+        let screenshot = json!({"type":"png","caret":"hide","animations":"disabled","scale":"css",
+            "mask":[{"frame":{"guid":"frame@page"},"selector":"#private"}],
+            "style":"private-style", "maskColor":"private-color", "path":"private-path"});
+        for meta in [&NEO_SCREENSHOT_META, &ELEMENT_HANDLE_SCREENSHOT_META] {
+            let summary = summarize(&screenshot, meta.params).params;
+            for key in ["type", "caret", "animations", "scale", "mask"] {
+                assert_eq!(summary[key], screenshot[key]);
+            }
+            for key in ["style", "maskColor", "path"] {
+                assert!(
+                    summary[key]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("[redacted "))
+                );
+            }
+        }
+        let fetch = json!({"url":"https://example.test/a?token=private-token", "method":"POST",
+            "headers":[{"name":"Authorization", "value":"private-header"}], "postData":"AAAAAA=="});
+        let summary = summarize(&fetch, routes::FETCH_META.params).params;
+        assert_eq!(summary["url"], "https://example.test/a?token=[redacted]");
+        assert_eq!(summary["method"], "POST");
+        assert_eq!(summary["headers"][0]["name"], "Authorization");
+        assert_eq!(summary["headers"][0]["value"], "[redacted 14]");
+        assert_eq!(summary["postData"], "[binary 4 bytes]");
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tests_that_an_attached_frame_call_starts_when_first_polled_after_run_end() {

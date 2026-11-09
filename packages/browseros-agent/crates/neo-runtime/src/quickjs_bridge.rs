@@ -598,6 +598,35 @@ enum GetRequest {
     Pure(PureRead),
 }
 
+/// Neo: register discarded input before answering, including failed parses and setters.
+/// A boolean or null answer carries no URL to register, but the saved script may quote it.
+impl GetRequest {
+    fn register_secrets(&self, secrets: &redact::RunSecrets) {
+        match self {
+            Self::Match(request) => {
+                redact::register_url_secrets(&request.url, secrets);
+                for pattern in [&request.matcher.glob, &request.matcher.regex_source]
+                    .into_iter()
+                    .flatten()
+                {
+                    redact::register_url_secrets(pattern, secrets);
+                }
+            }
+            Self::Pure(PureRead::Parse(request)) => {
+                redact::register_url_secrets(&request.url, secrets);
+                if let Some(base) = &request.base {
+                    redact::register_url_secrets(base, secrets);
+                }
+            }
+            Self::Pure(PureRead::SetUrl(request)) => {
+                redact::register_url_secrets(&request.href, secrets);
+                secrets.register(&request.value);
+            }
+            Self::Object(_) | Self::Pure(PureRead::Devices(_) | PureRead::Random(_)) => {}
+        }
+    }
+}
+
 /// A getter that reads no browser state, answered on the spot: platform pieces QuickJS lacks.
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -681,6 +710,7 @@ impl Getters {
             ),
         };
         let no = self.next.fetch_add(1, Ordering::Relaxed);
+        request.register_secrets(self.tap.secrets());
         let answer = self.answer(request);
         let duration_us = trace::micros(started.elapsed());
         if let Ok(value) = &answer {

@@ -265,7 +265,7 @@ pub(crate) fn getter_summary(field: GetterField, value: &Value) -> Value {
 /// URL-shaped params also appear verbatim in navigation logs and in the script. Register
 /// the discarded parts as record-only secrets, plus the full URL, so the field policy cannot
 /// be bypassed by those free-text copies. This never changes the URL sent to the browser.
-fn register_url_secrets(text: &str, secrets: &RunSecrets) {
+pub(crate) fn register_url_secrets(text: &str, secrets: &RunSecrets) {
     if redact_url(text) == text {
         return;
     }

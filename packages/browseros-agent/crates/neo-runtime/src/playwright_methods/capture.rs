@@ -52,10 +52,36 @@ pub(crate) static NEO_SCREENSHOT_META: MethodMeta = MethodMeta {
     render_params: &["type"],
     internal: false,
     flags: &[],
-    params: &[ParamShape {
-        path: "selector",
-        kind: ParamKind::Selector,
-    }],
+    params: &[
+        ParamShape {
+            path: "selector",
+            kind: ParamKind::Selector,
+        },
+        ParamShape {
+            path: "type",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "caret",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "animations",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "scale",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "mask[].frame.guid",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "mask[].selector",
+            kind: ParamKind::Selector,
+        },
+    ],
 };
 
 /// Neo: `ElementHandle.screenshot`'s trace metadata, as `neo-runtime-spec/spec/playwright/handles.yml`
@@ -70,7 +96,32 @@ pub(crate) static ELEMENT_HANDLE_SCREENSHOT_META: MethodMeta = MethodMeta {
     render_params: &["type"],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[],
+    params: &[
+        ParamShape {
+            path: "type",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "caret",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "animations",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "scale",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "mask[].frame.guid",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "mask[].selector",
+            kind: ParamKind::Selector,
+        },
+    ],
 };
 
 /// The calls this module serves, routed by `method_router::route`.

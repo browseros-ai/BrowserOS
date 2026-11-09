@@ -103,6 +103,60 @@ const NODE_PREVIEW_PREFIX: &str = "JSHandle@";
 /// Playwright: `server/dom.ts` `ElementHandle.constructor`: `super(context, 'node', undefined, objectId);`
 const NODE_TYPE: &str = "node";
 
+/// The SDK sends authored code beside an opaque page value and flat, runtime-minted handle ids.
+/// Neo: preserve code and identity while text inside the argument stays secret.
+const EVALUATION_TRACE_PARAMS: &[ParamShape] = &[
+    ParamShape {
+        path: "expression",
+        kind: ParamKind::Plain,
+    },
+    ParamShape {
+        path: "arg.handles[]",
+        kind: ParamKind::Plain,
+    },
+    ParamShape {
+        path: "arg.value.v",
+        kind: ParamKind::Plain,
+    },
+    ParamShape {
+        path: "arg.value.ta.k",
+        kind: ParamKind::Plain,
+    },
+    ParamShape {
+        path: "arg.value.ta.b",
+        kind: ParamKind::Binary,
+    },
+];
+
+/// The selector evaluation wire adds script intent to the same serialized argument boundary.
+/// Neo: selectors are readable; page values keep the evaluation redaction policy.
+const SELECTOR_EVALUATION_TRACE_PARAMS: &[ParamShape] = &[
+    ParamShape {
+        path: "expression",
+        kind: ParamKind::Plain,
+    },
+    ParamShape {
+        path: "arg.handles[]",
+        kind: ParamKind::Plain,
+    },
+    ParamShape {
+        path: "arg.value.v",
+        kind: ParamKind::Plain,
+    },
+    ParamShape {
+        path: "arg.value.ta.k",
+        kind: ParamKind::Plain,
+    },
+    ParamShape {
+        path: "arg.value.ta.b",
+        kind: ParamKind::Binary,
+    },
+    ParamShape {
+        path: "selector",
+        kind: ParamKind::Selector,
+    },
+];
+
 /// Neo: the trace metadata of Playwright's `Frame.evaluateExpression`, as
 /// `neo-runtime-spec/spec/playwright/frame.yml` declares it; written here because the spec does not
 /// generate this command (its `arg` arrives in the page's format).
@@ -115,10 +169,7 @@ pub(crate) static FRAME_EVALUATE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[ParamShape {
-        path: "expression",
-        kind: ParamKind::Plain,
-    }],
+    params: EVALUATION_TRACE_PARAMS,
 };
 /// Neo: `Frame.evaluateExpressionHandle`'s trace metadata, as
 /// `neo-runtime-spec/spec/playwright/frame.yml` declares it.
@@ -131,10 +182,7 @@ pub(crate) static FRAME_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[ParamShape {
-        path: "expression",
-        kind: ParamKind::Plain,
-    }],
+    params: EVALUATION_TRACE_PARAMS,
 };
 /// Neo: `JSHandle.evaluateExpression`'s trace metadata (also an `ElementHandle`'s), as
 /// `neo-runtime-spec/spec/playwright/handles.yml` declares it.
@@ -147,10 +195,7 @@ pub(crate) static HANDLE_EVALUATE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[ParamShape {
-        path: "expression",
-        kind: ParamKind::Plain,
-    }],
+    params: EVALUATION_TRACE_PARAMS,
 };
 /// Neo: `JSHandle.evaluateExpressionHandle`'s trace metadata, as
 /// `neo-runtime-spec/spec/playwright/handles.yml` declares it.
@@ -163,10 +208,7 @@ pub(crate) static HANDLE_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[ParamShape {
-        path: "expression",
-        kind: ParamKind::Plain,
-    }],
+    params: EVALUATION_TRACE_PARAMS,
 };
 /// Neo: `JSHandle.jsonValue`'s trace metadata, as `neo-runtime-spec/spec/playwright/handles.yml`
 /// declares it.
@@ -364,16 +406,10 @@ pub(crate) static FRAME_ADD_STYLE_TAG_META: MethodMeta = MethodMeta {
     render_params: &["url"],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[
-        ParamShape {
-            path: "url",
-            kind: ParamKind::Url,
-        },
-        ParamShape {
-            path: "type",
-            kind: ParamKind::Plain,
-        },
-    ],
+    params: &[ParamShape {
+        path: "url",
+        kind: ParamKind::Url,
+    }],
 };
 
 /// Neo: `ElementHandle.dispatchEvent`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
@@ -386,10 +422,28 @@ pub(crate) static HANDLE_DISPATCH_EVENT_META: MethodMeta = MethodMeta {
     render_params: &["type"],
     internal: false,
     flags: &[MethodFlag::SlowMo, MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[ParamShape {
-        path: "type",
-        kind: ParamKind::Plain,
-    }],
+    params: &[
+        ParamShape {
+            path: "type",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "eventInit.handles[]",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "eventInit.value.v",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "eventInit.value.ta.k",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "eventInit.value.ta.b",
+            kind: ParamKind::Binary,
+        },
+    ],
 };
 
 /// Neo: `Frame.querySelector`'s trace metadata, as `neo-runtime-spec/spec/playwright/frame.yml`
@@ -433,24 +487,7 @@ pub(crate) static FRAME_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[
-        ParamShape {
-            path: "expression",
-            kind: ParamKind::Plain,
-        },
-        ParamShape {
-            path: "arg.value.ta.b",
-            kind: ParamKind::Binary,
-        },
-        ParamShape {
-            path: "arg.value.ta.k",
-            kind: ParamKind::Plain,
-        },
-        ParamShape {
-            path: "selector",
-            kind: ParamKind::Selector,
-        },
-    ],
+    params: SELECTOR_EVALUATION_TRACE_PARAMS,
 };
 /// Neo: `Frame.evalOnSelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
 pub(crate) static FRAME_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
@@ -462,24 +499,7 @@ pub(crate) static FRAME_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[
-        ParamShape {
-            path: "expression",
-            kind: ParamKind::Plain,
-        },
-        ParamShape {
-            path: "arg.value.ta.b",
-            kind: ParamKind::Binary,
-        },
-        ParamShape {
-            path: "arg.value.ta.k",
-            kind: ParamKind::Plain,
-        },
-        ParamShape {
-            path: "selector",
-            kind: ParamKind::Selector,
-        },
-    ],
+    params: SELECTOR_EVALUATION_TRACE_PARAMS,
 };
 /// Neo: `Frame.waitForFunction`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
 pub(crate) static FRAME_WAIT_FOR_FUNCTION_META: MethodMeta = MethodMeta {
@@ -491,10 +511,7 @@ pub(crate) static FRAME_WAIT_FOR_FUNCTION_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[ParamShape {
-        path: "expression",
-        kind: ParamKind::Plain,
-    }],
+    params: EVALUATION_TRACE_PARAMS,
 };
 /// Neo: `ElementHandle.querySelector`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
 pub(crate) static ELEMENT_QUERY_META: MethodMeta = MethodMeta {
@@ -536,24 +553,7 @@ pub(crate) static ELEMENT_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[
-        ParamShape {
-            path: "expression",
-            kind: ParamKind::Plain,
-        },
-        ParamShape {
-            path: "arg.value.ta.b",
-            kind: ParamKind::Binary,
-        },
-        ParamShape {
-            path: "arg.value.ta.k",
-            kind: ParamKind::Plain,
-        },
-        ParamShape {
-            path: "selector",
-            kind: ParamKind::Selector,
-        },
-    ],
+    params: SELECTOR_EVALUATION_TRACE_PARAMS,
 };
 /// Neo: `ElementHandle.evalOnSelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
 pub(crate) static ELEMENT_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
@@ -565,24 +565,7 @@ pub(crate) static ELEMENT_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
-    params: &[
-        ParamShape {
-            path: "expression",
-            kind: ParamKind::Plain,
-        },
-        ParamShape {
-            path: "arg.value.ta.b",
-            kind: ParamKind::Binary,
-        },
-        ParamShape {
-            path: "arg.value.ta.k",
-            kind: ParamKind::Plain,
-        },
-        ParamShape {
-            path: "selector",
-            kind: ParamKind::Selector,
-        },
-    ],
+    params: SELECTOR_EVALUATION_TRACE_PARAMS,
 };
 /// Neo: `JSHandle.getProperty`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
 pub(crate) static HANDLE_GET_PROPERTY_META: MethodMeta = MethodMeta {

@@ -120,7 +120,24 @@ pub(crate) static BINDING_CALL_RESOLVE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: true,
     flags: &[],
-    params: &[],
+    params: &[
+        ParamShape {
+            path: "result.handles[]",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "result.value.v",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "result.value.ta.k",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "result.value.ta.b",
+            kind: ParamKind::Binary,
+        },
+    ],
 };
 /// Neo: `BindingCall.reject`'s trace metadata (`neo-runtime-spec/spec/playwright/playwright.yml`).
 pub(crate) static BINDING_CALL_REJECT_META: MethodMeta = MethodMeta {

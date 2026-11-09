@@ -1226,17 +1226,18 @@ async fn platform_getters_are_recorded_with_their_single_bridge_vocabulary() {
         .run(request(
             r"
         const get = request => JSON.parse(__neo_runtime.get(JSON.stringify(request)));
-        const matched = get({field:'matchesURL',url:'https://a.test/',matcher:{glob:'**'}});
+        const matched = get({field:'matchesURL',url:'https://a.test/?token=match-private-data',matcher:{glob:'**'}});
         get({field:'devices'});
         get({field:'parseURL',url:'https://a.test/?token=private-data'});
         get({field:'setURL',href:'https://a.test/',part:'pathname',value:'/next'});
+        const rejected = get({field:'setURL',href:'invalid',part:'password',value:'setter-private-data'});
         get({field:'randomValues',length:1});
-        return matched;
+        return [matched, rejected];
     ",
         ))
         .await;
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
-    assert_eq!(outcome.value, Some(json!(true)));
+    assert_eq!(outcome.value, Some(json!([true, null])));
     let events = sink.settled(outcome.run_id).await;
     let fields: Vec<_> = events
         .iter()
@@ -1251,6 +1252,7 @@ async fn platform_getters_are_recorded_with_their_single_bridge_vocabulary() {
             GetterField::MatchesUrl,
             GetterField::Devices,
             GetterField::ParseUrl,
+            GetterField::SetUrl,
             GetterField::SetUrl,
             GetterField::RandomValues
         ]

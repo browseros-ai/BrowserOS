@@ -31,7 +31,7 @@ use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpError, SessionId};
 use futures_util::future;
 use neo_runtime_spec::serve::{NameValue, RouteCall, RouteContinueParams, RouteFulfillParams};
-use neo_runtime_spec::{Binary, MethodMeta};
+use neo_runtime_spec::{Binary, MethodMeta, ParamKind, ParamShape};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
@@ -108,7 +108,24 @@ pub(crate) static FETCH_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
-    params: &[],
+    params: &[
+        ParamShape {
+            path: "url",
+            kind: ParamKind::Url,
+        },
+        ParamShape {
+            path: "method",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "headers[].name",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "postData",
+            kind: ParamKind::Binary,
+        },
+    ],
 };
 
 /// `route.fetch`'s overrides and redirect bound, as the SDK sends them.
