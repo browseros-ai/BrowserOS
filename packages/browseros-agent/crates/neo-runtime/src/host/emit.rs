@@ -21,6 +21,7 @@
 //! for every push, so a call task that outlives its run is silent. That is what lets a `RunPass`
 //! dropped after the run put `PassReleased` behind every event the run emitted.
 
+use std::collections::HashMap;
 use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -28,6 +29,7 @@ use std::time::SystemTime;
 use crate::host::Host;
 use crate::host::events::HostEvent;
 use crate::host::ids::{EpochMs, SessionKey, TabId};
+use crate::host::presence::{RunHold, RunHolds};
 use crate::host::privacy::{SessionPrivacy, Taint};
 use crate::host::tap::Tap;
 use crate::run::{CallRecord, CallResult, PageId, RunEnd, RunId, RunStatus};
@@ -41,6 +43,8 @@ struct Emission {
     tap: Arc<Tap>,
     privacy: Option<Arc<SessionPrivacy>>,
     taint: Arc<Taint>,
+    holds: Arc<RunHolds>,
+    held: Mutex<HashMap<PageId, RunHold>>,
     session: SessionKey,
     run: RunId,
     /// Held across each push, so ending a call claims it and queues its `CallEnded` in one step,
@@ -79,6 +83,8 @@ impl RunEmitter {
             tap: Arc::clone(host.tap()),
             privacy: host.0.privacy.session(session),
             taint: Arc::clone(&host.0.privacy.taint),
+            holds: Arc::clone(&host.0.run_holds),
+            held: Mutex::default(),
             session: session.clone(),
             run: run.clone(),
             state: Mutex::new(State::Running(Vec::new())),
@@ -88,14 +94,14 @@ impl RunEmitter {
     /// Puts `RunStarted` for a run starting on `page` in the tap, and returns the `RunEnded` the
     /// run now owes. `Runtime::run` calls it first, before anything that can end the run.
     pub(crate) fn run_started(&self, page: &PageId) -> RunEnding {
-        if let Some(emission) = &self.0 {
+        self.with_open(|emission, _| {
             emission.push(HostEvent::RunStarted {
                 session: emission.session.clone(),
                 run: emission.run.clone(),
                 page: page.clone(),
                 at: stamp(EpochMs::now()),
             });
-        }
+        });
         RunEnding(self.clone())
     }
 
@@ -191,6 +197,11 @@ impl RunEmitter {
             status,
             at: stamp(EpochMs::now()),
         });
+        // Release only after the terminal event, while the state lock excludes late calls.
+        // A RunEnding dropped with its future follows this same path.
+        if let Ok(mut held) = emission.held.lock() {
+            held.clear();
+        }
     }
 
     /// Runs `step` on the open calls under the state lock, unless the run has ended.
@@ -231,6 +242,12 @@ impl Emission {
             _ => None,
         };
         if let Some(target) = touched {
+            // Take run ownership before the touch can queue or be refused. Pruning sees this
+            // without waiting for the host writer, just as pixel gates see synchronous taint.
+            if let Ok(mut held) = self.held.lock() {
+                held.entry(target.clone())
+                    .or_insert_with(|| self.holds.acquire(target));
+            }
             if let Some(privacy) = &self.privacy {
                 privacy.touch(target);
             } else {
@@ -1150,6 +1167,55 @@ mod tests {
             assert_eq!(methods(&tracked_browser), methods(&plain));
         }
     }
+    #[test]
+    fn run_holds_cover_refused_touches_and_release_only_with_their_runs() {
+        let host = Host::new(HostOptions::new(9222, 1, Arc::new(MemoryStore::default())));
+        let session = SessionKey::new("held");
+        let emitter = RunEmitter::new(Some(&host), Some(&session), &RunId::mint());
+        let start = PageId::new("start".to_string());
+        let called = PageId::new("called".to_string());
+        let created = PageId::new("created".to_string());
+        let ending = emitter.run_started(&start);
+        let filler = HostEvent::CallStarted {
+            session: SessionKey::new("filler"),
+            run: RunId::mint(),
+            call_id: 1,
+            page: None,
+            snapshot: false,
+            at: EpochMs::MIN,
+        };
+        for _ in 0..TAP_QUEUE {
+            let _ = host.tap().try_push(filler.clone());
+        }
+        emitter.call_started(1, Some(&called), false, SystemTime::now());
+        emitter.call_started(2, Some(&called), false, SystemTime::now());
+        emitter.call_started(3, None, false, SystemTime::now());
+        emitter.page_created(3, &created, TabId::parse(3));
+        assert!(host.tap().refused().calls > 0);
+        for page in [&start, &called, &created] {
+            assert!(host.0.run_holds.contains(page));
+        }
+        let other = RunEmitter::new(Some(&host), Some(&session), &RunId::mint());
+        let other_ending = other.run_started(&called);
+        drop(ending);
+        assert!(!host.0.run_holds.contains(&start));
+        assert!(!host.0.run_holds.contains(&created));
+        assert!(
+            host.0.run_holds.contains(&called),
+            "another run still owns this target"
+        );
+        other_ending.ended(RunStatus::Ok);
+        assert!(
+            !host.0.run_holds.contains(&called),
+            "repeated touches own one hold per run"
+        );
+        emitter.call_started(4, Some(&start), false, SystemTime::now());
+        assert!(
+            !host.0.run_holds.contains(&start),
+            "a late call cannot reacquire ownership"
+        );
+    }
+
     #[test]
     fn withheld_touches_taint_before_even_a_refused_push_returns() {
         let host = Host::new(HostOptions::new(9222, 1, Arc::new(MemoryStore::default())));

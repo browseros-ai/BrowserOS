@@ -58,7 +58,7 @@ use tracing::debug;
 use crate::host::cdp;
 use crate::host::ids::{EpochMs, TabId};
 use crate::host::link::HostLink;
-use crate::host::presence::Presences;
+use crate::host::presence::{Presences, RunHolds};
 use crate::host::privacy::{Privacy, Taint};
 use crate::host::view::{FollowView, ShownTab};
 use crate::run::PageId;
@@ -136,6 +136,10 @@ impl CaptureHub {
             drops: Arc::default(),
             shutdown,
         })
+    }
+
+    pub(super) fn run_holds(&self) -> Arc<RunHolds> {
+        Arc::clone(&self.presences.holds)
     }
 
     /// Ends followers and all capture workers before presence teardown at host shutdown.

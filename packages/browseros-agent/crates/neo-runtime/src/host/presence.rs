@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
@@ -35,7 +35,52 @@ use crate::run::PageId;
 /// failed; a later [`Presences::ensure`] fills it.
 pub(crate) struct Presences {
     link: Arc<HostLink>,
+    pub(super) holds: Arc<RunHolds>,
     tabs: Mutex<HashMap<PageId, Arc<OnceCell<Arc<Presence>>>>>,
+}
+
+/// Synchronous run ownership, independent of tap consumption. A target is held once per run;
+/// pruning queries one hash entry under a std lock, never browser or store I/O.
+#[derive(Default)]
+pub(super) struct RunHolds(StdMutex<HashMap<PageId, usize>>);
+
+/// A run's hold survives refused touches and is released when its `RunEnding` fires (including
+/// cancellation). Keeping the obligation in a guard also covers the last emitter dropping.
+pub(super) struct RunHold {
+    holds: Arc<RunHolds>,
+    target: PageId,
+}
+
+impl RunHolds {
+    pub(super) fn acquire(self: &Arc<Self>, target: &PageId) -> RunHold {
+        if let Ok(mut holds) = self.0.lock() {
+            *holds.entry(target.clone()).or_default() += 1;
+        }
+        RunHold {
+            holds: Arc::clone(self),
+            target: target.clone(),
+        }
+    }
+
+    pub(super) fn contains(&self, target: &PageId) -> bool {
+        // A poisoned ownership lock must keep focus rather than detach under a live script.
+        self.0
+            .lock()
+            .map_or(true, |holds| holds.contains_key(target))
+    }
+}
+
+impl Drop for RunHold {
+    fn drop(&mut self) {
+        if let Ok(mut holds) = self.holds.0.lock()
+            && let Some(count) = holds.get_mut(&self.target)
+        {
+            *count -= 1;
+            if *count == 0 {
+                holds.remove(&self.target);
+            }
+        }
+    }
 }
 
 /// One tab's presence, attached and emulating focus.
@@ -47,6 +92,7 @@ impl Presences {
     pub(crate) fn new(link: Arc<HostLink>) -> Self {
         Self {
             link,
+            holds: Arc::default(),
             tabs: Mutex::new(HashMap::new()),
         }
     }
@@ -92,7 +138,9 @@ impl Presences {
 
     /// Detaches every presence `needed` refuses, and forgets those whose session is already
     /// gone. `needed` is the ledger's rule: a live session touched the tab, or a run is in
-    /// flight on it. A presence still attaching is left for the next prune.
+    /// flight on it. Synchronous emitter holds protect queued/refused touches too, including
+    /// during shutdown; the ledger alone cannot prove that no run is using a target.
+    /// A presence still attaching is left for the next prune.
     pub(crate) async fn prune(&self, needed: impl Fn(&PageId) -> bool) {
         let mut doomed = Vec::new();
         self.tabs
@@ -102,7 +150,7 @@ impl Presences {
                 None => true,
                 Some(presence) if presence.session.is_gone() => false,
                 Some(presence) => {
-                    let keep = needed(target);
+                    let keep = self.holds.contains(target) || needed(target);
                     if !keep {
                         doomed.push(Arc::clone(presence));
                     }

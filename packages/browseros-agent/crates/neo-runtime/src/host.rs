@@ -42,6 +42,7 @@ use tokio::time::{self, Instant};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::host::capture::CaptureHub;
+use crate::host::presence::RunHolds;
 use crate::host::privacy::Privacy;
 use crate::host::tap::Tap;
 use crate::host::task::{Command, Published};
@@ -103,6 +104,7 @@ pub struct Host(Arc<Inner>);
 struct Inner {
     options: HostOptions,
     privacy: Arc<Privacy>,
+    run_holds: Arc<RunHolds>,
     tap: Arc<Tap>,
     commands: mpsc::UnboundedSender<Command>,
     published: Arc<Mutex<Published>>,
@@ -193,12 +195,16 @@ impl Host {
         let privacy = captures
             .as_ref()
             .map_or_else(Arc::default, |hub| Arc::clone(&hub.privacy));
+        let run_holds = captures
+            .as_ref()
+            .map_or_else(Arc::default, |hub| hub.run_holds());
         let published = Published::new(Arc::clone(&privacy.taint));
         (
             Self(Arc::new(Inner {
                 tap: Arc::new(Tap::new(options.max_runs)),
                 options,
                 privacy,
+                run_holds,
                 commands,
                 published: Arc::new(Mutex::new(published)),
                 captures,

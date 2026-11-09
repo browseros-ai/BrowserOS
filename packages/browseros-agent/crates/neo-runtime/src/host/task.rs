@@ -1009,6 +1009,7 @@ mod tests {
         link: Arc<HostLink>,
         host: Host,
         jobs: Jobs,
+        presences: Arc<Presences>,
         store: Arc<Store>,
     }
 
@@ -1034,15 +1035,22 @@ mod tests {
             let mut options =
                 HostOptions::new(browser.port(), 8, Arc::clone(&store) as Arc<dyn HostStore>);
             options.idle = idle;
-            let (host, jobs) = start(options, Arc::clone(&link), presences, hub, shutdown)
-                .await
-                .unwrap();
+            let (host, jobs) = start(
+                options,
+                Arc::clone(&link),
+                Arc::clone(&presences),
+                hub,
+                shutdown,
+            )
+            .await
+            .unwrap();
             browser.wait_for("Browser.getTabs", 1).await;
             Self {
                 browser,
                 link,
                 host,
                 jobs,
+                presences,
                 store,
             }
         }
@@ -1082,6 +1090,50 @@ mod tests {
         let emitter = RunEmitter::new(Some(host), Some(key), &RunId::mint());
         let ending = emitter.run_started(&PageId::new(target.to_string()));
         (emitter, ending)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_queued_run_touch_keeps_the_previous_sessions_presence() {
+        let mut h = Harness::new(Duration::from_mins(1)).await;
+        let old = h.host.admit_run(None).await;
+        let (_, ending) = run(&h.host, old.session(), "one");
+        ending.ended(RunStatus::Ok);
+        h.settled(2).await;
+        let target = PageId::new("one".to_string());
+        let presence = h.presences.ensure(&target).await.unwrap();
+        let old_key = old.session().clone();
+        drop(old);
+        let next = h.host.admit_run(None).await;
+        h.store.admission_blocked.store(true, Ordering::SeqCst);
+        let blocked = tokio::spawn({
+            let host = h.host.clone();
+            async move {
+                host.admit_run(Some(&SessionKey::new("hold-admission")))
+                    .await
+            }
+        });
+        time::timeout(Duration::from_secs(5), h.store.admission_waiting.notified())
+            .await
+            .expect("admission did not reach the store barrier");
+        h.host.end_session(&old_key);
+        let (_, next_ending) = run(&h.host, next.session(), "one");
+        h.store.admission_blocked.store(false, Ordering::SeqCst);
+        h.store.admission_release.notify_one();
+        drop(
+            time::timeout(Duration::from_secs(5), blocked)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+        // A command barrier crosses refresh before the queued touch need be consumed.
+        drop(h.host.admit_run(None).await);
+        let still_present = h.presences.ensure(&target).await.unwrap();
+        assert!(
+            Arc::ptr_eq(&presence, &still_present),
+            "a run whose touch is still queued must keep the existing focus owner"
+        );
+        drop(next_ending);
+        drop(next);
     }
 
     #[tokio::test(start_paused = true)]
