@@ -1,6 +1,6 @@
 /**
  * The only file that touches `__neo_runtime`, the native object neo-runtime installs in the
- * realm (crates/neo-runtime/src/bridge.rs).
+ * realm (crates/neo-runtime/src/quickjs_bridge.rs).
  *
  * - `get` blocks until Rust has read one value live from BrowserOS over CDP.
  * - `callWithEvents` sends one Playwright protocol message and resolves with Rust's Playwright reply,
@@ -185,7 +185,7 @@ export function setURL(
   )
 }
 
-/** `length` random bytes from Rust's OS-seeded CSPRNG, at most 65,536 (`bridge.rs`). */
+/** `length` random bytes from Rust's OS-seeded CSPRNG, at most 65,536 (`quickjs_bridge.rs`). */
 export function randomValues(length: number): Uint8Array {
   return Buffer.fromBinary(
     JSON.parse(

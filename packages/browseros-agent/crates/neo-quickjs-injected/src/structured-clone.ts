@@ -1,6 +1,6 @@
 /**
  * Neo: the realm's `structuredClone`, which QuickJS lacks and a Node Playwright script has as a
- * global. `realm.rs` installs it (`globals.ts`).
+ * global. `quickjs.rs` installs it (`globals.ts`).
  *
  * It clones what the HTML structured clone algorithm clones out of plain JavaScript: primitives,
  * their wrapper objects, `Date`, `RegExp`, `ArrayBuffer`, typed arrays and `DataView`, `Map`,

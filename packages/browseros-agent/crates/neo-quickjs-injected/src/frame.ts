@@ -815,7 +815,7 @@ export class Frame {
    * with each `next` and the finish, so its abort rejects the waiting one. However the wait
    * ends, its cursor ends with it: by the finish, or by a release when the realm ended it. Rust
    * then answers the next still waiting, and the wait settles only once that answer is in, so a
-   * settled wait holds none of the run's call capacity (neo-runtime `dispatch.rs`
+   * settled wait holds none of the run's call capacity (neo-runtime `method_router.rs`
    * `MAX_CALLS_IN_FLIGHT`) or live-wait capacity (`history.rs` `MAX_CURSORS`).
    */
   async _navigationMatching(

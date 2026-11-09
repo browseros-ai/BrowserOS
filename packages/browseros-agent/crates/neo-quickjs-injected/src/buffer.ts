@@ -11,7 +11,7 @@
  *
  * `Buffer` is the part of Node's `Buffer` a script reads results with, moved unchanged in
  * behaviour from `neo-quickjs-injected/src/network.ts` (#3172). QuickJS has no `Buffer`; the
- * realm's global `Buffer` is this class, defined by `realm.rs` from `globals.ts`.
+ * realm's global `Buffer` is this class, defined by `quickjs.rs` from `globals.ts`.
  *
  * Platform: this QuickJS (quickjs-ng in rquickjs 0.12) has `Uint8Array.fromBase64` and
  * `Uint8Array.prototype.toBase64` (probes-bin.md B3: a 10 MiB result decodes in 6 ms and
@@ -45,7 +45,7 @@ let exporting = false
 const stringify = JSON.stringify
 
 /**
- * The script's return value as JSON text for neo-runtime (`realm.rs` `to_json`), exactly as the
+ * The script's return value as JSON text for neo-runtime (`quickjs.rs` `to_json`), exactly as the
  * realm's `JSON.stringify` writes it, except each `Uint8Array` (a `Buffer` included, top level
  * or nested): `ship(bytes)` copies its bytes out of the realm natively and answers an index, and
  * the JSON holds `{ type, bytes, [marker]: index }` in its place. Node's `{ type: 'Buffer', data }`

@@ -1,6 +1,6 @@
 //! Init scripts end to end on a real BrowserOS neo, through neo-quickjs-injected's
 //! `page.addInitScript` and `browserContext.addInitScript`, for Neo's one deviation from Playwright
-//! here: a script lives as long as the run that added it (`Deviation:` in `src/init_scripts.rs`). A
+//! here: a script lives as long as the run that added it (`Deviation:` in `src/browser_representations/init_scripts.rs`). A
 //! run's scripts run in every frame of its new documents, the cross-site out-of-process iframe
 //! included; once the run ends, by its script's return or by its deadline, no later document runs
 //! one, and no iframe is left held at its start.

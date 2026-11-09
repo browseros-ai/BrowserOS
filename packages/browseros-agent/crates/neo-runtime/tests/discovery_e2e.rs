@@ -1,4 +1,4 @@
-//! New pages on a real BrowserOS neo (`src/discovery.rs`): a popup reaches its listeners and
+//! New pages on a real BrowserOS neo (`src/chromium_bridge/discovery.rs`): a popup reaches its listeners and
 //! its id serves the next run; target discovery stays on while any run of a `Runtime` listens
 //! and is off once the last lets go; a run that listened leaves no session on the pages it was
 //! handed.

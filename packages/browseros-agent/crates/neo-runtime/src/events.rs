@@ -47,7 +47,7 @@ use tracing::warn;
 pub(crate) const CONTEXT_GUID: &str = "context@default";
 
 /// Neo: the prefix of every context's guid, the run's own and each one the run created
-/// (`browser_calls.rs`).
+/// (`browser_methods.rs`).
 const CONTEXT_PREFIX: &str = "context@";
 
 /// Deviation: `client/connection.ts` `Connection.dispatch`: `const object = this._objects.get(guid);`

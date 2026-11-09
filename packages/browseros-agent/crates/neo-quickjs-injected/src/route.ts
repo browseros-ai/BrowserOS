@@ -57,7 +57,7 @@ export type UnrouteBehavior = 'wait' | 'ignoreErrors' | 'default'
 /**
  * Deviation: `client/network.ts` `Route._innerFulfill`: `body = body.toString('base64');`
  * A body crosses to Rust in base64 inside one call, which the run's 8 MiB of requests in
- * flight bounds (neo-runtime `dispatch.rs`); Neo refuses a larger body by name rather than
+ * flight bounds (neo-runtime `method_router.rs`); Neo refuses a larger body by name rather than
  * with that cap's message.
  */
 const MAX_FULFILL_BYTES = 6 * 1024 * 1024

@@ -1,4 +1,4 @@
-//! Session state on a real BrowserOS neo (`src/session_state.rs`): what a run sets on its
+//! Session state on a real BrowserOS neo (`src/browser_representations/cookies_and_storage.rs`): what a run sets on its
 //! sessions (extra HTTP headers, offline mode, geolocation) ends with it, so the next run on the
 //! same tab finds none of it; a cookie it adds is browser data and stays; a permission it grants
 //! is reset once it ends, back to what the profile had before, and one run's clearing, even

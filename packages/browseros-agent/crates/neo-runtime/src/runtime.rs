@@ -3,7 +3,7 @@
 //! A run's order, after the tab check and the attach:
 //!
 //! ```text
-//!  Tabs ─▶ PageEntry ─▶ Arc<PageSession> ─┬─▶ realm::run(…, dispatcher)   the deadline decides, as before
+//!  Tabs ─▶ PageEntry ─▶ Arc<PageSession> ─┬─▶ quickjs::run(…, dispatcher)   the deadline decides, as before
 //!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s (highlights ≤ 1 s more), records
 //!                                             └─▶ last Arc drops ─▶ Session::drop ─▶ detach in background
 //! ```
@@ -20,20 +20,20 @@ use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio_util::task::TaskTracker;
 
 use crate::artifacts::{AbsolutePaths, Artifacts};
-use crate::bridge;
-use crate::bridge::Getters;
+use crate::browser_representations::cookies_and_storage::Permissions;
+use crate::browser_representations::page::TabInputs;
+use crate::browser_representations::tabs::Tabs;
+use crate::chromium_bridge::browser_connection_settings::Switches;
 use crate::deadline::Deadline;
-use crate::dispatch::Dispatcher;
-use crate::getters::CLOSED_TAB_MESSAGE;
-use crate::page::TabInputs;
+use crate::method_router::Dispatcher;
+use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
+use crate::playwright_methods::screenshot::TabScreenshots;
 use crate::progress::{ErrorName, RunScope};
-use crate::realm;
-use crate::realm::Script;
+use crate::quickjs;
+use crate::quickjs::Script;
+use crate::quickjs_bridge;
+use crate::quickjs_bridge::Getters;
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
-use crate::screenshot::TabScreenshots;
-use crate::session_state::Permissions;
-use crate::switch::Switches;
-use crate::tabs::Tabs;
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
 const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
@@ -47,7 +47,7 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 ///
 /// Runs also share the connection's target discovery, on while any of them listens for new
 /// pages (`discovery.rs`), and its download reports, on while any listens for downloads
-/// (`downloads.rs`), which the `Runtime` counts (`switch.rs`). Give a `CdpClient` one `Runtime`
+/// (`downloads.rs`), which the `Runtime` counts (`browser_connection_settings.rs`). Give a `CdpClient` one `Runtime`
 /// (clones are fine): a second `Runtime` on the same client would count its own runs, and the
 /// first to let go would turn either off for the other's.
 #[derive(Clone)]
@@ -57,7 +57,7 @@ pub struct Runtime {
     screenshots: TabScreenshots,
     /// Target discovery and download reports on `cdp`, each on while any run listens for them.
     switches: Switches,
-    /// The runs' permission grants on `cdp`, reset once no run holds one (`session_state.rs`).
+    /// The runs' permission grants on `cdp`, reset once no run holds one (`cookies_and_storage.rs`).
     permissions: Permissions,
     /// How every run's `path` options treat an absolute path (`artifacts.rs`).
     absolute_paths: AbsolutePaths,
@@ -200,8 +200,8 @@ impl Runtime {
 
         let script = Script {
             code,
-            page_guid: bridge::page_guid(&page),
-            frame_guid: bridge::frame_guid(&page),
+            page_guid: quickjs_bridge::page_guid(&page),
+            frame_guid: quickjs_bridge::frame_guid(&page),
             url,
         };
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
@@ -224,7 +224,7 @@ impl Runtime {
             run: tabs.run_id(),
             released: false,
         };
-        let outcome = realm::run(script, getters, dispatcher.clone(), deadline, events).await;
+        let outcome = quickjs::run(script, getters, dispatcher.clone(), deadline, events).await;
         let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
         grants.disarm();
@@ -235,7 +235,7 @@ impl Runtime {
     }
 }
 
-/// A run's hold on its permission grants (`session_state.rs` `Permissions`), for a run whose
+/// A run's hold on its permission grants (`cookies_and_storage.rs` `Permissions`), for a run whose
 /// future is dropped before `Dispatcher::finish` let go of them (`Tabs::release_run_scoped`,
 /// before the outcome returns, so the next run finds the browser's permissions as they were):
 /// its grants are then released on the cleanup tracker.

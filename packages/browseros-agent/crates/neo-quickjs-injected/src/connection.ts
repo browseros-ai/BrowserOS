@@ -9,7 +9,7 @@
  *
  * ```text
  *  locator.click() → frame._click('locator.click', …) → send(): location, message
- *    → __neo_runtime.call(json)  ── Rust: dispatch.rs serves it on its own task ──▶
+ *    → __neo_runtime.call(json)  ── Rust: method_router.rs serves it on its own task ──▶
  *    ◀ '{"id":1}'  |  '{"error":{"error":{"message","name"}},"id":1,"log":[…]}'
  *    → undefined   |  throw rebuildError(apiName, error, log)
  *  signal aborts meanwhile → __neo_runtime.abort(1, reason) → the reply is AbortError(reason)
@@ -335,7 +335,7 @@ export type ApiName =
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
 
-/** Playwright's reply. Rust writes it (`dispatch.rs` `encode_reply`), and
+/** Playwright's reply. Rust writes it (`method_router.rs` `encode_reply`), and
  * `neo-runtime/tests/fixtures/replies.json` pins the shape for both sides. */
 type Reply = {
   id: number

@@ -1,4 +1,4 @@
-//! A request a run's route left paused, on a real BrowserOS neo (`src/routes.rs`): a handler
+//! A request a run's route left paused, on a real BrowserOS neo (`src/browser_representations/routes.rs`): a handler
 //! that never answers holds its request while the run lasts; the run's end lets it go on, so
 //! the page gets its response; and the next run on the tab finds no interception left, its
 //! loads and fetches reaching the network untouched. An awaited `context.close()` lets go of

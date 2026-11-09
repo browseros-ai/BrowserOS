@@ -1,4 +1,4 @@
-//! The run's `Browser` on a real BrowserOS neo (`src/browser_calls.rs`, `src/emulation.rs`):
+//! The run's `Browser` on a real BrowserOS neo (`src/playwright_methods/browser_methods.rs`, `src/browser_representations/emulation.rs`):
 //! contexts a run creates go with it, also when it times out; its emulation lasts for the run
 //! and no longer; a created context's pages are tabs of their own, routed apart from the run's.
 

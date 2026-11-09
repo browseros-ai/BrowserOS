@@ -266,7 +266,7 @@ export class Browser extends ChannelOwner {
    * Neo: the run's disconnection, which `close()` and the run's own context's `close()` both are
    * (a connectOverCDP default context closes by closing its browser). `send` makes the call,
    * whose Rust side ends the run's subscriptions, stops its other calls and disposes the
-   * contexts it created (`browser_calls.rs` `disconnect`). The pages it closes are read before
+   * contexts it created (`browser_methods.rs` `disconnect`). The pages it closes are read before
    * it, since a created context's are gone once Rust answers; the events queued before its
    * answer reach their listeners first. Then every object of the run reads closed
    * ({@link Browser._didClose}).

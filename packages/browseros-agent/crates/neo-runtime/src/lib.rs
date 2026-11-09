@@ -5,13 +5,13 @@
 //! ```text
 //! Runtime::run                           runtime.rs: starting tab, run lifetime, outcome
 //!   ├─ Tabs::open                        tabs.rs: context scope, ordered page registry
-//!   └─ realm::run                        realm.rs: fresh QuickJS and embedded neo-quickjs-injected
-//!        └─ __neo_runtime                bridge.rs: JS/Rust boundary
+//!   └─ quickjs::run                        quickjs.rs: fresh QuickJS and embedded neo-quickjs-injected
+//!        └─ __neo_runtime                quickjs_bridge.rs: JS/Rust boundary
 //!             ├─ get → Tabs              live pages, URL, initializer, opener and closed state
 //!             ├─ subscribe → EventHub    events.rs: the run's event queue; producers:
 //!             │                          page_events.rs (one tab's watcher), frame_events.rs
 //!             │                          (its frame tree), discovery.rs (new tabs, popups)
-//!             └─ Dispatcher::call        dispatch.rs: target routing, task, trace, reply
+//!             └─ Dispatcher::call        method_router.rs: target routing, task, trace, reply
 //!                  ├─ tab_calls          context/page lifecycle; tracked creation and cleanup
 //!                  ├─ browser_calls      the run's Browser: created contexts, close, disposal
 //!                  ├─ debugger           context.debugger: holds a call before it starts
@@ -41,7 +41,7 @@
 //! `TabInputs`) are shared by every call and run of a `Runtime` on the same target.
 //!
 //! Locator construction does no I/O. The SDK uses Playwright's selector code, with the test
-//! id attribute shared with the page through `world.rs`.
+//! id attribute shared with the page through `playwright_injected_methods.rs`.
 
 #[cfg(test)]
 extern crate self as neo_runtime;
@@ -55,73 +55,21 @@ extern crate self as neo_runtime;
 mod fake_browser;
 
 mod abort;
-mod aria_yaml;
 mod artifacts;
-mod bindings;
-mod bridge;
-mod browser_calls;
-mod capture;
-mod check;
-mod click;
-mod clock;
-mod console;
-mod content;
-mod contexts;
+mod browser_representations;
+mod chromium_bridge;
 mod deadline;
 mod debugger;
-mod devices;
-mod dialogs;
-mod discovery;
-mod dispatch;
-mod downloads;
-mod drag;
-mod drop_on;
-mod element_ops;
-mod emulation;
-mod evaluate;
 mod events;
-mod fill;
-mod forms;
-mod frame_element;
-mod frame_events;
-mod frame_selector;
-mod frames;
-mod getters;
-mod highlight;
-mod history;
-mod init_scripts;
-mod input_devices;
-mod keyboard;
-mod lists;
-mod locator_handlers;
-mod main_world;
+mod method_router;
 mod mime;
-mod navigate;
-mod network;
-mod network_events;
-mod network_idle;
-mod page;
-mod page_events;
-mod pdf;
-mod press;
+mod playwright_methods;
 mod progress;
-mod reads;
-mod realm;
-mod responses;
-mod routes;
+mod quickjs;
+mod quickjs_bridge;
 mod run;
 mod runtime;
-mod screenshot;
-mod session_state;
-mod set_input_files;
-mod states;
-mod switch;
-mod tab_calls;
-mod tabs;
 mod url_match;
-mod waits;
-mod web_storage;
-mod world;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{

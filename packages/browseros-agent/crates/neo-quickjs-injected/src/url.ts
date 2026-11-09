@@ -1,6 +1,6 @@
 /**
  * Neo: the realm's WHATWG `URL` and `URLSearchParams`, which QuickJS lacks and a Node Playwright
- * script has as globals. `realm.rs` installs both (`globals.ts`); a URL predicate receives this
+ * script has as globals. `quickjs.rs` installs both (`globals.ts`); a URL predicate receives this
  * `URL` (`urlFor`, Playwright's `parseURL`), and a `URL` crossing `evaluate` either way is this
  * one too (`vendor-shims.ts`), so `instanceof URL` holds wherever a script meets one.
  *

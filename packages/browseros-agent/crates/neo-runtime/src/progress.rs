@@ -37,11 +37,11 @@ use tracing::info;
 
 use crate::abort::CallAbort;
 use crate::artifacts::Artifacts;
-use crate::bindings::Bindings;
-use crate::clock::Clock;
+use crate::browser_representations::bindings::Bindings;
+use crate::browser_representations::clock::Clock;
+use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
-use crate::evaluate::Handles;
-use crate::init_scripts::InitScripts;
+use crate::playwright_methods::evaluate::Handles;
 use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
@@ -151,7 +151,7 @@ pub(crate) struct RunScope {
     pub(crate) handles: Arc<Handles>,
     /// The run's init scripts (`init_scripts.rs`); removed from every session at run end.
     pub(crate) init_scripts: Arc<InitScripts>,
-    /// Cancelled when the script closes the run's context (`tab_calls.rs` `close_context`):
+    /// Cancelled when the script closes the run's context (`page_and_context_methods.rs` `close_context`):
     /// every call still running stops at its next await or check, as Playwright's calls stop
     /// with its connection, and none writes input after.
     pub(crate) context_closed: CancellationToken,
@@ -553,7 +553,7 @@ impl AckedInput {
     }
 }
 
-// The trace caps. They mirror `bridge::Logs`, for its reason: records live in Rust, outside the
+// The trace caps. They mirror `quickjs_bridge::Logs`, for its reason: records live in Rust, outside the
 // realm's memory limit, so a script looping on browser calls could otherwise hold any amount of
 // the server's memory. Like `Logs`, the first entries are kept and the rest only counted.
 

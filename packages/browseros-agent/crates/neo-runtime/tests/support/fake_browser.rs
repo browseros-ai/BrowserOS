@@ -781,7 +781,7 @@ fn answer(
     }
 }
 
-/// The init script commands (`src/init_scripts.rs`): a real tab answers each script its own
+/// The init script commands (`src/browser_representations/init_scripts.rs`): a real tab answers each script its own
 /// identifier, and takes its removal and the iframe auto-attach without a word.
 fn init_script_command(command: &Value, calls: &mut Calls) -> Option<Value> {
     match command["method"].as_str()? {

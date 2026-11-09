@@ -132,7 +132,7 @@ pub(crate) enum FileKind {
 }
 
 pub(crate) struct Source {
-    /// Relative to `crates/`, with `/` separators: `neo-runtime/src/click.rs`.
+    /// Relative to `crates/`, with `/` separators: `neo-runtime/src/playwright_methods/click.rs`.
     pub(crate) path: String,
     pub(crate) lang: Lang,
     pub(crate) tokens: Vec<Token>,
