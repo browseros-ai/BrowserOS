@@ -28,7 +28,7 @@ use crate::browser_representations::network::{
     self, HopId, LogError, NetworkLog, Refetch, Settled,
 };
 use crate::browser_representations::page::PageSession;
-use crate::chromium_bridge::cdp;
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::playwright_injected_methods;
 use crate::method_router::encode_result;
 use crate::playwright_methods::click::PageError;
@@ -215,7 +215,8 @@ async fn load_again(
 fn body_error(error: CdpError) -> PlaywrightError {
     match error {
         CdpError::Protocol { message, .. } => PlaywrightError::error(format!(
-            "Protocol error (Network.getResponseBody): {message}\n{BODY_GONE}"
+            "Protocol error ({}): {message}\n{BODY_GONE}",
+            cdp::network::GetResponseBody::METHOD
         )),
         error if playwright_injected_methods::classify(&error) == PageError::Closed => {
             PlaywrightError::target_closed()

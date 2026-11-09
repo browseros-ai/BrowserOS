@@ -16,7 +16,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 
 use crate::browser_representations::page::Session;
-use crate::chromium_bridge::cdp::{self, dom, page, target};
+use crate::chromium_bridge::cdp::{self, Command, dom, page, target};
 use crate::chromium_bridge::main_world::MainWorld;
 use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup, World};
 use crate::playwright_methods::click::PageError;
@@ -304,7 +304,10 @@ impl Frames {
             .await
             .map_err(|error| playwright_injected_methods::classify(&error))?;
         let targets = targets["targetInfos"].as_array().ok_or_else(|| {
-            PageError::Contract("Target.getTargets returned no targetInfos".to_string())
+            PageError::Contract(format!(
+                "{} returned no targetInfos",
+                target::GetTargets::METHOD
+            ))
         })?;
         let remote = targets
             .iter()
@@ -370,7 +373,10 @@ impl Frames {
             .map_err(|error| playwright_injected_methods::classify(&error))?;
         let mut frames = local_tree(&local)?;
         let targets = targets["targetInfos"].as_array().ok_or_else(|| {
-            PageError::Contract("Target.getTargets returned no targetInfos".to_string())
+            PageError::Contract(format!(
+                "{} returned no targetInfos",
+                target::GetTargets::METHOD
+            ))
         })?;
         let mut pending: Vec<Value> = targets
             .iter()
@@ -677,8 +683,9 @@ pub(crate) fn local_tree(reply: &Value) -> Result<Vec<FrameInfo>, PageError> {
     }
     let mut value = reply["frameTree"].clone();
     append_fragments(&mut value);
-    let tree: LocalTree = serde_json::from_value(value)
-        .map_err(|error| PageError::Contract(format!("Page.getFrameTree answered: {error}")))?;
+    let tree: LocalTree = serde_json::from_value(value).map_err(|error| {
+        PageError::Contract(format!("{} answered: {error}", page::GetFrameTree::METHOD))
+    })?;
     let mut frames = Vec::new();
     flatten(tree, &mut frames);
     Ok(frames)

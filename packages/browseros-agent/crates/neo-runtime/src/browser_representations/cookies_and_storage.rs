@@ -1216,7 +1216,8 @@ async fn local_storage(
         .map(|entry| match <[String; 2]>::try_from(entry) {
             Ok([name, value]) => Ok(NameValue { name, value }),
             Err(entry) => Err(PlaywrightError::error(format!(
-                "DOMStorage.getDOMStorageItems answered an entry of {} strings",
+                "{} answered an entry of {} strings",
+                cdp::dom_storage::GetDomStorageItems::METHOD,
                 entry.len()
             ))),
         })

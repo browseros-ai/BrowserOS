@@ -73,8 +73,8 @@ use crate::browser_representations::init_scripts::{self, Link, until_gone};
 use crate::browser_representations::locator_handlers::{self, LocatorHandlers};
 use crate::browser_representations::network::{Happening, Lookup, NetworkLog};
 use crate::browser_representations::routes::{Answer, ContextRoutes, Pause, Routes};
-use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::cdp::input::{DragIntercepted, SetInterceptDrags};
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frame_selector::{self, FrameOwner};
 use crate::chromium_bridge::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
 use crate::chromium_bridge::keyboard_input;
@@ -1276,7 +1276,9 @@ impl NavigationTab for FrameTab {
         self.enable_network().await.map_err(
             |error| match playwright_injected_methods::classify(&error) {
                 PageError::Closed => PageError::Closed,
-                _ => PageError::Contract(format!("Network.enable failed: {error}")),
+                _ => {
+                    PageError::Contract(format!("{} failed: {error}", cdp::network::Enable::METHOD))
+                }
             },
         )?;
         Ok(self.network.lags())
@@ -1325,9 +1327,10 @@ impl NavigationTab for FrameTab {
             .send_command(navigate)
             .await
             .map_err(|error| match error {
-                CdpError::Protocol { message, .. } => {
-                    PlaywrightError::error(format!("Protocol error (Page.navigate): {message}"))
-                }
+                CdpError::Protocol { message, .. } => PlaywrightError::error(format!(
+                    "Protocol error ({}): {message}",
+                    cdp::page::Navigate::METHOD
+                )),
                 error if playwright_injected_methods::classify(&error) == PageError::Closed => {
                     PlaywrightError::target_closed()
                 }

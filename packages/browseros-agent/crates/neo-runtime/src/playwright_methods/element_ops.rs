@@ -755,9 +755,10 @@ impl ElementOpsTab for FrameTab {
             }
         };
         let Some(border) = border_rect(&model.model.border) else {
-            return Err(PageError::Contract(
-                "DOM.getBoxModel answered no border quad".to_string(),
-            ));
+            return Err(PageError::Contract(format!(
+                "{} answered no border quad",
+                cdp::dom::GetBoxModel::METHOD
+            )));
         };
         // Playwright: `server/chromium/crPage.ts` `FrameSession._getBoundingBox`: `const position = await this._framePosition();`
         // Each out-of-process hop adds its iframe's border-box origin, as Playwright places

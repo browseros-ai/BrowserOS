@@ -47,7 +47,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::{Mutex, OnceCell};
 
-use crate::chromium_bridge::cdp::{self, dom, page, runtime};
+use crate::chromium_bridge::cdp::{self, Command, dom, page, runtime};
 use crate::chromium_bridge::frames::FrameContext;
 use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup};
 use crate::playwright_methods::click::PageError;
@@ -352,7 +352,10 @@ impl MainWorld {
                     .map_err(|error| frame.host.classify(&error))?;
                 let answer: CallFunctionOnResult =
                     serde_json::from_value(reply).map_err(|error| {
-                        PageError::Contract(format!("Runtime.callFunctionOn answered: {error}"))
+                        PageError::Contract(format!(
+                            "{} answered: {error}",
+                            runtime::CallFunctionOn::METHOD
+                        ))
                     })?;
                 if let Some(details) = answer.exception_details {
                     return Err(PageError::Contract(exception_message(details)));
@@ -388,7 +391,7 @@ impl MainWorld {
         let document = self.backend_node(frame, &anchor.node).await?;
         let main_document = self.resolve(frame, document.0, &group).await?;
         let object_id = main_document.object_id.ok_or_else(|| {
-            PageError::Contract("DOM.resolveNode returned no objectId".to_string())
+            PageError::Contract(format!("{} returned no objectId", dom::ResolveNode::METHOD))
         })?;
         let reply = frame
             .host
@@ -522,7 +525,10 @@ impl MainWorld {
             }
         };
         let answer: CallFunctionOnResult = serde_json::from_value(reply).map_err(|error| {
-            PageError::Contract(format!("Runtime.callFunctionOn answered: {error}"))
+            PageError::Contract(format!(
+                "{} answered: {error}",
+                runtime::CallFunctionOn::METHOD
+            ))
         })?;
         if let Some(details) = answer.exception_details {
             return Ok(Called::Threw(exception_message(details)));
@@ -689,7 +695,10 @@ pub(crate) async fn retain(
         .await
         .map_err(|error| frame.host.classify(&error))?;
     let answer: CallFunctionOnResult = serde_json::from_value(reply).map_err(|error| {
-        PageError::Contract(format!("Runtime.callFunctionOn answered: {error}"))
+        PageError::Contract(format!(
+            "{} answered: {error}",
+            runtime::CallFunctionOn::METHOD
+        ))
     })?;
     match answer.exception_details {
         Some(details) => Err(PageError::Contract(exception_message(details))),

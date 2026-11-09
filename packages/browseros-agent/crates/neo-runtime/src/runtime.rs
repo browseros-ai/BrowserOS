@@ -23,8 +23,8 @@ use crate::browser_representations::cookies_and_storage::Permissions;
 use crate::browser_representations::page::TabInputs;
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::Switches;
-use crate::chromium_bridge::cdp::Browser;
 use crate::chromium_bridge::cdp::browser::{GetTabInfo, TabExists};
+use crate::chromium_bridge::cdp::{Browser, Command};
 use crate::deadline::Deadline;
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
@@ -83,7 +83,8 @@ pub enum RuntimeError {
     /// `page.isClosed()` reads BrowserOS's `Browser.getTabInfo`; a browser that lacks it, or
     /// reports a missing tab differently, cannot answer it.
     #[error(
-        "Browser.getTabInfo does not report a missing tab as {CLOSED_TAB_MESSAGE:?}; is this BrowserOS? It answered: {0}"
+        "{method} does not report a missing tab as {CLOSED_TAB_MESSAGE:?}; is this BrowserOS? It answered: {0}",
+        method = TabExists::METHOD
     )]
     UnsupportedBrowser(String),
 }

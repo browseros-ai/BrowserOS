@@ -20,7 +20,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::browser_representations::page::{DialogAnswer, PageSession};
-use crate::chromium_bridge::cdp::page;
+use crate::chromium_bridge::cdp::{Command, page};
 use crate::chromium_bridge::playwright_injected_methods;
 use crate::playwright_methods::click::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -238,7 +238,8 @@ pub(crate) async fn serve(
 fn answer_error(error: &CdpError) -> PlaywrightError {
     match error {
         CdpError::Protocol { message, .. } => PlaywrightError::error(format!(
-            "Protocol error (Page.handleJavaScriptDialog): {message}"
+            "Protocol error ({}): {message}",
+            page::HandleJavaScriptDialog::METHOD
         )),
         error if playwright_injected_methods::classify(error) == PageError::Closed => {
             PlaywrightError::target_closed()
