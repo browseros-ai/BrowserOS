@@ -15,6 +15,7 @@
 //! as test crates, so it is never one on its own.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -40,6 +41,25 @@ pub const PAGE_URL: &str = "https://example.test/start";
 /// The one button on the fake's page, which only the selector `#go` matches. It is always
 /// visible, enabled, stable and the hit target, so a click on it succeeds.
 pub const BUTTON: &str = "<button id=\"go\">Go</button>";
+
+/// A tab of the fake's strip as BrowserOS's `Browser.getTabs` reports one: every field the
+/// pinned protocol's `Browser.TabInfo` requires, since the runtime decodes the reply strictly.
+/// Each record gets a tab id of its own.
+pub fn tab_record(
+    target: &str,
+    url: &str,
+    window: i64,
+    context: Option<&str>,
+    active: bool,
+) -> Value {
+    static NEXT_TAB_ID: AtomicI64 = AtomicI64::new(1);
+    json!({
+        "tabId": NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed), "targetId": target, "url": url,
+        "title": "", "isActive": active, "isLoading": false, "loadProgress": 1.0,
+        "isPinned": false, "isHidden": false, "windowId": window,
+        "liveBrowserContextId": context,
+    })
+}
 
 /// When the fake answers one CDP method: each of the first `answers` calls after `delay`, and
 /// later calls never. On the history read, `answers: 1` lets the run's own read at start
@@ -197,10 +217,7 @@ impl Default for Page {
     fn default() -> Self {
         Self {
             drag_listeners: false,
-            tabs: vec![json!({
-                "targetId": PAGE, "url": PAGE_URL, "windowId": 1,
-                "liveBrowserContextId": "profile", "isActive": true,
-            })],
+            tabs: vec![tab_record(PAGE, PAGE_URL, 1, Some("profile"), true)],
             frames: None,
             tab_info_delay: None,
             next_tab: 0,
@@ -217,10 +234,13 @@ impl Default for Page {
 impl Page {
     fn add_tab(&mut self, window: i64, url: &str) -> Value {
         self.next_tab += 1;
-        let tab = json!({
-            "targetId":format!("new-page-{}",self.next_tab), "url":url, "windowId":window,
-            "liveBrowserContextId":"profile", "isActive":false,
-        });
+        let tab = tab_record(
+            &format!("new-page-{}", self.next_tab),
+            url,
+            window,
+            Some("profile"),
+            false,
+        );
         self.tabs.push(tab.clone());
         tab
     }

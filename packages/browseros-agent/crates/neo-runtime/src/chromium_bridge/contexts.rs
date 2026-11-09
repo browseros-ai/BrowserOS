@@ -15,7 +15,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
-use browseros_cdp::{CdpEvent, SessionId};
+use browseros_cdp::SessionId;
 
 use crate::chromium_bridge::cdp::{self, runtime};
 
@@ -74,14 +74,14 @@ impl Contexts {
 impl ContextFrames {
     /// Applies one event of `Runtime.executionContextCreated` (a default context only),
     /// `executionContextDestroyed` or `executionContextsCleared`; any other event is ignored.
-    pub(crate) fn apply(&self, event: &CdpEvent) {
-        let Some(session) = event.session_id.as_ref().map(SessionId::as_str) else {
+    pub(crate) fn apply(&self, event: &cdp::Raw) {
+        let Some(session) = event.session().map(SessionId::as_str) else {
             return;
         };
         let Ok(mut contexts) = self.0.lock() else {
             return;
         };
-        if let Some(created) = cdp::decode::<runtime::ExecutionContextCreated>(event) {
+        if let Some(created) = event.decode::<runtime::ExecutionContextCreated>() {
             let context = created.context;
             // `auxData` is free-form in the protocol: Chromium's frame and page-world flags.
             let aux = context.aux_data.unwrap_or_default();
@@ -96,9 +96,9 @@ impl ContextFrames {
                     },
                 );
             }
-        } else if let Some(destroyed) = cdp::decode::<runtime::ExecutionContextDestroyed>(event) {
+        } else if let Some(destroyed) = event.decode::<runtime::ExecutionContextDestroyed>() {
             contexts.kill((session.to_string(), destroyed.execution_context_id));
-        } else if cdp::is::<runtime::ExecutionContextsCleared>(event) {
+        } else if event.is::<runtime::ExecutionContextsCleared>() {
             let owned: Vec<(String, i64)> = contexts
                 .frames
                 .iter()
@@ -197,12 +197,8 @@ mod tests {
 
     use super::*;
 
-    fn event(method: &str, session: &str, params: Value) -> CdpEvent {
-        CdpEvent {
-            method: method.to_string(),
-            params,
-            session_id: Some(SessionId::from(session)),
-        }
+    fn event(method: &str, session: &str, params: Value) -> cdp::Raw {
+        cdp::Raw::fixture(method, Some(session), params)
     }
 
     #[test]
@@ -277,12 +273,12 @@ mod unique_tests {
 
     use super::*;
 
-    fn created(session: &str, id: i64, frame: &str, unique: &str) -> CdpEvent {
-        CdpEvent {
-            method: "Runtime.executionContextCreated".to_string(),
-            params: fixtures::created(id, frame, true, unique),
-            session_id: Some(SessionId::from(session)),
-        }
+    fn created(session: &str, id: i64, frame: &str, unique: &str) -> cdp::Raw {
+        cdp::Raw::fixture(
+            "Runtime.executionContextCreated",
+            Some(session),
+            fixtures::created(id, frame, true, unique),
+        )
     }
 
     #[test]
@@ -294,11 +290,11 @@ mod unique_tests {
             Some(("main".to_string(), Some("old.1".to_string())))
         );
         // Another process numbers its first context 1 again: only its unique id tells them apart.
-        contexts.apply(&CdpEvent {
-            method: "Runtime.executionContextsCleared".to_string(),
-            params: json!({}),
-            session_id: Some(SessionId::from("tab")),
-        });
+        contexts.apply(&cdp::Raw::fixture(
+            "Runtime.executionContextsCleared",
+            Some("tab"),
+            json!({}),
+        ));
         contexts.apply(&created("tab", 1, "main", "new.1"));
         assert_eq!(
             contexts.context_of("tab", 1),

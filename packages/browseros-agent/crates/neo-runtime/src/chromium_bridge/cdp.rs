@@ -40,11 +40,6 @@
 //! Neo: Neo's own door. It types every send by its method, as Playwright's `CRSession.send`
 //! does; browseros-cdp's generated `pub async fn`s take a concrete client and cannot bind a write
 //! to the socket a session belongs to.
-#![expect(
-    dead_code,
-    unused_imports,
-    reason = "every command and event the crate names is declared here; the callers in browser_representations/ and playwright_methods/ move onto the door next"
-)]
 
 pub(crate) mod browser;
 pub(crate) mod dom;
@@ -308,8 +303,8 @@ impl Browser {
         self.client.is_connected()
     }
 
-    /// The connection itself, for the code in `browser_representations/` and
-    /// `playwright_methods/` that still sends by method name.
+    /// The connection itself, for the code in `playwright_methods/` that still sends by method
+    /// name.
     pub(crate) fn client(&self) -> &CdpClient {
         &self.client
     }
@@ -493,6 +488,11 @@ impl Events {
     pub(crate) fn try_recv(&mut self) -> Result<Raw, TryRecvError> {
         self.0.try_recv().map(Raw)
     }
+
+    /// A subscription of its own from the ring's next event on, as `broadcast::Receiver`'s.
+    pub(crate) fn resubscribe(&self) -> Self {
+        Self(self.0.resubscribe())
+    }
 }
 
 /// One event off the ring, not decoded yet.
@@ -505,6 +505,14 @@ impl Raw {
         self.0.session_id.as_ref() == Some(session)
     }
 
+    /// Whether the event is one of `domain`'s (`Network`), whether or not Neo declares it.
+    pub(crate) fn in_domain(&self, domain: &str) -> bool {
+        self.0
+            .method
+            .strip_prefix(domain)
+            .is_some_and(|rest| rest.starts_with('.'))
+    }
+
     /// The session the event came on; `None` for the browser target's own events.
     pub(crate) fn session(&self) -> Option<&SessionId> {
         self.0.session_id.as_ref()
@@ -512,41 +520,41 @@ impl Raw {
 
     /// Whether this is an `E`, whether or not its params decode.
     pub(crate) fn is<E: Event>(&self) -> bool {
-        is::<E>(&self.0)
+        self.0.method == E::METHOD
     }
 
     /// `Some` when this is an `E` and its params decode. A known event that does not decode
-    /// reads as `None` and is logged as a warning.
+    /// reads as `None` and is logged as a warning: a protocol skew to see, not to drop quietly.
     pub(crate) fn decode<E: Event>(&self) -> Option<E> {
-        decode(&self.0)
-    }
-}
-
-/// [`Raw::is`] over an event `browser_representations` read off the ring itself: its watchers
-/// still subscribe to the client and hand the `chromium_bridge` consumers a `CdpEvent`. Goes
-/// once they read through [`Session::events`].
-pub(crate) fn is<E: Event>(event: &CdpEvent) -> bool {
-    event.method == E::METHOD
-}
-
-/// [`Raw::decode`] over an event `browser_representations` read off the ring itself ([`is`]).
-pub(crate) fn decode<E: Event>(event: &CdpEvent) -> Option<E> {
-    if !is::<E>(event) {
-        return None;
-    }
-    match E::deserialize(&event.params) {
-        Ok(decoded) => Some(decoded),
-        Err(error) => {
-            warn!(method = E::METHOD, %error, "a CDP event did not decode; ignoring it");
-            None
+        if !self.is::<E>() {
+            return None;
+        }
+        match E::deserialize(&self.0.params) {
+            Ok(decoded) => Some(decoded),
+            Err(error) => {
+                warn!(method = E::METHOD, %error, "a CDP event did not decode; ignoring it");
+                None
+            }
         }
     }
 }
 
 #[cfg(test)]
 impl Raw {
-    /// An event as the client delivers one.
+    /// An event as the client delivers one. A declared event's params must decode as each type
+    /// declared for its method, or this panics: a fixture the runtime would drop as malformed
+    /// ([`Raw::decode`]) would let a test pass on an event nothing read.
     pub(crate) fn fixture(method: &str, session: Option<&str>, params: serde_json::Value) -> Self {
+        tests::check_fixture(method, &params);
+        Self::malformed(method, session, params)
+    }
+
+    /// [`Raw::fixture`] unchecked, for a test of what a malformed event does.
+    pub(crate) fn malformed(
+        method: &str,
+        session: Option<&str>,
+        params: serde_json::Value,
+    ) -> Self {
         Self(CdpEvent {
             method: method.to_string(),
             params,
@@ -569,6 +577,11 @@ impl Ring {
     pub(crate) fn send(&self, event: Raw) -> Result<usize, broadcast::error::SendError<CdpEvent>> {
         self.0.send(event.0)
     }
+
+    /// Another subscription to this ring, from its next event on.
+    pub(crate) fn subscribe(&self) -> Events {
+        Events(self.0.subscribe())
+    }
 }
 
 #[cfg(test)]
@@ -582,10 +595,15 @@ mod tests {
 
     use super::*;
 
+    /// An event type's decode of a payload, as [`Raw::decode`] makes it.
+    type Decodes = fn(&Value) -> Result<(), serde_json::Error>;
+
     /// One `command!` or `event!` entry: its method, and the Rust type declared for it.
     pub(crate) struct Declared {
         method: &'static str,
         type_name: &'static str,
+        /// An event's decode of a payload; `None` for a command.
+        decodes: Option<Decodes>,
     }
 
     impl Declared {
@@ -593,6 +611,7 @@ mod tests {
             Self {
                 method: C::METHOD,
                 type_name: any::type_name::<C>(),
+                decodes: None,
             }
         }
 
@@ -600,6 +619,21 @@ mod tests {
             Self {
                 method: E::METHOD,
                 type_name: any::type_name::<E>(),
+                decodes: Some(|params| E::deserialize(params).map(drop)),
+            }
+        }
+    }
+
+    /// Panics unless `params` decode as every event type declared for `method` ([`Raw::fixture`]).
+    pub(super) fn check_fixture(method: &str, params: &Value) {
+        for (_, _, events) in domains() {
+            for declared in events.iter().filter(|declared| declared.method == method) {
+                if let Some(Err(error)) = declared.decodes.map(|decodes| decodes(params)) {
+                    panic!(
+                        "a {method} fixture does not decode as {}: {error}",
+                        declared.type_name
+                    );
+                }
             }
         }
     }
@@ -799,7 +833,7 @@ mod tests {
             commit.decode::<page::LifecycleEvent>().is_none(),
             "another event's payload never decodes from it"
         );
-        let partial = Raw::fixture(
+        let partial = Raw::malformed(
             "Page.frameNavigated",
             Some("S"),
             json!({ "frame": { "id": "F", "url": "https://a.test/" }, "type": "Navigation" }),
@@ -818,7 +852,7 @@ mod tests {
             ring.send(Raw::fixture(
                 "Inspector.targetCrashed",
                 Some("S"),
-                json!(null),
+                json!({}),
             ))
             .expect("subscribed");
         }

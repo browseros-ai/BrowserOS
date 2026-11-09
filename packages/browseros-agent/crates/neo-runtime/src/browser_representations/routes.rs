@@ -23,6 +23,7 @@
 //! ([`Routes::left_open`]), as Playwright continues a disconnected client's paused requests.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
@@ -33,13 +34,14 @@ use futures_util::future;
 use neo_runtime_spec::serve::{NameValue, RouteCall, RouteContinueParams, RouteFulfillParams};
 use neo_runtime_spec::{Binary, MethodMeta};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::browser_representations::network::{HopId, NetworkLog, PauseTarget};
 use crate::browser_representations::page::PageSession;
 use crate::browser_representations::tabs::Tabs;
+use crate::chromium_bridge::cdp::{self, Command, fetch};
 use crate::chromium_bridge::playwright_injected_methods;
 use crate::playwright_methods::click::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -395,8 +397,80 @@ pub(crate) enum Pause {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Answer {
     pub(crate) session: Option<SessionId>,
-    pub(crate) method: &'static str,
-    pub(crate) params: Value,
+    pub(crate) command: FetchAnswer,
+}
+
+/// What a pause gets: its request goes on (with any overrides), fails, or is answered here.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum FetchAnswer {
+    Continue(fetch::ContinueRequest),
+    Fail(fetch::FailRequest),
+    Fulfill(fetch::FulfillRequest),
+}
+
+/// Neo: a pause's answer as a typed `Fetch` command, made when the run decides it and sent
+/// after; Playwright's route sends each command where it decides it.
+impl Answer {
+    /// The command's method, for the error a refusal reads.
+    pub(crate) fn method(&self) -> &'static str {
+        match &self.command {
+            FetchAnswer::Continue(_) => fetch::ContinueRequest::METHOD,
+            FetchAnswer::Fail(_) => fetch::FailRequest::METHOD,
+            FetchAnswer::Fulfill(_) => fetch::FulfillRequest::METHOD,
+        }
+    }
+
+    /// Sends the answer on the session that paused its request, which `tab`, the tab's own
+    /// session, reaches.
+    pub(crate) fn send(
+        self,
+        tab: &cdp::Session,
+    ) -> impl Future<Output = Result<(), CdpError>> + use<> {
+        let target = self
+            .session
+            .map_or_else(|| tab.clone(), |session| tab.browser().adopt(session));
+        async move {
+            match self.command {
+                FetchAnswer::Continue(command) => target.send(command).await.map(drop),
+                FetchAnswer::Fail(command) => target.send(command).await.map(drop),
+                FetchAnswer::Fulfill(command) => target.send(command).await.map(drop),
+            }
+        }
+    }
+
+    /// The command's params as they go out, for the tests to read.
+    #[cfg(test)]
+    pub(crate) fn params(&self) -> Value {
+        match &self.command {
+            FetchAnswer::Continue(command) => serde_json::to_value(command),
+            FetchAnswer::Fail(command) => serde_json::to_value(command),
+            FetchAnswer::Fulfill(command) => serde_json::to_value(command),
+        }
+        .unwrap_or_default()
+    }
+}
+
+/// Neo: `headers` as the `Fetch` commands carry them; Playwright's route hands its plain header
+/// objects to the send unconverted.
+fn entries(headers: Vec<NameValue>) -> Vec<fetch::HeaderEntry> {
+    headers
+        .into_iter()
+        .map(|header| fetch::HeaderEntry {
+            name: header.name,
+            value: header.value,
+        })
+        .collect()
+}
+
+/// Neo: `Fetch` headers as the run reads them, the conversion back of [`entries`].
+fn name_values(entries: &[fetch::HeaderEntry]) -> Vec<NameValue> {
+    entries
+        .iter()
+        .map(|entry| NameValue {
+            name: entry.name.clone(),
+            value: entry.value.clone(),
+        })
+        .collect()
 }
 
 /// A pause handed to the run, until its one answer.
@@ -442,7 +516,7 @@ struct State {
     ///
     /// Each continued request's params (without its interception id), by `networkId`: its
     /// redirect hops keep its header overrides, and a restart of it goes on with them again.
-    continued: HashMap<String, Map<String, Value>>,
+    continued: HashMap<String, fetch::ContinueRequest>,
 }
 
 /// Neo: the claim of one paused route's own continuation ([`Routes::begin_continuing`]), given
@@ -545,7 +619,11 @@ impl Routes {
             return Pause::Parked;
         };
         let Some(network_id) = params["networkId"].as_str().filter(|id| !id.is_empty()) else {
-            return Pause::Answer(go_on(session, request_id, Map::new()));
+            return Pause::Answer(go_on(
+                session,
+                request_id,
+                fetch::ContinueRequest::default(),
+            ));
         };
         if let Some(steps) = self
             .with(|state| state.fetching.get(network_id).cloned())
@@ -564,7 +642,11 @@ impl Routes {
             if self.adopt_response(network_id, session, request_id) {
                 return Pause::Parked;
             }
-            return Pause::Answer(go_on(session, request_id, Map::new()));
+            return Pause::Answer(go_on(
+                session,
+                request_id,
+                fetch::ContinueRequest::default(),
+            ));
         }
         // Before the request's record: Chromium reports a preflight with no frame, which the log
         // keeps no record of, as Playwright answers it before its own frame check.
@@ -593,7 +675,11 @@ impl Routes {
         }
         match log.pause_target(network_id) {
             PauseTarget::Unknown => self.park(session, network_id, params),
-            PauseTarget::Skipped => Pause::Answer(go_on(session, request_id, Map::new())),
+            PauseTarget::Skipped => Pause::Answer(go_on(
+                session,
+                request_id,
+                fetch::ContinueRequest::default(),
+            )),
             PauseTarget::Hop { hop, favicon } => {
                 self.route_or_answer(session, request_id, network_id, params, log, &hop, favicon)
             }
@@ -630,7 +716,11 @@ impl Routes {
             .flatten();
         match evicted.and_then(|(_, parked)| {
             let request_id = parked.params["requestId"].as_str()?.to_string();
-            Some(go_on(parked.session.as_ref(), &request_id, Map::new()))
+            Some(go_on(
+                parked.session.as_ref(),
+                &request_id,
+                fetch::ContinueRequest::default(),
+            ))
         }) {
             Some(answer) => Pause::Answer(answer),
             None => Pause::Parked,
@@ -655,8 +745,10 @@ impl Routes {
         if favicon {
             return Pause::Answer(Answer {
                 session: session.cloned(),
-                method: "Fetch.failRequest",
-                params: json!({ "requestId": request_id, "errorReason": "Aborted" }),
+                command: FetchAnswer::Fail(fetch::FailRequest {
+                    request_id: request_id.to_string(),
+                    error_reason: "Aborted".to_string(),
+                }),
             });
         }
         let request = &params["request"];
@@ -672,10 +764,18 @@ impl Routes {
         {
             Channel::Context
         } else {
-            return Pause::Answer(go_on(session, request_id, Map::new()));
+            return Pause::Answer(go_on(
+                session,
+                request_id,
+                fetch::ContinueRequest::default(),
+            ));
         };
         let Ok(record) = log.created_request(hop) else {
-            return Pause::Answer(go_on(session, request_id, Map::new()));
+            return Pause::Answer(go_on(
+                session,
+                request_id,
+                fetch::ContinueRequest::default(),
+            ));
         };
         // The handler's `allHeaders()` reads the request's raw headers, which Chromium reports
         // only once the request is sent: the pause's headers stand in until then.
@@ -827,7 +927,7 @@ impl Routes {
         Some(go_on(
             paused.session.as_ref(),
             &paused.request_id,
-            Map::new(),
+            fetch::ContinueRequest::default(),
         ))
     }
 
@@ -840,11 +940,21 @@ impl Routes {
             let mut answers: Vec<Answer> = state
                 .paused
                 .drain()
-                .map(|(_, paused)| go_on(paused.session.as_ref(), &paused.request_id, Map::new()))
+                .map(|(_, paused)| {
+                    go_on(
+                        paused.session.as_ref(),
+                        &paused.request_id,
+                        fetch::ContinueRequest::default(),
+                    )
+                })
                 .collect();
             answers.extend(state.parked.drain(..).filter_map(|(_, parked)| {
                 let request_id = parked.params["requestId"].as_str()?.to_string();
-                Some(go_on(parked.session.as_ref(), &request_id, Map::new()))
+                Some(go_on(
+                    parked.session.as_ref(),
+                    &request_id,
+                    fetch::ContinueRequest::default(),
+                ))
             }));
             answers
         })
@@ -885,11 +995,10 @@ impl Routes {
     /// unknown abort code.
     pub(crate) fn answer(&self, index: u64, call: RouteCall) -> Result<Answer, PlaywrightError> {
         let paused = self.take(index)?;
-        let (method, params) = match call {
-            RouteCall::Abort(params) => (
-                "Fetch.failRequest",
-                abort_params(&paused, params.error_code)?,
-            ),
+        let command = match call {
+            RouteCall::Abort(params) => {
+                FetchAnswer::Fail(abort_params(&paused, params.error_code)?)
+            }
             RouteCall::Continue(params) if paused.stage == Stage::Response => {
                 if params.url.is_some()
                     || params.method.is_some()
@@ -898,10 +1007,10 @@ impl Routes {
                 {
                     return Err(PlaywrightError::error(FETCHED_CONTINUE));
                 }
-                (
-                    "Fetch.continueRequest",
-                    json!({ "requestId": paused.request_id }),
-                )
+                FetchAnswer::Continue(fetch::ContinueRequest {
+                    request_id: paused.request_id.clone(),
+                    ..fetch::ContinueRequest::default()
+                })
             }
             RouteCall::Continue(params) => {
                 let continued = continue_params(&paused, params)?;
@@ -910,18 +1019,16 @@ impl Routes {
                         .continued
                         .insert(paused.network_id.clone(), continued.clone())
                 });
-                let mut params = continued;
-                params.insert("requestId".into(), json!(paused.request_id));
-                ("Fetch.continueRequest", Value::Object(params))
+                FetchAnswer::Continue(fetch::ContinueRequest {
+                    request_id: paused.request_id.clone(),
+                    ..continued
+                })
             }
-            RouteCall::Fulfill(params) => {
-                ("Fetch.fulfillRequest", fulfill_params(&paused, params)?)
-            }
+            RouteCall::Fulfill(params) => FetchAnswer::Fulfill(fulfill_params(&paused, params)?),
         };
         Ok(Answer {
             session: paused.session,
-            method,
-            params,
+            command,
         })
     }
 }
@@ -965,15 +1072,14 @@ pub(crate) async fn serve(
     progress: &Progress,
 ) -> Result<Option<Value>, CallError> {
     let answer = page.routes.answer(index, call)?;
-    let sent = progress
-        .race(page.send_to(answer.session.as_ref(), answer.method, answer.params))
-        .await?;
+    let method = answer.method();
+    let sent = progress.race(answer.send(page.cdp())).await?;
     // A pause leaves the registry only once the browser took its answer: one the browser
     // refused stays for the run's end to release.
     if sent.is_ok() {
         page.routes.settled(index);
     }
-    answered(answer.method, sent)?;
+    answered(method, sent)?;
     Ok(None)
 }
 
@@ -1000,7 +1106,7 @@ pub(crate) async fn fetch(
         routes: &page.routes,
         network_id: paused.network_id.clone(),
     };
-    let mut first = continue_params(
+    let first = continue_params(
         &paused,
         RouteContinueParams {
             url: params.url,
@@ -1010,19 +1116,13 @@ pub(crate) async fn fetch(
             is_fallback: false,
         },
     )?;
-    let overrides = first
-        .get("headers")
-        .and_then(|headers| serde_json::from_value::<Vec<NameValue>>(headers.clone()).ok());
-    first.insert("requestId".into(), json!(paused.request_id));
-    first.insert("interceptResponse".into(), json!(true));
-    step(
-        page,
-        paused.session.as_ref(),
-        "Fetch.continueRequest",
-        Value::Object(first),
-        progress,
-    )
-    .await?;
+    let overrides = first.headers.as_deref().map(name_values);
+    let first = fetch::ContinueRequest {
+        request_id: paused.request_id.clone(),
+        intercept_response: Some(true),
+        ..first
+    };
+    step(page, paused.session.as_ref(), first, progress).await?;
     let follow = params.max_redirects != Some(0);
     let mut redirects = params.max_redirects.unwrap_or(DEFAULT_MAX_REDIRECTS);
     loop {
@@ -1060,14 +1160,11 @@ pub(crate) async fn fetch(
                 return Err(PlaywrightError::error(MAX_REDIRECTS).into());
             }
             redirects -= 1;
-            step(
-                page,
-                session.as_ref(),
-                "Fetch.continueRequest",
-                json!({ "requestId": request_id }),
-                progress,
-            )
-            .await?;
+            let next = fetch::ContinueRequest {
+                request_id,
+                ..fetch::ContinueRequest::default()
+            };
+            step(page, session.as_ref(), next, progress).await?;
             continue;
         }
         // The route answers at this pause from now on, whatever the body read does.
@@ -1120,26 +1217,19 @@ async fn continue_hop(
     overrides: Option<Vec<NameValue>>,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    let mut hop = Map::new();
-    if let Some(overrides) = overrides {
+    let headers = overrides.map(|overrides| {
         let original = headers_array(&pause["request"]["headers"]);
-        hop.insert(
-            "headers".into(),
-            json!(remove_cookie_header(apply_headers_overrides(
-                &original, overrides
-            ))),
-        );
-    }
-    hop.insert("requestId".into(), pause["requestId"].clone());
-    hop.insert("interceptResponse".into(), json!(true));
-    step(
-        page,
-        session,
-        "Fetch.continueRequest",
-        Value::Object(hop),
-        progress,
-    )
-    .await
+        entries(remove_cookie_header(apply_headers_overrides(
+            &original, overrides,
+        )))
+    });
+    let hop = fetch::ContinueRequest {
+        request_id: pause["requestId"].as_str().unwrap_or_default().to_string(),
+        headers,
+        intercept_response: Some(true),
+        ..fetch::ContinueRequest::default()
+    };
+    step(page, session, hop, progress).await
 }
 
 /// Neo: a fetched response's body, base64, read where it paused.
@@ -1150,18 +1240,18 @@ async fn response_body(
     progress: &Progress,
 ) -> Result<String, CallError> {
     let read = progress
-        .race(page.send_to(
+        .race(page.send_command_to(
             session,
-            "Fetch.getResponseBody",
-            json!({ "requestId": request_id }),
+            fetch::GetResponseBody {
+                request_id: request_id.to_string(),
+            },
         ))
         .await?
         .map_err(|error| cdp_error(&error))?;
-    let text = read["body"].as_str().unwrap_or_default();
-    Ok(if read["base64Encoded"].as_bool().unwrap_or(false) {
-        text.to_string()
+    Ok(if read.base64_encoded {
+        read.body
     } else {
-        STANDARD.encode(text.as_bytes())
+        STANDARD.encode(read.body.as_bytes())
     })
 }
 
@@ -1169,14 +1259,13 @@ async fn response_body(
 async fn step(
     page: &PageSession,
     session: Option<&SessionId>,
-    method: &str,
-    params: Value,
+    command: fetch::ContinueRequest,
     progress: &Progress,
 ) -> Result<(), CallError> {
     progress
-        .race(page.send_to(session, method, params))
+        .race(page.send_command_to(session, command))
         .await?
-        .map(|_| ())
+        .map(drop)
         .map_err(|error| cdp_error(&error).into())
 }
 
@@ -1269,10 +1358,7 @@ pub(crate) async fn finish(page: &PageSession) {
 /// Neo: sends answers whose outcome nobody waits for (released pauses), all together.
 async fn send_all(page: &PageSession, answers: Vec<Answer>) {
     future::join_all(answers.into_iter().map(|answer| async move {
-        if let Err(error) = page
-            .send_to(answer.session.as_ref(), answer.method, answer.params)
-            .await
-        {
+        if let Err(error) = answer.send(page.cdp()).await {
             debug!(%error, "releasing a paused request failed");
         }
     }))
@@ -1303,17 +1389,28 @@ fn release(state: &mut State, channel: Channel) -> Vec<Answer> {
     released
         .into_iter()
         .filter_map(|index| state.paused.remove(&index))
-        .map(|paused| go_on(paused.session.as_ref(), &paused.request_id, Map::new()))
+        .map(|paused| {
+            go_on(
+                paused.session.as_ref(),
+                &paused.request_id,
+                fetch::ContinueRequest::default(),
+            )
+        })
         .collect()
 }
 
 /// Playwright: `server/chromium/crNetworkManager.ts` `RouteImpl.continue`: `await this._session.send('Fetch.continueRequest', this._alreadyContinuedParams);`
-fn go_on(session: Option<&SessionId>, request_id: &str, mut params: Map<String, Value>) -> Answer {
-    params.insert("requestId".into(), json!(request_id));
+fn go_on(
+    session: Option<&SessionId>,
+    request_id: &str,
+    overrides: fetch::ContinueRequest,
+) -> Answer {
     Answer {
         session: session.cloned(),
-        method: "Fetch.continueRequest",
-        params: Value::Object(params),
+        command: FetchAnswer::Continue(fetch::ContinueRequest {
+            request_id: request_id.to_string(),
+            ..overrides
+        }),
     }
 }
 
@@ -1325,22 +1422,22 @@ fn redirect_hop(
     session: Option<&SessionId>,
     request_id: &str,
     params: &Value,
-    continued: Option<&Map<String, Value>>,
+    continued: Option<&fetch::ContinueRequest>,
 ) -> Answer {
-    let mut answer = Map::new();
-    if let Some(overrides) = continued
-        .and_then(|continued| continued.get("headers"))
-        .and_then(|headers| serde_json::from_value::<Vec<NameValue>>(headers.clone()).ok())
-    {
-        let original = headers_array(&params["request"]["headers"]);
-        answer.insert(
-            "headers".into(),
-            json!(remove_cookie_header(apply_headers_overrides(
-                &original, overrides
-            ))),
-        );
-    }
-    go_on(session, request_id, answer)
+    let headers = continued
+        .and_then(|continued| continued.headers.as_deref())
+        .map(|overrides| {
+            let original = headers_array(&params["request"]["headers"]);
+            entries(remove_cookie_header(apply_headers_overrides(
+                &original,
+                name_values(overrides),
+            )))
+        });
+    let hop = fetch::ContinueRequest {
+        headers,
+        ..fetch::ContinueRequest::default()
+    };
+    go_on(session, request_id, hop)
 }
 
 /// Deviation: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onRequest`: `const isInterceptedOptionsPreflight = !!requestPausedEvent && requestPausedEvent.request.method === 'OPTIONS' && requestWillBeSentEvent.initiator.type === 'preflight';`
@@ -1368,32 +1465,43 @@ fn preflight(session: Option<&SessionId>, request_id: &str, headers: &[NameValue
             .find(|header| header.name == name)
             .map(|header| header.value.clone())
     };
+    let entry = |name: &str, value: String| fetch::HeaderEntry {
+        name: name.to_string(),
+        value,
+    };
     let mut response = vec![
-        json!({ "name": "Access-Control-Allow-Origin", "value": header("Origin").unwrap_or_else(|| "*".into()) }),
-        json!({
-            "name": "Access-Control-Allow-Methods",
-            "value": header("Access-Control-Request-Method").unwrap_or_else(|| "GET, POST, OPTIONS, DELETE".into()),
-        }),
-        json!({ "name": "Access-Control-Allow-Credentials", "value": "true" }),
+        entry(
+            "Access-Control-Allow-Origin",
+            header("Origin").unwrap_or_else(|| "*".into()),
+        ),
+        entry(
+            "Access-Control-Allow-Methods",
+            header("Access-Control-Request-Method")
+                .unwrap_or_else(|| "GET, POST, OPTIONS, DELETE".into()),
+        ),
+        entry("Access-Control-Allow-Credentials", "true".to_string()),
     ];
     if let Some(allowed) = header("Access-Control-Request-Headers") {
-        response.push(json!({ "name": "Access-Control-Allow-Headers", "value": allowed }));
+        response.push(entry("Access-Control-Allow-Headers", allowed));
     }
     Answer {
         session: session.cloned(),
-        method: "Fetch.fulfillRequest",
-        params: json!({
-            "requestId": request_id,
-            "responseCode": 204,
-            "responsePhrase": status_text(204),
-            "responseHeaders": response,
-            "body": "",
+        command: FetchAnswer::Fulfill(fetch::FulfillRequest {
+            request_id: request_id.to_string(),
+            response_code: 204,
+            response_phrase: Some(status_text(204).to_string()),
+            response_headers: Some(response),
+            body: Some(Value::String(String::new())),
+            binary_response_headers: None,
         }),
     }
 }
 
 /// Playwright: `server/chromium/crNetworkManager.ts` `RouteImpl.abort`: `const errorReason = errorReasons[errorCode];`
-fn abort_params(paused: &Paused, error_code: Option<String>) -> Result<Value, PlaywrightError> {
+fn abort_params(
+    paused: &Paused,
+    error_code: Option<String>,
+) -> Result<fetch::FailRequest, PlaywrightError> {
     let code = error_code
         .filter(|code| !code.is_empty())
         .unwrap_or_else(|| DEFAULT_ERROR_CODE.to_string());
@@ -1402,7 +1510,10 @@ fn abort_params(paused: &Paused, error_code: Option<String>) -> Result<Value, Pl
         .find(|(name, _)| *name == code)
         .map(|(_, reason)| *reason)
         .ok_or_else(|| PlaywrightError::error(format!("{UNKNOWN_ERROR_CODE}{code}")))?;
-    Ok(json!({ "requestId": paused.request_id, "errorReason": reason }))
+    Ok(fetch::FailRequest {
+        request_id: paused.request_id.clone(),
+        error_reason: reason.to_string(),
+    })
 }
 
 /// Playwright: `server/network.ts` `Route.continue`: `if (oldUrl.protocol !== newUrl.protocol)`
@@ -1411,8 +1522,8 @@ fn abort_params(paused: &Paused, error_code: Option<String>) -> Result<Value, Pl
 fn continue_params(
     paused: &Paused,
     params: RouteContinueParams,
-) -> Result<Map<String, Value>, PlaywrightError> {
-    let mut out = Map::new();
+) -> Result<fetch::ContinueRequest, PlaywrightError> {
+    let mut out = fetch::ContinueRequest::default();
     if let Some(url) = params.url {
         let new = url_match::parse_url(&url).ok_or_else(|| PlaywrightError::error(INVALID_URL))?;
         let old =
@@ -1420,17 +1531,15 @@ fn continue_params(
         if old.protocol != new.protocol {
             return Err(PlaywrightError::error(NEW_PROTOCOL));
         }
-        out.insert("url".into(), json!(url));
+        out.url = Some(url);
     }
-    if let Some(method) = params.method {
-        out.insert("method".into(), json!(method));
-    }
+    out.method = params.method;
     if let Some(headers) = params.headers {
         let headers = apply_headers_overrides(&paused.headers, headers);
-        out.insert("headers".into(), json!(remove_cookie_header(headers)));
+        out.headers = Some(entries(remove_cookie_header(headers)));
     }
     if let Some(post_data) = params.post_data {
-        out.insert("postData".into(), json!(post_data));
+        out.post_data = Some(json!(post_data));
     }
     Ok(out)
 }
@@ -1438,7 +1547,10 @@ fn continue_params(
 /// Playwright: `server/network.ts` `Route.fulfill`: `status: overrides.status || 200,`
 ///
 /// `Fetch.fulfillRequest`'s params for the script's response.
-fn fulfill_params(paused: &Paused, params: RouteFulfillParams) -> Result<Value, PlaywrightError> {
+fn fulfill_params(
+    paused: &Paused,
+    params: RouteFulfillParams,
+) -> Result<fetch::FulfillRequest, PlaywrightError> {
     let status = params.status.filter(|status| *status != 0).unwrap_or(200);
     let mut headers = params.headers.unwrap_or_default();
     maybe_add_cors_headers(paused, &mut headers);
@@ -1453,13 +1565,14 @@ fn fulfill_params(paused: &Paused, params: RouteFulfillParams) -> Result<Value, 
         }
         None => String::new(),
     };
-    Ok(json!({
-        "requestId": paused.request_id,
-        "responseCode": status,
-        "responsePhrase": status_text(status),
-        "responseHeaders": split_set_cookie_header(headers),
-        "body": body,
-    }))
+    Ok(fetch::FulfillRequest {
+        request_id: paused.request_id.clone(),
+        response_code: status,
+        response_phrase: Some(status_text(status).to_string()),
+        response_headers: Some(entries(split_set_cookie_header(headers))),
+        body: Some(Value::String(body)),
+        binary_response_headers: None,
+    })
 }
 
 /// Playwright: `server/network.ts` `Route._maybeAddCorsHeaders`: `headers.push({ name: 'access-control-allow-origin', value: origin });`
@@ -1601,7 +1714,7 @@ fn headers_array(headers: &Value) -> Vec<NameValue> {
 /// The answer's outcome: the browser's refusal of a status or header the script gave, which
 /// the script can fix, rejects; any other error (the request already went, the page closed)
 /// is swallowed, as Playwright does.
-pub(crate) fn answered(method: &str, sent: Result<Value, CdpError>) -> Result<(), CallError> {
+pub(crate) fn answered<T>(method: &str, sent: Result<T, CdpError>) -> Result<(), CallError> {
     match sent {
         Err(CdpError::Protocol { message, .. })
             if message.contains(BAD_STATUS) || message.contains(UNSAFE_HEADER) =>
@@ -1658,12 +1771,11 @@ mod tests {
     #[test]
     fn tests_that_abort_maps_playwright_codes_and_refuses_others() {
         let paused = paused("https://a.test/x", &[]);
+        assert_eq!(abort_params(&paused, None).unwrap().error_reason, "Failed");
         assert_eq!(
-            abort_params(&paused, None).unwrap()["errorReason"],
-            "Failed"
-        );
-        assert_eq!(
-            abort_params(&paused, Some("internetdisconnected".into())).unwrap()["errorReason"],
+            abort_params(&paused, Some("internetdisconnected".into()))
+                .unwrap()
+                .error_reason,
             "InternetDisconnected"
         );
         assert_eq!(
@@ -1700,6 +1812,7 @@ mod tests {
             },
         )
         .unwrap();
+        let params = serde_json::to_value(params).unwrap();
         assert_eq!(params["method"], "POST");
         assert_eq!(
             params["headers"],
@@ -1742,6 +1855,7 @@ mod tests {
             },
         )
         .unwrap();
+        let params = serde_json::to_value(params).unwrap();
         assert_eq!(params["responseCode"], 200);
         assert_eq!(params["responsePhrase"], "OK");
         assert_eq!(params["body"], STANDARD.encode("hé".as_bytes()));
@@ -1795,7 +1909,7 @@ mod tests {
         let answer = routes
             .answer(1, RouteCall::Abort(RouteAbortParams { error_code: None }))
             .unwrap();
-        assert_eq!(answer.method, "Fetch.failRequest");
+        assert_eq!(answer.method(), "Fetch.failRequest");
         let second = routes
             .answer(1, RouteCall::Abort(RouteAbortParams { error_code: None }))
             .unwrap_err();
@@ -1895,9 +2009,9 @@ mod tests {
             "a script's own OPTIONS request is routed"
         );
         let answer = preflight(None, "i", &headers_array(&pause["request"]["headers"]));
-        assert_eq!(answer.params["responseCode"], 204);
+        assert_eq!(answer.params()["responseCode"], 204);
         assert_eq!(
-            answer.params["responseHeaders"][0],
+            answer.params()["responseHeaders"][0],
             json!({ "name": "Access-Control-Allow-Origin", "value": "https://page.test" })
         );
     }
@@ -1938,7 +2052,7 @@ mod tests {
             Pause::Parked,
             "Chromium may pause it before its requestWillBeSent (measured)"
         );
-        log.apply(
+        log.apply_json(
             None,
             "Network.requestWillBeSent",
             &will_be_sent("R1", "https://a.test/data.json", Some("MAIN")),
@@ -1963,14 +2077,17 @@ mod tests {
         assert_eq!(routes.paused(None, &early, &log), Pause::Parked);
         let released = routes.left_open();
         assert_eq!(released.len(), 1);
-        assert_eq!(released[0].params, json!({ "requestId": "interception-2" }));
+        assert_eq!(
+            released[0].params(),
+            json!({ "requestId": "interception-2" })
+        );
     }
 
     #[test]
     fn tests_that_a_favicon_is_aborted_and_a_frameless_request_goes_on() {
         let log = NetworkLog::new("MAIN".to_string());
         let routes = routing_page("**/*");
-        log.apply(
+        log.apply_json(
             None,
             "Network.requestWillBeSent",
             &will_be_sent("W1", "https://a.test/worker.json", None),
@@ -1982,10 +2099,10 @@ mod tests {
         ) else {
             panic!("a request the log keeps no record of is not routed");
         };
-        assert_eq!(answer.method, "Fetch.continueRequest");
+        assert_eq!(answer.method(), "Fetch.continueRequest");
         let mut favicon = will_be_sent("F1", "https://a.test/favicon.ico", Some("MAIN"));
         favicon["type"] = json!("Other");
-        log.apply(None, "Network.requestWillBeSent", &favicon);
+        log.apply_json(None, "Network.requestWillBeSent", &favicon);
         let Pause::Answer(answer) = routes.paused(
             None,
             &pause("i-4", "F1", "https://a.test/favicon.ico"),
@@ -1994,7 +2111,7 @@ mod tests {
             panic!("a favicon is answered, never routed");
         };
         assert_eq!(
-            (answer.method, answer.params["errorReason"].clone()),
+            (answer.method(), answer.params()["errorReason"].clone()),
             ("Fetch.failRequest", json!("Aborted"))
         );
     }
@@ -2010,7 +2127,7 @@ mod tests {
         let answer = routes
             .answer(1, RouteCall::Abort(RouteAbortParams { error_code: None }))
             .unwrap();
-        assert_eq!(answer.method, "Fetch.failRequest");
+        assert_eq!(answer.method(), "Fetch.failRequest");
         assert!(
             routes.set_page(Patterns::default()).is_empty(),
             "an answered pause is the browser's: emptied patterns release nothing"
@@ -2044,22 +2161,31 @@ mod tests {
             .unwrap();
         let released = routes.set_page(Patterns::default());
         assert_eq!(released.len(), 1);
-        assert_eq!(released[0].method, "Fetch.continueRequest");
-        assert_eq!(released[0].params, json!({ "requestId": "interception-1" }));
+        assert_eq!(released[0].method(), "Fetch.continueRequest");
+        assert_eq!(
+            released[0].params(),
+            json!({ "requestId": "interception-1" })
+        );
         assert!(routes.left_open().is_empty(), "released once");
     }
 
     #[test]
     fn tests_that_a_redirect_hop_keeps_its_first_hops_header_overrides() {
-        let continued = json!({ "headers": [{ "name": "x-extra", "value": "1" }] });
+        let continued = fetch::ContinueRequest {
+            headers: Some(vec![fetch::HeaderEntry {
+                name: "x-extra".to_string(),
+                value: "1".to_string(),
+            }]),
+            ..fetch::ContinueRequest::default()
+        };
         let answer = redirect_hop(
             None,
             "interception-2",
             &json!({ "request": { "headers": { "Referer": "https://a.test/", "Cookie": "a=1" } } }),
-            continued.as_object(),
+            Some(&continued),
         );
         assert_eq!(
-            answer.params,
+            answer.params(),
             json!({
                 "requestId": "interception-2",
                 "headers": [

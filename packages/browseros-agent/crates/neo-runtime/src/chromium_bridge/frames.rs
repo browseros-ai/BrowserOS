@@ -6,12 +6,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use browseros_cdp::{CdpError, CdpEvent, SessionId};
+use browseros_cdp::{CdpError, SessionId};
 use neo_runtime_spec::{Element, Handle, InjectedCall};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::runtime::Handle as TokioHandle;
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
@@ -99,10 +98,9 @@ impl FrameContext {
 
 /// A CDP session retained by every context and cleanup that uses it.
 pub(crate) struct Host {
-    /// Owns the attachment: its `Drop` detaches, once the last context or cleanup lets go.
+    /// Owns the attachment: its `Drop` detaches, once the last context or cleanup lets go. The
+    /// door sends on its `door`.
     session: Arc<Session>,
-    /// The same session, as the door sends on it.
-    cdp: cdp::Session,
     target_id: Option<String>,
     parent: Option<Arc<Host>>,
     gone: CancellationToken,
@@ -120,7 +118,6 @@ impl Host {
         contexts: Weak<Contexts>,
     ) -> Self {
         Self {
-            cdp: session.door.clone(),
             session,
             target_id,
             parent,
@@ -143,7 +140,7 @@ impl Host {
             let result = tokio::select! {
                 biased;
                 () = self.gone.cancelled() => Err(CdpError::SessionGone),
-                result = self.cdp.send_serialized(command) => result,
+                result = self.session.door.send_serialized(command) => result,
             };
             self.forget_if_gone(&result);
             result
@@ -151,13 +148,12 @@ impl Host {
     }
 
     /// [`Self::send_command`] by method name and JSON params, for the callers in
-    /// `browser_representations/` and `playwright_methods/` that do not send through the door
-    /// yet.
+    /// `playwright_methods/` that do not send through the door yet.
     pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
         let result = tokio::select! {
             biased;
             () = self.gone.cancelled() => Err(CdpError::SessionGone),
-            result = self.session.cdp.send(method, params, Some(&self.session.id)) => result,
+            result = self.session.door.browser().client().send(method, params, Some(self.session.door.id())) => result,
         };
         self.forget_if_gone(&result);
         result
@@ -187,14 +183,13 @@ impl Host {
     }
 
     pub(crate) fn session_id(&self) -> &SessionId {
-        &self.session.id
+        self.session.door.id()
     }
 
     /// Every CDP event the host's connection receives from now on; [`Host::session_id`] picks
-    /// this host's. Raw for the readers in `playwright_methods/` that do not read through the
-    /// door yet (`content.rs`, `evaluate.rs` by way of `main_world::replaced_during`).
-    pub(crate) fn events(&self) -> broadcast::Receiver<CdpEvent> {
-        self.session.cdp.events()
+    /// this host's.
+    pub(crate) fn events(&self) -> cdp::Events {
+        self.session.door.events()
     }
 
     /// The child target this host attached, an out-of-process frame's id; `None` for the tab.
@@ -314,7 +309,8 @@ impl Frames {
         let targets = self
             .main
             .host
-            .cdp
+            .session
+            .door
             .browser()
             .send(iframe_targets())
             .await
@@ -348,7 +344,7 @@ impl Frames {
             id: frame.to_string(),
             world: Arc::new(
                 World::on_host(
-                    host.cdp.clone(),
+                    host.session.door.clone(),
                     frame.to_string(),
                     host.is_child(),
                     host.gone.clone(),
@@ -381,7 +377,7 @@ impl Frames {
     async fn read_tree(&self) -> Result<(Vec<FrameInfo>, bool), PageError> {
         let mut changed_host = false;
         let local = self.main.host.send_command(page::GetFrameTree {});
-        let targets = self.main.host.cdp.browser().send(iframe_targets());
+        let targets = self.main.host.session.door.browser().send(iframe_targets());
         let (local, targets) = tokio::try_join!(local, targets)
             .map_err(|error| playwright_injected_methods::classify(&error))?;
         let mut frames = local_tree(&local)?;
@@ -505,10 +501,10 @@ impl Frames {
     }
 
     async fn attach(&self, frame: &str, parent: &Arc<Host>) -> Result<Arc<Host>, PageError> {
-        let browser = self.main.host.cdp.browser().clone();
+        let browser = self.main.host.session.door.browser().clone();
         // Subscribe before attaching: even a detach delivered before the attach reply must
         // cancel this host. The tracked task reads a late reply and drops unclaimed sessions.
-        let events = self.main.host.cdp.events();
+        let events = self.main.host.session.door.events();
         let session = self
             .tasks
             .spawn(Session::attach(
@@ -524,7 +520,7 @@ impl Frames {
         let watch = stop.clone().drop_guard();
         tokio::spawn(watch_host(
             events,
-            session.id.clone(),
+            session.id().clone(),
             gone.clone(),
             stop,
             Arc::downgrade(&self.contexts),

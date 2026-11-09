@@ -12,11 +12,10 @@ use std::collections::HashSet;
 use std::sync::MutexGuard;
 use std::time::Duration;
 
-use browseros_cdp::{CdpError, CdpEvent, SessionId, browser};
+use browseros_cdp::{CdpError, SessionId, browser};
 use neo_runtime_spec::serve::{FrameChannel, FrameInitializer};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time;
 use tokio::time::Instant;
@@ -46,7 +45,7 @@ pub(crate) enum FrameField {
 /// from page closure. The receiver precedes domain setup; draining before each snapshot
 /// prevents a detach between the last getter and page.close from reviving an old frame.
 pub(crate) struct FrameMetadata {
-    events: broadcast::Receiver<CdpEvent>,
+    events: cdp::Events,
     watched: HashSet<SessionId>,
     known: Vec<FrameInfo>,
     live: Vec<String>,
@@ -60,14 +59,14 @@ pub(crate) struct FrameMetadata {
 /// owns a separate event cursor and can replace retained state only after reconciliation.
 struct FrameSnapshot {
     revision: u64,
-    closing_events: Option<broadcast::Receiver<CdpEvent>>,
+    closing_events: Option<cdp::Events>,
 }
 
 /// Neo: Keeps observed metadata and real detach events separate from session closure.
 impl FrameMetadata {
     pub(crate) fn new(cdp: &cdp::Browser) -> Self {
         Self {
-            events: cdp.client().events(),
+            events: cdp.events(),
             watched: HashSet::new(),
             known: Vec::new(),
             live: Vec::new(),
@@ -100,16 +99,12 @@ impl FrameMetadata {
     fn collect_events(&mut self, candidate: &[FrameInfo]) -> Result<(), PlaywrightError> {
         loop {
             match self.events.try_recv() {
-                Ok(event)
-                    if event
-                        .session_id
-                        .as_ref()
-                        .is_some_and(|id| self.watched.contains(id)) =>
-                {
+                Ok(event) if event.session().is_some_and(|id| self.watched.contains(id)) => {
                     let Some(id) = page::event_frame(&event) else {
                         continue;
                     };
-                    let Some(session) = &event.session_id else {
+                    let id = id.as_str();
+                    let Some(session) = event.session() else {
                         continue;
                     };
                     let observed = self
@@ -118,10 +113,11 @@ impl FrameMetadata {
                         .chain(candidate)
                         .any(|frame| frame.id == id);
                     let applied = page::apply(&mut PageState::default(), &event, session, id);
-                    let removed =
-                        event.method == "Page.frameDetached" && event.params["reason"] == "remove";
-                    let swapped =
-                        event.method == "Page.frameDetached" && event.params["reason"] == "swap";
+                    let detached = event
+                        .decode::<cdp::page::FrameDetached>()
+                        .map(|detached| detached.reason);
+                    let removed = detached.as_deref() == Some("remove");
+                    let swapped = detached.as_deref() == Some("swap");
                     let navigated = applied.navigation.is_some();
                     // Playwright: `server/frames.ts` `FrameManager.frameCommittedNewDocumentNavigation`: `this.removeChildFramesRecursively(frame);`
                     // Playwright: `server/chromium/crPage.ts` `FrameSession._onFrameDetached`: `this._page.frameManager.removeChildFramesRecursively(frame);`
@@ -140,8 +136,11 @@ impl FrameMetadata {
                         && let Some(frame) = self.known.iter_mut().find(|frame| frame.id == id)
                     {
                         frame.url = navigation.url;
-                        if let Some(name) = event.params["frame"]["name"].as_str() {
-                            frame.name = name.to_string();
+                        if let Some(name) = event
+                            .decode::<cdp::page::FrameNavigated>()
+                            .and_then(|navigated| navigated.frame.name)
+                        {
+                            frame.name = name;
                         }
                     }
                     if removed || (observed && (applied.new_document || swapped || navigated)) {
@@ -187,7 +186,7 @@ impl FrameMetadata {
         }
         let _collected = self.collect_events(&[]);
         if self.lost_events {
-            self.events = cdp.client().events();
+            self.events = cdp.events();
         }
         FrameSnapshot {
             revision: self.revision,
@@ -565,11 +564,11 @@ pub(crate) async fn is_closed(cdp: &cdp::Browser, page: &PageId) -> Result<bool,
 mod tests {
     use std::sync::Arc;
 
-    use browseros_cdp::{CdpEvent, SessionId};
+    use browseros_cdp::SessionId;
+    use browseros_cdp::page::Frame;
     use serde_json::{Value, json};
 
     use tokio::runtime::Handle;
-    use tokio::sync::broadcast;
     use tokio_util::task::TaskTracker;
 
     use crate::chromium_bridge::cdp;
@@ -680,24 +679,24 @@ mod tests {
         (browser, tabs, page, host)
     }
 
-    fn lose_events(page: &PageEntry) -> broadcast::Sender<CdpEvent> {
-        let (sender, receiver) = broadcast::channel(1);
+    fn lose_events(page: &PageEntry) -> cdp::Ring {
+        let (sender, receiver) = cdp::Ring::new(1);
         page.frame_metadata
             .lock()
             .unwrap_or_else(|error| panic!("metadata state: {error}"))
             .events = receiver;
         for _ in 0..2 {
-            let _sent = sender.send(CdpEvent {
-                method: "Runtime.consoleAPICalled".to_string(),
-                params: json!({}),
-                session_id: None,
-            });
+            let _sent = sender.send(cdp::Raw::fixture(
+                "Runtime.consoleAPICalled",
+                None,
+                json!({ "type": "log", "args": [], "executionContextId": 1, "timestamp": 0.0 }),
+            ));
         }
         sender
     }
 
-    fn metadata_events(page: &PageEntry) -> (broadcast::Sender<CdpEvent>, SessionId) {
-        let (sender, receiver) = broadcast::channel(16);
+    fn metadata_events(page: &PageEntry) -> (cdp::Ring, SessionId) {
+        let (sender, receiver) = cdp::Ring::new(16);
         let mut metadata = page
             .frame_metadata
             .lock()
@@ -712,12 +711,18 @@ mod tests {
         (sender, session)
     }
 
-    fn commit(session: &SessionId, id: &str) -> CdpEvent {
-        CdpEvent {
-            method: "Page.frameNavigated".to_string(),
-            params: json!({"frame":{"id":id,"url":"https://example.test/new","loaderId":"new-document"}}),
-            session_id: Some(session.clone()),
-        }
+    fn commit(session: &SessionId, id: &str) -> cdp::Raw {
+        let navigated = cdp::page::FrameNavigated {
+            frame: Frame {
+                id: id.to_string(),
+                url: "https://example.test/new".to_string(),
+                loader_id: "new-document".to_string(),
+                ..Frame::default()
+            },
+            r#type: "Navigation".to_string(),
+        };
+        let params = serde_json::to_value(navigated).expect("the event serializes");
+        cdp::Raw::fixture("Page.frameNavigated", Some(session.as_str()), params)
     }
 
     #[test]
@@ -1048,11 +1053,11 @@ mod tests {
         let stale = metadata.known.clone();
         let revision = metadata.begin_snapshot(tabs.cdp());
         sender
-            .send(CdpEvent {
-                method: "Page.navigatedWithinDocument".to_string(),
-                params: json!({"frameId":PAGE,"url":format!("{PAGE_URL}#next")}),
-                session_id: Some(session),
-            })
+            .send(cdp::Raw::fixture(
+                "Page.navigatedWithinDocument",
+                Some(session.as_str()),
+                json!({"frameId":PAGE,"url":format!("{PAGE_URL}#next"),"navigationType":"fragment"}),
+            ))
             .unwrap();
         if !metadata.finish_snapshot(&stale, revision) {
             let revision = metadata.begin_snapshot(tabs.cdp());
@@ -1090,11 +1095,11 @@ mod tests {
         let tree = metadata.known.clone();
         let revision = metadata.begin_snapshot(tabs.cdp());
         sender
-            .send(CdpEvent {
-                method: "Runtime.consoleAPICalled".to_string(),
-                params: json!({}),
-                session_id: Some(session.clone()),
-            })
+            .send(cdp::Raw::fixture(
+                "Runtime.consoleAPICalled",
+                Some(session.as_str()),
+                json!({ "type": "log", "args": [], "executionContextId": 1, "timestamp": 0.0 }),
+            ))
             .unwrap();
         sender.send(commit(&session, "unobserved-churn")).unwrap();
         assert!(metadata.finish_snapshot(&tree, revision));
@@ -1180,11 +1185,11 @@ mod tests {
             .unwrap();
         let (sender, session) = metadata_events(&page);
         sender
-            .send(CdpEvent {
-                method: "Page.frameDetached".to_string(),
-                params: json!({"frameId":"local","reason":"swap"}),
-                session_id: Some(session),
-            })
+            .send(cdp::Raw::fixture(
+                "Page.frameDetached",
+                Some(session.as_str()),
+                json!({"frameId":"local","reason":"swap"}),
+            ))
             .unwrap();
         let mut metadata = page.frame_metadata.lock().unwrap();
         metadata.closing();
@@ -1238,7 +1243,7 @@ mod tests {
             frame(&tabs, &page, &local, FrameField::Name).await.unwrap(),
             "before"
         );
-        let (sender, receiver) = broadcast::channel(8);
+        let (sender, receiver) = cdp::Ring::new(8);
         let session = {
             let mut metadata = page.frame_metadata.lock().unwrap();
             metadata.events = receiver;
@@ -1251,11 +1256,11 @@ mod tests {
             .await
             .unwrap();
         sender
-            .send(CdpEvent {
-                method: "Page.frameDetached".to_string(),
-                params: json!({"frameId":"local","reason":"remove"}),
-                session_id: Some(session),
-            })
+            .send(cdp::Raw::fixture(
+                "Page.frameDetached",
+                Some(session.as_str()),
+                json!({"frameId":"local","reason":"remove"}),
+            ))
             .unwrap();
         tabs.cdp().client().disconnect().await;
         assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
@@ -1288,11 +1293,11 @@ mod tests {
             let tree = metadata.known.clone();
             let snapshot = metadata.begin_snapshot(tabs.cdp());
             sender
-                .send(CdpEvent {
-                    method: "Page.frameDetached".to_string(),
-                    params: json!({"frameId":"local","reason":"remove"}),
-                    session_id: Some(session),
-                })
+                .send(cdp::Raw::fixture(
+                    "Page.frameDetached",
+                    Some(session.as_str()),
+                    json!({"frameId":"local","reason":"remove"}),
+                ))
                 .unwrap();
             assert!(!metadata.finish_snapshot(&tree, snapshot));
         }
@@ -1324,11 +1329,11 @@ mod tests {
             .await
             .unwrap();
         sender
-            .send(CdpEvent {
-                method: "Page.frameDetached".to_string(),
-                params: json!({"frameId":"local","reason":"remove"}),
-                session_id: Some(session),
-            })
+            .send(cdp::Raw::fixture(
+                "Page.frameDetached",
+                Some(session.as_str()),
+                json!({"frameId":"local","reason":"remove"}),
+            ))
             .unwrap();
         assert!(
             !page

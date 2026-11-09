@@ -2389,7 +2389,7 @@ mod tests {
     use crate::chromium_bridge::browser_connection_settings::Switches;
     use crate::chromium_bridge::cdp;
     use crate::deadline::Deadline;
-    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies, tab_record};
     use crate::playwright_methods::click::tests::FakeTab;
     use crate::playwright_methods::forms::SelectOption;
     use crate::playwright_methods::screenshot::TabScreenshots;
@@ -2475,10 +2475,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn tests_that_closing_pages_share_one_finish_budget() {
         let browser = FakeBrowser::start(Replies::default()).await;
-        browser.page.lock().unwrap().tabs.push(json!({
-            "targetId":"other", "url":"about:blank", "windowId":1,
-            "liveBrowserContextId":"profile", "isActive":false,
-        }));
+        browser.page.lock().unwrap().tabs.push(tab_record(
+            "other",
+            "about:blank",
+            1,
+            Some("profile"),
+            false,
+        ));
         let tasks = TaskTracker::new();
         let run = RunScope::new(
             Deadline::new(Duration::from_secs(10), CancellationToken::new()),

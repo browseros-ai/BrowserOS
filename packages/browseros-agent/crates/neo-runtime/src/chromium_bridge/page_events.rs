@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use browseros_cdp::{CdpEvent, SessionId};
+use browseros_cdp::SessionId;
 use neo_runtime_spec::serve::SerializedError;
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
@@ -391,8 +391,8 @@ impl PageEvents {
     /// Applies one event the watcher already applied to the page's state (`applied`), and
     /// returns the dialog answer the watcher still owes: `applied.dialog` unless a listener now
     /// owns the dialog.
-    pub(crate) fn apply(&self, event: &CdpEvent, applied: &Applied) -> Option<DialogAnswer> {
-        let Some(session) = event.session_id.as_ref() else {
+    pub(crate) fn apply(&self, event: &cdp::Raw, applied: &Applied) -> Option<DialogAnswer> {
+        let Some(session) = event.session() else {
             return applied.dialog;
         };
         self.track_context(event, session);
@@ -406,7 +406,7 @@ impl PageEvents {
                 .and_then(|children| children.get(session).cloned());
             if let Some(hosted) = hosted {
                 self.context_frames.apply(event);
-                if let Some(opened) = cdp::decode::<page::FileChooserOpened>(event) {
+                if let Some(opened) = event.decode::<page::FileChooserOpened>() {
                     self.file_chooser(opened, hosted);
                 }
                 self.console_event(event, session);
@@ -416,12 +416,12 @@ impl PageEvents {
         }
         self.context_frames.apply(event);
         let mut answer = applied.dialog;
-        if cdp::is::<page::JavascriptDialogOpening>(event) {
+        if event.is::<page::JavascriptDialogOpening>() {
             answer = self.dialog_opening(event, answer);
-        } else if cdp::is::<page::JavascriptDialogClosed>(event) {
+        } else if event.is::<page::JavascriptDialogClosed>() {
             self.dialog_closed();
-        } else if cdp::is::<page::FileChooserOpened>(event) {
-            if let Some(opened) = cdp::decode(event) {
+        } else if event.is::<page::FileChooserOpened>() {
+            if let Some(opened) = event.decode() {
                 self.file_chooser(opened, None);
             }
         } else {
@@ -439,11 +439,11 @@ impl PageEvents {
     ///
     /// The page-world execution contexts of the tab's own session and of the out-of-process
     /// frame sessions the watcher takes, each with its frame.
-    fn track_context(&self, event: &CdpEvent, session: &SessionId) {
+    fn track_context(&self, event: &cdp::Raw, session: &SessionId) {
         let Ok(mut contexts) = self.contexts.lock() else {
             return;
         };
-        if let Some(created) = cdp::decode::<runtime::ExecutionContextCreated>(event) {
+        if let Some(created) = event.decode::<runtime::ExecutionContextCreated>() {
             let context = created.context;
             // `auxData` is free-form in the protocol: Chromium's frame and page-world flags.
             let aux = context.aux_data.unwrap_or_default();
@@ -451,23 +451,23 @@ impl PageEvents {
             if let (Some(frame), true) = (aux["frameId"].as_str(), page_world) {
                 contexts.insert((session.clone(), context.id), frame.to_string());
             }
-        } else if let Some(destroyed) = cdp::decode::<runtime::ExecutionContextDestroyed>(event) {
+        } else if let Some(destroyed) = event.decode::<runtime::ExecutionContextDestroyed>() {
             contexts.remove(&(session.clone(), destroyed.execution_context_id));
-        } else if cdp::is::<runtime::ExecutionContextsCleared>(event) {
+        } else if event.is::<runtime::ExecutionContextsCleared>() {
             contexts.retain(|(of, _), _| of != session);
         }
     }
 
     /// A frame change of the tab, for the page's and the context's frame listeners.
-    fn frame_event(&self, event: &CdpEvent) {
-        let frame_change = cdp::is::<page::FrameAttached>(event)
-            || cdp::is::<page::FrameDetached>(event)
-            || cdp::is::<page::FrameNavigated>(event)
-            || cdp::is::<page::NavigatedWithinDocument>(event);
+    fn frame_event(&self, event: &cdp::Raw) {
+        let frame_change = event.is::<page::FrameAttached>()
+            || event.is::<page::FrameDetached>()
+            || event.is::<page::FrameNavigated>()
+            || event.is::<page::NavigatedWithinDocument>();
         if !frame_change {
             return;
         }
-        if let Some(navigated) = cdp::decode::<page::FrameNavigated>(event) {
+        if let Some(navigated) = event.decode::<page::FrameNavigated>() {
             self.visit(&navigated.frame.url);
         }
         let Ok(changes) = self.frames.lock().map(|mut model| model.apply(event)) else {
@@ -503,8 +503,8 @@ impl PageEvents {
 
     /// The session ended: the tab closed or crashed. Emits `close` or `crash` on the page; the
     /// SDK's `close` also runs the context's `pageclose` listeners.
-    pub(crate) fn closing(&self, event: Option<&CdpEvent>) {
-        let crashed = event.is_some_and(cdp::is::<inspector::TargetCrashed>);
+    pub(crate) fn closing(&self, event: Option<&cdp::Raw>) {
+        let crashed = event.is_some_and(cdp::Raw::is::<inspector::TargetCrashed>);
         let wanted = if crashed {
             self.hub.subscribed(&self.page_guid, "crash")
         } else {
@@ -522,24 +522,25 @@ impl PageEvents {
     }
 
     /// A console message, log entry or page error of `session`, the tab's or a frame's.
-    fn console_event(&self, event: &CdpEvent, session: &SessionId) {
-        if cdp::is::<ConsoleApiCalled>(event) {
+    fn console_event(&self, event: &cdp::Raw, session: &SessionId) {
+        if event.is::<ConsoleApiCalled>() {
             self.console_api(event, session);
-        } else if cdp::is::<LogEntryAdded>(event) {
+        } else if event.is::<LogEntryAdded>() {
             self.log_entry(event, session);
-        } else if cdp::is::<ExceptionThrown>(event) {
+        } else if event.is::<ExceptionThrown>() {
             self.exception(event, session);
         }
     }
 
-    fn console_api(&self, event: &CdpEvent, session: &SessionId) {
-        let Some(called) = cdp::decode::<ConsoleApiCalled>(event) else {
+    fn console_api(&self, event: &cdp::Raw, session: &SessionId) {
+        let Some(called) = event.decode::<ConsoleApiCalled>() else {
             return;
         };
         let Some(record) = console::from_console_api(&called) else {
             return;
         };
-        let args = cdp::decode::<runtime::ConsoleArgs>(event)
+        let args = event
+            .decode::<runtime::ConsoleArgs>()
             .and_then(|console| console.args.as_array().cloned())
             .unwrap_or_default();
         // Playwright: `server/chromium/crPage.ts` `FrameSession._onConsoleAPI`: `const context = this._contextIdToContext.get(event.executionContextId);`
@@ -551,8 +552,8 @@ impl PageEvents {
         self.message(record, called.timestamp, session, args, frame);
     }
 
-    fn log_entry(&self, event: &CdpEvent, session: &SessionId) {
-        let Some(LogEntryAdded { entry }) = cdp::decode(event) else {
+    fn log_entry(&self, event: &cdp::Raw, session: &SessionId) {
+        let Some(LogEntryAdded { entry }) = event.decode() else {
             return;
         };
         // Playwright: `server/chromium/crPage.ts` `FrameSession._onLogEntryAdded`: `args.map(arg => releaseObject(this._client, arg.objectId!));`
@@ -609,8 +610,8 @@ impl PageEvents {
         }
     }
 
-    fn exception(&self, event: &CdpEvent, session: &SessionId) {
-        let Some(event) = cdp::decode::<ExceptionThrown>(event) else {
+    fn exception(&self, event: &cdp::Raw, session: &SessionId) {
+        let Some(event) = event.decode::<ExceptionThrown>() else {
             return;
         };
         let record = console::from_exception(&event);
@@ -637,10 +638,10 @@ impl PageEvents {
 
     fn dialog_opening(
         &self,
-        event: &CdpEvent,
+        event: &cdp::Raw,
         answer: Option<DialogAnswer>,
     ) -> Option<DialogAnswer> {
-        let Some(opening) = cdp::decode::<page::JavascriptDialogOpening>(event) else {
+        let Some(opening) = event.decode::<page::JavascriptDialogOpening>() else {
             return answer;
         };
         let Some((index, record)) = self.dialogs.opened(
@@ -1177,11 +1178,7 @@ mod tests {
             cdp::Browser::new(browser.cdp().await).adopt(SessionId::from("s")),
             false,
         );
-        let context = |method: &str, params: Value| CdpEvent {
-            method: method.to_string(),
-            params,
-            session_id: Some(SessionId::from("s")),
-        };
+        let context = |method: &str, params: Value| cdp::Raw::fixture(method, Some("s"), params);
         // As Chromium sends it: every field the pinned protocol requires.
         let created = |id: i64, default: bool| {
             serde_json::to_value(runtime::ExecutionContextCreated {

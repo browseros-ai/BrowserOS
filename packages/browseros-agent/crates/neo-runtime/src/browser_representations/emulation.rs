@@ -18,27 +18,26 @@
 //! background, as Playwright does, so the page never keeps half of a rejected change.
 
 use std::collections::HashSet;
-use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use browseros_cdp::{CdpError, CdpEvent, SessionId};
+use browseros_cdp::{CdpError, SessionId};
 use futures_util::future;
 use neo_runtime_spec::serve::{
     PageEmulateMediaParams, PageEmulateMediaParamsColorScheme, PageEmulateMediaParamsContrast,
     PageEmulateMediaParamsForcedColors, PageEmulateMediaParamsMedia,
     PageEmulateMediaParamsReducedMotion,
 };
-use serde::Deserialize;
-use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::browser_representations::page::PageSession;
 use crate::browser_representations::tabs;
-use crate::chromium_bridge::cdp;
+use crate::chromium_bridge::cdp::{
+    self, Command, OnSession, browser, emulation, heap_profiler, page as page_domain, runtime,
+    security, target,
+};
 use crate::chromium_bridge::frames::Host;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
@@ -124,34 +123,52 @@ pub(crate) struct PageEmulation {
     updates: AsyncMutex<()>,
     /// The sessions Chromium attached for a created context's out-of-process frames
     /// ([`watch_targets`]), which `emulateMedia` reaches too.
-    frames: Mutex<Vec<SessionId>>,
+    frames: Mutex<Vec<cdp::Session>>,
     /// Stops [`watch_targets`] when the page's session, and this emulation with it, goes.
     watching: OnceLock<DropGuard>,
 }
 
 /// The paused auto-attach Playwright sets on every frame session and worker.
-fn auto_attach() -> Value {
+fn auto_attach() -> target::SetAutoAttach {
     // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `this._client.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }),`
-    json!({ "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true })
+    target::SetAutoAttach {
+        auto_attach: true,
+        wait_for_debugger_on_start: true,
+        flatten: Some(true),
+        filter: None,
+    }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AttachedTarget {
-    session_id: SessionId,
-    target_info: AttachedTargetInfo,
+/// Neo: the frame session an emulation write goes to. Playwright's `FrameSession` sends on its
+/// own `CRSession`; Neo's frame sessions come two ways, so the writes that every frame session
+/// gets ([`frame_options`]) are made once for both.
+#[derive(Clone, Copy)]
+enum FrameSession<'a> {
+    /// The page's own session, or one Chromium auto-attached under a created context's page
+    /// ([`watch_targets`]).
+    Session(&'a cdp::Session),
+    /// An out-of-process frame the run attached when a call first reached it: its sends answer
+    /// `SessionGone` at once once the frame's session detached ([`Host::send_command`]).
+    Host(&'a Host),
 }
 
-#[derive(Deserialize)]
-struct AttachedTargetInfo {
-    #[serde(rename = "type")]
-    kind: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DetachedTarget {
-    session_id: SessionId,
+impl<'a> FrameSession<'a> {
+    /// Sends `command`, an emulation write whose reply is `{}`.
+    fn send<C: Command<Via = OnSession> + 'a>(
+        self,
+        command: C,
+    ) -> future::BoxFuture<'a, Result<(), CdpError>> {
+        match self {
+            Self::Session(session) => {
+                let sent = session.send(command);
+                Box::pin(async move { sent.await.map(drop) })
+            }
+            Self::Host(host) => {
+                let sent = host.send_command(command);
+                Box::pin(async move { sent.await.map(drop) })
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -163,7 +180,7 @@ struct State {
     /// Playwright's `Page._emulatedMedia`.
     media: EmulatedMedia,
     /// Playwright's `FrameSession._metricsOverride`: the last override sent.
-    metrics: Option<Value>,
+    metrics: Option<emulation::SetDeviceMetricsOverride>,
     /// Playwright's `FrameSession._windowId`: set only for a created context's page with a
     /// viewport, as Playwright reads it only without `noDefaultViewport`.
     window: Option<i64>,
@@ -194,24 +211,21 @@ impl PageEmulation {
         }
         // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `const { windowId } = await this._client.send('Browser.getWindowForTarget');`
         if context.viewport.is_some()
-            && let Ok(reply) = page.send("Browser.getWindowForTarget", json!({})).await
-            && let Some(window) = reply.get("windowId").and_then(Value::as_i64)
+            && let Ok(reply) = page
+                .send_command(browser::GetWindowForTarget { target_id: None })
+                .await
             && let Ok(mut state) = self.state.lock()
         {
-            state.window = Some(window);
+            state.window = Some(reply.window_id);
         }
+        let main = FrameSession::Session(page.cdp());
         let mut steps: Vec<future::BoxFuture<'_, Result<(), CdpError>>> = vec![
             // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._client.send('Emulation.setFocusEmulationEnabled', { enabled: true }));`
-            Box::pin(sent(page.send(
-                "Emulation.setFocusEmulationEnabled",
-                json!({ "enabled": true }),
-            ))),
+            main.send(emulation::SetFocusEmulationEnabled { enabled: true }),
             Box::pin(self.update_viewport(page)),
             Box::pin(self.send_media(page, &[])),
         ];
-        steps.extend(frame_options(&context, |method, params| {
-            Box::pin(sent(page.send(method, params))) as future::BoxFuture<'_, _>
-        }));
+        steps.extend(frame_options(&context, main));
         future::try_join_all(steps).await?;
         self.attach_targets(page).await
     }
@@ -220,25 +234,21 @@ impl PageEmulation {
     /// every out-of-process frame or worker the page starts waits for [`watch_targets`], which
     /// applies the context's options to it and only then lets it run.
     async fn attach_targets(self: &Arc<Self>, page: &PageSession) -> Result<(), CdpError> {
-        let cdp = page.cdp().browser().clone();
-        let parent = page.session_id().clone();
+        let main = page.cdp();
         // Subscribed before auto-attach is on, so no target it pauses goes unseen and unreleased.
-        let events = cdp.client().events();
+        let events = main.events();
         let stop = CancellationToken::new();
         if self.watching.set(stop.clone().drop_guard()).is_err() {
             return Ok(());
         }
         tokio::spawn(watch_targets(
-            cdp.clone(),
-            parent.clone(),
+            main.browser().clone(),
+            main.id().clone(),
             events,
             Arc::downgrade(self),
             stop,
         ));
-        cdp.client()
-            .send("Target.setAutoAttach", auto_attach(), Some(&parent))
-            .await
-            .map(|_| ())
+        main.send(auto_attach()).await.map(drop)
     }
 
     /// Playwright's `FrameSession._onAttachedToTarget` for a target Chromium attached to the
@@ -247,15 +257,11 @@ impl PageEmulation {
     /// Returns whether its own session is watched for the targets it starts in turn.
     async fn configure_target(
         &self,
-        cdp: &cdp::Browser,
-        parent: &SessionId,
-        child: &SessionId,
+        parent: &cdp::Session,
+        child: &cdp::Session,
         kind: &str,
     ) -> bool {
-        let send = |method: &'static str, params: Value| {
-            Box::pin(sent(cdp.client().send(method, params, Some(child))))
-                as future::BoxFuture<'_, _>
-        };
+        let to = FrameSession::Session(child);
         let context = self
             .state
             .lock()
@@ -265,10 +271,10 @@ impl PageEmulation {
         match kind {
             "iframe" => {
                 if let Some(context) = &context {
-                    steps.extend(frame_options(context, send));
+                    steps.extend(frame_options(context, to));
                 }
-                steps.push(send("Emulation.setEmulatedMedia", self.media_params()));
-                steps.push(send("Target.setAutoAttach", auto_attach()));
+                steps.push(to.send(self.media_params()));
+                steps.push(to.send(auto_attach()));
                 if let Ok(mut frames) = self.frames.lock() {
                     frames.push(child.clone());
                 }
@@ -279,22 +285,17 @@ impl PageEmulation {
                     .as_deref()
                     .filter(|context| context.user_agent.is_some() || context.locale.is_some())
                 {
-                    steps.push(send(
-                        "Emulation.setUserAgentOverride",
-                        user_agent_params(context),
-                    ));
+                    steps.push(to.send(user_agent_params(context)));
                 }
-                steps.push(send("Target.setAutoAttach", auto_attach()));
+                steps.push(to.send(auto_attach()));
             }
             _ => {
                 // Playwright: `server/chromium/crPage.ts` `FrameSession._onAttachedToTarget`: `parentSession._sendMayFail('Target.detachFromTarget', { sessionId: event.sessionId });`
-                let detached = cdp
-                    .client()
-                    .send(
-                        "Target.detachFromTarget",
-                        json!({ "sessionId": child }),
-                        Some(parent),
-                    )
+                let detached = parent
+                    .send(target::DetachChild(target::DetachFromTarget {
+                        session_id: Some(child.id().as_str().to_string()),
+                        target_id: None,
+                    }))
                     .await;
                 if let Err(error) = detached {
                     debug!(%error, "letting go of an attached target failed");
@@ -308,7 +309,7 @@ impl PageEmulation {
             }
         }
         // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._client.send('Runtime.runIfWaitingForDebugger'));`
-        if let Err(error) = send("Runtime.runIfWaitingForDebugger", json!({})).await {
+        if let Err(error) = child.send(runtime::RunIfWaitingForDebugger {}).await {
             debug!(%error, "releasing an attached target failed");
         }
         true
@@ -317,7 +318,7 @@ impl PageEmulation {
     /// Forgets an out-of-process frame session Chromium detached.
     fn forget_frame(&self, session: &SessionId) {
         if let Ok(mut frames) = self.frames.lock() {
-            frames.retain(|frame| frame != session);
+            frames.retain(|frame| frame.id() != session);
         }
     }
 
@@ -338,17 +339,13 @@ impl PageEmulation {
             ),
             Err(_) => return,
         };
+        let to = FrameSession::Host(host);
         let mut steps: Vec<future::BoxFuture<'_, Result<(), CdpError>>> = Vec::new();
         if let Some(context) = &context {
-            steps.extend(frame_options(context, |method, params| {
-                Box::pin(sent(host.send(method, params))) as future::BoxFuture<'_, _>
-            }));
+            steps.extend(frame_options(context, to));
         }
         if context.is_some() || media_set {
-            let params = self.media_params();
-            steps.push(Box::pin(sent(
-                host.send("Emulation.setEmulatedMedia", params),
-            )));
+            steps.push(to.send(self.media_params()));
         }
         for result in future::join_all(steps).await {
             if let Err(error) = result {
@@ -462,14 +459,17 @@ impl PageEmulation {
         };
         if let Some((window, width, height)) = window {
             // Playwright: `server/chromium/crPage.ts` `FrameSession.setWindowBounds`: `return await this._client.send('Browser.setWindowBounds', {`
-            page.send(
-                "Browser.setWindowBounds",
-                json!({ "windowId": window, "bounds": { "width": width, "height": height } }),
-            )
+            page.send_command(browser::SetWindowBounds {
+                window_id: window,
+                bounds: browser::Bounds {
+                    width: Some(width),
+                    height: Some(height),
+                    ..browser::Bounds::default()
+                },
+            })
             .await?;
         }
-        page.send("Emulation.setDeviceMetricsOverride", metrics.clone())
-            .await?;
+        page.send_command(metrics.clone()).await?;
         if let Ok(mut state) = self.state.lock() {
             state.metrics = Some(metrics);
         }
@@ -480,15 +480,15 @@ impl PageEmulation {
     /// out-of-process frame session in `children`, where a closed session is skipped.
     async fn send_media(&self, page: &PageSession, children: &[Arc<Host>]) -> Result<(), CdpError> {
         let params = self.media_params();
-        let main = page.send("Emulation.setEmulatedMedia", params.clone());
+        let main = page.send_command(params.clone());
         let frames = children.iter().map(|host| {
-            let params = params.clone();
+            let sent = host.send_command(params.clone());
             async move {
-                match host.send("Emulation.setEmulatedMedia", params).await {
+                match sent.await {
                     // Playwright: `server/chromium/crPage.ts` `CRPage._forAllFrameSessions`: `if (isSessionClosedError(e))`
-                    Err(CdpError::SessionGone) => Ok(Value::Null),
-                    Err(_) if host.gone().is_cancelled() => Ok(Value::Null),
-                    other => other,
+                    Err(CdpError::SessionGone) => Ok(()),
+                    Err(_) if host.gone().is_cancelled() => Ok(()),
+                    other => other.map(drop),
                 }
             }
         });
@@ -498,17 +498,11 @@ impl PageEmulation {
             .map(|frames| frames.clone())
             .unwrap_or_default();
         let auto = attached.iter().map(|session| {
-            let params = params.clone();
+            let sent = session.send(params.clone());
             async move {
-                match page
-                    .cdp()
-                    .browser()
-                    .client()
-                    .send("Emulation.setEmulatedMedia", params, Some(session))
-                    .await
-                {
-                    Err(CdpError::SessionGone) => Ok(Value::Null),
-                    other => other,
+                match sent.await {
+                    Err(CdpError::SessionGone) => Ok(()),
+                    other => other.map(drop),
                 }
             }
         });
@@ -523,7 +517,7 @@ impl PageEmulation {
     }
 
     /// Playwright's `FrameSession._updateEmulateMedia` params for the media emulated now.
-    fn media_params(&self) -> Value {
+    fn media_params(&self) -> emulation::SetEmulatedMedia {
         let media = self
             .state
             .lock()
@@ -591,7 +585,9 @@ impl State {
         clippy::type_complexity,
         reason = "one tuple of the two writes and their order"
     )]
-    fn metrics_update(&self) -> Option<(Value, Option<(i64, i64, i64)>)> {
+    fn metrics_update(
+        &self,
+    ) -> Option<(emulation::SetDeviceMetricsOverride, Option<(i64, i64, i64)>)> {
         let (viewport, screen) = self.emulated_size()?;
         let context = self.context.as_deref();
         let is_mobile = context.is_some_and(|context| context.is_mobile);
@@ -601,22 +597,26 @@ impl State {
             .and_then(|context| context.device_scale_factor)
             .filter(|factor| *factor != 0.0)
             .unwrap_or(1.0);
-        let orientation = if is_mobile && is_landscape {
-            json!({ "angle": 90, "type": "landscapePrimary" })
+        let (angle, kind) = if is_mobile && is_landscape {
+            (90, "landscapePrimary")
         } else if is_mobile {
-            json!({ "angle": 0, "type": "portraitPrimary" })
+            (0, "portraitPrimary")
         } else {
-            json!({ "angle": 0, "type": "landscapePrimary" })
+            (0, "landscapePrimary")
         };
-        let metrics = json!({
-            "mobile": is_mobile,
-            "width": viewport.width,
-            "height": viewport.height,
-            "screenWidth": screen.width,
-            "screenHeight": screen.height,
-            "deviceScaleFactor": device_scale_factor,
-            "screenOrientation": orientation,
-        });
+        let metrics = emulation::SetDeviceMetricsOverride {
+            mobile: is_mobile,
+            width: viewport.width,
+            height: viewport.height,
+            screen_width: Some(screen.width),
+            screen_height: Some(screen.height),
+            device_scale_factor,
+            screen_orientation: Some(emulation::ScreenOrientation {
+                angle,
+                r#type: kind.to_string(),
+            }),
+            ..emulation::SetDeviceMetricsOverride::default()
+        };
         if self.metrics.as_ref() == Some(&metrics) {
             return None;
         }
@@ -641,7 +641,7 @@ impl State {
 async fn watch_targets(
     cdp: cdp::Browser,
     parent: SessionId,
-    mut events: broadcast::Receiver<CdpEvent>,
+    mut events: cdp::Events,
     emulation: Weak<PageEmulation>,
     stop: CancellationToken,
 ) {
@@ -663,111 +663,97 @@ async fn watch_targets(
             }
             Err(RecvError::Closed) => return,
         };
-        let Some(from) = event
-            .session_id
-            .clone()
-            .filter(|from| watched.contains(from))
-        else {
+        let Some(from) = event.session().filter(|from| watched.contains(*from)) else {
             continue;
         };
-        match event.method.as_str() {
-            "Target.attachedToTarget" => {
-                let Ok(attached) = serde_json::from_value::<AttachedTarget>(event.params) else {
-                    continue;
-                };
-                let Some(emulation) = emulation.upgrade() else {
-                    return;
-                };
-                let child = attached.session_id;
-                if emulation
-                    .configure_target(&cdp, &from, &child, &attached.target_info.kind)
-                    .await
-                {
-                    watched.insert(child);
-                }
+        if let Some(attached) = event.decode::<target::AttachedToTarget>() {
+            let Some(emulation) = emulation.upgrade() else {
+                return;
+            };
+            // Adopted the moment Chromium names it ([`cdp::Browser::adopt`]).
+            let child = cdp.adopt(SessionId::from(attached.session_id));
+            if emulation
+                .configure_target(
+                    &cdp.adopt(from.clone()),
+                    &child,
+                    &attached.target_info.r#type,
+                )
+                .await
+            {
+                watched.insert(child.id().clone());
             }
-            "Target.detachedFromTarget" => {
-                if let Ok(detached) = serde_json::from_value::<DetachedTarget>(event.params) {
-                    watched.remove(&detached.session_id);
-                    if let Some(emulation) = emulation.upgrade() {
-                        emulation.forget_frame(&detached.session_id);
-                    }
-                }
+        } else if let Some(detached) = event.decode::<target::DetachedFromTarget>() {
+            let session = SessionId::from(detached.session_id);
+            watched.remove(&session);
+            if let Some(emulation) = emulation.upgrade() {
+                emulation.forget_frame(&session);
             }
-            _ => {}
         }
     }
 }
 
 /// Playwright's `FrameSession._updateEmulateMedia`: `'no-override'` is sent as `''`, which
 /// stops the override.
-fn media_params(media: &EmulatedMedia) -> Value {
+fn media_params(media: &EmulatedMedia) -> emulation::SetEmulatedMedia {
     // Playwright: `server/chromium/crPage.ts` `FrameSession._updateEmulateMedia`: `const media = emulatedMedia.media === 'no-override' ? '' : emulatedMedia.media;`
     let value = |literal: Option<&'static str>| match literal {
-        None | Some(NO_OVERRIDE) => "",
-        Some(literal) => literal,
+        None | Some(NO_OVERRIDE) => String::new(),
+        Some(literal) => literal.to_string(),
     };
-    json!({
-        "media": value(media.media),
-        "features": [
-            { "name": "prefers-color-scheme", "value": value(media.color_scheme) },
-            { "name": "prefers-reduced-motion", "value": value(media.reduced_motion) },
-            { "name": "forced-colors", "value": value(media.forced_colors) },
-            { "name": "prefers-contrast", "value": value(media.contrast) },
-        ],
-    })
+    let feature = |name: &str, literal| emulation::MediaFeature {
+        name: name.to_string(),
+        value: value(literal),
+    };
+    emulation::SetEmulatedMedia {
+        media: Some(value(media.media)),
+        features: Some(vec![
+            feature("prefers-color-scheme", media.color_scheme),
+            feature("prefers-reduced-motion", media.reduced_motion),
+            feature("forced-colors", media.forced_colors),
+            feature("prefers-contrast", media.contrast),
+        ]),
+    }
 }
 
 /// The per-frame writes of Playwright's `FrameSession._initialize` for a created context's
-/// options, each one `send(method, params)`; every frame session gets them, the main one too.
-fn frame_options<'a, F>(
+/// options, each sent on `to`; every frame session gets them, the main one too.
+fn frame_options<'a>(
     context: &'a ContextEmulation,
-    send: F,
-) -> Vec<future::BoxFuture<'a, Result<(), CdpError>>>
-where
-    F: Fn(&'static str, Value) -> future::BoxFuture<'a, Result<(), CdpError>>,
-{
+    to: FrameSession<'a>,
+) -> Vec<future::BoxFuture<'a, Result<(), CdpError>>> {
     let mut steps = Vec::new();
     if context.bypass_csp {
         // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._client.send('Page.setBypassCSP', { enabled: true }));`
-        steps.push(send("Page.setBypassCSP", json!({ "enabled": true })));
+        steps.push(to.send(page_domain::SetBypassCsp { enabled: true }));
     }
     if context.ignore_https_errors {
         // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._client.send('Security.setIgnoreCertificateErrors', { ignore: true }));`
-        steps.push(send(
-            "Security.setIgnoreCertificateErrors",
-            json!({ "ignore": true }),
-        ));
+        steps.push(to.send(security::SetIgnoreCertificateErrors { ignore: true }));
     }
     if context.has_touch {
         // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._client.send('Emulation.setTouchEmulationEnabled', { enabled: true }));`
-        steps.push(send(
-            "Emulation.setTouchEmulationEnabled",
-            json!({ "enabled": true }),
-        ));
+        steps.push(to.send(emulation::SetTouchEmulationEnabled {
+            enabled: true,
+            max_touch_points: None,
+        }));
     }
     if context.java_script_enabled == Some(false) {
         // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._client.send('Emulation.setScriptExecutionDisabled', { value: true }));`
-        steps.push(send(
-            "Emulation.setScriptExecutionDisabled",
-            json!({ "value": true }),
-        ));
+        steps.push(to.send(emulation::SetScriptExecutionDisabled { value: true }));
     }
     if context.user_agent.is_some() || context.locale.is_some() {
-        steps.push(send(
-            "Emulation.setUserAgentOverride",
-            user_agent_params(context),
-        ));
+        steps.push(to.send(user_agent_params(context)));
     }
     if let Some(locale) = &context.locale {
-        let locale = send("Emulation.setLocaleOverride", json!({ "locale": locale }));
+        let locale = to.send(emulation::SetLocaleOverride {
+            locale: Some(locale.clone()),
+        });
         steps.push(Box::pin(emulate_locale(locale)));
     }
     if let Some(timezone_id) = &context.timezone_id {
-        let timezone = send(
-            "Emulation.setTimezoneOverride",
-            json!({ "timezoneId": timezone_id }),
-        );
+        let timezone = to.send(emulation::SetTimezoneOverride {
+            timezone_id: timezone_id.clone(),
+        });
         steps.push(Box::pin(emulate_timezone(timezone, timezone_id.clone())));
     }
     steps
@@ -812,20 +798,18 @@ async fn emulate_timezone(
 }
 
 /// Playwright's `FrameSession._updateUserAgent` params.
-fn user_agent_params(context: &ContextEmulation) -> Value {
-    // Playwright: `server/chromium/crPage.ts` `FrameSession._updateUserAgent`: `userAgent: options.userAgent || '',`
-    let mut params = json!({ "userAgent": context.user_agent.clone().unwrap_or_default() });
-    if let Some(locale) = &context.locale {
-        params["acceptLanguage"] = json!(locale);
+fn user_agent_params(context: &ContextEmulation) -> emulation::SetUserAgentOverride {
+    emulation::SetUserAgentOverride {
+        // Playwright: `server/chromium/crPage.ts` `FrameSession._updateUserAgent`: `userAgent: options.userAgent || '',`
+        user_agent: context.user_agent.clone().unwrap_or_default(),
+        accept_language: context.locale.clone(),
+        platform: None,
+        user_agent_metadata: user_agent_metadata(context),
     }
-    if let Some(metadata) = user_agent_metadata(context) {
-        params["userAgentMetadata"] = metadata;
-    }
-    params
 }
 
 /// Playwright's `calculateUserAgentMetadata`: the client hints a user agent string implies.
-fn user_agent_metadata(context: &ContextEmulation) -> Option<Value> {
+fn user_agent_metadata(context: &ContextEmulation) -> Option<emulation::UserAgentMetadata> {
     let ua = context.user_agent.as_deref().filter(|ua| !ua.is_empty())?;
     // Playwright: `server/chromium/crPage.ts` `calculateUserAgentMetadata`: `platform: 'Windows',`
     let mut platform = "Windows";
@@ -859,13 +843,14 @@ fn user_agent_metadata(context: &ContextEmulation) -> Option<Value> {
     if ua.contains("ARM") {
         architecture = "arm";
     }
-    Some(json!({
-        "mobile": context.is_mobile,
-        "model": "",
-        "architecture": architecture,
-        "platform": platform,
-        "platformVersion": platform_version,
-    }))
+    Some(emulation::UserAgentMetadata {
+        mobile: context.is_mobile,
+        model: String::new(),
+        architecture: architecture.to_string(),
+        platform: platform.to_string(),
+        platform_version,
+        ..emulation::UserAgentMetadata::default()
+    })
 }
 
 /// The first match of Playwright's `<prefix>(\d+(<sep>\d+)?…)` with at most `parts` numbers:
@@ -929,15 +914,10 @@ pub(crate) async fn request_gc(page: &PageSession, progress: &Progress) -> Resul
     // Playwright: `server/chromium/crPage.ts` `CRPage.requestGC`: `await this._mainFrameSession._client.send('HeapProfiler.collectGarbage');`
     finish(
         progress
-            .race(page.send("HeapProfiler.collectGarbage", json!({})))
+            .race(page.send_command(heap_profiler::CollectGarbage {}))
             .await
-            .map(|result| result.map(|_| ())),
+            .map(|result| result.map(drop)),
     )
-}
-
-/// A write's reply, dropped: every emulation command replies `{}`.
-async fn sent(reply: impl Future<Output = Result<Value, CdpError>>) -> Result<(), CdpError> {
-    reply.await.map(|_| ())
 }
 
 /// A raced update's outcome as the call's result.
@@ -997,6 +977,8 @@ fn contrast_literal(contrast: PageEmulateMediaParamsContrast) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn context(user_agent: &str, is_mobile: bool) -> ContextEmulation {
@@ -1033,7 +1015,8 @@ mod tests {
         ];
         for (ua, mobile, platform, version, architecture) in cases {
             assert_eq!(
-                user_agent_metadata(&context(ua, mobile)),
+                user_agent_metadata(&context(ua, mobile))
+                    .map(|metadata| serde_json::to_value(metadata).unwrap()),
                 Some(json!({
                     "mobile": mobile,
                     "model": "",
@@ -1075,7 +1058,7 @@ mod tests {
     fn media_resolves_against_the_pages_context() {
         let attached = State::default();
         assert_eq!(
-            media_params(&attached.emulated_media()),
+            serde_json::to_value(media_params(&attached.emulated_media())).unwrap(),
             json!({"media": "", "features": [
                 {"name": "prefers-color-scheme", "value": ""},
                 {"name": "prefers-reduced-motion", "value": ""},
@@ -1100,7 +1083,7 @@ mod tests {
             ..State::default()
         };
         assert_eq!(
-            media_params(&created.emulated_media()),
+            serde_json::to_value(media_params(&created.emulated_media())).unwrap(),
             json!({"media": "print", "features": [
                 {"name": "prefers-color-scheme", "value": "light"},
                 {"name": "prefers-reduced-motion", "value": "reduce"},
@@ -1134,7 +1117,7 @@ mod tests {
         };
         let (metrics, window) = state.metrics_update().unwrap();
         assert_eq!(
-            metrics,
+            serde_json::to_value(&metrics).unwrap(),
             json!({
                 "mobile": true,
                 "width": 390,
@@ -1173,6 +1156,7 @@ mod tests {
             ..State::default()
         };
         let (metrics, window) = landscape.metrics_update().unwrap();
+        let metrics = serde_json::to_value(metrics).unwrap();
         assert_eq!(metrics["mobile"], json!(false));
         assert_eq!(metrics["deviceScaleFactor"], json!(1.0));
         assert_eq!(

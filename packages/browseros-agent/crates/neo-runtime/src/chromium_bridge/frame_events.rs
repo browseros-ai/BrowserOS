@@ -26,7 +26,6 @@
 
 use std::collections::HashMap;
 
-use browseros_cdp::CdpEvent;
 use neo_runtime_spec::serve::{FrameChannel, FrameInitializer};
 use serde_json::{Value, json};
 
@@ -89,13 +88,13 @@ impl FrameModel {
         self.frames.contains_key(frame)
     }
 
-    pub(crate) fn apply(&mut self, event: &CdpEvent) -> Vec<FrameChange> {
+    pub(crate) fn apply(&mut self, event: &cdp::Raw) -> Vec<FrameChange> {
         let mut changes = Vec::new();
         if let Some(page::FrameAttached {
             frame_id,
             parent_frame_id,
             ..
-        }) = cdp::decode(event)
+        }) = event.decode()
         {
             if !self.frames.contains_key(&frame_id) {
                 self.frames.insert(
@@ -107,11 +106,11 @@ impl FrameModel {
                 );
                 changes.push(self.change("frameAttached", "frameattached", &frame_id));
             }
-        } else if let Some(page::FrameDetached { frame_id, reason }) = cdp::decode(event) {
+        } else if let Some(page::FrameDetached { frame_id, reason }) = event.decode() {
             if reason != "swap" && frame_id != self.target {
                 self.detach(&frame_id, true, &mut changes);
             }
-        } else if let Some(page::FrameNavigated { frame, .. }) = cdp::decode(event) {
+        } else if let Some(page::FrameNavigated { frame, .. }) = event.decode() {
             let url = format!("{}{}", frame.url, frame.url_fragment.unwrap_or_default());
             if self.frames.contains_key(&frame.id) {
                 self.detach(&frame.id, false, &mut changes);
@@ -126,7 +125,7 @@ impl FrameModel {
                 known.parent = parent;
             }
             changes.push(self.navigated(&frame.id));
-        } else if let Some(page::NavigatedWithinDocument { frame_id, url, .. }) = cdp::decode(event)
+        } else if let Some(page::NavigatedWithinDocument { frame_id, url, .. }) = event.decode()
             && let Some(known) = self.frames.get_mut(&frame_id)
         {
             known.url = url;
@@ -197,19 +196,14 @@ impl FrameModel {
 
 #[cfg(test)]
 mod tests {
-    use browseros_cdp::SessionId;
     use browseros_cdp::page::Frame;
 
     use super::*;
 
     const TAB: &str = "TAB";
 
-    fn event(method: &str, params: Value) -> CdpEvent {
-        CdpEvent {
-            method: method.to_string(),
-            params,
-            session_id: Some(SessionId::from("s")),
-        }
+    fn event(method: &str, params: Value) -> cdp::Raw {
+        cdp::Raw::fixture(method, Some("s"), params)
     }
 
     /// A frame of `Page.frameNavigated`, every field the pinned protocol requires filled.

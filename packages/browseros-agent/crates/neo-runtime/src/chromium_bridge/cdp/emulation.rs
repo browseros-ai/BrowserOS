@@ -12,7 +12,6 @@ use serde::Serialize;
 
 use super::{Ignored, OnSession, command};
 
-pub(crate) use browseros_cdp::dom::RGBA as Rgba;
 pub(crate) use generated::{
     MediaFeature, ScreenOrientation,
     SetDefaultBackgroundColorOverrideParams as SetDefaultBackgroundColorOverride,

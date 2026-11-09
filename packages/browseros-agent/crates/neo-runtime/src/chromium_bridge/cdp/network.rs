@@ -16,8 +16,8 @@ use serde_json::{Map, Value};
 use super::{Ignored, OnSession, command, event};
 
 pub(crate) use generated::{
-    EmulateNetworkConditionsParams as EmulateNetworkConditions, EnableParams as Enable,
-    GetResponseBodyParams as GetResponseBody, LoadNetworkResourceOptions,
+    CookiePartitionKey, EmulateNetworkConditionsParams as EmulateNetworkConditions,
+    EnableParams as Enable, GetResponseBodyParams as GetResponseBody, LoadNetworkResourceOptions,
     LoadNetworkResourceParams as LoadNetworkResource, LoadingFailedEvent as LoadingFailed,
     LoadingFinishedEvent as LoadingFinished, RequestServedFromCacheEvent as RequestServedFromCache,
     SetCacheDisabledParams as SetCacheDisabled,

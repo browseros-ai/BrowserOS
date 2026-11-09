@@ -363,10 +363,13 @@ fn add_tab(browser: &FakeBrowser, id: &str, window: i64, context: Option<&str>) 
         .lock()
         .unwrap_or_else(|error| panic!("lock tabs: {error}"))
         .tabs
-        .push(json!({
-            "targetId":id, "url":fake_browser::PAGE_URL, "windowId":window,
-            "liveBrowserContextId":context, "isActive":false,
-        }));
+        .push(fake_browser::tab_record(
+            id,
+            fake_browser::PAGE_URL,
+            window,
+            context,
+            false,
+        ));
 }
 
 #[tokio::test(flavor = "multi_thread")]

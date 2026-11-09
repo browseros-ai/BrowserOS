@@ -17,9 +17,10 @@ use std::sync::Mutex;
 use browseros_cdp::CdpError;
 use neo_runtime_spec::serve::{DialogCall, DialogInitializer, PageChannel};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::browser_representations::page::{DialogAnswer, PageSession};
+use crate::chromium_bridge::cdp::page;
 use crate::chromium_bridge::playwright_injected_methods;
 use crate::playwright_methods::click::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
@@ -222,12 +223,12 @@ pub(crate) async fn serve(
         DialogCall::Dismiss(_) => (false, None),
     };
     page.events.dialogs.take_answer(index, accept)?;
-    let mut params = json!({ "accept": accept });
-    if let Some(text) = prompt_text {
-        params["promptText"] = json!(text);
-    }
+    let answer = page::HandleJavaScriptDialog {
+        accept,
+        prompt_text,
+    };
     progress
-        .race(page.send("Page.handleJavaScriptDialog", params))
+        .race(page.send_command(answer))
         .await?
         .map_err(|error| answer_error(&error))?;
     Ok(None)

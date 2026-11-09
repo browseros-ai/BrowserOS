@@ -39,12 +39,12 @@
 
 use std::sync::Arc;
 
+use browseros_cdp::CdpError;
 use browseros_cdp::runtime::{CallFunctionOnResult, ExceptionDetails, RemoteObject};
-use browseros_cdp::{CdpError, CdpEvent};
 use neo_runtime_spec::injected::{InjectedDocumentParams, InjectedInitializer};
 use neo_runtime_spec::{Element, Handle, HandleId};
 use serde_json::{Value, json};
-use tokio::sync::broadcast::{self, error::TryRecvError};
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::chromium_bridge::cdp::{self, dom, page, runtime};
@@ -211,10 +211,7 @@ const OBJECT_GONE: &str = "Could not find object with given id";
 /// count as gone, so a call that may have run is never sent again.
 ///
 /// Playwright: `server/frames.ts` `Frame.contextDestroyed`: `context.contextDestroyed('Execution context was destroyed, most likely because of a navigation');`
-pub(crate) fn replaced_during(
-    events: &mut broadcast::Receiver<CdpEvent>,
-    frame: &FrameContext,
-) -> bool {
+pub(crate) fn replaced_during(events: &mut cdp::Events, frame: &FrameContext) -> bool {
     let session = frame.host.session_id();
     loop {
         let event = match events.try_recv() {
@@ -222,13 +219,16 @@ pub(crate) fn replaced_during(
             Err(TryRecvError::Lagged(_)) => return true,
             Err(TryRecvError::Empty | TryRecvError::Closed) => return false,
         };
-        if event.session_id.as_ref() != Some(session) {
+        if event.session() != Some(session) {
             continue;
         }
-        let navigated = cdp::decode::<page::FrameNavigated>(&event).is_some_and(|navigated| {
-            navigated.frame.id == frame.id || navigated.frame.parent_id.is_none()
-        });
-        let detached = cdp::decode::<page::FrameDetached>(&event)
+        let navigated = event
+            .decode::<page::FrameNavigated>()
+            .is_some_and(|navigated| {
+                navigated.frame.id == frame.id || navigated.frame.parent_id.is_none()
+            });
+        let detached = event
+            .decode::<page::FrameDetached>()
             .is_some_and(|detached| detached.frame_id == frame.id);
         if navigated || detached {
             return true;

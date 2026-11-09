@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use browseros_cdp::{CdpError, CdpEvent, SessionId};
+use browseros_cdp::{CdpError, SessionId};
 use futures_util::future::join_all;
 use neo_runtime_spec::serve::{
     BrowserContextSetGeolocationParamsGeolocation, BrowserContextSetStorageStateParams,
@@ -28,7 +28,6 @@ use neo_runtime_spec::serve::{
     BrowserContextStorageStateResult, NameValue, NetworkCookie, NetworkCookieSameSite,
     OriginStorage, SetNetworkCookie, SetOriginStorage,
 };
-use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::fs;
 use tokio::sync::Mutex;
@@ -41,7 +40,7 @@ use url::{Origin, Url};
 use crate::artifacts::{ArtifactPath, Artifacts};
 use crate::browser_representations::page::PageSession;
 use crate::browser_representations::tabs::{self, PageEntry, Tabs};
-use crate::chromium_bridge::cdp;
+use crate::chromium_bridge::cdp::{self, Command, OnSession};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::run::PageId;
 
@@ -64,43 +63,10 @@ const COOKIE_EXPIRES: &str = "Cookie should have a valid expires, only -1 or a p
 /// server throws Node's `TypeError: Invalid URL`, which its client sees as an Error.
 const INVALID_URL: &str = "Invalid URL";
 
-/// CDP's `Network.Cookie`, as `Storage.getCookies` reports it.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CdpCookie {
-    name: String,
-    value: String,
-    domain: String,
-    path: String,
-    expires: f64,
-    http_only: bool,
-    secure: bool,
-    #[serde(default)]
-    same_site: Option<NetworkCookieSameSite>,
-    #[serde(default)]
-    partition_key: Option<CdpPartitionKey>,
-}
-
-/// CDP's `Network.CookiePartitionKey`.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CdpPartitionKey {
-    top_level_site: String,
-    has_cross_site_ancestor: bool,
-}
-
-#[derive(Deserialize)]
-struct GotCookies {
-    cookies: Vec<CdpCookie>,
-}
-
-/// `params` with the run's browser context, when BrowserOS names it; the default context
-/// otherwise, which the browser-level `Storage` and `Browser` calls take without one.
-fn in_context(mut params: Value, tabs: &Tabs) -> Value {
-    if let Some(context) = tabs.context_id() {
-        params["browserContextId"] = json!(context);
-    }
-    params
+/// The run's browser context, when BrowserOS names it; `None`, the default context, otherwise,
+/// which the browser-level `Storage` and `Browser` calls take without one.
+fn in_context(tabs: &Tabs) -> Option<String> {
+    tabs.context_id().map(str::to_string)
 }
 
 /// Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.doGetCookies`: `const { cookies } = await this._browser._session.send('Storage.getCookies', { browserContextId: this._browserContextId });`
@@ -118,11 +84,9 @@ pub(crate) async fn cookies(
         .map(|url| Url::parse(url).map_err(|_| PlaywrightError::error(INVALID_URL)))
         .collect::<Result<Vec<_>, _>>()?;
     let got = progress
-        .race(tabs.cdp().client().send_typed::<_, GotCookies>(
-            "Storage.getCookies",
-            in_context(json!({}), tabs),
-            None,
-        ))
+        .race(tabs.cdp().send(cdp::storage::GetCookies {
+            browser_context_id: in_context(tabs),
+        }))
         .await?
         .map_err(|error| tabs::cdp_error(&error))?;
     Ok(got
@@ -134,7 +98,7 @@ pub(crate) async fn cookies(
 }
 
 /// Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.doGetCookies`: `sameSite: sameSite ?? 'Lax',`
-fn network_cookie(cookie: CdpCookie) -> NetworkCookie {
+fn network_cookie(cookie: cdp::storage::Cookie) -> NetworkCookie {
     let (partition_key, cr_has_cross_site_ancestor) =
         cookie.partition_key.map_or((None, None), |key| {
             (Some(key.top_level_site), Some(key.has_cross_site_ancestor))
@@ -147,7 +111,10 @@ fn network_cookie(cookie: CdpCookie) -> NetworkCookie {
         expires: cookie.expires,
         http_only: cookie.http_only,
         secure: cookie.secure,
-        same_site: cookie.same_site.unwrap_or(NetworkCookieSameSite::Lax),
+        same_site: cookie
+            .same_site
+            .and_then(|same_site| serde_json::from_value(Value::String(same_site)).ok())
+            .unwrap_or(NetworkCookieSameSite::Lax),
         partition_key,
         cr_has_cross_site_ancestor,
     }
@@ -202,11 +169,10 @@ pub(crate) async fn add_cookies(
         .map(|cookie| rewrite_cookie(cookie).map(|cookie| chromium_cookie(&cookie)))
         .collect::<Result<Vec<_>, _>>()?;
     progress
-        .race(tabs.cdp().client().send(
-            "Storage.setCookies",
-            in_context(json!({ "cookies": cookies }), tabs),
-            None,
-        ))
+        .race(tabs.cdp().send(cdp::storage::SetCookies {
+            cookies,
+            browser_context_id: in_context(tabs),
+        }))
         .await?
         .map_err(|error| tabs::cdp_error(&error))?;
     Ok(())
@@ -272,43 +238,41 @@ fn rewrite_cookie(mut cookie: SetNetworkCookie) -> Result<SetNetworkCookie, Play
 /// Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.addCookies`: `hasCrossSiteAncestor: _crHasCrossSiteAncestor ?? true,`
 ///
 /// One cookie as CDP's `Network.CookieParam`.
-fn chromium_cookie(cookie: &SetNetworkCookie) -> Value {
-    let mut param = json!({ "name": cookie.name, "value": cookie.value });
-    let fields = [
-        ("url", cookie.url.as_ref().map(|url| json!(url))),
-        ("domain", cookie.domain.as_ref().map(|domain| json!(domain))),
-        ("path", cookie.path.as_ref().map(|path| json!(path))),
-        ("expires", cookie.expires.map(|expires| json!(expires))),
-        (
-            "httpOnly",
-            cookie.http_only.map(|http_only| json!(http_only)),
-        ),
-        ("secure", cookie.secure.map(|secure| json!(secure))),
-        (
-            "sameSite",
-            cookie
-                .same_site
-                .as_ref()
-                .and_then(|same_site| serde_json::to_value(same_site).ok()),
-        ),
-    ];
-    for (name, value) in fields {
-        if let Some(value) = value {
-            param[name] = value;
-        }
+fn chromium_cookie(cookie: &SetNetworkCookie) -> cdp::storage::CookieParam {
+    cdp::storage::CookieParam {
+        name: cookie.name.clone(),
+        value: cookie.value.clone(),
+        url: cookie.url.clone(),
+        domain: cookie.domain.clone(),
+        path: cookie.path.clone(),
+        expires: cookie.expires,
+        http_only: cookie.http_only,
+        secure: cookie.secure,
+        same_site: cookie.same_site.as_ref().and_then(|same_site| {
+            serde_json::to_value(same_site)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+        }),
+        partition_key: cookie
+            .partition_key
+            .as_ref()
+            .map(|site| cdp::network::CookiePartitionKey {
+                top_level_site: site.clone(),
+                has_cross_site_ancestor: cookie.cr_has_cross_site_ancestor.unwrap_or(true),
+            }),
+        ..cdp::storage::CookieParam::default()
     }
-    if let Some(site) = &cookie.partition_key {
-        param["partitionKey"] = json!({
-            "topLevelSite": site,
-            "hasCrossSiteAncestor": cookie.cr_has_cross_site_ancestor.unwrap_or(true),
-        });
-    }
-    param
 }
 
 /// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._setOfflineForSession`: `// values of 0 remove any active throttling. crbug.com/456324#c9`
-fn network_conditions(offline: bool) -> Value {
-    json!({ "offline": offline, "latency": 0, "downloadThroughput": -1, "uploadThroughput": -1 })
+fn network_conditions(offline: bool) -> cdp::network::EmulateNetworkConditions {
+    cdp::network::EmulateNetworkConditions {
+        offline,
+        latency: 0.0,
+        download_throughput: -1.0,
+        upload_throughput: -1.0,
+        ..cdp::network::EmulateNetworkConditions::default()
+    }
 }
 
 /// The run's session-scoped state: what each of its sessions gets, the tabs' and their
@@ -380,7 +344,7 @@ struct Held {
     run: u64,
     session: SessionId,
     /// The `Emulation.setGeolocationOverride` params it set, while it holds a position.
-    geolocation: Option<Value>,
+    geolocation: Option<cdp::emulation::SetGeolocationOverride>,
     offline: bool,
     /// When it last set either.
     order: u64,
@@ -390,28 +354,37 @@ struct Held {
 /// that run's session, and the session of the latest other run that holds the tab offline.
 #[derive(Default)]
 struct Restore {
-    geolocation: Option<(SessionId, Value)>,
+    geolocation: Option<(SessionId, cdp::emulation::SetGeolocationOverride)>,
     offline: Option<SessionId>,
 }
 
 impl Slots {
     /// Run `run` holds `tab` at `position` through `target`, its own session of the tab.
-    async fn hold_geolocation(&self, target: &Target<'_>, tab: &PageId, run: u64, position: Value) {
+    async fn hold_geolocation(
+        &self,
+        target: &Target,
+        tab: &PageId,
+        run: u64,
+        position: cdp::emulation::SetGeolocationOverride,
+    ) {
         self.hold(target, tab, run, |held| held.geolocation = Some(position))
             .await;
     }
 
     /// Run `run` holds `tab` offline (or online again) through `target`.
-    async fn hold_offline(&self, target: &Target<'_>, tab: &PageId, run: u64, offline: bool) {
+    async fn hold_offline(&self, target: &Target, tab: &PageId, run: u64, offline: bool) {
         self.hold(target, tab, run, |held| held.offline = offline)
             .await;
     }
 
-    async fn hold(&self, target: &Target<'_>, tab: &PageId, run: u64, set: impl FnOnce(&mut Held)) {
+    async fn hold(&self, target: &Target, tab: &PageId, run: u64, set: impl FnOnce(&mut Held)) {
         if self.watching.set(()).is_ok() {
-            tokio::spawn(watch_detaches(target.cdp.clone(), self.clone()));
+            tokio::spawn(watch_detaches(
+                target.session.browser().clone(),
+                self.clone(),
+            ));
         }
-        let session = &target.session;
+        let session = target.session.id();
         let mut state = self.state.lock().await;
         state.next += 1;
         let order = state.next;
@@ -459,22 +432,13 @@ impl Slots {
             .drop_holds(&tab, |held| &held.session == session, false)
             .await;
         if let Some((other, position)) = restore.geolocation {
-            let target = Target {
-                cdp,
-                session: other,
-            };
-            if let Err(error) = target
-                .send("Emulation.setGeolocationOverride", position)
-                .await
-            {
+            let target = Target::on(cdp, other);
+            if let Err(error) = target.geolocation(Some(&position)).await {
                 debug!(?error, "a run's position did not go back on");
             }
         }
         if let Some(other) = restore.offline {
-            let target = Target {
-                cdp,
-                session: other,
-            };
+            let target = Target::on(cdp, other);
             if let Err(error) = target.offline(true).await {
                 debug!(?error, "a run's offline mode did not go back on");
             }
@@ -534,22 +498,20 @@ impl Slots {
 /// events end. Not a task of any tracker: it outlives every run, and `Runtime::drain` must not
 /// wait for it.
 async fn watch_detaches(cdp: cdp::Browser, slots: Slots) {
-    let mut events = cdp.client().events();
+    let mut events = cdp.events();
     loop {
         match events.recv().await {
-            Ok(CdpEvent { method, params, .. }) if method == "Target.detachedFromTarget" => {
-                let Some(session) = params["sessionId"].as_str() else {
+            Ok(event) => {
+                let Some(detached) = event.decode::<cdp::target::DetachedFromTarget>() else {
                     continue;
                 };
                 // `targetId` is deprecated: CDP may name the session alone.
-                let tab = params["targetId"]
-                    .as_str()
-                    .map(|tab| PageId::new(tab.to_string()));
+                let tab = detached.target_id.map(PageId::new);
                 slots
-                    .detached(&cdp, tab.as_ref(), &SessionId::from(session.to_string()))
+                    .detached(&cdp, tab.as_ref(), &SessionId::from(detached.session_id))
                     .await;
             }
-            Ok(_) | Err(RecvError::Lagged(_)) => {}
+            Err(RecvError::Lagged(_)) => {}
             Err(RecvError::Closed) => return,
         }
     }
@@ -586,7 +548,7 @@ fn merge_headers(lists: &[&[NameValue]]) -> Vec<NameValue> {
 /// Playwright: `server/browserContext.ts` `verifyGeolocation`: `geolocation.accuracy = geolocation.accuracy || 0;`
 fn verify_geolocation(
     geolocation: &BrowserContextSetGeolocationParamsGeolocation,
-) -> Result<Value, PlaywrightError> {
+) -> Result<cdp::emulation::SetGeolocationOverride, PlaywrightError> {
     let accuracy = geolocation.accuracy.unwrap_or(0.0);
     if !(-180.0..=180.0).contains(&geolocation.longitude) {
         return Err(PlaywrightError::error(
@@ -603,40 +565,41 @@ fn verify_geolocation(
             "geolocation.accuracy: precondition 0 <= ACCURACY failed.",
         ));
     }
-    Ok(json!({
-        "latitude": geolocation.latitude,
-        "longitude": geolocation.longitude,
-        "accuracy": accuracy,
-    }))
+    Ok(cdp::emulation::SetGeolocationOverride {
+        latitude: Some(geolocation.latitude),
+        longitude: Some(geolocation.longitude),
+        accuracy: Some(accuracy),
+        ..cdp::emulation::SetGeolocationOverride::default()
+    })
 }
 
 /// CDP's `Network.Headers`: one object, each name once.
-fn headers_object(headers: &[NameValue]) -> Value {
+fn headers_object(headers: &[NameValue]) -> Map<String, Value> {
     let mut object = Map::new();
     for header in headers {
         object.insert(header.name.clone(), json!(header.value));
     }
-    Value::Object(object)
+    object
 }
 
 /// One CDP session of the run: a tab's own, or one of its out-of-process frames'.
-struct Target<'a> {
-    cdp: &'a cdp::Browser,
-    session: SessionId,
+struct Target {
+    session: cdp::Session,
 }
 
-impl Target<'_> {
+impl Target {
+    fn on(cdp: &cdp::Browser, session: SessionId) -> Self {
+        Self {
+            session: cdp.adopt(session),
+        }
+    }
+
     /// Playwright: `server/chromium/crPage.ts` `CRPage._forAllFrameSessions`: `if (isSessionClosedError(e))`
     ///
     /// A session that went away (its frame detached, its tab closed) has nothing left to set,
     /// so a send to it is a no-op, as Playwright's broadcast to a closed frame's session is.
-    async fn send(&self, method: &str, params: Value) -> Result<(), PlaywrightError> {
-        match self
-            .cdp
-            .client()
-            .send(method, params, Some(&self.session))
-            .await
-        {
+    async fn send<C: Command<Via = OnSession>>(&self, command: C) -> Result<(), PlaywrightError> {
+        match self.session.send(command).await {
             Ok(_) | Err(CdpError::SessionGone) => Ok(()),
             Err(error) => Err(tabs::cdp_error(&error)),
         }
@@ -644,30 +607,24 @@ impl Target<'_> {
 
     /// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager.addSession`: `session.send('Network.enable'),`
     async fn headers(&self, headers: &[NameValue]) -> Result<(), PlaywrightError> {
-        self.send("Network.enable", json!({})).await?;
-        self.send(
-            "Network.setExtraHTTPHeaders",
-            json!({ "headers": headers_object(headers) }),
-        )
+        self.send(cdp::network::Enable::default()).await?;
+        self.send(cdp::network::SetExtraHttpHeaders {
+            headers: headers_object(headers),
+        })
         .await
     }
 
     async fn offline(&self, offline: bool) -> Result<(), PlaywrightError> {
-        self.send("Network.enable", json!({})).await?;
-        self.send(
-            "Network.emulateNetworkConditions",
-            network_conditions(offline),
-        )
-        .await
+        self.send(cdp::network::Enable::default()).await?;
+        self.send(network_conditions(offline)).await
     }
 
     /// Playwright: `server/chromium/crPage.ts` `FrameSession._updateGeolocation`: `await this._client.send('Emulation.setGeolocationOverride', geolocation || {});`
-    async fn geolocation(&self, geolocation: Option<&Value>) -> Result<(), PlaywrightError> {
-        self.send(
-            "Emulation.setGeolocationOverride",
-            geolocation.cloned().unwrap_or_else(|| json!({})),
-        )
-        .await
+    async fn geolocation(
+        &self,
+        geolocation: Option<&cdp::emulation::SetGeolocationOverride>,
+    ) -> Result<(), PlaywrightError> {
+        self.send(geolocation.cloned().unwrap_or_default()).await
     }
 }
 
@@ -680,12 +637,12 @@ fn open_tabs(tabs: &Tabs) -> impl Iterator<Item = (Arc<PageEntry>, Arc<PageSessi
 }
 
 /// Every session of a tab the run attached: its own, then its out-of-process frames'.
-fn targets_of(page: &PageSession) -> Vec<Target<'_>> {
+fn targets_of(page: &PageSession) -> Vec<Target> {
     let cdp = page.events.cdp().browser();
     page.events
         .sessions()
         .into_iter()
-        .map(|session| Target { cdp, session })
+        .map(|session| Target::on(cdp, session))
         .collect()
 }
 
@@ -710,7 +667,7 @@ impl Overrides {
             for target in targets_of(&page) {
                 state
                     .applied
-                    .entry(target.session.clone())
+                    .entry(target.session.id().clone())
                     .or_default()
                     .headers = true;
                 progress.race(target.headers(&merged)).await??;
@@ -736,7 +693,7 @@ impl Overrides {
         for target in targets_of(page) {
             state
                 .applied
-                .entry(target.session.clone())
+                .entry(target.session.id().clone())
                 .or_default()
                 .headers = true;
             progress.race(target.headers(&merged)).await??;
@@ -762,7 +719,10 @@ impl Overrides {
         let slots = tabs.permissions().slots();
         for (entry, page) in open_tabs(tabs) {
             for (index, target) in targets_of(&page).into_iter().enumerate() {
-                let noted = state.applied.entry(target.session.clone()).or_default();
+                let noted = state
+                    .applied
+                    .entry(target.session.id().clone())
+                    .or_default();
                 noted.offline = true;
                 if index == 0 {
                     noted.tab = Some(entry.id.clone());
@@ -790,12 +750,12 @@ impl Overrides {
         }
         state.geolocation = geolocation;
         let slots = tabs.permissions().slots();
-        let position = checked.clone().unwrap_or_else(|| json!({}));
+        let position = checked.clone().unwrap_or_default();
         // The tab's own session only: its frames, out-of-process ones too, see the tab's
         // override, and a frame session that detaches would take the tab's with it (measured).
         for (entry, page) in open_tabs(tabs) {
             if let Some(own) = targets_of(&page).into_iter().next() {
-                let noted = state.applied.entry(own.session.clone()).or_default();
+                let noted = state.applied.entry(own.session.id().clone()).or_default();
                 noted.geolocation = true;
                 noted.tab = Some(entry.id.clone());
                 slots
@@ -849,7 +809,7 @@ impl Overrides {
                 noted.tab = Some(page.clone());
             }
         }
-        let target = Target { cdp, session };
+        let target = Target::on(cdp, session);
         if !frame {
             if offline {
                 slots.hold_offline(&target, page, run, true).await;
@@ -929,14 +889,13 @@ impl Overrides {
         applied: &Applied,
         restore: Restore,
     ) {
-        let target = Target {
-            cdp,
-            session: session.clone(),
-        };
+        let target = Target::on(cdp, session.clone());
         let headers = async {
             if applied.headers
                 && target
-                    .send("Network.setExtraHTTPHeaders", json!({ "headers": {} }))
+                    .send(cdp::network::SetExtraHttpHeaders {
+                        headers: Map::new(),
+                    })
                     .await
                     .is_ok()
             {
@@ -946,13 +905,7 @@ impl Overrides {
         let offline = async {
             if applied.offline
                 && (restore.offline.is_some()
-                    || target
-                        .send(
-                            "Network.emulateNetworkConditions",
-                            network_conditions(false),
-                        )
-                        .await
-                        .is_ok())
+                    || target.send(network_conditions(false)).await.is_ok())
             {
                 self.confirm(session, |left| left.offline = false).await;
             }
@@ -960,20 +913,17 @@ impl Overrides {
         let geolocation = async {
             if !applied.geolocation
                 || target
-                    .send("Emulation.clearGeolocationOverride", json!({}))
+                    .send(cdp::emulation::ClearGeolocationOverride {})
                     .await
                     .is_err()
             {
                 return;
             }
             let back = match restore.geolocation {
-                Some((other, position)) => Target {
-                    cdp,
-                    session: other,
-                }
-                .send("Emulation.setGeolocationOverride", position)
-                .await
-                .is_ok(),
+                Some((other, position)) => Target::on(cdp, other)
+                    .geolocation(Some(&position))
+                    .await
+                    .is_ok(),
                 None => true,
             };
             if back {
@@ -1157,29 +1107,36 @@ async fn replace_local_storage(
     origin: &str,
     items: &[NameValue],
 ) -> Result<(), PlaywrightError> {
-    let cdp = page.events.cdp().browser();
-    let session = page.events.sessions().into_iter().next();
-    let storage = json!({ "securityOrigin": origin, "isLocalStorage": true });
-    let send = |method: &'static str, params: Value| {
-        let session = session.clone();
-        async move {
-            cdp.client()
-                .send(method, params, session.as_ref())
-                .await
-                .map(|_| ())
-                .map_err(|error| tabs::cdp_error(&error))
-        }
-    };
-    send("DOMStorage.enable", json!({})).await?;
-    send("DOMStorage.clear", json!({ "storageId": storage })).await?;
+    let tab = page.events.cdp();
+    let storage = || local_storage_of(origin);
+    let failed = |error: CdpError| tabs::cdp_error(&error);
+    tab.send(cdp::dom_storage::Enable {})
+        .await
+        .map_err(failed)?;
+    tab.send(cdp::dom_storage::Clear {
+        storage_id: storage(),
+    })
+    .await
+    .map_err(failed)?;
     for item in items {
-        send(
-            "DOMStorage.setDOMStorageItem",
-            json!({ "storageId": storage, "key": item.name, "value": item.value }),
-        )
-        .await?;
+        tab.send(cdp::dom_storage::SetDomStorageItem {
+            storage_id: storage(),
+            key: item.name.clone(),
+            value: item.value.clone(),
+        })
+        .await
+        .map_err(failed)?;
     }
     Ok(())
+}
+
+/// `origin`'s `localStorage`, as `DOMStorage` names it.
+fn local_storage_of(origin: &str) -> cdp::dom_storage::StorageId {
+    cdp::dom_storage::StorageId {
+        security_origin: Some(origin.to_string()),
+        storage_key: None,
+        is_local_storage: true,
+    }
 }
 
 /// Deviation: `server/browserContext.ts` `BrowserContext.storageState`: `// If there are still origins to save, create a blank page to iterate over origins.`
@@ -1237,39 +1194,33 @@ pub(crate) async fn storage_state(
     })
 }
 
-#[derive(Deserialize)]
-struct StorageItems {
-    entries: Vec<(String, String)>,
-}
-
 /// `origin`'s `localStorage`, read over the tab's own session, where it has a frame.
 async fn local_storage(
     page: &PageSession,
     origin: &str,
 ) -> Result<Vec<NameValue>, PlaywrightError> {
-    let cdp = page.events.cdp().browser();
-    let session = page.events.sessions().into_iter().next();
-    let send = |method: &'static str, params: Value| {
-        let session = session.clone();
-        async move {
-            cdp.client()
-                .send(method, params, session.as_ref())
-                .await
-                .map_err(|error| tabs::cdp_error(&error))
-        }
-    };
-    send("DOMStorage.enable", json!({})).await?;
-    let items = send(
-        "DOMStorage.getDOMStorageItems",
-        json!({ "storageId": { "securityOrigin": origin, "isLocalStorage": true } }),
-    )
-    .await?;
-    let StorageItems { entries } =
-        serde_json::from_value(items).map_err(|error| PlaywrightError::error(error.to_string()))?;
-    Ok(entries
+    let tab = page.events.cdp();
+    let failed = |error: CdpError| tabs::cdp_error(&error);
+    tab.send(cdp::dom_storage::Enable {})
+        .await
+        .map_err(failed)?;
+    let items = tab
+        .send(cdp::dom_storage::GetDomStorageItems {
+            storage_id: local_storage_of(origin),
+        })
+        .await
+        .map_err(failed)?;
+    items
+        .entries
         .into_iter()
-        .map(|(name, value)| NameValue { name, value })
-        .collect())
+        .map(|entry| match <[String; 2]>::try_from(entry) {
+            Ok([name, value]) => Ok(NameValue { name, value }),
+            Err(entry) => Err(PlaywrightError::error(format!(
+                "DOMStorage.getDOMStorageItems answered an entry of {} strings",
+                entry.len()
+            ))),
+        })
+        .collect()
 }
 
 /// Neo: each run's id among the process's runs, for the permission grants it holds.
@@ -1381,26 +1332,18 @@ async fn grant_union(
                 }
             }
         }
-        let mut params = json!({ "permissions": permissions });
-        if origin != "*" {
-            params["origin"] = json!(origin);
+        cdp::browser::GrantPermissions {
+            permissions: permissions.into_iter().map(str::to_string).collect(),
+            origin: (origin != "*").then(|| origin.to_string()),
+            browser_context_id: context.map(str::to_string),
         }
-        if let Some(context) = context {
-            params["browserContextId"] = json!(context);
-        }
-        params
     };
-    match cdp
-        .client()
-        .send("Browser.grantPermissions", grant(false), None)
-        .await
-    {
+    match cdp.send(grant(false)).await {
         Ok(_) => Ok(()),
         Err(_) => cdp
-            .client()
-            .send("Browser.grantPermissions", grant(true), None)
+            .send(grant(true))
             .await
-            .map(|_| ())
+            .map(drop)
             .map_err(|error| tabs::cdp_error(&error)),
     }
 }
@@ -1413,14 +1356,11 @@ async fn reset_context(
     grants: &BTreeMap<u64, RunGrants>,
     context: Option<&str>,
 ) -> Result<(), PlaywrightError> {
-    let mut params = json!({});
-    if let Some(context) = context {
-        params["browserContextId"] = json!(context);
-    }
-    cdp.client()
-        .send("Browser.resetPermissions", params, None)
-        .await
-        .map_err(|error| tabs::cdp_error(&error))?;
+    cdp.send(cdp::browser::ResetPermissions {
+        browser_context_id: context.map(str::to_string),
+    })
+    .await
+    .map_err(|error| tabs::cdp_error(&error))?;
     let origins: Vec<String> = grants
         .values()
         .filter(|run| run.context.as_deref() == context)
@@ -1797,7 +1737,7 @@ mod tests {
             .await;
         let offline = format!(
             "Network.emulateNetworkConditions {}",
-            network_conditions(false)
+            json!(network_conditions(false))
         );
         let no_headers = format!("Network.setExtraHTTPHeaders {}", json!({ "headers": {} }));
         let mut tab = vec![
@@ -1902,7 +1842,10 @@ mod tests {
             BTreeMap::from([
                 (
                     "one".to_string(),
-                    vec![format!("Emulation.setGeolocationOverride {position}")]
+                    vec![format!(
+                        "Emulation.setGeolocationOverride {}",
+                        json!(position)
+                    )]
                 ),
                 ("two".to_string(), gone),
             ]),
@@ -1916,11 +1859,11 @@ mod tests {
         let before = browser.exchanges().len();
         slots.detached(&cdp, None, &session("two")).await;
         let mut back = vec![
-            format!("Emulation.setGeolocationOverride {position}"),
+            format!("Emulation.setGeolocationOverride {}", json!(position)),
             "Network.enable {}".to_string(),
             format!(
                 "Network.emulateNetworkConditions {}",
-                network_conditions(true)
+                json!(network_conditions(true))
             ),
         ];
         back.sort();
@@ -1938,7 +1881,7 @@ mod tests {
             "Emulation.clearGeolocationOverride {}".to_string(),
             format!(
                 "Network.emulateNetworkConditions {}",
-                network_conditions(false)
+                json!(network_conditions(false))
             ),
             no_headers,
         ];
@@ -2109,12 +2052,20 @@ mod tests {
 
     #[test]
     fn tests_that_a_partitioned_cookie_keeps_its_partition_both_ways() {
-        let got: CdpCookie = serde_json::from_value(json!({
-            "name": "p", "value": "1", "domain": "a.test", "path": "/", "expires": -1,
-            "httpOnly": false, "secure": true, "sameSite": "None",
-            "partitionKey": { "topLevelSite": "https://top.test", "hasCrossSiteAncestor": false },
-        }))
-        .unwrap_or_else(|error| panic!("{error}"));
+        let got = cdp::storage::Cookie {
+            name: "p".to_string(),
+            value: "1".to_string(),
+            domain: "a.test".to_string(),
+            path: "/".to_string(),
+            expires: -1.0,
+            secure: true,
+            same_site: Some("None".to_string()),
+            partition_key: Some(cdp::network::CookiePartitionKey {
+                top_level_site: "https://top.test".to_string(),
+                has_cross_site_ancestor: false,
+            }),
+            ..cdp::storage::Cookie::default()
+        };
         let cookie = network_cookie(got);
         assert_eq!(
             (
@@ -2128,11 +2079,14 @@ mod tests {
                 &NetworkCookieSameSite::None
             )
         );
-        let lax: CdpCookie = serde_json::from_value(json!({
-            "name": "l", "value": "1", "domain": "a.test", "path": "/", "expires": -1,
-            "httpOnly": false, "secure": false,
-        }))
-        .unwrap_or_else(|error| panic!("{error}"));
+        let lax = cdp::storage::Cookie {
+            name: "l".to_string(),
+            value: "1".to_string(),
+            domain: "a.test".to_string(),
+            path: "/".to_string(),
+            expires: -1.0,
+            ..cdp::storage::Cookie::default()
+        };
         assert_eq!(
             network_cookie(lax).same_site,
             NetworkCookieSameSite::Lax,
@@ -2152,7 +2106,7 @@ mod tests {
             cr_has_cross_site_ancestor: None,
         };
         assert_eq!(
-            chromium_cookie(&set)["partitionKey"],
+            serde_json::to_value(chromium_cookie(&set)).unwrap()["partitionKey"],
             json!({ "topLevelSite": "https://top.test", "hasCrossSiteAncestor": true })
         );
     }

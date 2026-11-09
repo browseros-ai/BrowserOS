@@ -33,16 +33,30 @@ pub(crate) use generated::{
     RemoveScriptToEvaluateOnNewDocumentParams as RemoveScriptToEvaluateOnNewDocument,
     SetBypassCSPParams as SetBypassCsp,
     SetInterceptFileChooserDialogParams as SetInterceptFileChooserDialog,
-    SetLifecycleEventsEnabledParams as SetLifecycleEventsEnabled, Viewport,
+    SetLifecycleEventsEnabledParams as SetLifecycleEventsEnabled,
 };
 
 /// `Page.bringToFront`. Local: it takes no params, and browseros-cdp generates no params type
 /// for such a command.
 #[derive(Serialize)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "its caller in playwright_methods/ moves onto the door in the next commit"
+    )
+)]
 pub(crate) struct BringToFront {}
 
 /// `Page.close`. Local: it takes no params ([`BringToFront`]).
 #[derive(Serialize)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "its caller in playwright_methods/ moves onto the door in the next commit"
+    )
+)]
 pub(crate) struct Close {}
 
 /// `Page.disable`. Local: it takes no params ([`BringToFront`]).
@@ -57,10 +71,24 @@ pub(crate) struct GetFrameTree {}
 
 /// `Page.getLayoutMetrics`. Local: it takes no params ([`BringToFront`]).
 #[derive(Serialize)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "its caller in playwright_methods/ moves onto the door in the next commit"
+    )
+)]
 pub(crate) struct GetLayoutMetrics {}
 
 /// `Page.getNavigationHistory`. Local: it takes no params ([`BringToFront`]).
 #[derive(Serialize)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "its caller in playwright_methods/ moves onto the door in the next commit"
+    )
+)]
 pub(crate) struct GetNavigationHistory {}
 
 command! {

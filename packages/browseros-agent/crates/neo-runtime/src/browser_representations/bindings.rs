@@ -40,15 +40,12 @@ use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, Weak};
 
-use browseros_cdp::{CdpEvent, SessionId};
+use browseros_cdp::SessionId;
 use neo_runtime_spec::{MethodGroup, MethodMeta};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::sync::broadcast::{
-    self,
-    error::{RecvError, TryRecvError},
-};
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -581,11 +578,7 @@ impl Bindings {
         if first {
             scripts.attach_bindings(self);
             // Subscribed before any session gets the binding, so no call is missed.
-            tokio::spawn(watch(
-                Arc::downgrade(self),
-                tabs.clone(),
-                cdp.client().events(),
-            ));
+            tokio::spawn(watch(Arc::downgrade(self), tabs.clone(), cdp.events()));
             scripts
                 .add_ranked(
                     cdp,
@@ -685,12 +678,8 @@ impl Bindings {
         if !self.mark(link.session.as_str(), target, true).await {
             return;
         }
-        let _enabled = until_gone(
-            &link.gone,
-            cdp.client()
-                .send("Runtime.enable", json!({}), Some(&link.session)),
-        )
-        .await;
+        let session = cdp.adopt(link.session.clone());
+        let _enabled = until_gone(&link.gone, session.send(cdp::runtime::Enable {})).await;
         add_binding(cdp, &link.session, Some(&link.gone)).await;
         if self.state.lock().await.closed {
             remove_binding(cdp, &link.session, Some(&link.gone)).await;
@@ -1158,11 +1147,12 @@ fn page_object(id: u64, fields: Vec<(&str, Value)>) -> Value {
 
 async fn add_binding(cdp: &cdp::Browser, session: &SessionId, gone: Option<&CancellationToken>) {
     // Playwright: `server/chromium/crPage.ts` `FrameSession.exposePlaywrightBinding`: `await this._client.send('Runtime.addBinding', { name: PageBinding.kBindingName });`
-    let add = cdp.client().send(
-        "Runtime.addBinding",
-        json!({ "name": BINDING_NAME }),
-        Some(session),
-    );
+    let target = cdp.adopt(session.clone());
+    let add = target.send(cdp::runtime::AddBinding {
+        name: BINDING_NAME.to_string(),
+        execution_context_id: None,
+        execution_context_name: None,
+    });
     let added = match gone {
         Some(gone) => until_gone(gone, add).await.is_some(),
         None => add.await.is_ok(),
@@ -1204,11 +1194,10 @@ fn refused(binding: Option<bool>, payload: &Payload) -> Option<String> {
 /// Neo: takes the CDP binding off `session`, so no later document gets it. A document that has it
 /// keeps it (probe C2): bindings-call.js `end` deletes it there.
 async fn remove_binding(cdp: &cdp::Browser, session: &SessionId, gone: Option<&CancellationToken>) {
-    let remove = cdp.client().send(
-        "Runtime.removeBinding",
-        json!({ "name": BINDING_NAME }),
-        Some(session),
-    );
+    let target = cdp.adopt(session.clone());
+    let remove = target.send(cdp::runtime::RemoveBinding {
+        name: BINDING_NAME.to_string(),
+    });
     let removed = match gone {
         Some(gone) => until_gone(gone, remove).await.is_some(),
         None => remove.await.is_ok(),
@@ -1291,7 +1280,7 @@ fn page_of(tabs: &Tabs, target: &str) -> Option<Arc<PageSession>> {
 /// a call's reply waits (`EventHub::barrier`) until every binding call read before it has reached
 /// the hub, so a binding the page called during that call reaches the script first, as
 /// Playwright's server dispatches its `bindingCall` before the call's reply.
-async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: broadcast::Receiver<CdpEvent>) {
+async fn watch(bindings: Weak<Bindings>, tabs: Tabs, mut events: cdp::Events) {
     let Some(stop) = bindings.upgrade().map(|bindings| bindings.stop.clone()) else {
         return;
     };
@@ -1351,7 +1340,7 @@ struct Reader {
 
 impl Reader {
     /// Reads one event of the run's sessions: `false` once the reader must stop.
-    async fn on(&mut self, event: Result<CdpEvent, RecvError>) -> bool {
+    async fn on(&mut self, event: Result<cdp::Raw, RecvError>) -> bool {
         let event = match event {
             Ok(event) => event,
             Err(RecvError::Lagged(_)) => return true,
@@ -1360,31 +1349,26 @@ impl Reader {
         let Some(bindings) = self.bindings.upgrade() else {
             return false;
         };
-        if event.method == "Target.detachedFromTarget" {
-            if let Some(session) = event.params["sessionId"].as_str() {
-                bindings.forget(session).await;
-            }
+        if let Some(detached) = event.decode::<cdp::target::DetachedFromTarget>() {
+            bindings.forget(&detached.session_id).await;
             return true;
         }
-        let Some(session) = event.session_id.as_ref().map(SessionId::as_str) else {
+        let Some(session) = event.session().map(SessionId::as_str) else {
             return true;
         };
         let Some(prepared) = bindings.prepared(session).await else {
             return true;
         };
-        match event.method.as_str() {
-            "Runtime.executionContextCreated"
-            | "Runtime.executionContextDestroyed"
-            | "Runtime.executionContextsCleared" => {
-                bindings.contexts.apply(&event);
-            }
-            "Runtime.bindingCalled" if event.params["name"].as_str() == Some(BINDING_NAME) => {
-                let (Some(context), Some(payload)) = (
-                    event.params["executionContextId"].as_i64(),
-                    event.params["payload"].as_str(),
-                ) else {
-                    return true;
-                };
+        if event.is::<cdp::runtime::ExecutionContextCreated>()
+            || event.is::<cdp::runtime::ExecutionContextDestroyed>()
+            || event.is::<cdp::runtime::ExecutionContextsCleared>()
+        {
+            bindings.contexts.apply(&event);
+        } else if let Some(called) = event.decode::<cdp::runtime::BindingCalled>()
+            && called.name == BINDING_NAME
+        {
+            {
+                let (context, payload) = (called.execution_context_id, called.payload);
                 // The calling frame, read here in event order, before a later event can end that
                 // context: this reader's own map for a context it saw created, else net's for a
                 // tab context older than this reader (`contexts.rs` keeps destroyed ones).
@@ -1413,14 +1397,13 @@ impl Reader {
                         unique,
                     },
                     frame,
-                    payload: payload.to_string(),
+                    payload,
                 };
                 self.reading.retain(|call| !call.is_finished());
                 self.reading.push(tokio::spawn(
                     Arc::clone(&bindings).called(self.tabs.clone(), incoming),
                 ));
             }
-            _ => {}
         }
         true
     }
@@ -1437,7 +1420,7 @@ impl Reader {
 /// a look that finds none hold the reader's thread that long (`test_hooks::receive_paused`), as a
 /// preemption right after that look would: the events and the reply after them all arrive
 /// before the reader looks again (`neo-quickjs-injected/tests/parity/binding-order.test.mjs`).
-async fn receive(events: &mut broadcast::Receiver<CdpEvent>) -> Result<CdpEvent, RecvError> {
+async fn receive(events: &mut cdp::Events) -> Result<cdp::Raw, RecvError> {
     #[cfg(debug_assertions)]
     if let Some(pause) = test_hooks::poll_pause() {
         return test_hooks::receive_paused(events, pause).await;
@@ -1459,8 +1442,8 @@ mod test_hooks {
     use std::time::Duration;
     use std::{env, thread};
 
-    use browseros_cdp::CdpEvent;
-    use tokio::sync::broadcast::{self, error::RecvError};
+    use crate::chromium_bridge::cdp;
+    use tokio::sync::broadcast::error::RecvError;
     use tokio::time;
 
     /// Neo: how many binding calls this process has read, which picks each one's delay.
@@ -1483,9 +1466,9 @@ mod test_hooks {
     /// `events.recv()`, with `pause` held on the reader's thread after each look that finds no
     /// event, which the scheduler could do there anyway.
     pub(super) async fn receive_paused(
-        events: &mut broadcast::Receiver<CdpEvent>,
+        events: &mut cdp::Events,
         pause: Duration,
-    ) -> Result<CdpEvent, RecvError> {
+    ) -> Result<cdp::Raw, RecvError> {
         future::poll_fn(|cx| {
             let receive = events.recv();
             let mut receive = pin!(receive);
@@ -1516,7 +1499,7 @@ mod test_hooks {
 
 /// What the session reader does next: an event, or a flush of the hub's barrier.
 enum Step {
-    Event(Result<CdpEvent, RecvError>),
+    Event(Result<cdp::Raw, RecvError>),
     Flush(Option<oneshot::Sender<()>>),
 }
 

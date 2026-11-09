@@ -15,7 +15,7 @@ use super::{Ignored, OnSession, command};
 
 pub(crate) use generated::{
     DescribeNodeParams as DescribeNode, GetBoxModelParams as GetBoxModel,
-    GetContentQuadsParams as GetContentQuads, GetFrameOwnerParams as GetFrameOwner, Rect,
+    GetContentQuadsParams as GetContentQuads, GetFrameOwnerParams as GetFrameOwner,
     ResolveNodeParams as ResolveNode, ScrollIntoViewIfNeededParams as ScrollIntoViewIfNeeded,
     SetFileInputFilesParams as SetFileInputFiles,
 };
