@@ -21,7 +21,7 @@ const REGENERATE: &str =
 fn tests_that_hook_author_docs_match_served_actions() {
     let mut groups = BTreeMap::<&str, BTreeSet<&str>>::new();
     let mut kinds = BTreeSet::new();
-    for (_, action) in actions::served() {
+    for action in actions::served().map(actions::ServedMethod::action) {
         let kind = action.kind().as_str();
         groups
             .entry(action.group().as_str())
