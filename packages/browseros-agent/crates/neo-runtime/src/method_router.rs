@@ -903,6 +903,9 @@ impl Dispatcher {
             CallOrigin::Hook => {
                 if let Ok(call) = &route {
                     inner.run.swapped.remember_typed(typed_values(call));
+                    if let Some(arg) = scripted_argument(call) {
+                        inner.run.swapped.remember_serialized(&arg.value);
+                    }
                 }
             }
         }
@@ -2728,6 +2731,29 @@ fn element_options(call: ObjectCall) -> Option<ElementOptions> {
         Route::FrameSelectText(target, force) => Arc::new((target, force)),
         _ => return None,
     })
+}
+
+/// What a call hands page script: the serialized `arg` of an evaluation (`evaluate*`, `$eval`,
+/// `$$eval`, a handle's `evaluate`, `waitForFunction`) or a `dispatchEvent`'s event init. A hook's
+/// own such call is remembered for the scrub (`action_hooks/swapped.rs`): it may set a box's
+/// value by script.
+fn scripted_argument(call: &ObjectCall) -> Option<&evaluate::SerializedArgument> {
+    let ObjectCall::Frame(route) = call else {
+        return None;
+    };
+    match route {
+        Route::FrameEval(
+            EvalCall::Frame(evaluation)
+            | EvalCall::Handle { evaluation, .. }
+            | EvalCall::EvalOnSelector { evaluation, .. }
+            | EvalCall::EvalOnSelectorAll { evaluation, .. }
+            | EvalCall::WaitForFunction { evaluation, .. }
+            | EvalCall::WaitForFunctionOnElement { evaluation, .. },
+        ) => Some(&evaluation.arg),
+        Route::FrameEval(EvalCall::DispatchEvent { event_init, .. })
+        | Route::FrameDispatchEvent(DispatchOptions { event_init, .. }) => Some(event_init),
+        _ => None,
+    }
 }
 
 /// What a call types into the page: a fill's value, a type's text, `keyboard.type` and

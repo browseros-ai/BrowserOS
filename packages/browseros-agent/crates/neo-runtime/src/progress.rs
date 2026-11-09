@@ -36,6 +36,7 @@ use tokio_util::task::TaskTracker;
 use tracing::info;
 
 use crate::abort::CallAbort;
+use crate::action_hooks::swapped::UNTRACKED;
 use crate::action_hooks::{ElementGate, SwappedValues};
 use crate::artifacts::Artifacts;
 use crate::browser_representations::bindings::Bindings;
@@ -843,19 +844,23 @@ impl CallEntry {
         let _first = self.swapped.set(swapped);
     }
 
-    /// `text` without a value the run's hooks swapped in, for a call that scrubs.
+    /// The error text `text` without a value the run's hooks swapped in, for a call that
+    /// scrubs; past the scrub's caps, its fixed text (`swapped::UNTRACKED`): fail closed.
     pub(crate) fn scrubbed(&self, text: String) -> String {
         match self.swapped.get() {
+            Some(swapped) if swapped.overflowed() => UNTRACKED.to_string(),
             Some(swapped) => swapped.scrubbed(text),
             None => text,
         }
     }
 
+    /// `log` without a value the run's hooks swapped in; past the scrub's caps, no log at all.
     fn scrub_log(&self, log: Vec<String>) -> Vec<String> {
-        if self.swapped.get().is_none() {
-            return log;
+        match self.swapped.get() {
+            Some(swapped) if swapped.overflowed() => Vec::new(),
+            Some(swapped) => log.into_iter().map(|line| swapped.scrubbed(line)).collect(),
+            None => log,
         }
-        log.into_iter().map(|line| self.scrubbed(line)).collect()
     }
 
     fn scrub_result(&self, result: CallResult) -> CallResult {

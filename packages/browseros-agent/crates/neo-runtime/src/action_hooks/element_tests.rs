@@ -1027,6 +1027,92 @@ async fn tests_that_what_a_hook_types_itself_never_reaches_an_agent_reply() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tests_that_past_the_scrubs_caps_agent_replies_fail_closed() {
+    let harness = Harness::start(None, Duration::from_secs(30)).await;
+    let insert = |id: u64, text: &str| {
+        message(
+            id,
+            &page_guid(),
+            "keyboardInsertText",
+            json!({ "text": text }),
+            json!({}),
+        )
+    };
+    // A hook types the secret, then 1023 more values: exactly the scrub's cap.
+    let _typed = harness.hook_call(&fill_go(1, SECRET)).await.unwrap();
+    for n in 1..1024_u64 {
+        let _inserted = harness
+            .hook_call(&insert(n + 1, &format!("value-{n:05}")))
+            .await
+            .unwrap();
+    }
+    let refused = format!("{REFUSED_FILL}{SECRET}");
+    let under = harness.call(&fill_go(5000, &refused)).await.unwrap();
+    let message = under["error"]["error"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(!message.contains(SECRET), "{under}");
+    assert!(
+        message.contains(REFUSED_FILL),
+        "under the cap the error keeps its own words: {under}"
+    );
+    // One more value does not fit: every later agent reply keeps no log and a fixed text.
+    let _past = harness
+        .hook_call(&insert(5001, "one-value-too-many"))
+        .await
+        .unwrap();
+    let past = harness.call(&fill_go(5002, &refused)).await.unwrap();
+    assert_eq!(past["error"]["error"]["name"], "Error", "{past}");
+    let message = past["error"]["error"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(!message.contains(SECRET), "{past}");
+    assert!(
+        !message.contains(REFUSED_FILL),
+        "the page's words are withheld: {past}"
+    );
+    assert_eq!(past["log"], json!([]), "{past}");
+    let clicked = harness.call(&click(5003)).await.unwrap();
+    assert_eq!(clicked, json!({ "id": 5003 }), "calls still run");
+}
+
+#[tokio::test(start_paused = true)]
+async fn tests_that_past_the_scrubs_caps_an_agent_record_keeps_no_log_and_a_fixed_error() {
+    let run = run_scope(Duration::from_hours(1));
+    let values: Vec<String> = (0..=1024).map(|n| format!("value-{n:05}")).collect();
+    run.swapped
+        .remember_typed(values.iter().map(String::as_str));
+    assert!(run.swapped.overflowed());
+    let agent = Arc::new(CallEntry::new(CallStart {
+        call_id: 2,
+        guid: "frame@T".to_string(),
+        method: "press".to_string(),
+        title: None,
+        origin: CallOrigin::Agent,
+        action: None,
+        params: json!({ "selector": SELECTOR, "key": "Enter" }),
+        location: None,
+        input: true,
+    }));
+    agent.scrub_with(Arc::clone(&run.swapped));
+    let progress = Progress::new(Arc::clone(&agent), 30_000.0, run, CancellationToken::new());
+    progress.log("  locator resolved to <input value=\"untracked-secret\"/>");
+    let error = agent.scrubbed("strict mode violation: untracked-secret".to_string());
+    let log = agent.finish(CallResult::Error {
+        name: "Error".to_string(),
+        message: error.clone(),
+    });
+    assert!(log.is_empty(), "{log:?}");
+    assert!(!error.contains("untracked-secret"), "{error}");
+    let record = record(&agent);
+    assert!(record.log.is_empty());
+    assert!(
+        matches!(&record.result, CallResult::Error { message, .. } if !message.contains("untracked")),
+        "{record:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tests_that_an_element_action_no_hook_wants_mints_no_pin() {
     let fake = Arc::new(FakeHooks::new(&Timeline::default()).wanting(|_, kind| kind == "goto"));
     let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;

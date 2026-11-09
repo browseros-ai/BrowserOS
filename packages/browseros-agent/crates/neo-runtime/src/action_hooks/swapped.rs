@@ -3,14 +3,19 @@
 //! the real password; the page may then show it in an element's attributes (a page that mirrors
 //! an input's value into its `value` attribute, as React's controlled inputs do), and a later
 //! call's log or error names that element by its preview, attributes included. So once a hook
-//! swapped a string in, or typed one with its own call, every agent call's call log and error
-//! text replies, and is recorded, with that string replaced by [`REDACTED`].
+//! swapped a string in, typed one with its own call or handed one to its own page script, every
+//! agent call's call log and error text replies, and is recorded, with that string replaced by
+//! [`REDACTED`].
+//!
+//! The run keeps every such value: none is ever dropped, or an agent that makes the run remember
+//! more could push the password out. Past the caps, the scrub fails closed instead: from then on
+//! every agent call replies with no log and [`UNTRACKED`] for its error text.
 //!
 //! Results are not scrubbed: a read that returns the value is the hooks' to redact (afterAction).
 //! Nor are a hook's own replies: a hook needs the real values.
 
 use std::cmp::Reverse;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -18,6 +23,12 @@ use serde_json::Value;
 
 /// Neo: what replaces a swapped value in the agent's call logs and error texts.
 pub(crate) const REDACTED: &str = "[redacted]";
+
+/// Neo: the error text of every agent call once the run's hooks swapped in more values than the
+/// scrub keeps ([`MAX_SWAPPED_VALUES`], [`MAX_SWAPPED_TOTAL_BYTES`]): the real text could name one
+/// it did not keep.
+pub(crate) const UNTRACKED: &str = "the run's hooks swapped in more values than Neo keeps out of \
+                                    call logs; this call's message is withheld";
 
 /// Neo: the shortest value typed into the page that a swap remembers, in characters: a value or
 /// text a hook swapped in or typed itself (a card's 3-digit code is one). Shorter ones would
@@ -36,12 +47,16 @@ const TYPED_KEYS: [&str; 3] = ["value", "text", "valueOrLabel"];
 /// which no call log or error text echoes, would make every scrub slow.
 const MAX_SWAPPED_BYTES: usize = 64 * 1024;
 
-/// Neo: how many values a run remembers at most; past it, the oldest go first, so a run that
-/// swaps on every call cannot make each scrub slower without bound.
+/// Neo: how many values a run remembers at most, so a run that swaps on every call cannot make
+/// each scrub slower without bound; past it, the scrub fails closed ([`UNTRACKED`]).
 const MAX_SWAPPED_VALUES: usize = 1024;
 
-/// Neo: how many bytes of values a run remembers at most, the oldest going first past it.
+/// Neo: how many bytes of values a run remembers at most; past it, the scrub fails closed.
 const MAX_SWAPPED_TOTAL_BYTES: usize = 1024 * 1024;
+
+/// Neo: the markers Playwright's argument serializer writes for values JSON cannot hold
+/// (`{v: 'undefined'}` and kin), which are no value a hook handed its page script.
+const SERIALIZER_MARKERS: [&str; 6] = ["undefined", "null", "NaN", "Infinity", "-Infinity", "-0"];
 
 /// Neo: the longest cut-short prefix of a swapped value a scrub looks for, in characters: an
 /// element preview cuts its attributes at 500 characters and its text at 50, each ending in an
@@ -54,32 +69,36 @@ const MAX_CUT_CHARS: usize = 500;
 pub(crate) struct SwappedValues {
     values: Mutex<Remembered>,
     any: AtomicBool,
+    /// Set once a value did not fit the caps: the scrub fails closed for the rest of the run.
+    overflowed: AtomicBool,
 }
 
 #[derive(Default)]
 struct Remembered {
-    /// In the order they were remembered, the oldest first: who goes past the caps.
-    order: VecDeque<String>,
+    /// In the order they were remembered.
+    order: Vec<String>,
     /// The same values, longest first, so a value that holds another is scrubbed whole.
     by_length: Vec<String>,
     bytes: usize,
 }
 
 impl Remembered {
-    fn add(&mut self, value: &str) {
+    /// Keeps `value`; `false` when it does not fit the caps, and is not kept: nothing kept is
+    /// ever dropped.
+    fn add(&mut self, value: &str) -> bool {
         if self.order.iter().any(|known| known == value) {
-            return;
+            return true;
         }
-        self.order.push_back(value.to_string());
+        if self.order.len() >= MAX_SWAPPED_VALUES
+            || self.bytes + value.len() > MAX_SWAPPED_TOTAL_BYTES
+        {
+            return false;
+        }
+        self.order.push(value.to_string());
         self.bytes += value.len();
-        while self.order.len() > MAX_SWAPPED_VALUES || self.bytes > MAX_SWAPPED_TOTAL_BYTES {
-            let Some(oldest) = self.order.pop_front() else {
-                break;
-            };
-            self.bytes -= oldest.len();
-        }
-        self.by_length = self.order.iter().cloned().collect();
+        self.by_length = self.order.clone();
         self.by_length.sort_by_key(|value| Reverse(value.len()));
+        true
     }
 }
 
@@ -111,6 +130,20 @@ impl SwappedValues {
         );
     }
 
+    /// Remembers the strings of what a hook hands its own page script (the serialized `arg` of an
+    /// `evaluate`, `$eval` or a handle's `evaluate`), from [`MIN_OTHER_CHARS`] characters: a hook
+    /// that sets a box's value by script leaves it in the page as a swap does. The serializer's
+    /// markers and an object's keys are no value.
+    pub(crate) fn remember_serialized(&self, value: &Value) {
+        let mut found = Vec::new();
+        serialized_strings(value, &mut found);
+        self.add(
+            found
+                .into_iter()
+                .filter(|text| worth_remembering(text, false)),
+        );
+    }
+
     fn add<'a>(&self, fresh: impl Iterator<Item = &'a str>) {
         let mut fresh = fresh.peekable();
         if fresh.peek().is_none() {
@@ -119,10 +152,18 @@ impl SwappedValues {
         // A poisoned lock (a panic while scrubbing) makes every scrub redact everything.
         if let Ok(mut values) = self.values.lock() {
             for value in fresh {
-                values.add(value);
+                if !values.add(value) {
+                    self.overflowed.store(true, Ordering::SeqCst);
+                }
             }
         }
         self.any.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether a value did not fit the caps: every later agent call keeps no log and replies
+    /// [`UNTRACKED`] for its error text.
+    pub(crate) fn overflowed(&self) -> bool {
+        self.overflowed.load(Ordering::SeqCst)
     }
 
     /// `text` with every swapped value replaced by [`REDACTED`], and every prefix of one that
@@ -165,6 +206,28 @@ fn worth_remembering(text: &str, typed: bool) -> bool {
         MIN_OTHER_CHARS
     };
     text.chars().count() >= floor && text.len() <= MAX_SWAPPED_BYTES
+}
+
+/// Every string leaf of a serialized page-script argument but the serializer's markers and an
+/// object entry's key (`{k, v}`).
+fn serialized_strings<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+    match value {
+        Value::String(text) => {
+            if !SERIALIZER_MARKERS.contains(&text.as_str()) {
+                out.push(text);
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| serialized_strings(item, out)),
+        Value::Object(fields) => {
+            let entry = fields.contains_key("k") && fields.contains_key("v");
+            for (key, field) in fields {
+                if !(entry && key == "k") {
+                    serialized_strings(field, out);
+                }
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }
 
 /// Every string leaf of `value`, with whether its object key ([`TYPED_KEYS`]) types it into the
@@ -293,19 +356,47 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_the_oldest_values_go_past_the_caps() {
+    fn tests_that_nothing_kept_is_dropped_and_past_the_caps_the_scrub_fails_closed() {
         let swapped = SwappedValues::default();
-        let values: Vec<String> = (0..=MAX_SWAPPED_VALUES)
+        swapped.remember(
+            &json!({ "value": "{{password}}" }),
+            &json!({ "value": SECRET }),
+        );
+        let values: Vec<String> = (1..MAX_SWAPPED_VALUES)
             .map(|n| format!("value-{n:05}"))
             .collect();
         swapped.remember_typed(values.iter().map(String::as_str));
-        assert_eq!(swapped.scrub("value-00000"), None, "the oldest went first");
-        assert!(swapped.scrub("value-00001").is_some());
-        let big = "x".repeat(MAX_SWAPPED_BYTES);
-        let bigger: Vec<String> = (0..17).map(|n| format!("{n:02}{big}")).collect();
+        assert!(!swapped.overflowed(), "exactly at the cap");
+        assert!(
+            swapped.scrub(SECRET).is_some(),
+            "the first value is still scrubbed at the cap"
+        );
+        swapped.remember_typed(["one-too-many"]);
+        assert!(swapped.overflowed(), "past the cap");
+        assert!(swapped.scrub(SECRET).is_some(), "nothing kept was dropped");
         let large = SwappedValues::default();
-        large.remember_typed(bigger.iter().map(|value| &value[..MAX_SWAPPED_BYTES]));
-        let remembered = large.values.lock().map_or(0, |values| values.bytes);
-        assert!(remembered <= MAX_SWAPPED_TOTAL_BYTES, "{remembered}");
+        let big = "x".repeat(MAX_SWAPPED_BYTES - 2);
+        let bigger: Vec<String> = (0..17).map(|n| format!("{n:02}{big}")).collect();
+        large.remember_typed(bigger.iter().take(16).map(String::as_str));
+        assert!(!large.overflowed(), "16 values of 64 KiB fit 1 MiB");
+        large.remember_typed([bigger[16].as_str()]);
+        assert!(large.overflowed(), "the 17th does not");
+    }
+
+    #[test]
+    fn tests_that_a_page_scripts_argument_strings_are_remembered_but_not_its_markers_or_keys() {
+        let swapped = SwappedValues::default();
+        swapped.remember_serialized(&json!({
+            "o": [
+                { "k": "password", "v": SECRET },
+                { "k": "missing", "v": { "v": "undefined" } },
+                { "k": "short", "v": "abc" },
+            ],
+            "id": 1,
+        }));
+        assert_eq!(
+            swapped.scrub(&format!("{SECRET} password undefined abc")),
+            Some(format!("{REDACTED} password undefined abc"))
+        );
     }
 }
