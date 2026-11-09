@@ -150,7 +150,7 @@ async fn loaded(code: &str) -> (HookSandbox, TaskTracker) {
 /// The outcome a gate ended the run with.
 fn ended(gate: Gate) -> RunOutcome {
     match gate {
-        Gate::End(outcome) => outcome,
+        Gate::End(outcome) => *outcome,
         Gate::Start => panic!("the run was expected to end before its script"),
     }
 }
@@ -183,11 +183,15 @@ async fn tests_that_invocations_queue_in_the_order_they_were_sent() {
     .await;
     let started = Instant::now();
     let first = async {
-        let decided = hooks.before_action(action("first", json!({"wait": 100}))).await;
+        let decided = hooks
+            .before_action(action("first", json!({"wait": 100})))
+            .await;
         (decided, started.elapsed())
     };
     let second = async {
-        let decided = hooks.before_action(action("second", json!({"wait": 10}))).await;
+        let decided = hooks
+            .before_action(action("second", json!({"wait": 10})))
+            .await;
         (decided, started.elapsed())
     };
     let ((first, first_at), (second, second_at)) = tokio::join!(first, second);
@@ -243,7 +247,7 @@ async fn tests_that_a_failing_before_run_blocks_without_its_detail() {
         "neo.on('beforeRun', async () => { throw new Error('secret-1234') })",
         r#"neo.on('beforeRun', () => '{"decision":"keep","notes":["secret-1234"]}')"#,
         r#"neo.on('beforeRun', () => '{"decision":"block","reason":""}')"#,
-        r#"neo.on('beforeRun', () => 'secret-1234')"#,
+        r"neo.on('beforeRun', () => 'secret-1234')",
     ];
     for code in failing {
         let (hooks, _tasks) = sandbox(code);
@@ -344,7 +348,10 @@ async fn tests_that_after_run_keeps_replaces_or_notes() {
     let outcome = hooks.after_run(ok()).await;
     assert_eq!(outcome.status, RunStatus::Ok);
     assert_eq!(outcome.value, Some(json!("redacted")));
-    assert!(outcome.binaries.is_empty(), "the replaced value's binaries go");
+    assert!(
+        outcome.binaries.is_empty(),
+        "the replaced value's binaries go"
+    );
     assert_eq!(outcome.notes, ["was ok", r#"{"who":"owner"}"#]);
     assert_eq!(outcome.logs, ["log"]);
 
@@ -352,30 +359,40 @@ async fn tests_that_after_run_keeps_replaces_or_notes() {
     let outcome = hooks.after_run(ok()).await;
     assert_eq!((outcome.status, outcome.value), (RunStatus::Ok, None));
 
-    let (hooks, _tasks) = loaded("neo.on('afterRun', (event) => ({ note: event.value.secret }))").await;
+    let (hooks, _tasks) =
+        loaded("neo.on('afterRun', (event) => ({ note: event.value.secret }))").await;
     assert_eq!(hooks.after_run(ok()).await.notes, ["s3"]);
 }
 
 #[tokio::test(start_paused = true)]
 async fn tests_that_a_failing_after_run_withholds_the_result() {
-    let failed = || RunOutcome::failed(RunError::new("TypeError", "x".to_string()), Vec::new());
-    let ok = || RunOutcome::returned(Some(json!("secret-1234")), Vec::new());
-    let cases: [(&str, fn() -> RunOutcome); 5] = [
-        ("neo.on('afterRun', () => { throw new Error('secret-1234') })", ok),
-        ("neo.on('afterRun', () => new Promise(() => {}))", ok),
-        (r#"neo.on('afterRun', () => '{"decision":"allow"}')"#, ok),
-        (r#"neo.on('afterRun', () => '{"decision":"replace","value":1,"extra":2}')"#, ok),
-        ("neo.on('afterRun', () => ({ replace: 'swap' }))", failed),
+    let failed = RunOutcome::failed(RunError::new("TypeError", "x".to_string()), Vec::new());
+    let ok = RunOutcome::returned(Some(json!("secret-1234")), Vec::new());
+    let cases = [
+        (
+            "neo.on('afterRun', () => { throw new Error('secret-1234') })",
+            &ok,
+        ),
+        ("neo.on('afterRun', () => new Promise(() => {}))", &ok),
+        (r#"neo.on('afterRun', () => '{"decision":"allow"}')"#, &ok),
+        (
+            r#"neo.on('afterRun', () => '{"decision":"replace","value":1,"extra":2}')"#,
+            &ok,
+        ),
+        ("neo.on('afterRun', () => ({ replace: 'swap' }))", &failed),
     ];
     for (code, outcome) in cases {
         let (hooks, _tasks) = loaded(code).await;
-        let outcome = hooks.after_run(outcome()).await;
+        let outcome = hooks.after_run(outcome.clone()).await;
         assert_eq!(outcome.status, RunStatus::Error, "{code}");
         assert!(outcome.value.is_none(), "{code}");
         let error = outcome.error.expect("a withheld result has an error");
         assert_eq!(error.name, "Error", "{code}");
         assert!(!error.message.contains("secret-1234"), "{code}");
-        assert_ne!(error.message, "x", "{code}: the script's own error is replaced too");
+        assert_ne!(
+            error.message, "x",
+            "{code}: the script's own error is replaced too"
+        );
         assert!(!hooks.take_trace().is_empty(), "{code}");
     }
 }
@@ -424,8 +441,10 @@ async fn tests_that_action_hooks_decide_and_fold() {
             )
             .await,
         Ok(AfterDecision {
-            replace: Some(Some(json!({"value": "***"}))),
-            binaries: Vec::new(),
+            replace: Some(Replaced {
+                value: Some(json!({"value": "***"})),
+                binaries: Vec::new(),
+            }),
             notes: vec!["redacted".to_string()],
         })
     );
@@ -438,7 +457,6 @@ async fn tests_that_action_hooks_decide_and_fold() {
             .await,
         Ok(AfterDecision {
             replace: None,
-            binaries: Vec::new(),
             notes: Vec::new(),
         })
     );

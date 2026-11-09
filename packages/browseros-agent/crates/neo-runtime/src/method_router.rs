@@ -355,7 +355,11 @@ impl Dispatcher {
         target: Option<&(Arc<PageEntry>, FrameScope)>,
     ) -> Option<ReleaseClaim> {
         if let Some(cursor) = ending_cursor(route) {
-            return self.side.cursors.begin_ending(cursor).map(ReleaseClaim::Ending);
+            return self
+                .side
+                .cursors
+                .begin_ending(cursor)
+                .map(ReleaseClaim::Ending);
         }
         match route {
             ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => {
@@ -631,11 +635,33 @@ impl Dispatcher {
         }
     }
 
+    /// The context whose debugger sees this realm's call ([`debugger_context`]); none for a hook's
+    /// call: the hooks run outside the script being debugged, and a held hook call would hold the
+    /// agent's call waiting on it.
+    fn debugged(
+        &self,
+        object: &ObjectKind,
+        target: Option<&(Arc<PageEntry>, FrameScope)>,
+    ) -> Option<String> {
+        match self.side.origin {
+            CallOrigin::Agent => debugger_context(object, target, &self.inner.run.init_scripts),
+            CallOrigin::Hook => None,
+        }
+    }
+
+    /// What every call of the run shares about the run itself.
+    pub(crate) fn run_scope(&self) -> &RunScope {
+        &self.inner.run
+    }
+
     /// Who sends this dispatcher's calls. The call path reads it to skip the hooks for a hook's
     /// own calls (hooks feature 3); every record it opens carries it (`CallEntry::origin`).
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "hooks feature 3's seam: the call path skips hooks for a hook's calls")
+        expect(
+            dead_code,
+            reason = "hooks feature 3's seam: the call path skips hooks for a hook's calls"
+        )
     )]
     pub(crate) fn origin(&self) -> CallOrigin {
         self.side.origin
@@ -670,14 +696,7 @@ impl Dispatcher {
         let object = self
             .platform_object(&guid)
             .unwrap_or_else(|| object_kind(&guid, target.is_some()));
-        // No debugger holds a hook's call: the hooks run outside the script being debugged, and a
-        // held hook call would hold the agent's call waiting on it.
-        let debugged = match origin {
-            CallOrigin::Agent => {
-                debugger_context(&object, target.as_ref(), &inner.run.init_scripts)
-            }
-            CallOrigin::Hook => None,
-        };
+        let debugged = self.debugged(&object, target.as_ref());
         let Routed { meta, route } = route(object, &method, params.clone());
         let route = route.map(|call| inner.ordered(&guid, call));
         let metadata = metadata.unwrap_or(Metadata {
@@ -768,7 +787,10 @@ impl Dispatcher {
         | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(params)) =
             route
         {
-            self.inner.tabs.test_id().set(&params.test_id_attribute_name);
+            self.inner
+                .tabs
+                .test_id()
+                .set(&params.test_id_attribute_name);
         }
         let (meta, context) = debugged?;
         self.hold(meta, &context, metadata, entry)
@@ -2562,10 +2584,13 @@ mod tests {
 
     /// The reply text of a call through `dispatcher`, within 5 s.
     async fn replied(dispatcher: &Dispatcher, message: &Value) -> Value {
-        let (reply, _) = time::timeout(Duration::from_secs(5), dispatcher.call(&message.to_string()))
-            .await
-            .expect("the call replies in time")
-            .expect("the call has a reply");
+        let (reply, _) = time::timeout(
+            Duration::from_secs(5),
+            dispatcher.call(&message.to_string()),
+        )
+        .await
+        .expect("the call replies in time")
+        .expect("the call has a reply");
         serde_json::from_str(&reply).unwrap()
     }
 
@@ -2614,7 +2639,11 @@ mod tests {
         let (records, dropped) = agent.finish(RunEnd::Settled).await;
         assert!(dropped.is_none());
         let [agent_record, hook_record] = <[CallRecord; 2]>::try_from(records).unwrap();
-        assert_eq!((agent_record.call_id, hook_record.call_id), (1, 2), "one call id sequence");
+        assert_eq!(
+            (agent_record.call_id, hook_record.call_id),
+            (1, 2),
+            "one call id sequence"
+        );
         assert_eq!(agent_record.origin, CallOrigin::Agent);
         assert_eq!(agent_record.params, json!({"waitTimeout": 60_000}));
         assert_eq!(
@@ -2650,11 +2679,15 @@ mod tests {
     async fn tests_that_no_debugger_holds_a_hooks_call() {
         let browser = FakeBrowser::start(Replies::default()).await;
         let (agent, hooks) = agent_and_hooks(&browser).await;
-        let debugger = |id: u64, method: &str| {
-            json!({"id": id, "guid": "debugger@default", "method": method, "params": {}})
-        };
-        let pause = |id: u64| json!({"id": id, "guid": "context@default", "method": "pause", "params": {}});
-        assert!(replied(&agent, &debugger(1, "requestPause")).await.get("error").is_none());
+        let debugger = |id: u64, method: &str| json!({"id": id, "guid": "debugger@default", "method": method, "params": {}});
+        let pause =
+            |id: u64| json!({"id": id, "guid": "context@default", "method": "pause", "params": {}});
+        assert!(
+            replied(&agent, &debugger(1, "requestPause"))
+                .await
+                .get("error")
+                .is_none()
+        );
         assert!(replied(&hooks, &pause(1)).await.get("error").is_none());
         assert_eq!(
             agent.inner.tabs.debuggers().paused_details(DEFAULT_CONTEXT),
@@ -2663,13 +2696,22 @@ mod tests {
         );
         let held = agent.call(&pause(2).to_string());
         let mut held = Box::pin(held);
-        assert!(time::timeout(Duration::from_millis(100), &mut held).await.is_err());
+        assert!(
+            time::timeout(Duration::from_millis(100), &mut held)
+                .await
+                .is_err()
+        );
         assert_ne!(
             agent.inner.tabs.debuggers().paused_details(DEFAULT_CONTEXT),
             Value::Null,
             "the pause still holds the agent's next call"
         );
-        assert!(replied(&agent, &debugger(3, "resume")).await.get("error").is_none());
+        assert!(
+            replied(&agent, &debugger(3, "resume"))
+                .await
+                .get("error")
+                .is_none()
+        );
         assert!(time::timeout(Duration::from_secs(5), held).await.is_ok());
         let (records, _) = agent.finish(RunEnd::Settled).await;
         assert_eq!(records.len(), 4);

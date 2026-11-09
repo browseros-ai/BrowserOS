@@ -43,7 +43,9 @@ use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
 use crate::hooks::HookSandbox;
 use crate::playwright_methods::evaluate::Handles;
-use crate::run::{CallLocation, CallOrigin, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
+use crate::run::{
+    CallLocation, CallOrigin, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd,
+};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
 /// Every handler returns this; `?` on [`Progress::race`] is how a handler gives up.
@@ -681,7 +683,10 @@ impl CallEntry {
     /// own calls (hooks feature 3).
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "hooks feature 3's seam: the call path skips hooks for a hook's calls")
+        expect(
+            dead_code,
+            reason = "hooks feature 3's seam: the call path skips hooks for a hook's calls"
+        )
     )]
     pub(crate) fn origin(&self) -> CallOrigin {
         self.origin
@@ -1078,7 +1083,10 @@ mod tests {
         trace.push(Arc::clone(&entry));
         let reply_log = entry.finish(CallResult::Ok);
         trace.finished(&entry);
-        assert!(!reply_log.is_empty(), "the hook's realm reads its own call log");
+        assert!(
+            !reply_log.is_empty(),
+            "the hook's realm reads its own call log"
+        );
         let (records, dropped) = trace.take(RunEnd::Settled);
         assert!(dropped.is_none());
         let record = &records[0];

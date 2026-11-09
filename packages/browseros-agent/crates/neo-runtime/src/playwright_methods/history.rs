@@ -786,10 +786,10 @@ mod tests {
     use tokio_util::task::TaskTracker;
 
     use super::*;
-    use crate::run::CallOrigin;
     use crate::deadline::Deadline;
     use crate::playwright_methods::navigate::{NavigateReply, NavigationState};
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope};
+    use crate::run::CallOrigin;
 
     const START: &str = "https://a.test/start";
 

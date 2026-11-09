@@ -5,6 +5,9 @@
 //! ```text
 //! Runtime::run                           runtime.rs: starting tab, run lifetime, outcome
 //!   ├─ Tabs::open                        tabs.rs: context scope, ordered page registry
+//!   ├─ HookSandbox                       hooks.rs: only for a run with hooks; a second realm on
+//!   │                                    its own actor task: load, beforeRun, afterRun; its
+//!   │                                    bridge holds Dispatcher::for_hooks (origin hook)
 //!   └─ quickjs::run                        quickjs.rs: fresh QuickJS and embedded neo-quickjs-injected
 //!        └─ __neo_runtime                quickjs_bridge.rs: JS/Rust boundary
 //!             ├─ get → Tabs              live pages, URL, initializer, opener and closed state

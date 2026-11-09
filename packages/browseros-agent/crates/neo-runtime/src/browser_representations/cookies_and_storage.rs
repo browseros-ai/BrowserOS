@@ -1542,13 +1542,13 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::run::CallOrigin;
     use crate::browser_representations::page::TabInputs;
     use crate::chromium_bridge::browser_connection_settings::Switches;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::{CallEntry, CallStart, RunScope};
+    use crate::run::CallOrigin;
 
     fn call_progress() -> Progress {
         progress_ending_with(CancellationToken::new())

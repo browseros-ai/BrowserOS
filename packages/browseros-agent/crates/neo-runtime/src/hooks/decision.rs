@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::events::CONTEXT_GUID;
-use crate::hooks::{ActionEnd, ActionEvent, AfterDecision, HookEvent, HookFailure};
+use crate::hooks::{ActionEnd, ActionEvent, AfterDecision, HookEvent, HookFailure, Replaced};
 use crate::run::RunOutcome;
 
 /// What `invoke` resolved with, as the SDK writes it.
@@ -67,12 +67,13 @@ pub(crate) fn parse(event: HookEvent, text: &str) -> Result<Decided, HookFailure
         }
         Wire::Keep { notes } if !before => Ok(Decided::After(AfterDecision {
             replace: None,
-            binaries: Vec::new(),
             notes,
         })),
         Wire::Replace { value, notes } if !before => Ok(Decided::After(AfterDecision {
-            replace: Some(value),
-            binaries: Vec::new(),
+            replace: Some(Replaced {
+                value,
+                binaries: Vec::new(),
+            }),
             notes,
         })),
         wire => Err(HookFailure::BadDecision(format!(
@@ -142,14 +143,17 @@ mod tests {
     use crate::hooks::LocatorRef;
     use crate::run::{CallLocation, RunError};
 
-    fn decide(event: HookEvent, decision: Value) -> Result<Decided, HookFailure> {
+    fn decide(event: HookEvent, decision: &Value) -> Result<Decided, HookFailure> {
         parse(event, &decision.to_string())
     }
 
-    fn after(replace: Option<Option<Value>>, notes: &[&str]) -> Decided {
+    /// An after decision; `replace` is `Some(None)` for a replacement with `undefined`.
+    fn after(replace: Option<Value>, replaced: bool, notes: &[&str]) -> Decided {
         Decided::After(AfterDecision {
-            replace,
-            binaries: Vec::new(),
+            replace: replaced.then(|| Replaced {
+                value: replace,
+                binaries: Vec::new(),
+            }),
             notes: notes.iter().map(ToString::to_string).collect(),
         })
     }
@@ -158,45 +162,48 @@ mod tests {
     fn tests_that_each_event_reads_the_decisions_it_allows() {
         for event in [HookEvent::BeforeRun, HookEvent::BeforeAction] {
             assert_eq!(
-                decide(event, json!({"decision": "allow"})),
+                decide(event, &json!({"decision": "allow"})),
                 Ok(Decided::Allow)
             );
             assert_eq!(
-                decide(event, json!({"decision": "block", "reason": "owner approval"})),
+                decide(
+                    event,
+                    &json!({"decision": "block", "reason": "owner approval"})
+                ),
                 Ok(Decided::Block("owner approval".to_string()))
             );
         }
         assert_eq!(
             decide(
                 HookEvent::BeforeAction,
-                json!({"decision": "replaceArgs", "args": {"value": "s3cret"}})
+                &json!({"decision": "replaceArgs", "args": {"value": "s3cret"}})
             ),
             Ok(Decided::ReplaceArgs(json!({"value": "s3cret"})))
         );
         for event in [HookEvent::AfterRun, HookEvent::AfterAction] {
             assert_eq!(
-                decide(event, json!({"decision": "keep", "notes": []})),
-                Ok(after(None, &[]))
+                decide(event, &json!({"decision": "keep", "notes": []})),
+                Ok(after(None, false, &[]))
             );
             assert_eq!(
-                decide(event, json!({"decision": "keep", "notes": ["a", "b"]})),
-                Ok(after(None, &["a", "b"]))
+                decide(event, &json!({"decision": "keep", "notes": ["a", "b"]})),
+                Ok(after(None, false, &["a", "b"]))
             );
             assert_eq!(
                 decide(
                     event,
-                    json!({"decision": "replace", "value": {"x": 1}, "notes": ["n"]})
+                    &json!({"decision": "replace", "value": {"x": 1}, "notes": ["n"]})
                 ),
-                Ok(after(Some(Some(json!({"x": 1}))), &["n"]))
+                Ok(after(Some(json!({"x": 1})), true, &["n"]))
             );
             assert_eq!(
-                decide(event, json!({"decision": "replace", "value": null})),
-                Ok(after(Some(Some(Value::Null)), &[])),
+                decide(event, &json!({"decision": "replace", "value": null})),
+                Ok(after(Some(Value::Null), true, &[])),
                 "null replaces with null"
             );
             assert_eq!(
-                decide(event, json!({"decision": "replace", "notes": []})),
-                Ok(after(Some(None), &[])),
+                decide(event, &json!({"decision": "replace", "notes": []})),
+                Ok(after(None, true, &[])),
                 "an absent value replaces with undefined"
             );
         }
@@ -205,19 +212,40 @@ mod tests {
     #[test]
     fn tests_that_a_decision_the_event_does_not_allow_fails() {
         let refused = [
-            (HookEvent::BeforeRun, json!({"decision": "replaceArgs", "args": {}})),
-            (HookEvent::BeforeRun, json!({"decision": "keep", "notes": []})),
-            (HookEvent::BeforeRun, json!({"decision": "replace", "value": 1})),
+            (
+                HookEvent::BeforeRun,
+                json!({"decision": "replaceArgs", "args": {}}),
+            ),
+            (
+                HookEvent::BeforeRun,
+                json!({"decision": "keep", "notes": []}),
+            ),
+            (
+                HookEvent::BeforeRun,
+                json!({"decision": "replace", "value": 1}),
+            ),
             (HookEvent::AfterRun, json!({"decision": "allow"})),
-            (HookEvent::AfterRun, json!({"decision": "block", "reason": "no"})),
-            (HookEvent::AfterRun, json!({"decision": "replaceArgs", "args": {}})),
-            (HookEvent::BeforeAction, json!({"decision": "keep", "notes": []})),
+            (
+                HookEvent::AfterRun,
+                json!({"decision": "block", "reason": "no"}),
+            ),
+            (
+                HookEvent::AfterRun,
+                json!({"decision": "replaceArgs", "args": {}}),
+            ),
+            (
+                HookEvent::BeforeAction,
+                json!({"decision": "keep", "notes": []}),
+            ),
             (HookEvent::AfterAction, json!({"decision": "allow"})),
-            (HookEvent::AfterAction, json!({"decision": "replaceArgs", "args": {}})),
+            (
+                HookEvent::AfterAction,
+                json!({"decision": "replaceArgs", "args": {}}),
+            ),
         ];
         for (event, decision) in refused {
             assert!(
-                matches!(decide(event, decision.clone()), Err(HookFailure::BadDecision(_))),
+                matches!(decide(event, &decision), Err(HookFailure::BadDecision(_))),
                 "{event:?} must refuse {decision}"
             );
         }
@@ -226,7 +254,7 @@ mod tests {
     #[test]
     fn tests_that_every_failure_shape_fails_closed() {
         assert!(matches!(
-            decide(HookEvent::BeforeRun, json!({"decision": "fail", "error": "boom"})),
+            decide(HookEvent::BeforeRun, &json!({"decision": "fail", "error": "boom"})),
             Err(HookFailure::Threw(detail)) if detail == "boom"
         ));
         let bad = [
@@ -271,7 +299,10 @@ mod tests {
         let failed = RunOutcome::failed(RunError::new("TypeError", "x".to_string()), Vec::new());
         let failed: Value = serde_json::from_str(&after_run(&failed, "page@T")).unwrap();
         assert_eq!(failed["status"], "error");
-        assert_eq!(failed["error"], json!({"name": "TypeError", "message": "x"}));
+        assert_eq!(
+            failed["error"],
+            json!({"name": "TypeError", "message": "x"})
+        );
         assert!(failed.get("value").is_none());
 
         let event = ActionEvent {
@@ -308,7 +339,10 @@ mod tests {
         assert_eq!(done["result"], json!({}));
         let failed = ActionEnd::Error(RunError::new("TimeoutError", "late".to_string()));
         let failed: Value = serde_json::from_str(&action(&event, Some(&failed))).unwrap();
-        assert_eq!(failed["error"], json!({"name": "TimeoutError", "message": "late"}));
+        assert_eq!(
+            failed["error"],
+            json!({"name": "TimeoutError", "message": "late"})
+        );
         assert!(failed.get("result").is_none());
     }
 }

@@ -367,8 +367,8 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::run::CallOrigin;
     use crate::progress::{CallStart, ErrorName};
+    use crate::run::CallOrigin;
 
     fn entry() -> Arc<CallEntry> {
         Arc::new(CallEntry::new(CallStart {

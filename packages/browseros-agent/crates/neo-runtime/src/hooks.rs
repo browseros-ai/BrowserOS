@@ -37,7 +37,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 
-use crate::deadline::Deadline;
+use crate::deadline::{Deadline, Stop};
 use crate::method_router::Dispatcher;
 use crate::quickjs;
 use crate::quickjs_bridge::{Getters, Logs};
@@ -83,7 +83,10 @@ impl HookEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "hooks feature 3 fires the action hooks from the call path")
+    expect(
+        dead_code,
+        reason = "hooks feature 3 fires the action hooks from the call path"
+    )
 )]
 pub(crate) enum ActionHook {
     Before,
@@ -128,7 +131,10 @@ pub(crate) struct LocatorRef {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "hooks feature 3 fires the action hooks from the call path")
+    expect(
+        dead_code,
+        reason = "hooks feature 3 fires the action hooks from the call path"
+    )
 )]
 pub(crate) enum ActionEnd {
     Result(Value),
@@ -147,14 +153,21 @@ pub(crate) enum ActionDecision {
 /// What an after event's handlers decided.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AfterDecision {
-    /// `Some` when a handler replaced the result: the replacement's JSON, or `None` inside for
-    /// `{ replace: undefined }`, which replaces too (`'replace' in r` decides).
-    pub(crate) replace: Option<Option<Value>>,
-    /// The replacement's binaries, lifted out of it as the agent's result's are: each one's place
-    /// holds `{type, bytes}` and its bytes are here (`RunOutcome::binaries`).
-    pub(crate) binaries: Vec<RunBinary>,
+    /// What replaces the result, when a handler replaced it.
+    pub(crate) replace: Option<Replaced>,
     /// Every handler's note, in order.
     pub(crate) notes: Vec<String>,
+}
+
+/// A result a hook put in place of the run's or the action's own.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Replaced {
+    /// The replacement as JSON; `None` for `{ replace: undefined }`, which JSON cannot hold and
+    /// which replaces too (`'replace' in r` decides).
+    pub(crate) value: Option<Value>,
+    /// Its binaries, lifted out of it as the agent's result's are: each one's place holds
+    /// `{type, bytes}` and its bytes are here (`RunOutcome::binaries`).
+    pub(crate) binaries: Vec<RunBinary>,
 }
 
 /// Why an invocation decided nothing usable. Every one fails closed.
@@ -194,7 +207,8 @@ pub(crate) struct RealmParts {
     pub(crate) frame_guid: String,
     pub(crate) url: String,
     pub(crate) getters: Getters,
-    /// The run's hook dispatcher (`Dispatcher::for_hooks`).
+    /// The run's hook dispatcher (`Dispatcher::for_hooks`), whose run scope gives the sandbox
+    /// the run's tracker and the slot the call path finds it in (`RunScope::hooks`).
     pub(crate) dispatcher: Dispatcher,
     /// Counts realms created on the run's `Runtime`.
     pub(crate) realms: Arc<AtomicU64>,
@@ -205,13 +219,14 @@ pub(crate) struct RealmParts {
 pub(crate) enum Gate {
     Start,
     /// The run ends here, before its script: blocked, timed out or cancelled.
-    End(RunOutcome),
+    End(Box<RunOutcome>),
 }
 
 impl HookSandbox {
-    /// Starts the actor of a run's hook realm, on the run's tracker, for `hooks`. Nothing runs
-    /// until [`HookSandbox::before_run`] loads the hook file.
-    pub(crate) fn start(hooks: RunHooks, parts: RealmParts, tasks: &TaskTracker) -> Self {
+    /// Starts the actor of a run's hook realm, on the run's tracker, for `hooks`, and puts the
+    /// sandbox where the run's call path finds it (`RunScope::hooks`). Nothing runs until
+    /// [`HookSandbox::before_run`] loads the hook file.
+    pub(crate) fn start(hooks: RunHooks, parts: RealmParts) -> Self {
         let RealmParts {
             page_guid,
             frame_guid,
@@ -220,10 +235,12 @@ impl HookSandbox {
             dispatcher,
             realms,
         } = parts;
+        let run = dispatcher.run_scope();
+        let (tasks, slot) = (run.tasks.clone(), Arc::clone(&run.hooks));
         let setup = Setup {
             code: hooks.code,
             meta: hooks.meta,
-            page_guid: page_guid.clone(),
+            page_guid,
             frame_guid,
             url,
             bridge: Bridge::Run {
@@ -233,7 +250,9 @@ impl HookSandbox {
             sdk: Cow::Borrowed(quickjs::SDK_BUNDLE),
             realms,
         };
-        Self::spawn(setup, hooks.budget, tasks)
+        let sandbox = Self::spawn(setup, hooks.budget, &tasks);
+        let _first = slot.set(sandbox.clone());
+        sandbox
     }
 
     fn spawn(setup: Setup, budget: Duration, tasks: &TaskTracker) -> Self {
@@ -270,6 +289,15 @@ impl HookSandbox {
         self.trace.take()
     }
 
+    /// The run's end for its hooks: `afterRun` ([`HookSandbox::after_run`]), then the sandbox
+    /// closes, and the outcome carries the hook trace. Before `Dispatcher::finish`: the actor is a
+    /// task of the run's tracker, which `finish` waits for.
+    pub(crate) async fn end(&self, outcome: RunOutcome) -> RunOutcome {
+        let outcome = self.after_run(outcome).await;
+        self.close();
+        outcome.with_hook_trace(self.take_trace())
+    }
+
     /// Loads the hook file and runs `beforeRun`, both racing the run's `deadline`. The script
     /// starts only when every `beforeRun` handler allowed it.
     pub(crate) async fn before_run(&self, script: &str, deadline: &Deadline) -> Gate {
@@ -281,7 +309,7 @@ impl HookSandbox {
         let registrations = match self.send(job, loaded).await {
             Some(Loaded::Ready(registrations)) => registrations,
             Some(Loaded::Stopped(stop)) => {
-                return Gate::End(RunOutcome::stopped(stop, deadline.timeout(), Vec::new()));
+                return Gate::stopped(stop, deadline);
             }
             Some(Loaded::Failed(detail)) => return self.blocked(&format!("loading: {detail}")),
             None => return self.blocked("loading: the hook realm is gone"),
@@ -295,18 +323,17 @@ impl HookSandbox {
             .invoke(HookEvent::BeforeRun, payload, Some(deadline.clone()))
             .await
         {
-            Invoked::Decided(decided) => match decision::parse(HookEvent::BeforeRun, &decided.text) {
+            Invoked::Decided(decided) => match decision::parse(HookEvent::BeforeRun, &decided.text)
+            {
                 Ok(Decided::Allow) => Gate::Start,
-                Ok(Decided::Block(reason)) => {
-                    Gate::End(RunOutcome::blocked(RunError::new("Error", reason)))
-                }
+                Ok(Decided::Block(reason)) => Gate::End(Box::new(RunOutcome::blocked(
+                    RunError::new("Error", reason),
+                ))),
                 Ok(other) => self.blocked(&format!("beforeRun decided {other:?}")),
                 Err(failure) => self.blocked(&format!("beforeRun: {failure:?}")),
             },
             Invoked::Failed(failure) => self.blocked(&format!("beforeRun: {failure:?}")),
-            Invoked::Stopped(stop) => {
-                Gate::End(RunOutcome::stopped(stop, deadline.timeout(), Vec::new()))
-            }
+            Invoked::Stopped(stop) => Gate::stopped(stop, deadline),
         }
     }
 
@@ -324,12 +351,8 @@ impl HookSandbox {
             Invoked::Failed(failure) => Err(failure),
             Invoked::Stopped(_) => Err(HookFailure::Realm("the run stopped".to_string())),
         };
-        let (replace, binaries, notes) = match decided {
-            Ok(Decided::After(AfterDecision {
-                replace,
-                binaries,
-                notes,
-            })) => (replace, binaries, notes),
+        let (replace, notes) = match decided {
+            Ok(Decided::After(AfterDecision { replace, notes })) => (replace, notes),
             Ok(other) => {
                 return self.withheld(outcome, &format!("afterRun decided {other:?}"));
             }
@@ -338,7 +361,7 @@ impl HookSandbox {
         let outcome = match replace {
             None => outcome,
             // The script's binaries belong to the value it returned, so they go with it.
-            Some(value) if outcome.status == RunStatus::Ok => RunOutcome {
+            Some(Replaced { value, binaries }) if outcome.status == RunStatus::Ok => RunOutcome {
                 value,
                 binaries,
                 ..outcome
@@ -355,7 +378,10 @@ impl HookSandbox {
     /// realm for every other action.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "hooks feature 3 fires the action hooks from the call path")
+        expect(
+            dead_code,
+            reason = "hooks feature 3 fires the action hooks from the call path"
+        )
     )]
     pub(crate) fn wants(&self, event: ActionHook, kind: Option<&str>, group: Option<&str>) -> bool {
         let event = match event {
@@ -363,9 +389,9 @@ impl HookSandbox {
             ActionHook::After => HookEvent::AfterAction,
         };
         self.registrations.get().is_some_and(|registrations| {
-            registrations
-                .iter()
-                .any(|registration| registration.event == event && registration.matches(kind, group))
+            registrations.iter().any(|registration| {
+                registration.event == event && registration.matches(kind, group)
+            })
         })
     }
 
@@ -374,7 +400,10 @@ impl HookSandbox {
     /// invocation, whose `ctx.signal` then fires.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "hooks feature 3 fires the action hooks from the call path")
+        expect(
+            dead_code,
+            reason = "hooks feature 3 fires the action hooks from the call path"
+        )
     )]
     pub(crate) async fn before_action(
         &self,
@@ -394,7 +423,10 @@ impl HookSandbox {
     /// `afterAction` for `event`, which `ended` so, as [`HookSandbox::before_action`].
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "hooks feature 3 fires the action hooks from the call path")
+        expect(
+            dead_code,
+            reason = "hooks feature 3 fires the action hooks from the call path"
+        )
     )]
     pub(crate) async fn after_action(
         &self,
@@ -454,10 +486,10 @@ impl HookSandbox {
     /// trace, the outcome names no detail.
     fn blocked(&self, detail: &str) -> Gate {
         self.trace.push(format!("neo: {detail}"));
-        Gate::End(RunOutcome::blocked(RunError::new(
+        Gate::End(Box::new(RunOutcome::blocked(RunError::new(
             "Error",
             BEFORE_RUN_FAILED.to_string(),
-        )))
+        ))))
     }
 
     /// `afterRun` failed: the outcome becomes an error without the script's result.
@@ -473,6 +505,17 @@ impl HookSandbox {
     }
 }
 
+impl Gate {
+    /// The run's deadline passed, or its host cancelled it, before the script started.
+    fn stopped(stop: Stop, deadline: &Deadline) -> Self {
+        Self::End(Box::new(RunOutcome::stopped(
+            stop,
+            deadline.timeout(),
+            Vec::new(),
+        )))
+    }
+}
+
 /// `decided` checked against `event`, a replacement's binaries lifted out of its value.
 fn checked(event: HookEvent, decided: Decision) -> Result<Decided, HookFailure> {
     let Decision {
@@ -480,21 +523,18 @@ fn checked(event: HookEvent, decided: Decision) -> Result<Decided, HookFailure> 
         marker,
         shipped,
     } = decided;
-    Ok(match decision::parse(event, &text)? {
-        Decided::After(AfterDecision {
-            replace: Some(Some(mut value)),
-            notes,
-            ..
-        }) => {
-            let binaries = quickjs::lift_binaries(&mut value, &marker, shipped);
-            Decided::After(AfterDecision {
-                replace: Some(Some(value)),
-                binaries,
-                notes,
-            })
-        }
-        other => other,
-    })
+    let mut decided = decision::parse(event, &text)?;
+    if let Decided::After(AfterDecision {
+        replace: Some(Replaced {
+            value: Some(value),
+            binaries,
+        }),
+        ..
+    }) = &mut decided
+    {
+        *binaries = quickjs::lift_binaries(value, &marker, shipped);
+    }
+    Ok(decided)
 }
 
 #[cfg(test)]

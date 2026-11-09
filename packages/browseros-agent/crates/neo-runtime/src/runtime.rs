@@ -228,9 +228,6 @@ impl Runtime {
             tokio.clone(),
             Arc::clone(&run.handles),
         );
-        let hook_slot = Arc::clone(&run.hooks);
-        let handles = Arc::clone(&run.handles);
-        let hook_tasks = run.tasks.clone();
         let dispatcher = Dispatcher::new(tabs.clone(), run);
         let events = tabs.events().clone();
         // A run whose future is dropped lets go of its permission grants on the cleanup tracker.
@@ -242,6 +239,7 @@ impl Runtime {
         };
         // The hook sandbox exists only for a run with hooks; without, nothing below costs a thing.
         let sandbox = hooks.map(|hooks| {
+            let handles = Arc::clone(&dispatcher.run_scope().handles);
             let parts = RealmParts {
                 page_guid: page_guid.clone(),
                 frame_guid: frame_guid.clone(),
@@ -250,13 +248,10 @@ impl Runtime {
                 dispatcher: dispatcher.for_hooks(),
                 realms: Arc::clone(&self.hook_realms),
             };
-            HookSandbox::start(hooks, parts, &hook_tasks)
+            HookSandbox::start(hooks, parts)
         });
         // A dropped run future closes the sandbox too, so its realm lets go of the run.
         let _close_hooks = sandbox.as_ref().map(HookSandbox::close_on_drop);
-        if let Some(sandbox) = &sandbox {
-            let _first = hook_slot.set(sandbox.clone());
-        }
         let gate = match &sandbox {
             Some(sandbox) => sandbox.before_run(&code, &deadline).await,
             None => Gate::Start,
@@ -271,15 +266,10 @@ impl Runtime {
                 };
                 quickjs::run(script, getters, dispatcher.clone(), deadline, events).await
             }
-            Gate::End(outcome) => outcome,
+            Gate::End(outcome) => *outcome,
         };
         let outcome = match &sandbox {
-            Some(sandbox) => {
-                let outcome = sandbox.after_run(outcome).await;
-                // Before `finish`: the actor is a task of the run's tracker, which it waits for.
-                sandbox.close();
-                outcome.with_hook_trace(sandbox.take_trace())
-            }
+            Some(sandbox) => sandbox.end(outcome).await,
             None => outcome,
         };
         let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;

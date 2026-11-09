@@ -186,7 +186,9 @@ impl Registration {
     /// filter, otherwise when its kind is in `kinds` or its group in `groups`.
     pub(crate) fn matches(&self, kind: Option<&str>, group: Option<&str>) -> bool {
         let listed = |names: Option<&Vec<String>>, name: Option<&str>| {
-            names.zip(name).is_some_and(|(names, name)| names.iter().any(|listed| listed == name))
+            names
+                .zip(name)
+                .is_some_and(|(names, name)| names.iter().any(|listed| listed == name))
         };
         (self.kinds.is_none() && self.groups.is_none())
             || listed(self.kinds.as_ref(), kind)
@@ -251,7 +253,12 @@ pub(crate) struct Actor {
 }
 
 impl Actor {
-    pub(crate) fn new(setup: Setup, budget: Duration, trace: Logs, close: CancellationToken) -> Self {
+    pub(crate) fn new(
+        setup: Setup,
+        budget: Duration,
+        trace: Logs,
+        close: CancellationToken,
+    ) -> Self {
         Self {
             setup: Some(setup),
             budget,
@@ -290,7 +297,9 @@ impl Actor {
                     if reply.is_closed() {
                         continue;
                     }
-                    let invoked = self.invoke(event, &payload, race.as_ref(), &mut reply).await;
+                    let invoked = self
+                        .invoke(event, &payload, race.as_ref(), &mut reply)
+                        .await;
                     let _sent = reply.send(invoked);
                 }
             }
@@ -305,7 +314,12 @@ impl Actor {
         };
         let until = self.until();
         self.watch.arm(until, Some(race.clone()));
-        let loading = build(setup, self.trace.clone(), self.watch.clone(), self.close.clone());
+        let loading = build(
+            setup,
+            self.trace.clone(),
+            self.watch.clone(),
+            self.close.clone(),
+        );
         let loaded = tokio::select! {
             biased;
             () = self.close.cancelled() => Loaded::Failed("the run ended".to_string()),
@@ -353,7 +367,13 @@ impl Actor {
             let promise = quickjs::ship(&ctx, &shipped)
                 .and_then(|ship| {
                     let invoke = stashed(&ctx, key, "invoke")?;
-                    invoke.call::<_, Promise<'_>>((id, event.name(), payload, ship, marker.as_str()))
+                    invoke.call::<_, Promise<'_>>((
+                        id,
+                        event.name(),
+                        payload,
+                        ship,
+                        marker.as_str(),
+                    ))
                 })
                 .catch(&ctx)
                 .map_err(|error| describe(&ctx, error))?;
@@ -480,7 +500,10 @@ fn start<'js>(
     key: &str,
 ) -> rquickjs::Result<Promise<'js>> {
     match setup.bridge {
-        Bridge::Run { getters, dispatcher } => {
+        Bridge::Run {
+            getters,
+            dispatcher,
+        } => {
             quickjs_bridge::install_hooks(ctx, getters, trace, dispatcher)?;
         }
         #[cfg(test)]
@@ -515,7 +538,11 @@ fn start<'js>(
     let neo: rquickjs::Value<'js> = hooks.get("neo")?;
     let sdk_uncaught: rquickjs::Value<'js> = hooks.get("uncaught")?;
     let stash: Function<'js> = ctx.eval(STASH)?;
-    stash.call::<_, ()>((key, hooks, vec![sdk_uncaught, abort_uncaught, timer_uncaught]))?;
+    stash.call::<_, ()>((
+        key,
+        hooks,
+        vec![sdk_uncaught, abort_uncaught, timer_uncaught],
+    ))?;
     let body = quickjs::async_function(ctx, ("neo", setup.code))?;
     let loading: Promise<'js> = body.call((neo,))?;
     stashed(ctx, key, "race")?.call((loading,))

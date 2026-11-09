@@ -352,7 +352,7 @@ pub(crate) fn install_sdk_globals<'js>(
     install.call::<_, ()>((objects.get::<_, Object<'js>>("globals")?,))
 }
 
-/// The AsyncFunction constructor, as Playwright users write `new AsyncFunction(...)`, applied
+/// The `AsyncFunction` constructor, as Playwright users write `new AsyncFunction(...)`, applied
 /// to `params_and_body` (each parameter's name, then the code): the code is a function body
 /// that cannot close the wrapper early, and a syntax error in it throws a `SyntaxError` here.
 pub(crate) fn async_function<'js>(
@@ -382,8 +382,7 @@ pub(crate) fn to_json<'js>(
     value: rquickjs::Value<'js>,
 ) -> Result<Returned, RunError> {
     let shipped = Shipped::default();
-    let ship =
-        ship(ctx, &shipped).map_err(|error| RunError::new("Error", error.to_string()))?;
+    let ship = ship(ctx, &shipped).map_err(|error| RunError::new("Error", error.to_string()))?;
     let marker = binary_marker();
     let text: Option<String> = match export.call((value, ship, marker.as_str())).catch(ctx) {
         Ok(text) => text,
@@ -408,7 +407,10 @@ pub(crate) struct Shipped(Arc<Mutex<Vec<Vec<u8>>>>);
 impl Shipped {
     /// Every binary shipped so far, taken; `None` if a panic while shipping poisoned the sink.
     pub(crate) fn take(&self) -> Option<Vec<Vec<u8>>> {
-        self.0.lock().ok().map(|mut shipped| mem::take(&mut *shipped))
+        self.0
+            .lock()
+            .ok()
+            .map(|mut shipped| mem::take(&mut *shipped))
     }
 }
 

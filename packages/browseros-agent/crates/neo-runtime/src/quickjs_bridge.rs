@@ -97,7 +97,13 @@ pub(crate) fn install<'js>(
 ) -> rquickjs::Result<()> {
     let tabs = getters.tabs.clone();
     let bridge = Object::new(ctx.clone())?;
-    install_calls(&bridge, getters, logs.clone(), dispatcher, Watermark::Events)?;
+    install_calls(
+        &bridge,
+        getters,
+        logs.clone(),
+        dispatcher,
+        Watermark::Events,
+    )?;
     let subscriptions = tabs.clone();
     bridge.set(
         "subscribe",
@@ -141,8 +147,8 @@ pub(crate) fn install<'js>(
 /// run's hook dispatcher (`Dispatcher::for_hooks`). Hook listeners never fire (a documented
 /// limit): `subscribe` does nothing, `drain` answers `[]` and `nextEvents` never resolves, so the
 /// hook realm never takes, delays or reorders an event of the agent's.
-pub(crate) fn install_hooks<'js>(
-    ctx: &Ctx<'js>,
+pub(crate) fn install_hooks(
+    ctx: &Ctx<'_>,
     getters: Getters,
     trace: Logs,
     dispatcher: Dispatcher,
@@ -154,7 +160,7 @@ pub(crate) fn install_hooks<'js>(
     bridge.set(
         "nextEvents",
         // Never resolves; dropped with the hook realm.
-        Func::from(Async(|| future::pending::<rquickjs::Result<()>>())),
+        Func::from(Async(future::pending::<rquickjs::Result<()>>)),
     )?;
     ctx.globals().set("__neo_runtime", bridge)
 }

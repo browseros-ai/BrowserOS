@@ -412,10 +412,6 @@ pub enum CallOrigin {
 impl CallOrigin {
     /// Whether the agent's script made the call.
     #[must_use]
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "serde's `skip_serializing_if` passes the field by reference"
-    )]
     pub fn is_agent(&self) -> bool {
         matches!(self, Self::Agent)
     }
