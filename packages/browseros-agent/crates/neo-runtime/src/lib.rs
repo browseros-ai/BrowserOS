@@ -75,6 +75,7 @@ mod run;
 mod runtime;
 #[cfg(feature = "test-host")]
 mod test_host;
+mod trace;
 mod url_match;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
@@ -85,3 +86,10 @@ pub use run::{
 pub use runtime::{Runtime, RuntimeError};
 #[cfg(feature = "test-host")]
 pub use test_host::{TestHost, TestHostError};
+
+pub use quickjs_bridge::GetterField;
+pub use trace::{
+    CallId, ConsoleLine, EndCause, GetterResult, IdKey, InvalidCallId, InvalidIdKey, InvalidRunId,
+    PageRef, RunEvent, RunId, RunOrigin, RunRef, RunSink, RunStarted, SessionKey,
+    TRACE_EVENT_VERSION, TabEvent, TraceSink,
+};

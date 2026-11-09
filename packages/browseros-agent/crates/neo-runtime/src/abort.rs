@@ -371,6 +371,7 @@ mod tests {
 
     fn entry() -> Arc<CallEntry> {
         Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id: 1,
             guid: "frame@T".to_string(),
             method: "click".to_string(),

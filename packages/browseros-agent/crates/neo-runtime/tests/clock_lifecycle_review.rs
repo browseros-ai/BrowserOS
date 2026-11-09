@@ -58,6 +58,7 @@ async fn check_cleanup(cancel_run: bool) {
         .unwrap_or_else(|error| panic!("runtime: {error}"));
     let cancel = CancellationToken::new();
     let request = RunRequest {
+        origin: Default::default(),
         code: "await page.clock.install({time: 0});
                await page.clock.pauseAt(1000000);
                await page.evaluate(() => {window.clockReady = true});

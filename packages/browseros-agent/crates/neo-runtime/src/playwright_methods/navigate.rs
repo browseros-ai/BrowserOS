@@ -451,6 +451,7 @@ mod tests {
 
     fn progress(timeout: f64) -> (Progress, RunScope) {
         let entry = Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id: 1,
             guid: "frame@T".to_string(),
             method: "goto".to_string(),

@@ -25,6 +25,7 @@ async fn wait(tab: &Tab, expression: &str) {
 
 fn request(tab: &Tab, code: &str) -> RunRequest {
     RunRequest {
+        origin: Default::default(),
         page: PageId::new(tab.target_id.clone()),
         code: code.to_string(),
         timeout: Duration::from_secs(30),

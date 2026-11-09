@@ -60,6 +60,7 @@ const CART_STATE: &str = r"(() => {
 async fn run(runtime: &Runtime, page: &PageId, code: &str, timeout: Duration) -> RunOutcome {
     runtime
         .run(RunRequest {
+            origin: Default::default(),
             code: code.to_string(),
             page: page.clone(),
             timeout,

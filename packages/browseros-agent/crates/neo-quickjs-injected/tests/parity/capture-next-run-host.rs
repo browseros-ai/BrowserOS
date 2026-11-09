@@ -33,6 +33,7 @@ async fn cancel_and_reuse_runtime() {
         async move {
             runtime
                 .run(RunRequest {
+                    origin: Default::default(),
                     code,
                     page: PageId::new(target),
                     timeout: Duration::from_secs(30),

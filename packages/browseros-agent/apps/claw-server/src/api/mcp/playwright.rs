@@ -276,6 +276,7 @@ impl PlaywrightService {
         let mut outcome = browser
             .runtime
             .run(RunRequest {
+                origin: Default::default(),
                 code: args.code,
                 page: PageId::new(page.clone()),
                 timeout: deadline.saturating_duration_since(Instant::now()),

@@ -22,12 +22,13 @@ futures-util.workspace = true
 neo-runtime-spec.workspace = true
 rand.workspace = true
 rquickjs.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+ulid.workspace = true
 url.workspace = true
 
 # clap backs the `neo_run` example. tokio-tungstenite serves the fake browser in

@@ -64,6 +64,7 @@ async fn runtime(tab: &Tab) -> Runtime {
 
 fn request(tab: &Tab, code: &str, timeout: Duration, cancel: CancellationToken) -> RunRequest {
     RunRequest {
+        origin: Default::default(),
         code: code.to_string(),
         page: PageId::new(tab.target_id.clone()),
         timeout,

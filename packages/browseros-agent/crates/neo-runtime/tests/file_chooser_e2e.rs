@@ -81,6 +81,7 @@ async fn tests_that_file_chooser_interception_ends_with_the_run() {
         .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
     let outcome = runtime
         .run(RunRequest {
+            origin: Default::default(),
             code: r"const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#single')])
 return [chooser.isMultiple(), await chooser.element().evaluate((input) => input.id)]"
                 .to_string(),

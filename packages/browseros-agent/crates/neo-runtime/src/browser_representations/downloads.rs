@@ -691,6 +691,7 @@ mod tests {
 
     fn call_progress() -> Progress {
         let entry = Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id: 1,
             guid: "download@G".to_string(),
             method: "saveAs".to_string(),

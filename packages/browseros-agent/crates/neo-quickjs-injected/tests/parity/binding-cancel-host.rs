@@ -41,6 +41,7 @@ async fn cancel_during_setup() {
         async move {
             runtime
                 .run(RunRequest {
+                    origin: Default::default(),
                     code: "await page.exposeFunction('oldRunBinding',()=>17);await new Promise(()=>{})"
                         .into(),
                     page: PageId::new(target),

@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 fn request(tab: &Tab, code: &str) -> RunRequest {
     RunRequest {
+        origin: Default::default(),
         page: PageId::new(tab.target_id.clone()),
         code: code.to_string(),
         timeout: Duration::from_secs(8),

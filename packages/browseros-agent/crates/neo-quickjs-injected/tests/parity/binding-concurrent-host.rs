@@ -46,6 +46,7 @@ async fn main() {
         runs.push(tokio::spawn(async move {
             let outcome = runtime
                 .run(RunRequest {
+                    origin: Default::default(),
                     code,
                     page,
                     timeout: Duration::from_secs(30),

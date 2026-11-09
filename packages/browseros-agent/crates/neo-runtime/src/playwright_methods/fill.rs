@@ -647,6 +647,7 @@ mod tests {
                 TaskTracker::new(),
             );
             let entry = Arc::new(CallEntry::new(CallStart {
+                timeout_ms: None,
                 call_id: 1,
                 guid: "frame@test".into(),
                 method: "fill".into(),
@@ -743,6 +744,7 @@ mod tests {
             TaskTracker::new(),
         );
         let entry = Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id: 1,
             guid: "frame@test".into(),
             method: "forms".into(),

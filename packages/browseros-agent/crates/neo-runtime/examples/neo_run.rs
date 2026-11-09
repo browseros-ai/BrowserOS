@@ -87,6 +87,7 @@ async fn run(args: Args) -> Result<RunStatus, String> {
 
     let outcome = runtime
         .run(RunRequest {
+            origin: Default::default(),
             code,
             page: PageId::new(args.page),
             timeout: Duration::from_millis(args.timeout_ms),

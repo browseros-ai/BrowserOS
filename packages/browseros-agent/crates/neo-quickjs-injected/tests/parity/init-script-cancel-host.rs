@@ -40,6 +40,7 @@ async fn cancel_during_setup() {
         let cancel = cancel.clone();
         async move {
             runtime.run(RunRequest {
+            origin: Default::default(),
             code: "await page.context().addInitScript(()=>{window.oldRunInit=17});await page.evaluate(()=>0);await new Promise(()=>{})".into(),
             page: PageId::new(target), timeout: Duration::from_secs(30), cancel, artifacts: None,
         }).await

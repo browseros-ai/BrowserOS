@@ -301,6 +301,7 @@ async fn open_frames() -> Option<(Tab, Value)> {
 fn start(tab: &Tab, runtime: &Runtime, code: &str) -> (CancellationToken, JoinHandle<RunOutcome>) {
     let cancel = CancellationToken::new();
     let request = RunRequest {
+        origin: Default::default(),
         code: code.to_string(),
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(30),

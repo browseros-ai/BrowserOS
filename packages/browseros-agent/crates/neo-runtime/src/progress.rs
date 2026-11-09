@@ -419,6 +419,7 @@ impl Progress {
     /// a run whose deadline is far away, on a tab that never closes.
     pub(crate) fn for_test(timeout_ms: f64) -> Self {
         let entry = Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id: 1,
             guid: "frame@T".to_string(),
             method: "click".to_string(),
@@ -581,6 +582,7 @@ pub(crate) struct CallEntry {
     /// `params` as JSON text, in bytes: what keeping the record costs before any log.
     params_bytes: usize,
     location: Option<CallLocation>,
+    timeout_ms: Option<f64>,
     started_at: SystemTime,
     started: Instant,
     log: Mutex<CallLog>,
@@ -620,6 +622,7 @@ pub(crate) struct CallStart {
     pub(crate) title: Option<&'static str>,
     pub(crate) params: Value,
     pub(crate) location: Option<CallLocation>,
+    pub(crate) timeout_ms: Option<f64>,
     /// Whether the method writes input, so its delivery is tracked.
     pub(crate) input: bool,
 }
@@ -633,6 +636,7 @@ impl CallEntry {
             title,
             params,
             location,
+            timeout_ms,
             input,
         } = start;
         Self {
@@ -643,6 +647,7 @@ impl CallEntry {
             params_bytes: params.to_string().len(),
             params,
             location,
+            timeout_ms,
             started_at: SystemTime::now(),
             started: Instant::now(),
             log: Mutex::default(),
@@ -746,6 +751,7 @@ impl CallEntry {
             title: self.title.map(str::to_string),
             params: self.params.clone(),
             location: self.location,
+            timeout_ms: self.timeout_ms,
             started_at_ms,
             duration,
             result,
@@ -1024,6 +1030,7 @@ mod tests {
         );
         let entry = || {
             Arc::new(CallEntry::new(CallStart {
+                timeout_ms: None,
                 call_id: 1,
                 guid: "frame@T".to_string(),
                 method: "click".to_string(),
@@ -1060,6 +1067,7 @@ mod tests {
 
     fn entry_with_params(call_id: u64, input: bool, params: Value) -> Arc<CallEntry> {
         Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id,
             guid: "frame@T".to_string(),
             method: "click".to_string(),

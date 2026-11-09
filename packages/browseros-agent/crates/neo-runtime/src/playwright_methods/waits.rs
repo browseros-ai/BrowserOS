@@ -1172,6 +1172,7 @@ mod tests {
                 TaskTracker::new(),
             );
             let entry = Arc::new(CallEntry::new(CallStart {
+                timeout_ms: None,
                 call_id: 1,
                 guid: "frame@T".to_string(),
                 method: "wait".to_string(),

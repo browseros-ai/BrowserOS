@@ -189,6 +189,7 @@ impl Tab {
         tokio::spawn(async move {
             runtime
                 .run(RunRequest {
+                    origin: Default::default(),
                     code,
                     page,
                     timeout,

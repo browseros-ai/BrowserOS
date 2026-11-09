@@ -36,6 +36,7 @@ use crate::quickjs_bridge::Getters;
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
 #[cfg(feature = "test-host")]
 use crate::test_host::TestHost;
+use crate::trace::{RunId, RunSink, RunStarted, TraceSink};
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
 const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
@@ -64,6 +65,8 @@ pub struct Runtime {
     /// How every run's `path` options treat an absolute path (`artifacts.rs`).
     absolute_paths: AbsolutePaths,
     cleanup: TaskTracker,
+    /// Asked in order whether they listen to each run, before the run can fail.
+    sinks: Arc<[Arc<dyn TraceSink>]>,
 }
 
 /// Close the run's tracker on every exit, including a dropped future or failed tab open.
@@ -118,6 +121,7 @@ impl Runtime {
                     permissions: Permissions::new(cleanup.clone()),
                     absolute_paths: AbsolutePaths::default(),
                     cleanup,
+                    sinks: Arc::default(),
                 })
             }
             Err(CdpError::Protocol { message, .. }) => {
@@ -147,6 +151,16 @@ impl Runtime {
     pub async fn drain(&self) {
         self.cleanup.close();
         self.cleanup.wait().await;
+    }
+
+    /// Installs this runtime's trace sinks, replacing those previously installed. Each run
+    /// asks them whether they listen before opening its starting tab.
+    #[must_use]
+    pub fn with_sinks(self, sinks: impl IntoIterator<Item = Arc<dyn TraceSink>>) -> Self {
+        Self {
+            sinks: sinks.into_iter().collect(),
+            ..self
+        }
     }
 
     /// Runs `request.code` against `request.page` and reports how it ended. Every failure,
@@ -186,19 +200,27 @@ impl Runtime {
         request: RunRequest,
         #[cfg(feature = "test-host")] test_host: Option<Box<dyn TestHost>>,
     ) -> RunOutcome {
+        let run_id = RunId::mint();
+        let started = RunStarted::new(run_id, &request);
+        let _listeners: Vec<Arc<dyn RunSink>> = self
+            .sinks
+            .iter()
+            .filter_map(|sink| sink.run(&started))
+            .collect();
         let RunRequest {
             code,
             page,
             timeout,
             cancel,
             artifacts,
+            origin: _,
         } = request;
         let deadline = Deadline::new(timeout, cancel);
         let tokio = match Handle::try_current() {
             Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => handle,
             _ => {
                 let message = "neo-runtime runs need tokio's multi-threaded runtime".to_string();
-                return RunOutcome::failed(RunError::new("Error", message), Vec::new());
+                return RunOutcome::failed(run_id, RunError::new("Error", message), Vec::new());
             }
         };
 
@@ -210,7 +232,7 @@ impl Runtime {
         self.cleanup.spawn(async move { remaining.wait().await });
         let opened = tokio::select! {
             stop = deadline.reached() => {
-                return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
+                return RunOutcome::stopped(run_id, stop, deadline.timeout(), Vec::new());
             }
             opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &page) => opened,
         };
@@ -222,7 +244,7 @@ impl Runtime {
                 } else {
                     RunError::new(error.name.as_str(), error.message)
                 };
-                return RunOutcome::failed(error, Vec::new());
+                return RunOutcome::failed(run_id, error, Vec::new());
             }
         };
 
@@ -254,7 +276,15 @@ impl Runtime {
             run: tabs.run_id(),
             released: false,
         };
-        let outcome = quickjs::run(script, getters, dispatcher.clone(), deadline, events).await;
+        let outcome = quickjs::run(
+            run_id,
+            script,
+            getters,
+            dispatcher.clone(),
+            deadline,
+            events,
+        )
+        .await;
         let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
         grants.disarm();

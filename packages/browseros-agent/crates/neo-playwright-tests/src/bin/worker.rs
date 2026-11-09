@@ -112,6 +112,7 @@ async fn run() -> Result<(), String> {
     let outcome = runtime
         .run_with_test_host(
             RunRequest {
+                origin: Default::default(),
                 code,
                 page: PageId::new(page.clone()),
                 timeout: Duration::from_mins(10),

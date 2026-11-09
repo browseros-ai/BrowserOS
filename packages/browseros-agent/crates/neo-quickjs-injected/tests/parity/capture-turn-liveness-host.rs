@@ -44,6 +44,7 @@ async fn held_cleanup_keeps_other_calls_live() {
         async move {
             runtime
                 .run(RunRequest {
+                    origin: Default::default(),
                     code: "await page.screenshot({omitBackground:true,timeout:0})".into(),
                     page: PageId::new(target),
                     timeout: Duration::from_secs(30),
@@ -64,6 +65,7 @@ async fn held_cleanup_keeps_other_calls_live() {
     };
     let second = runtime
         .run(RunRequest {
+            origin: Default::default(),
             code: code.into(),
             page: PageId::new(if mode == "independent" { other } else { target }),
             timeout: Duration::from_secs(20),

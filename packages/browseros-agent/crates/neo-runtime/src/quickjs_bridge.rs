@@ -422,9 +422,10 @@ pub(crate) struct Getters {
     handles: Arc<Handles>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+/// The one wire vocabulary for synchronous object getters and their trace records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-enum GetterField {
+pub enum GetterField {
     Url,
     IsClosed,
     Pages,

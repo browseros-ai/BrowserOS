@@ -1013,6 +1013,7 @@ mod tests {
 
     fn progress(timeout: f64) -> Progress {
         let entry = Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id: 1,
             guid: "page@T".to_string(),
             method: "goBack".to_string(),

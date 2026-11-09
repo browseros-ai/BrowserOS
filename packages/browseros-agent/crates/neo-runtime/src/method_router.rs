@@ -620,6 +620,7 @@ impl Dispatcher {
             timeout: None,
         });
         let entry = Arc::new(CallEntry::new(CallStart {
+            timeout_ms: metadata.timeout,
             call_id: inner.next_call_id.fetch_add(1, Ordering::Relaxed),
             guid,
             method,
@@ -2413,6 +2414,7 @@ mod tests {
         .unwrap();
         let (page, scope) = tabs.resolve(&format!("frame@{PAGE}")).unwrap();
         let entry = Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id: 1,
             guid: format!("frame@{PAGE}"),
             method: "click".to_string(),
@@ -3544,6 +3546,7 @@ mod tests {
     async fn tests_that_a_call_gives_its_share_back_before_its_reply_is_sent() {
         let in_flight = Arc::new(InFlight::default());
         let entry = Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id: 1,
             guid: format!("frame@{PAGE}"),
             method: "neo:nextNavigation".to_string(),
@@ -3872,6 +3875,7 @@ mod review_abort_priority {
             .resolve(&format!("frame@{PAGE}"))
             .unwrap_or_else(|| panic!("the fake tab must have a main frame"));
         let entry = Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id: 1,
             guid: format!("frame@{PAGE}"),
             method: "click".to_string(),

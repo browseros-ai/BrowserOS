@@ -11,10 +11,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::artifacts::RunArtifact;
 use crate::deadline::Stop;
+use crate::trace::{RunId, RunOrigin};
 
 /// The CDP target id of a tab. In the script's realm the page is `page@<id>` and its main
 /// frame is `frame@<id>`, because Chromium gives a page's main frame its target's id.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct PageId(String);
 
 impl PageId {
@@ -43,6 +44,8 @@ pub struct RunRequest {
     /// Cancelling ends the run with [`RunStatus::Cancelled`] at the script's next instruction,
     /// timer or getter.
     pub cancel: CancellationToken,
+    /// Host labels for trace sinks; default when the host supplies no labels.
+    pub origin: RunOrigin,
     /// The directory the run's `path` options write into (`page.screenshot({ path })`,
     /// `page.pdf({ path })`), created on first write. A `path` must be relative to it and stay
     /// inside it; a runtime opted into `AbsolutePaths::Redirect` also takes absolute paths
@@ -112,6 +115,8 @@ impl RunError {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOutcome {
+    /// Minted before anything can fail, including before the starting tab opens.
+    pub run_id: RunId,
     pub status: RunStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
@@ -140,8 +145,9 @@ pub struct RunOutcome {
 }
 
 impl RunOutcome {
-    pub(crate) fn returned(value: Option<Value>, logs: Vec<String>) -> Self {
+    pub(crate) fn returned(run_id: RunId, value: Option<Value>, logs: Vec<String>) -> Self {
         Self {
+            run_id,
             status: RunStatus::Ok,
             value,
             logs,
@@ -154,8 +160,9 @@ impl RunOutcome {
         }
     }
 
-    pub(crate) fn failed(error: RunError, logs: Vec<String>) -> Self {
+    pub(crate) fn failed(run_id: RunId, error: RunError, logs: Vec<String>) -> Self {
         Self {
+            run_id,
             status: RunStatus::Error,
             value: None,
             logs,
@@ -168,12 +175,13 @@ impl RunOutcome {
         }
     }
 
-    pub(crate) fn stopped(stop: Stop, timeout: Duration, logs: Vec<String>) -> Self {
+    pub(crate) fn stopped(run_id: RunId, stop: Stop, timeout: Duration, logs: Vec<String>) -> Self {
         let (status, error) = match stop {
             Stop::Timeout => (RunStatus::Timeout, Some(RunError::timeout(timeout))),
             Stop::Cancelled => (RunStatus::Cancelled, None),
         };
         Self {
+            run_id,
             status,
             value: None,
             logs,
@@ -261,6 +269,9 @@ pub struct CallRecord {
     /// Where the agent's script made the call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<CallLocation>,
+    /// The SDK metadata timeout, in milliseconds; zero means no call timeout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<f64>,
     /// Wall clock at arrival, in Unix milliseconds.
     pub started_at_ms: u64,
     #[serde(serialize_with = "serialize_millis")]

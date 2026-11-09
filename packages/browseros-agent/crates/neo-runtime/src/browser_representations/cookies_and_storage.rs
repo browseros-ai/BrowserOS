@@ -1556,6 +1556,7 @@ mod tests {
     /// A call's progress whose run ends once `cancel` is.
     fn progress_ending_with(cancel: CancellationToken) -> Progress {
         let entry = Arc::new(CallEntry::new(CallStart {
+            timeout_ms: None,
             call_id: 1,
             guid: "context@default".to_string(),
             method: "grantPermissions".to_string(),

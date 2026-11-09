@@ -29,6 +29,7 @@ async fn main() {
     });
     let outcome = runtime
         .run(RunRequest {
+            origin: Default::default(),
             code: fs::read_to_string(&args[3]).expect("script"),
             page: PageId::new(args[2].clone()),
             timeout: Duration::from_secs(30),

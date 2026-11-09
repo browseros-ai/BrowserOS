@@ -332,6 +332,7 @@ impl Drop for FakeBrowser {
 /// A run of `code` against the fake's tab.
 pub fn run_request(code: &str, timeout: Duration, cancel: CancellationToken) -> RunRequest {
     RunRequest {
+        origin: Default::default(),
         code: code.to_string(),
         page: PageId::new(PAGE.to_string()),
         timeout,

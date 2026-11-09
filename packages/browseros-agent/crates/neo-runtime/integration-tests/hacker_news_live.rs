@@ -58,6 +58,7 @@ const COMMENT_PAGE: &str = r"(() => ({
 async fn run(runtime: &Runtime, page: &PageId, code: &str) -> RunOutcome {
     runtime
         .run(RunRequest {
+            origin: Default::default(),
             code: code.to_string(),
             page: page.clone(),
             timeout: Duration::from_mins(2),

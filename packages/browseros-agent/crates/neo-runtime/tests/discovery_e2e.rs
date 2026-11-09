@@ -54,6 +54,7 @@ async fn open() -> Option<Tab> {
 async fn run(runtime: &Runtime, page: &str, code: &str) -> RunOutcome {
     runtime
         .run(RunRequest {
+            origin: Default::default(),
             code: code.to_string(),
             page: PageId::new(page.to_string()),
             timeout: Duration::from_secs(30),
