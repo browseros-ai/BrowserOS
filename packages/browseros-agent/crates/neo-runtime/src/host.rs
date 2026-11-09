@@ -222,8 +222,8 @@ impl Host {
             label: label.cloned(),
             reply,
         });
-        if let Ok(admitted) = receiver.await {
-            self.issue_pass(admitted.session, admitted.successor_of)
+        if let Ok(pass) = receiver.await {
+            pass
         } else {
             tracing::warn!("admission after host shutdown");
             self.issue_pass(SessionKey::mint(), None)

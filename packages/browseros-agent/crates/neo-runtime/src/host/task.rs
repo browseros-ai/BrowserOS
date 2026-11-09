@@ -23,10 +23,12 @@ use crate::host::events::HostEvent;
 use crate::host::link::HostLink;
 use crate::host::presence::Presences;
 use crate::host::privacy::Taint;
-use crate::host::sessions::{Admitted, Completion, Job, JobKind, Ledger, Phase};
+use crate::host::sessions::{Completion, Job, JobKind, Ledger, Phase};
 use crate::host::store::CallArtifacts;
 use crate::host::view::FollowView;
-use crate::host::{EpochMs, Host, HostError, HostOptions, SessionKey, SessionView, TabRef};
+use crate::host::{
+    EpochMs, Host, HostError, HostOptions, RunPass, SessionKey, SessionView, TabRef,
+};
 use crate::run::PageId;
 
 /// Neo: complete, unwatched entries leave RAM an hour after settlement, bounding the host ledger without evicting active readers (design §6.9).
@@ -42,7 +44,7 @@ type WithholdReply = (watch::Receiver<Option<Result<(), HostError>>>, bool);
 pub(super) enum Command {
     Admit {
         label: Option<SessionKey>,
-        reply: oneshot::Sender<Admitted>,
+        reply: oneshot::Sender<RunPass>,
     },
     End(SessionKey),
     Withhold(SessionKey),
@@ -460,13 +462,12 @@ impl Task {
                     self.ledger
                         .admit_with_key(label.as_ref(), known, Instant::now(), candidate);
                 self.publish();
-                // A cancelled admission must release the pass it would have returned.
-                if let Err(admitted) = reply.send(admitted) {
-                    drop(
-                        self.host
-                            .issue_pass(admitted.session, admitted.successor_of),
-                    );
-                }
+                // Ownership crosses the oneshot with the accounting obligation attached.
+                // Cancellation before send or after a successful send drops the same guard.
+                let _ = reply.send(
+                    self.host
+                        .issue_pass(admitted.session, admitted.successor_of),
+                );
             }
             Command::End(key) => {
                 self.ledger.end(&key, Instant::now());
@@ -983,6 +984,28 @@ mod tests {
         let emitter = RunEmitter::new(Some(host), Some(key), &RunId::mint());
         let ending = emitter.run_started(&PageId::new(target.to_string()));
         (emitter, ending)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unreceived_successful_admission_releases_its_pass() {
+        let h = Harness::new(Duration::from_mins(1)).await;
+        let key = SessionKey::new("abandoned-admission");
+        let (reply, receiver) = oneshot::channel();
+        h.host
+            .0
+            .commands
+            .send(Command::Admit {
+                label: Some(key.clone()),
+                reply,
+            })
+            .unwrap();
+        // FIFO command processing makes this a barrier after the successful send, without
+        // polling the first reply. Cancellation now drops a value already in the oneshot.
+        let barrier = h.host.admit_run(None).await;
+        drop(receiver);
+        h.host.end_session(&key);
+        assert!(until(&h.host, &key, |view| view.complete).await.complete);
+        drop(barrier);
     }
 
     #[tokio::test(start_paused = true)]
