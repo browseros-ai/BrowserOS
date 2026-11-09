@@ -30,7 +30,6 @@ use std::mem;
 use std::pin::Pin;
 use std::time::Duration;
 
-use browseros_cdp::input::DispatchMouseEventParams;
 use browseros_cdp::{CdpError, SessionId};
 use futures_util::future;
 use serde_json::{Value, json};
@@ -38,6 +37,8 @@ use tokio::sync::oneshot;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
+use crate::chromium_bridge::cdp::input::{self, DispatchMouseEvent};
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::keyboard_input::TextTail;
 use crate::chromium_bridge::playwright_injected_methods;
 use crate::playwright_methods::click::{MouseButton, MouseClick, PageError, PressReport};
@@ -349,11 +350,14 @@ pub(crate) enum DragStep {
 
 /// Neo: building a plan, which no script sees.
 impl Planned {
-    /// A command written on its own, undoing nothing.
-    pub(crate) fn command(method: &'static str, params: String, effect: Effect) -> Self {
+    /// `command`, written on its own, undoing nothing: its method, and its params as its struct
+    /// serializes them, so key events keep Playwright's field order. Serializing these plain
+    /// structs cannot fail; if it ever did, Chromium would refuse the empty params, and the
+    /// write counts as failed.
+    pub(crate) fn write<C: Command<Via = cdp::Write>>(command: &C, effect: Effect) -> Self {
         Self {
-            method: Some(method),
-            params,
+            method: Some(C::METHOD),
+            params: serde_json::to_string(command).unwrap_or_default(),
             effect,
             undoes: None,
             with_next: false,
@@ -367,7 +371,13 @@ impl Planned {
     pub(crate) fn state_only(effect: Effect) -> Self {
         Self {
             method: None,
-            ..Self::command("", String::new(), effect)
+            params: String::new(),
+            effect,
+            undoes: None,
+            with_next: false,
+            pause: None,
+            always: false,
+            drag: DragStep::None,
         }
     }
 }
@@ -430,13 +440,6 @@ fn button_name(button: MouseButton) -> &'static str {
     }
 }
 
-/// Neo: `Input.dispatchMouseEvent`, as JSON. Serializing this plain struct cannot fail; if it
-/// ever did, Chromium would refuse the empty params, and the write counts as failed.
-fn mouse_command(params: &DispatchMouseEventParams, effect: Effect) -> Planned {
-    let params = serde_json::to_string(params).unwrap_or_default();
-    Planned::command("Input.dispatchMouseEvent", params, effect)
-}
-
 /// Playwright: `server/input.ts` `Mouse.move`: `const middleX = fromX + (x - fromX) * (i / steps);`
 ///
 /// `steps` moves from the pointer's last position to `to`, each a `RawMouseImpl.move`: the last
@@ -458,7 +461,7 @@ pub(crate) fn plan_move(plan: &mut Plan, simulated: &mut InputDevices, to: (f64,
         let held = !simulated.mouse.buttons.is_empty();
         // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.move`: `force: buttons.size > 0 ? 0.5 : 0,`
         let force = if held { 0.5 } else { 0.0 };
-        let params = DispatchMouseEventParams {
+        let params = DispatchMouseEvent {
             r#type: "mouseMoved".to_string(),
             x,
             y,
@@ -472,9 +475,9 @@ pub(crate) fn plan_move(plan: &mut Plan, simulated: &mut InputDevices, to: (f64,
             ),
             buttons: Some(simulated.buttons_mask()),
             force: Some(force),
-            ..DispatchMouseEventParams::default()
+            ..DispatchMouseEvent::default()
         };
-        let command = mouse_command(&params, Effect::Moved { x, y });
+        let command = Planned::write(&params, Effect::Moved { x, y });
         plan.push(simulated, command);
     }
 }
@@ -517,7 +520,7 @@ pub(crate) fn plan_down(
     pressed.apply(&effect, true);
     // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.down`: `force: buttons.size > 0 ? 0.5 : 0,`
     let force = 0.5;
-    let params = DispatchMouseEventParams {
+    let params = DispatchMouseEvent {
         r#type: "mousePressed".to_string(),
         x: simulated.mouse.x,
         y: simulated.mouse.y,
@@ -526,12 +529,12 @@ pub(crate) fn plan_down(
         buttons: Some(pressed.buttons_mask()),
         click_count: Some(click_count),
         force: Some(force),
-        ..DispatchMouseEventParams::default()
+        ..DispatchMouseEvent::default()
     };
     // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.down`: `if (this._dragManager.isDragging())`
     let command = Planned {
         drag: DragStep::Down,
-        ..mouse_command(&params, effect)
+        ..Planned::write(&params, effect)
     };
     plan.push(simulated, command)
 }
@@ -550,7 +553,7 @@ pub(crate) fn plan_up(
     let effect = Effect::ButtonUp { button };
     let mut released = simulated.clone();
     released.apply(&effect, true);
-    let params = DispatchMouseEventParams {
+    let params = DispatchMouseEvent {
         r#type: "mouseReleased".to_string(),
         x: simulated.mouse.x,
         y: simulated.mouse.y,
@@ -558,13 +561,13 @@ pub(crate) fn plan_up(
         button: Some(button_name(button).to_string()),
         buttons: Some(released.buttons_mask()),
         click_count: Some(click_count),
-        ..DispatchMouseEventParams::default()
+        ..DispatchMouseEvent::default()
     };
     // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.up`: `await this._dragManager.drop(progress, x, y, modifiers);`
     let command = Planned {
         undoes,
         drag: DragStep::Up,
-        ..mouse_command(&params, effect)
+        ..Planned::write(&params, effect)
     };
     plan.push(simulated, command)
 }
@@ -615,16 +618,16 @@ pub(crate) fn plan_wheel(
     delta_x: f64,
     delta_y: f64,
 ) {
-    let params = DispatchMouseEventParams {
+    let params = DispatchMouseEvent {
         r#type: "mouseWheel".to_string(),
         x: simulated.mouse.x,
         y: simulated.mouse.y,
         modifiers: Some(i64::from(simulated.keyboard.modifiers)),
         delta_x: Some(delta_x),
         delta_y: Some(delta_y),
-        ..DispatchMouseEventParams::default()
+        ..DispatchMouseEvent::default()
     };
-    plan.push(simulated, mouse_command(&params, Effect::None));
+    plan.push(simulated, Planned::write(&params, Effect::None));
 }
 
 /// Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `await progress.race(Promise.all([`
@@ -634,25 +637,29 @@ pub(crate) fn plan_wheel(
 pub(crate) fn plan_tap(plan: &mut Plan, simulated: &mut InputDevices, at: (f64, f64)) {
     let modifiers = simulated.keyboard.modifiers;
     // Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `type: 'touchStart',`
-    let start = json!({
-        "type": "touchStart",
-        "modifiers": modifiers,
-        "touchPoints": [{ "x": at.0, "y": at.1 }],
-    });
+    let start = input::DispatchTouchEvent {
+        modifiers,
+        touch_points: vec![input::TouchPoint { x: at.0, y: at.1 }],
+        kind: "touchStart",
+    };
     // Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `touchPoints: []`
-    let end = json!({ "type": "touchEnd", "modifiers": modifiers, "touchPoints": [] });
+    let end = input::DispatchTouchEvent {
+        modifiers,
+        touch_points: Vec::new(),
+        kind: "touchEnd",
+    };
     let started = plan.push(
         simulated,
         Planned {
             with_next: true,
-            ..Planned::command("Input.dispatchTouchEvent", start.to_string(), Effect::None)
+            ..Planned::write(&start, Effect::None)
         },
     );
     plan.push(
         simulated,
         Planned {
             undoes: Some(started),
-            ..Planned::command("Input.dispatchTouchEvent", end.to_string(), Effect::None)
+            ..Planned::write(&end, Effect::None)
         },
     );
 }
@@ -740,11 +747,7 @@ pub(crate) trait InputSender: Send + Sync + 'static {
         &self,
         params: String,
     ) -> impl Future<Output = Result<Option<Value>, CdpError>> + Send {
-        async move {
-            self.send_input("Input.dispatchMouseEvent", params)
-                .await
-                .map(|()| None)
-        }
+        async move { self.send_input(MOUSE, params).await.map(|()| None) }
     }
 }
 
@@ -933,10 +936,9 @@ impl Writer {
                 let command = &commands[at];
                 let (send, ends) = match outgoing {
                     Outgoing::Skipped => (None, false),
-                    Outgoing::Drag { params, ends } => (
-                        Some(sender.send_input("Input.dispatchDragEvent", params)),
-                        ends,
-                    ),
+                    Outgoing::Drag { params, ends } => {
+                        (Some(sender.send_input(DRAG, params)), ends)
+                    }
                     Outgoing::Planned(params) => (
                         command.method.map(|method| {
                             sender.send_input(
@@ -1017,7 +1019,7 @@ impl Writer {
         let planned: Value = serde_json::from_str(&command.params).unwrap_or_default();
         let result = if let Some(drag) = &devices.drag {
             let params = drag_event("dragOver", x, y, &drag.data, modifiers);
-            let result = sender.send_input("Input.dispatchDragEvent", params).await;
+            let result = sender.send_input(DRAG, params).await;
             sink.apply(&command.effect, result.is_ok());
             sink.apply(&Effect::DragMoved { x, y }, result.is_ok());
             result
@@ -1027,7 +1029,7 @@ impl Writer {
                     sink.apply(&command.effect, true);
                     let params = drag_event("dragEnter", x, y, &data, modifiers);
                     sink.apply(&Effect::DragStarted { data, x, y }, true);
-                    sender.send_input("Input.dispatchDragEvent", params).await
+                    sender.send_input(DRAG, params).await
                 }
                 Ok(None) => {
                     sink.apply(&command.effect, true);
@@ -1077,13 +1079,13 @@ fn drag_outgoing(command: &Planned, devices: &InputDevices) -> Option<Outgoing> 
         }
         DragStep::Cancel | DragStep::Escape => Some(Outgoing::Drag {
             // Playwright: `server/chromium/crDragDrop.ts` `DragManager.cancelDrag`: `type: 'dragCancel',`
-            params: json!({
-                "type": "dragCancel",
-                "x": drag.x,
-                "y": drag.y,
-                "data": { "items": [], "dragOperationsMask": DRAG_OPERATIONS_ALL },
-            })
-            .to_string(),
+            params: serialized(&input::DispatchDragEvent {
+                data: &json!({ "items": [], "dragOperationsMask": DRAG_OPERATIONS_ALL }),
+                modifiers: None,
+                kind: "dragCancel",
+                x: drag.x,
+                y: drag.y,
+            }),
             ends: true,
         }),
         DragStep::None | DragStep::Move => None,
@@ -1096,8 +1098,29 @@ const DRAG_OPERATIONS_ALL: i64 = 0xFFFF;
 /// Neo: `Input.dispatchDragEvent`'s params, as Playwright's `DragManager` builds them: the event, its point,
 /// the intercepted drag's data and the held modifiers.
 fn drag_event(kind: &str, x: f64, y: f64, data: &Value, modifiers: i64) -> String {
-    json!({ "type": kind, "x": x, "y": y, "data": data, "modifiers": modifiers }).to_string()
+    serialized(&input::DispatchDragEvent {
+        data,
+        modifiers: Some(modifiers),
+        kind,
+        x,
+        y,
+    })
 }
+
+/// Neo: a drag event's params as JSON. Serializing this plain struct cannot fail; if it ever
+/// did, Chromium would refuse the empty params, and the write counts as failed.
+fn serialized(event: &input::DispatchDragEvent<'_>) -> String {
+    serde_json::to_string(event).unwrap_or_default()
+}
+
+/// Neo: the `Input` methods the writer tells apart, named once, by their declarations.
+const KEY: &str = input::KeyEvent::METHOD;
+/// Neo: as [`KEY`].
+const MOUSE: &str = DispatchMouseEvent::METHOD;
+/// Neo: as [`KEY`].
+const TOUCH: &str = input::DispatchTouchEvent::METHOD;
+/// Neo: as [`KEY`].
+const DRAG: &str = input::DispatchDragEvent::METHOD;
 
 /// Neo: `command`'s params with the modifiers (and, for a mouse event, the buttons) that
 /// `after`, the tab once this command is applied, holds; `None` for any other command. Only
@@ -1105,10 +1128,8 @@ fn drag_event(kind: &str, x: f64, y: f64, data: &Value, modifiers: i64) -> Strin
 fn actual_params(command: &Planned, after: &InputDevices) -> Option<String> {
     let modifiers = i64::from(after.keyboard.modifiers);
     match command.method? {
-        "Input.dispatchKeyEvent" | "Input.dispatchTouchEvent" => {
-            Some(with_number(&command.params, "modifiers", modifiers))
-        }
-        "Input.dispatchMouseEvent" => {
+        KEY | TOUCH => Some(with_number(&command.params, "modifiers", modifiers)),
+        MOUSE => {
             let params = with_number(&command.params, "modifiers", modifiers);
             Some(with_number(&params, "buttons", after.buttons_mask()))
         }

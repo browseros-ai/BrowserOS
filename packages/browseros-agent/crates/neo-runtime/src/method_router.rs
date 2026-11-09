@@ -85,6 +85,7 @@ use crate::browser_representations::page::{DialogAnswer, FrameTab, PageSession};
 use crate::browser_representations::responses::{self, NetworkCall};
 use crate::browser_representations::routes;
 use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::chromium_bridge::cdp::{self, page};
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::keyboard_input::KeyboardTab;
 use crate::debugger::{CallToGate, DEBUGGER_PREFIX, DEFAULT_CONTEXT};
@@ -1761,8 +1762,11 @@ async fn answer_left_open(tabs: &Tabs) {
         let answer = session.events.dialogs.left_open()?;
         Some(async move {
             let accept = answer == DialogAnswer::Accept;
-            let answered = session
-                .send("Page.handleJavaScriptDialog", json!({ "accept": accept }))
+            let answered = cdp::Session::adopt(session.cdp().clone(), session.session_id().clone())
+                .send(page::HandleJavaScriptDialog {
+                    accept,
+                    prompt_text: None,
+                })
                 .await;
             if let Err(error) = answered {
                 debug!(%error, "answering a dialog left open at run end failed");

@@ -47,6 +47,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::sync::{Mutex, OnceCell};
 
+use crate::chromium_bridge::cdp::{dom, runtime};
 use crate::chromium_bridge::frames::FrameContext;
 use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup};
 use crate::playwright_methods::click::PageError;
@@ -341,16 +342,14 @@ impl MainWorld {
             .get_or_try_init(|| async {
                 let reply = frame
                     .host
-                    .send(
-                        "Runtime.callFunctionOn",
-                        json!({
-                            "functionDeclaration": MAIN_INJECTED,
-                            "objectId": installed.utility.object_id(),
-                            "arguments": [{ "value": main_initializer() }],
-                            "returnByValue": false,
-                            "objectGroup": MAIN_WORLD_GROUP,
-                        }),
-                    )
+                    .send_command(runtime::CallFunctionOn {
+                        function_declaration: MAIN_INJECTED,
+                        object_id: Some(installed.utility.object_id()),
+                        arguments: Some(vec![json!({ "value": main_initializer() })]),
+                        return_by_value: Some(false),
+                        object_group: Some(MAIN_WORLD_GROUP),
+                        ..runtime::CallFunctionOn::default()
+                    })
                     .await
                     .map_err(|error| frame.host.classify(&error))?;
                 let answer: CallFunctionOnResult =
@@ -395,15 +394,13 @@ impl MainWorld {
         })?;
         let reply = frame
             .host
-            .send(
-                "Runtime.callFunctionOn",
-                json!({
-                    "functionDeclaration": UTILITY,
-                    "objectId": object_id,
-                    "returnByValue": false,
-                    "objectGroup": MAIN_WORLD_GROUP,
-                }),
-            )
+            .send_command(runtime::CallFunctionOn {
+                function_declaration: UTILITY,
+                object_id: Some(&object_id),
+                return_by_value: Some(false),
+                object_group: Some(MAIN_WORLD_GROUP),
+                ..runtime::CallFunctionOn::default()
+            })
             .await
             .map_err(|error| frame.host.classify(&error))?;
         let answer: CallFunctionOnResult = serde_json::from_value(reply).map_err(|error| {
@@ -504,7 +501,7 @@ impl MainWorld {
         // Subscribed before the call goes out: what arrives here came after it, in the socket's
         // order, so a commit that precedes the reply came while the call was in the page.
         let mut events = frame.host.events();
-        let reply = match frame.host.send("Runtime.callFunctionOn", request).await {
+        let reply = match frame.host.send_command(request).await {
             Ok(reply) => reply,
             Err(CdpError::Protocol { message, .. }) => {
                 let gone = message.contains(CONTEXT_GONE) || message.contains(OBJECT_GONE);
@@ -591,10 +588,12 @@ impl MainWorld {
         // No `executionContextId`: Chromium resolves into the main world of the node's frame.
         let reply = frame
             .host
-            .send(
-                "DOM.resolveNode",
-                json!({ "backendNodeId": backend, "objectGroup": group.0 }),
-            )
+            .send_command(dom::ResolveNode {
+                backend_node_id: Some(backend),
+                object_group: Some(group.0.clone()),
+                node_id: None,
+                execution_context_id: None,
+            })
             .await
             .map_err(|error| frame.host.classify(&error))?;
         serde_json::from_value(reply["object"].clone())
@@ -611,36 +610,42 @@ impl MainWorld {
 /// `NotConnected` when the object or its context is gone; `Closed` when the session is.
 /// One `Runtime.callFunctionOn` of a built function on `utility` (the `UtilityScript`'s object
 /// id, always the first argument): on that object, or in the execution context `context`.
-fn call_request(
-    utility: &str,
-    context: Option<&ContextPin>,
+fn call_request<'a>(
+    utility: &'a str,
+    context: Option<&'a ContextPin>,
     function: MainFunction,
     arguments: Vec<Value>,
     return_by_value: bool,
-    group: Option<&ObjectGroup>,
-) -> Value {
+    group: Option<&'a ObjectGroup>,
+) -> runtime::CallFunctionOn<'a> {
     let mut all = Vec::with_capacity(arguments.len() + 1);
     all.push(json!({ "objectId": utility }));
     all.extend(arguments);
     // Each declaration is named at its key, so the page JS guard can see it is built.
     let mut request = match function {
-        MainFunction::Evaluate => json!({ "functionDeclaration": EVALUATE }),
-        MainFunction::JsonValue => json!({ "functionDeclaration": JSON_VALUE }),
+        MainFunction::Evaluate => runtime::CallFunctionOn {
+            function_declaration: EVALUATE,
+            ..runtime::CallFunctionOn::default()
+        },
+        MainFunction::JsonValue => runtime::CallFunctionOn {
+            function_declaration: JSON_VALUE,
+            ..runtime::CallFunctionOn::default()
+        },
     };
     match context {
         Some(ContextPin {
             unique: Some(unique),
             ..
-        }) => request["uniqueContextId"] = json!(unique),
-        Some(pin) => request["executionContextId"] = json!(pin.id),
-        None => request["objectId"] = json!(utility),
+        }) => request.unique_context_id = Some(unique),
+        Some(pin) => request.execution_context_id = Some(pin.id),
+        None => request.object_id = Some(utility),
     }
-    request["arguments"] = json!(all);
-    request["returnByValue"] = json!(return_by_value);
-    request["awaitPromise"] = json!(true);
-    request["userGesture"] = json!(true);
+    request.arguments = Some(all);
+    request.return_by_value = Some(return_by_value);
+    request.await_promise = Some(true);
+    request.user_gesture = Some(true);
     if let Some(ObjectGroup(group)) = group {
-        request["objectGroup"] = json!(group);
+        request.object_group = Some(group);
     }
     request
 }
@@ -652,16 +657,14 @@ pub(crate) async fn retain(
 ) -> Result<RemoteObject, PageError> {
     let reply = frame
         .host
-        .send(
-            "Runtime.callFunctionOn",
-            json!({
-                "functionDeclaration": RETAIN,
-                "objectId": object_id,
-                "arguments": [{ "objectId": object_id }],
-                "objectGroup": group.0,
-                "returnByValue": false,
-            }),
-        )
+        .send_command(runtime::CallFunctionOn {
+            function_declaration: RETAIN,
+            object_id: Some(object_id),
+            arguments: Some(vec![json!({ "objectId": object_id })]),
+            object_group: Some(&group.0),
+            return_by_value: Some(false),
+            ..runtime::CallFunctionOn::default()
+        })
         .await
         .map_err(|error| frame.host.classify(&error))?;
     let answer: CallFunctionOnResult = serde_json::from_value(reply).map_err(|error| {
@@ -676,7 +679,10 @@ pub(crate) async fn retain(
 async fn describe(frame: &FrameContext, object_id: &str) -> Result<i64, PageError> {
     let reply = frame
         .host
-        .send("DOM.describeNode", json!({ "objectId": object_id }))
+        .send_command(dom::DescribeNode {
+            object_id: Some(object_id.to_string()),
+            ..dom::DescribeNode::default()
+        })
         .await
         .map_err(|error| frame.host.classify(&error))?;
     reply["node"]["backendNodeId"]
@@ -734,14 +740,15 @@ mod tests {
             id: 7,
             unique: None,
         };
-        let pinned = call_request(
+        let pinned = serde_json::to_value(call_request(
             "utility-1",
             Some(&numbered),
             MainFunction::Evaluate,
             vec![json!({ "value": 1 })],
             true,
             None,
-        );
+        ))
+        .expect("the request serializes");
         assert_eq!(pinned["executionContextId"], json!(7));
         assert!(
             pinned.get("objectId").is_none(),
@@ -757,24 +764,27 @@ mod tests {
             id: 7,
             unique: Some("-123.456".to_string()),
         };
-        let pinned = call_request(
+        let pinned = serde_json::to_value(call_request(
             "utility-1",
             Some(&unique),
             MainFunction::Evaluate,
             Vec::new(),
             true,
             None,
-        );
+        ))
+        .expect("the request serializes");
         assert_eq!(pinned["uniqueContextId"], json!("-123.456"));
         assert!(pinned.get("executionContextId").is_none());
-        let unpinned = call_request(
+        let group = ObjectGroup("group".to_string());
+        let unpinned = serde_json::to_value(call_request(
             "utility-1",
             None,
             MainFunction::JsonValue,
             Vec::new(),
             false,
-            Some(&ObjectGroup("group".to_string())),
-        );
+            Some(&group),
+        ))
+        .expect("the request serializes");
         assert_eq!(unpinned["objectId"], json!("utility-1"));
         assert!(unpinned.get("executionContextId").is_none());
         assert_eq!(unpinned["objectGroup"], json!("group"));

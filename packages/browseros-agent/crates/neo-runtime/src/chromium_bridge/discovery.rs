@@ -29,34 +29,40 @@ use std::collections::{HashMap, HashSet};
 
 use browseros_cdp::{CdpError, CdpEvent};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tracing::warn;
 
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::{Setting, Switch};
+use crate::chromium_bridge::cdp::{self, Command, target};
 use crate::events::{EventHub, Flushes};
 
 /// Neo: the target types discovery reports. Tabs are `page` targets; without the filter, every
 /// extension worker and browser UI target would cross the run's event ring too.
-fn page_filter() -> Value {
-    json!([{ "type": "page" }])
+fn page_filter() -> Vec<target::FilterEntry> {
+    vec![target::FilterEntry {
+        r#type: Some("page".to_string()),
+        exclude: None,
+    }]
 }
 
 /// Neo: target discovery as a setting the `Runtime`'s runs share (`browser_connection_settings.rs`): on for page
 /// targets while any run listens for new pages, off once the last lets go.
 pub(crate) static DISCOVERY: Setting = Setting {
-    method: "Target.setDiscoverTargets",
+    method: target::SetDiscoverTargets::METHOD,
     params: discovery_params,
 };
 
 fn discovery_params(on: bool, _scope: Option<&str>) -> Value {
-    if on {
-        json!({ "discover": true, "filter": page_filter() })
-    } else {
-        json!({ "discover": false })
-    }
+    // Serializing this plain struct cannot fail; if it ever did, the browser would refuse the
+    // empty params and the switch would report it.
+    serde_json::to_value(target::SetDiscoverTargets {
+        discover: on,
+        filter: on.then(page_filter),
+    })
+    .unwrap_or_default()
 }
 
 /// What `Target.targetCreated`, `Target.targetInfoChanged` and `Target.getTargets` report of a
@@ -109,13 +115,12 @@ pub(crate) async fn run(tabs: Tabs, discovery: Switch) {
     let events = cdp.events();
     let flushes = hub.watcher();
     let started = async {
-        let baseline: TargetInfos = cdp
-            .send_typed(
-                "Target.getTargets",
-                json!({ "filter": page_filter() }),
-                None,
-            )
+        let baseline = cdp::Browser::new(cdp.clone())
+            .send(target::GetTargets {
+                filter: Some(page_filter()),
+            })
             .await?;
+        let baseline: TargetInfos = serde_json::from_value(baseline)?;
         let lease = discovery.acquire(&cdp, None).await?;
         Ok::<_, CdpError>((baseline, lease))
     };
@@ -264,6 +269,7 @@ impl Targets {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use tokio_util::task::TaskTracker;
 
     use super::*;

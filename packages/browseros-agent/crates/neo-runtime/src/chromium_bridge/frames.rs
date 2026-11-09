@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use browseros_cdp::{CdpError, CdpEvent, SessionId};
 use neo_runtime_spec::{Element, Handle, InjectedCall};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
@@ -17,6 +17,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 
 use crate::browser_representations::page::Session;
+use crate::chromium_bridge::cdp::{self, dom, page, target};
 use crate::chromium_bridge::main_world::MainWorld;
 use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup, World};
 use crate::playwright_methods::click::PageError;
@@ -98,7 +99,10 @@ impl FrameContext {
 
 /// A CDP session retained by every context and cleanup that uses it.
 pub(crate) struct Host {
+    /// Owns the attachment: its `Drop` detaches, once the last context or cleanup lets go.
     session: Arc<Session>,
+    /// The same session, as the door sends on it.
+    cdp: cdp::Session,
     target_id: Option<String>,
     parent: Option<Arc<Host>>,
     gone: CancellationToken,
@@ -107,12 +111,58 @@ pub(crate) struct Host {
 }
 
 impl Host {
+    fn new(
+        session: Arc<Session>,
+        target_id: Option<String>,
+        parent: Option<Arc<Host>>,
+        gone: CancellationToken,
+        watch: Option<DropGuard>,
+        contexts: Weak<Contexts>,
+    ) -> Self {
+        let cdp = cdp::Session::adopt(session.cdp.clone(), session.id.clone());
+        Self {
+            session,
+            cdp,
+            target_id,
+            parent,
+            gone,
+            _watch: watch,
+            contexts,
+        }
+    }
+
+    /// Sends `command` on this host's session. A host whose session detached answers
+    /// `SessionGone` at once instead of waiting out CDP's request timeout (Chromium never
+    /// answers some requests after removing an OOPIF); see [`Self::forget_if_gone`].
+    pub(crate) async fn send_command<C: cdp::Command<Via = cdp::OnSession>>(
+        &self,
+        command: C,
+    ) -> Result<C::Reply, CdpError> {
+        let result = tokio::select! {
+            biased;
+            () = self.gone.cancelled() => Err(CdpError::SessionGone),
+            result = self.cdp.send(command) => result,
+        };
+        self.forget_if_gone(&result);
+        result
+    }
+
+    /// [`Self::send_command`] by method name and JSON params, for the callers in
+    /// `browser_representations/` and `playwright_methods/` that do not send through the door
+    /// yet.
     pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
         let result = tokio::select! {
             biased;
             () = self.gone.cancelled() => Err(CdpError::SessionGone),
             result = self.session.cdp.send(method, params, Some(&self.session.id)) => result,
         };
+        self.forget_if_gone(&result);
+        result
+    }
+
+    /// A send that found the session gone forgets every context on it, so the next call finds
+    /// its frame's current host.
+    fn forget_if_gone<T>(&self, result: &Result<T, CdpError>) {
         if result
             .as_ref()
             .is_err_and(|error| self.classify(error) == PageError::NotConnected)
@@ -121,7 +171,6 @@ impl Host {
         {
             contexts.retain(|_, frame| frame.host.session_id() != self.session_id());
         }
-        result
     }
 
     pub(crate) fn is_child(&self) -> bool {
@@ -178,14 +227,14 @@ impl Frames {
         let contexts = Arc::new(Mutex::new(HashMap::new()));
         let main = Arc::new(FrameContext {
             id,
-            host: Arc::new(Host {
+            host: Arc::new(Host::new(
                 session,
-                target_id: None,
-                parent: None,
-                gone: CancellationToken::new(),
-                _watch: None,
-                contexts: Arc::downgrade(&contexts),
-            }),
+                None,
+                None,
+                CancellationToken::new(),
+                None,
+                Arc::downgrade(&contexts),
+            )),
             world,
             main: MainWorld::default(),
             contexts: Arc::downgrade(&contexts),
@@ -261,13 +310,9 @@ impl Frames {
         let targets = self
             .main
             .host
-            .session
             .cdp
-            .send(
-                "Target.getTargets",
-                json!({"filter":[{"type":"iframe"}]}),
-                None,
-            )
+            .browser()
+            .send(iframe_targets())
             .await
             .map_err(|error| playwright_injected_methods::classify(&error))?;
         let targets = targets["targetInfos"].as_array().ok_or_else(|| {
@@ -299,8 +344,7 @@ impl Frames {
             id: frame.to_string(),
             world: Arc::new(
                 World::on_host(
-                    host.session.cdp.clone(),
-                    host.session_id().clone(),
+                    host.cdp.clone(),
                     frame.to_string(),
                     host.is_child(),
                     host.gone.clone(),
@@ -332,12 +376,8 @@ impl Frames {
     /// Neo: Reads fresh host trees and reports a child lost during enumeration.
     async fn read_tree(&self) -> Result<(Vec<FrameInfo>, bool), PageError> {
         let mut changed_host = false;
-        let local = self.main.host.send("Page.getFrameTree", json!({}));
-        let targets = self.main.host.session.cdp.send(
-            "Target.getTargets",
-            json!({"filter":[{"type":"iframe"}]}),
-            None,
-        );
+        let local = self.main.host.send_command(page::GetFrameTree {});
+        let targets = self.main.host.cdp.browser().send(iframe_targets());
         let (local, targets) = tokio::try_join!(local, targets)
             .map_err(|error| playwright_injected_methods::classify(&error))?;
         let mut frames = local_tree(&local)?;
@@ -392,7 +432,7 @@ impl Frames {
             };
             let local = match context
                 .host
-                .send("Page.getFrameTree", json!({}))
+                .send_command(page::GetFrameTree {})
                 .await
                 .map_err(|error| context.host.classify(&error))
             {
@@ -485,14 +525,14 @@ impl Frames {
             stop,
             Arc::downgrade(&self.contexts),
         ));
-        let host = Arc::new(Host {
-            session: Arc::new(session),
-            target_id: Some(frame.to_string()),
-            parent: Some(Arc::clone(parent)),
+        let host = Arc::new(Host::new(
+            Arc::new(session),
+            Some(frame.to_string()),
+            Some(Arc::clone(parent)),
             gone,
-            _watch: Some(watch),
-            contexts: Arc::downgrade(&self.contexts),
-        });
+            Some(watch),
+            Arc::downgrade(&self.contexts),
+        ));
         if let Some(hook) = self.child_hook.get() {
             hook(Arc::clone(&host)).await;
         }
@@ -513,14 +553,19 @@ impl Frames {
                 .as_ref()
                 .ok_or_else(|| PageError::Contract("A child host has no parent".to_string()))?;
             let owner = parent
-                .send("DOM.getFrameOwner", json!({"frameId": frame}))
+                .send_command(dom::GetFrameOwner {
+                    frame_id: frame.clone(),
+                })
                 .await
                 .map_err(|error| parent.classify(&error))?;
             let backend = owner["backendNodeId"].as_i64().ok_or_else(|| {
                 PageError::Contract("DOM.getFrameOwner returned no backendNodeId".to_string())
             })?;
             let model = parent
-                .send("DOM.getBoxModel", json!({"backendNodeId":backend}))
+                .send_command(dom::GetBoxModel {
+                    backend_node_id: Some(backend),
+                    ..dom::GetBoxModel::default()
+                })
                 .await
                 .map_err(|error| parent.classify(&error))?;
             let x = model["model"]["content"][0].as_f64().ok_or_else(|| {
@@ -558,7 +603,9 @@ impl Frames {
                 .as_ref()
                 .ok_or_else(|| PageError::Contract("A child host has no parent".to_string()))?;
             let owner = parent
-                .send("DOM.getFrameOwner", json!({"frameId": frame}))
+                .send_command(dom::GetFrameOwner {
+                    frame_id: frame.clone(),
+                })
                 .await
                 .map_err(|error| parent.classify(&error))?;
             let backend = owner["backendNodeId"].as_i64().ok_or_else(|| {
@@ -566,7 +613,10 @@ impl Frames {
             })?;
             // Playwright's `_sendMayFail`: an owner with no box gives no position.
             let Ok(model) = parent
-                .send("DOM.getBoxModel", json!({"backendNodeId": backend}))
+                .send_command(dom::GetBoxModel {
+                    backend_node_id: Some(backend),
+                    ..dom::GetBoxModel::default()
+                })
                 .await
             else {
                 return Ok(None);
@@ -733,12 +783,25 @@ async fn watch_host(
     }
 }
 
+/// `Target.getTargets` of the browser's iframe targets: the out-of-process frames, which
+/// `Page.getFrameTree` leaves out.
+fn iframe_targets() -> target::GetTargets {
+    target::GetTargets {
+        filter: Some(vec![target::FilterEntry {
+            r#type: Some("iframe".to_string()),
+            exclude: None,
+        }]),
+    }
+}
+
 fn cache_error() -> PageError {
     PageError::Contract("neo-runtime: frame contexts cannot be accessed".to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::run::PageId;

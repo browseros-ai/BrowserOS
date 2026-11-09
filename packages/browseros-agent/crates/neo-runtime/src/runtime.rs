@@ -14,8 +14,7 @@
 
 use std::sync::Arc;
 
-use browseros_cdp::{CdpClient, CdpError, browser};
-use serde_json::Value;
+use browseros_cdp::{CdpClient, CdpError};
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio_util::task::TaskTracker;
 
@@ -24,6 +23,8 @@ use crate::browser_representations::cookies_and_storage::Permissions;
 use crate::browser_representations::page::TabInputs;
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::Switches;
+use crate::chromium_bridge::cdp::Browser;
+use crate::chromium_bridge::cdp::browser::{GetTabInfo, TabExists};
 use crate::deadline::Deadline;
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
@@ -95,15 +96,11 @@ impl Runtime {
     /// [`RuntimeError::UnsupportedBrowser`] when `Browser.getTabInfo` is missing or reports
     /// an unknown tab differently, and [`RuntimeError::Cdp`] when the check itself fails.
     pub async fn connect(cdp: CdpClient) -> Result<Self, RuntimeError> {
-        let probe = cdp
-            .send_typed::<_, Value>(
-                "Browser.getTabInfo",
-                browser::GetTabInfoParams {
-                    target_id: Some(PROBE_TARGET_ID.to_string()),
-                    tab_id: None,
-                },
-                None,
-            )
+        let probe = Browser::new(cdp.clone())
+            .send(TabExists(GetTabInfo {
+                target_id: Some(PROBE_TARGET_ID.to_string()),
+                tab_id: None,
+            }))
             .await;
         match probe {
             Err(CdpError::Protocol { message, .. }) if message.contains(CLOSED_TAB_MESSAGE) => {

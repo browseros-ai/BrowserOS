@@ -45,6 +45,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::chromium_bridge::cdp::{self, dom, page, runtime};
 use crate::playwright_methods::click::PageError;
 
 /// Neo's isolated world. Distinct from BrowserOS core's `browseros` and Playwright's
@@ -164,8 +165,8 @@ pub(crate) struct ObjectGroup(pub(crate) String);
 
 /// The run's handle on one frame's utility world.
 pub(crate) struct World {
-    cdp: CdpClient,
-    session: SessionId,
+    /// The session of the frame's host: the tab's, or an out-of-process frame's.
+    cdp: cdp::Session,
     /// A frame id; only the main frame also uses the tab target id.
     frame_id: String,
     child_host: bool,
@@ -192,20 +193,24 @@ enum StaleReply {
 }
 
 impl World {
+    /// The main frame's world on the tab's session, which `page.rs` attached.
     pub(crate) fn new(cdp: CdpClient, session: SessionId, frame_id: String) -> Self {
-        Self::on_host(cdp, session, frame_id, false, CancellationToken::new())
+        Self::on_host(
+            cdp::Session::adopt(cdp, session),
+            frame_id,
+            false,
+            CancellationToken::new(),
+        )
     }
 
     pub(crate) fn on_host(
-        cdp: CdpClient,
-        session: SessionId,
+        cdp: cdp::Session,
         frame_id: String,
         child_host: bool,
         gone: CancellationToken,
     ) -> Self {
         Self {
             cdp,
-            session,
             frame_id,
             child_host,
             gone,
@@ -250,7 +255,14 @@ impl World {
         backend: i64,
     ) -> Result<Handle<Element>, PageError> {
         let attached = self.attached().await?;
-        let result = self.send("DOM.resolveNode", json!({"backendNodeId":backend,"executionContextId":attached.context,"objectGroup":group.0})).await;
+        let result = self
+            .send(dom::ResolveNode {
+                backend_node_id: Some(backend),
+                execution_context_id: Some(attached.context),
+                object_group: Some(group.0.clone()),
+                node_id: None,
+            })
+            .await;
         let reply = match result {
             Ok(reply) => reply,
             Err(error) => {
@@ -334,17 +346,16 @@ impl World {
         );
 
         let attached = self.attached().await?;
-        let mut request = json!({
-            "functionDeclaration": CALL,
-            "objectId": attached.glue.object_id(),
-            "arguments": arguments,
-            "awaitPromise": true,
-            "returnByValue": by_value,
-        });
-        if let Some(ObjectGroup(group)) = group {
-            request["objectGroup"] = json!(group);
-        }
-        let reply = match self.send("Runtime.callFunctionOn", request).await {
+        let request = runtime::CallFunctionOn {
+            function_declaration: CALL,
+            object_id: Some(attached.glue.object_id()),
+            arguments: Some(arguments),
+            await_promise: Some(true),
+            return_by_value: Some(by_value),
+            object_group: group.map(|ObjectGroup(group)| group.as_str()),
+            ..runtime::CallFunctionOn::default()
+        };
+        let reply = match self.send(request).await {
             Ok(reply) => reply,
             Err(error) => {
                 if error == PageError::NotConnected {
@@ -370,10 +381,11 @@ impl World {
                 ))
             })?;
             let reply = self
-                .send(
-                    "Runtime.getProperties",
-                    json!({ "objectId": object_id, "ownProperties": true }),
-                )
+                .send(runtime::GetProperties {
+                    object_id,
+                    own_properties: Some(true),
+                    ..runtime::GetProperties::default()
+                })
                 .await?;
             let properties: GetPropertiesResult =
                 serde_json::from_value(reply).map_err(|error| {
@@ -410,14 +422,11 @@ impl World {
         }
         let key = glue_key_named(&test_id)?;
         let world = self
-            .send(
-                "Page.createIsolatedWorld",
-                json!({
-                    "frameId": self.frame_id,
-                    "worldName": WORLD_NAME,
-                    "grantUniveralAccess": true,
-                }),
-            )
+            .send(page::CreateIsolatedWorld {
+                frame_id: &self.frame_id,
+                world_name: WORLD_NAME,
+                grant_universal_access: true,
+            })
             .await?;
         let context = world["executionContextId"].as_i64().ok_or_else(|| {
             PageError::Contract(format!("Page.createIsolatedWorld answered {world}"))
@@ -461,16 +470,14 @@ impl World {
         arguments: &[Value],
     ) -> Result<Option<HandleId>, PageError> {
         let reply = self
-            .send(
-                "Runtime.callFunctionOn",
-                json!({
-                    "functionDeclaration": function,
-                    "executionContextId": context,
-                    "arguments": arguments,
-                    "returnByValue": false,
-                    "objectGroup": GLUE_GROUP,
-                }),
-            )
+            .send(runtime::CallFunctionOn {
+                function_declaration: function,
+                execution_context_id: Some(context),
+                arguments: Some(arguments.to_vec()),
+                return_by_value: Some(false),
+                object_group: Some(GLUE_GROUP),
+                ..runtime::CallFunctionOn::default()
+            })
             .await?;
         match evaluated(reply, "the glue bundle") {
             Ok(result) => Ok(result.object_id.map(HandleId::new)),
@@ -490,11 +497,16 @@ impl World {
         }
     }
 
-    async fn send(&self, method: &str, params: Value) -> Result<Value, PageError> {
+    /// Sends `command` on the world's session. A host whose session detached answers
+    /// `NotConnected` at once, and a CDP error is classified as for this world's host.
+    async fn send<C: cdp::Command<Via = cdp::OnSession>>(
+        &self,
+        command: C,
+    ) -> Result<C::Reply, PageError> {
         tokio::select! {
             biased;
             () = self.gone.cancelled() => Err(PageError::NotConnected),
-            result = self.cdp.send(method, params, Some(&self.session)) => result.map_err(|error| classify_host(&error, self.child_host)),
+            result = self.cdp.send(command) => result.map_err(|error| classify_host(&error, self.child_host)),
         }
     }
 }
@@ -675,8 +687,10 @@ mod tests {
             .unwrap();
         let gone = CancellationToken::new();
         let world = World::on_host(
-            cdp,
-            SessionId::from(attached["sessionId"].as_str().unwrap()),
+            cdp::Session::adopt(
+                cdp,
+                SessionId::from(attached["sessionId"].as_str().unwrap()),
+            ),
             PAGE.to_string(),
             true,
             gone.clone(),

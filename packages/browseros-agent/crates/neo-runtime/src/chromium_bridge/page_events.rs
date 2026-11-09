@@ -54,6 +54,7 @@ use crate::browser_representations::network::{Happening, NetworkLog};
 use crate::browser_representations::page::{Applied, DialogAnswer};
 use crate::browser_representations::routes::Channel;
 use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::chromium_bridge::cdp::{self, log, page, runtime};
 use crate::chromium_bridge::contexts::ContextFrames;
 use crate::chromium_bridge::frame_events::FrameModel;
 use crate::chromium_bridge::frames::{self, Host};
@@ -236,11 +237,8 @@ impl PageEvents {
         }
         let switched = time::timeout(
             CHILD_ENABLE_WAIT,
-            self.cdp.send(
-                "Page.setInterceptFileChooserDialog",
-                json!({ "enabled": wanted }),
-                Some(&self.session),
-            ),
+            self.on(&self.session)
+                .send(page::SetInterceptFileChooserDialog { enabled: wanted }),
         )
         .await;
         match switched {
@@ -272,18 +270,13 @@ impl PageEvents {
     /// a session intercepting that frame's own, and a session intercepts only once its `Page`
     /// domain is on (measured). Bounded by [`CHILD_ENABLE_WAIT`]; a failure is logged.
     async fn intercept_child(&self, session: &SessionId, enabled: bool) {
+        let frame = self.on(session);
         let switch = async {
             if enabled {
-                self.cdp
-                    .send("Page.enable", json!({}), Some(session))
-                    .await?;
+                frame.send(page::Enable::default()).await?;
             }
-            self.cdp
-                .send(
-                    "Page.setInterceptFileChooserDialog",
-                    json!({ "enabled": enabled }),
-                    Some(session),
-                )
+            frame
+                .send(page::SetInterceptFileChooserDialog { enabled })
                 .await
         };
         match time::timeout(CHILD_ENABLE_WAIT, switch).await {
@@ -338,6 +331,12 @@ impl PageEvents {
         &self.cdp
     }
 
+    /// `session`, the tab's own or one of its out-of-process frames', as the door sends on it.
+    /// These sessions only send here, never write input.
+    fn on(&self, session: &SessionId) -> cdp::Session {
+        cdp::Session::adopt(self.cdp.clone(), session.clone())
+    }
+
     /// The tab's own session, then each out-of-process frame session of it the run attached.
     pub(crate) fn sessions(&self) -> Vec<SessionId> {
         let mut sessions = vec![self.session.clone()];
@@ -357,8 +356,8 @@ impl PageEvents {
         }
         self.console.request(&session);
         let enable = async {
-            host.send("Runtime.enable", json!({})).await?;
-            host.send("Log.enable", json!({})).await
+            host.send_command(runtime::Enable {}).await?;
+            host.send_command(log::Enable {}).await
         };
         match time::timeout(CHILD_ENABLE_WAIT, enable).await {
             Ok(Ok(_)) => {}
@@ -584,15 +583,11 @@ impl PageEvents {
         };
         // Playwright: `server/chromium/crPage.ts` `FrameSession._onLogEntryAdded`: `args.map(arg => releaseObject(this._client, arg.objectId!));`
         for object in console::log_entry_object_ids(&entry) {
-            let cdp = self.cdp.clone();
+            let frame = self.on(session);
             let session = session.clone();
             tokio::spawn(async move {
-                let released = cdp
-                    .send(
-                        "Runtime.releaseObject",
-                        json!({ "objectId": object }),
-                        Some(&session),
-                    )
+                let released = frame
+                    .send(runtime::ReleaseObject { object_id: object })
                     .await;
                 if let Err(error) = released {
                     debug!(%session, %error, "releasing a log entry's argument failed");
@@ -748,14 +743,12 @@ impl PageEvents {
             if !self.console.requested(&session) {
                 continue;
             }
-            let cdp = self.cdp.clone();
+            let frame = self.on(&session);
             tokio::spawn(async move {
-                let released = cdp
-                    .send(
-                        "Runtime.releaseObjectGroup",
-                        json!({ "objectGroup": "console" }),
-                        Some(&session),
-                    )
+                let released = frame
+                    .send(runtime::ReleaseObjectGroup {
+                        object_group: "console".to_string(),
+                    })
                     .await;
                 if let Err(error) = released {
                     debug!(%session, %error, "releasing the console's objects failed");

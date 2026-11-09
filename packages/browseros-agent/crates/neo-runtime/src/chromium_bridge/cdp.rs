@@ -165,12 +165,13 @@ impl Browser {
         Self { client }
     }
 
-    /// Sends a browser-wide command and decodes its reply.
+    /// Sends a browser-wide command and decodes its reply. Serializing consumes the command, so
+    /// the future holds its JSON across the await, not the command too.
     pub(crate) async fn send<C: Command<Via = OnBrowser>>(
         &self,
         command: C,
     ) -> Result<C::Reply, CdpError> {
-        let params = serde_json::to_value(&command)?;
+        let params = serde_json::to_value(command)?;
         let reply = self.client.send(C::METHOD, params, None).await?;
         serde_json::from_value(reply).map_err(CdpError::from)
     }
@@ -244,12 +245,12 @@ impl Session {
         &self.browser
     }
 
-    /// Sends a command on this session and decodes its reply.
+    /// Sends a command on this session and decodes its reply ([`Browser::send`]).
     pub(crate) async fn send<C: Command<Via = OnSession>>(
         &self,
         command: C,
     ) -> Result<C::Reply, CdpError> {
-        let params = serde_json::to_value(&command)?;
+        let params = serde_json::to_value(command)?;
         let reply = self
             .browser
             .client

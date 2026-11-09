@@ -32,10 +32,8 @@ use std::mem;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use serde::Serialize;
-use serde_json::json;
-
 use crate::browser_representations::page::{FrameTab, InputPermit};
+use crate::chromium_bridge::cdp::input::{self, KeyDown, KeyEvent, KeyUp};
 use crate::chromium_bridge::mouse_and_touch_input::{
     self, DragStep, Effect, InputDevices, KeyboardState, Owner, Plan, Planned,
 };
@@ -128,49 +126,6 @@ impl Platform {
 #[error("Unknown key: \"{key}\"")]
 pub(crate) struct UnknownKey {
     pub(crate) key: String,
-}
-
-/// One `Input.dispatchKeyEvent`, serialized exactly as `crInput.ts` builds it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(untagged)]
-pub(crate) enum KeyEvent {
-    Down(KeyDown),
-    Up(KeyUp),
-}
-
-/// `RawKeyboardImpl.keydown`'s params, in its field order. Every field is always present:
-/// `commands` is empty off mac and `text` empty for a key that types nothing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct KeyDown {
-    /// `keyDown` when the key types text, else `rawKeyDown`.
-    #[serde(rename = "type")]
-    pub(crate) kind: &'static str,
-    pub(crate) modifiers: u8,
-    pub(crate) windows_virtual_key_code: u32,
-    pub(crate) code: &'static str,
-    pub(crate) commands: Vec<&'static str>,
-    pub(crate) key: &'static str,
-    pub(crate) text: &'static str,
-    pub(crate) unmodified_text: &'static str,
-    pub(crate) auto_repeat: bool,
-    pub(crate) location: u32,
-    pub(crate) is_keypad: bool,
-}
-
-/// `RawKeyboardImpl.keyup`'s params, in its field order.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct KeyUp {
-    /// Always `keyUp`.
-    #[serde(rename = "type")]
-    pub(crate) kind: &'static str,
-    pub(crate) modifiers: u8,
-    pub(crate) key: &'static str,
-    pub(crate) windows_virtual_key_code: u32,
-    pub(crate) code: &'static str,
-    pub(crate) location: u32,
-    pub(crate) is_keypad: bool,
 }
 
 /// Playwright's `KeyboardModifier`, with the smart `ControlOrMeta`: what an action's
@@ -389,10 +344,9 @@ fn plan_characters(
 
 /// Playwright: `server/chromium/crInput.ts` `RawKeyboardImpl.sendText`: `await progress.race(this._client.send('Input.insertText', { text }));`
 pub(crate) fn plan_insert_text(plan: &mut Plan, simulated: &mut InputDevices, text: &str) -> usize {
-    let params = json!({ "text": text }).to_string();
     plan.push(
         simulated,
-        Planned::command("Input.insertText", params, Effect::None),
+        Planned::write(&input::InsertText { text }, Effect::None),
     )
 }
 
@@ -579,9 +533,6 @@ fn holders_of(state: &KeyboardState, key: &str) -> Vec<Owner> {
 
 /// Neo: one key event as a plan command, with what it does to the tab's keyboard.
 fn key_command(event: &KeyEvent, owner: &Owner) -> Planned {
-    // Serializing these plain structs cannot fail; if it ever did, Chromium would refuse the
-    // empty params, and the write counts as failed.
-    let params = serde_json::to_string(event).unwrap_or_default();
     let effect = match event {
         KeyEvent::Down(down) => Effect::KeyDown {
             code: down.code,
@@ -600,7 +551,7 @@ fn key_command(event: &KeyEvent, owner: &Owner) -> Planned {
     };
     Planned {
         drag,
-        ..Planned::command("Input.dispatchKeyEvent", params, effect)
+        ..Planned::write(event, effect)
     }
 }
 
