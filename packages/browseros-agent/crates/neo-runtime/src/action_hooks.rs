@@ -41,7 +41,7 @@ use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Notify;
 
-use crate::actions::{ResultShapeError, ServedMethod};
+use crate::actions::{self, ResultShapeError, ServedMethod};
 use crate::hooks::{
     ActionDecision, ActionEnd, ActionEvent, ActionHook, AfterDecision, HookFailure, HookSandbox,
     LocatorRef, Replaced,
@@ -131,6 +131,16 @@ impl ActionHooks for HookSandbox {
     fn add_failure(&self, line: String) {
         HookSandbox::add_failure(self, line);
     }
+}
+
+/// Whether `name` is the kind of some served action (`actions.rs`), as a hook's filter names it.
+pub(crate) fn is_action_kind(name: &str) -> bool {
+    actions::served().any(|served| served.action().kind().as_str() == name)
+}
+
+/// Whether `name` is the group of some served action, as a hook's filter names it.
+pub(crate) fn is_action_group(name: &str) -> bool {
+    actions::served().any(|served| served.action().group().as_str() == name)
 }
 
 /// `failure` as the host-only trace words it.

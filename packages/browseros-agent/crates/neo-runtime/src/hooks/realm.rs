@@ -47,6 +47,7 @@ use tokio::time;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::action_hooks;
 use crate::deadline::{Deadline, Stop};
 use crate::hooks::{HookEvent, HookFailure};
 use crate::method_router::Dispatcher;
@@ -182,6 +183,30 @@ pub(crate) struct Registration {
 }
 
 impl Registration {
+    /// Why this registration's filter names no real action, if it does not: a kind or a group
+    /// that is none of the run's action labels (`actions.rs`), such as `pagescript` for
+    /// `pageScript`. Such a filter would match nothing, a policy that silently never runs, so
+    /// loading fails instead and the run ends blocked (hooks design D8).
+    fn unknown_name(&self) -> Option<String> {
+        let event = self.event.name();
+        let kind = self
+            .kinds
+            .iter()
+            .flatten()
+            .find(|name| !action_hooks::is_action_kind(name));
+        if let Some(kind) = kind {
+            return Some(format!(
+                "neo.on('{event}') filters on no action kind {kind:?}"
+            ));
+        }
+        let group = self
+            .groups
+            .iter()
+            .flatten()
+            .find(|name| !action_hooks::is_action_group(name));
+        group.map(|group| format!("neo.on('{event}') filters on no action group {group:?}"))
+    }
+
     /// Whether an action of `kind` and `group` reaches this registration: always without a
     /// filter, otherwise when its kind is in `kinds` or its group in `groups`.
     pub(crate) fn matches(&self, kind: Option<&str>, group: Option<&str>) -> bool {
@@ -484,8 +509,11 @@ async fn build(
                 .map_err(|error| describe(&ctx, error))
         })
         .await?;
-    let registrations = serde_json::from_str(&registrations)
+    let registrations: Vec<Registration> = serde_json::from_str(&registrations)
         .map_err(|error| format!("finishLoading listed {registrations}: {error}"))?;
+    if let Some(unknown) = registrations.iter().find_map(Registration::unknown_name) {
+        return Err(unknown);
+    }
     Ok((
         Realm {
             key,
