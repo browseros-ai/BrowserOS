@@ -12,6 +12,7 @@
 //! so sessions detach once the realm, dispatcher and their writers are gone, also when a
 //! caller drops the run's future. Browser tabs themselves survive the run.
 //!
+//! Neo: an optional host emitter surrounds the run lifetime so failed admission checks and dropped futures still report a matched start and end.
 //! Around all of it, a runtime with a host side reports the run through its `RunEmitter`
 //! (`host/emit.rs`): `RunStarted` before the tab check, `RunEnded` after the outcome, or from
 //! the emitter's guard when the run's future is dropped.
@@ -69,8 +70,7 @@ pub struct Runtime {
     absolute_paths: AbsolutePaths,
     cleanup: TaskTracker,
     host: Option<Host>,
-    // The host task owns a Host handle itself; a separate lifetime guard lets the last Runtime
-    // clone cancel that task instead of leaving a socket cycle when callers omit shutdown.
+    // Neo: a separate runtime lifetime guard cancels the host actor when the last Runtime clone drops, breaking the actor/Host ownership cycle.
     _host_lifetime: Option<Arc<DropGuard>>,
 }
 
@@ -84,6 +84,7 @@ impl Drop for CloseRunTasks {
     }
 }
 
+/// Neo: opt-in host wiring lets servers add the ledger and capture socket without changing script-only runtimes.
 /// How [`Runtime::connect_with`] builds a runtime. The default runs scripts and nothing else.
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeOptions {
@@ -117,6 +118,7 @@ impl Runtime {
         Self::connect_with(cdp, RuntimeOptions::default()).await
     }
 
+    /// Neo: start the host socket and actor only when the caller supplies host options, after validating the run client's browser.
     /// Like [`Self::connect`], with a host side when `options.host` asks for one.
     ///
     /// # Errors
@@ -186,6 +188,7 @@ impl Runtime {
         self.cleanup.wait().await;
     }
 
+    /// Neo: server shutdown drains runs before detaching presences, preserving focus through outstanding input cleanup.
     /// Cancels the host side and waits for its ledger writer to stop. For server shutdown,
     /// first stop admission, cancel and await runs, then call [`Runtime::drain`], and finally
     /// this method. Draining before releasing host presences prevents their detach from
@@ -243,6 +246,7 @@ impl Runtime {
         outcome
     }
 
+    /// Neo: run execution carries the same id and emitter minted before tab validation, so every early outcome remains attributable.
     async fn run_script(
         &self,
         run_id: RunId,

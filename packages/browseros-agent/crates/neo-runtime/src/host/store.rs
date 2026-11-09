@@ -1,4 +1,4 @@
-//! The host side's persistence port. The trace store owns rows and retention; the host only
+//! Neo: The host side's persistence port. The trace store owns rows and retention; the host only
 //! attaches after-call artifacts and fences completion. No database type crosses this seam.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -60,6 +60,7 @@ struct Memory {
 }
 
 impl Memory {
+    /// Neo: retain the newest 64 screenshots per session to bound stored image bytes while preserving recent after-call context (design §8).
     fn prune_images(&mut self, session: &SessionKey) {
         let withheld = self.withheld.contains(session);
         let mut kept = 0;

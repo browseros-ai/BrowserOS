@@ -1,0 +1,933 @@
+/**
+ * Copyright (c) Microsoft Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+import { getMetainfo } from '@isomorphic/protocolMetainfo';
+import { assert } from '@isomorphic/assert';
+import { monotonicTime } from '@isomorphic/time';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { eventsHelper  } from '@utils/eventsHelper';
+import { createGuid } from '@utils/crypto';
+import { removeFolders  } from '@utils/fileUtils';
+import { SerializedFS  } from '@utils/serializedFS';
+import { getPlaywrightVersion } from '../../userAgent';
+import { Snapshotter } from './snapshotter';
+import { Artifact } from '../../artifact';
+import { BrowserContext } from '../../browserContext';
+import { CoverageRecorder } from '../../coverageRecorder';
+import { Dispatcher } from '../../dispatchers/dispatcher';
+import { serializeError } from '../../errors';
+import { HarRecorder } from '../../har/harRecorder';
+import { HarTracer } from '../../har/harTracer';
+import { SdkObject } from '../../instrumentation';
+import { Page, ariaSnapshotJSONForFrame } from '../../page';
+import { isAbortError, nullProgress } from '../../progress';
+
+import type { SnapshotterBlob, SnapshotterDelegate } from './snapshotter';
+import type { NameValue } from '@isomorphic/types';
+import type { RegisteredListener } from '@utils/eventsHelper';
+import type { ConsoleMessage } from '../../console';
+import type { Dialog } from '../../dialog';
+import type { Download } from '../../download';
+import type { APIRequestContext } from '../../fetch';
+import type { HarTracerDelegate } from '../../har/harTracer';
+import type { CallMetadata, InstrumentationListener } from '../../instrumentation';
+import type { PageError } from '../../page';
+import type { RecordHarOptions, StackFrame, TracingTracingStopChunkParams } from '../../channels';
+import type * as har from '@isomorphic/trace/versions/har';
+import type * as trace from '@isomorphic/trace/trace';
+import type { Progress } from '../../progress';
+import type * as types from '../../types';
+import type { Screencast, ScreencastClient } from '../../screencast';
+
+const version: trace.VERSION = 10;
+
+export type TracerOptions = {
+  name?: string;
+  snapshotDom?: boolean;
+  snapshotAria?: boolean;
+  snapshotScreen?: boolean;
+  screencast?: boolean;
+  coverage?: boolean;
+  live?: boolean;
+};
+
+type RecordingState = {
+  options: TracerOptions,
+  traceName: string,
+  networkFile: string,
+  traceFile: string,
+  tracesDir: string,
+  chunkOrdinal: number,
+  // Blobs referenced by the network stream. The network file is preserved between
+  // chunks (for browser contexts), so these are included in every chunk's archive.
+  crossChunkFiles: Set<string>,
+  // Blobs referenced by the current chunk's trace stream, reset on every stopChunk.
+  chunkFiles: Set<string>,
+  recording: boolean;
+  callsInProgress: Set<string>;
+  groupStack: string[];
+};
+
+export class Tracing extends SdkObject implements InstrumentationListener, SnapshotterDelegate, HarTracerDelegate {
+  private _fs = new SerializedFS();
+  private _snapshotter?: Snapshotter;
+  private _harTracer: HarTracer;
+  private _screencastListeners: RegisteredListener[] = [];
+  private _pageTracingRecorders = new Map<Page, ScreencastTracingRecorder>();
+  private _eventListeners: RegisteredListener[] = [];
+  private _context: BrowserContext | APIRequestContext;
+  // Note: state should only be touched inside API methods, but not inside trace operations.
+  private _state: RecordingState | undefined;
+  private _isStopping = false;
+  private _precreatedTracesDir: string | undefined;
+  private _tracesTmpDir: string | undefined;
+  private _allResources = new Set<string>();
+  private _contextCreatedEvent: trace.ContextCreatedTraceEvent;
+  private _pendingHarEntries = new Set<har.Entry>();
+  private _started = false;
+  private _coverageRecorder: CoverageRecorder | undefined;
+  readonly harRecorders = new Map<string, HarRecorder>();
+
+  constructor(context: BrowserContext | APIRequestContext, tracesDir: string | undefined) {
+    super(context, 'tracing');
+    this._context = context;
+    this._precreatedTracesDir = tracesDir;
+    this._harTracer = new HarTracer(context, null, this, {
+      content: 'attach',
+      recordRequestOverrides: false,
+      waitForContentOnStop: false,
+    });
+    const testIdAttributeName = ('selectors' in context) ? context.selectors().testIdAttributeName() : undefined;
+    this._contextCreatedEvent = {
+      version,
+      type: 'context-options',
+      origin: 'library',
+      browserName: '',
+      playwrightVersion: getPlaywrightVersion(),
+      options: {},
+      platform: process.platform,
+      wallTime: 0,
+      monotonicTime: 0,
+      sdkLanguage: this._sdkLanguage(),
+      testIdAttributeName,
+    };
+    if (context instanceof BrowserContext) {
+      this._snapshotter = new Snapshotter(context, this);
+      assert(tracesDir, 'tracesDir must be specified for BrowserContext');
+      this._contextCreatedEvent.browserName = context._browser.options.name;
+      this._contextCreatedEvent.channel = context._browser.options.channel;
+      const { baseURL, viewport, deviceScaleFactor, isMobile, userAgent } = context._options;
+      this._contextCreatedEvent.options = { baseURL, viewport, deviceScaleFactor, isMobile, userAgent };
+    }
+  }
+
+  private _sdkLanguage() {
+    return this._context instanceof BrowserContext ? this._context._browser.sdkLanguage() : this._context.attribution.playwright.options.sdkLanguage;
+  }
+
+  async resetForReuse(progress: Progress) {
+    await this.stop(progress);
+    if (this._snapshotter)
+      await progress.race(this._snapshotter.resetForReuse());
+  }
+
+  start(progress: Progress, options: TracerOptions) {
+    if (this._isStopping)
+      throw new Error('Cannot start tracing while stopping');
+    if (this._state)
+      throw new Error('Tracing has been already started');
+
+    // Re-write for testing.
+    this._contextCreatedEvent.sdkLanguage = this._sdkLanguage();
+
+    // TODO: passing the same name for two contexts makes them write into a single file
+    // and conflict.
+    const traceName = options.name || createGuid();
+
+    const tracesDir = this._createTracesDirIfNeeded();
+
+    // Init the state synchronously.
+    this._state = {
+      options,
+      traceName,
+      tracesDir,
+      traceFile: path.join(tracesDir, traceName + '.trace'),
+      networkFile: path.join(tracesDir, traceName + '.network'),
+      chunkOrdinal: 0,
+      chunkFiles: new Set(),
+      crossChunkFiles: new Set(),
+      recording: false,
+      callsInProgress: new Set(),
+      groupStack: [],
+    };
+    this._fs.mkdir(path.join(tracesDir, 'resources'));
+    if (options.screencast)
+      this._fs.mkdir(path.join(tracesDir, 'screencast'));
+    if (options.snapshotScreen)
+      this._fs.mkdir(path.join(tracesDir, 'screenshots'));
+    if (options.snapshotAria)
+      this._fs.mkdir(path.join(tracesDir, 'aria'));
+    this._fs.writeFile(this._state.networkFile, '');
+    // Tracing is 10x bigger if we include scripts in every trace.
+    if (options.snapshotDom)
+      this._harTracer.start({ omitScripts: !options.live });
+    if (options.coverage && this._context instanceof BrowserContext)
+      this._coverageRecorder = new CoverageRecorder(this._context);
+    this._started = true;
+  }
+
+  async startChunk(progress: Progress, options: { name?: string, title?: string } = {}): Promise<{ traceName: string }> {
+    if (this._state && this._state.recording)
+      await this.stopChunk(progress, { mode: 'discard' });
+
+    if (!this._state)
+      throw new Error('Must start tracing before starting a new chunk');
+    if (this._isStopping)
+      throw new Error('Cannot start a trace chunk while stopping');
+
+    this._state.recording = true;
+    this._state.callsInProgress.clear();
+
+    // - Browser context network trace is shared across chunks as it contains resources
+    // used to serve page snapshots, so make a copy with the new name.
+    // - APIRequestContext network traces are chunk-specific, always start from scratch.
+    const preserveNetworkResources = this._context instanceof BrowserContext;
+    if (options.name && options.name !== this._state.traceName)
+      this._changeTraceName(this._state, options.name, preserveNetworkResources);
+    else
+      this._allocateNewTraceFile(this._state);
+    if (!preserveNetworkResources) {
+      this._state.crossChunkFiles = new Set();
+      this._fs.writeFile(this._state.networkFile, '');
+    }
+
+    this._fs.mkdir(path.dirname(this._state.traceFile));
+    const event: trace.TraceEvent = {
+      ...this._contextCreatedEvent,
+      title: options.title,
+      wallTime: Date.now(),
+      monotonicTime: monotonicTime()
+    };
+    this._appendTraceEvent(event);
+
+    this._context.instrumentation.addListener(this, this._context);
+    this._eventListeners.push(
+        eventsHelper.addEventListener(this._context, BrowserContext.Events.Console, this._onConsoleMessage.bind(this)),
+        eventsHelper.addEventListener(this._context, BrowserContext.Events.PageError, this._onPageError.bind(this)),
+    );
+    if (this._context instanceof BrowserContext) {
+      for (const page of this._context.pages())
+        this.onPageOpen(page);
+    }
+    if (this._state.options.screencast)
+      this._startScreencast();
+    this._harTracer.setOmitWebSocketFrames(!!process.env.PLAYWRIGHT_TRACING_NO_WEBSOCKET_FRAMES);
+    if (this._state.options.snapshotDom)
+      await this._snapshotter?.start(progress);
+    if (this._state.options.coverage)
+      await this._coverageRecorder?.install(progress);
+    return { traceName: this._state.traceName };
+  }
+
+  private _currentGroupId(): string | undefined {
+    return this._state?.groupStack.length ? this._state.groupStack[this._state.groupStack.length - 1] : undefined;
+  }
+
+  group(progress: Progress, name: string, location: { file: string, line?: number, column?: number } | undefined) {
+    if (!this._state)
+      return;
+    const metadata = progress.metadata;
+    const stackFrames: StackFrame[] = [];
+    const { file, line, column } = location ?? metadata.location ?? {};
+    if (file) {
+      stackFrames.push({
+        file,
+        line: line ?? 0,
+        column: column ?? 0,
+      });
+    }
+    const event: trace.BeforeActionTraceEvent = {
+      type: 'before',
+      callId: metadata.id,
+      startTime: metadata.startTime,
+      title: name,
+      class: 'Tracing',
+      method: 'tracingGroup',
+      params: { },
+      stack: stackFrames,
+    };
+    if (this._currentGroupId())
+      event.parentId = this._currentGroupId();
+    this._state.groupStack.push(event.callId);
+    this._appendTraceEvent(event);
+  }
+
+  groupEnd(progress: Progress) {
+    this._groupEnd();
+  }
+
+  private _groupEnd() {
+    if (!this._state)
+      return;
+    const callId = this._state.groupStack.pop();
+    if (!callId)
+      return;
+    const event: trace.AfterActionTraceEvent = {
+      type: 'after',
+      callId,
+      endTime: monotonicTime(),
+    };
+    this._appendTraceEvent(event);
+  }
+
+  private _startScreencast() {
+    if (!(this._context instanceof BrowserContext))
+      return;
+    for (const page of this._context.pages())
+      this._startScreencastInPage(page);
+    this._screencastListeners.push(
+        eventsHelper.addEventListener(this._context, BrowserContext.Events.Page, this._startScreencastInPage.bind(this)),
+    );
+  }
+
+  private _stopScreencast() {
+    eventsHelper.removeEventListeners(this._screencastListeners);
+    for (const recorder of this._pageTracingRecorders.values())
+      recorder.dispose();
+    this._pageTracingRecorders.clear();
+  }
+
+  private _allocateNewTraceFile(state: RecordingState) {
+    const suffix = state.chunkOrdinal ? `-chunk${state.chunkOrdinal}` : ``;
+    state.chunkOrdinal++;
+    state.traceFile = path.join(state.tracesDir, `${state.traceName}${suffix}.trace`);
+  }
+
+  private _changeTraceName(state: RecordingState, name: string, preserveNetworkResources: boolean) {
+    state.traceName = name;
+    state.chunkOrdinal = 0;  // Reset ordinal for the new name.
+    this._allocateNewTraceFile(state);
+
+    const newNetworkFile = path.join(state.tracesDir, name + '.network');
+    if (preserveNetworkResources)
+      this._fs.copyFile(state.networkFile, newNetworkFile);
+    state.networkFile = newNetworkFile;
+  }
+
+  async stop(progress: Progress) {
+    // Discard the chunk if the client failed to stop it, so that tracing can be restarted.
+    await this.stopChunk(progress, { mode: 'discard' }).catch(() => {});
+    await progress.race(this._stop());
+  }
+
+  private async _stop() {
+    if (!this._state)
+      return;
+    if (this._isStopping)
+      throw new Error(`Tracing is already stopping`);
+    if (this._state.recording)
+      throw new Error(`Must stop trace file before stopping tracing`);
+    this._closeAllGroups();
+    this._harTracer.stop();
+    this.flushHarEntries();
+    const coverageRecorder = this._coverageRecorder;
+    this._coverageRecorder = undefined;
+    await coverageRecorder?.uninstall();
+    await this._fs.sync().finally(() => {
+      this._state = undefined;
+    });
+  }
+
+  async deleteTmpTracesDir() {
+    if (this._tracesTmpDir)
+      await removeFolders([this._tracesTmpDir]);
+  }
+
+  private _createTracesDirIfNeeded() {
+    if (this._precreatedTracesDir)
+      return this._precreatedTracesDir;
+    this._tracesTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playwright-tracing-'));
+    return this._tracesTmpDir;
+  }
+
+  abort() {
+    this._snapshotter?.dispose();
+    this._harTracer.stop();
+  }
+
+  async flush() {
+    this.abort();
+    for (const harRecorder of this.harRecorders.values())
+      await harRecorder.flush();
+    await this._fs.sync();
+  }
+
+  harStart(page: Page | null, options: RecordHarOptions): string {
+    const harId = createGuid();
+    const artifactsDir = this._context instanceof BrowserContext ? this._context._browser.options.artifactsDir : this._createTracesDirIfNeeded();
+    this.harRecorders.set(harId, new HarRecorder(this._context, artifactsDir, harId, page, options));
+    return harId;
+  }
+
+  async harExport(progress: Progress, harId: string | undefined, mode: 'archive' | 'entries'): Promise<{ artifact?: Artifact, entries?: NameValue[] }> {
+    const recorder = this.harRecorders.get(harId || '')!;
+    const result = await progress.race(recorder.export(mode));
+    this.harRecorders.delete(harId || '');
+    return result;
+  }
+
+  private _closeAllGroups() {
+    while (this._currentGroupId())
+      this._groupEnd();
+  }
+
+  // Collected before the chunk stops, while the pages can still be evaluated in.
+  private async _takeCoverage(progress: Progress, mode: TracingTracingStopChunkParams['mode']): Promise<string | undefined> {
+    const recorder = this._coverageRecorder;
+    if (!this._state?.recording || !recorder)
+      return;
+    const coverageJson = await recorder.take(progress, mode === 'discard' ? 'discard' : 'keep');
+    if (coverageJson === undefined)
+      return;
+    const coverageFile = path.join(this._state.tracesDir, `${this._state.traceName}-coverage-${this._state.chunkOrdinal}.json`);
+    this._fs.writeFile(coverageFile, coverageJson);
+    return coverageFile;
+  }
+
+  async stopChunk(progress: Progress, params: TracingTracingStopChunkParams): Promise<{ artifact?: Artifact, entries?: NameValue[] }> {
+    if (this._isStopping)
+      throw new Error(`Tracing is already stopping`);
+    this._isStopping = true;
+    try {
+      let coverageFile: string | undefined;
+      let coverageError: Error | undefined;
+      try {
+        coverageFile = await this._takeCoverage(progress, params.mode);
+      } catch (error) {
+        coverageError = error;
+      }
+      // The chunk is torn down either way, the coverage error is reported after.
+      const result = this._stopChunk(params, coverageFile);
+      if (coverageError)
+        throw coverageError;
+      if (!result)
+        return {};
+
+      // Make sure all file operations complete.
+      try {
+        await progress.race(this._fs.sync());
+      } catch (error) {
+        // This check is here because closing the browser removes the tracesDir and tracing
+        // cannot access removed files. Clients are ready for the missing artifact.
+        if (!isAbortError(error) && this._context.attribution.browser && !this._context.attribution.browser.isConnected())
+          return {};
+        throw error;
+      }
+
+      if (params.mode === 'entries')
+        return { entries: result.entries };
+
+      const artifact = new Artifact(this._context, result.zipFileName);
+      artifact.reportFinished();
+      return { artifact };
+    } finally {
+      // Always release the recording state, even when saving the chunk failed.
+      this._isStopping = false;
+      if (this._state)
+        this._state.recording = false;
+    }
+  }
+
+  private _stopChunk(params: TracingTracingStopChunkParams, coverageFile: string | undefined): { entries: NameValue[], zipFileName: string } | undefined {
+    if (!this._state || !this._state.recording) {
+      if (params.mode !== 'discard')
+        throw new Error(`Must start tracing before stopping`);
+      return undefined;
+    }
+
+    this._closeAllGroups();
+
+    this._context.instrumentation.removeListener(this);
+    eventsHelper.removeEventListeners(this._eventListeners);
+    if (this._state.options.screencast)
+      this._stopScreencast();
+    // We don't need websocket frames outside of the recording window. This also
+    // stops updating websocket content blobs, which we want to stay unchanged for zipping.
+    this._harTracer.setOmitWebSocketFrames(true);
+    if (this._state.options.snapshotDom)
+      this._snapshotter?.stop();
+
+    this.flushHarEntries();
+
+    // Network file survives across chunks, make a snapshot before returning the resulting entries.
+    // We should pick a name starting with "traceName" and ending with .network.
+    // Something like <traceName>someSuffixHere.network.
+    // However, this name must not clash with any other "traceName".network in the same tracesDir.
+    // We can use <traceName>-<guid>.network, but "-pwnetcopy-0" suffix is more readable
+    // and makes it easier to debug future issues.
+    const newNetworkFile = path.join(this._state.tracesDir, this._state.traceName + `-pwnetcopy-${this._state.chunkOrdinal}.network`);
+
+    const entries: NameValue[] = [];
+    entries.push({ name: 'trace.trace', value: this._state.traceFile });
+    entries.push({ name: 'trace.network', value: newNetworkFile });
+    if (coverageFile)
+      entries.push({ name: 'trace.coverage', value: coverageFile });
+    for (const file of new Set([...this._state.chunkFiles, ...this._state.crossChunkFiles]))
+      entries.push({ name: file, value: path.join(this._state.tracesDir, file) });
+
+    this._state.chunkFiles = new Set();
+
+    if (params.mode === 'discard')
+      return undefined;
+
+    this._fs.copyFile(this._state.networkFile, newNetworkFile);
+
+    const zipFileName = this._state.traceFile + '.zip';
+    if (params.mode === 'archive')
+      this._fs.zip(entries, zipFileName);
+
+    return { entries, zipFileName };
+  }
+
+  private async _captureSnapshot(progress: Progress, sdkObject: SdkObject, phase: trace.ActionPhase): Promise<void> {
+    const page = sdkObject.attribution.page;
+    if (!page)
+      return;
+    if (!this._shouldCaptureAtPhase(progress.metadata, phase))
+      return;
+
+    if (this._snapshotter?.started()) {
+      // Node references are only reset by the first snapshot of the action.
+      const resetTargets = phase === 'before';
+      try {
+        await progress.race(this._snapshotter.captureSnapshot(page, progress.metadata.id, phase, resetTargets));
+      } catch {
+      }
+    }
+
+    const options = this._state?.options;
+    if (options?.snapshotScreen)
+      await this._captureScreenshot(progress, page, phase);
+    if (options?.snapshotAria)
+      await this._captureAriaSnapshot(progress, page, phase);
+    if (phase === 'after')
+      await this._captureCoverage(progress, page);
+  }
+
+  private async _captureCoverage(progress: Progress, page: Page): Promise<void> {
+    const recorder = this._coverageRecorder;
+    if (!recorder)
+      return;
+    try {
+      await progress.race(recorder.collectFromPage(page));
+    } catch {
+    }
+  }
+
+  private _shouldCaptureAtPhase(metadata: CallMetadata, phase: trace.ActionPhase) {
+    const metainfo = getMetainfo(metadata);
+    if (!metainfo?.snapshot)
+      return false;
+
+    switch (phase) {
+      case 'before': return !metainfo.input || !!metainfo.isAutoWaiting;
+      case 'action': return !!metainfo.input;
+      case 'after': return true;
+    }
+  }
+
+  private async _captureScreenshot(progress: Progress, page: Page, phase: trace.ActionPhase): Promise<void> {
+    const buffer = await page.screenshot(progress, { type: 'png', scale: 'css' }).catch(() => undefined);
+    if (!buffer || !this._state?.recording)
+      return;
+    const file = `screenshots/${progress.metadata.id}-${phase}.png`;
+    this._state.chunkFiles.add(file);
+    this._appendResource(file, buffer);
+    this._appendTraceEvent({ type: 'screenshot', callId: progress.metadata.id, phase, pageId: page.guid, timestamp: monotonicTime(), file });
+  }
+
+  private async _captureAriaSnapshot(progress: Progress, page: Page, phase: trace.ActionPhase): Promise<void> {
+    const snapshot = await ariaSnapshotJSONForFrame(progress, page.mainFrame(), undefined, { mode: 'default', boxes: true }).catch(() => null);
+    if (!snapshot || !this._state?.recording)
+      return;
+    const buffer = Buffer.from(JSON.stringify(snapshot), 'utf8');
+    const file = `aria/${progress.metadata.id}-${phase}.json`;
+    this._state.chunkFiles.add(file);
+    this._appendResource(file, buffer);
+    this._appendTraceEvent({ type: 'aria-snapshot', callId: progress.metadata.id, phase, pageId: page.guid, timestamp: monotonicTime(), file });
+  }
+
+  onBeforeCall(progress: Progress, sdkObject: SdkObject, parentId?: string) {
+    // IMPORTANT: no awaits in this method, this._appendTraceEvent must be called synchronously.
+    const { metadata } = progress;
+    const event = createBeforeActionTraceEvent(metadata, parentId ?? this._currentGroupId());
+    if (!event)
+      return Promise.resolve();
+    this._temporarilyDisableThrottling(sdkObject.attribution.page);
+    this._state?.callsInProgress.add(metadata.id);
+    this._appendTraceEvent(event);
+    return this._captureSnapshot(progress, sdkObject, 'before');
+  }
+
+  onBeforeInputAction(progress: Progress, sdkObject: SdkObject, point?: types.Point, box?: types.Rect) {
+    const { metadata } = progress;
+    // IMPORTANT: no awaits in this method, this._appendTraceEvent must be called synchronously.
+    if (!this._state?.callsInProgress.has(metadata.id))
+      return Promise.resolve();
+    const event = createInputActionTraceEvent(metadata, point, box);
+    if (!event)
+      return Promise.resolve();
+    this._temporarilyDisableThrottling(sdkObject.attribution.page);
+    this._appendTraceEvent(event);
+    return this._captureSnapshot(progress, sdkObject, 'action');
+  }
+
+  onCallLog(sdkObject: SdkObject, metadata: CallMetadata, logName: string, message: string) {
+    if (!this._state?.callsInProgress.has(metadata.id))
+      return;
+    if (metadata.internal)
+      return;
+    if (logName !== 'api')
+      return;
+    const event = createActionLogTraceEvent(metadata, message);
+    if (event)
+      this._appendTraceEvent(event);
+  }
+
+  onAfterCall(progress: Progress, sdkObject: SdkObject) {
+    // IMPORTANT: no awaits in this method, this._appendTraceEvent must be called synchronously.
+    const { metadata } = progress;
+    if (!this._state?.callsInProgress.has(metadata.id))
+      return Promise.resolve();
+    this._state?.callsInProgress.delete(metadata.id);
+    const event = createAfterActionTraceEvent(metadata);
+    if (!event)
+      return Promise.resolve();
+    this._temporarilyDisableThrottling(sdkObject.attribution.page);
+    this._appendTraceEvent(event);
+    return this._captureSnapshot(progress, sdkObject, 'after');
+  }
+
+  async onPageWillClose(page: Page) {
+    await this._coverageRecorder?.collectFromPage(page).catch(() => {});
+  }
+
+  onEntryStarted(entry: har.Entry) {
+    this._pendingHarEntries.add(entry);
+  }
+
+  onEntryFinished(entry: har.Entry) {
+    this._pendingHarEntries.delete(entry);
+    const event: trace.ResourceSnapshotTraceEvent = { type: 'resource-snapshot', snapshot: entry };
+    const visited = visitTraceEvent(event);
+    this._fs.appendFile(this._state!.networkFile, JSON.stringify(visited) + '\n', true /* flush */);
+  }
+
+  flushHarEntries() {
+    const harLines: string[] = [];
+    for (const entry of this._pendingHarEntries) {
+      const event: trace.ResourceSnapshotTraceEvent = { type: 'resource-snapshot', snapshot: entry };
+      const visited = visitTraceEvent(event);
+      harLines.push(JSON.stringify(visited));
+    }
+    this._pendingHarEntries.clear();
+    if (harLines.length)
+      this._fs.appendFile(this._state!.networkFile, harLines.join('\n') + '\n', true /* flush */);
+  }
+
+  onContentBlob(shortName: string, buffer: Buffer) {
+    const file = `resources/${shortName}`;
+    this._state!.crossChunkFiles.add(file);
+    this._appendResource(file, buffer);
+    return file;
+  }
+
+  onContentBlobAppend(shortName: string, text: string) {
+    const file = `resources/${shortName}`;
+    this._state!.crossChunkFiles.add(file);
+    if (!this._allResources.has(file))
+      this._allResources.add(file);
+    this._fs.appendFile(path.join(this._state!.tracesDir, file), text, this._state!.options.live /* flush */);
+    return file;
+  }
+
+  onSnapshotterBlob(blob: SnapshotterBlob): string {
+    const file = `resources/${blob.sha1}`;
+    this._state!.chunkFiles.add(file);
+    this._appendResource(file, blob.buffer);
+    return file;
+  }
+
+  onFrameSnapshot(snapshot: trace.FrameSnapshot): void {
+    this._appendTraceEvent({ type: 'frame-snapshot', snapshot });
+  }
+
+  private _onConsoleMessage(message: ConsoleMessage) {
+    const event: trace.ConsoleMessageTraceEvent = {
+      type: 'console',
+      messageType: message.type(),
+      text: message.text(),
+      args: message.args().map(a => ({ preview: a.toString(), value: a.rawValue() })),
+      location: message.location(),
+      time: monotonicTime(),
+      pageId: message.page()?.guid,
+    };
+    this._appendTraceEvent(event);
+  }
+
+  onDialog(dialog: Dialog) {
+    const event: trace.EventTraceEvent = {
+      type: 'event',
+      time: monotonicTime(),
+      class: 'BrowserContext',
+      method: 'dialog',
+      params: { pageId: dialog.page().guid, type: dialog.type(), message: dialog.message(), defaultValue: dialog.defaultValue() },
+    };
+    this._appendTraceEvent(event);
+  }
+
+  onDownload(page: Page, download: Download) {
+    const event: trace.EventTraceEvent = {
+      type: 'event',
+      time: monotonicTime(),
+      class: 'BrowserContext',
+      method: 'download',
+      params: { pageId: page.guid, url: download.url, suggestedFilename: download.suggestedFilename() },
+    };
+    this._appendTraceEvent(event);
+  }
+
+  onPageOpen(page: Page) {
+    const event: trace.EventTraceEvent = {
+      type: 'event',
+      time: monotonicTime(),
+      class: 'BrowserContext',
+      method: 'page',
+      params: { pageId: page.guid, openerPageId: page.opener()?.guid },
+    };
+    this._appendTraceEvent(event);
+  }
+
+  onPageDidClose(page: Page) {
+    const event: trace.EventTraceEvent = {
+      type: 'event',
+      time: monotonicTime(),
+      class: 'BrowserContext',
+      method: 'pageClosed',
+      params: { pageId: page.guid },
+    };
+    this._appendTraceEvent(event);
+    this._pageTracingRecorders.get(page)?.dispose();
+    this._pageTracingRecorders.delete(page);
+  }
+
+  dispose(params: TracingTracingStopChunkParams) {
+    // Avoid protocol calls for the closed context.
+    if (this._started)
+      this.stopChunk(nullProgress, params).then(() => this._stop()).catch(() => {});
+    this._started = false;
+  }
+
+  private _onPageError(pageError: PageError, page: Page) {
+    const event: trace.EventTraceEvent = {
+      type: 'event',
+      time: monotonicTime(),
+      class: 'BrowserContext',
+      method: 'pageError',
+      params: {
+        error: serializeError(pageError.error),
+        location: {
+          url: pageError.location.url,
+          line: pageError.location.lineNumber,
+          column: pageError.location.columnNumber,
+        },
+      },
+      pageId: page.guid,
+    };
+    this._appendTraceEvent(event);
+  }
+
+  private _temporarilyDisableThrottling(page: Page | undefined) {
+    if (page)
+      this._pageTracingRecorders.get(page)?.temporarilyDisableThrottling();
+  }
+
+  private _startScreencastInPage(page: Page) {
+    const prefix = page.guid;
+    const onFrame = (params: types.ScreencastFrame) => {
+      const suffix = Date.now();
+      const file = `screencast/${prefix}-${suffix}.jpeg`;
+      const event: trace.ScreencastFrameTraceEvent = {
+        type: 'screencast-frame',
+        pageId: page.guid,
+        file,
+        width: params.viewportWidth,
+        height: params.viewportHeight,
+        timestamp: monotonicTime(),
+        frameSwapWallTime: params.frameSwapWallTime,
+      };
+      // Make sure to write the screencast frame before adding a reference to it.
+      this._state!.chunkFiles.add(file);
+      this._appendResource(file, params.buffer);
+      this._appendTraceEvent(event);
+    };
+    this._pageTracingRecorders.set(page, new ScreencastTracingRecorder(page.screencast, onFrame));
+  }
+
+  private _appendTraceEvent(event: trace.TraceEvent) {
+    const visited = visitTraceEvent(event);
+    // Do not flush (console) events, they are too noisy, unless we are in ui mode (live).
+    const flush = this._state!.options.live || (event.type !== 'event' && event.type !== 'console' && event.type !== 'log');
+    this._fs.appendFile(this._state!.traceFile, JSON.stringify(visited) + '\n', flush);
+  }
+
+  private _appendResource(file: string, buffer: Buffer) {
+    if (this._allResources.has(file))
+      return;
+    this._allResources.add(file);
+    const resourcePath = path.join(this._state!.tracesDir, file);
+    this._fs.writeFile(resourcePath, buffer, true /* skipIfExists */);
+  }
+}
+
+function visitTraceEvent(object: any): any {
+  if (Array.isArray(object))
+    return object.map(o => visitTraceEvent(o));
+  if (object instanceof Dispatcher)
+    return `<${(object as Dispatcher<any, any, any>)._type}>`;
+  if (object instanceof Buffer)
+    return `<Buffer>`;
+  if (object instanceof Date)
+    return object;
+  if (typeof object === 'object') {
+    const result: any = {};
+    for (const key in object)
+      result[key] = visitTraceEvent(object[key]);
+    return result;
+  }
+  return object;
+}
+
+function createBeforeActionTraceEvent(metadata: CallMetadata, parentId?: string): trace.BeforeActionTraceEvent | null {
+  if (metadata.internal || metadata.method.startsWith('tracing'))
+    return null;
+  const event: trace.BeforeActionTraceEvent = {
+    type: 'before',
+    callId: metadata.id,
+    startTime: metadata.startTime,
+    title: metadata.title,
+    class: metadata.type,
+    method: metadata.method,
+    params: metadata.timeout ? { ...metadata.params, timeout: metadata.timeout } : metadata.params,
+  };
+  if (parentId)
+    event.parentId = parentId;
+  return event;
+}
+
+function createInputActionTraceEvent(metadata: CallMetadata, point: types.Point | undefined, box: types.Rect | undefined): trace.InputActionTraceEvent | null {
+  if (metadata.internal || metadata.method.startsWith('tracing'))
+    return null;
+  return {
+    type: 'input',
+    callId: metadata.id,
+    point,
+    box,
+  };
+}
+
+function createActionLogTraceEvent(metadata: CallMetadata, message: string): trace.LogTraceEvent | null {
+  if (metadata.internal || metadata.method.startsWith('tracing'))
+    return null;
+  return {
+    type: 'log',
+    callId: metadata.id,
+    time: monotonicTime(),
+    message,
+  };
+}
+
+function createAfterActionTraceEvent(metadata: CallMetadata): trace.AfterActionTraceEvent | null {
+  if (metadata.internal || metadata.method.startsWith('tracing'))
+    return null;
+  return {
+    type: 'after',
+    callId: metadata.id,
+    endTime: metadata.endTime,
+    error: metadata.error?.error,
+    result: metadata.result,
+  };
+}
+
+const throttledRate = 200;
+const unthrottleDuration = 500;
+
+class ScreencastTracingRecorder {
+  private _screencast: Screencast;
+  private _client: ScreencastClient;
+  private _unthrottledUntil = 0;
+  private _pendingAck: ManualPromise<void> | undefined;
+  private _timer: NodeJS.Timeout | undefined;
+
+  constructor(screencast: Screencast, onFrame: (frame: types.ScreencastFrame) => void) {
+    this._screencast = screencast;
+    this._client = {
+      onFrame: (frame: types.ScreencastFrame) => {
+        const time = monotonicTime();
+
+        if (time < this._unthrottledUntil) {
+          onFrame(frame);
+          return;
+        }
+
+        // We are throttling, but frames are coming => there is another client.
+        if (this._pendingAck)
+          return;
+
+        onFrame(frame);
+        this._pendingAck = new ManualPromise<void>();
+        this._timer = setTimeout(() => this._clearPendingAck(), throttledRate);
+        return this._pendingAck;
+      },
+      gracefulClose: () => this.dispose(),
+      dispose: () => this.dispose(),
+    };
+    this._screencast.addClient(this._client);
+  }
+
+  dispose() {
+    this._screencast.removeClient(this._client);
+    this._clearPendingAck();
+  }
+
+  temporarilyDisableThrottling() {
+    this._unthrottledUntil = monotonicTime() + unthrottleDuration;
+    this._clearPendingAck();
+  }
+
+  private _clearPendingAck() {
+    this._pendingAck?.resolve();
+    this._pendingAck = undefined;
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = undefined;
+    }
+  }
+}

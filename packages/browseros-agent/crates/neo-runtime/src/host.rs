@@ -1,4 +1,4 @@
-//! The host side of a `Runtime`: what a server needs to serve its hosts (the partner backend
+//! Neo: The host side of a `Runtime`: what a server needs to serve its hosts (the partner backend
 //! reading `/v1`, later the cockpit). Opt-in through `RuntimeOptions`; a runtime built without
 //! it opens nothing extra and runs scripts exactly as before.
 //!
@@ -54,8 +54,7 @@ pub(crate) use events::HostEvent;
 pub use ids::{EpochMs, SessionKey, TabId};
 pub use store::{CallArtifacts, HostStore, MemoryStore, StoreError};
 
-/// How long a session stays live after its last run unless the server says otherwise:
-/// claw-server's `DEFAULT_SESSION_IDLE_MS` (`apps/claw-server/src/config.rs:19`, origin/main).
+/// Neo: a 30-minute idle window lets a partner resume a task between runs without retaining abandoned live sessions indefinitely (claw-server's `DEFAULT_SESSION_IDLE_MS`, `apps/claw-server/src/config.rs`).
 const DEFAULT_IDLE: Duration = Duration::from_mins(30);
 
 /// What a server sets to give its `Runtime` a host side (`RuntimeOptions::host`).

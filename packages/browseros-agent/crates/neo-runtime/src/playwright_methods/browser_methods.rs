@@ -425,9 +425,9 @@ async fn new_page(
             guid: quickjs_bridge::page_guid(&entry.id),
         },
     })?;
-    // Neo: this creation commits here, after readiness and encoding, like `NewPage::keep`
-    // for the run's own context. Target.createTarget has no BrowserOS tab id in its reply;
-    // the host directory supplies it when discovery catches up, without adding a script await.
+    // Neo: report the created-context page after readiness and encoding, like `NewPage::keep`, so the host never observes a rolled-back creation.
+    // Platform: `Target.createTarget` returns only `targetId`, with no BrowserOS tab id (`browseros-cdp/protocol/protocol.json`).
+    // The host directory supplies the tab id when discovery catches up, without adding a script await.
     progress.page_created(&entry.id, None);
     Ok(result)
 }

@@ -167,6 +167,7 @@ pub(crate) struct RunScope {
     pub(crate) bindings: Arc<Bindings>,
     /// The run's fake clock (`clock.rs`); uninstalled in every frame at run end.
     pub(crate) clock: Arc<Clock>,
+    /// Neo: one per-run emitter supplies host correlation and privacy without coupling progress to the host actor.
     /// Who the run is for the host side; the run's trace reports its calls through it. A no-op
     /// for a run no host tracks.
     pub(crate) emitter: RunEmitter,
@@ -417,8 +418,7 @@ impl Progress {
         self.entry.delivery.as_ref()
     }
 
-    /// Commits a `newPage` to this call on the run's emitter. Its open-call state is independent
-    /// of the record caps, so even a call whose record was dropped carries its created page.
+    /// Neo: a successful creation reports its page at commit, independent of trace-record retention, so the host can attribute even a dropped call record.
     pub(crate) fn page_created(&self, page: &PageId, tab: Option<TabId>) {
         self.run.emitter.page_created(self.entry.call_id, page, tab);
     }
@@ -646,8 +646,8 @@ pub(crate) struct CallStart {
     /// The tab the dispatcher resolved the call's guid to; `None` for a context call or an
     /// unknown guid. The host side's events name it, so no consumer parses guids.
     pub(crate) page: Option<PageId>,
-    /// Whether Playwright's spec flags the method `snapshot`, its own rule for when a trace
-    /// captures the page: the host side takes a screenshot after such a call.
+    /// Playwright: `server/trace/recorder/tracing.ts` `Tracing._shouldCaptureAtPhase`: `if (!metainfo?.snapshot)`
+    /// Neo: the host requests an after-call JPEG for methods carrying the generated snapshot flag.
     pub(crate) snapshot: bool,
 }
 
@@ -851,7 +851,7 @@ struct TraceInner {
 }
 
 impl Trace {
-    /// The trace of a run whose calls `emitter` reports to the host side.
+    /// Neo: keep host emission independent of record caps, so dropping a trace row never loses the call's lifecycle.
     pub(crate) fn new(emitter: RunEmitter) -> Self {
         Self {
             records: Arc::default(),
@@ -862,6 +862,7 @@ impl Trace {
     /// Registers a call that just arrived: kept, its params charged, while the caps allow;
     /// otherwise counted. Either way the host side learns it started.
     pub(crate) fn push(&self, entry: Arc<CallEntry>) {
+        // Neo: emit before record admission so a full trace cannot hide a call from the host's touch and privacy accounting.
         self.emitter.call_started(
             entry.call_id,
             entry.page.as_ref(),
@@ -888,6 +889,7 @@ impl Trace {
         let Ok(mut trace) = self.records.lock() else {
             return;
         };
+        // Neo: serialize host completion with `take` so a call ending during run teardown reports the same result once.
         // Under the records' lock, which `take` holds while it reads the records and ends the
         // calls still open. So a call that ends as the run ends reads the same both ways: either
         // this ends it first, or `take` ends it with whatever its record says.
@@ -922,6 +924,7 @@ impl Trace {
             .drain(..)
             .map(|(entry, _)| entry.record(reason))
             .collect();
+        // Neo: settle every remaining host call from the final records before reporting the run ended.
         self.emitter.unfinished(reason, &records);
         for record in &records {
             info!(

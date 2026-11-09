@@ -32,12 +32,14 @@ impl PageId {
     }
 }
 
+/// Neo: a fresh ULID correlates a run, its host events and persisted root row without sharing counters across concurrent runs.
 /// One run, minted when `Runtime::run` starts: a ULID, so ids sort by start time. Hosts see it
 /// as the root tool call's id on `/v1` and in the run tool's result `_meta`, and every browser
 /// call the run makes names it as its parent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RunId(Arc<str>);
 
+/// Neo: mint and expose the host correlation id without coupling it to a tab or session.
 impl RunId {
     pub(crate) fn mint() -> Self {
         Self(ulid::Ulid::new().to_string().into())
@@ -49,12 +51,14 @@ impl RunId {
     }
 }
 
+/// Neo: host keys display as their opaque ULID text.
 impl fmt::Display for RunId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
+/// Neo: persist and return the same textual id that the host event stream carries.
 impl Serialize for RunId {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.0)
@@ -82,6 +86,7 @@ pub struct RunRequest {
     /// option; the bytes a script asked for are still returned. Files written are listed in
     /// [`RunOutcome::artifacts`].
     pub artifacts: Option<PathBuf>,
+    /// Neo: the host session key links this run's events to the admission pass; runs without a host need no session.
     /// The host session the run belongs to: the key its `RunPass` names. The runtime copies it
     /// onto the run's host events and reads nothing else from it. `None` for a run no host
     /// tracks; ignored by a runtime without a host side.
@@ -98,6 +103,7 @@ pub enum RunStatus {
     Cancelled,
 }
 
+/// Neo: the outcome and host emitter share one mapping from run status to unfinished-call reason.
 impl RunStatus {
     /// Why a run that ended this way ended its calls still running. The realm reports `Timeout`
     /// or `Cancelled` whenever the deadline or cancellation fired, even when the script caught

@@ -1,4 +1,4 @@
-//! Live capture on a real BrowserOS neo. A background tab, behind another, streams screencast
+//! Neo: Live capture on a real BrowserOS neo. A background tab, behind another, streams screencast
 //! frames once its presence turns focus emulation on (the neo-host-events design's probes 1
 //! and 2, kept as a regression test), and `Page.startScreenRecording` produces an AV1
 //! fragmented MP4 with a fragment within 5 s (probe 5). Runs only when `NEO_E2E_BROWSER` names
@@ -32,6 +32,7 @@ const WAIT_10_S: Duration = Duration::from_secs(10);
 /// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
 const WAIT_5_S: Duration = Duration::from_secs(5);
 
+/// Neo: a compositor animation supplies a changing test page so capture tests can distinguish a painting background tab from a stalled one.
 /// A page that never stops changing, so a tab that paints keeps sending frames: a compositor
 /// animation runs at the display rate while the tab paints, and not at all while it does not.
 const ANIMATED: &str = "<title>animated</title><style>@keyframes slide { from { transform: \

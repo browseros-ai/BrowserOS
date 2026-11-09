@@ -1,4 +1,4 @@
-//! The host's single writer: tap → ledger, socket discovery → directory, jobs → persistence
+//! Neo: The host's single writer: tap → ledger, socket discovery → directory, jobs → persistence
 //! fences. Public snapshots are mirrored under a short lock that the run path never takes.
 //! End/privacy revocations also update that mirror synchronously; the writer imports them
 //! before publishing, so a queued event cannot briefly resurrect a revoked view. A damaged
@@ -29,11 +29,11 @@ use crate::host::view::FollowView;
 use crate::host::{EpochMs, Host, HostError, HostOptions, SessionKey, SessionView, TabRef};
 use crate::run::PageId;
 
-/// Neo policy (§6.9): complete, unwatched entries leave RAM an hour after settlement.
+/// Neo: complete, unwatched entries leave RAM an hour after settlement, bounding the host ledger without evicting active readers (design §6.9).
 const RETAIN_SETTLED: Duration = Duration::from_hours(1);
 /// Neo: recheck settled sessions retained by watchers once a minute after retention expires, so the host writer does not spin.
 const SETTLED_SWEEP_INTERVAL: Duration = Duration::from_mins(1);
-/// Neo policy (§6.5): refusal finalizes the row's absence before completion can be flushed.
+/// Neo: bound derived-job ingress to 1024 rows; refusal finalizes a row's absence before completion can be flushed (design §6.5).
 pub(super) const JOB_INGRESS: usize = 1024;
 
 type Durability = watch::Sender<Option<Result<(), HostError>>>;

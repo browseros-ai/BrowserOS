@@ -1,4 +1,4 @@
-//! What the run path tells the host side, in the order it learns it. The run path produces these
+//! Neo: What the run path tells the host side, in the order it learns it. The run path produces these
 //! at the one door every run and browser call already passes (`progress.rs` `Trace`,
 //! `runtime.rs` `Runtime::run`, `tabs.rs` `NewPage::keep`). The host side consumes them in one
 //! FIFO, the tap, so the order below is the order the ledger sees.
@@ -30,7 +30,8 @@ pub(crate) enum HostEvent {
         call_id: u64,
         /// The page the dispatcher resolved the call's guid to; `None` for context calls.
         page: Option<PageId>,
-        /// Playwright's spec flags the method `snapshot`: the host takes a screenshot after it.
+        /// Playwright: `server/trace/recorder/tracing.ts` `Tracing._shouldCaptureAtPhase`: `if (!metainfo?.snapshot)`
+        /// Neo: the host uses the generated snapshot flag to request an after-call JPEG.
         snapshot: bool,
         at: EpochMs,
     },
@@ -46,7 +47,7 @@ pub(crate) enum HostEvent {
         session: SessionKey,
         run: RunId,
         page: PageId,
-        /// From the create reply, so the target ↔ tab mapping exists before discovery sees it.
+        /// Platform: BrowserOS's create-tab reply includes `Browser.TabInfo.tabId` (`browseros-cdp/protocol/protocol.json`), allowing attribution before discovery reports the target.
         tab: Option<TabId>,
         /// The `newPage` call that created it.
         call_id: Option<u64>,

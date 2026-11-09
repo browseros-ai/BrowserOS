@@ -1,8 +1,8 @@
+//! Neo: claw-server's `CaptureHub` (`apps/claw-server/src/services/capture/mod.rs`), retaining shared captures so viewers of one tab do not duplicate browser work.
+//!
 //! Live views of the tabs a session works in: an MJPEG screencast that follows the session's
-//! current tab, and a fragmented AV1 video that stays on one tab. Ported from claw-server's
-//! `CaptureHub` (`apps/claw-server/src/services/capture/mod.rs:1-492`, origin/main) with its
-//! tested rules: a capture per (tab, kind, quality) runs only while watched, is shared by every
-//! viewer of that key, is ack-paced, and stops `STOP_GRACE` after its last viewer leaves, or at
+//! current tab, and a fragmented AV1 video that stays on one tab. A capture per (tab, kind,
+//! quality) runs only while watched, is shared by every viewer of that key, is ack-paced, and stops `STOP_GRACE` after its last viewer leaves, or at
 //! once when the session ends (`capture/lease.rs`).
 //!
 //! ```text

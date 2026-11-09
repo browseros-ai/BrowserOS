@@ -1,4 +1,4 @@
-//! The run path's one handle on the host side. `Runtime::run` makes a [`RunEmitter`] for each
+//! Neo: The run path's one handle on the host side. `Runtime::run` makes a [`RunEmitter`] for each
 //! run, and every host event the run causes enters the tap through it.
 //!
 //! ```text

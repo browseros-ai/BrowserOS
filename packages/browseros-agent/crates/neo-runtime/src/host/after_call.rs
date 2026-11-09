@@ -1,4 +1,4 @@
-//! After-call work, off the run path. One scheduler coalesces facts by target and keeps one
+//! Neo: After-call work, off the run path. One scheduler coalesces facts by target and keeps one
 //! pending still per session. Work's drop marker settles every exit path, including refusal
 //! and shutdown; artifact writes carry that marker back through the host writer first.
 
@@ -22,12 +22,14 @@ use crate::host::store::CallArtifacts;
 use crate::host::task::{Artifacts, Jobs, Work};
 use crate::run::{PageId, RunId};
 
-/// Neo backpressure policy (§6.5), measured in rows rather than Facts/Still job pairs.
+/// Neo: at most 256 waiting rows per target bounds a burst's memory without blocking the run path (design §6.5).
 const WAITING_PER_TARGET: usize = 256;
+/// Neo: at most 1024 waiting targets bounds scheduler memory when many tabs finish calls at once.
 const WAITING_TARGETS: usize = 1024;
+/// Neo: eight concurrent facts reads keep browser work bounded while unrelated targets can progress.
 const FACTS_IN_FLIGHT: usize = 8;
 
-// Process-wide, including other runtimes and screenshot commands whose caller timed out.
+/// Neo: share screenshot slots process-wide, including other runtimes and commands whose caller timed out, so timed-out work cannot exceed the browser concurrency bound.
 static STILL_SLOTS: Semaphore = Semaphore::const_new(cdp::SCREENSHOT_SLOTS);
 
 type Row = (RunId, Option<u64>);
@@ -209,7 +211,8 @@ async fn screenshot(
     let taint = Arc::clone(&work.taint);
     // The browser may finish a command after its caller timed out. This detached operation
     // retains the process-wide slot until that reply, preventing timeout storms from exceeding
-    // two actual screenshot commands (claw-server visual.rs:305-322, origin/main).
+    // two actual screenshot commands.
+    // Neo: claw-server's `SessionVisualService::capture_with_session` (`apps/claw-server/src/services/cockpit/visual.rs`) retains the worker's slot beyond its caller's timeout; otherwise timeout storms bypass the concurrency cap.
     let mut changes = work.taint.changes();
     let mut operation = tokio::spawn(async move {
         let _permit = permit;

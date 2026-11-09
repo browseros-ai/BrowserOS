@@ -176,8 +176,7 @@ pub(crate) struct NewPage {
 impl NewPage {
     pub(crate) fn keep(self, progress: &Progress) {
         self.accepted.store(true, Ordering::Release);
-        // Registration precedes readiness and can still roll back. Only this commit reports the
-        // page to the host, before the creating call can finish on the same emitter.
+        // Neo: report the page only after readiness commits the registration, before the creating call can finish on the same emitter; a failed registration can still roll back.
         progress.page_created(&self.entry.id, self.tab);
     }
 }
@@ -1418,6 +1417,7 @@ impl Scope {
     }
 }
 
+/// Platform: BrowserOS replies carry a session-scoped tab id when a target belongs to a tab (`browseros-cdp/protocol/protocol.json`, `Browser.TabInfo.tabId` and `Target.TargetInfo.tabId`).
 /// Older replies may omit the id; non-tab targets report zero or negative ids. Validate at
 /// the CDP boundary so every later host event carries either a real BrowserOS tab id or none.
 fn deserialize_tab_id<'de, D: Deserializer<'de>>(

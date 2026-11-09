@@ -1,10 +1,10 @@
-//! A tab's presence: the one host-owned CDP session on a touched tab that turns focus emulation
+//! Neo: A tab's presence: the one host-owned CDP session on a touched tab that turns focus emulation
 //! on, so a background tab keeps painting for its captures and screenshots between runs. Runs
 //! cannot provide it: each run's session detaches when the run ends (`runtime.rs`). It plays the
 //! role browseros-core's long-lived per-tab attach played for claw-server's capture.
 //!
-//! Measured on BrowserOS neo 155, headless and headed (the neo-host-events design's probes 1, 2
-//! and P-A):
+//! Platform: focus emulation keeps background painting per attached session, but `document.hasFocus()` is a page-shared flag cleared by an emulating session detaching or disabling it (`designs/neo-host-events/grounding/probes.md`, BrowserOS neo 155 probes 1, 2 and P-A).
+//! Measured headless and headed:
 //! - a background tab paints only while some attached session has focus emulation on, counted
 //!   per session: one session's detach or `enabled: false` does not stop another's painting;
 //! - `document.hasFocus()` is one shared flag: any emulating session's detach, or any
@@ -13,9 +13,8 @@
 //!   without changing focus or visibility.
 //!
 //! So exactly one host session per tab enables emulation, the presence, and never sends
-//! `enabled: false` (Playwright sends the same `true` on every page,
-//! `packages/playwright-core/src/server/chromium/crPage.ts:552` at 26137face). A capture ensures
-//! the presence before it starts, and capture sessions enable nothing. A presence detaches only
+//! `enabled: false`. A capture ensures the presence before it starts, and capture sessions enable
+//! nothing. A presence detaches only
 //! when the caller's predicate says no live session touched the tab and no run is in flight on
 //! it ([`Presences::prune`]), or when the tab is gone: its detach clears page focus, so it must
 //! never happen under a running script. A presence also outlives the captures of its tab, which
@@ -115,8 +114,8 @@ impl Presence {
 async fn attach(link: &HostLink, target: &PageId) -> Result<Arc<Presence>, LinkError> {
     let session = link.attach(target).await?;
     if let Err(error) = cdp::emulate_focus(&session).await {
-        // The session never turned emulation on, so detaching it changes nothing on the page
-        // (probe P-A2); the next ensure tries again. A foreground tab paints anyway.
+        // The session never turned emulation on, so detaching it changes nothing on the page.
+        // The next ensure tries again. A foreground tab paints anyway.
         link.release(&session).await;
         return Err(error.into());
     }

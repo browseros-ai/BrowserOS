@@ -1,6 +1,6 @@
-//! Splits Chromium's fragmented MP4 recording into the pieces a live viewer needs. Copied
-//! verbatim from claw-server (`apps/claw-server/src/services/capture/mp4.rs:1-187`, origin/main),
-//! tests included.
+//! Neo: claw-server's `Mp4Splitter` and `next_box` (`apps/claw-server/src/services/capture/mp4.rs`), preserving initialization and keyframe-led fragment boundaries so late viewers can start playback.
+//!
+//! Splits Chromium's fragmented MP4 recording into the pieces a live viewer needs.
 //!
 //! `Page.startScreenRecording` writes one growing MP4 file to a CDP IO stream: an
 //! initialization segment (`ftyp` + `moov`), then a `moof` + `mdat` fragment for every

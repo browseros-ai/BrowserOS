@@ -1,7 +1,7 @@
-//! The quality presets behind a live view's `?quality=`, copied verbatim from claw-server
-//! (`apps/claw-server/src/services/capture/presets.rs:1-58`, origin/main). Every capture reads
-//! its numbers from this table. The hosted contract publishes them (`openapi.yaml`'s `Quality`
-//! description), so changing a value here is a contract text change too.
+//! Neo: claw-server's `Quality`, `Preset` and `preset` (`apps/claw-server/src/services/capture/presets.rs`), keeping the partner's published low/high capture profiles.
+//!
+//! Every capture reads its numbers from this table. The hosted contract publishes them
+//! (`openapi.yaml`'s `Quality` description), so changing a value here is a contract text change too.
 //!
 //! The frame rates are ceilings. Chromium sends a screencast frame only when the page changes,
 //! and the screencast's rate is enforced by when the capture acknowledges frames, which keeps
@@ -40,6 +40,7 @@ pub(crate) struct Preset {
     pub(crate) jpeg_quality: u32,
 }
 
+/// Deviation: `server/screencast.ts` `Screencast._startScreencast`: `quality: quality ?? 90,` Neo keeps claw-server's published low/high dimensions, frame rates and JPEG qualities to bound host bandwidth and browser work.
 pub(crate) const fn preset(quality: Quality) -> Preset {
     match quality {
         Quality::Low => Preset {

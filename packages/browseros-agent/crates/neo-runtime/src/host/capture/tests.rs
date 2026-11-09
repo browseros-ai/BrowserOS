@@ -1,7 +1,7 @@
-//! `CaptureHub` through its interface: the loopback browser in `tests/support/fake_host_cdp.rs`
+//! Neo: `CaptureHub` through its interface: the loopback browser in `tests/support/fake_host_cdp.rs`
 //! stands in for Chromium, and the test publishes the session's `FollowView` as the ledger
-//! would. claw-server's capture suite (`apps/claw-server/src/services/capture/tests.rs:62-594`,
-//! origin/main) is ported as acceptance criteria, followed by the rules Neo adds.
+//! would.
+//! Neo: claw-server's capture tests (`apps/claw-server/src/services/capture/tests.rs`) supply the sharing, follow and cleanup acceptance criteria; this suite also checks Neo's privacy and timestamp rules.
 
 use std::collections::HashSet;
 use std::sync::Arc;

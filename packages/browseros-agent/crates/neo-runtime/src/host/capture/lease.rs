@@ -1,7 +1,7 @@
-//! One running capture of one tab, shared by every viewer of that (tab, kind, quality), and the
-//! worker that drives it. Copied from claw-server
-//! (`apps/claw-server/src/services/capture/tab_capture.rs:1-455`, origin/main) with its rules
-//! unchanged, over the host link (`link.rs`) and `cdp.rs`.
+//! Neo: claw-server's `Capture` and `Lease` (`apps/claw-server/src/services/capture/tab_capture.rs`), sharing one worker per (tab, kind, quality) and keeping it alive across brief viewer reconnects.
+//!
+//! One running capture of one tab and the worker that drives it, over the host link (`link.rs`)
+//! and `cdp.rs`.
 //!
 //! The first viewer creates the capture and starts its worker; viewers hold a [`Lease`]. When
 //! the last lease drops, the capture lingers for `STOP_GRACE` so a reconnecting viewer or a
@@ -37,8 +37,8 @@ pub(super) enum Kind {
     Video,
 }
 
-/// Chromium refuses a screencast and a screen recording in one session, so the kind is part of
-/// the key and each capture attaches its own session.
+/// Platform: BrowserOS refuses concurrent screencast and screen recording on one CDP session (`designs/neo-host-events/grounding/probes.md`, probe 4).
+/// The kind is part of the key and each capture attaches its own session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) struct CaptureKey {
     pub(super) target: PageId,
@@ -365,6 +365,7 @@ async fn screencast(
         if let Some(frame) = raw_frame(frame, drops) {
             capture.frames.send_replace(Some(Arc::new(frame)));
         }
+        // Deviation: `server/chromium/crPage.ts` `FrameSession._onScreencastFrame`: `this._client._sendMayFail('Page.screencastFrameAck', { sessionId: payload.sessionId });` Neo delays the ack to claw-server's preset rate so capture work is bounded even when every viewer reads immediately.
         // The ack is the frame-rate limit: Chromium sends the next frame only after it.
         if let Some(last) = last_ack {
             tokio::select! {

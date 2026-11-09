@@ -1,4 +1,4 @@
-//! What a live view may show of one session at one instant: the hand-off between the session
+//! Neo: What a live view may show of one session at one instant: the hand-off between the session
 //! ledger (`sessions.rs`, which derives it) and capture (`capture.rs`, which follows it). Derived,
 //! never stored; the ledger publishes a fresh one on a `watch` whenever any input to it changes,
 //! so a follower never polls.

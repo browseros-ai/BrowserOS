@@ -571,6 +571,7 @@ impl Dispatcher {
         Self(Arc::new(Inner {
             tabs,
             _ending: run.ended.clone().drop_guard(),
+            // Neo: the trace and the run share one emitter so every dispatched call inherits its host correlation and privacy boundary.
             trace: Trace::new(run.emitter.clone()),
             run,
             in_flight: Arc::default(),
@@ -628,6 +629,7 @@ impl Dispatcher {
             location: call_location(&metadata),
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
             page: target.as_ref().map(|(page, _)| page.id.clone()),
+            // Playwright: `server/trace/recorder/tracing.ts` `Tracing._shouldCaptureAtPhase`: `if (!metainfo?.snapshot)`
             snapshot: meta.is_some_and(|meta| meta.has(MethodFlag::Snapshot)),
         }));
         inner.trace.push(Arc::clone(&entry));
@@ -683,8 +685,7 @@ impl Dispatcher {
             } else {
                 progress
             };
-            // The router carries every method's state. Box it at the owned-task boundary
-            // so growth of the shared run context does not inflate this task's future.
+            // Neo: box the router at the owned-task handoff to bound the task's stack footprint as host context grows.
             Box::pin(serve_call(
                 tabs, cursors, target, route, progress, call_reply,
             ))

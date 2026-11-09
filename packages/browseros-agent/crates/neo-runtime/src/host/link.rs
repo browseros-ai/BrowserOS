@@ -1,10 +1,10 @@
+//! Neo: claw-server's `Link` (`apps/claw-server/src/services/capture/link.rs`) and `CdpPortTransport` (`apps/claw-server/src/services/capture/ports.rs`), isolating frame traffic from run commands on a separate socket.
+//!
 //! The host side's own CDP connection: one `CdpClient` to the browser's port, never the runs'
-//! client, shared by the presences and every capture. Adapted from claw-server's capture link
-//! (`apps/claw-server/src/services/capture/link.rs:1-185` and `ports.rs:96-138`, origin/main),
-//! over `browseros_cdp::CdpClient` directly instead of browseros-core's `CdpConnection`.
+//! client, shared by the presences and every capture, over `browseros_cdp::CdpClient` directly.
 //!
 //! Why a socket of its own: screencast frames are large and frequent, and on the runs'
-//! connection they would queue every run command and keepalive behind them (`ports.rs:96-98`).
+//! connection they would queue every run command and keepalive behind them.
 //! This client gives its one `events_targeted` subscriber for `Page.screencastFrame` to the
 //! link, so frames bypass its 4096-slot ring, which then carries only `Target.*` events and
 //! the host side's own sessions' events. A run never shares that subscriber: runs read their

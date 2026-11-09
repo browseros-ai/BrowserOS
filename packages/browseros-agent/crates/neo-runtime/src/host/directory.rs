@@ -1,4 +1,4 @@
-//! The host side's tab directory: every page target in the browser, keyed by CDP target id, with
+//! Neo: The host side's tab directory: every page target in the browser, keyed by CDP target id, with
 //! the BrowserOS tab id, URL and title it has now. The one place the two tab identities meet:
 //! scripts, capture and the session ledger speak target ids (`PageId`), hosts see tab ids
 //! (`TabId`). It is browser-wide and keeps flowing between runs, because a live view keeps
@@ -21,12 +21,13 @@
 //! The seed is fresh. After (re)enabling discovery the host task asks for `Browser.getTabs`, and
 //! events that reach the socket before that reply describe the browser as it was before the seed
 //! was taken. Applied after the seed, an older `Target.targetInfoChanged` would overwrite a newer
-//! seed, as claw-server's rebuild lets it
-//! (`apps/claw-server/src/services/browser/tab_registry.rs:131-133`). The table holds the rule
-//! itself, so the host task only applies inputs in socket order, the seed where its reply
+//! seed. The table holds the rule itself, so the host task only applies inputs in socket order,
+//! the seed where its reply
 //! arrived: until a seed is applied (at first, and after `Lost`), `Created` and `Changed` are
 //! dropped; `Destroyed` always applies, and a destroyed target never opens again (Chromium never
 //! reuses a target id), so a seed that still lists it cannot bring it back.
+
+//! Neo: claw-server's `TabRegistry::observe_session` (`apps/claw-server/src/services/browser/tab_registry.rs`) supplies the discovery/rebuild model; Neo discards pre-seed events so stale facts cannot overwrite the seed.
 
 use std::collections::HashMap;
 use std::mem;

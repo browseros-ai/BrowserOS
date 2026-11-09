@@ -1,4 +1,4 @@
-//! The host's synchronous privacy boundary. Taint has one add-only set shared by the emitter,
+//! Neo: The host's synchronous privacy boundary. Taint has one add-only set shared by the emitter,
 //! ledger, capture and artifact worker. A session's flag and touched-target union share a short
 //! lock: a touch racing withhold is included on one side of that boundary, never missed.
 

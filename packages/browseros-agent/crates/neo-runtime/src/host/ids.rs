@@ -1,4 +1,4 @@
-//! The identities the host side speaks, parsed once where they enter. Hosts address sessions by
+//! Neo: The identities the host side speaks, parsed once where they enter. Hosts address sessions by
 //! [`SessionKey`] and see BrowserOS tab ids ([`TabId`]); scripts and capture speak CDP target ids
 //! (`PageId`). The two tab identities meet only in the host's tab directory.
 
@@ -22,9 +22,7 @@ impl SessionKey {
         Self(key.into())
     }
 
-    /// A fresh 8-hex-digit key, the shape claw-server mints for stateless sessions
-    /// (`apps/claw-server/src/api/mcp/session_handle.rs:31-33`). Uniqueness against live and
-    /// stored sessions is the caller's check.
+    /// Neo: claw-server's `candidate` (`apps/claw-server/src/api/mcp/session_handle.rs`), retaining an opaque eight-hex-digit host session handle; uniqueness against live and stored sessions is the caller's check.
     pub(crate) fn mint() -> Self {
         // The low 32 random bits of a ULID; its timestamp bits would make keys sortable.
         let random = Ulid::new().random() & u128::from(u32::MAX);
@@ -43,9 +41,8 @@ impl fmt::Display for SessionKey {
     }
 }
 
-/// A BrowserOS tab id: `Browser.TabInfo.tabId`, and BrowserOS's patched
-/// `Target.TargetInfo.tabId` (probe 6 in the neo-host-events design). Always positive, so a
-/// frame can never carry `X-Tab-Id: 0`, which the main host rejects. Chromium never reuses one
+/// Platform: BrowserOS's `Browser.TabInfo.tabId` and `Target.TargetInfo.tabId` are session-scoped tab identities (`browseros-cdp/protocol/protocol.json`, confirmed by `designs/neo-host-events/grounding/probes.md`, probe 6).
+/// A BrowserOS tab id. Always positive, so a frame can never carry `X-Tab-Id: 0`, which the main host rejects. Chromium never reuses one
 /// within a browser session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TabId(NonZeroI64);
@@ -74,7 +71,7 @@ impl TabId {
 pub struct EpochMs(NonZeroU64);
 
 impl EpochMs {
-    /// The earliest time an `EpochMs` can hold, 1 ms after the epoch.
+    /// Neo: the earliest representable host timestamp is 1 ms after the epoch; zero must never reach `X-Frame-At`.
     pub(crate) const MIN: Self = Self(NonZeroU64::MIN);
 
     #[must_use]
@@ -92,17 +89,15 @@ impl EpochMs {
         Self::from_system_time(SystemTime::now())
     }
 
-    /// `Page.screencastFrame.metadata.timestamp`, epoch seconds with a microsecond fraction
-    /// (probe 8), as milliseconds, truncated as Playwright converts it
-    /// (`packages/playwright-core/src/server/chromium/crPage.ts:997` at 26137face). `None` when
-    /// absent, not finite or not positive: the caller drops such a frame rather than stamping
-    /// it with arrival time, which cannot be correlated with a browser action.
+    /// Playwright: `server/chromium/crPage.ts` `FrameSession._onScreencastFrame`: `frameSwapWallTime: payload.metadata.timestamp ? payload.metadata.timestamp * 1000 : Date.now(),`
+    /// Platform: CDP frame timestamps are epoch seconds (`browseros-cdp/protocol/protocol.json`, `Page.ScreencastFrameMetadata.timestamp` referencing `Network.TimeSinceEpoch`; measured in `designs/neo-host-events/grounding/probes.md`, probe 8).
+    /// Deviation: `server/chromium/crPage.ts` `FrameSession._onScreencastFrame`: `frameSwapWallTime: payload.metadata.timestamp ? payload.metadata.timestamp * 1000 : Date.now(),` Neo requires positive integer milliseconds for `X-Frame-At`, truncates fractional milliseconds and drops invalid timestamps instead of substituting arrival time, so hosts can correlate frames with browser actions.
     pub(crate) fn from_frame_seconds(seconds: f64) -> Option<Self> {
         if !seconds.is_finite() || seconds <= 0.0 {
             return None;
         }
         let ms = (seconds * 1000.0).trunc();
-        // Far past any wall clock (year ~586 million) and below `u64::MAX`, so the cast is exact.
+        // Neo: reject milliseconds at 1.8e19, below u64::MAX and far past any wall clock (year ~586 million), so the conversion stays in range.
         if ms >= 1.8e19 {
             return None;
         }

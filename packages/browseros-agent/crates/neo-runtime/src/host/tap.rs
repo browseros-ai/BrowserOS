@@ -1,4 +1,4 @@
-//! The host side's inbox: one bounded FIFO from the producers, which push on a script's path
+//! Neo: The host side's inbox: one bounded FIFO from the producers, which push on a script's path
 //! (the run path, a `RunPass` dropping), to the one consumer, the session ledger's task.
 //!
 //! A push never waits. [`Tap::try_push`] holds the lock for one `VecDeque` push and either
@@ -31,12 +31,14 @@ use tracing::warn;
 use crate::host::events::HostEvent;
 use crate::host::ids::SessionKey;
 
+/// Neo: refuse per-call events past 16384 queued rows so a starved host task cannot grow memory on the script's path.
 /// Per-call events queued past this are refused. Far above any real burst: a run has at most 64
-/// calls in flight (`dispatch.rs` `MAX_CALLS_IN_FLIGHT`), each puts two per-call events here,
+/// calls in flight (`method_router.rs` `MAX_CALLS_IN_FLIGHT`), each puts two per-call events here,
 /// and the ledger applies one in microseconds, so a full queue means its task was starved for a
 /// long time. Neo's own figure (design §11).
 pub(crate) const TAP_QUEUE: usize = 16_384;
 
+/// Neo: reserve four lifecycle events per admitted run so call-event bursts cannot prevent session completion.
 /// The lifecycle events budgeted per admitted run: `RunStarted`, `RunEnded`, its pass's
 /// `PassReleased` and one `PageCreated`. A run that creates more pages spends more of the band.
 pub(crate) const LIFECYCLE_PER_RUN: usize = 4;

@@ -1,4 +1,4 @@
-//! The session ledger. From the run path's events it decides which host sessions are live,
+//! Neo: The session ledger. From the run path's events it decides which host sessions are live,
 //! which tabs each worked in, which tab is current, what is withheld, and when a session is
 //! `complete`, a promise `/v1` keeps: once true, never false. No I/O, clock reads or tasks; taint
 //! is read from the host's shared monotonic privacy fact. The host task owns the only [`Ledger`],
@@ -202,8 +202,8 @@ impl Ledger {
     /// store knows it (`label_known_to_store`, asked only for labels [`Self::knows`] does not
     /// know): the server restarted under it. A label whose session ended, or is past its idle
     /// window at `now`, gets a successor, the same one for every admission under that label
-    /// while the successor lives, because clients keep resending a dead handle
-    /// (`apps/claw-server/src/services/sessions/manager.rs:65-73`). No label gets a new session.
+    /// while the successor lives, because clients keep resending a dead handle. No label gets a new session.
+    /// Neo: claw-server's `Retired.replacement` (`apps/claw-server/src/services/sessions/manager.rs`), preserving successor reuse so repeated stale partner handles converge on one live session.
     /// Minted keys are unique in the ledger; unique in the trace store too is the caller's check.
     ///
     /// A session past its idle window is ended by [`Self::expire`], never here, so every idle

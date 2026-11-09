@@ -81,6 +81,7 @@ pub(crate) async fn context(
             };
             let value = serde_json::to_value(result)
                 .map_err(|error| PlaywrightError::error(error.to_string()))?;
+            // Neo: commit the host creation event after readiness and reply encoding, before the creating call can end.
             created.keep(progress);
             Ok(Some(value))
         }

@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (132)
+## Deviations (137)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -112,6 +112,11 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/debugger.rs | `format_param` | `isomorphic/protocolFormatter.ts` `_formatProtocolParam` | Playwright shows a selector as the JavaScript locator that builds it (`locator('div')`); Rust has no locator generator, so a paused call's title shows the selector itself (`div`). |
 | neo-runtime/src/events.rs | `MAX_QUEUED_BYTES` | `client/connection.ts` `Connection.dispatch` | The same bound in bytes of queued JSON, so a few huge payloads cannot pin the server's memory. |
 | neo-runtime/src/events.rs | `MAX_QUEUED_EVENTS` | `client/connection.ts` `Connection.dispatch` | Playwright's client dispatches every event its server sends; Neo's queue lives outside the realm's memory limit, so a run holds at most this many undelivered events and counts the rest. |
+| neo-runtime/src/host/capture/lease.rs | `screencast` | `server/chromium/crPage.ts` `FrameSession._onScreencastFrame` | Neo delays the ack to claw-server's preset rate so capture work is bounded even when every viewer reads immediately. The ack is the frame-rate limit: Chromium sends the next frame only after it. |
+| neo-runtime/src/host/capture/presets.rs | `preset` | `server/screencast.ts` `Screencast._startScreencast` | Neo keeps claw-server's published low/high dimensions, frame rates and JPEG qualities to bound host bandwidth and browser work. |
+| neo-runtime/src/host/cdp.rs | `MAX_FRAMES_IN_FLIGHT` | `server/chromium/crPage.ts` `CRPage.startScreencast` | Neo keeps claw-server's single unacknowledged frame so delayed acknowledgements bound browser UI-thread work. |
+| neo-runtime/src/host/cdp.rs | `capture_still` | `server/chromium/crPage.ts` `CRPage.takeScreenshot` | Neo additionally fits the JPEG into its audit ladder, using measured device scale without a run's emulation override, so host screenshots can fit Zuzu's cap on an independent session. |
+| neo-runtime/src/host/ids.rs | `EpochMs::from_frame_seconds` | `server/chromium/crPage.ts` `FrameSession._onScreencastFrame` | Neo requires positive integer milliseconds for `X-Frame-At`, truncates fractional milliseconds and drops invalid timestamps instead of substituting arrival time, so hosts can correlate frames with browser actions. |
 | neo-runtime/src/method_router.rs | `released` | `server/debugger.ts` `Debugger._pause` | Playwright's held call waits for a resume even after its browser disconnected, and never settles (measured on BrowserOS neo with pinned Playwright); Neo's fails as closed, as every call the disconnection stopped does, and never runs. |
 | neo-runtime/src/method_router.rs | `released` | `server/progress.ts` `ProgressController.run` | Playwright's timeout already runs while its debugger holds a call (one that fires meanwhile is dropped); Neo starts the call, and its own timeout, once the debugger lets it go. |
 | neo-runtime/src/playwright_methods/browser_methods.rs | (file) | `server/chromium/crBrowser.ts` `CRBrowserContext.doClose` | Playwright keeps a context until the script closes it; a run's realm is gone when it ends, so Neo disposes every context the run created then, with its pages. |
@@ -140,7 +145,8 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/playwright_methods/screenshot.rs | `screenshot_locator` | `server/frames.ts` `Frame.waitForSelector` | is the element Playwright's wait returns; Neo resolves it again with click's `resolve`, which also marks it as a target (`markTargets: 'all'`), and waits again if it detached in between. |
 | neo-runtime/src/quickjs.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-quickjs-injected reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. The realm's own `abort` listeners and timer callbacks report theirs the same way (`abort::REALM_GLOBALS`, `HOST_GLOBALS`). |
 
-## Unexplained: owner questions (0)
+## Unexplained: owner questions (1)
 
 | File | Item | What is unknown |
 | --- | --- | --- |
+| neo-runtime/src/host/cdp.rs | `capture_still` | why the host viewport clip uses ceil instead of Playwright's floor(size + 1e-3); the original port records no rationale for the fractional-edge difference. |

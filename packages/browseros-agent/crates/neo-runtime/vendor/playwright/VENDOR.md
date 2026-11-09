@@ -85,6 +85,8 @@ and NOTICE.
 | `packages/playwright-core/src/server/page.ts` | `c17ffdb5133c507085447a5914b8a38992b83c65985b9b5b06ee65ce68c975bf` |
 | `packages/playwright-core/src/server/progress.ts` | `0770a2b225b77df82f0aefea8ca89b699ebb3e58eb4274771d5e0c0cf43aed01` |
 | `packages/playwright-core/src/server/protocolError.ts` | `b6d54500d5764b973f93504d7c21126e8176266c8ddfa4da47d218f8ec88bb04` |
+| `packages/playwright-core/src/server/screencast.ts` | `a76877a012c8018bc6aeaf429dce2da81d05ddaf953978b67a2898e80fc52213` |
 | `packages/playwright-core/src/server/screenshotter.ts` | `8a3f5de0754d091cefb1abf12e1eb697f6b56968b3ceca6852fd0d813d25a87c` |
+| `packages/playwright-core/src/server/trace/recorder/tracing.ts` | `fd458b39d81aa78f954cd24d98a05cafff871abf341684cb6b07e0ae4c7925d0` |
 | `packages/protocol/src/validatorPrimitives.ts` | `760ea88dc1ab52fb3a7d677162868723a4e77215b3480110cad0b035f397ab84` |
 | `packages/utils/stackTrace.ts` | `fd74bd690ad37498ad3b676025129b38c08c5bffb190c8d96f228a2be7b5210b` |
