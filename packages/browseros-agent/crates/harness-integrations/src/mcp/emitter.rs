@@ -283,6 +283,24 @@ fn json_container_or_set(object: &CstObject, shape: StdioShape) -> CstObject {
     }
 }
 
+/// Heal a server entry an older version placed directly under `top_level_key` (for example
+/// OpenCode before it nested servers under `mcp.servers`). Once the harness nests entries
+/// under `servers_key`, a leftover sibling at `top_level_key.<name>` is a stale duplicate
+/// that some agents reject, so drop it. Never touches the servers container itself.
+fn strip_legacy_entry(object: &CstObject, shape: StdioShape, name: &str) {
+    let Some(servers_key) = shape.servers_key else {
+        return;
+    };
+    if name == servers_key {
+        return;
+    }
+    if let Some(section) = object.object_value(shape.top_level_key)
+        && let Some(legacy) = section.get(name)
+    {
+        legacy.remove();
+    }
+}
+
 fn json_read(raw: &str, shape: StdioShape) -> Vec<String> {
     let (_, raw) = split_bom(raw);
     if raw.trim().is_empty() {
@@ -378,6 +396,7 @@ fn json_add(
             container.append(name, value);
         }
     }
+    strip_legacy_entry(&object, shape, name);
     Ok(with_bom(root.to_string(), had_bom))
 }
 
@@ -617,7 +636,17 @@ mod tests {
             "value"
         );
         assert_eq!(opencode["mcp"]["servers"]["gh"]["type"], "local");
+        // OpenCode >= 2.0 has no `enabled` field; writing it would fail schema validation.
+        assert!(opencode["mcp"]["servers"]["gh"].get("enabled").is_none());
         assert!(opencode["mcp"].get("gh").is_none());
+
+        let opencode_http = json_output(AgentId::OpenCode, &http())?;
+        assert_eq!(opencode_http["mcp"]["servers"]["gh"]["type"], "remote");
+        assert!(
+            opencode_http["mcp"]["servers"]["gh"]
+                .get("enabled")
+                .is_none()
+        );
 
         let antigravity = json_output(AgentId::Antigravity, &http())?;
         assert_eq!(
@@ -625,6 +654,26 @@ mod tests {
             "https://example.com/mcp"
         );
         assert!(antigravity["mcpServers"]["gh"].get("url").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn opencode_heals_a_legacy_top_level_entry() -> Result<(), Error> {
+        // An older BrowserOS placed the server directly under `mcp` with an `enabled` field.
+        // Re-adding must write it under `mcp.servers` without `enabled` and drop the stale
+        // top-level entry so OpenCode >= 2.0 accepts the file.
+        let emitter = emitter(AgentId::OpenCode)?;
+        let raw = "{\n  \"mcp\": {\n    \"gh\": { \"type\": \"local\", \"command\": [\"old\"], \"enabled\": true }\n  }\n}\n";
+        let added = emitter.add(raw, "gh", &stdio())?;
+        let value: JsonValue = serde_json::from_str(&added).map_err(|error| Error::Config {
+            format: "test JSON",
+            message: error.to_string(),
+        })?;
+        assert_eq!(value["mcp"]["servers"]["gh"]["command"][0], "gh-mcp");
+        assert_eq!(value["mcp"]["servers"]["gh"]["type"], "local");
+        assert!(value["mcp"]["servers"]["gh"].get("enabled").is_none());
+        // The stale top-level entry is gone.
+        assert!(value["mcp"].get("gh").is_none());
         Ok(())
     }
 

@@ -181,11 +181,10 @@ const ZED_INJECTS: &[(&str, InjectValue)] = &[
     ("source", InjectValue::String("custom")),
     ("enabled", InjectValue::Bool(true)),
 ];
-const OPENCODE_STDIO_INJECTS: &[(&str, InjectValue)] = &[
-    ("type", InjectValue::String("local")),
-    ("enabled", InjectValue::Bool(true)),
-];
-const OPENCODE_HTTP_INJECTS: &[(&str, InjectValue)] = &[("enabled", InjectValue::Bool(true))];
+// OpenCode >= 2.0 nests servers under `mcp.servers`, rejects unknown fields, and has no
+// `enabled` field: a server is enabled by omission and disabled with `disabled: true`.
+// Stdio entries carry `type: local`; remote entries get `type: remote` from the HTTP tag.
+const OPENCODE_STDIO_INJECTS: &[(&str, InjectValue)] = &[("type", InjectValue::String("local"))];
 
 const STDIO_SSE_HTTP: &[McpTransport] =
     &[McpTransport::Stdio, McpTransport::Sse, McpTransport::Http];
@@ -569,7 +568,7 @@ const OPENCODE: HarnessDefinition = HarnessDefinition {
             tag_key: Some("type"),
             tag_value: Some("remote"),
             sse_tag_value: None,
-            injects: OPENCODE_HTTP_INJECTS,
+            injects: NONE,
             supports_oauth: true,
         }),
         project: None,
