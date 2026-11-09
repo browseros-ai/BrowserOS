@@ -9020,7 +9020,22 @@ function labelHit(injected, element, point) {
   if (injected.expectHitTarget(point, control) === "done")
     return element;
   const labels = "labels" in control ? Array.from(control.labels ?? []) : [];
-  return labels.find((label) => injected.expectHitTarget(point, label) === "done") ?? element;
+  return labels.find((label) => activatesControl(injected, label, control, point)) ?? element;
+}
+function activatesControl(injected, label, control, point) {
+  if (label.control !== control)
+    return false;
+  if (injected.expectHitTarget(point, label) !== "done")
+    return false;
+  const root = label.getRootNode();
+  const hit = root.elementFromPoint(point.x, point.y);
+  if (!hit || !label.contains(hit))
+    return false;
+  const interactive = 'a[href], area[href], button, input:not([type="hidden"]), select, textarea, ' + "label, summary, details, iframe, embed, object, audio[controls], video[controls], " + 'img[usemap], [contenteditable]:not([contenteditable="false"]), [tabindex]';
+  for (let node = hit;node && node !== label; node = node.parentElement)
+    if (node.matches(interactive))
+      return false;
+  return true;
 }
 var glue = {
   title: () => ({ value: document.title }),

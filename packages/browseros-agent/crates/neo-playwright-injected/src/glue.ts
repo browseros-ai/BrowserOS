@@ -197,10 +197,13 @@ function judgeRelease(
 }
 
 /**
- * Deviation: `injected/src/injectedScript.ts` `InjectedScript.expectHitTarget`: `if (hitElement === targetElement)` Playwright accepts a hit on the element or inside it only. Neo keeps the hit check of a forced input on an element an action hook decided about (neo-runtime's hooks feature 4, where Playwright's force has none), and there also accepts a hit inside a `<label>` of the element: the click activates the same control, as on a custom checkbox whose styled box covers its input.
+ * Deviation: `injected/src/injectedScript.ts` `InjectedScript.expectHitTarget`: `if (hitElement === targetElement)` Playwright accepts a hit on the element or inside it only. Neo keeps the hit check of a forced input on an element an action hook decided about (neo-runtime's hooks feature 4, where Playwright's force has none), and there also accepts a hit on a `<label>` of the element whose activation reaches it: the click activates the same control, as on a custom checkbox whose styled box covers its input.
  *
  * The node the interceptor judges for `followLabel`: `element`, unless `point` misses it (as
- * Playwright retargets it, to its button or link) and hits one of its labels.
+ * Playwright retargets it, to its button or link) and lands on one of its labels where the
+ * browser forwards the click to the label's control: on the label itself, or inside it with no
+ * interactive content between (a link, a button, another control, an editable region), whose
+ * own activation the browser runs instead. Anything else keeps `element`, and the check fails.
  */
 function labelHit(
   injected: InjectedScript,
@@ -214,9 +217,37 @@ function labelHit(
       ? Array.from((control as HTMLInputElement).labels ?? [])
       : []
   return (
-    labels.find((label) => injected.expectHitTarget(point, label) === 'done') ??
+    labels.find((label) => activatesControl(injected, label, control, point)) ??
     element
   )
+}
+
+/** Whether a click at `point` lands on `label` where the browser forwards it to `control`: the
+ * label's control is `control`, the point hits the label, and no interactive content sits
+ * between the element hit and the label (HTML's label activation behavior does nothing for a
+ * click on interactive content inside the label). */
+function activatesControl(
+  injected: InjectedScript,
+  label: HTMLLabelElement,
+  control: Element,
+  point: { x: number; y: number },
+): boolean {
+  if (label.control !== control) return false
+  if (injected.expectHitTarget(point, label) !== 'done') return false
+  const root = label.getRootNode() as Document | ShadowRoot
+  const hit = root.elementFromPoint(point.x, point.y)
+  if (!hit || !label.contains(hit)) return false
+  const interactive =
+    'a[href], area[href], button, input:not([type="hidden"]), select, textarea, ' +
+    'label, summary, details, iframe, embed, object, audio[controls], video[controls], ' +
+    'img[usemap], [contenteditable]:not([contenteditable="false"]), [tabindex]'
+  for (
+    let node: Element | null = hit;
+    node && node !== label;
+    node = node.parentElement
+  )
+    if (node.matches(interactive)) return false
+  return true
 }
 
 export const glue = {
