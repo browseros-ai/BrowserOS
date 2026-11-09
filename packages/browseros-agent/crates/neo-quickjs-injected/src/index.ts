@@ -5,6 +5,7 @@ import type { Page } from './page'
 import type { Playwright } from './playwright'
 import { connectRun, type RunInit } from './run-objects'
 
+export { createHooks, type HooksInit } from './hooks'
 export type { RunInit } from './run-objects'
 
 /**
