@@ -377,6 +377,31 @@ mod tests {
         );
     }
 
+    /// A type a hook's arguments replaced (hooks feature 4) types their text, and its log echoes
+    /// the script's text, never the hook's.
+    #[tokio::test(start_paused = true)]
+    async fn a_replaced_type_types_the_hooks_text_and_logs_the_scripts() {
+        let tab = FakeTab::ready();
+        let progress = Progress::for_test(1000.0);
+        let script = type_options("{{code}}", &serde_json::json!({}));
+        let replaced = type_options("é", &serde_json::json!({}));
+        let action = PressAction {
+            options: &script,
+            delivery: progress.delivery().expect("an input call"),
+            platform: OnceLock::new(),
+        };
+        let acted = ElementAction::act(&action, &tab, &1, Some(&replaced), &progress).await;
+        assert!(matches!(acted, Ok(ActionResult::Done(()))));
+        assert_eq!(tab.count("insertText é"), 1, "{:?}", tab.calls());
+        let log = progress.folded_log();
+        assert!(
+            log.iter()
+                .any(|line| line.contains("elementHandle.type(\"{{code}}\")")),
+            "{log:?}"
+        );
+        assert!(!log.iter().any(|line| line.contains('é')), "{log:?}");
+    }
+
     /// `type('')` focuses and types nothing: it resolves with nothing written.
     #[tokio::test(start_paused = true)]
     async fn typing_nothing_focuses_and_writes_nothing() {

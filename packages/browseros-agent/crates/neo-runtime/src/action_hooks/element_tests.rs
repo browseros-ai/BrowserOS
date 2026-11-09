@@ -21,6 +21,7 @@ use super::tests::{
 use super::*;
 use crate::fake_browser::{GO_NODE, REFUSED_FILL};
 use crate::hooks::ElementRef;
+use crate::method_router::Dispatcher;
 use crate::playwright_methods::click::tests::{FakeTab, Step, pin_guid};
 use crate::playwright_methods::click::{self, PointerOptions, StatesCheck};
 use crate::playwright_methods::evaluate::Handles;
@@ -743,6 +744,49 @@ async fn tests_that_a_waiting_element_hook_holds_no_input_lock() {
         at(&lines, "mouse click done") < at(&lines, "click decided"),
         "{lines:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_hooks_own_input_goes_while_the_element_action_waits_for_it() {
+    let realm: Arc<OnceLock<Dispatcher>> = Arc::default();
+    let hook_side = Arc::clone(&realm);
+    let fake = Arc::new(
+        FakeHooks::new(&Timeline::default())
+            .wanting(|hook, kind| hook == ActionHook::Before && kind == "click")
+            .before(move |_, _| {
+                let realm = hook_side.get().cloned();
+                async move {
+                    let realm = realm.ok_or_else(|| HookFailure::Realm("no realm".into()))?;
+                    // The hook's own input, while the agent's click waits for this decision.
+                    let reply = realm.call(&mouse_click(90, 5.0, 5.0).to_string()).await;
+                    reply
+                        .map(|_| ActionDecision::Allow)
+                        .map_err(|error| HookFailure::Threw(format!("{error:?}")))
+                }
+                .boxed()
+            }),
+    );
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let _set = realm.set(harness.hook_realm.clone());
+    let hooked = click(1);
+    let reply = time::timeout(Duration::from_secs(10), harness.call(&hooked))
+        .await
+        .expect("the hook's input never waits for the call it decides")
+        .unwrap();
+    assert_eq!(reply, json!({ "id": 1 }));
+    let records = harness.records(RunEnd::Settled).await;
+    let hooks_own = records
+        .iter()
+        .find(|record| record.origin == CallOrigin::Hook)
+        .expect("the hook's mouse click");
+    assert_eq!(hooks_own.result, CallResult::Ok);
+    assert_eq!(hooks_own.delivery, Some(Delivery::Done));
+    let agents = records
+        .iter()
+        .find(|record| record.method == "click")
+        .expect("the agent's click");
+    assert_eq!(agents.result, CallResult::Ok);
+    assert_eq!(agents.delivery, Some(Delivery::Done));
 }
 
 #[tokio::test(flavor = "multi_thread")]
