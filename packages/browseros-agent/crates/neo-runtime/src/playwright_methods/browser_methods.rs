@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use browseros_cdp::{CdpClient, CdpError};
+use browseros_cdp::CdpError;
 use futures_util::future;
 use neo_runtime_spec::serve::{
     BrowserCall, BrowserContextCall, BrowserContextChannel, BrowserContextNewPageResult,
@@ -44,6 +44,7 @@ use tracing::debug;
 use crate::browser_representations::emulation::{ContextEmulation, EmulatedMedia, Size};
 use crate::browser_representations::page::PageSession;
 use crate::browser_representations::tabs::{self, CreatedPage, PageEntry, Tabs};
+use crate::chromium_bridge::cdp;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::quickjs_bridge;
 use crate::run::PageId;
@@ -76,7 +77,7 @@ const URL_BACKOFF_MAX: Duration = Duration::from_millis(16);
 /// The contexts a run created, and what the run read of the browser once. Lives in the run's
 /// [`Tabs`], so calls and getters reach the same contexts.
 pub(crate) struct CreatedContexts {
-    cdp: CdpClient,
+    cdp: cdp::Browser,
     tokio: Handle,
     registry: Mutex<Registry>,
     version: OnceCell<Version>,
@@ -147,7 +148,7 @@ struct TargetInfo {
 }
 
 impl CreatedContexts {
-    pub(crate) fn new(cdp: CdpClient, tokio: Handle) -> Self {
+    pub(crate) fn new(cdp: cdp::Browser, tokio: Handle) -> Self {
         Self {
             cdp,
             tokio,
@@ -189,6 +190,7 @@ impl CreatedContexts {
             .get_or_try_init(|| async {
                 let reply: VersionReply = self
                     .cdp
+                    .client()
                     .send_typed("Browser.getVersion", json!({}), None)
                     .await
                     .map_err(|error| tabs::cdp_error(&error))?;
@@ -322,6 +324,7 @@ async fn new_context(
     tabs.spawn(created.creating.track_future(async move {
         // Playwright: `server/chromium/crBrowser.ts` `CRBrowser.doCreateNewContext`: `disposeOnDetach: true,`
         let sent = cdp
+            .client()
             .send_typed::<_, CreatedContextReply>(
                 "Target.createBrowserContext",
                 json!({ "disposeOnDetach": true }),
@@ -389,7 +392,7 @@ async fn new_page(
     }
     // Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.doCreateNewPage`: `const { targetId } = await this._browser._session.send('Target.createTarget', { url: 'about:blank', browserContextId: this._browserContextId });`
     let created: CreatedTargetReply = progress
-        .race(tabs.cdp().send_typed(
+        .race(tabs.cdp().client().send_typed(
             "Target.createTarget",
             json!({ "url": "about:blank", "browserContextId": context.id }),
             None,
@@ -539,8 +542,9 @@ pub(crate) async fn dispose_all(tabs: &Tabs) {
 }
 
 /// `Target.disposeBrowserContext`. A context the browser no longer has is disposed already.
-async fn dispose(cdp: &CdpClient, id: &str) -> Result<(), PlaywrightError> {
+async fn dispose(cdp: &cdp::Browser, id: &str) -> Result<(), PlaywrightError> {
     match cdp
+        .client()
         .send(
             "Target.disposeBrowserContext",
             json!({ "browserContextId": id }),
@@ -587,6 +591,7 @@ pub(crate) async fn context_pages(
     }
     let reply: TargetsReply = tabs
         .cdp()
+        .client()
         .send_typed("Target.getTargets", json!({}), None)
         .await
         .map_err(|error| tabs::cdp_error(&error))?;

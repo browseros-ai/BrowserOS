@@ -34,8 +34,8 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
+use browseros_cdp::CdpError;
 use browseros_cdp::runtime::{CallFunctionOnResult, PropertyDescriptor, RemoteObject};
-use browseros_cdp::{CdpClient, CdpError, SessionId};
 use neo_runtime_spec::injected::InjectedInitializer;
 use neo_runtime_spec::{
     Element, Handle, HandleId, InjectedCall, PageResult, Properties, SPEC_SHA256,
@@ -193,13 +193,8 @@ enum StaleReply {
 
 impl World {
     /// The main frame's world on the tab's session, which `page.rs` attached.
-    pub(crate) fn new(cdp: CdpClient, session: SessionId, frame_id: String) -> Self {
-        Self::on_host(
-            cdp::Session::adopt(cdp, session),
-            frame_id,
-            false,
-            CancellationToken::new(),
-        )
+    pub(crate) fn new(session: cdp::Session, frame_id: String) -> Self {
+        Self::on_host(session, frame_id, false, CancellationToken::new())
     }
 
     pub(crate) fn on_host(
@@ -609,6 +604,7 @@ fn split_properties(descriptors: Vec<PropertyDescriptor>) -> Result<Properties, 
 
 #[cfg(test)]
 mod tests {
+    use browseros_cdp::SessionId;
     use neo_runtime_spec::injected::{
         HitTargetSetup, InjectedResolveResult, InjectedSetupHitTargetInterceptorResult,
     };
@@ -698,10 +694,7 @@ mod tests {
             .unwrap();
         let gone = CancellationToken::new();
         let world = World::on_host(
-            cdp::Session::adopt(
-                cdp,
-                SessionId::from(attached["sessionId"].as_str().unwrap()),
-            ),
+            cdp::Browser::new(cdp).adopt(SessionId::from(attached["sessionId"].as_str().unwrap())),
             PAGE.to_string(),
             true,
             gone.clone(),

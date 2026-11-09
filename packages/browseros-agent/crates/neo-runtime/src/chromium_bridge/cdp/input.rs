@@ -8,15 +8,22 @@
 //! says why.
 
 use browseros_cdp::input as generated;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{Ignored, Write, command, event};
 
 pub(crate) use generated::{
-    DispatchMouseEventParams as DispatchMouseEvent, DragInterceptedEvent as DragIntercepted,
-    SetInterceptDragsParams as SetInterceptDrags,
+    DispatchMouseEventParams as DispatchMouseEvent, SetInterceptDragsParams as SetInterceptDrags,
 };
+
+/// `Input.dragIntercepted`: the drag Chromium handed over, kept as JSON. Local: the drag events
+/// that carry the drag on write its data back unchanged ([`DispatchDragEvent`]), where the
+/// generated `DragData` would re-encode it.
+#[derive(Deserialize)]
+pub(crate) struct DragIntercepted {
+    pub(crate) data: Value,
+}
 
 /// One `Input.dispatchDragEvent`, as Playwright's `DragManager` builds it: the event, its point,
 /// the held modifiers (none for a cancel), and the drag's data. Local: the data is the JSON the

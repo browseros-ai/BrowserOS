@@ -63,6 +63,7 @@ pub(crate) mod security;
 pub(crate) mod storage;
 pub(crate) mod target;
 
+use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 
@@ -189,6 +190,64 @@ impl<C: Command> Serialized<C> {
     }
 }
 
+/// One page write as the input writer plans it: a [`Write`] command's method and its params,
+/// serialized now as the command's struct declares, so key and touch events keep their bytes.
+/// Only [`Input::new`] makes one and only [`Session::write`] sends one. Planned before anything
+/// is written, it is read to meet a drag and has the held modifiers and buttons patched in after
+/// a stop ([`Input::with_number`]); nothing else changes it. Its `Debug` leaves the params out:
+/// typed text may be a secret.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Input {
+    method: &'static str,
+    params: String,
+}
+
+impl Input {
+    /// `command`, serialized now. Serializing these plain structs cannot fail; if it ever did,
+    /// Chromium would refuse the empty params, and the write counts as failed.
+    pub(crate) fn new<C: Command<Via = Write>>(command: &C) -> Self {
+        Self {
+            method: C::METHOD,
+            params: serde_json::to_string(command).unwrap_or_default(),
+        }
+    }
+
+    pub(crate) fn method(&self) -> &'static str {
+        self.method
+    }
+
+    /// The params as they go out, for the writer to read a planned event's fields.
+    pub(crate) fn params(&self) -> &str {
+        &self.params
+    }
+
+    /// This write with the number its `name` field holds replaced by `value`, in place, so the
+    /// params keep their field order; unchanged when it has no such field.
+    #[must_use]
+    pub(crate) fn with_number(&self, name: &str, value: i64) -> Self {
+        let key = format!("\"{name}\":");
+        let Some(start) = self.params.find(&key).map(|at| at + key.len()) else {
+            return self.clone();
+        };
+        let end = self.params[start..]
+            .find(|character: char| !(character.is_ascii_digit() || character == '-'))
+            .map_or(self.params.len(), |length| start + length);
+        Self {
+            method: self.method,
+            params: format!("{}{value}{}", &self.params[..start], &self.params[end..]),
+        }
+    }
+}
+
+impl fmt::Debug for Input {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Input")
+            .field("method", &self.method)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The browser end of the door, over the `Runtime`'s one connection. Cheap to clone.
 #[derive(Clone)]
 pub(crate) struct Browser {
@@ -198,6 +257,31 @@ pub(crate) struct Browser {
 impl Browser {
     pub(crate) fn new(client: CdpClient) -> Self {
         Self { client }
+    }
+
+    /// Whether the connection is up now: Playwright's `browser.isConnected()`.
+    pub(crate) fn is_connected(&self) -> bool {
+        self.client.is_connected()
+    }
+
+    /// The connection itself, for the code in `browser_representations/` and
+    /// `playwright_methods/` that still sends by method name.
+    pub(crate) fn client(&self) -> &CdpClient {
+        &self.client
+    }
+
+    /// A session the door did not attach: one Chromium auto-attached under a session Neo holds
+    /// (`Target.attachedToTarget`), or a tab's or frame's session handed around by its id.
+    ///
+    /// Its socket incarnation is read now, not at the attach, so adopt a session as soon as it
+    /// is known: one adopted after a reconnect would bind its writes to the new socket. Only a
+    /// session attached through [`Self::attach`] writes input.
+    pub(crate) fn adopt(&self, id: SessionId) -> Session {
+        Session {
+            browser: self.clone(),
+            epoch: self.client.epoch(),
+            id,
+        }
     }
 
     /// Sends a browser-wide command and decodes its reply. The command is serialized now, when
@@ -221,10 +305,6 @@ impl Browser {
     /// The socket incarnation is read just before the attach is sent: the session id belongs to
     /// that socket, so input written under it after a reconnect is refused instead of reaching
     /// a session the new socket never had.
-    #[expect(
-        dead_code,
-        reason = "browser_representations' page sessions attach through the door once they move onto it"
-    )]
     pub(crate) async fn attach(&self, target: &str) -> Result<Session, CdpError> {
         let epoch = self.client.epoch();
         let attached = self
@@ -259,28 +339,6 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    /// A session the door did not attach: one `browser_representations/page.rs` attached itself
-    /// (`page::Session::attach`) and hands to the `chromium_bridge` types it builds (the
-    /// utility world, the page's event producer, the frames' hosts) as a client and an id, or
-    /// one Chromium auto-attached under a session Neo holds (`Target.attachedToTarget`).
-    ///
-    /// Its socket incarnation is read now, not at the attach, so adopt a session as soon as it
-    /// is known: one adopted after a reconnect would bind its writes to the new socket. Those
-    /// holders only send and subscribe; input stays on `page::Session` until it attaches
-    /// through [`Browser::attach`].
-    pub(crate) fn adopt(client: CdpClient, id: SessionId) -> Self {
-        let epoch = client.epoch();
-        Self {
-            browser: Browser::new(client),
-            id,
-            epoch,
-        }
-    }
-
-    #[expect(
-        dead_code,
-        reason = "page.rs's session reads its id through the door once it moves onto it"
-    )]
     pub(crate) fn id(&self) -> &SessionId {
         &self.id
     }
@@ -314,9 +372,9 @@ impl Session {
         serde_json::from_value(reply).map_err(CdpError::from)
     }
 
-    /// Writes `command` to the page at the session's socket incarnation, serialized as its
-    /// struct declares (key events keep Playwright's field order), and decodes the answer. It
-    /// takes the call's delivery record, so a page write without one does not compile.
+    /// Writes `input` to the page at the session's socket incarnation, its params as planned
+    /// (key events keep Playwright's field order). It takes the call's delivery record, so a
+    /// page write without one does not compile.
     ///
     /// What each outcome proves, for that record:
     /// - `Err(ConnectionEpochChanged)`: refused before any byte went out, because the socket
@@ -329,22 +387,16 @@ impl Session {
     /// turn once the frame is written, before the answer (navigation, as neo-nav-history plans
     /// it), needs this split in two: a `dispatch` that resolves on the write, and the pending
     /// answer. That split needs browseros-cdp to expose the write stage of its send.
-    #[expect(
-        dead_code,
-        reason = "page.rs's input writer moves onto the door with browser_representations"
-    )]
-    pub(crate) async fn write<C: Command<Via = Write>>(
+    pub(crate) async fn write(
         &self,
-        command: &C,
+        input: &Input,
         _delivery: &InputTicket,
-    ) -> Result<C::Reply, CdpError> {
-        let params = serde_json::to_string(command)?;
-        let reply = self
-            .browser
+    ) -> Result<(), CdpError> {
+        self.browser
             .client
-            .send_raw_json_at_epoch(self.epoch, C::METHOD, &params, Some(&self.id))
-            .await?;
-        serde_json::from_str(&reply).map_err(CdpError::from)
+            .send_raw_json_at_epoch(self.epoch, input.method, &input.params, Some(&self.id))
+            .await
+            .map(drop)
     }
 
     /// Every event on the client's ring from now on, every session's included
@@ -356,10 +408,6 @@ impl Session {
 
     /// `Target.detachFromTarget` for this session, owning all it needs: the session's owner
     /// spawns it on drop, best effort.
-    #[expect(
-        dead_code,
-        reason = "page.rs's session detaches through the door once it attaches through it"
-    )]
     pub(crate) fn detach(&self) -> impl Future<Output = Result<(), CdpError>> + Send + 'static {
         let browser = self.browser.clone();
         let session_id = self.id.as_str().to_string();
@@ -395,10 +443,6 @@ pub(crate) struct Raw(CdpEvent);
 impl Raw {
     /// Whether the event came on `session`. The root session's `Target.detachedFromTarget` does
     /// not: it names the detached session in its params.
-    #[expect(
-        dead_code,
-        reason = "browser_representations' watchers read through the door once they move onto it"
-    )]
     pub(crate) fn on_session(&self, session: &SessionId) -> bool {
         self.0.session_id.as_ref() == Some(session)
     }

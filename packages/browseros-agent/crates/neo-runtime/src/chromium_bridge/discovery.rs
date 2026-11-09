@@ -29,13 +29,12 @@ use std::collections::{HashMap, HashSet};
 
 use browseros_cdp::CdpError;
 use serde::Deserialize;
-use serde_json::Value;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tracing::warn;
 
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::{Setting, Switch};
-use crate::chromium_bridge::cdp::{self, Command, target};
+use crate::chromium_bridge::cdp::{self, target};
 use crate::events::{EventHub, Flushes};
 
 /// Neo: the target types discovery reports. Tabs are `page` targets; without the filter, every
@@ -49,19 +48,17 @@ fn page_filter() -> Vec<target::FilterEntry> {
 
 /// Neo: target discovery as a setting the `Runtime`'s runs share (`browser_connection_settings.rs`): on for page
 /// targets while any run listens for new pages, off once the last lets go.
-pub(crate) static DISCOVERY: Setting = Setting {
-    method: target::SetDiscoverTargets::METHOD,
-    params: discovery_params,
-};
+pub(crate) struct Discovery;
 
-fn discovery_params(on: bool, _scope: Option<&str>) -> Value {
-    // Serializing this plain struct cannot fail; if it ever did, the browser would refuse the
-    // empty params and the switch would report it.
-    serde_json::to_value(target::SetDiscoverTargets {
-        discover: on,
-        filter: on.then(page_filter),
-    })
-    .unwrap_or_default()
+impl Setting for Discovery {
+    type Command = target::SetDiscoverTargets;
+
+    fn command(on: bool, _scope: Option<&str>) -> Self::Command {
+        target::SetDiscoverTargets {
+            discover: on,
+            filter: on.then(page_filter),
+        }
+    }
 }
 
 /// Neo's record of a page target: what discovery reports and `tabs.rs` keeps. Read from
@@ -107,10 +104,9 @@ pub(crate) fn is_initial_empty(url: &str) -> bool {
 
 /// Turns the run's discovery on and watches it until the run's events end. Runs on the run's
 /// task tracker, so `Dispatcher::finish` waits for the lease's release.
-pub(crate) async fn run(tabs: Tabs, discovery: Switch) {
+pub(crate) async fn run(tabs: Tabs, discovery: Switch<Discovery>) {
     let hub = tabs.events().clone();
-    let cdp = tabs.cdp().clone();
-    let browser = cdp::Browser::new(cdp.clone());
+    let browser = tabs.cdp().clone();
     // Subscribed first: every target event from here on reaches this receiver, the replay too.
     let events = browser.events();
     let flushes = hub.watcher();
@@ -121,7 +117,7 @@ pub(crate) async fn run(tabs: Tabs, discovery: Switch) {
             })
             .await?;
         let baseline: TargetInfos = serde_json::from_value(baseline)?;
-        let lease = discovery.acquire(&cdp, None).await?;
+        let lease = discovery.acquire(&browser, None).await?;
         Ok::<_, CdpError>((baseline, lease))
     };
     let started = started.await;
@@ -270,7 +266,7 @@ impl Targets {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
     use tokio_util::task::TaskTracker;
 
     use super::*;
@@ -444,8 +440,8 @@ mod tests {
     #[tokio::test]
     async fn tests_that_discovery_is_on_while_any_run_holds_it() {
         let browser = FakeBrowser::start(Replies::default()).await;
-        let cdp = browser.cdp().await;
-        let discovery = Switch::new(&DISCOVERY, TaskTracker::new());
+        let cdp = cdp::Browser::new(browser.cdp().await);
+        let discovery = Switch::<Discovery>::new(TaskTracker::new());
         let first = discovery.acquire(&cdp, None).await.unwrap();
         let second = discovery.acquire(&cdp, None).await.unwrap();
         assert_eq!(discovery.holders().await, 2);

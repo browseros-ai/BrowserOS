@@ -40,7 +40,7 @@ use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, Weak};
 
-use browseros_cdp::{CdpClient, CdpEvent, SessionId};
+use browseros_cdp::{CdpEvent, SessionId};
 use neo_runtime_spec::{MethodGroup, MethodMeta};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -57,6 +57,7 @@ use tracing::debug;
 use crate::browser_representations::init_scripts::{self, InitScripts, Link, Rank, until_gone};
 use crate::browser_representations::page::{FrameTab, PageSession};
 use crate::browser_representations::tabs::Tabs;
+use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::contexts::ContextFrames;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::chromium_bridge::main_world::{BuiltExpression, ContextPin};
@@ -580,7 +581,11 @@ impl Bindings {
         if first {
             scripts.attach_bindings(self);
             // Subscribed before any session gets the binding, so no call is missed.
-            tokio::spawn(watch(Arc::downgrade(self), tabs.clone(), cdp.events()));
+            tokio::spawn(watch(
+                Arc::downgrade(self),
+                tabs.clone(),
+                cdp.client().events(),
+            ));
             scripts
                 .add_ranked(
                     cdp,
@@ -654,7 +659,7 @@ impl Bindings {
 
     /// Gives the tab's session of `page` the CDP binding, once: after net's runtime enable,
     /// which the binding needs.
-    pub(crate) async fn prepare_tab(&self, cdp: &CdpClient, page: &Arc<PageSession>) {
+    pub(crate) async fn prepare_tab(&self, cdp: &cdp::Browser, page: &Arc<PageSession>) {
         let target = init_scripts::target_of(page);
         if !self.mark(page.session_id().as_str(), &target, false).await {
             return;
@@ -676,13 +681,14 @@ impl Bindings {
 
     /// Gives an iframe session `init_scripts.rs` holds for `target`'s page the CDP binding,
     /// once, before the iframe runs: `Runtime.enable` (which it needs) and `Runtime.addBinding`.
-    pub(crate) async fn prepare_child(&self, cdp: &CdpClient, link: &Link, target: &str) {
+    pub(crate) async fn prepare_child(&self, cdp: &cdp::Browser, link: &Link, target: &str) {
         if !self.mark(link.session.as_str(), target, true).await {
             return;
         }
         let _enabled = until_gone(
             &link.gone,
-            cdp.send("Runtime.enable", json!({}), Some(&link.session)),
+            cdp.client()
+                .send("Runtime.enable", json!({}), Some(&link.session)),
         )
         .await;
         add_binding(cdp, &link.session, Some(&link.gone)).await;
@@ -1150,9 +1156,9 @@ fn page_object(id: u64, fields: Vec<(&str, Value)>) -> Value {
     json!({ "o": fields, "id": id })
 }
 
-async fn add_binding(cdp: &CdpClient, session: &SessionId, gone: Option<&CancellationToken>) {
+async fn add_binding(cdp: &cdp::Browser, session: &SessionId, gone: Option<&CancellationToken>) {
     // Playwright: `server/chromium/crPage.ts` `FrameSession.exposePlaywrightBinding`: `await this._client.send('Runtime.addBinding', { name: PageBinding.kBindingName });`
-    let add = cdp.send(
+    let add = cdp.client().send(
         "Runtime.addBinding",
         json!({ "name": BINDING_NAME }),
         Some(session),
@@ -1197,8 +1203,8 @@ fn refused(binding: Option<bool>, payload: &Payload) -> Option<String> {
 
 /// Neo: takes the CDP binding off `session`, so no later document gets it. A document that has it
 /// keeps it (probe C2): bindings-call.js `end` deletes it there.
-async fn remove_binding(cdp: &CdpClient, session: &SessionId, gone: Option<&CancellationToken>) {
-    let remove = cdp.send(
+async fn remove_binding(cdp: &cdp::Browser, session: &SessionId, gone: Option<&CancellationToken>) {
+    let remove = cdp.client().send(
         "Runtime.removeBinding",
         json!({ "name": BINDING_NAME }),
         Some(session),

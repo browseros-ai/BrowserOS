@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use browseros_cdp::CdpError;
 use browseros_cdp::runtime::RemoteObject;
-use browseros_cdp::{CdpClient, CdpError};
 use futures_util::future;
 use neo_runtime_spec::injected::InjectedPreviewNodeParams;
 use neo_runtime_spec::serve::{
@@ -31,6 +31,7 @@ use crate::browser_representations::network::HopId;
 use crate::browser_representations::page::{FrameTab, PageSession, PageSetup, Session, TabInputs};
 use crate::browser_representations::routes::{self, ContextRoutes};
 use crate::chromium_bridge::browser_connection_settings::Switches;
+use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::discovery::{self, TargetInfo};
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::chromium_bridge::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
@@ -56,7 +57,7 @@ const ARGS_WAIT: Duration = Duration::from_secs(5);
 pub(crate) struct Tabs(Arc<Inner>);
 
 struct Inner {
-    cdp: CdpClient,
+    cdp: cdp::Browser,
     tokio: Handle,
     inputs: TabInputs,
     /// The `Runtime`'s screenshot turns, one per tab, across runs.
@@ -196,7 +197,7 @@ impl Tabs {
         reason = "each per-tab share the Runtime keeps (inputs, screenshots, switches, permissions) is one argument"
     )]
     pub(crate) async fn open(
-        cdp: CdpClient,
+        cdp: cdp::Browser,
         tokio: Handle,
         inputs: TabInputs,
         screenshots: TabScreenshots,
@@ -250,7 +251,7 @@ impl Tabs {
         Ok((tabs, url))
     }
 
-    pub(crate) fn cdp(&self) -> &CdpClient {
+    pub(crate) fn cdp(&self) -> &cdp::Browser {
         &self.0.cdp
     }
 
@@ -553,7 +554,7 @@ impl Tabs {
             return Ok(page);
         }
         let overrides = Arc::clone(&self.0.overrides);
-        let cdp = page.events.cdp().clone();
+        let cdp = page.events.cdp().browser().clone();
         let id = entry.id.clone();
         let slots = self.0.permissions.slots().clone();
         let run = self.0.run_id;
@@ -572,7 +573,7 @@ impl Tabs {
             self.0
                 .overrides
                 .apply_to_new(
-                    page.events.cdp(),
+                    page.events.cdp().browser(),
                     own,
                     &entry.id,
                     false,
@@ -615,6 +616,7 @@ impl Tabs {
         let reply: TabsReply = self
             .0
             .cdp
+            .client()
             .send_typed("Browser.getTabs", json!({}), None)
             .await
             .map_err(|error| cdp_error(&error))?;
@@ -705,6 +707,7 @@ impl Tabs {
             let window: WindowReply = self
                 .0
                 .cdp
+                .client()
                 .send_typed(
                     "Browser.createWindow",
                     json!({"browserContextId":context,"url":"about:blank"}),
@@ -727,6 +730,7 @@ impl Tabs {
         let reply: TabReply = self
             .0
             .cdp
+            .client()
             .send_typed("Browser.createTab", params, None)
             .await
             .map_err(|error| cdp_error(&error))?;
@@ -739,6 +743,7 @@ impl Tabs {
             let _closed = self
                 .0
                 .cdp
+                .client()
                 .send(
                     "Target.closeTarget",
                     json!({"targetId":entry.id.as_str()}),
@@ -973,6 +978,7 @@ impl Tabs {
         let info = self
             .0
             .cdp
+            .client()
             .send_typed::<_, TargetInfoReply>(
                 "Target.getTargetInfo",
                 json!({ "targetId": frame }),
@@ -1119,6 +1125,7 @@ impl Tabs {
             let reply = self
                 .0
                 .cdp
+                .client()
                 .send_typed::<_, TargetInfoReply>(
                     "Target.getTargetInfo",
                     json!({ "targetId": entry.id.as_str() }),
@@ -1409,10 +1416,11 @@ impl Scope {
 }
 
 pub(crate) async fn tab_info(
-    cdp: &CdpClient,
+    cdp: &cdp::Browser,
     page: &PageId,
 ) -> Result<Option<TabInfo>, PlaywrightError> {
     let reply = cdp
+        .client()
         .send_typed::<_, TabReply>(
             "Browser.getTabInfo",
             json!({ "targetId": page.as_str() }),
@@ -1495,7 +1503,7 @@ mod tests {
     async fn guids_resolve_the_registered_tab_and_starting_frame_scope() {
         let browser = FakeBrowser::start(Replies::default()).await;
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),

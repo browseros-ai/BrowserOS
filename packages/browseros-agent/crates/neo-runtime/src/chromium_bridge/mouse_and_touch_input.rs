@@ -305,11 +305,9 @@ impl InputDevices {
 /// One command of a plan, decided before anything is written.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Planned {
-    /// The `Input.*` method, or `None` for a change of state that writes nothing (a move of no
-    /// steps still moves Playwright's pointer).
-    pub(crate) method: Option<&'static str>,
-    /// Its params, already JSON, written unchanged.
-    pub(crate) params: String,
+    /// The write, its params already JSON and written as planned, or `None` for a change of
+    /// state that writes nothing (a move of no steps still moves Playwright's pointer).
+    pub(crate) input: Option<cdp::Input>,
     pub(crate) effect: Effect,
     /// The command this one undoes (a release its press, a modifier restore the change it
     /// restores): written even after the writer stopped when that one may have been written,
@@ -350,14 +348,11 @@ pub(crate) enum DragStep {
 
 /// Neo: building a plan, which no script sees.
 impl Planned {
-    /// `command`, written on its own, undoing nothing: its method, and its params as its struct
-    /// serializes them, so key events keep Playwright's field order. Serializing these plain
-    /// structs cannot fail; if it ever did, Chromium would refuse the empty params, and the
-    /// write counts as failed.
+    /// `command`, written on its own, undoing nothing, its params as its struct serializes them,
+    /// so key events keep Playwright's field order ([`cdp::Input`]).
     pub(crate) fn write<C: Command<Via = cdp::Write>>(command: &C, effect: Effect) -> Self {
         Self {
-            method: Some(C::METHOD),
-            params: serde_json::to_string(command).unwrap_or_default(),
+            input: Some(cdp::Input::new(command)),
             effect,
             undoes: None,
             with_next: false,
@@ -367,11 +362,22 @@ impl Planned {
         }
     }
 
+    /// The planned write's method, `None` for a change of state.
+    #[cfg(test)]
+    pub(crate) fn method(&self) -> Option<&'static str> {
+        self.input.as_ref().map(cdp::Input::method)
+    }
+
+    /// The planned write's params, empty for a change of state.
+    #[cfg(test)]
+    pub(crate) fn params(&self) -> &str {
+        self.input.as_ref().map_or("", cdp::Input::params)
+    }
+
     /// A change of state that writes nothing.
     pub(crate) fn state_only(effect: Effect) -> Self {
         Self {
-            method: None,
-            params: String::new(),
+            input: None,
             effect,
             undoes: None,
             with_next: false,
@@ -413,7 +419,7 @@ impl Plan {
     pub(crate) fn writes(&self) -> usize {
         self.commands
             .iter()
-            .filter(|command| command.method.is_some())
+            .filter(|command| command.input.is_some())
             .count()
     }
 }
@@ -495,7 +501,7 @@ pub(crate) fn plan_free_move(
     let first = plan.commands.len();
     plan_move(plan, simulated, to, steps);
     for command in &mut plan.commands[first..] {
-        if command.method.is_some() {
+        if command.input.is_some() {
             command.drag = DragStep::Move;
         }
     }
@@ -730,24 +736,26 @@ pub(crate) fn plan_retire(plan: &mut Plan, simulated: &mut InputDevices, owner: 
 // The seam a turn provides, and the writer.
 // ---------------------------------------------------------------------------------------------
 
-/// Neo: where a writer's commands go, the run's session at its socket incarnation (`page.rs`
-/// `send_input_json`), or a recording fake under paused time in the tests.
+/// Neo: where a writer's commands go, the run's session at its socket incarnation (`page.rs`,
+/// through `cdp::Session::write`), or a recording fake under paused time in the tests. Every
+/// write carries the call's delivery record.
 pub(crate) trait InputSender: Send + Sync + 'static {
-    /// Sends one `Input.*` command, its params already serialized.
+    /// Writes one planned `Input.*` command.
     fn send_input(
         &self,
-        method: &'static str,
-        params: String,
+        input: &cdp::Input,
+        delivery: &InputTicket,
     ) -> impl Future<Output = Result<(), CdpError>> + Send;
 
-    /// Playwright's `DragManager.interceptDragCausedByMove` around one `mouseMoved` (`params`)
+    /// Playwright's `DragManager.interceptDragCausedByMove` around one `mouseMoved` (`moved`)
     /// made with the left button held: the drag Chromium handed over when the move started one
     /// the page did not prevent, else `None`. A sender that cannot see the page just moves.
     fn move_intercepting_drag(
         &self,
-        params: String,
+        moved: &cdp::Input,
+        delivery: &InputTicket,
     ) -> impl Future<Output = Result<Option<Value>, CdpError>> + Send {
-        async move { self.send_input(MOUSE, params).await.map(|()| None) }
+        async move { self.send_input(moved, delivery).await.map(|()| None) }
     }
 }
 
@@ -800,12 +808,15 @@ pub(crate) struct Written {
 /// the session is gone. A `pause` is cut short too.
 pub(crate) async fn write_plan(
     sender: &impl InputSender,
+    delivery: &InputTicket,
     sink: &impl EffectSink,
     plan: &Plan,
     cut_short: &CancellationToken,
 ) -> Written {
     let mut writer = Writer::default();
-    writer.write(sender, sink, &plan.commands, cut_short).await;
+    writer
+        .write(sender, delivery, sink, &plan.commands, cut_short)
+        .await;
     let mut planned = plan.writes();
     let mut typed = true;
     if let Some(tail) = &plan.tail {
@@ -823,7 +834,9 @@ pub(crate) async fn write_plan(
                 break;
             };
             planned += chunk.writes();
-            writer.write(sender, sink, &chunk.commands, cut_short).await;
+            writer
+                .write(sender, delivery, sink, &chunk.commands, cut_short)
+                .await;
         }
     }
     let complete = !writer.refused && typed && writer.outcomes.len() == planned;
@@ -844,8 +857,8 @@ struct Writer {
 /// Neo: one command as the writer sends it: as planned (its params patched after a stop),
 /// replaced by a drag event, or written as nothing (a press while a drag runs).
 enum Outgoing {
-    Planned(Option<String>),
-    Drag { params: String, ends: bool },
+    Planned(Option<cdp::Input>),
+    Drag { input: cdp::Input, ends: bool },
     Skipped,
 }
 
@@ -855,6 +868,7 @@ impl Writer {
     async fn write(
         &mut self,
         sender: &impl InputSender,
+        delivery: &InputTicket,
         sink: &impl EffectSink,
         commands: &[Planned],
         cut_short: &CancellationToken,
@@ -866,7 +880,7 @@ impl Writer {
                 // The socket that carried the session is gone: nothing more is written, but a
                 // run end's bookkeeping (state only, written even after a stop) still applies.
                 let command = &commands[index];
-                if command.method.is_none() && command.always {
+                if command.input.is_none() && command.always {
                     sink.apply(&command.effect, true);
                 }
                 index += 1;
@@ -879,7 +893,9 @@ impl Writer {
                     self.stopped = true;
                 }
                 if !self.stopped {
-                    written[index] = self.free_move(sender, sink, &commands[index]).await;
+                    written[index] = self
+                        .free_move(sender, delivery, sink, &commands[index])
+                        .await;
                 }
                 index += 1;
                 continue;
@@ -932,28 +948,21 @@ impl Writer {
                 }
                 batch.push((at, outgoing));
             }
-            let sends = batch.into_iter().map(|(at, outgoing)| {
-                let command = &commands[at];
-                let (send, ends) = match outgoing {
-                    Outgoing::Skipped => (None, false),
-                    Outgoing::Drag { params, ends } => {
-                        (Some(sender.send_input(DRAG, params)), ends)
+            // Each command's write as it goes out, owned here so the sends below can borrow it.
+            let outgoing: Vec<(usize, Option<cdp::Input>, bool)> = batch
+                .into_iter()
+                .map(|(at, outgoing)| match outgoing {
+                    Outgoing::Skipped => (at, None, false),
+                    Outgoing::Drag { input, ends } => (at, Some(input), ends),
+                    Outgoing::Planned(patched) => {
+                        (at, patched.or_else(|| commands[at].input.clone()), false)
                     }
-                    Outgoing::Planned(params) => (
-                        command.method.map(|method| {
-                            sender.send_input(
-                                method,
-                                params.unwrap_or_else(|| command.params.clone()),
-                            )
-                        }),
-                        false,
-                    ),
-                };
-                async move {
-                    match send {
-                        Some(send) => (at, Some(send.await), ends),
-                        None => (at, None, ends),
-                    }
+                })
+                .collect();
+            let sends = outgoing.iter().map(|(at, input, ends)| async move {
+                match input {
+                    Some(input) => (*at, Some(sender.send_input(input, delivery).await), *ends),
+                    None => (*at, None, *ends),
                 }
             });
             for (at, result, ends) in future::join_all(sends).await {
@@ -975,7 +984,7 @@ impl Writer {
     ) -> bool {
         let Some(result) = result else {
             sink.apply(&command.effect, true);
-            if command.method.is_none() {
+            if command.input.is_none() {
                 return false;
             }
             // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.down`: `if (this._dragManager.isDragging())`
@@ -1007,29 +1016,30 @@ impl Writer {
     async fn free_move(
         &mut self,
         sender: &impl InputSender,
+        delivery: &InputTicket,
         sink: &impl EffectSink,
         command: &Planned,
     ) -> bool {
-        let (Some(method), Effect::Moved { x, y }) = (command.method, &command.effect) else {
+        let (Some(input), Effect::Moved { x, y }) = (&command.input, &command.effect) else {
             return false;
         };
         let (x, y) = (*x, *y);
         let devices = sink.devices();
         let modifiers = i64::from(devices.keyboard.modifiers);
-        let planned: Value = serde_json::from_str(&command.params).unwrap_or_default();
+        let planned: Value = serde_json::from_str(input.params()).unwrap_or_default();
         let result = if let Some(drag) = &devices.drag {
-            let params = drag_event("dragOver", x, y, &drag.data, modifiers);
-            let result = sender.send_input(DRAG, params).await;
+            let over = drag_event("dragOver", x, y, &drag.data, modifiers);
+            let result = sender.send_input(&over, delivery).await;
             sink.apply(&command.effect, result.is_ok());
             sink.apply(&Effect::DragMoved { x, y }, result.is_ok());
             result
         } else if planned["button"] == "left" {
-            match sender.move_intercepting_drag(command.params.clone()).await {
+            match sender.move_intercepting_drag(input, delivery).await {
                 Ok(Some(data)) => {
                     sink.apply(&command.effect, true);
-                    let params = drag_event("dragEnter", x, y, &data, modifiers);
+                    let enter = drag_event("dragEnter", x, y, &data, modifiers);
                     sink.apply(&Effect::DragStarted { data, x, y }, true);
-                    sender.send_input(DRAG, params).await
+                    sender.send_input(&enter, delivery).await
                 }
                 Ok(None) => {
                     sink.apply(&command.effect, true);
@@ -1041,7 +1051,7 @@ impl Writer {
                 }
             }
         } else {
-            let result = sender.send_input(method, command.params.clone()).await;
+            let result = sender.send_input(input, delivery).await;
             sink.apply(&command.effect, result.is_ok());
             result
         };
@@ -1063,7 +1073,13 @@ impl Writer {
 fn drag_outgoing(command: &Planned, devices: &InputDevices) -> Option<Outgoing> {
     let drag = devices.drag.as_ref()?;
     let modifiers = i64::from(devices.keyboard.modifiers);
-    let planned = || serde_json::from_str::<Value>(&command.params).unwrap_or_default();
+    let planned = || {
+        command
+            .input
+            .as_ref()
+            .and_then(|input| serde_json::from_str::<Value>(input.params()).ok())
+            .unwrap_or_default()
+    };
     match command.drag {
         DragStep::Down => Some(Outgoing::Skipped),
         DragStep::Up => {
@@ -1073,13 +1089,13 @@ fn drag_outgoing(command: &Planned, devices: &InputDevices) -> Option<Outgoing> 
                 planned["y"].as_f64().unwrap_or(drag.y),
             );
             Some(Outgoing::Drag {
-                params: drag_event("drop", x, y, &drag.data, modifiers),
+                input: drag_event("drop", x, y, &drag.data, modifiers),
                 ends: true,
             })
         }
         DragStep::Cancel | DragStep::Escape => Some(Outgoing::Drag {
             // Playwright: `server/chromium/crDragDrop.ts` `DragManager.cancelDrag`: `type: 'dragCancel',`
-            params: serialized(&input::DispatchDragEvent {
+            input: cdp::Input::new(&input::DispatchDragEvent {
                 data: &json!({ "items": [], "dragOperationsMask": DRAG_OPERATIONS_ALL }),
                 modifiers: None,
                 kind: "dragCancel",
@@ -1095,10 +1111,10 @@ fn drag_outgoing(command: &Planned, devices: &InputDevices) -> Option<Outgoing> 
 /// Playwright: `server/chromium/crDragDrop.ts` `DragManager.cancelDrag`: `dragOperationsMask: 0xFFFF,`
 const DRAG_OPERATIONS_ALL: i64 = 0xFFFF;
 
-/// Neo: `Input.dispatchDragEvent`'s params, as Playwright's `DragManager` builds them: the event, its point,
-/// the intercepted drag's data and the held modifiers.
-fn drag_event(kind: &str, x: f64, y: f64, data: &Value, modifiers: i64) -> String {
-    serialized(&input::DispatchDragEvent {
+/// Neo: one `Input.dispatchDragEvent`, as Playwright's `DragManager` builds it: the event, its
+/// point, the intercepted drag's data and the held modifiers.
+fn drag_event(kind: &str, x: f64, y: f64, data: &Value, modifiers: i64) -> cdp::Input {
+    cdp::Input::new(&input::DispatchDragEvent {
         data,
         modifiers: Some(modifiers),
         kind,
@@ -1107,47 +1123,28 @@ fn drag_event(kind: &str, x: f64, y: f64, data: &Value, modifiers: i64) -> Strin
     })
 }
 
-/// Neo: a drag event's params as JSON. Serializing this plain struct cannot fail; if it ever
-/// did, Chromium would refuse the empty params, and the write counts as failed.
-fn serialized(event: &input::DispatchDragEvent<'_>) -> String {
-    serde_json::to_string(event).unwrap_or_default()
-}
-
 /// Neo: the `Input` methods the writer tells apart, named once, by their declarations.
 const KEY: &str = input::KeyEvent::METHOD;
 /// Neo: as [`KEY`].
 const MOUSE: &str = DispatchMouseEvent::METHOD;
 /// Neo: as [`KEY`].
 const TOUCH: &str = input::DispatchTouchEvent::METHOD;
-/// Neo: as [`KEY`].
-const DRAG: &str = input::DispatchDragEvent::METHOD;
 
-/// Neo: `command`'s params with the modifiers (and, for a mouse event, the buttons) that
+/// Neo: `command`'s write with the modifiers (and, for a mouse event, the buttons) that
 /// `after`, the tab once this command is applied, holds; `None` for any other command. Only
 /// the numbers change, in place, so the params keep Playwright's field order.
-fn actual_params(command: &Planned, after: &InputDevices) -> Option<String> {
+fn actual_params(command: &Planned, after: &InputDevices) -> Option<cdp::Input> {
+    let input = command.input.as_ref()?;
     let modifiers = i64::from(after.keyboard.modifiers);
-    match command.method? {
-        KEY | TOUCH => Some(with_number(&command.params, "modifiers", modifiers)),
-        MOUSE => {
-            let params = with_number(&command.params, "modifiers", modifiers);
-            Some(with_number(&params, "buttons", after.buttons_mask()))
-        }
+    match input.method() {
+        KEY | TOUCH => Some(input.with_number("modifiers", modifiers)),
+        MOUSE => Some(
+            input
+                .with_number("modifiers", modifiers)
+                .with_number("buttons", after.buttons_mask()),
+        ),
         _ => None,
     }
-}
-
-/// Neo: `params` with the number its `name` field holds replaced by `value`; unchanged when
-/// it has no such field.
-fn with_number(params: &str, name: &str, value: i64) -> String {
-    let key = format!("\"{name}\":");
-    let Some(start) = params.find(&key).map(|at| at + key.len()) else {
-        return params.to_string();
-    };
-    let end = params[start..]
-        .find(|character: char| !(character.is_ascii_digit() || character == '-'))
-        .map_or(params.len(), |length| start + length);
-    format!("{}{value}{}", &params[..start], &params[end..])
 }
 
 /// Neo: what every writer reports. The whole plan written and every command acknowledged →
@@ -1212,7 +1209,7 @@ pub(crate) fn start_writer<D: Devices, C: Send + 'static>(
     let (report_sender, receiver) = oneshot::channel();
     let writer_cut_short = cut_short.clone();
     spawn(Box::pin(async move {
-        let written = write_plan(&sender, &turn, &plan, &writer_cut_short).await;
+        let written = write_plan(&sender, &ticket, &turn, &plan, &writer_cut_short).await;
         let reported = report(&written, ticket);
         // Every command is answered: the tab's next input may start.
         drop(turn);
@@ -1280,7 +1277,14 @@ mod tests {
         assert!(plan.tail.is_some());
         let turn = Turn::of(InputDevices::default(), "A");
         let sender = Sender::answering([]);
-        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        let written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &plan,
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(written.complete);
         assert_eq!(written.outcomes.len(), 2 * 1000);
         let sent = sender.sent();
@@ -1298,7 +1302,11 @@ mod tests {
             time::sleep(ROUND_TRIP * 301).await;
             cut_short.cancel();
         };
-        let (written, ()) = tokio::join!(write_plan(&sender, &turn, &plan, &cut_short), stopper);
+        let delivery = unread_ticket();
+        let (written, ()) = tokio::join!(
+            write_plan(&sender, &delivery, &turn, &plan, &cut_short),
+            stopper
+        );
         assert!(!written.complete, "the rest of the text never went out");
         let sent = sender.sent();
         assert!(
@@ -1346,7 +1354,14 @@ mod tests {
         plan_button_releases(&mut release, &mut simulated, &run("A"));
         assert_eq!(release.writes(), 0, "A's end writes nothing B still holds");
         let sender = Sender::answering([]);
-        let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
+        let _written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &release,
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(sender.sent().is_empty());
         let held = turn.devices();
         assert_eq!(held.keyboard.pressed, [("ShiftLeft", run("B"))]);
@@ -1361,7 +1376,14 @@ mod tests {
         let mut release = Plan::default();
         keyboard_input::plan_key_releases(&mut release, &mut simulated, &run("B"));
         plan_button_releases(&mut release, &mut simulated, &run("B"));
-        let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
+        let _written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &release,
+            &CancellationToken::new(),
+        )
+        .await;
         assert_eq!(
             sender.sent(),
             ["keyUp", "mouseReleased"],
@@ -1385,7 +1407,14 @@ mod tests {
         plan_up(&mut plan, &mut simulated, MouseButton::Left, 1, None);
         let sender = Sender::dragging([Some(data.clone())]);
         let turn = Turn::of(InputDevices::default(), "A");
-        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        let written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &plan,
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(written.complete);
         assert_eq!(
             sender.sent(),
@@ -1408,7 +1437,14 @@ mod tests {
 
         let sender = Sender::dragging([None, None]);
         let turn = Turn::of(InputDevices::default(), "A");
-        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        let written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &plan,
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(written.complete);
         assert_eq!(
             sender.sent(),
@@ -1458,7 +1494,14 @@ mod tests {
         .expect("Escape");
         let sender = Sender::answering([]);
         let turn = Turn::of(running.clone(), "A");
-        let _written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        let _written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &plan,
+            &CancellationToken::new(),
+        )
+        .await;
         assert_eq!(sender.sent(), ["dragCancel", "keyUp"]);
         assert_eq!(turn.devices().drag, None);
 
@@ -1478,7 +1521,14 @@ mod tests {
         );
         let sender = Sender::answering([]);
         let turn = Turn::of(running.clone(), "A");
-        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        let written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &plan,
+            &CancellationToken::new(),
+        )
+        .await;
         assert_eq!(
             sender.sent(),
             ["mouseMoved", "drop"],
@@ -1494,7 +1544,14 @@ mod tests {
         plan_button_releases(&mut release, &mut simulated, &run("A"));
         let sender = Sender::answering([]);
         let turn = Turn::of(running, "A");
-        let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
+        let _written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &release,
+            &CancellationToken::new(),
+        )
+        .await;
         assert_eq!(
             sender.sent(),
             ["dragCancel"],
@@ -1532,7 +1589,14 @@ mod tests {
         plan_button_releases(&mut end_a, &mut simulated, &run("A"));
         let sender = Sender::answering([]);
         let turn = Turn::of(running, "observer");
-        let written = write_plan(&sender, &turn, &end_a, &CancellationToken::new()).await;
+        let written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &end_a,
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(written.complete);
         assert_eq!(
             sender.sent(),
@@ -1575,7 +1639,8 @@ mod tests {
             let turn = Turn::of(running.clone(), "observer");
             let sender = Sender::answering([answer]);
             let never = CancellationToken::new();
-            let write = write_plan(&sender, &turn, &end_a, &never);
+            let delivery = unread_ticket();
+            let write = write_plan(&sender, &delivery, &turn, &end_a, &never);
             if exit == "dropped" {
                 let dropped = time::timeout(Duration::from_secs(1), write).await;
                 assert!(dropped.is_err(), "the run's deadline dropped it");
@@ -1592,7 +1657,14 @@ mod tests {
             keyboard_input::plan_key_releases(&mut end_b, &mut simulated, &run("B"));
             plan_button_releases(&mut end_b, &mut simulated, &run("B"));
             let sender = Sender::answering([]);
-            let _written = write_plan(&sender, &turn, &end_b, &CancellationToken::new()).await;
+            let _written = write_plan(
+                &sender,
+                &unread_ticket(),
+                &turn,
+                &end_b,
+                &CancellationToken::new(),
+            )
+            .await;
             assert_eq!(
                 sender.sent(),
                 ["dragCancel"],
@@ -1626,7 +1698,14 @@ mod tests {
         keyboard_input::plan_key_releases(&mut release, &mut simulated, &run("A"));
         plan_button_releases(&mut release, &mut simulated, &run("A"));
         let sender = Sender::answering([Answer::Fail, Answer::Ok, Answer::Ok]);
-        let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
+        let _written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &release,
+            &CancellationToken::new(),
+        )
+        .await;
         let actual = turn.devices();
         assert_eq!(
             actual.keyboard.pressed,
@@ -1658,7 +1737,14 @@ mod tests {
         let mut end_a = Plan::default();
         keyboard_input::plan_key_releases(&mut end_a, &mut devices, &run("A"));
         let failed = Sender::answering([Answer::Fail]);
-        let written = write_plan(&failed, &observer, &end_a, &CancellationToken::new()).await;
+        let written = write_plan(
+            &failed,
+            &unread_ticket(),
+            &observer,
+            &end_a,
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(written.outcomes[0].is_err());
         assert_eq!(observer.devices().keyboard.modifiers, keyboard_input::SHIFT);
 
@@ -1673,13 +1759,27 @@ mod tests {
         )
         .expect("key");
         let sender = Sender::answering([]);
-        let _written = write_plan(&sender, &observer, &down_b, &CancellationToken::new()).await;
+        let _written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &observer,
+            &down_b,
+            &CancellationToken::new(),
+        )
+        .await;
 
         let mut devices = observer.devices();
         let mut end_b = Plan::default();
         keyboard_input::plan_key_releases(&mut end_b, &mut devices, &run("B"));
         let release = Sender::answering([]);
-        let _written = write_plan(&release, &observer, &end_b, &CancellationToken::new()).await;
+        let _written = write_plan(
+            &release,
+            &unread_ticket(),
+            &observer,
+            &end_b,
+            &CancellationToken::new(),
+        )
+        .await;
         assert_eq!(
             release.sent(),
             ["keyUp"],
@@ -1699,8 +1799,8 @@ mod tests {
     fn sent_events(plan: &Plan) -> Vec<Value> {
         plan.commands
             .iter()
-            .filter(|command| command.method.is_some())
-            .map(|command| serde_json::from_str(&command.params).expect("params are JSON"))
+            .filter_map(|command| command.input.as_ref())
+            .map(|input| serde_json::from_str(input.params()).expect("params are JSON"))
             .collect()
     }
 
@@ -1747,9 +1847,13 @@ mod tests {
     }
 
     impl InputSender for Sender {
-        async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
-            let params: Value = serde_json::from_str(&params).expect("params are JSON");
-            let kind = match method {
+        async fn send_input(
+            &self,
+            input: &cdp::Input,
+            _delivery: &InputTicket,
+        ) -> Result<(), CdpError> {
+            let params: Value = serde_json::from_str(input.params()).expect("params are JSON");
+            let kind = match input.method() {
                 "Input.insertText" => "insertText".to_string(),
                 _ => params["type"].as_str().unwrap_or_default().to_string(),
             };
@@ -1764,7 +1868,7 @@ mod tests {
             match answer {
                 Answer::Ok => Ok(()),
                 Answer::Fail => Err(CdpError::Timeout {
-                    method: method.to_string(),
+                    method: input.method().to_string(),
                 }),
                 Answer::Refuse => Err(CdpError::ConnectionEpochChanged {
                     expected: 1,
@@ -1775,8 +1879,12 @@ mod tests {
             }
         }
 
-        async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
-            self.send_input("Input.dispatchMouseEvent", params).await?;
+        async fn move_intercepting_drag(
+            &self,
+            moved: &cdp::Input,
+            delivery: &InputTicket,
+        ) -> Result<Option<Value>, CdpError> {
+            self.send_input(moved, delivery).await?;
             let drag = self.drags.lock().expect("drags").pop_front().flatten();
             self.sent.lock().expect("sent").push(
                 if drag.is_some() {
@@ -1831,6 +1939,11 @@ mod tests {
         fn owner(&self) -> Owner {
             self.owner.clone()
         }
+    }
+
+    /// A delivery record no test reads, for a writer the test drives itself.
+    fn unread_ticket() -> InputTicket {
+        fresh_ticket().1
     }
 
     fn fresh_ticket() -> (Arc<DeliveryCell>, InputTicket) {
@@ -2142,7 +2255,14 @@ mod tests {
         let turn = Turn::of(InputDevices::default(), "A");
         let (cell, ticket) = fresh_ticket();
         let started = time::Instant::now();
-        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        let written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &plan,
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(matches!(report(&written, ticket), PressReport::Acked(_)));
         assert_eq!(cell.delivery(), Delivery::Done);
         assert_eq!(
@@ -2179,7 +2299,14 @@ mod tests {
         .expect("Shift");
         let sender = Sender::answering([Answer::Ok, Answer::Fail]);
         let turn = Turn::of(InputDevices::default(), "A");
-        let written = write_plan(&sender, &turn, &plan, &CancellationToken::new()).await;
+        let written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &plan,
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(!written.outcomes.iter().all(Result::is_ok));
         let devices = turn.devices();
         assert_eq!(devices.keyboard.modifiers, SHIFT);
@@ -2255,7 +2382,14 @@ mod tests {
         let turn = || Turn::of(InputDevices::default(), "A");
         let sender = Sender::answering([Answer::Fail, Answer::Fail]);
         let (cell, ticket) = fresh_ticket();
-        let written = write_plan(&sender, &turn(), &tap(), &CancellationToken::new()).await;
+        let written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn(),
+            &tap(),
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(matches!(
             report(&written, ticket),
             PressReport::Failed { closed: false, .. }
@@ -2325,7 +2459,14 @@ mod tests {
 
         let sender = Sender::answering([Answer::Refuse, Answer::Refuse]);
         let (cell, ticket) = fresh_ticket();
-        let written = write_plan(&sender, &turn(), &tap(), &CancellationToken::new()).await;
+        let written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn(),
+            &tap(),
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(matches!(
             report(&written, ticket),
             PressReport::NothingWritten
@@ -2368,7 +2509,7 @@ mod tests {
         let cut_short = CancellationToken::new();
         cut_short.cancel();
         let sender = Sender::answering([]);
-        let _written = write_plan(&sender, &turn, &end, &cut_short).await;
+        let _written = write_plan(&sender, &unread_ticket(), &turn, &end, &cut_short).await;
         assert_eq!(sender.sent(), ["keyUp", "mouseReleased"], "cut short");
         assert_eq!(turn.devices().keyboard, KeyboardState::default());
         assert!(turn.devices().ended.is_empty() && turn.devices().mouse.buttons.is_empty());
@@ -2378,7 +2519,14 @@ mod tests {
         let turn = Turn::of(simulated.clone(), "observer");
         let end = end_of(&mut simulated);
         let sender = Sender::answering([Answer::Gone, Answer::Gone]);
-        let _written = write_plan(&sender, &turn, &end, &CancellationToken::new()).await;
+        let _written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &end,
+            &CancellationToken::new(),
+        )
+        .await;
         assert_eq!(turn.devices().ended, [run("A")], "session gone");
         assert_eq!(
             sender.sent(),
@@ -2393,7 +2541,13 @@ mod tests {
         let sender = Sender::answering([Answer::Hang]);
         let dropped = time::timeout(
             Duration::from_secs(1),
-            write_plan(&sender, &turn, &end, &CancellationToken::new()),
+            write_plan(
+                &sender,
+                &unread_ticket(),
+                &turn,
+                &end,
+                &CancellationToken::new(),
+            ),
         )
         .await;
         assert!(dropped.is_err(), "the run's deadline dropped it");
@@ -2405,7 +2559,14 @@ mod tests {
         keyboard_input::plan_key_releases(&mut later, &mut simulated, &run("B"));
         plan_button_releases(&mut later, &mut simulated, &run("B"));
         let sender = Sender::answering([]);
-        let _written = write_plan(&sender, &turn, &later, &CancellationToken::new()).await;
+        let _written = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &later,
+            &CancellationToken::new(),
+        )
+        .await;
         assert_eq!(sender.sent(), ["keyUp", "mouseReleased"]);
         assert_eq!(
             turn.devices(),
@@ -2437,7 +2598,14 @@ mod tests {
         keyboard_input::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
         plan_button_releases(&mut end_a, &mut simulated, &run("A"));
         let refused = Sender::answering([Answer::Refuse]);
-        let written = write_plan(&refused, &turn, &end_a, &CancellationToken::new()).await;
+        let written = write_plan(
+            &refused,
+            &unread_ticket(),
+            &turn,
+            &end_a,
+            &CancellationToken::new(),
+        )
+        .await;
         assert!(matches!(
             &written.outcomes[0],
             Err(CdpError::ConnectionEpochChanged { .. })
@@ -2453,13 +2621,27 @@ mod tests {
         )
         .expect("key");
         let sender = Sender::answering([]);
-        let _down = write_plan(&sender, &turn, &down_b, &CancellationToken::new()).await;
+        let _down = write_plan(
+            &sender,
+            &unread_ticket(),
+            &turn,
+            &down_b,
+            &CancellationToken::new(),
+        )
+        .await;
         let mut simulated = turn.devices();
         let mut end_b = Plan::default();
         keyboard_input::plan_key_releases(&mut end_b, &mut simulated, &run("B"));
         plan_button_releases(&mut end_b, &mut simulated, &run("B"));
         let released = Sender::answering([]);
-        let _end = write_plan(&released, &turn, &end_b, &CancellationToken::new()).await;
+        let _end = write_plan(
+            &released,
+            &unread_ticket(),
+            &turn,
+            &end_b,
+            &CancellationToken::new(),
+        )
+        .await;
         assert_eq!(
             released.sent(),
             ["keyUp"],
@@ -2490,7 +2672,14 @@ mod tests {
             keyboard_input::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
             plan_button_releases(&mut end_a, &mut simulated, &run("A"));
             let failed = Sender::answering([Answer::Fail, Answer::Fail]);
-            let _end = write_plan(&failed, &turn, &end_a, &CancellationToken::new()).await;
+            let _end = write_plan(
+                &failed,
+                &unread_ticket(),
+                &turn,
+                &end_a,
+                &CancellationToken::new(),
+            )
+            .await;
             assert_eq!(turn.devices().ended, [run("A")]);
             if live_b {
                 let mut simulated = turn.devices();
@@ -2506,6 +2695,7 @@ mod tests {
                 plan_down(&mut down_b, &mut simulated, MouseButton::Left, 1, &run("B"));
                 let _down = write_plan(
                     &Sender::answering([]),
+                    &unread_ticket(),
                     &turn,
                     &down_b,
                     &CancellationToken::new(),
@@ -2520,8 +2710,14 @@ mod tests {
                 );
                 plan_button_releases(&mut observer_end, &mut simulated, &run("observer"));
                 let sender = Sender::answering([]);
-                let _end =
-                    write_plan(&sender, &turn, &observer_end, &CancellationToken::new()).await;
+                let _end = write_plan(
+                    &sender,
+                    &unread_ticket(),
+                    &turn,
+                    &observer_end,
+                    &CancellationToken::new(),
+                )
+                .await;
                 assert!(
                     sender.sent().is_empty(),
                     "a live holder still needs its key and button"
@@ -2533,7 +2729,14 @@ mod tests {
             keyboard_input::plan_key_releases(&mut final_end, &mut simulated, &owner);
             plan_button_releases(&mut final_end, &mut simulated, &owner);
             let sender = Sender::answering([]);
-            let _end = write_plan(&sender, &turn, &final_end, &CancellationToken::new()).await;
+            let _end = write_plan(
+                &sender,
+                &unread_ticket(),
+                &turn,
+                &final_end,
+                &CancellationToken::new(),
+            )
+            .await;
             assert_eq!(sender.sent(), ["keyUp", "mouseReleased"]);
             let actual = turn.devices();
             assert_eq!(actual.keyboard, KeyboardState::default());

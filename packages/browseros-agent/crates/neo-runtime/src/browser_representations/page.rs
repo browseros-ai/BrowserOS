@@ -46,7 +46,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId, dom, target};
+use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId, dom};
 use futures_util::future;
 use neo_runtime_spec::injected::{
     ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetAction,
@@ -74,6 +74,8 @@ use crate::browser_representations::init_scripts::{self, Link, until_gone};
 use crate::browser_representations::locator_handlers::{self, LocatorHandlers};
 use crate::browser_representations::network::{Happening, Lookup, NetworkLog};
 use crate::browser_representations::routes::{Answer, ContextRoutes, Pause, Routes};
+use crate::chromium_bridge::cdp;
+use crate::chromium_bridge::cdp::input::{DragIntercepted, SetInterceptDrags};
 use crate::chromium_bridge::frame_selector::{self, FrameOwner};
 use crate::chromium_bridge::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
 use crate::chromium_bridge::keyboard_input;
@@ -94,8 +96,7 @@ use crate::playwright_methods::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
 use crate::playwright_methods::network_idle::{IdleChange, SharedIdle};
-use crate::progress::InputTicket;
-use crate::progress::{PlaywrightError, Progress};
+use crate::progress::{DeliveryCell, InputTicket, PlaywrightError, Progress};
 use crate::run::PageId;
 
 /// Detaching is best effort. It runs in the background after a run, so this bound only keeps
@@ -117,38 +118,28 @@ const DRAG_INTERCEPT_WAIT: Duration = Duration::from_secs(5);
 /// the browser answered the attach: the script's end, a failed or stopped setup, an answer
 /// that arrives after the run stopped, and a caller that drops the run's future.
 pub(crate) struct Session {
+    /// The door's session, attached through it ([`cdp::Browser::attach`]): it binds input to
+    /// the socket incarnation the attach was sent on, so a press is never sent on a
+    /// reconnected socket under a session id that does not exist there.
+    pub(crate) door: cdp::Session,
+    /// The connection and the session's id, for the sends here that still name their method.
     pub(crate) cdp: CdpClient,
     pub(crate) id: SessionId,
-    /// browseros-cdp's socket incarnation, read just before the attach is sent: the
-    /// incarnation `id` belongs to. Mouse input is written with `send_at_epoch(epoch, …)`, so
-    /// a press is never sent on a reconnected socket under a session id that does not exist
-    /// there.
-    epoch: u64,
     /// Drop is synchronous, so the detach and every cleanup task run on this runtime.
     tokio: TokioHandle,
 }
 
 impl Session {
     pub(crate) async fn attach(
-        cdp: CdpClient,
+        browser: cdp::Browser,
         page: PageId,
         tokio: TokioHandle,
     ) -> Result<Self, CdpError> {
-        let epoch = cdp.epoch();
-        let attached: target::AttachToTargetResult = cdp
-            .send_typed(
-                "Target.attachToTarget",
-                target::AttachToTargetParams {
-                    target_id: page.as_str().to_string(),
-                    flatten: Some(true),
-                },
-                None,
-            )
-            .await?;
+        let door = browser.attach(page.as_str()).await?;
         Ok(Self {
-            cdp,
-            id: SessionId::from(attached.session_id),
-            epoch,
+            cdp: browser.client().clone(),
+            id: door.id().clone(),
+            door,
             tokio,
         })
     }
@@ -156,19 +147,11 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let cdp = self.cdp.clone();
         let session = self.id.clone();
+        let detach = self.door.detach();
         self.tokio.spawn(async move {
-            let detach = cdp.send_typed::<_, Value>(
-                "Target.detachFromTarget",
-                target::DetachFromTargetParams {
-                    session_id: Some(session.as_str().to_string()),
-                    target_id: None,
-                },
-                None,
-            );
             match time::timeout(DETACH_TIMEOUT, detach).await {
-                Ok(Ok(_)) => {}
+                Ok(Ok(())) => {}
                 // Expected once the tab has closed: the session went with it.
                 Ok(Err(error)) => debug!(%session, %error, "detaching a run's session failed"),
                 Err(_) => debug!(%session, "detaching a run's session timed out"),
@@ -696,22 +679,12 @@ impl PageSession {
         let child_routes = Arc::clone(&routes);
         let init_children = Arc::new(InitChildren::default());
         let reported = Arc::clone(&init_children);
-        let events = PageEvents::new(
-            hub,
-            page.as_str(),
-            session.cdp.clone(),
-            session.id.clone(),
-            discovered,
-        );
+        let events = PageEvents::new(hub, page.as_str(), session.door.clone(), discovered);
         let child_events = events.clone();
         let network = Arc::new(NetworkLog::new(page.as_str().to_string()));
         let child_network = Arc::clone(&network);
-        let world = World::new(
-            session.cdp.clone(),
-            session.id.clone(),
-            page.as_str().to_string(),
-        )
-        .with_test_id(test_id);
+        let world =
+            World::new(session.door.clone(), page.as_str().to_string()).with_test_id(test_id);
         let session = Arc::new(session);
         let world = Arc::new(world);
         let frames = Arc::new(Frames::new(
@@ -785,9 +758,10 @@ impl PageSession {
         &self.session.id
     }
 
-    /// The browser connection the session lives on, for commands to its child sessions.
-    pub(crate) fn cdp(&self) -> &CdpClient {
-        &self.session.cdp
+    /// The tab's session, as the door sends on it; through it, the door reaches the browser
+    /// and the tab's child sessions.
+    pub(crate) fn cdp(&self) -> &cdp::Session {
+        &self.session.door
     }
 
     pub(crate) fn closed(&self) -> CancellationToken {
@@ -2062,7 +2036,7 @@ struct InitChildren(SyncMutex<HashMap<String, InitChild>>);
 /// Neo: one init-script session of an out-of-process frame.
 #[derive(Clone)]
 struct InitChild {
-    cdp: CdpClient,
+    cdp: cdp::Browser,
     link: Link,
 }
 
@@ -2111,7 +2085,9 @@ impl InitChild {
     async fn send(&self, method: &str, params: Value) -> bool {
         let sent = until_gone(
             &self.link.gone,
-            self.cdp.send(method, params, Some(&self.link.session)),
+            self.cdp
+                .client()
+                .send(method, params, Some(&self.link.session)),
         );
         matches!(time::timeout(CHILD_NETWORK_WAIT, sent).await, Ok(Some(_)))
     }
@@ -3410,10 +3386,11 @@ fn pixels(value: i64) -> f64 {
 // Input, written by `mouse_and_touch_input.rs`.
 // ---------------------------------------------------------------------------------------------
 
-/// Every input writer sends through the session at its socket incarnation.
+/// Every input writer writes through the door's session, at its socket incarnation
+/// ([`cdp::Session::write`]).
 impl InputSender for Arc<PageSession> {
-    async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
-        self.send_input_json(method, &params).await
+    async fn send_input(&self, input: &cdp::Input, delivery: &InputTicket) -> Result<(), CdpError> {
+        self.session.door.write(input, delivery).await
     }
 
     /// Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `await progress.race(client.send('Input.setInterceptDrags', { enabled: true }));`
@@ -3421,7 +3398,11 @@ impl InputSender for Arc<PageSession> {
     /// The listeners go into every frame's utility world, interception is on for the move
     /// alone and always turned off again, and a frame that saw a drag start hands Neo the
     /// drag Chromium intercepted.
-    async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
+    async fn move_intercepting_drag(
+        &self,
+        moved: &cdp::Input,
+        delivery: &InputTicket,
+    ) -> Result<Option<Value>, CdpError> {
         let frames = self.drag_frames().await;
         future::join_all(frames.iter().map(|frame| {
             time::timeout(
@@ -3431,23 +3412,17 @@ impl InputSender for Arc<PageSession> {
         }))
         .await;
         // Subscribed before interception is on, so its event cannot slip past.
-        let mut events = self.session.cdp.events();
-        if let Err(error) = self
-            .send_input_json("Input.setInterceptDrags", r#"{"enabled":true}"#)
-            .await
-        {
+        let mut events = self.session.door.events();
+        let intercept = |enabled| cdp::Input::new(&SetInterceptDrags { enabled });
+        if let Err(error) = self.session.door.write(&intercept(true), delivery).await {
             // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `this._crPage._page.safeNonStallingEvaluateInAllFrames('window.__cleanupDrag?.()', 'utility').catch(() => {});`
             // The listeners go on every exit, this one included.
             PageSession::cleanup_drag(&frames).await;
             return Err(error);
         }
-        let moved = self
-            .send_input_json("Input.dispatchMouseEvent", &params)
-            .await;
+        let moved = self.session.door.write(moved, delivery).await;
         let started = PageSession::cleanup_drag(&frames).await;
-        let disabled = self
-            .send_input_json("Input.setInterceptDrags", r#"{"enabled":false}"#)
-            .await;
+        let disabled = self.session.door.write(&intercept(false), delivery).await;
         moved?;
         disabled?;
         if !started {
@@ -3456,11 +3431,10 @@ impl InputSender for Arc<PageSession> {
         let intercepted = async {
             loop {
                 match events.recv().await {
-                    Ok(event)
-                        if event.method == "Input.dragIntercepted"
-                            && event.session_id.as_ref() == Some(&self.session.id) =>
-                    {
-                        return Ok(event.params["data"].clone());
+                    Ok(event) if event.on_session(self.session.door.id()) => {
+                        if let Some(intercepted) = event.decode::<DragIntercepted>() {
+                            return Ok(intercepted.data);
+                        }
                     }
                     Ok(_) | Err(RecvError::Lagged(_)) => {}
                     Err(RecvError::Closed) => return Err(CdpError::SessionGone),
@@ -3470,7 +3444,7 @@ impl InputSender for Arc<PageSession> {
         time::timeout(DRAG_INTERCEPT_WAIT, intercepted)
             .await
             .map_err(|_| CdpError::Timeout {
-                method: "Input.dragIntercepted".to_string(),
+                method: <DragIntercepted as cdp::Event>::METHOD.to_string(),
             })?
             .map(Some)
     }
@@ -3561,8 +3535,20 @@ async fn write_run_releases(sender: &impl InputSender, permit: &InputPermit) {
     let mut plan = Plan::default();
     keyboard_input::plan_key_releases(&mut plan, &mut simulated, &owner);
     mouse_and_touch_input::plan_button_releases(&mut plan, &mut simulated, &owner);
-    let written =
-        mouse_and_touch_input::write_plan(sender, permit, &plan, &CancellationToken::new()).await;
+    // No call's delivery records a run end's releases: this record exists only because every
+    // write takes one, and nobody reads it.
+    let record = Arc::new(DeliveryCell::default());
+    let Ok(delivery) = record.begin() else {
+        return;
+    };
+    let written = mouse_and_touch_input::write_plan(
+        sender,
+        &delivery,
+        permit,
+        &plan,
+        &CancellationToken::new(),
+    )
+    .await;
     if let Some(Err(error)) = written.outcomes.iter().find(|outcome| outcome.is_err()) {
         debug!(%error, "releasing the run's held input failed");
     }
@@ -3570,19 +3556,6 @@ async fn write_run_releases(sender: &impl InputSender, permit: &InputPermit) {
 
 // Input commands and the browser's platform go through these two.
 impl PageSession {
-    /// One input command on the session's own socket incarnation, its params already JSON and
-    /// written unchanged (key events keep Playwright's field order on the wire). browseros-cdp
-    /// refuses it with `ConnectionEpochChanged` before writing once the socket was replaced, so
-    /// no input goes out under a session id the new socket does not know, and a writer can
-    /// prove it wrote nothing.
-    pub(crate) async fn send_input_json(&self, method: &str, params: &str) -> Result<(), CdpError> {
-        self.session
-            .cdp
-            .send_raw_json_at_epoch(self.session.epoch, method, params, Some(&self.session.id))
-            .await
-            .map(|_| ())
-    }
-
     /// The browser's userAgent: `Browser.getVersion`, a browser-wide command sent without the
     /// session, as Playwright reads it once per browser (`crBrowser.ts`).
     pub(crate) async fn user_agent(&self) -> Result<String, CdpError> {
@@ -3612,6 +3585,13 @@ mod tests {
 
     const SESSION: &str = "S1";
     const MAIN: &str = "MAIN";
+
+    /// A delivery record no test reads, for a writer the test drives itself.
+    fn unread_ticket() -> InputTicket {
+        Arc::new(DeliveryCell::default())
+            .begin()
+            .expect("a fresh record")
+    }
 
     fn event(method: &str, session: Option<&str>, params: Value) -> CdpEvent {
         CdpEvent {
@@ -4438,8 +4418,7 @@ mod tests {
                 state,
                 navigations,
                 world: Arc::new(World::new(
-                    cdp.clone(),
-                    SessionId::from(SESSION),
+                    cdp::Browser::new(cdp.clone()).adopt(SessionId::from(SESSION)),
                     MAIN.to_string(),
                 )),
                 network: Arc::new(NetworkLog::new(MAIN.to_string())),
@@ -4484,9 +4463,13 @@ mod tests {
 
         let browser = FakeBrowser::start(Replies::default()).await;
         let id = PageId::new(PAGE.to_string());
-        let session = Session::attach(browser.cdp().await, id.clone(), TokioHandle::current())
-            .await
-            .expect("attach");
+        let session = Session::attach(
+            cdp::Browser::new(browser.cdp().await),
+            id.clone(),
+            TokioHandle::current(),
+        )
+        .await
+        .expect("attach");
         let page = Arc::new(PageSession::new(
             session,
             &id,
@@ -4529,7 +4512,7 @@ mod tests {
 
     /// A session on the fake's tab with its own tracker and closed token.
     async fn tracked_page(
-        cdp: CdpClient,
+        cdp: cdp::Browser,
         tasks: &TaskTracker,
         closed: &CancellationToken,
     ) -> Arc<PageSession> {
@@ -4567,7 +4550,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let tasks = TaskTracker::new();
         let closed = CancellationToken::new();
-        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let page = tracked_page(cdp::Browser::new(browser.cdp().await), &tasks, &closed).await;
         let (held, released) = oneshot::channel::<()>();
         page.spawn_while_open(async move {
             future::pending::<()>().await;
@@ -4596,7 +4579,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let tasks = TaskTracker::new();
         let closed = CancellationToken::new();
-        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let page = tracked_page(cdp::Browser::new(browser.cdp().await), &tasks, &closed).await;
         let (done, finished) = oneshot::channel();
         page.spawn_while_open(async move {
             time::sleep(Duration::from_millis(20)).await;
@@ -4633,7 +4616,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let tasks = TaskTracker::new();
         let closed = CancellationToken::new();
-        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let page = tracked_page(cdp::Browser::new(browser.cdp().await), &tasks, &closed).await;
         let tab = FrameTab {
             page: Arc::clone(&page),
             scope: FrameScope::Main,
@@ -4678,7 +4661,10 @@ mod tests {
             PageUpdates {
                 state,
                 navigations,
-                world: Arc::new(World::new(cdp, SessionId::from(SESSION), MAIN.to_string())),
+                world: Arc::new(World::new(
+                    cdp::Browser::new(cdp).adopt(SessionId::from(SESSION)),
+                    MAIN.to_string(),
+                )),
                 network: Arc::new(NetworkLog::new(MAIN.to_string())),
                 frames: None,
                 feeds: None,
@@ -4911,8 +4897,12 @@ mod tests {
     }
 
     impl InputSender for ReviewDelayedInput {
-        async fn send_input(&self, _method: &'static str, params: String) -> Result<(), CdpError> {
-            let value: Value = serde_json::from_str(&params).expect("input params");
+        async fn send_input(
+            &self,
+            input: &cdp::Input,
+            _delivery: &InputTicket,
+        ) -> Result<(), CdpError> {
+            let value: Value = serde_json::from_str(input.params()).expect("input params");
             self.events.lock().expect("events").push(
                 value["type"]
                     .as_str()
@@ -4978,8 +4968,14 @@ mod tests {
         let stopped = CancellationToken::new();
         let writer_stop = stopped.clone();
         let writer = tokio::spawn(async move {
-            let result =
-                mouse_and_touch_input::write_plan(&writer_sender, &a, &plan, &writer_stop).await;
+            let result = mouse_and_touch_input::write_plan(
+                &writer_sender,
+                &unread_ticket(),
+                &a,
+                &plan,
+                &writer_stop,
+            )
+            .await;
             drop(a);
             result
         });
@@ -5027,17 +5023,27 @@ mod tests {
         )
         .expect("B's Shift");
         let immediate = ReviewDelayedInput::new(false);
-        let _down =
-            mouse_and_touch_input::write_plan(&immediate, &b, &down_b, &CancellationToken::new())
-                .await;
+        let _down = mouse_and_touch_input::write_plan(
+            &immediate,
+            &unread_ticket(),
+            &b,
+            &down_b,
+            &CancellationToken::new(),
+        )
+        .await;
         let mut simulated = b.snapshot().expect("B's devices");
         let mut end_b = Plan::default();
         keyboard_input::plan_key_releases(&mut end_b, &mut simulated, &owner_b);
         mouse_and_touch_input::plan_button_releases(&mut end_b, &mut simulated, &owner_b);
         let releasing = ReviewDelayedInput::new(false);
-        let _end =
-            mouse_and_touch_input::write_plan(&releasing, &b, &end_b, &CancellationToken::new())
-                .await;
+        let _end = mouse_and_touch_input::write_plan(
+            &releasing,
+            &unread_ticket(),
+            &b,
+            &end_b,
+            &CancellationToken::new(),
+        )
+        .await;
         assert_eq!(
             releasing.events(),
             ["keyUp"],
@@ -5083,12 +5089,16 @@ mod tests {
             .expect("a");
         let sender = ReviewDelayedInput::new(false);
         let never = CancellationToken::new();
-        let _pressed = mouse_and_touch_input::write_plan(&sender, &permit, &press, &never).await;
+        let _pressed =
+            mouse_and_touch_input::write_plan(&sender, &unread_ticket(), &permit, &press, &never)
+                .await;
         assert!(sender.events().is_empty(), "an ended run presses nothing");
         let mut simulated = permit.snapshot().expect("devices");
         let mut end = Plan::default();
         keyboard_input::plan_key_releases(&mut end, &mut simulated, &a);
-        let _released = mouse_and_touch_input::write_plan(&sender, &permit, &end, &never).await;
+        let _released =
+            mouse_and_touch_input::write_plan(&sender, &unread_ticket(), &permit, &end, &never)
+                .await;
         assert_eq!(sender.events(), ["keyUp"], "its release still goes out");
         assert_eq!(permit.devices().keyboard, KeyboardState::default());
     }
@@ -5251,8 +5261,13 @@ mod tests {
     }
 
     impl InputSender for FuzzSender {
-        async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
-            let event: Value = serde_json::from_str(&params).expect("input params");
+        async fn send_input(
+            &self,
+            input: &cdp::Input,
+            _delivery: &InputTicket,
+        ) -> Result<(), CdpError> {
+            let method = input.method();
+            let event: Value = serde_json::from_str(input.params()).expect("input params");
             let (answer, held_back) = {
                 let mut browser = self.browser.lock().expect("browser");
                 let answer = browser.answer();
@@ -5286,8 +5301,12 @@ mod tests {
 
         /// The move, and then, with the left button down and no drag running, a drag the page
         /// starts three times in four, which Chromium hands over (`Input.dragIntercepted`).
-        async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
-            self.send_input("Input.dispatchMouseEvent", params).await?;
+        async fn move_intercepting_drag(
+            &self,
+            moved: &cdp::Input,
+            delivery: &InputTicket,
+        ) -> Result<Option<Value>, CdpError> {
+            self.send_input(moved, delivery).await?;
             let mut browser = self.browser.lock().expect("browser");
             let left_down = browser
                 .down
@@ -5455,8 +5474,14 @@ mod tests {
                 let mut simulated = permit.snapshot().expect("devices");
                 let mut plan = Plan::default();
                 call.plan(&mut plan, &mut simulated, &owner);
-                let written =
-                    mouse_and_touch_input::write_plan(&sender, &permit, &plan, &stop).await;
+                let written = mouse_and_touch_input::write_plan(
+                    &sender,
+                    &unread_ticket(),
+                    &permit,
+                    &plan,
+                    &stop,
+                )
+                .await;
                 let mut browser = sender.browser.lock().expect("browser");
                 browser.released.clear();
                 // A call whose every write was answered resolves, a drag's skipped press

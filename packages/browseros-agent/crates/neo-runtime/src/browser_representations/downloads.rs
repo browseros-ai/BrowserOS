@@ -49,6 +49,7 @@ use tracing::{debug, warn};
 use crate::artifacts::Artifacts;
 use crate::browser_representations::tabs::{self, Tabs};
 use crate::chromium_bridge::browser_connection_settings::{Setting, Switches};
+use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::discovery::{self, TargetInfo};
 use crate::events::{CONTEXT_GUID, Flushes};
 use crate::method_router::encode_result;
@@ -64,20 +65,19 @@ pub(crate) const DOWNLOAD_PREFIX: &str = "download@";
 /// the user's browser, so Neo leaves the saving to it (`default`: where, and under which name, the
 /// user's settings say) and only turns the reports on. Off is `default` without reports: CDP has
 /// no read of the behavior to restore, and `default` is the browser's own.
-pub(crate) static DOWNLOAD_EVENTS: Setting = Setting {
-    method: "Browser.setDownloadBehavior",
-    params: download_behavior,
-};
+pub(crate) struct DownloadEvents;
 
-fn download_behavior(on: bool, context: Option<&str>) -> Value {
-    let mut params = json!({ "behavior": "default" });
-    if on {
-        params["eventsEnabled"] = json!(true);
+impl Setting for DownloadEvents {
+    type Command = cdp::browser::SetDownloadBehavior;
+
+    fn command(on: bool, context: Option<&str>) -> Self::Command {
+        cdp::browser::SetDownloadBehavior {
+            behavior: "default".to_string(),
+            browser_context_id: context.map(str::to_string),
+            download_path: None,
+            events_enabled: on.then_some(true),
+        }
     }
-    if let Some(context) = context {
-        params["browserContextId"] = json!(context);
-    }
-    params
 }
 
 /// Neo: how many downloads a run keeps for their `Download` objects. Past it the oldest goes,
@@ -241,15 +241,18 @@ impl Downloads {
 /// The watcher also holds target discovery, for the tabs that open and close around a download
 /// ([`Opened`]); without it the run still hears every other download.
 pub(crate) async fn run(tabs: Tabs, switches: Switches) {
-    let cdp = tabs.cdp().clone();
+    let browser = tabs.cdp().clone();
     // Subscribed first: every report from the switches on reaches this receiver.
-    let events = cdp.events();
+    let events = browser.client().events();
     let flushes = tabs.events().watcher();
-    let discovery = switches.discovery.acquire(&cdp, None).await;
+    let discovery = switches.discovery.acquire(&browser, None).await;
     if let Err(error) = &discovery {
         debug!(%error, "the download watcher cannot see new tabs; a new window's download is lost");
     }
-    let hold = switches.downloads.acquire(&cdp, tabs.context_id()).await;
+    let hold = switches
+        .downloads
+        .acquire(&browser, tabs.context_id())
+        .await;
     tabs.downloads_ready();
     match hold {
         Ok(hold) => {
@@ -456,7 +459,11 @@ pub(crate) async fn serve(
                 params["browserContextId"] = json!(context);
             }
             progress
-                .race(tabs.cdp().send("Browser.cancelDownload", params, None))
+                .race(
+                    tabs.cdp()
+                        .client()
+                        .send("Browser.cancelDownload", params, None),
+                )
                 .await?
                 .map_err(|error| tabs::cdp_error(&error))?;
             Ok(None)
@@ -549,14 +556,14 @@ mod tests {
 
     #[test]
     fn tests_that_reports_switch_on_with_events_and_off_to_the_browsers_own_behavior() {
+        let params = |on, context| {
+            serde_json::to_value(DownloadEvents::command(on, context)).expect("params serialize")
+        };
         assert_eq!(
-            download_behavior(true, Some("CONTEXT")),
+            params(true, Some("CONTEXT")),
             json!({ "behavior": "default", "eventsEnabled": true, "browserContextId": "CONTEXT" })
         );
-        assert_eq!(
-            download_behavior(false, None),
-            json!({ "behavior": "default" })
-        );
+        assert_eq!(params(false, None), json!({ "behavior": "default" }));
     }
 
     #[test]
@@ -717,7 +724,7 @@ mod tests {
     async fn tests_that_save_as_copies_a_finished_download_into_the_artifact_directory() {
         let browser = FakeBrowser::start(Replies::default()).await;
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),

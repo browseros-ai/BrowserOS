@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use browseros_cdp::{CdpClient, CdpEvent, SessionId};
+use browseros_cdp::{CdpEvent, SessionId};
 use neo_runtime_spec::serve::SerializedError;
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
@@ -73,7 +73,9 @@ pub(crate) struct PageEvents {
     hub: EventHub,
     page_guid: String,
     target: String,
-    cdp: CdpClient,
+    /// The tab's own session, which the run attached, as the door sends on it.
+    tab: cdp::Session,
+    /// Its id.
     session: SessionId,
     /// The out-of-process frame sessions of this tab the run attached, whose console events the
     /// tab's watcher takes as the tab's, with the frame each hosts.
@@ -135,19 +137,13 @@ impl PageEvents {
 
     /// `discovered`: the run's discovery reported the tab as new, so its first lifecycle replay
     /// is the page's own new life and reaches listeners.
-    pub(crate) fn new(
-        hub: EventHub,
-        target: &str,
-        cdp: CdpClient,
-        session: SessionId,
-        discovered: bool,
-    ) -> Self {
+    pub(crate) fn new(hub: EventHub, target: &str, tab: cdp::Session, discovered: bool) -> Self {
         Self {
             hub,
             page_guid: quickjs_bridge::page_guid(&PageId::new(target.to_string())),
             target: target.to_string(),
-            cdp,
-            session,
+            session: tab.id().clone(),
+            tab,
             children: Arc::default(),
             args: Arc::default(),
             choosers: Arc::default(),
@@ -309,15 +305,15 @@ impl PageEvents {
             .unwrap_or_default()
     }
 
-    /// The client of the tab's sessions.
-    pub(crate) fn cdp(&self) -> &CdpClient {
-        &self.cdp
+    /// The tab's own session, through which the door reaches its child sessions too.
+    pub(crate) fn cdp(&self) -> &cdp::Session {
+        &self.tab
     }
 
     /// `session`, the tab's own or one of its out-of-process frames', as the door sends on it.
     /// These sessions only send here, never write input.
     fn on(&self, session: &SessionId) -> cdp::Session {
-        cdp::Session::adopt(self.cdp.clone(), session.clone())
+        self.tab.browser().adopt(session.clone())
     }
 
     /// The tab's own session, then each out-of-process frame session of it the run attached.
@@ -1133,8 +1129,7 @@ mod tests {
         let events = PageEvents::new(
             hub.clone(),
             "T",
-            browser.cdp().await,
-            SessionId::from("s"),
+            cdp::Browser::new(browser.cdp().await).adopt(SessionId::from("s")),
             false,
         );
         let switches = || -> Vec<Value> {
@@ -1179,8 +1174,7 @@ mod tests {
         let events = PageEvents::new(
             EventHub::default(),
             "T",
-            browser.cdp().await,
-            SessionId::from("s"),
+            cdp::Browser::new(browser.cdp().await).adopt(SessionId::from("s")),
             false,
         );
         let context = |method: &str, params: Value| CdpEvent {
@@ -1245,8 +1239,7 @@ mod tests {
             let events = PageEvents::new(
                 hub.clone(),
                 "T",
-                cdp.clone(),
-                SessionId::from("s"),
+                cdp::Browser::new(cdp.clone()).adopt(SessionId::from("s")),
                 discovered,
             );
             events.lifecycle(&loaded);

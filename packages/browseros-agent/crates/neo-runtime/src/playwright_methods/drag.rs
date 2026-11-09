@@ -158,10 +158,10 @@ mod tests {
             .map(|plan| {
                 plan.commands
                     .iter()
-                    .filter(|command| command.method.is_some())
+                    .filter(|command| command.method().is_some())
                     .map(|command| {
                         let event: Value =
-                            serde_json::from_str(&command.params).expect("params are JSON");
+                            serde_json::from_str(command.params()).expect("params are JSON");
                         event["type"].as_str().unwrap_or_default().to_string()
                     })
                     .collect()

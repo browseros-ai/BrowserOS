@@ -1209,6 +1209,7 @@ mod tests {
     use tokio::time::Instant;
 
     use super::*;
+    use crate::chromium_bridge::cdp;
     use crate::chromium_bridge::mouse_and_touch_input::{Devices, EffectSink, InputSender};
     use crate::playwright_methods::click::tests::{FakeInput, FakeTab, Step, Writes, fake_owner};
     use crate::progress::DeliveryCell;
@@ -1744,11 +1745,15 @@ mod tests {
     }
 
     impl InputSender for FakeSender {
-        async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
+        async fn send_input(
+            &self,
+            input: &cdp::Input,
+            _delivery: &InputTicket,
+        ) -> Result<(), CdpError> {
             let sent = Sent {
                 at: self.start.elapsed(),
-                method,
-                params,
+                method: input.method(),
+                params: input.params().to_string(),
             };
             self.sent.lock().expect("sent").push(sent);
             let answer = self
@@ -2065,11 +2070,15 @@ mod tests {
     }
 
     impl InputSender for TabSender {
-        async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
+        async fn send_input(
+            &self,
+            input: &cdp::Input,
+            _delivery: &InputTicket,
+        ) -> Result<(), CdpError> {
             let sent = Sent {
                 at: Duration::ZERO,
-                method,
-                params,
+                method: input.method(),
+                params: input.params().to_string(),
             };
             self.calls.lock().expect("calls").push(describe(&sent));
             time::sleep(self.duration).await;

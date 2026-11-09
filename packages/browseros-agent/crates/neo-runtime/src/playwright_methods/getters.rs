@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::sync::MutexGuard;
 use std::time::Duration;
 
-use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId, browser};
+use browseros_cdp::{CdpError, CdpEvent, SessionId, browser};
 use neo_runtime_spec::serve::{FrameChannel, FrameInitializer};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,6 +24,7 @@ use tokio::time::Instant;
 use crate::browser_representations::page;
 use crate::browser_representations::page::PageState;
 use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::frames::{FrameInfo, FrameScope, Host};
 use crate::playwright_methods::click::PageError;
 use crate::progress::PlaywrightError;
@@ -64,9 +65,9 @@ struct FrameSnapshot {
 
 /// Neo: Keeps observed metadata and real detach events separate from session closure.
 impl FrameMetadata {
-    pub(crate) fn new(cdp: &CdpClient) -> Self {
+    pub(crate) fn new(cdp: &cdp::Browser) -> Self {
         Self {
-            events: cdp.events(),
+            events: cdp.client().events(),
             watched: HashSet::new(),
             known: Vec::new(),
             live: Vec::new(),
@@ -177,7 +178,7 @@ impl FrameMetadata {
 
     /// Neo: A fresh receiver precedes recovery's live read. Lost history remains explicit
     /// until that read succeeds and no queued structural change invalidates its snapshot.
-    fn begin_snapshot(&mut self, cdp: &CdpClient) -> FrameSnapshot {
+    fn begin_snapshot(&mut self, cdp: &cdp::Browser) -> FrameSnapshot {
         if self.closing {
             return FrameSnapshot {
                 revision: self.revision,
@@ -186,7 +187,7 @@ impl FrameMetadata {
         }
         let _collected = self.collect_events(&[]);
         if self.lost_events {
-            self.events = cdp.events();
+            self.events = cdp.client().events();
         }
         FrameSnapshot {
             revision: self.revision,
@@ -501,7 +502,7 @@ const MAX_RETRY_BACKOFF: Duration = Duration::from_millis(16);
 /// [`HISTORY_RETRY_BUDGET`] and then returns the last history error. Every caller races the
 /// whole call against the run's deadline, so the budget never outlives the run.
 pub(crate) async fn url(
-    cdp: &CdpClient,
+    cdp: &cdp::Browser,
     session: &SessionId,
     page: &PageId,
 ) -> Result<Option<String>, CdpError> {
@@ -523,8 +524,9 @@ pub(crate) async fn url(
     }
 }
 
-async fn current_url(cdp: &CdpClient, session: &SessionId) -> Result<String, CdpError> {
+async fn current_url(cdp: &cdp::Browser, session: &SessionId) -> Result<String, CdpError> {
     let reply = cdp
+        .client()
         .send("Page.getNavigationHistory", json!({}), Some(session))
         .await?;
     let history: NavigationHistory = serde_json::from_value(reply)?;
@@ -543,12 +545,13 @@ async fn current_url(cdp: &CdpClient, session: &SessionId) -> Result<String, Cdp
 }
 
 /// `page.isClosed()`: whether BrowserOS still has a tab for this target.
-pub(crate) async fn is_closed(cdp: &CdpClient, page: &PageId) -> Result<bool, CdpError> {
+pub(crate) async fn is_closed(cdp: &cdp::Browser, page: &PageId) -> Result<bool, CdpError> {
     let params = browser::GetTabInfoParams {
         target_id: Some(page.as_str().to_string()),
         tab_id: None,
     };
     let reply = cdp
+        .client()
         .send_typed::<_, Value>("Browser.getTabInfo", params, None)
         .await;
     match reply {
@@ -568,6 +571,8 @@ mod tests {
     use tokio::runtime::Handle;
     use tokio::sync::broadcast;
     use tokio_util::task::TaskTracker;
+
+    use crate::chromium_bridge::cdp;
 
     use super::{
         FrameField, FrameMetadata, frame, frame_records, frame_value, matches_url, watch_frame_host,
@@ -630,7 +635,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("fixture state: {error}"))
             .frames = Some(fixture_tree("before", true));
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
@@ -812,7 +817,7 @@ mod tests {
             .into(),
             ..FrameReplies::default()
         });
-        let cdp = browser.cdp().await;
+        let cdp = cdp::Browser::new(browser.cdp().await);
         let (tabs, _) = Tabs::open(
             cdp.clone(),
             Handle::current(),
@@ -830,7 +835,7 @@ mod tests {
             frame(&tabs, &page, &scope, FrameField::Name).await.unwrap(),
             ""
         );
-        cdp.disconnect().await;
+        cdp.client().disconnect().await;
         let error = frame(&tabs, &page, &scope, FrameField::Name)
             .await
             .unwrap_err();
@@ -860,6 +865,7 @@ mod tests {
         );
         page.request_close();
         tabs.cdp()
+            .client()
             .send("Target.closeTarget", json!({"targetId":PAGE}), None)
             .await
             .unwrap();
@@ -891,6 +897,7 @@ mod tests {
         let _events = lose_events(&page);
         page.request_close();
         tabs.cdp()
+            .client()
             .send("Target.closeTarget", json!({"targetId":PAGE}), None)
             .await
             .unwrap();
@@ -907,7 +914,7 @@ mod tests {
             "before"
         );
         let _events = lose_events(&page);
-        tabs.cdp().disconnect().await;
+        tabs.cdp().client().disconnect().await;
         let error = frame(&tabs, &page, &local, FrameField::Name)
             .await
             .unwrap_err();
@@ -1239,6 +1246,7 @@ mod tests {
         };
         page.request_close();
         tabs.cdp()
+            .client()
             .send("Target.closeTarget", json!({"targetId":PAGE}), None)
             .await
             .unwrap();
@@ -1249,7 +1257,7 @@ mod tests {
                 session_id: Some(session),
             })
             .unwrap();
-        tabs.cdp().disconnect().await;
+        tabs.cdp().client().disconnect().await;
         assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
         page.closed.cancel();
         assert_eq!(
@@ -1271,6 +1279,7 @@ mod tests {
         let (sender, session) = metadata_events(&page);
         page.request_close();
         tabs.cdp()
+            .client()
             .send("Target.closeTarget", json!({"targetId":PAGE}), None)
             .await
             .unwrap();
@@ -1287,7 +1296,7 @@ mod tests {
                 .unwrap();
             assert!(!metadata.finish_snapshot(&tree, snapshot));
         }
-        tabs.cdp().disconnect().await;
+        tabs.cdp().client().disconnect().await;
         assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
         page.closed.cancel();
         assert_eq!(
@@ -1310,6 +1319,7 @@ mod tests {
         };
         page.request_close();
         tabs.cdp()
+            .client()
             .send("Target.closeTarget", json!({"targetId":PAGE}), None)
             .await
             .unwrap();
@@ -1327,7 +1337,7 @@ mod tests {
                 .unwrap()
                 .finish_snapshot(&tree, snapshot)
         );
-        tabs.cdp().disconnect().await;
+        tabs.cdp().client().disconnect().await;
         assert!(frame(&tabs, &page, &local, FrameField::Name).await.is_err());
         page.closed.cancel();
         assert_eq!(
@@ -1359,7 +1369,7 @@ mod tests {
     #[tokio::test]
     async fn tests_that_child_host_setup_preserves_connection_failures() {
         let (_browser, tabs, page, host) = remote_fixture().await;
-        tabs.cdp().disconnect().await;
+        tabs.cdp().client().disconnect().await;
         assert!(watch_frame_host(&page, &host).await.is_err());
     }
 

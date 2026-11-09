@@ -336,7 +336,7 @@ async fn bring_to_front(
     // entry. Browser.activateTab changes that selection (see probes-runtime.md).
     if !info.is_active {
         let activated = progress
-            .race(tabs.cdp().send(
+            .race(tabs.cdp().client().send(
                 "Browser.activateTab",
                 json!({"targetId":entry.id.as_str()}),
                 None,
@@ -613,7 +613,7 @@ async fn close(tabs: &Tabs, entry: &PageEntry, progress: &Progress) -> Result<()
     }
     entry.request_close();
     let closed = progress
-        .race(tabs.cdp().send(
+        .race(tabs.cdp().client().send(
             "Target.closeTarget",
             json!({"targetId":entry.id.as_str()}),
             None,

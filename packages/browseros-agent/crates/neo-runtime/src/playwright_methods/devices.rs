@@ -214,7 +214,7 @@ pub(crate) async fn serve<T: KeyboardTab>(
     };
     let input = progress.race(tab.input()).await?;
     let plan = plan(call, &input, platform)?;
-    if !plan.commands.iter().any(|command| command.method.is_some()) {
+    if !plan.commands.iter().any(|command| command.input.is_some()) {
         // Nothing to write: a move of no steps still moves the pointer, as Playwright's does.
         for command in &plan.commands {
             input.apply(&command.effect, true);

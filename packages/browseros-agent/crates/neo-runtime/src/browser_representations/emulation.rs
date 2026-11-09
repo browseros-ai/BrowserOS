@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
+use browseros_cdp::{CdpError, CdpEvent, SessionId};
 use futures_util::future;
 use neo_runtime_spec::serve::{
     PageEmulateMediaParams, PageEmulateMediaParamsColorScheme, PageEmulateMediaParamsContrast,
@@ -38,6 +38,7 @@ use tracing::debug;
 
 use crate::browser_representations::page::PageSession;
 use crate::browser_representations::tabs;
+use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::frames::Host;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
@@ -219,10 +220,10 @@ impl PageEmulation {
     /// every out-of-process frame or worker the page starts waits for [`watch_targets`], which
     /// applies the context's options to it and only then lets it run.
     async fn attach_targets(self: &Arc<Self>, page: &PageSession) -> Result<(), CdpError> {
-        let cdp = page.cdp().clone();
+        let cdp = page.cdp().browser().clone();
         let parent = page.session_id().clone();
         // Subscribed before auto-attach is on, so no target it pauses goes unseen and unreleased.
-        let events = cdp.events();
+        let events = cdp.client().events();
         let stop = CancellationToken::new();
         if self.watching.set(stop.clone().drop_guard()).is_err() {
             return Ok(());
@@ -234,7 +235,8 @@ impl PageEmulation {
             Arc::downgrade(self),
             stop,
         ));
-        cdp.send("Target.setAutoAttach", auto_attach(), Some(&parent))
+        cdp.client()
+            .send("Target.setAutoAttach", auto_attach(), Some(&parent))
             .await
             .map(|_| ())
     }
@@ -245,13 +247,14 @@ impl PageEmulation {
     /// Returns whether its own session is watched for the targets it starts in turn.
     async fn configure_target(
         &self,
-        cdp: &CdpClient,
+        cdp: &cdp::Browser,
         parent: &SessionId,
         child: &SessionId,
         kind: &str,
     ) -> bool {
         let send = |method: &'static str, params: Value| {
-            Box::pin(sent(cdp.send(method, params, Some(child)))) as future::BoxFuture<'_, _>
+            Box::pin(sent(cdp.client().send(method, params, Some(child))))
+                as future::BoxFuture<'_, _>
         };
         let context = self
             .state
@@ -286,6 +289,7 @@ impl PageEmulation {
             _ => {
                 // Playwright: `server/chromium/crPage.ts` `FrameSession._onAttachedToTarget`: `parentSession._sendMayFail('Target.detachFromTarget', { sessionId: event.sessionId });`
                 let detached = cdp
+                    .client()
                     .send(
                         "Target.detachFromTarget",
                         json!({ "sessionId": child }),
@@ -498,6 +502,8 @@ impl PageEmulation {
             async move {
                 match page
                     .cdp()
+                    .browser()
+                    .client()
                     .send("Emulation.setEmulatedMedia", params, Some(session))
                     .await
                 {
@@ -633,7 +639,7 @@ impl State {
 /// Every target it misses stays paused, so it never skips one: a lagged event stream is logged,
 /// and Chromium lets a paused target run once the session that paused it detaches, with the run.
 async fn watch_targets(
-    cdp: CdpClient,
+    cdp: cdp::Browser,
     parent: SessionId,
     mut events: broadcast::Receiver<CdpEvent>,
     emulation: Weak<PageEmulation>,

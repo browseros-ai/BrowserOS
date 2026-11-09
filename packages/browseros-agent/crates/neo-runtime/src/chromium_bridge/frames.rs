@@ -119,10 +119,9 @@ impl Host {
         watch: Option<DropGuard>,
         contexts: Weak<Contexts>,
     ) -> Self {
-        let cdp = cdp::Session::adopt(session.cdp.clone(), session.id.clone());
         Self {
+            cdp: session.door.clone(),
             session,
-            cdp,
             target_id,
             parent,
             gone,
@@ -506,14 +505,14 @@ impl Frames {
     }
 
     async fn attach(&self, frame: &str, parent: &Arc<Host>) -> Result<Arc<Host>, PageError> {
-        let cdp = self.main.host.session.cdp.clone();
+        let browser = self.main.host.cdp.browser().clone();
         // Subscribe before attaching: even a detach delivered before the attach reply must
         // cancel this host. The tracked task reads a late reply and drops unclaimed sessions.
         let events = self.main.host.cdp.events();
         let session = self
             .tasks
             .spawn(Session::attach(
-                cdp,
+                browser,
                 PageId::new(frame.to_string()),
                 TokioHandle::current(),
             ))
@@ -824,17 +823,16 @@ mod tests {
             ]
             .into(),
         });
-        let cdp = browser.cdp().await;
         let session = Arc::new(
             Session::attach(
-                cdp.clone(),
+                cdp::Browser::new(browser.cdp().await),
                 PageId::new(PAGE.to_string()),
                 TokioHandle::current(),
             )
             .await
             .unwrap(),
         );
-        let world = Arc::new(World::new(cdp, session.id.clone(), PAGE.to_string()));
+        let world = Arc::new(World::new(session.door.clone(), PAGE.to_string()));
         let frames = Frames::new(session, PAGE.to_string(), world, TaskTracker::new());
         let tree = frames.tree().await.unwrap();
         assert_eq!(
@@ -886,17 +884,16 @@ mod tests {
     #[tokio::test]
     async fn stale_contexts_are_forgotten_without_evicting_their_replacement() {
         let browser = FakeBrowser::start(Replies::default()).await;
-        let cdp = browser.cdp().await;
         let session = Arc::new(
             Session::attach(
-                cdp.clone(),
+                cdp::Browser::new(browser.cdp().await),
                 PageId::new(PAGE.to_string()),
                 TokioHandle::current(),
             )
             .await
             .unwrap(),
         );
-        let world = Arc::new(World::new(cdp, session.id.clone(), PAGE.to_string()));
+        let world = Arc::new(World::new(session.door.clone(), PAGE.to_string()));
         let frames = Frames::new(session, PAGE.to_string(), world, TaskTracker::new());
         let stale = frames
             .context("local-child", Some(&frames.main.host))

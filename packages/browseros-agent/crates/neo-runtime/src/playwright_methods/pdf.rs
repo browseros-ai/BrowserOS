@@ -386,6 +386,8 @@ mod tests {
     use tokio::runtime::Handle;
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
+
+    use crate::chromium_bridge::cdp;
     use tokio_util::task::TaskTracker;
 
     use super::*;
@@ -401,9 +403,13 @@ mod tests {
         closed: &CancellationToken,
     ) -> Arc<PageSession> {
         let id = PageId::new(PAGE.to_string());
-        let session = Session::attach(browser.cdp().await, id.clone(), Handle::current())
-            .await
-            .expect("attach");
+        let session = Session::attach(
+            cdp::Browser::new(browser.cdp().await),
+            id.clone(),
+            Handle::current(),
+        )
+        .await
+        .expect("attach");
         Arc::new(PageSession::new(
             session,
             &id,

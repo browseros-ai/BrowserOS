@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
+use browseros_cdp::{CdpError, CdpEvent, SessionId};
 use futures_util::future::join_all;
 use neo_runtime_spec::serve::{
     BrowserContextSetGeolocationParamsGeolocation, BrowserContextSetStorageStateParams,
@@ -41,6 +41,7 @@ use url::{Origin, Url};
 use crate::artifacts::{ArtifactPath, Artifacts};
 use crate::browser_representations::page::PageSession;
 use crate::browser_representations::tabs::{self, PageEntry, Tabs};
+use crate::chromium_bridge::cdp;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::run::PageId;
 
@@ -117,7 +118,7 @@ pub(crate) async fn cookies(
         .map(|url| Url::parse(url).map_err(|_| PlaywrightError::error(INVALID_URL)))
         .collect::<Result<Vec<_>, _>>()?;
     let got = progress
-        .race(tabs.cdp().send_typed::<_, GotCookies>(
+        .race(tabs.cdp().client().send_typed::<_, GotCookies>(
             "Storage.getCookies",
             in_context(json!({}), tabs),
             None,
@@ -201,7 +202,7 @@ pub(crate) async fn add_cookies(
         .map(|cookie| rewrite_cookie(cookie).map(|cookie| chromium_cookie(&cookie)))
         .collect::<Result<Vec<_>, _>>()?;
     progress
-        .race(tabs.cdp().send(
+        .race(tabs.cdp().client().send(
             "Storage.setCookies",
             in_context(json!({ "cookies": cookies }), tabs),
             None,
@@ -440,7 +441,7 @@ impl Slots {
 
     /// A session of `tab` detached: a hold through it is gone, and the latest holders' position
     /// and offline state go back on, which that session may have taken with it (measured).
-    async fn detached(&self, cdp: &CdpClient, tab: Option<&PageId>, session: &SessionId) {
+    async fn detached(&self, cdp: &cdp::Browser, tab: Option<&PageId>, session: &SessionId) {
         let tab = {
             let mut state = self.state.lock().await;
             let released = state.released.remove(session);
@@ -532,8 +533,8 @@ impl Slots {
 /// Watches the connection's session detaches for [`Slots::detached`], until the connection's
 /// events end. Not a task of any tracker: it outlives every run, and `Runtime::drain` must not
 /// wait for it.
-async fn watch_detaches(cdp: CdpClient, slots: Slots) {
-    let mut events = cdp.events();
+async fn watch_detaches(cdp: cdp::Browser, slots: Slots) {
+    let mut events = cdp.client().events();
     loop {
         match events.recv().await {
             Ok(CdpEvent { method, params, .. }) if method == "Target.detachedFromTarget" => {
@@ -620,7 +621,7 @@ fn headers_object(headers: &[NameValue]) -> Value {
 
 /// One CDP session of the run: a tab's own, or one of its out-of-process frames'.
 struct Target<'a> {
-    cdp: &'a CdpClient,
+    cdp: &'a cdp::Browser,
     session: SessionId,
 }
 
@@ -630,7 +631,12 @@ impl Target<'_> {
     /// A session that went away (its frame detached, its tab closed) has nothing left to set,
     /// so a send to it is a no-op, as Playwright's broadcast to a closed frame's session is.
     async fn send(&self, method: &str, params: Value) -> Result<(), PlaywrightError> {
-        match self.cdp.send(method, params, Some(&self.session)).await {
+        match self
+            .cdp
+            .client()
+            .send(method, params, Some(&self.session))
+            .await
+        {
             Ok(_) | Err(CdpError::SessionGone) => Ok(()),
             Err(error) => Err(tabs::cdp_error(&error)),
         }
@@ -675,7 +681,7 @@ fn open_tabs(tabs: &Tabs) -> impl Iterator<Item = (Arc<PageEntry>, Arc<PageSessi
 
 /// Every session of a tab the run attached: its own, then its out-of-process frames'.
 fn targets_of(page: &PageSession) -> Vec<Target<'_>> {
-    let cdp = page.events.cdp();
+    let cdp = page.events.cdp().browser();
     page.events
         .sessions()
         .into_iter()
@@ -816,7 +822,7 @@ impl Overrides {
     /// document request carries them, as the tab's session sends it.
     pub(crate) async fn apply_to_new(
         &self,
-        cdp: &CdpClient,
+        cdp: &cdp::Browser,
         session: SessionId,
         page: &PageId,
         frame: bool,
@@ -882,7 +888,7 @@ impl Overrides {
     /// tried again at the next release (the run's end). Meant for a task of the run's tracker
     /// (`Tabs::release_run_scoped`), which its caller may stop waiting for and nothing cuts
     /// short. A session that went away counts as reset (`Target::send`).
-    pub(crate) async fn release(self: Arc<Self>, cdp: CdpClient, slots: Slots, run: u64) {
+    pub(crate) async fn release(self: Arc<Self>, cdp: cdp::Browser, slots: Slots, run: u64) {
         let pending: Vec<(SessionId, Applied)> = {
             let mut state = self.0.lock().await;
             state.released = true;
@@ -918,7 +924,7 @@ impl Overrides {
     /// that run's goes back on through its own session.
     async fn reset(
         &self,
-        cdp: &CdpClient,
+        cdp: &cdp::Browser,
         session: &SessionId,
         applied: &Applied,
         restore: Restore,
@@ -1151,13 +1157,14 @@ async fn replace_local_storage(
     origin: &str,
     items: &[NameValue],
 ) -> Result<(), PlaywrightError> {
-    let cdp = page.events.cdp();
+    let cdp = page.events.cdp().browser();
     let session = page.events.sessions().into_iter().next();
     let storage = json!({ "securityOrigin": origin, "isLocalStorage": true });
     let send = |method: &'static str, params: Value| {
         let session = session.clone();
         async move {
-            cdp.send(method, params, session.as_ref())
+            cdp.client()
+                .send(method, params, session.as_ref())
                 .await
                 .map(|_| ())
                 .map_err(|error| tabs::cdp_error(&error))
@@ -1240,12 +1247,13 @@ async fn local_storage(
     page: &PageSession,
     origin: &str,
 ) -> Result<Vec<NameValue>, PlaywrightError> {
-    let cdp = page.events.cdp();
+    let cdp = page.events.cdp().browser();
     let session = page.events.sessions().into_iter().next();
     let send = |method: &'static str, params: Value| {
         let session = session.clone();
         async move {
-            cdp.send(method, params, session.as_ref())
+            cdp.client()
+                .send(method, params, session.as_ref())
                 .await
                 .map_err(|error| tabs::cdp_error(&error))
         }
@@ -1348,7 +1356,7 @@ struct RunGrants {
 ///
 /// `Browser.grantPermissions` for every web permission the context's runs granted on `origin`.
 async fn grant_union(
-    cdp: &CdpClient,
+    cdp: &cdp::Browser,
     grants: &BTreeMap<u64, RunGrants>,
     context: Option<&str>,
     origin: &str,
@@ -1383,11 +1391,13 @@ async fn grant_union(
         params
     };
     match cdp
+        .client()
         .send("Browser.grantPermissions", grant(false), None)
         .await
     {
         Ok(_) => Ok(()),
         Err(_) => cdp
+            .client()
             .send("Browser.grantPermissions", grant(true), None)
             .await
             .map(|_| ())
@@ -1399,7 +1409,7 @@ async fn grant_union(
 ///
 /// Resets the context's overrides, then grants again what its other runs hold.
 async fn reset_context(
-    cdp: &CdpClient,
+    cdp: &cdp::Browser,
     grants: &BTreeMap<u64, RunGrants>,
     context: Option<&str>,
 ) -> Result<(), PlaywrightError> {
@@ -1407,7 +1417,8 @@ async fn reset_context(
     if let Some(context) = context {
         params["browserContextId"] = json!(context);
     }
-    cdp.send("Browser.resetPermissions", params, None)
+    cdp.client()
+        .send("Browser.resetPermissions", params, None)
         .await
         .map_err(|error| tabs::cdp_error(&error))?;
     let origins: Vec<String> = grants
@@ -1501,14 +1512,14 @@ impl Permissions {
     }
 
     /// The run's end: its grants go, as [`Self::clear`]'s do, before the run's outcome returns.
-    pub(crate) async fn release(&self, cdp: &CdpClient, run: u64) {
+    pub(crate) async fn release(&self, cdp: &cdp::Browser, run: u64) {
         if let Err(error) = self.let_go(cdp.clone(), run).await {
             debug!(?error, "the run's permission reset stopped");
         }
     }
 
     /// [`Self::release`] without waiting, for a run whose future was dropped.
-    pub(crate) fn release_later(&self, cdp: CdpClient, run: u64) {
+    pub(crate) fn release_later(&self, cdp: cdp::Browser, run: u64) {
         drop(self.let_go(cdp, run));
     }
 
@@ -1517,7 +1528,7 @@ impl Permissions {
     /// a dropped run); the task never stops halfway, which would leave the browser between the
     /// reset and the other runs' grants, or holding this run's once its record is gone. A
     /// failure is logged.
-    fn let_go(&self, cdp: CdpClient, run: u64) -> JoinHandle<Result<(), PlaywrightError>> {
+    fn let_go(&self, cdp: cdp::Browser, run: u64) -> JoinHandle<Result<(), PlaywrightError>> {
         let grants = Arc::clone(&self.grants);
         self.cleanup.spawn(async move {
             let mut grants = grants.lock().await;
@@ -1588,7 +1599,7 @@ mod tests {
     async fn tests_that_each_runs_grants_add_up_and_reset_once_no_run_holds_one() {
         let browser = FakeBrowser::start(Replies::default()).await;
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
@@ -1662,7 +1673,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let cleanup = TaskTracker::new();
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
@@ -1763,7 +1774,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn tests_that_released_overrides_come_off_every_session_and_go_on_no_new_one() {
         let browser = FakeBrowser::start(Replies::default()).await;
-        let cdp = browser.cdp().await;
+        let cdp = cdp::Browser::new(browser.cdp().await);
         let overrides = holding(10.0).await;
         let slots = Slots::default();
         let page = PageId::new(PAGE.to_string());
@@ -1825,7 +1836,7 @@ mod tests {
             ..Replies::default()
         })
         .await;
-        let cdp = browser.cdp().await;
+        let cdp = cdp::Browser::new(browser.cdp().await);
         let overrides = holding(10.0).await;
         let slots = Slots::default();
         let page = PageId::new(PAGE.to_string());
@@ -1861,7 +1872,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn tests_that_letting_go_of_a_shared_tab_puts_the_other_runs_state_back() {
         let browser = FakeBrowser::start(Replies::default()).await;
-        let cdp = browser.cdp().await;
+        let cdp = cdp::Browser::new(browser.cdp().await);
         let slots = Slots::default();
         let page = PageId::new(PAGE.to_string());
         let one = holding(10.0).await;
@@ -1945,7 +1956,7 @@ mod tests {
     async fn tests_that_a_grant_after_the_context_closed_sends_nothing() {
         let browser = FakeBrowser::start(Replies::default()).await;
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
