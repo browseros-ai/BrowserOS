@@ -9864,6 +9864,8 @@ class HookRealm {
     view.context = objects.context;
     if (objects.locator)
       view.locator = objects.locator;
+    if (objects.element)
+      view.element = objects.element;
     view.meta = this.#meta;
     return view;
   }
@@ -9879,6 +9881,10 @@ class HookRealm {
     if (payload.locator !== undefined) {
       const locator = record(payload, "locator");
       objects.locator = this.#frameFor(text2(locator, "frame"), context).locator(text2(locator, "selector"));
+    }
+    if (payload.element !== undefined) {
+      const element = record(payload, "element");
+      objects.element = new ElementHandle(this.#objects.connection, text2(element, "guid"), { preview: text2(element, "preview") }, objects.frame);
     }
     return objects;
   }
