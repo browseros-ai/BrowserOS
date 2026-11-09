@@ -326,22 +326,46 @@ fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
 const MAX_RANDOM_BYTES: usize = 65_536;
 
 /// The most `console` text and lines a run keeps. Kept lines live in Rust, outside the realm's
-/// memory limit, so without a cap one script could hold any amount of the server's memory.
+/// memory limit, so without a cap one script could hold any amount of the server's memory. A
+/// run's hook trace and its hooks' notes keep as much, for the same reason.
 const MAX_LOG_BYTES: usize = 1024 * 1024;
 const MAX_LOG_LINES: usize = 1000;
 
+/// Neo: the most lines of its own a run's hook trace keeps (why a hook failed), apart from the
+/// hook's own lines, so a hook that fills its trace cannot hide them.
+const MAX_FAILURE_LINES: usize = 100;
+/// Neo: the most bytes of those lines.
+const MAX_FAILURE_BYTES: usize = 64 * 1024;
+
 /// Lines the script wrote with `console`. Shared because the realm owns the JS `log` function
-/// while the run reads the lines back, also after a deadline dropped the realm mid-script.
+/// while the run reads the lines back, also after a deadline dropped the realm mid-script. Also
+/// a run's hook trace, Neo's own lines on why a hook failed, and the hooks' notes, each a
+/// [`LogKind`] of its own with its own caps and overflow note (`hooks.rs`).
 ///
-/// Keeps the first lines up to [`MAX_LOG_LINES`] and [`MAX_LOG_BYTES`]. The first line past
-/// either cap ends keeping: it and every later line are only counted, so the kept lines are
-/// always the start of what the script wrote, and [`Logs::take`] ends them with a note saying
-/// how many were dropped. Logging itself never fails, so the cap never throws into the script.
-#[derive(Debug, Clone, Default)]
+/// Keeps the first lines up to its kind's line and byte caps ([`MAX_LOG_LINES`] and
+/// [`MAX_LOG_BYTES`] for the script's `console`). The first line past either cap ends keeping: it
+/// and every later line are only counted, so the kept lines are always the start of what was
+/// written, and [`Logs::take`] ends them with a note saying how many were dropped. Logging itself
+/// never fails, so the cap never throws into the script.
+#[derive(Debug, Clone)]
 pub(crate) struct Logs(Arc<Mutex<LogLines>>);
 
-#[derive(Debug, Default)]
+/// What a [`Logs`] holds, which sets its caps and names it in its overflow note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogKind {
+    /// The script's `console` lines.
+    Console,
+    /// A run's hook trace: the hook realm's `ctx.trace` and `console` lines.
+    HookTrace,
+    /// Neo's own lines in the hook trace, on why a hook failed.
+    HookFailures,
+    /// The notes a run's hooks left for the model.
+    HookNotes,
+}
+
+#[derive(Debug)]
 struct LogLines {
+    kind: LogKind,
     kept: Vec<String>,
     kept_bytes: usize,
     /// Set by the first line that did not fit.
@@ -360,7 +384,19 @@ enum LogLimit {
     Bytes,
 }
 
+impl Default for Logs {
+    /// The script's `console` lines.
+    fn default() -> Self {
+        Self::of(LogKind::Console)
+    }
+}
+
 impl Logs {
+    /// An empty list of `kind`.
+    pub(crate) fn of(kind: LogKind) -> Self {
+        Self(Arc::new(Mutex::new(LogLines::new(kind))))
+    }
+
     pub(crate) fn push(&self, line: String) {
         if let Ok(mut lines) = self.0.lock() {
             lines.push(line);
@@ -371,15 +407,45 @@ impl Logs {
         let Ok(mut lines) = self.0.lock() else {
             return Vec::new();
         };
+        let kind = lines.kind;
         let LogLines {
             mut kept, overflow, ..
-        } = mem::take(&mut *lines);
-        kept.extend(overflow.map(|overflow| overflow.note()));
+        } = mem::replace(&mut *lines, LogLines::new(kind));
+        kept.extend(overflow.map(|overflow| overflow.note(kind)));
         kept
     }
 }
 
+impl LogKind {
+    /// The most lines and bytes a list of this kind keeps.
+    fn caps(self) -> (usize, usize) {
+        match self {
+            Self::Console | Self::HookTrace | Self::HookNotes => (MAX_LOG_LINES, MAX_LOG_BYTES),
+            Self::HookFailures => (MAX_FAILURE_LINES, MAX_FAILURE_BYTES),
+        }
+    }
+
+    /// What the overflow note calls one of its lines.
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Console => "console",
+            Self::HookTrace => "hook trace",
+            Self::HookFailures => "hook failure",
+            Self::HookNotes => "hook note",
+        }
+    }
+}
+
 impl LogLines {
+    fn new(kind: LogKind) -> Self {
+        Self {
+            kind,
+            kept: Vec::new(),
+            kept_bytes: 0,
+            overflow: None,
+        }
+    }
+
     fn push(&mut self, line: String) {
         if let Some(overflow) = &mut self.overflow {
             overflow.dropped += 1;
@@ -394,9 +460,10 @@ impl LogLines {
     }
 
     fn limit_passed_by(&self, line: &str) -> Option<LogLimit> {
-        if self.kept.len() >= MAX_LOG_LINES {
+        let (max_lines, max_bytes) = self.kind.caps();
+        if self.kept.len() >= max_lines {
             Some(LogLimit::Lines)
-        } else if self.kept_bytes + line.len() > MAX_LOG_BYTES {
+        } else if self.kept_bytes + line.len() > max_bytes {
             Some(LogLimit::Bytes)
         } else {
             None
@@ -405,14 +472,19 @@ impl LogLines {
 }
 
 impl Overflow {
-    fn note(&self) -> String {
+    fn note(&self, kind: LogKind) -> String {
         let lines = if self.dropped == 1 { "line" } else { "lines" };
+        let (max_lines, max_bytes) = kind.caps();
+        let noun = kind.noun();
         let limit = match self.limit {
-            LogLimit::Lines => format!("{MAX_LOG_LINES} lines"),
-            LogLimit::Bytes => format!("{} MiB of console text", MAX_LOG_BYTES >> 20),
+            LogLimit::Lines => format!("{max_lines} lines"),
+            LogLimit::Bytes if max_bytes >= 1 << 20 => {
+                format!("{} MiB of {noun} text", max_bytes >> 20)
+            }
+            LogLimit::Bytes => format!("{} KiB of {noun} text", max_bytes >> 10),
         };
         format!(
-            "neo-runtime dropped the last {} console {lines}: a run keeps at most {limit}",
+            "neo-runtime dropped the last {} {noun} {lines}: a run keeps at most {limit}",
             self.dropped
         )
     }

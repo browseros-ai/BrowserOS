@@ -222,7 +222,8 @@ pub struct RunOutcome {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<RunArtifact>,
     /// The notes the run's `afterRun` hooks added, in the order they were added, for the model
-    /// to read. Absent from the JSON when empty, so a run without hooks reads as before.
+    /// to read, capped as `logs` is (1000 lines and 1 MiB, then a note saying how many were
+    /// dropped). Absent from the JSON when empty, so a run without hooks reads as before.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     /// The hook trace, for the host only and never in the outcome's JSON: every `ctx.trace` and
@@ -294,11 +295,9 @@ impl RunOutcome {
         }
     }
 
-    /// Adds the notes the run's `afterRun` hooks left for the model.
+    /// Attaches the notes the run's hooks left for the model, already capped (`hooks.rs`).
     pub(crate) fn with_notes(self, notes: Vec<String>) -> Self {
-        let mut all = self.notes;
-        all.extend(notes);
-        Self { notes: all, ..self }
+        Self { notes, ..self }
     }
 
     /// Attaches the run's host-only hook trace.

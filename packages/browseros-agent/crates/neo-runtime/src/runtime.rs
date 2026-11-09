@@ -251,8 +251,6 @@ impl Runtime {
             };
             HookSandbox::start(hooks, parts)
         });
-        // A dropped run future closes the sandbox too, so its realm lets go of the run.
-        let _close_hooks = sandbox.as_ref().map(HookSandbox::close_on_drop);
         let gate = match &sandbox {
             Some(sandbox) => sandbox.before_run(&code, &deadline).await,
             None => Gate::Start,
@@ -269,11 +267,13 @@ impl Runtime {
             }
             Gate::End(outcome) => *outcome,
         };
+        // How the script ended, for its unfinished calls, whatever afterRun does with the outcome.
+        let run_end = run_end_of(&outcome);
         let outcome = match &sandbox {
             Some(sandbox) => sandbox.end(outcome).await,
             None => outcome,
         };
-        let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
+        let (calls, dropped) = dispatcher.finish(run_end).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
         grants.disarm();
         outcome

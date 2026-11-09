@@ -28,6 +28,7 @@
 //! the call path through `RunScope::hooks`.
 
 use std::borrow::Cow;
+use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -41,7 +42,7 @@ use tokio_util::task::TaskTracker;
 use crate::deadline::{Deadline, Stop};
 use crate::method_router::Dispatcher;
 use crate::quickjs;
-use crate::quickjs_bridge::{Getters, Logs};
+use crate::quickjs_bridge::{Getters, LogKind, Logs};
 use crate::run::{CallLocation, RunBinary, RunError, RunHooks, RunOutcome, RunStatus};
 
 mod decision;
@@ -192,14 +193,35 @@ pub(crate) struct HookSandbox {
     jobs: mpsc::UnboundedSender<Job>,
     /// Set once loading succeeds, never changed after.
     registrations: Arc<OnceLock<Vec<Registration>>>,
-    /// The host-only hook trace: the realm's `ctx.trace` and `console` lines, and Rust's notes
-    /// on why a hook failed.
+    /// The host-only hook trace: the hook realm's `ctx.trace` and `console` lines.
     trace: Logs,
+    /// Neo's own lines on why a hook failed, kept apart from `trace` under caps of their own and
+    /// appended to it, so a hook that fills its trace cannot hide them.
+    failures: Logs,
+    /// The notes the run's hooks left for the model, capped as the script's `console` is.
+    notes: Logs,
     /// Cancelled when the run is done with its hooks, or its future is dropped: the actor ends
     /// and drops the realm.
     close: CancellationToken,
     /// The run page, as `beforeRun` and `afterRun` name it.
     page_guid: String,
+}
+
+/// The run's own hold on its hook sandbox, which [`HookSandbox::start`] returns: the sandbox, and
+/// a guard that closes it when this drops. The hook realm holds the run's hook dispatcher, and
+/// with it the run's sessions and tasks, until the sandbox closes; holding the guard here means
+/// no caller can forget it, whether the run ends or its future is dropped.
+pub(crate) struct HookRun {
+    sandbox: HookSandbox,
+    _close: DropGuard,
+}
+
+impl Deref for HookRun {
+    type Target = HookSandbox;
+
+    fn deref(&self) -> &HookSandbox {
+        &self.sandbox
+    }
 }
 
 /// Everything the run's hook realm is built from, besides the hook file itself.
@@ -226,8 +248,9 @@ pub(crate) enum Gate {
 impl HookSandbox {
     /// Starts the actor of a run's hook realm, on the run's tracker, for `hooks`, and puts the
     /// sandbox where the run's call path finds it (`RunScope::hooks`). Nothing runs until
-    /// [`HookSandbox::before_run`] loads the hook file.
-    pub(crate) fn start(hooks: RunHooks, parts: RealmParts) -> Self {
+    /// [`HookSandbox::before_run`] loads the hook file. Dropping the returned [`HookRun`] closes
+    /// the sandbox.
+    pub(crate) fn start(hooks: RunHooks, parts: RealmParts) -> HookRun {
         let RealmParts {
             page_guid,
             frame_guid,
@@ -251,24 +274,36 @@ impl HookSandbox {
             sdk: Cow::Borrowed(quickjs::SDK_BUNDLE),
             realms,
         };
-        let sandbox = Self::spawn(setup, hooks.budget, &tasks);
-        let _first = slot.set(sandbox.clone());
-        sandbox
+        let run = Self::spawn(setup, hooks.budget, &tasks);
+        let _first = slot.set(run.sandbox.clone());
+        run
     }
 
-    fn spawn(setup: Setup, budget: Duration, tasks: &TaskTracker) -> Self {
+    fn spawn(setup: Setup, budget: Duration, tasks: &TaskTracker) -> HookRun {
         let (jobs, receiver) = mpsc::unbounded_channel();
-        let trace = Logs::default();
+        let trace = Logs::of(LogKind::HookTrace);
+        let failures = Logs::of(LogKind::HookFailures);
         let close = CancellationToken::new();
         let page_guid = setup.page_guid.clone();
-        let actor = Actor::new(setup, budget, trace.clone(), close.clone());
+        let actor = Actor::new(
+            setup,
+            budget,
+            trace.clone(),
+            failures.clone(),
+            close.clone(),
+        );
         tasks.spawn(actor.run(receiver));
-        Self {
-            jobs,
-            registrations: Arc::default(),
-            trace,
-            close,
-            page_guid,
+        HookRun {
+            sandbox: Self {
+                jobs,
+                registrations: Arc::default(),
+                trace,
+                failures,
+                notes: Logs::of(LogKind::HookNotes),
+                close: close.clone(),
+                page_guid,
+            },
+            _close: close.drop_guard(),
         }
     }
 
@@ -278,25 +313,31 @@ impl HookSandbox {
         self.close.cancel();
     }
 
-    /// A guard that closes the sandbox when dropped, for a run whose future is dropped before
-    /// it closes the sandbox itself: otherwise the realm, holding the run's hook dispatcher,
-    /// would keep the run's sessions and tasks alive.
-    pub(crate) fn close_on_drop(&self) -> DropGuard {
-        self.close.clone().drop_guard()
+    /// The hook trace so far, taken: what the run's outcome carries as `hook_trace`. The hook's
+    /// own lines come first, then Neo's lines on why a hook failed.
+    pub(crate) fn take_trace(&self) -> Vec<String> {
+        let mut lines = self.trace.take();
+        lines.extend(self.failures.take());
+        lines
     }
 
-    /// The hook trace so far, taken: what the run's outcome carries as `hook_trace`.
-    pub(crate) fn take_trace(&self) -> Vec<String> {
-        self.trace.take()
+    /// Adds notes a hook left for the model, which the outcome carries, capped
+    /// ([`LogKind::HookNotes`]).
+    pub(crate) fn add_notes(&self, notes: Vec<String>) {
+        for note in notes {
+            self.notes.push(note);
+        }
     }
 
     /// The run's end for its hooks: `afterRun` ([`HookSandbox::after_run`]), then the sandbox
-    /// closes, and the outcome carries the hook trace. Before `Dispatcher::finish`: the actor is a
-    /// task of the run's tracker, which `finish` waits for.
+    /// closes, and the outcome carries the hooks' notes and the hook trace. Before
+    /// `Dispatcher::finish`: the actor is a task of the run's tracker, which `finish` waits for.
     pub(crate) async fn end(&self, outcome: RunOutcome) -> RunOutcome {
         let outcome = self.after_run(outcome).await;
         self.close();
-        outcome.with_hook_trace(self.take_trace())
+        outcome
+            .with_notes(self.notes.take())
+            .with_hook_trace(self.take_trace())
     }
 
     /// Loads the hook file and runs `beforeRun`, both racing the run's `deadline`. The script
@@ -340,8 +381,10 @@ impl HookSandbox {
 
     /// Runs `afterRun` on how the run ended, unless the hooks never loaded or blocked the run:
     /// always otherwise, even after a timeout or cancel, with its full budget (its browser calls
-    /// then fail on the stopped deadline). A replacement applies only to an `ok` run; notes go
-    /// to the outcome. A failure turns the outcome into an error without the result.
+    /// then fail on the stopped deadline). A replacement applies only to an `ok` run; notes go to
+    /// [`HookSandbox::add_notes`]. A failure turns an `ok` or `error` outcome into an error
+    /// without the result; a timed-out or cancelled one keeps its status and error
+    /// ([`HookSandbox::after_run_failed`]).
     pub(crate) async fn after_run(&self, outcome: RunOutcome) -> RunOutcome {
         if outcome.status == RunStatus::Blocked || !self.registered(HookEvent::AfterRun) {
             return outcome;
@@ -355,9 +398,11 @@ impl HookSandbox {
         let (replace, notes) = match decided {
             Ok(Decided::After(AfterDecision { replace, notes })) => (replace, notes),
             Ok(other) => {
-                return self.withheld(outcome, &format!("afterRun decided {other:?}"));
+                return self.after_run_failed(outcome, &format!("afterRun decided {other:?}"));
             }
-            Err(failure) => return self.withheld(outcome, &format!("afterRun: {failure:?}")),
+            Err(failure) => {
+                return self.after_run_failed(outcome, &format!("afterRun: {failure:?}"));
+            }
         };
         let outcome = match replace {
             None => outcome,
@@ -368,10 +413,14 @@ impl HookSandbox {
                 ..outcome
             },
             Some(_) => {
-                return self.withheld(outcome, "afterRun replaced the result of a run that failed");
+                return self.after_run_failed(
+                    outcome,
+                    "afterRun replaced the result of a run that did not end ok",
+                );
             }
         };
-        outcome.with_notes(notes)
+        self.add_notes(notes);
+        outcome
     }
 
     /// Whether any `event` action registration matches an action of `kind` and `group`, read
@@ -486,22 +535,30 @@ impl HookSandbox {
     /// The run ends blocked before its script, after the hooks failed: `detail` goes to the
     /// trace, the outcome names no detail.
     fn blocked(&self, detail: &str) -> Gate {
-        self.trace.push(format!("neo: {detail}"));
+        self.failures.push(format!("neo: {detail}"));
         Gate::End(Box::new(RunOutcome::blocked(RunError::new(
             "Error",
             BEFORE_RUN_FAILED.to_string(),
         ))))
     }
 
-    /// `afterRun` failed: the outcome becomes an error without the script's result.
-    fn withheld(&self, outcome: RunOutcome, detail: &str) -> RunOutcome {
-        self.trace.push(format!("neo: {detail}"));
-        RunOutcome {
-            status: RunStatus::Error,
-            value: None,
-            error: Some(RunError::new("Error", AFTER_RUN_FAILED.to_string())),
-            binaries: Vec::new(),
-            ..outcome
+    /// `afterRun` failed, or replaced the result of a run that did not end `ok`; `detail` goes to
+    /// the trace, and that afterRun's notes go nowhere. An `ok` or `error` outcome becomes an error
+    /// without the script's result: a filter that failed must not let the unfiltered result
+    /// through, and an `error`'s message is the script's. A timed-out or cancelled one keeps its
+    /// status and Neo's own error: it has no result to withhold, and the model and the host must
+    /// still see that the run ran out of time or was cancelled.
+    fn after_run_failed(&self, outcome: RunOutcome, detail: &str) -> RunOutcome {
+        self.failures.push(format!("neo: {detail}"));
+        match outcome.status {
+            RunStatus::Timeout | RunStatus::Cancelled => outcome,
+            RunStatus::Ok | RunStatus::Error | RunStatus::Blocked => RunOutcome {
+                status: RunStatus::Error,
+                value: None,
+                error: Some(RunError::new("Error", AFTER_RUN_FAILED.to_string())),
+                binaries: Vec::new(),
+                ..outcome
+            },
         }
     }
 }

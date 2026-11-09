@@ -263,3 +263,102 @@ async fn a_dropped_run_lets_go_of_its_hook_realm() {
         "the dropped run's hook realm still held its tasks"
     );
 }
+
+/// A run that timed out or was cancelled keeps its status and its own error when afterRun fails
+/// (here by touching the page after the deadline, without a catch), and its unfinished agent call
+/// keeps the true reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_after_run_keeps_a_timeout_or_cancel_and_its_calls_reasons() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let runtime = browser.runtime().await;
+    let hooks = || {
+        RunHooks::new(
+            "neo.on('afterRun', async (event) => { await event.page.waitForTimeout(1); return { note: 'kept?' } })",
+        )
+    };
+    let code = "page.waitForTimeout(60000).catch(() => {}); await new Promise(() => {})";
+    let timed_out = runtime
+        .run(request(code, Duration::from_millis(300), Some(hooks())))
+        .await;
+    assert_eq!(timed_out.status, RunStatus::Timeout, "{timed_out:?}");
+    assert_eq!(
+        timed_out.error.as_ref().map(|error| error.name.as_str()),
+        Some("TimeoutError")
+    );
+    assert!(timed_out.notes.is_empty());
+    assert!(!timed_out.hook_trace.is_empty());
+    let agent_call = timed_out
+        .calls
+        .iter()
+        .find(|call| call.origin == CallOrigin::Agent)
+        .expect("the agent's call has a record");
+    assert_eq!(
+        agent_call.result,
+        CallResult::Unfinished {
+            reason: RunEnd::Timeout
+        }
+    );
+
+    let cancel = CancellationToken::new();
+    let cancelling = {
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            time::sleep(Duration::from_millis(300)).await;
+            cancel.cancel();
+        })
+    };
+    let cancelled = runtime
+        .run(RunRequest {
+            hooks: Some(hooks()),
+            ..fake_browser::run_request(code, TIMEOUT, cancel)
+        })
+        .await;
+    cancelling.await.unwrap();
+    assert_eq!(cancelled.status, RunStatus::Cancelled, "{cancelled:?}");
+    assert!(cancelled.error.is_none() && cancelled.notes.is_empty());
+    let agent_call = cancelled
+        .calls
+        .iter()
+        .find(|call| call.origin == CallOrigin::Agent)
+        .expect("the agent's call has a record");
+    assert_eq!(
+        agent_call.result,
+        CallResult::Unfinished {
+            reason: RunEnd::Cancelled
+        }
+    );
+}
+
+/// afterRun still runs after the host cancels a run, with its full budget.
+#[tokio::test(flavor = "multi_thread")]
+async fn after_run_runs_after_a_cancel() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let runtime = browser.runtime().await;
+    let cancel = CancellationToken::new();
+    let cancelling = {
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            time::sleep(Duration::from_millis(300)).await;
+            cancel.cancel();
+        })
+    };
+    let outcome = runtime
+        .run(RunRequest {
+            hooks: Some(RunHooks::new(
+                "neo.on('afterRun', async (event) => {
+                   await new Promise((resolve) => setTimeout(resolve, 50))
+                   return { note: `after ${event.status}` }
+                 })",
+            )),
+            ..fake_browser::run_request("await new Promise(() => {})", TIMEOUT, cancel)
+        })
+        .await;
+    cancelling.await.unwrap();
+    assert_eq!(
+        outcome.status,
+        RunStatus::Cancelled,
+        "{:?}",
+        outcome.hook_trace
+    );
+    assert_eq!(outcome.notes, ["after cancelled"]);
+}

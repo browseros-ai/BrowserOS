@@ -17,6 +17,7 @@ use crate::browser_representations::cookies_and_storage::Permissions;
 use crate::browser_representations::page::TabInputs;
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::Switches;
+use crate::deadline::Stop;
 use crate::fake_browser::{FakeBrowser, PAGE, Replies};
 use crate::playwright_methods::screenshot::TabScreenshots;
 use crate::progress::RunScope;
@@ -108,7 +109,7 @@ const STUB_SDK: &str = r"(() => {
 
 const BUDGET: Duration = Duration::from_millis(300);
 
-fn sandbox_with(code: &str, budget: Duration, sdk: &'static str) -> (HookSandbox, TaskTracker) {
+fn sandbox_with(code: &str, budget: Duration, sdk: &'static str) -> (HookRun, TaskTracker) {
     let tasks = TaskTracker::new();
     let setup = Setup {
         code: code.to_string(),
@@ -124,7 +125,7 @@ fn sandbox_with(code: &str, budget: Duration, sdk: &'static str) -> (HookSandbox
     (sandbox, tasks)
 }
 
-fn sandbox(code: &str) -> (HookSandbox, TaskTracker) {
+fn sandbox(code: &str) -> (HookRun, TaskTracker) {
     sandbox_with(code, BUDGET, STUB_SDK)
 }
 
@@ -149,7 +150,7 @@ fn action(method: &str, args: Value) -> ActionEvent {
 }
 
 /// Loads `code`, which registers no `beforeRun` that blocks, and returns the loaded sandbox.
-async fn loaded(code: &str) -> (HookSandbox, TaskTracker) {
+async fn loaded(code: &str) -> (HookRun, TaskTracker) {
     let (hooks, tasks) = sandbox(code);
     let gate = hooks.before_run("return 1", &far()).await;
     assert!(matches!(gate, Gate::Start), "{gate:?}");
@@ -320,7 +321,7 @@ async fn tests_that_the_run_deadline_and_cancel_end_loading_and_before_run_first
     assert_eq!(outcome.status, RunStatus::Timeout);
     assert_eq!(started.elapsed(), Duration::from_millis(100));
     // afterRun still runs, on the timed-out run.
-    let outcome = hooks.after_run(outcome).await;
+    let outcome = hooks.end(outcome).await;
     assert_eq!(outcome.status, RunStatus::Timeout);
     assert_eq!(outcome.notes, ["timeout"]);
 
@@ -354,7 +355,7 @@ async fn tests_that_after_run_keeps_replaces_or_notes() {
          neo.on('afterRun', (event, ctx) => ({ note: JSON.stringify(ctx.meta) }))",
     )
     .await;
-    let outcome = hooks.after_run(ok()).await;
+    let outcome = hooks.end(ok()).await;
     assert_eq!(outcome.status, RunStatus::Ok);
     assert_eq!(outcome.value, Some(json!("redacted")));
     assert!(
@@ -370,7 +371,7 @@ async fn tests_that_after_run_keeps_replaces_or_notes() {
 
     let (hooks, _tasks) =
         loaded("neo.on('afterRun', (event) => ({ note: event.value.secret }))").await;
-    assert_eq!(hooks.after_run(ok()).await.notes, ["s3"]);
+    assert_eq!(hooks.end(ok()).await.notes, ["s3"]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -563,9 +564,10 @@ async fn tests_that_closing_ends_the_actor_and_fails_later_jobs() {
         hooks.before_action(action("goto", json!({}))).await,
         Err(HookFailure::Realm(_))
     ));
-    let (hooks, tasks) = sandbox("neo.on('beforeAction', () => {})");
-    let guard = hooks.close_on_drop();
-    drop(guard);
+    // Dropping the run's hold closes the sandbox; a handle kept past it reaches no realm.
+    let (run, tasks) = sandbox("neo.on('beforeAction', () => {})");
+    let hooks = HookSandbox::clone(&run);
+    drop(run);
     tasks.close();
     tasks.wait().await;
     let outcome = ended(hooks.before_run("return 1", &far()).await);
@@ -643,9 +645,9 @@ async fn tests_that_the_sdks_create_hooks_decides_through_the_realm() {
         Gate::Start
     ));
     let outcome = hooks
-        .after_run(RunOutcome::returned(Some(json!(7)), Vec::new()))
+        .end(RunOutcome::returned(Some(json!(7)), Vec::new()))
         .await;
-    assert_eq!(outcome.status, RunStatus::Ok, "{:?}", hooks.take_trace());
+    assert_eq!(outcome.status, RunStatus::Ok, "{:?}", outcome.hook_trace);
     assert_eq!(
         outcome.value,
         Some(json!({"shot": {"type": "Buffer", "bytes": 3}, "seen": 7, "who": "owner"}))
@@ -716,11 +718,222 @@ async fn tests_that_closing_the_sandbox_lets_the_runs_last_dispatcher_go() {
         !ended.is_cancelled(),
         "the live realm still holds the run's dispatcher state"
     );
-    drop(sandbox.close_on_drop());
+    drop(sandbox);
     assert!(
         time::timeout(Duration::from_secs(5), ended.cancelled())
             .await
             .is_ok(),
         "closing the sandbox let the run's last dispatcher drop"
     );
+}
+
+/// A timed-out or cancelled run has no value to withhold: an afterRun that fails, or tries to
+/// replace, leaves its status and Neo's own error, its notes go nowhere, and the trace says why.
+/// A note on such a run still lands.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_failing_after_run_keeps_a_timeout_or_cancel() {
+    let stopped = [
+        RunOutcome::stopped(Stop::Timeout, Duration::from_millis(300), Vec::new()),
+        RunOutcome::stopped(Stop::Cancelled, Duration::from_millis(300), Vec::new()),
+    ];
+    let failing = [
+        "neo.on('afterRun', () => { throw new Error('secret-1234') })",
+        "neo.on('afterRun', () => new Promise(() => {}))",
+        "neo.on('afterRun', () => ({ replace: 'swap', note: 'lost' }))",
+        r#"neo.on('afterRun', () => '{"decision":"allow"}')"#,
+    ];
+    for outcome in &stopped {
+        for code in failing {
+            let (hooks, _tasks) = loaded(code).await;
+            let ended = hooks.end(outcome.clone()).await;
+            assert_eq!(ended.status, outcome.status, "{code}");
+            assert_eq!(ended.error, outcome.error, "{code}: Neo's own error stays");
+            assert!(ended.notes.is_empty(), "{code}: {:?}", ended.notes);
+            assert!(!ended.hook_trace.is_empty(), "{code}: the trace says why");
+        }
+        let (hooks, _tasks) =
+            loaded("neo.on('afterRun', (event) => ({ note: event.status }))").await;
+        let ended = hooks.end(outcome.clone()).await;
+        assert_eq!(ended.status, outcome.status);
+        let status = serde_json::to_value(outcome.status).unwrap();
+        assert_eq!(ended.notes, [status.as_str().unwrap()]);
+    }
+}
+
+/// A hook that fills its trace cannot hide why it failed: Neo's own line comes after the hook's
+/// kept lines and their overflow note, which names the hook trace, not console lines.
+#[tokio::test(start_paused = true)]
+async fn tests_that_neos_failure_line_survives_a_full_hook_trace() {
+    let (hooks, _tasks) = sandbox(
+        "neo.on('beforeRun', (event, ctx) => {
+           for (let i = 0; i < 1100; i++) ctx.trace(`line ${i}`)
+           throw new Error('after the flood')
+         })",
+    );
+    let outcome = ended(hooks.before_run("return 1", &far()).await);
+    assert_eq!(outcome.status, RunStatus::Blocked);
+    let trace = hooks.take_trace();
+    assert_eq!(
+        trace.len(),
+        1000 + 1 + 1,
+        "kept lines, their note, Neo's line"
+    );
+    let kept: Vec<String> = (0..1000).map(|i| format!("line {i}")).collect();
+    assert_eq!(trace[..1000], kept[..]);
+    let console = Logs::default();
+    for line in kept.iter().chain(["one more".to_string()].iter()) {
+        console.push(line.clone());
+    }
+    let console_note = console.take().pop();
+    assert_ne!(
+        Some(&trace[1000]),
+        console_note.as_ref(),
+        "the overflow note names the hook trace"
+    );
+    assert!(
+        !trace[1001].starts_with("line "),
+        "Neo's own line is last: {}",
+        trace[1001]
+    );
+}
+
+/// The model reads the notes, so they are capped as the script's console lines are.
+#[tokio::test(start_paused = true)]
+async fn tests_that_notes_are_capped() {
+    let (hooks, _tasks) = loaded("").await;
+    let notes: Vec<String> = (0..1001).map(|i| format!("note {i}")).collect();
+    hooks.add_notes(notes.clone());
+    let outcome = hooks.end(RunOutcome::returned(None, Vec::new())).await;
+    assert_eq!(outcome.notes.len(), 1001, "1000 kept and a note");
+    assert_eq!(outcome.notes[..1000], notes[..1000]);
+    assert_ne!(outcome.notes[1000], notes[1000]);
+}
+
+/// Running out of memory or stack inside the real SDK's handler fails closed, and the realm
+/// answers the next job.
+#[tokio::test(start_paused = true)]
+async fn tests_that_running_out_of_memory_or_stack_fails_closed_and_the_realm_lives_on() {
+    let (hooks, _tasks) = sandbox_with(
+        "neo.on('beforeAction', (event) => {
+           if (event.method === 'memory') { const all = []; while (true) all.push(new Array(1e6).fill(1)) }
+           if (event.method === 'stack') { const deeper = () => deeper(); deeper() }
+         })",
+        BUDGET,
+        quickjs::SDK_BUNDLE,
+    );
+    assert!(matches!(
+        hooks.before_run("return 1", &far()).await,
+        Gate::Start
+    ));
+    for method in ["memory", "stack"] {
+        let decided = hooks.before_action(action(method, json!({}))).await;
+        assert!(
+            matches!(decided, Err(HookFailure::Threw(_))),
+            "{method}: {decided:?}"
+        );
+        assert_eq!(
+            hooks.before_action(action("goto", json!({}))).await,
+            Ok(ActionDecision::Allow),
+            "the realm answers after {method}"
+        );
+    }
+}
+
+/// A spinning afterRun in the real SDK withholds an `ok` run's value at its budget, and the realm
+/// answers the next job. A real clock: the interrupt handler reads it while JS runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_spinning_after_run_in_the_sdk_withholds_the_value() {
+    let (hooks, _tasks) = sandbox_with(
+        "neo.on('afterRun', () => { while (true) {} })
+         neo.on('beforeAction', () => {})",
+        BUDGET,
+        quickjs::SDK_BUNDLE,
+    );
+    assert!(matches!(
+        hooks.before_run("return 1", &far()).await,
+        Gate::Start
+    ));
+    let started = Instant::now();
+    let outcome = hooks
+        .after_run(RunOutcome::returned(Some(json!("secret")), Vec::new()))
+        .await;
+    assert!(started.elapsed() >= BUDGET && started.elapsed() < BUDGET + Duration::from_secs(3));
+    assert_eq!((outcome.status, outcome.value), (RunStatus::Error, None));
+    assert_eq!(
+        hooks.before_action(action("goto", json!({}))).await,
+        Ok(ActionDecision::Allow)
+    );
+}
+
+/// The hook realm's `page.on` and `page.off` reach no subscription of the run's: its bridge's
+/// `subscribe` does nothing, so the agent's subscriptions stay as they were.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_hooks_listeners_leave_the_agents_subscriptions_alone() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let (run, deadline, tabs) = real_sandbox(
+        &browser,
+        "neo.on('beforeRun', (event) => {
+           const listener = () => {}
+           event.page.on('dialog', listener)
+           event.page.on('console', listener)
+           event.page.off('console', listener)
+           event.page.removeAllListeners('console')
+         })",
+    )
+    .await;
+    let page = format!("page@{PAGE}");
+    // The agent's script listens to console messages, as `page.on('console', …)` makes it.
+    tabs.events().subscribe(&page, "console", true);
+    assert!(matches!(
+        run.before_run("return 1", &deadline).await,
+        Gate::Start
+    ));
+    assert!(
+        tabs.events().subscribed(&page, "console"),
+        "the agent still listens"
+    );
+    assert!(
+        !tabs.events().subscribed(&page, "dialog"),
+        "the hook's listener reached nothing"
+    );
+}
+
+/// A run's hook sandbox on the fake browser's tab, built as `Runtime::run` builds it, with its
+/// real bridge, the real SDK and a minute's deadline.
+async fn real_sandbox(browser: &FakeBrowser, code: &str) -> (HookRun, Deadline, Tabs) {
+    let tasks = TaskTracker::new();
+    let deadline = Deadline::new(Duration::from_mins(1), CancellationToken::new());
+    let run = RunScope::new(deadline.clone(), tasks.clone());
+    let page = PageId::new(PAGE.to_string());
+    let (tabs, url) = Tabs::open(
+        browser.cdp().await,
+        Handle::current(),
+        TabInputs::default(),
+        TabScreenshots::default(),
+        Switches::default(),
+        Permissions::default(),
+        tasks,
+        &page,
+    )
+    .await
+    .unwrap();
+    let dispatcher = Dispatcher::new(tabs.clone(), run);
+    let getters = Getters::new(
+        tabs.clone(),
+        deadline.clone(),
+        Handle::current(),
+        Arc::clone(&dispatcher.run_scope().hook_handles),
+    );
+    let sandbox = HookSandbox::start(
+        RunHooks::new(code),
+        RealmParts {
+            page_guid: quickjs_bridge::page_guid(&page),
+            frame_guid: quickjs_bridge::frame_guid(&page),
+            url,
+            getters,
+            dispatcher: dispatcher.for_hooks(),
+            realms: Arc::default(),
+        },
+    );
+    (sandbox, deadline, tabs)
 }

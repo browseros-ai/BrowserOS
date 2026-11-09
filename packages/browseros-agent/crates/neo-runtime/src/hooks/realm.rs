@@ -245,7 +245,10 @@ struct Realm {
 pub(crate) struct Actor {
     setup: Option<Setup>,
     budget: Duration,
+    /// The hook trace, which the realm's bridge writes.
     trace: Logs,
+    /// Neo's own lines on why a hook failed.
+    failures: Logs,
     watch: Watch,
     close: CancellationToken,
     realm: Option<Realm>,
@@ -257,12 +260,14 @@ impl Actor {
         setup: Setup,
         budget: Duration,
         trace: Logs,
+        failures: Logs,
         close: CancellationToken,
     ) -> Self {
         Self {
             setup: Some(setup),
             budget,
             trace,
+            failures,
             watch: Watch::default(),
             close,
             realm: None,
@@ -427,7 +432,7 @@ impl Actor {
                 .await;
             self.watch.disarm();
             if let Err(error) = aborted {
-                self.trace
+                self.failures
                     .push(format!("neo: aborting {} failed: {error}", event.name()));
             }
         }
