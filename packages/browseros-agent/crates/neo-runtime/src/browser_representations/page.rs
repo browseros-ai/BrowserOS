@@ -2655,6 +2655,23 @@ impl Drop for PageSession {
     }
 }
 
+/// Neo: `element`'s node identity (hooks feature 4): its `backendNodeId` (`DOM.describeNode`),
+/// which Chromium keeps for the node across worlds and resolutions, in the document its frame's
+/// world held throughout the read. A commit during it makes it `NotConnected`, so loop A
+/// resolves again: a node read across a commit could take an id the new document reuses.
+pub(crate) async fn node_key_of(element: &ResolvedElement) -> Result<NodeKey, PageError> {
+    let frame = &element.frame;
+    let document = frame.world.generation();
+    let backend = frame
+        .main
+        .backend_of(frame, element.handle().id().object_id())
+        .await?;
+    if frame.world.generation() != document {
+        return Err(PageError::NotConnected);
+    }
+    Ok(NodeKey::new(frame.world.instance(), document, backend))
+}
+
 /// `click::Tab::Element` for the real tab: one element and the group of the resolution that
 /// produced it. The handle dies with the group.
 #[derive(Clone)]
@@ -2851,15 +2868,8 @@ impl Tab for FrameTab {
         }))
     }
 
-    /// The node's frame and its `backendNodeId` (`DOM.describeNode`), which Chromium keeps for
-    /// the node across worlds and resolutions.
     async fn node_key(&self, element: &ResolvedElement) -> Result<NodeKey, PageError> {
-        let frame = &element.frame;
-        let backend = frame
-            .main
-            .backend_of(frame, element.handle().id().object_id())
-            .await?;
-        Ok(NodeKey::new(frame.id.clone(), backend))
+        node_key_of(element).await
     }
 
     async fn pin(

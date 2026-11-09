@@ -22,10 +22,12 @@ use super::*;
 use crate::fake_browser::{GO_NODE, REFUSED_FILL};
 use crate::hooks::ElementRef;
 use crate::method_router::Dispatcher;
-use crate::playwright_methods::click::tests::{FakeTab, Step, pin_guid};
-use crate::playwright_methods::click::{self, PointerOptions, StatesCheck};
+use crate::playwright_methods::check::{self, CheckOptions};
+use crate::playwright_methods::click::tests::{ArmAnswer, FakeTab, Step, pin_guid};
+use crate::playwright_methods::click::{self, PageError, PointerOptions, StatesCheck};
 use crate::playwright_methods::evaluate::Handles;
 use crate::playwright_methods::fill::{self, FillOptions};
+use crate::playwright_methods::forms::CheckedState;
 use crate::progress::{CallError, CallStart, Progress};
 use crate::run::{CallHookRecord, CallOrigin, CallRecord, CallResult, Delivery, RunEnd};
 
@@ -314,6 +316,163 @@ async fn tests_that_a_new_element_gets_a_new_decision_and_a_replacement_stays_re
     assert_eq!(record.hook, Some(before_record(BeforeHookResult::Allowed)));
     assert!(record.log.is_empty(), "the replaced attempt hid the log");
     assert!(call.progress.element_gate().unwrap().replaced());
+}
+
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_node_number_another_document_reuses_is_another_element() {
+    // The retry finds node 1 again, but in another document (a cross-site navigation keeps the
+    // frame, and the new renderer may number its nodes from the same ids).
+    let mut tab = FakeTab::ready();
+    tab.check_states = Step::new(
+        Duration::from_millis(33),
+        [Ok(StatesCheck::NotConnected), Ok(StatesCheck::Ready)],
+    );
+    tab.documents = Step::new(Duration::ZERO, [1, 2]);
+    let fake = Arc::new(FakeHooks::new(&Timeline::default()));
+    let call = paused(&fake, "click", click_args(), 30_000.0);
+    let result = click::pointer_action(&tab, &click_options(), &call.progress).await;
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        pins(&fake),
+        [Some(pinned(1)), Some(pinned(1))],
+        "asked again"
+    );
+    assert_eq!(tab.count("pin 1"), 2);
+    let seen = tab.calls();
+    let second_pin = seen
+        .iter()
+        .rposition(|call| call == "pin 1")
+        .expect("pinned again");
+    assert!(at(&seen, "unpin 1") < second_pin, "{seen:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_node_found_after_the_input_went_out_is_only_verified() {
+    // A check whose click landed, then whose box re-renders: the read-back finds a new node.
+    let mut tab = FakeTab::ready();
+    let state = |matches: bool| CheckedState {
+        matches,
+        received: Some(if matches { "checked" } else { "unchecked" }.into()),
+        is_radio: Some(false),
+    };
+    tab.forms.checked = Step::new(
+        Duration::from_millis(1),
+        [
+            Ok(state(false)),
+            Err(PageError::NotConnected),
+            Ok(state(true)),
+        ],
+    );
+    tab.nodes = Step::new(Duration::ZERO, [1, 2]);
+    let fake = Arc::new(FakeHooks::new(&Timeline::default()));
+    let call = paused(&fake, "check", click_args(), 30_000.0);
+    let options = CheckOptions::from_check(serde_json::from_value(click_args()).unwrap());
+    let result = check::set_checked(&tab, &options, &call.progress).await;
+    assert_eq!(result, Ok(()));
+    assert_eq!(pins(&fake), [Some(pinned(1))], "no second question");
+    assert_eq!(tab.count("pin 2"), 0);
+    assert_eq!(call.progress.delivery().unwrap().delivery(), Delivery::Done);
+    assert_eq!(
+        record(&call.entry).hook,
+        Some(before_record(BeforeHookResult::Allowed)),
+        "the record keeps the decision that let the click through"
+    );
+    let gate = call.progress.element_gate().unwrap();
+    assert!(!gate.refused(), "it acted: its afterAction runs");
+    assert_eq!(
+        gate.acted().0,
+        Some(pinned(1)),
+        "afterAction sees the element clicked"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_forced_click_on_a_hooked_element_keeps_its_hit_check() {
+    let forced = |position: bool| {
+        let mut args = json!({ "selector": SELECTOR, "strict": true, "force": true });
+        if position {
+            args["position"] = json!({ "x": 230, "y": 20 });
+        }
+        PointerOptions::from_click(serde_json::from_value(args).unwrap()).unwrap()
+    };
+    for position in [true, false] {
+        // Another element is at the point: a forced click would land on it.
+        let mut tab = FakeTab::ready();
+        tab.arm = Step::always(
+            Duration::from_millis(1),
+            Ok(ArmAnswer::Intercepted(
+                "<button id=\"pay\">Pay</button>".into(),
+            )),
+        );
+        let fake = Arc::new(FakeHooks::new(&Timeline::default()));
+        let call = paused(&fake, "click", click_args(), 1000.0);
+        let result = click::pointer_action(&tab, &forced(position), &call.progress).await;
+        assert_eq!(result, Err(PlaywrightError::timeout(1000.0).into()));
+        assert!(tab.count_prefix("arm ") > 0, "{:?}", tab.calls());
+        assert_eq!(
+            tab.count_prefix("press"),
+            0,
+            "nothing pressed: {:?}",
+            tab.calls()
+        );
+        assert_eq!(
+            call.progress.delivery().unwrap().delivery(),
+            Delivery::NotSent
+        );
+    }
+    // Without hooks, force is Playwright's: no hit check, the press goes out.
+    let tab = FakeTab::ready();
+    let progress = Progress::for_test(1000.0);
+    let result = click::pointer_action(&tab, &forced(true), &progress).await;
+    assert_eq!(result, Ok(()));
+    assert_eq!(tab.count_prefix("arm "), 0, "{:?}", tab.calls());
+    assert_eq!(tab.count_prefix("press"), 1, "{:?}", tab.calls());
+}
+
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_swapped_value_never_reaches_an_agent_calls_log_or_error() {
+    let run = run_scope(Duration::from_hours(1));
+    run.swapped
+        .remember(&fill_args(PLACEHOLDER), &fill_args(SECRET));
+    let agent = Arc::new(CallEntry::new(CallStart {
+        call_id: 2,
+        guid: "frame@T".to_string(),
+        method: "press".to_string(),
+        title: None,
+        origin: CallOrigin::Agent,
+        action: None,
+        params: json!({ "selector": SELECTOR, "key": "Enter" }),
+        location: None,
+        input: true,
+    }));
+    agent.scrub_with(Arc::clone(&run.swapped));
+    let progress = Progress::new(Arc::clone(&agent), 30_000.0, run, CancellationToken::new());
+    // The page mirrors the box's value into its attribute: the next call's preview names it.
+    progress.log(format!(
+        "  locator resolved to <input id=\"pw\" type=\"password\" value=\"{SECRET}\"/>"
+    ));
+    let error = agent.scrubbed(format!(
+        "strict mode violation: <input value=\"{SECRET}\"/>"
+    ));
+    let log = agent.finish(CallResult::Error {
+        name: "Error".to_string(),
+        message: error.clone(),
+    });
+    assert!(!error.contains(SECRET), "{error}");
+    assert!(!log.join("\n").contains(SECRET), "{log:?}");
+    assert!(
+        log.join("\n").contains("locator resolved to"),
+        "the log is kept: {log:?}"
+    );
+    let record = record(&agent);
+    assert!(
+        !serde_json::to_string(&record).unwrap().contains(SECRET),
+        "{record:?}"
+    );
+    assert!(
+        record.params.to_string().contains("Enter"),
+        "params are the script's"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -791,6 +950,45 @@ async fn tests_that_a_hooks_own_input_goes_while_the_element_action_waits_for_it
         .expect("the agent's click");
     assert_eq!(agents.result, CallResult::Ok);
     assert_eq!(agents.delivery, Some(Delivery::Done));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_replies_after_a_swap_name_it_to_hooks_only() {
+    // Swaps the placeholder only; any other fill goes as the script wrote it.
+    let fake = Arc::new(
+        FakeHooks::new(&Timeline::default())
+            .wanting(|hook, kind| hook == ActionHook::Before && kind == "fill")
+            .before(|_, event| {
+                if event.args["value"] != PLACEHOLDER {
+                    return decided(Ok(ActionDecision::Allow));
+                }
+                let mut args = event.args;
+                args["value"] = json!(SECRET);
+                decided(Ok(ActionDecision::ReplaceArgs(args)))
+            }),
+    );
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let reply = harness.call(&fill_go(1, PLACEHOLDER)).await.unwrap();
+    assert!(reply.get("error").is_none(), "{reply}");
+    // A later call whose page error names the secret (here it is in the call's own text; on a
+    // real page, a mirrored attribute in a preview).
+    let refused = format!("{REFUSED_FILL}{SECRET}");
+    let agents = harness.call(&fill_go(2, &refused)).await.unwrap();
+    assert_eq!(agents["error"]["error"]["name"], "Error", "{agents}");
+    assert!(!agents.to_string().contains(SECRET), "{agents}");
+    let hooks = harness.hook_call(&fill_go(3, &refused)).await.unwrap();
+    assert!(
+        hooks["error"]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(SECRET)),
+        "a hook's own reply keeps the real text: {hooks}"
+    );
+    // Records keep what the script sent (`params`); no log or error text names the secret.
+    let records = harness.records(RunEnd::Settled).await;
+    for record in &records {
+        let text = serde_json::to_string(&(&record.log, &record.result)).unwrap();
+        assert!(!text.contains(SECRET), "{record:?}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

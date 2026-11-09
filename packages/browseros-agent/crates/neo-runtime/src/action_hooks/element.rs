@@ -36,24 +36,31 @@ use super::{ActionHooks, before_failed, failure_detail, trace_line};
 use crate::hooks::{ActionDecision, ActionEvent, ElementRef, HookFailure};
 use crate::playwright_methods::click::{Resolved, Stop, Tab};
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::run::{BeforeHookResult, RunEnd};
+use crate::run::{BeforeHookResult, Delivery, RunEnd};
 
 /// What a hook's replacement arguments become, type-erased: the dispatcher's route of the
 /// element action (`method_router.rs`), which only that action's handler reads, by type.
 pub(crate) type ElementOptions = Arc<dyn Any + Send + Sync>;
 
 /// A DOM node's identity across resolutions: the same node gives an equal key, another node a
-/// different one. Read in the page (a node's frame and backend node id), never from a preview.
+/// different one. Read from the page, never from a preview: the node's backend node id, which
+/// Chromium numbers per renderer process, within its document, named by the frame's world and
+/// the commits that world has seen. A cross-site navigation keeps the frame and may reuse a
+/// backend id in the new process; the document part tells the two apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NodeKey {
-    frame: String,
+    world: u64,
+    document: u64,
     backend: i64,
 }
 
 impl NodeKey {
-    pub(crate) fn new(frame: impl Into<String>, backend: i64) -> Self {
+    /// Node `backend` of document `document` of world `world` (`World::instance`,
+    /// `World::generation`).
+    pub(crate) fn new(world: u64, document: u64, backend: i64) -> Self {
         Self {
-            frame: frame.into(),
+            world,
+            document,
             backend,
         }
     }
@@ -167,13 +174,16 @@ impl ElementGate {
     }
 
     /// Whether an attempt of the call was to run with a hook's arguments: its error is redacted.
+    /// A poisoned lock reads as replaced: redacting a clean error costs nothing, leaking a
+    /// swapped value cannot be undone.
     pub(crate) fn replaced(&self) -> bool {
-        self.lock().is_some_and(|state| state.replaced)
+        self.lock().is_none_or(|state| state.replaced)
     }
 
-    /// Whether the call ended at a question about its element, before it acted on it.
+    /// Whether the call ended at a question about its element, before it acted on it. A
+    /// poisoned lock reads as refused, failing closed.
     pub(crate) fn refused(&self) -> bool {
-        self.lock().is_some_and(|state| state.refused)
+        self.lock().is_none_or(|state| state.refused)
     }
 
     /// The element the call acted on last, and the arguments it acted with when a hook replaced
@@ -218,14 +228,18 @@ impl ElementGate {
                 .map(|pinned| pinned.element.key.clone())
         });
         if let Some(pinned) = pinned {
+            // The call's input went out already: whatever node this is, the call resolved it to
+            // verify what it did (a check reading back its state), and cannot send input again.
+            // No new question; the decision that let the input through stands.
+            if progress
+                .delivery()
+                .is_some_and(|cell| cell.delivery() != Delivery::NotSent)
+            {
+                return Ok(self.decided_options());
+            }
             let key = progress.race(tab.node_key(&resolved.element)).await??;
             if key == pinned {
-                return Ok(self.lock().and_then(|state| {
-                    state
-                        .pinned
-                        .as_ref()
-                        .and_then(|pinned| pinned.decided.options())
-                }));
+                return Ok(self.decided_options());
             }
             // Another node: its predecessor's pin goes before this one is minted.
             let released = self.lock().and_then(|mut state| state.pinned.take());
@@ -250,6 +264,16 @@ impl ElementGate {
         self.decided(progress, element, decided)
     }
 
+    /// The options of the decision about the pinned element: `None` for the script's own.
+    fn decided_options(&self) -> Option<ElementOptions> {
+        self.lock().and_then(|state| {
+            state
+                .pinned
+                .as_ref()
+                .and_then(|pinned| pinned.decided.options())
+        })
+    }
+
     /// What `decided` means for the call, on `element`; records it on the call's entry.
     fn decided(
         &self,
@@ -260,6 +284,10 @@ impl ElementGate {
         let (decided, options) = match decided {
             Ok(ActionDecision::Allow) => {
                 progress.record_hook_before(BeforeHookResult::Allowed);
+                // An earlier element's replacement is no longer in use.
+                if let Some(mut state) = self.lock() {
+                    drop(state.charge.take());
+                }
                 (Decided::Allow, None)
             }
             Ok(ActionDecision::Block(reason)) => {
@@ -277,6 +305,11 @@ impl ElementGate {
                 match self.route.reroute_element(args.clone()) {
                     Ok(Rerouted { options, charge }) => {
                         progress.record_hook_before(BeforeHookResult::ArgsReplaced);
+                        // From now on no agent call's log or error text names what it swapped in.
+                        progress
+                            .run_scope()
+                            .swapped
+                            .remember(&self.event.args, &args);
                         if let Some(mut state) = self.lock() {
                             state.replaced = true;
                             // The replacement in use is the one charged; an earlier one goes.

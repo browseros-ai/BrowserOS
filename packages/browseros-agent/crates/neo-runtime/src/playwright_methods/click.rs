@@ -1116,7 +1116,9 @@ async fn attempt<T: Tab>(
     // it the preliminary hit check, the input and the stop all see this action's own
     // interceptor.
     let input = progress.race(tab.input()).await?;
-    let armed = if options.force {
+    // Deviation: `server/dom.ts` `ElementHandle._performPointerAction`: `if (force) {` Playwright's force skips the hit-target check; Neo keeps it for a call whose beforeAction hook decided about its element (hooks feature 4), so a forced input, at a `position` or under an overlay, lands on the element the hook checked, or not at all.
+    let unchecked = options.force && progress.element_gate().is_none();
+    let armed = if unchecked {
         None
     } else {
         match progress
@@ -1783,6 +1785,9 @@ pub(crate) mod tests {
         /// Which node each `resolve` finds (its `Element`), the last repeating: node 1 by
         /// default. `node_key` and `pin` name nodes by this number.
         pub(crate) nodes: Step<u32>,
+        /// The document each `node_key` and `pin` reads its node in, the last repeating: 1 by
+        /// default, so a node number reused by another document is another node.
+        pub(crate) documents: Step<u64>,
     }
 
     /// The fake's pin release: it records `unpin <node>` as it drops.
@@ -1840,6 +1845,7 @@ pub(crate) mod tests {
                 plans: Mutex::default(),
                 checkpoints: Mutex::default(),
                 nodes: Step::always(Duration::ZERO, 1),
+                documents: Step::always(Duration::ZERO, 1),
             }
         }
 
@@ -1853,6 +1859,14 @@ pub(crate) mod tests {
 
         pub(crate) fn count(&self, name: &str) -> usize {
             self.calls().iter().filter(|call| *call == name).count()
+        }
+
+        /// How many recorded calls start with `prefix`.
+        pub(crate) fn count_prefix(&self, prefix: &str) -> usize {
+            self.calls()
+                .iter()
+                .filter(|call| call.starts_with(prefix))
+                .count()
         }
     }
 
@@ -1888,7 +1902,7 @@ pub(crate) mod tests {
         async fn node_key(&self, element: &u32) -> Result<NodeKey, PageError> {
             self.record(format!("node_key {element}"));
             time::sleep(ROUND_TRIP).await;
-            Ok(NodeKey::new("main", i64::from(*element)))
+            Ok(NodeKey::new(0, self.documents.next(), i64::from(*element)))
         }
 
         async fn pin(
@@ -1904,7 +1918,7 @@ pub(crate) mod tests {
                     guid: pin_guid(*element),
                     preview: preview.to_string(),
                 },
-                NodeKey::new("main", i64::from(*element)),
+                NodeKey::new(0, self.documents.next(), i64::from(*element)),
                 Box::new(FakeUnpin {
                     calls: Arc::clone(&self.calls),
                     node: *element,

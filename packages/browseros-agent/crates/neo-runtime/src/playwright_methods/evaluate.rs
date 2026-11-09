@@ -44,9 +44,11 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use tokio::time;
 
-use crate::action_hooks::element::{NodeKey, PinnedElement};
+use crate::action_hooks::element::PinnedElement;
 use crate::actions::{ActionKind, NeoMethod};
-use crate::browser_representations::page::{FrameTab, GroupGuard, PageSession, ResolvedElement};
+use crate::browser_representations::page::{
+    self, FrameTab, GroupGuard, PageSession, ResolvedElement,
+};
 use crate::chromium_bridge::frame_selector;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::chromium_bridge::main_world::{
@@ -3063,10 +3065,7 @@ pub(crate) async fn pin_element(
     handles: &Arc<Handles>,
 ) -> Result<PinnedElement, PageError> {
     let frame = &element.frame;
-    let backend = frame
-        .main
-        .backend_of(frame, element.handle().id().object_id())
-        .await?;
+    let key = page::node_key_of(element).await?;
     let created = element_handle_for(tab, frame, element.handle(), preview, handles).await?;
     let release = PinRelease {
         handles: Arc::clone(handles),
@@ -3078,7 +3077,7 @@ pub(crate) async fn pin_element(
             guid: created.guid,
             preview: created.initializer.preview,
         },
-        NodeKey::new(frame.id.clone(), backend),
+        key,
         Box::new(release),
     ))
 }

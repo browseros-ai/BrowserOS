@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (133)
+## Deviations (134)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -122,6 +122,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/playwright_methods/click.rs | `MAX_CLICK_COUNT` | `server/input.ts` `Mouse.click` | Playwright has no cap; every click is two events Neo plans before writing, so a script's `clickCount: 1e9` must not take the server's memory with it. |
 | neo-runtime/src/playwright_methods/click.rs | `MAX_STEPS` | `server/input.ts` `Mouse.move` | Playwright has no cap; every step is one event Neo plans before writing, so `steps: 1e9` must not take the server's memory with it. |
 | neo-runtime/src/playwright_methods/click.rs | `PointerOptions::from_tap` | `server/frames.ts` `Frame.tap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |
+| neo-runtime/src/playwright_methods/click.rs | `attempt` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright's force skips the hit-target check; Neo keeps it for a call whose beforeAction hook decided about its element (hooks feature 4), so a forced input, at a `position` or under an overlay, lands on the element the hook checked, or not at all. |
 | neo-runtime/src/playwright_methods/click.rs | `attempt` | `server/dom.ts` `ElementHandle._performPointerAction` | Playwright's trial still performs the input into an interceptor that blocks every event it judges, which the page's earlier listeners and the hover state still see; Neo's trial ends at its checks and sends no input. Dropping the interceptor disarms it, and the tab's input comes back once that stop has answered. |
 | neo-runtime/src/playwright_methods/content.rs | `OOPIF_NETWORKIDLE` | `server/frames.ts` `Frame.setContent` | Playwright waits for an out-of-process frame's `networkidle` as for any frame's. Neo's idle tracker follows the tab's own session only, which such a frame left (`network_idle.rs`), so the wait could only time out: it is refused before the write. |
 | neo-runtime/src/playwright_methods/devices.rs | `DeviceCall::from_page_call` | `server/input.ts` `Touchscreen.apiTap` | Neo's run attaches to the user's BrowserOS context, which has no hasTouch option, and its tab answers Input.dispatchTouchEvent with the events of a hasTouch context, so Neo taps where Playwright refuses. |

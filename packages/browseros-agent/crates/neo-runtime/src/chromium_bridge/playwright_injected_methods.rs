@@ -162,8 +162,15 @@ impl TestIdAttribute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObjectGroup(pub(crate) String);
 
+/// Neo: numbers each [`World`] apart, process-wide, so a node's identity (`NodeKey`) never
+/// matches across two worlds of one frame, a child frame's world made again after a commit
+/// included.
+static NEXT_WORLD: AtomicU64 = AtomicU64::new(1);
+
 /// The run's handle on one frame's utility world.
 pub(crate) struct World {
+    /// This world's number ([`NEXT_WORLD`]).
+    instance: u64,
     cdp: CdpClient,
     session: SessionId,
     /// A frame id; only the main frame also uses the tab target id.
@@ -204,6 +211,7 @@ impl World {
         gone: CancellationToken,
     ) -> Self {
         Self {
+            instance: NEXT_WORLD.fetch_add(1, Ordering::Relaxed),
             cdp,
             session,
             frame_id,
@@ -213,6 +221,12 @@ impl World {
             document: AtomicU64::new(0),
             test_id: Arc::default(),
         }
+    }
+
+    /// This world's number, unique in the process: with [`World::generation`], it names one
+    /// document of one frame (hooks feature 4's node identity).
+    pub(crate) fn instance(&self) -> u64 {
+        self.instance
     }
 
     /// This world with the run's test id attribute instead of the default.
