@@ -1,7 +1,8 @@
 //! Neo: fixed action labels and admission metadata for every served browser command.
 //!
 //! Generated commands are covered by exhaustive matches. Neo commands carry their action
-//! beside their metadata; routing cannot accept an unlabelled `MethodMeta`.
+//! beside their metadata; routing cannot accept an unlabelled `MethodMeta`. Each served
+//! command also fixes how a hook's replacement result is checked against it.
 
 #![deny(clippy::wildcard_enum_match_arm)]
 
@@ -9,8 +10,9 @@ use std::ops::Deref;
 
 use neo_runtime_spec::serve;
 use neo_runtime_spec::{CallDecodeError, Command, MethodMeta};
-use serde::{Serialize, Serializer};
-use serde_json::Value;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::{Map, Number, Value};
 
 use crate::browser_representations::bindings;
 use crate::browser_representations::clock;
@@ -491,6 +493,138 @@ impl Action {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResultShapeError(pub(crate) String);
 
+/// What a hook's replacement result is checked against, fixed per served command.
+#[derive(Clone, Copy)]
+enum ResultShape {
+    /// A generated command that replies a `result`: the replacement must decode as its
+    /// `Result` type ([`generated_result`]).
+    Generated(fn(&Value) -> Result<Value, String>),
+    /// A generated command whose reply has no `result` (`Command::VOID_RESULT`).
+    Void,
+    /// A Neo command, which has no generated result type ([`like_actual`]).
+    Neo,
+}
+
+impl ResultShape {
+    /// Generated command `P`'s shape. Requiring `Deserialize` here makes every generated row
+    /// prove its result type can be decoded, or the table does not compile.
+    const fn generated<P>() -> Self
+    where
+        P: Command,
+        P::Result: DeserializeOwned,
+    {
+        if P::VOID_RESULT {
+            Self::Void
+        } else {
+            Self::Generated(generated_result::<P>)
+        }
+    }
+}
+
+/// Decodes `replaced` as generated command `P`'s result and encodes it again. A key the type
+/// does not define, or `null` for an absent optional field, would vanish in that round trip,
+/// so the replacement is refused rather than sent as a different value than the hook returned.
+fn generated_result<P>(replaced: &Value) -> Result<Value, String>
+where
+    P: Command,
+    P::Result: DeserializeOwned,
+{
+    let decoded = P::Result::deserialize(replaced)
+        .map_err(|error| format!("not its result type: {error}"))?;
+    let encoded =
+        serde_json::to_value(decoded).map_err(|error| format!("cannot encode: {error}"))?;
+    if same_json(&encoded, replaced) {
+        Ok(encoded)
+    } else {
+        Err("a key its result type does not define, or null for an absent one".to_owned())
+    }
+}
+
+/// Whether `a` and `b` are the same JSON. Numbers compare by value: JavaScript has one number
+/// type, so a hook's whole number arrives as `1` (`JSON.stringify`) where a float field
+/// encodes `1.0`. Recursion is bounded by the depth of the hook's JSON.
+fn same_json(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => same_number(a, b),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_json(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| same_json(a, b)))
+        }
+        _ => a == b,
+    }
+}
+
+/// Integers compare exactly; an integer and a float compare as floats.
+fn same_number(a: &Number, b: &Number) -> bool {
+    if let (Some(a), Some(b)) = (a.as_i64(), b.as_i64()) {
+        return a == b;
+    }
+    if let (Some(a), Some(b)) = (a.as_u64(), b.as_u64()) {
+        return a == b;
+    }
+    a.as_f64() == b.as_f64()
+}
+
+/// A Neo command's check, with `actual` as the reference: the same JSON kind and, for an
+/// object, the same keys with values of the same kinds. Values below the top level (such as
+/// an evaluate's serialized value) are free.
+fn like_actual(replaced: Value, actual: &Value) -> Result<Value, String> {
+    if kind(&replaced) != kind(actual) {
+        return Err(format!(
+            "{} where the result is {}",
+            kind(&replaced),
+            kind(actual)
+        ));
+    }
+    if let (Value::Object(fields), Value::Object(expected)) = (&replaced, actual) {
+        let keys = |map: &Map<String, Value>| {
+            map.keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let other_keys = || {
+            format!(
+                "keys [{}] where the result has [{}]",
+                keys(fields),
+                keys(expected)
+            )
+        };
+        if fields.len() != expected.len() {
+            return Err(other_keys());
+        }
+        for (key, value) in expected {
+            let Some(field) = fields.get(key) else {
+                return Err(other_keys());
+            };
+            if kind(field) != kind(value) {
+                return Err(format!(
+                    "`{key}` is {} where the result's is {}",
+                    kind(field),
+                    kind(value)
+                ));
+            }
+        }
+    }
+    Ok(replaced)
+}
+
+/// A JSON value's kind, as the hook trace names it.
+fn kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
+}
+
 /// Metadata for a command outside the generated spec. An action is mandatory at declaration.
 pub(crate) struct NeoMethod {
     meta: MethodMeta,
@@ -514,11 +648,13 @@ impl Deref for NeoMethod {
     }
 }
 
-/// The router's admission token: metadata that cannot exist without its action.
+/// The router's admission token: metadata that cannot exist without its action and the shape
+/// a hook's replacement result must have.
 #[derive(Clone, Copy)]
 pub(crate) struct ServedMethod {
     meta: &'static MethodMeta,
     action: Action,
+    result: ResultShape,
 }
 
 impl ServedMethod {
@@ -530,29 +666,47 @@ impl ServedMethod {
         self.action
     }
 
-    /// The reply `result` a hook's replacement becomes, if `replaced` has this command's result
-    /// shape; `actual` is the result the action produced (`None` for a void command).
+    /// The reply `result` to send instead of `actual`, the one the action produced (`None`
+    /// when the reply has no `result`), if the hook's `replaced` has this command's result
+    /// shape. design.md, Error handling: "Replaced results must have the method's result
+    /// shape; otherwise the call fails."
     ///
-    /// Skeleton: accepts any replacement as it is. The F3 result-shape piece replaces the body.
-    #[expect(
-        dead_code,
-        clippy::unnecessary_wraps,
-        reason = "skeleton: the F3 call path calls it and the result-shape piece can fail"
+    /// A generated command's replacement must decode as its `Result` type and encode back to
+    /// the same JSON (numbers compared by value); the encoded value is sent. A Neo command's
+    /// replacement must keep `actual`'s top-level shape and is sent as it is. A command that
+    /// replies no `result` has nothing to replace, so this never returns `Ok(None)`.
+    ///
+    /// # Errors
+    ///
+    /// When the replacement does not have the shape; the message is for the hook trace.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the F3 hook call path calls it; until then only tests do"
+        )
     )]
     pub(crate) fn replacement_result(
         self,
         replaced: Value,
         actual: Option<&Value>,
     ) -> Result<Option<Value>, ResultShapeError> {
-        let _ = (self, actual);
-        Ok(Some(replaced))
+        let checked = match (self.result, actual) {
+            (ResultShape::Void, _) | (_, None) => Err("replies no result to replace".to_owned()),
+            (ResultShape::Generated(check), Some(_)) => check(&replaced),
+            (ResultShape::Neo, Some(actual)) => like_actual(replaced, actual),
+        };
+        checked.map(Some).map_err(|reason| {
+            ResultShapeError(format!(
+                "{}.{}: {reason}",
+                self.meta.interface, self.meta.method
+            ))
+        })
     }
 
     pub(crate) fn decode_error(error: &CallDecodeError) -> Option<Self> {
         match error {
-            CallDecodeError::InvalidParams { meta, .. } => {
-                classify(meta).map(|action| Self { meta, action })
-            }
+            CallDecodeError::InvalidParams { meta, .. } => classify(meta),
             CallDecodeError::UnknownMethod { .. } => None,
         }
     }
@@ -571,6 +725,7 @@ impl From<&'static NeoMethod> for ServedMethod {
         Self {
             meta: &method.meta,
             action: method.action,
+            result: ResultShape::Neo,
         }
     }
 }
@@ -593,17 +748,16 @@ macro_rules! spec_actions {
         }
 
         $(impl SpecCommand for serve::$params {
-            /// Neo: this generated command's mandatory action classification.
+            /// Neo: this generated command's mandatory action classification and result shape.
             const METHOD: ServedMethod = ServedMethod {
                 meta: Self::META,
                 action: Action::new(ActionKind::$kind, spec_actions!(@element $($element)?)),
+                result: ResultShape::generated::<Self>(),
             };
         })*
 
         /// Neo: the labelled commands in one generated call enum, shared with the classifier.
-        const $table: &[(&MethodMeta, Action)] = &[
-            $((<serve::$params as Command>::META, <serve::$params as SpecCommand>::METHOD.action),)*
-        ];
+        const $table: &[ServedMethod] = &[$(<serve::$params as SpecCommand>::METHOD,)*];
     };
     (@element element) => { true };
     (@element) => { false };
@@ -808,7 +962,7 @@ const NEO_METHODS: &[&NeoMethod] = &[
 ];
 
 /// Every served command, including commands whose params failed to decode.
-pub(crate) fn served() -> impl Iterator<Item = (&'static MethodMeta, Action)> {
+pub(crate) fn served() -> impl Iterator<Item = ServedMethod> {
     [
         BROWSER_CONTEXT_ACTIONS,
         BROWSER_ACTIONS,
@@ -824,25 +978,23 @@ pub(crate) fn served() -> impl Iterator<Item = (&'static MethodMeta, Action)> {
     .into_iter()
     .flatten()
     .copied()
-    .chain(
-        NEO_METHODS
-            .iter()
-            .map(|method| (&method.meta, method.action)),
-    )
+    .chain(NEO_METHODS.iter().copied().map(ServedMethod::from))
 }
 
 /// Unknown commands have no label; argument values never participate in classification.
-pub(crate) fn classify(meta: &MethodMeta) -> Option<Action> {
-    served()
-        .find(|(known, _)| known.interface == meta.interface && known.method == meta.method)
-        .map(|(_, action)| action)
+pub(crate) fn classify(meta: &MethodMeta) -> Option<ServedMethod> {
+    served().find(|known| known.interface == meta.interface && known.method == meta.method)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
-    use super::{classify, served};
+    use neo_runtime_spec::serve;
+    use serde_json::{Value, json};
+
+    use super::{ResultShape, ServedMethod, SpecCommand, classify, served};
+    use crate::playwright_methods::evaluate;
 
     /// Neo: the independent literal contract for all 163 served command labels.
     const EXPECTED: &[(&str, &str, &str, &str, bool)] = &[
@@ -1333,12 +1485,17 @@ mod tests {
     fn tests_that_every_served_command_has_its_contract_label() {
         let mut actual = Vec::new();
         let mut commands = BTreeSet::new();
-        for (meta, action) in served() {
+        for method in served() {
+            let (meta, action) = (method.meta(), method.action());
             assert!(
                 commands.insert((meta.interface, meta.method)),
                 "duplicate served command: {meta:?}"
             );
-            assert_eq!(classify(meta), Some(action), "classification: {meta:?}");
+            assert_eq!(
+                classify(meta).map(ServedMethod::action),
+                Some(action),
+                "classification: {meta:?}"
+            );
             actual.push((
                 meta.interface,
                 meta.method,
@@ -1368,5 +1525,206 @@ mod tests {
             }
         }
         assert_eq!(count, 116, "all spec commands checked");
+    }
+
+    /// A served `Frame` command, labelled as the router labels a decoded call.
+    fn frame(method: &str, params: Value) -> ServedMethod {
+        ServedMethod::from(&serve::FrameCall::decode(method, Some(params)).unwrap())
+    }
+
+    #[test]
+    fn tests_that_a_generated_result_decodes_as_its_type_with_no_other_key() {
+        let title = frame("title", json!({}));
+        let actual = json!({ "value": "Old" });
+        assert_eq!(
+            title.replacement_result(json!({ "value": "x" }), Some(&actual)),
+            Ok(Some(json!({ "value": "x" }))),
+            "a string replaces the title"
+        );
+        for refused in [
+            json!({ "value": 1 }),
+            json!({ "value": "x", "extra": 1 }),
+            json!({}),
+            json!("x"),
+        ] {
+            assert!(
+                title
+                    .replacement_result(refused.clone(), Some(&actual))
+                    .is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_an_optional_result_field_may_be_absent_but_never_null() {
+        let goto = frame("goto", json!({ "url": "https://a.test/" }));
+        let actual = json!({ "response": { "guid": "response@1" } });
+        for kept in [json!({}), json!({ "response": { "guid": "response@2" } })] {
+            assert_eq!(
+                goto.replacement_result(kept.clone(), Some(&actual)),
+                Ok(Some(kept.clone())),
+                "accepted: {kept}"
+            );
+        }
+        for refused in [
+            json!({ "response": null }),
+            json!({ "response": "response@2" }),
+            json!({ "response": { "guid": "response@2", "url": "https://a.test/" } }),
+        ] {
+            assert!(
+                goto.replacement_result(refused.clone(), Some(&actual))
+                    .is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_a_command_with_no_result_has_nothing_to_replace() {
+        let click = frame("click", json!({ "selector": "#go" }));
+        assert!(
+            click.replacement_result(json!({}), None).is_err(),
+            "a void command"
+        );
+        assert!(
+            click
+                .replacement_result(json!({}), Some(&json!({})))
+                .is_err(),
+            "a void command, whatever result it is handed"
+        );
+        let title = frame("title", json!({}));
+        assert!(
+            title
+                .replacement_result(json!({ "value": "x" }), None)
+                .is_err(),
+            "a command that produced no result"
+        );
+    }
+
+    #[test]
+    fn tests_that_result_numbers_compare_by_value() {
+        let cookies = <serve::BrowserContextCookiesParams as SpecCommand>::METHOD;
+        let cookie = json!({
+            "name": "a",
+            "value": "b",
+            "domain": "a.test",
+            "path": "/",
+            "expires": -1,
+            "httpOnly": false,
+            "secure": false,
+            "sameSite": "Lax",
+        });
+        let replaced = cookies
+            .replacement_result(
+                json!({ "cookies": [cookie] }),
+                Some(&json!({ "cookies": [] })),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            replaced["cookies"][0]["expires"].as_f64(),
+            Some(-1.0),
+            "a whole number fills a float field"
+        );
+        let count = frame("queryCount", json!({ "selector": "li" }));
+        let actual = json!({ "value": 3 });
+        assert_eq!(
+            count.replacement_result(json!({ "value": 2 }), Some(&actual)),
+            Ok(Some(json!({ "value": 2 }))),
+            "an integer field"
+        );
+        assert!(
+            count
+                .replacement_result(json!({ "value": 2.5 }), Some(&actual))
+                .is_err(),
+            "a fraction in an integer field"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_neo_result_keeps_the_actual_top_level_shape() {
+        let evaluate_expression = ServedMethod::from(&evaluate::FRAME_EVALUATE_META);
+        let actual = json!({ "value": { "s": "old" } });
+        let nested = json!({ "value": { "o": [{ "k": "a", "v": { "n": 1 } }] } });
+        assert_eq!(
+            evaluate_expression.replacement_result(nested.clone(), Some(&actual)),
+            Ok(Some(nested)),
+            "values below the top level are free"
+        );
+        for refused in [
+            json!({ "handle": { "guid": "handle@1" } }),
+            json!({ "value": { "s": "x" }, "extra": 1 }),
+            json!({}),
+            json!({ "value": "x" }),
+            json!(["x"]),
+        ] {
+            assert!(
+                evaluate_expression
+                    .replacement_result(refused.clone(), Some(&actual))
+                    .is_err(),
+                "refused: {refused}"
+            );
+        }
+        assert!(
+            evaluate_expression
+                .replacement_result(actual, None)
+                .is_err(),
+            "no result to compare with"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_decode_error_keeps_its_commands_result_shape() {
+        let error = serve::FrameCall::decode("goto", Some(json!({}))).unwrap_err();
+        let goto = ServedMethod::decode_error(&error).unwrap();
+        let actual = json!({});
+        assert_eq!(
+            goto.replacement_result(json!({}), Some(&actual)),
+            Ok(Some(json!({}))),
+            "goto's result"
+        );
+        assert!(
+            goto.replacement_result(json!({ "response": null }), Some(&actual))
+                .is_err(),
+            "checked as goto's result"
+        );
+    }
+
+    #[test]
+    fn tests_that_every_served_command_checks_replacement_results() {
+        let reported = json!({ "value": true });
+        let mut shapes = BTreeMap::new();
+        for method in served() {
+            let shape = match method.result {
+                ResultShape::Generated(_) => "generated",
+                ResultShape::Void => "void",
+                ResultShape::Neo => "neo",
+            };
+            *shapes.entry(shape).or_insert(0) += 1;
+            let name = format!("{}.{}", method.interface, method.method);
+            assert!(
+                method.replacement_result(reported.clone(), None).is_err(),
+                "{name}: no result to replace"
+            );
+            assert!(
+                method
+                    .replacement_result(json!({ "neo:unknown": true }), Some(&reported))
+                    .is_err(),
+                "{name}: a key its result does not have"
+            );
+            if shape == "neo" {
+                assert_eq!(
+                    method.replacement_result(reported.clone(), Some(&reported)),
+                    Ok(Some(reported.clone())),
+                    "{name}: its own result"
+                );
+            }
+        }
+        assert_eq!(
+            shapes,
+            BTreeMap::from([("generated", 45), ("neo", 47), ("void", 71)]),
+            "every spec command decodes or has no result; every Neo command compares"
+        );
     }
 }
