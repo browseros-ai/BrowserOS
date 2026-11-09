@@ -10,6 +10,7 @@ use std::ops::Deref;
 use neo_runtime_spec::serve;
 use neo_runtime_spec::{CallDecodeError, Command, MethodMeta};
 use serde::{Serialize, Serializer};
+use serde_json::Value;
 
 use crate::browser_representations::bindings;
 use crate::browser_representations::clock;
@@ -467,7 +468,28 @@ impl Action {
     pub const fn targets_element(self) -> bool {
         self.element
     }
+
+    /// Whether this is an element action in design.md's sense: input (pointer, typing, select,
+    /// focus or files) aimed at an element the call resolves. Its hooks fire once the element is
+    /// found (F4); every other action's hooks fire before the call starts (F3), reads and page
+    /// scripts that name a selector included.
+    #[must_use]
+    pub const fn element_action(self) -> bool {
+        self.element
+            && matches!(
+                self.kind.group(),
+                ActionGroup::Pointer
+                    | ActionGroup::Type
+                    | ActionGroup::Select
+                    | ActionGroup::Focus
+                    | ActionGroup::Files
+            )
+    }
 }
+
+/// Why a hook's replacement result does not fit its command (the detail goes to the hook trace).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResultShapeError(pub(crate) String);
 
 /// Metadata for a command outside the generated spec. An action is mandatory at declaration.
 pub(crate) struct NeoMethod {
@@ -506,6 +528,24 @@ impl ServedMethod {
 
     pub(crate) const fn action(self) -> Action {
         self.action
+    }
+
+    /// The reply `result` a hook's replacement becomes, if `replaced` has this command's result
+    /// shape; `actual` is the result the action produced (`None` for a void command).
+    ///
+    /// Skeleton: accepts any replacement as it is. The F3 result-shape piece replaces the body.
+    #[expect(
+        dead_code,
+        clippy::unnecessary_wraps,
+        reason = "skeleton: the F3 call path calls it and the result-shape piece can fail"
+    )]
+    pub(crate) fn replacement_result(
+        self,
+        replaced: Value,
+        actual: Option<&Value>,
+    ) -> Result<Option<Value>, ResultShapeError> {
+        let _ = (self, actual);
+        Ok(Some(replaced))
     }
 
     pub(crate) fn decode_error(error: &CallDecodeError) -> Option<Self> {
