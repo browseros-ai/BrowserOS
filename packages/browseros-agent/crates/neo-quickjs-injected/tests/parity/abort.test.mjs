@@ -428,11 +428,11 @@ test('signal aborts calls as Playwright does', {
         })
         assert.deepEqual(reference.effect, UNTOUCHED, 'no late click')
         const click = neo.outcome.calls.find((call) => call.method === 'click')
-        assert.deepEqual(
-          click?.result,
-          { kind: 'error', name: 'AbortError', message: 'foo bar' },
-          'Neo records the abort',
-        )
+        assert.ok(click)
+        assert.equal(click.result.kind, 'error')
+        assert.equal(click.result.name, 'AbortError')
+        // The script receives its reason; the trace must not retain that secret.
+        assert.ok(!JSON.stringify(click).includes('foo bar'))
       },
     )
 

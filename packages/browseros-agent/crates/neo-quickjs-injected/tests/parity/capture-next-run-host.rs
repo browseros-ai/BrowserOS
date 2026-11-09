@@ -1,6 +1,6 @@
 //! Review-only persistent-runtime cancellation probe; launched by the recording browser driver.
-use neo_runtime::RunOrigin;
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
+use neo_runtime::RunOrigin;
 use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
 use serde_json::json;
 use std::env;
@@ -60,7 +60,7 @@ async fn cancel_and_reuse_runtime() {
         let outcome = task.await.expect("run task");
         assert_eq!(outcome.status, RunStatus::Cancelled, "{outcome:#?}");
     }
-    let later=runtime.run(RunRequest{code:"const b=await page.screenshot({clip:{x:0,y:0,width:10,height:10}});return {alpha:b[25]===6||b[25]===4}".into(),page:PageId::new(target),timeout:Duration::from_secs(10),cancel:CancellationToken::new(),artifacts:None}).await;
+    let later=runtime.run(RunRequest{origin:RunOrigin::default(),code:"const b=await page.screenshot({clip:{x:0,y:0,width:10,height:10}});return {alpha:b[25]===6||b[25]===4}".into(),page:PageId::new(target),timeout:Duration::from_secs(10),cancel:CancellationToken::new(),artifacts:None}).await;
     assert_eq!(later.status, RunStatus::Ok, "{later:#?}");
     time::timeout(Duration::from_secs(10), runtime.drain())
         .await
