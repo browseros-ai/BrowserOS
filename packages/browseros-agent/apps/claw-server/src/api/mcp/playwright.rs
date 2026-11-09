@@ -10,7 +10,9 @@ use std::{
 };
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use neo_runtime::{AbsolutePaths, PageId, RunOutcome, RunPage, RunRequest, RunStatus, Runtime};
+use neo_runtime::{
+    AbsolutePaths, PageId, RunHooks, RunOutcome, RunPage, RunRequest, RunStatus, Runtime,
+};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
@@ -39,13 +41,17 @@ use super::{
     output::{RESULTS_DIR, Store},
 };
 
+#[path = "playwright_host.rs"]
+mod host;
+
 const DEFAULT_TIMEOUT: u64 = 30_000;
 const MAX_TIMEOUT: u64 = 120_000;
 const INSTRUCTIONS: &str = concat!(
     "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).",
     " Scope large reads with locator.ariaSnapshot({mode:'ai'}). A response's JSON is held to maxResponseTokens (default 100000, 1000-200000; tokens = UTF-8 bytes / 4, rounded up), settable on any call; image blocks are outside it. If your client caps tool output lower, pass maxResponseTokens. Truncated fields include next arguments for run({result,field,path,offset,limit,maxResponseTokens}) to read the stored original without changing refs; next repeats the maxResponseTokens you set. limit (4000-100000 bytes, at most maxResponseTokens x 4) narrows a window, and truncated.<field>.file names a local file holding the field's full text. A large object or array keeps its type: small keys stay whole, and truncated.value.cut lists each shortened part by JSON Pointer path with its own next.",
     " A `path` option (screenshot, pdf, storageState, download.saveAs) writes into one artifact directory shared by all runs: relative paths resolve there, and an absolute path outside it is written there under its file name; the result's artifacts[] gives each file's absolute `file` path (and `requested` when redirected). setInputFiles reads from the same directory.",
-    " A returned Buffer (return await page.screenshot()), alone or nested, is saved there in full and described in value as {type, mimeType, bytes, width, height, file}; a PNG or JPEG is also returned as an image content block, scaled to at most 1568 px and 1.15 megapixels."
+    " A returned Buffer (return await page.screenshot()), alone or nested, is saved there in full and described in value as {type, mimeType, bytes, width, height, file}; a PNG or JPEG is also returned as an image content block, scaled to at most 1568 px and 1.15 megapixels.",
+    " With code, optional hooks supplies a hook file; meta supplies its context object and requires hooks. Hooks may ask the MCP client's elicitation handler for host data."
 );
 /// Neo: how often, at most, a run that wrote files prunes the artifact directory again.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
@@ -66,6 +72,7 @@ pub struct PlaywrightService {
     state_dir: PathBuf,
     /// When the artifact directory was last pruned; `None` before the first prune.
     pruned: Arc<std::sync::Mutex<Option<Instant>>>,
+    hosts: host::Runs,
 }
 
 /// A run's report and the image blocks of the binaries it returned (`binary.rs`).
@@ -83,12 +90,11 @@ impl From<Value> for Reply {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Arguments {
     code: String,
     page: Option<String>,
     timeout: Option<u64>,
+    hooks: Option<RunHooks>,
 }
 
 #[derive(Deserialize)]
@@ -97,6 +103,8 @@ struct RequestArguments {
     code: Option<String>,
     page: Option<String>,
     timeout: Option<u64>,
+    hooks: Option<String>,
+    meta: Option<Map<String, Value>>,
     result: Option<String>,
     field: Option<String>,
     path: Option<String>,
@@ -118,6 +126,7 @@ impl PlaywrightService {
             output: Arc::new(Mutex::new(Store::default())),
             state_dir,
             pruned: Arc::new(std::sync::Mutex::new(None)),
+            hosts: host::Runs::default(),
         };
         service.prune_artifacts();
         service
@@ -281,7 +290,7 @@ impl PlaywrightService {
                 timeout: deadline.saturating_duration_since(Instant::now()),
                 cancel,
                 artifacts: Some(self.artifact_dir()),
-                hooks: None,
+                hooks: args.hooks,
             })
             .await;
         if !outcome.artifacts.is_empty() || !outcome.binaries.is_empty() {
@@ -410,13 +419,15 @@ fn tool() -> Tool {
         ("type".into(), json!("object")),
         ("additionalProperties".into(), json!(false)),
         ("oneOf".into(), json!([
-            {"required":["code"],"not":{"anyOf":[{"required":["result"]},{"required":["field"]},{"required":["path"]},{"required":["offset"]},{"required":["limit"]}]}},
-            {"required":["result"],"not":{"anyOf":[{"required":["code"]},{"required":["page"]},{"required":["timeout"]}]}}
+            {"required":["code"],"not":{"anyOf":[{"required":["result"]},{"required":["field"]},{"required":["path"]},{"required":["offset"]},{"required":["limit"]},{"required":["meta"],"not":{"required":["hooks"]}}]}},
+            {"required":["result"],"not":{"anyOf":[{"required":["code"]},{"required":["page"]},{"required":["timeout"]},{"required":["hooks"]},{"required":["meta"]}]}}
         ])),
         ("properties".into(), json!({
             "code":{"type":"string","description":"Playwright async function body; page and context are provided. Return a value."},
             "page":{"type":"string","minLength":1,"description":"A pages[].id from an earlier result. Omit to open a background tab."},
             "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT,"default":DEFAULT_TIMEOUT,"description":"Whole-run timeout in milliseconds."},
+            "hooks":{"type":"string","description":"Hook file registering neo.on handlers. Only with code."},
+            "meta":{"type":"object","description":"Context for the hook file. Requires hooks; only with code."},
             "result":{"type":"string","minLength":1,"description":"Stored truncated result ID. Use instead of code, without page or timeout; retrieval never touches the browser. Process-local LRU: 16 results, 64 MiB; cleared on restart."},
             "field":{"type":"string","enum":["value","logs","calls","error"],"default":"value","description":"Original field to retrieve. Strings are raw text; other values and logs/calls/error use pretty JSON. Follow truncated.next verbatim."},
             "path":{"type":"string","description":"JSON Pointer (RFC 6901) to one node inside the field, such as /snap or /items/0; offset then counts into that node's text (raw for a string, pretty JSON otherwise). Copy it from a truncated.value.cut[].next."},
@@ -485,6 +496,7 @@ impl ServerHandler for PlaywrightService {
             .into());
         }
         let arguments = request.arguments.unwrap_or_default();
+        let binding = json!({"arguments":arguments, "client":context.client_info(), "protocol":context.protocol_version()});
         if arguments.values().any(Value::is_null) {
             return Err(McpError::invalid_params(
                 "provided run arguments must not be null",
@@ -495,7 +507,24 @@ impl ServerHandler for PlaywrightService {
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
         let budget = Budget::parse(args.max_response_tokens.as_ref())
             .map_err(|error| McpError::invalid_params(error, None))?;
+        if args.meta.is_some() && args.hooks.is_none() {
+            return Err(McpError::invalid_params("meta requires hooks", None));
+        }
+        if (request.request_state.is_some() || request.input_responses.is_some())
+            && args.hooks.is_none()
+        {
+            return Err(McpError::invalid_params(
+                "host continuation requires hooks",
+                None,
+            ));
+        }
         if let Some(id) = args.result {
+            if args.hooks.is_some() || args.meta.is_some() {
+                return Err(McpError::invalid_params(
+                    "hooks and meta require code",
+                    None,
+                ));
+            }
             if args.code.is_some()
                 || args.page.is_some()
                 || args.timeout.is_some()
@@ -546,10 +575,13 @@ impl ServerHandler for PlaywrightService {
                 None,
             ));
         }
-        let args = Arguments {
+        let hook_code = args.hooks;
+        let meta = args.meta.unwrap_or_default();
+        let mut args = Arguments {
             code,
             page: args.page,
             timeout: args.timeout,
+            hooks: None,
         };
         if args
             .timeout
@@ -564,26 +596,42 @@ impl ServerHandler for PlaywrightService {
                 None,
             ));
         }
-        let service = self.clone();
-        let cancel = context.ct.child_token();
-        let _cancel_on_drop = cancel.clone().drop_guard();
-        // A transport dropping its handler cancels the request, while this owned task
-        // keeps Runtime::run alive until it has drained calls and detached its sessions.
-        let Reply { report, images } = self
-            .runs
-            .spawn(async move {
-                let execution = service.execute(args, cancel.clone());
-                tokio::pin!(execution);
-                tokio::select! {
-                    result = &mut execution => result,
-                    () = service.shutdown.cancelled() => {
-                        cancel.cancel();
-                        execution.await
-                    }
+        let Reply { report, images } = if let Some(code) = hook_code {
+            let active = if let Some(state) = request.request_state {
+                self.hosts
+                    .resume(&state, &binding, request.input_responses, &context)
+                    .await?
+            } else {
+                if request.input_responses.is_some() {
+                    return Err(McpError::invalid_params(
+                        "inputResponses requires requestState",
+                        None,
+                    ));
                 }
-            })
-            .await
-            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+                let (callback, inbox) = host::channel();
+                args.hooks = Some(
+                    RunHooks::new(code)
+                        .with_meta(Value::Object(meta))
+                        .with_host(callback),
+                );
+                let cancel = CancellationToken::new();
+                host::Active::new(self.start(args, cancel.clone()), inbox, cancel, binding)
+            };
+            match self
+                .hosts
+                .drive(active, &context, &self.runs, &self.shutdown)
+                .await?
+            {
+                host::Step::Complete(reply) => reply,
+                host::Step::Input(input) => return Ok(input.into()),
+            }
+        } else {
+            let cancel = context.ct.child_token();
+            let _cancel_on_drop = cancel.clone().drop_guard();
+            self.start(args, cancel)
+                .await
+                .map_err(|error| McpError::internal_error(error.to_string(), None))?
+        };
         let files = self.state_dir.join(RESULTS_DIR);
         // Links in the reply must stay valid if the client resolves them from another cwd.
         let files = std::path::absolute(&files).unwrap_or(files);
@@ -607,6 +655,24 @@ impl ServerHandler for PlaywrightService {
                 .map(|image| ContentBlock::image(image.data, image.mime_type)),
         );
         Ok(result.into())
+    }
+}
+
+impl PlaywrightService {
+    /// Own the run through cleanup even if its HTTP handler disappears.
+    fn start(&self, args: Arguments, cancel: CancellationToken) -> tokio::task::JoinHandle<Reply> {
+        let service = self.clone();
+        self.runs.spawn(async move {
+            let execution = service.execute(args, cancel.clone());
+            tokio::pin!(execution);
+            tokio::select! {
+                result = &mut execution => result,
+                () = service.shutdown.cancelled() => {
+                    cancel.cancel();
+                    execution.await
+                }
+            }
+        })
     }
 }
 
