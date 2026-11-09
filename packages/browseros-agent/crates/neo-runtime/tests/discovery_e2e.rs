@@ -59,6 +59,7 @@ async fn run(runtime: &Runtime, page: &str, code: &str) -> RunOutcome {
             timeout: Duration::from_secs(30),
             cancel: CancellationToken::new(),
             artifacts: None,
+            hooks: None,
         })
         .await
 }

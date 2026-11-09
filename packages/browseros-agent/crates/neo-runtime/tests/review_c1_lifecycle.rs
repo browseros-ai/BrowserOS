@@ -17,6 +17,7 @@ fn request(tab: &Tab, code: &str) -> RunRequest {
         timeout: Duration::from_secs(8),
         cancel: CancellationToken::new(),
         artifacts: None,
+        hooks: None,
     }
 }
 
