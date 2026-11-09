@@ -202,7 +202,7 @@ impl Runtime {
         request: RunRequest,
         #[cfg(feature = "test-host")] test_host: Option<Box<dyn TestHost>>,
     ) -> RunOutcome {
-        // Both public entry points share one guard so test-host transport cannot bypass
+        // Neo: Both public entry points share one guard so test-host transport cannot bypass
         // run identity, terminal records, or settlement of retained browser work.
         let guard = RunGuard::start(&self.sinks, &request);
         let (outcome, cause) = self

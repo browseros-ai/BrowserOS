@@ -1295,3 +1295,56 @@ async fn abort_control_frames_scrub_the_existing_call_without_changing_its_reply
             .contains("abort-reason-secret")
     );
 }
+
+/// Neo: The optional harness transport must share the ordinary run's capture and cleanup
+/// ownership; enabling it cannot create a second call path or lose the terminal trace.
+#[cfg(feature = "test-host")]
+#[tokio::test(flavor = "multi_thread")]
+async fn hosted_runs_share_call_getter_and_settlement_traces() {
+    use futures_util::future::BoxFuture;
+    use neo_runtime::{TestHost, TestHostError};
+
+    struct EofHost;
+
+    impl TestHost for EofHost {
+        fn receive(&self) -> BoxFuture<'_, Result<Option<String>, TestHostError>> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn reply(&self, _frame: String) -> Result<(), TestHostError> {
+            Ok(())
+        }
+    }
+
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let sink = RecordingSink::new(true);
+    let runtime = runtime_with(&browser, &[&sink]).await;
+    let outcome = runtime
+        .run_with_test_host(
+            request("await page.click('#go'); return [typeof __neo_test_host.reply, await __neo_test_host.receive(), page.url()]"),
+            Box::new(EofHost),
+        )
+        .await;
+    runtime.drain().await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        outcome.value,
+        Some(json!(["function", null, fake_browser::PAGE_URL])),
+        "the host transport and browser getters retain their script values"
+    );
+    assert_eq!(sink.run_ids(), [outcome.run_id], "one shared run identity");
+    assert_eq!(outcome.calls.len(), 1, "only the browser call is recorded");
+    assert_eq!(outcome.calls[0].result, CallResult::Ok);
+    let events = sink.settled(outcome.run_id).await;
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            RunEvent::Getter {
+                field: GetterField::Url,
+                ..
+            }
+        )),
+        "hosted runs pass through the ordinary getter door: {events:?}"
+    );
+}
