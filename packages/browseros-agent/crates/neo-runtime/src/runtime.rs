@@ -1,4 +1,4 @@
-//! The entry point: owns the browser connection and runs each script from its requested tab.
+//! Neo: The entry point: owns the browser connection and runs each script from its requested tab.
 //!
 //! A run's order, after the tab check and the attach:
 //!
@@ -34,6 +34,8 @@ use crate::quickjs::Script;
 use crate::quickjs_bridge;
 use crate::quickjs_bridge::Getters;
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
+#[cfg(feature = "test-host")]
+use crate::test_host::TestHost;
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
 const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
@@ -158,6 +160,32 @@ impl Runtime {
     /// current-thread runtime does not support; on it the run ends with an error before any
     /// script runs.
     pub async fn run(&self, request: RunRequest) -> RunOutcome {
+        self.run_inner(
+            request,
+            #[cfg(feature = "test-host")]
+            None,
+        )
+        .await
+    }
+
+    /// Neo: Runs the same native script lifecycle as [`Self::run`], with an opaque test transport
+    /// installed as `__neo_test_host` in this run's realm. Ownership moves into the run, never
+    /// into `Runtime`, so concurrent runs and runtime clones cannot inherit another host.
+    /// The host does not dispatch browser methods or change call cancellation and cleanup.
+    #[cfg(feature = "test-host")]
+    pub async fn run_with_test_host(
+        &self,
+        request: RunRequest,
+        host: Box<dyn TestHost>,
+    ) -> RunOutcome {
+        self.run_inner(request, Some(host)).await
+    }
+
+    async fn run_inner(
+        &self,
+        request: RunRequest,
+        #[cfg(feature = "test-host")] test_host: Option<Box<dyn TestHost>>,
+    ) -> RunOutcome {
         let RunRequest {
             code,
             page,
@@ -203,6 +231,8 @@ impl Runtime {
             page_guid: quickjs_bridge::page_guid(&page),
             frame_guid: quickjs_bridge::frame_guid(&page),
             url,
+            #[cfg(feature = "test-host")]
+            test_host,
         };
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
         // group-release tasks the page spawns, so `finish` waits for them all.

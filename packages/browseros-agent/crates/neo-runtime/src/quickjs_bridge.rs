@@ -37,6 +37,8 @@ use std::sync::{Arc, Mutex};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use rand::RngCore;
+#[cfg(feature = "test-host")]
+use rquickjs::IntoJs;
 use rquickjs::function::{Async, Func};
 use rquickjs::{Ctx, Exception, Object};
 use serde::Deserialize;
@@ -56,6 +58,8 @@ use crate::playwright_methods::evaluate::Handles;
 use crate::playwright_methods::getters::{self, FrameField};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunError};
+#[cfg(feature = "test-host")]
+use crate::test_host::TestHost;
 use crate::url_match::{self, SerializedUrlMatch, UrlPart};
 
 /// The guid the realm gives a run's page, in the `<type>@<id>` form Playwright's protocol uses.
@@ -79,13 +83,18 @@ pub(crate) fn frame_guid_of(page: &PageId, frame: &str) -> String {
     }
 }
 
-/// Installs `__neo_runtime` as a global of the realm `ctx`.
+/// Installs `__neo_runtime` and, only when explicitly supplied, `__neo_test_host` in this realm.
 pub(crate) fn install<'js>(
     ctx: &Ctx<'js>,
     getters: Getters,
     logs: Logs,
     dispatcher: Dispatcher,
+    #[cfg(feature = "test-host")] test_host: Option<Box<dyn TestHost>>,
 ) -> rquickjs::Result<()> {
+    #[cfg(feature = "test-host")]
+    if let Some(host) = test_host {
+        install_test_host(ctx, host, getters.deadline.clone())?;
+    }
     let tabs = getters.tabs.clone();
     let bridge = Object::new(ctx.clone())?;
     bridge.set(
@@ -175,6 +184,54 @@ pub(crate) fn install<'js>(
         })),
     )?;
     ctx.globals().set("__neo_runtime", bridge)
+}
+
+/// Neo: Both callbacks share only this run's owned host. Receive parks the realm cooperatively;
+/// reply stays synchronous so native getters and builders retain their actual JS behavior.
+#[cfg(feature = "test-host")]
+fn install_test_host<'js>(
+    ctx: &Ctx<'js>,
+    host: Box<dyn TestHost>,
+    deadline: Deadline,
+) -> rquickjs::Result<()> {
+    let host: Arc<dyn TestHost> = Arc::from(host);
+    let receiver = Arc::clone(&host);
+    let bridge = Object::new(ctx.clone())?;
+    bridge.set(
+        "receive",
+        Func::from(Async(move |ctx: Ctx<'js>| {
+            let host = Arc::clone(&receiver);
+            let deadline = deadline.clone();
+            async move {
+                // A host cannot keep a parked run alive by withholding its next command.
+                // Dropping the losing receive also releases any transport-side borrow.
+                let frame = tokio::select! {
+                    stop = deadline.reached() => {
+                        let error = match stop {
+                            Stop::Timeout => RunError::timeout(deadline.timeout()),
+                            Stop::Cancelled => RunError::new("Error", "Run cancelled".to_string()),
+                        };
+                        return Err(throw_named(&ctx, &error.name, &error.message));
+                    }
+                    result = host.receive() => result
+                        .map_err(|error| throw_named(&ctx, "Error", &error.to_string()))?,
+                };
+                match frame {
+                    Some(frame) => frame.into_js(&ctx),
+                    // rquickjs's Option conversion uses undefined; EOF is explicitly null.
+                    None => Ok(rquickjs::Value::new_null(ctx)),
+                }
+            }
+        })),
+    )?;
+    bridge.set(
+        "reply",
+        Func::from(move |ctx: Ctx<'js>, frame: String| {
+            host.reply(frame)
+                .map_err(|error| throw_named(&ctx, "Error", &error.to_string()))
+        }),
+    )?;
+    ctx.globals().set("__neo_test_host", bridge)
 }
 
 /// `__neo_runtime.subscribe`: the script's listening to `event` on a page or the context turned

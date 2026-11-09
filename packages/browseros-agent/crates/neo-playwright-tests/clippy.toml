@@ -1,0 +1,10 @@
+# Google Rust style: never call `catch_unwind`, and never reach inside a poisoned mutex.
+disallowed-methods = [
+  { path = "std::panic::catch_unwind", reason = "Google Rust style: don't call panic::catch_unwind" },
+  { path = "std::sync::PoisonError::into_inner", reason = "Google Rust style: never reach inside a poisoned mutex" },
+]
+# The crate denies `unwrap_used` and `expect_used`; tests may still assert with them.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+# Product names that `doc_markdown` would otherwise ask to wrap in backticks.
+doc-valid-idents = ["BrowserOS", "QuickJS", ".."]
