@@ -29,7 +29,7 @@ from bos_build.cli.build import (
 from bos_build.core.checkout_lock import ChromiumCheckoutLock
 from bos_build.core.planner import Switches, plan
 from bos_build.core.resume import ResumeState
-from bos_build.lib.testing import MockChromium
+from bos_build.lib.testing import MockBrowserOSRoot, MockChromium
 from bos_build.lib.utils import get_platform, get_platform_arch
 
 runner = CliRunner()
@@ -81,6 +81,29 @@ def plan_lines(output: str):
 
 
 class _ProfileMixin(unittest.TestCase):
+    def _preset_kwargs(self, **overrides):
+        kwargs = dict(
+            preset=None,
+            profile=None,
+            product=None,
+            arch=None,
+            clean=None,
+            provision=None,
+            download=None,
+            resource_mode=None,
+            prepared_resources=None,
+            sign=None,
+            upload=None,
+            build_type=None,
+            skip=None,
+            from_=None,
+            chromium_src=None,
+            source_sha=None,
+            extra_gn_args=("symbol_level=2",),
+        )
+        kwargs.update(overrides)
+        return kwargs
+
     def _profile(self, text: str) -> Path:
         with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
             f.write(text)
@@ -564,29 +587,6 @@ class GnArgOptionTest(_ProfileMixin):
 class GnArgPlumbingTest(_ProfileMixin):
     """--gn-arg must reach every Context the projections construct."""
 
-    def _preset_kwargs(self, **overrides):
-        kwargs = dict(
-            preset=None,
-            profile=None,
-            product=None,
-            arch=None,
-            clean=None,
-            provision=None,
-            download=None,
-            resource_mode=None,
-            prepared_resources=None,
-            sign=None,
-            upload=None,
-            build_type=None,
-            skip=None,
-            from_=None,
-            chromium_src=None,
-            source_sha=None,
-            extra_gn_args=("symbol_level=2",),
-        )
-        kwargs.update(overrides)
-        return kwargs
-
     def test_preset_build_runs_carry_extra_gn_args(self):
         with tempfile.TemporaryDirectory() as tmp:
             m = MockChromium(Path(tmp))
@@ -659,6 +659,106 @@ class GnArgPlumbingTest(_ProfileMixin):
         self.assertTrue(runs)
         for ctx, _steps in runs:
             self.assertEqual(ctx.extra_gn_args, ("symbol_level=2",))
+
+
+class PatchRootCliTest(_ProfileMixin):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.base = Path(temp.name)
+        self.external = MockBrowserOSRoot(
+            self.base / "patches", chromium_version="158.0.8127.18"
+        ).with_patch_store()
+
+    def test_show_plan_without_checkout_in_every_mode(self):
+        profile = self._profile("modules: [clean]\n")
+        for selection in (
+            ("--preset", "debug"),
+            ("--modules", "clean"),
+            ("--profile", str(profile)),
+        ):
+            with (
+                self.subTest(selection=selection),
+                scrubbed_env(),
+                mock.patch(
+                    "bos_build.cli.build.Context",
+                    side_effect=AssertionError("projection created a Context"),
+                ),
+            ):
+                result = invoke(
+                    *selection, "--patch-root", str(self.external.root), "--show-plan"
+                )
+                self.assertEqual(result.exit_code, 0, combined(result))
+                self.assertIn("158.0.8127.18", plain_output(result))
+                self.assertIn("Chromium patch root:", plain_output(result))
+
+    def test_external_patch_package_reaches_preset_and_modules_profile(self):
+        chromium = MockChromium(self.base / "chromium")
+        profile = self._profile("modules: [clean]\n")
+        for selection in ({"preset": "debug"}, {"profile": profile}):
+            with self.subTest(selection=selection), scrubbed_env():
+                projection = _resolve_preset(
+                    **self._preset_kwargs(
+                        **selection,
+                        chromium_src=chromium.src,
+                        patch_root=self.external.root,
+                    )
+                )
+                runs = projection.build_runs()
+                self.assertTrue(runs)
+                for ctx, _steps in runs:
+                    self.assertEqual(ctx.get_patch_root(), self.external.root.resolve())
+                    self.assertEqual(ctx.chromium_version, "158.0.8127.18")
+
+    def test_lane_manifest_rejects_external_package_before_execution(self):
+        with (
+            scrubbed_env(),
+            mock.patch(
+                "bos_build.cli.build._execute_runs_with_checkout_lock"
+            ) as execute,
+        ):
+            result = invoke(
+                "--preset",
+                "debug",
+                "--patch-root",
+                str(self.external.root),
+                "--lane-manifest",
+                str(self.base / "lane.json"),
+            )
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("does not support an external --patch-root", plain_output(result))
+        execute.assert_not_called()
+
+    def test_invalid_v8_package_rejected_before_execution(self):
+        self.external.with_v8_store()
+        (self.external.root / "v8_patches/.store.yaml").unlink()
+        with (
+            scrubbed_env(),
+            mock.patch(
+                "bos_build.cli.build._execute_runs_with_checkout_lock"
+            ) as execute,
+        ):
+            result = invoke(
+                "--preset", "release", "--patch-root", str(self.external.root)
+            )
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Invalid V8 patch store", plain_output(result))
+        execute.assert_not_called()
+
+    def test_invalid_patch_package_rejected_before_execution(self):
+        (self.external.root / "BASE_COMMIT").write_text("b" * 40)
+        with (
+            scrubbed_env(),
+            mock.patch(
+                "bos_build.cli.build._execute_runs_with_checkout_lock"
+            ) as execute,
+        ):
+            result = invoke(
+                "--modules", "clean", "--patch-root", str(self.external.root)
+            )
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("disagree", plain_output(result))
+        execute.assert_not_called()
 
 
 class SourceProvenanceTest(unittest.TestCase):

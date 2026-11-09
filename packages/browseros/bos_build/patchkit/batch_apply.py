@@ -9,6 +9,8 @@ need it, so this stays in Python.
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
+import yaml
+
 from ..lib.utils import log_info, log_error, log_success, log_warning
 from .extract.utils import run_git_command
 
@@ -297,13 +299,69 @@ def apply_all_patches(
     interactive: bool = False,
     reset_to: Optional[str] = None,
 ) -> Tuple[int, List[str]]:
-    """Apply every patch under chromium_patches/ in sorted order.
+    """Apply the Chromium store and the separately pinned V8 dependency store.
 
     Returns (applied_count, failed_list); the pipeline step treats a
     non-empty failed list as a build failure.
     """
-    patches_dir = build_ctx.get_patches_dir()
+    # Git records V8 as a gitlink, so a Chromium diff cannot carry its source
+    # edits. Apply V8-relative patches inside that repository before Blink's
+    # patches, which may depend on the new inspector interface. This belongs in
+    # the required patch step, including debug prep, not optional series patches.
+    chromium_store = build_ctx.get_patches_dir()
+    package_root = chromium_store.parent
+    v8_store = package_root / "v8_patches"
+    stores = []
+    if v8_store.exists():
+        metadata = yaml.safe_load((v8_store / ".store.yaml").read_text())
+        v8_base = metadata["base_commit"]
+        chromium_base = (
+            reset_to or (package_root / "BASE_COMMIT").read_text().strip()
+        )
+        pin = run_git_command(
+            ["git", "ls-tree", chromium_base, "--", "v8"],
+            cwd=build_ctx.chromium_src,
+        )
+        # A Chromium upgrade must repin and re-extract V8 too; do not silently
+        # apply an old dependency patch set just because its context still fits.
+        if pin.returncode != 0 or pin.stdout.split() != [
+            "160000",
+            "commit",
+            v8_base,
+            "v8",
+        ]:
+            raise RuntimeError(
+                "v8_patches base does not match Chromium's pinned V8 gitlink"
+            )
+        v8_src = build_ctx.chromium_src / "v8"
+        if not (v8_src / ".git").exists():
+            raise RuntimeError(
+                "V8 checkout is missing; sync Chromium dependencies first"
+            )
+        stores.append((v8_store, v8_src, "v8/", v8_base if reset_to else None))
+    stores.append((chromium_store, build_ctx.chromium_src, "", reset_to))
 
+    total_applied = 0
+    failures = []
+    for patches_dir, chromium_src, prefix, base in stores:
+        applied, failed = apply_patch_directory(
+            patches_dir, chromium_src, dry_run, interactive, base
+        )
+        total_applied += applied
+        failures.extend(prefix + str(path) for path in failed)
+        if failed:
+            break
+    return total_applied, failures
+
+
+def apply_patch_directory(
+    patches_dir: Path,
+    chromium_src: Path,
+    dry_run: bool = False,
+    interactive: bool = False,
+    reset_to: str | None = None,
+) -> tuple[int, list[str]]:
+    """Apply one repository's store without crossing a Git repository boundary."""
     if not patches_dir.exists():
         log_warning(f"Patches directory does not exist: {patches_dir}")
         return 0, []
@@ -323,7 +381,7 @@ def apply_all_patches(
 
     applied, failed = process_patch_list(
         patch_list,
-        build_ctx.chromium_src,
+        chromium_src,
         patches_dir,
         dry_run,
         interactive,
@@ -337,4 +395,4 @@ def apply_all_patches(
         for p in failed:
             log_error(f"  - {p}")
 
-    return applied, failed
+    return applied, [str(path) for path in failed]

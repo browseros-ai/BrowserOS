@@ -141,6 +141,61 @@ class BatchApplyTest(unittest.TestCase):
             "line two changed", (self.repo / "chrome" / "a.txt").read_text()
         )
 
+    def _nested_store(self):
+        fixture = self.root / "v8-fixture"
+        fixture.mkdir()
+        v8_src = _make_repo(fixture)
+        v8_src.rename(self.repo / "v8")
+        v8_src = self.repo / "v8"
+        v8_base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=v8_src, text=True
+        ).strip()
+        _git(self.repo, "update-index", "--add", "--cacheinfo", "160000", v8_base, "v8")
+        _git(self.repo, "commit", "-qm", "pin V8")
+        chromium_base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        (self.root / "BASE_COMMIT").write_text(chromium_base)
+        v8_store = self.root / "v8_patches"
+        v8_store.mkdir()
+        (v8_store / ".store.yaml").write_text("base_commit: " + v8_base + "\n")
+        _make_patch(v8_src, v8_store)
+        _make_patch(self.repo, self.patches_dir)
+        return v8_src, v8_store
+
+    def test_applies_both_repository_stores(self):
+        v8_src, _store = self._nested_store()
+        self.assertEqual(apply_all_patches(self._ctx()), (2, []))
+        for repo in (self.repo, v8_src):
+            self.assertIn("line two changed", (repo / "chrome/a.txt").read_text())
+
+    def test_nested_dry_run_does_not_change_either_repository(self):
+        v8_src, _store = self._nested_store()
+        self.assertEqual(apply_all_patches(self._ctx(), dry_run=True), (2, []))
+        for repo in (self.repo, v8_src):
+            self.assertNotIn("line two changed", (repo / "chrome/a.txt").read_text())
+
+    def test_reset_reapplies_each_store_against_its_own_base(self):
+        self._nested_store()
+        self.assertEqual(apply_all_patches(self._ctx()), (2, []))
+        base = (self.root / "BASE_COMMIT").read_text()
+        self.assertEqual(apply_all_patches(self._ctx(), reset_to=base), (2, []))
+
+    def test_stale_v8_pin_fails_before_chromium_mutation(self):
+        _src, store = self._nested_store()
+        (store / ".store.yaml").write_text("base_commit: " + "b" * 40 + "\n")
+        with self.assertRaisesRegex(RuntimeError, "pinned V8 gitlink"):
+            apply_all_patches(self._ctx())
+        self.assertNotIn("line two changed", (self.repo / "chrome/a.txt").read_text())
+
+    def test_v8_patch_failure_blocks_dependent_chromium_patches(self):
+        _src, store = self._nested_store()
+        (store / "chrome/a.txt").write_text("corrupt patch")
+        applied, failed = apply_all_patches(self._ctx())
+        self.assertEqual(applied, 0)
+        self.assertEqual(failed, ["v8/chrome/a.txt"])
+        self.assertNotIn("line two changed", (self.repo / "chrome/a.txt").read_text())
+
 
 class CheckPatchAppliesTest(unittest.TestCase):
     def setUp(self):
