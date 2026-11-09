@@ -59,6 +59,7 @@ neo-runtime-spec/src/binary.rs
 neo-runtime/src/abort.rs
 neo-runtime/src/action_hooks.rs
 neo-runtime/src/action_hooks/element.rs
+neo-runtime/src/action_hooks/swapped.rs
 neo-runtime/src/actions.rs
 neo-runtime/src/artifacts.rs
 neo-runtime/src/browser_representations/bindings.rs

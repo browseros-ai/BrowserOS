@@ -56,8 +56,10 @@ use crate::progress::{CallEntry, PlaywrightError, RunScope};
 use crate::run::{AfterHookResult, BeforeHookResult, RunError};
 
 pub(crate) mod element;
+pub(crate) mod swapped;
 
 pub(crate) use element::{ElementGate, ElementRoute};
+pub(crate) use swapped::SwappedValues;
 
 #[cfg(test)]
 mod element_tests;
@@ -429,7 +431,7 @@ impl<G: CallRoute> CallHooks<G> {
             Ok(decided) => decided,
             Err(halt) => return halt,
         };
-        let gated = self.decided(entry, decided, call, &route);
+        let gated = self.decided(run, entry, decided, call, &route);
         // Only now may the next call's beforeAction start: this call's ordered turns are taken.
         drop(place);
         gated
@@ -438,6 +440,7 @@ impl<G: CallRoute> CallHooks<G> {
     /// What `decided` means for the call; records it on the entry.
     fn decided(
         &mut self,
+        run: &RunScope,
         entry: &CallEntry,
         decided: Result<ActionDecision, HookFailure>,
         call: G::Call,
@@ -460,6 +463,8 @@ impl<G: CallRoute> CallHooks<G> {
                 match route.reroute(args.clone()) {
                     Ok(rerouted) => {
                         entry.hook_before(BeforeHookResult::ArgsReplaced);
+                        // From now on no agent call's log or error text names what it swapped in.
+                        run.swapped.remember(&self.event.args, &args);
                         self.args_replaced = true;
                         if self.frame_call {
                             self.event.locator = locator_of(&self.event.guid, &args);
@@ -745,7 +750,8 @@ fn trace_line(event: &str, call_id: u64, method: &str, detail: &str) -> String {
 }
 
 /// The locator a frame call's `args` name: their string `selector` in `frame`, or a drag's
-/// `source`, the element its hooks are asked about (feature 4).
+/// `source`, the element its hooks are asked about (feature 4). Every frame call takes the
+/// fallback, but only `dragAndDrop` has a `source` and no `selector`.
 fn locator_of(frame: &str, args: &Value) -> Option<LocatorRef> {
     let selector = args
         .get("selector")

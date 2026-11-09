@@ -895,6 +895,11 @@ impl Dispatcher {
             location: call_location(&metadata),
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
         }));
+        // The agent's script reads its calls' logs and errors: none may name a value a hook
+        // swapped in (`action_hooks/swapped.rs`). A hook's own call needs the real values.
+        if origin == CallOrigin::Agent {
+            entry.scrub_with(Arc::clone(&inner.run.swapped));
+        }
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
             let admission = self.admit(&route, target.as_ref(), message.len())?;
@@ -903,6 +908,10 @@ impl Dispatcher {
         let (route, admission) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
+                let error = PlaywrightError {
+                    message: entry.scrubbed(error.message),
+                    ..error
+                };
                 entry.finish(error.to_result());
                 inner.trace.finished(&entry);
                 let watermark = inner.tabs.events().seq();
@@ -2521,6 +2530,12 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         },
         None => answer,
     };
+    // The script can copy what it reads into its own value: no error text it gets names a value
+    // a hook swapped in (an agent call's entry scrubs; a hook's keeps it).
+    let answer = answer.map_err(|error| PlaywrightError {
+        message: entry.scrubbed(error.message),
+        ..error
+    });
     let record = match &answer {
         Ok(_) => CallResult::Ok,
         Err(error) => error.to_result(),

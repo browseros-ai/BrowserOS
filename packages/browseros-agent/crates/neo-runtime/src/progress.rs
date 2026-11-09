@@ -36,7 +36,7 @@ use tokio_util::task::TaskTracker;
 use tracing::info;
 
 use crate::abort::CallAbort;
-use crate::action_hooks::ElementGate;
+use crate::action_hooks::{ElementGate, SwappedValues};
 use crate::artifacts::Artifacts;
 use crate::browser_representations::bindings::Bindings;
 use crate::browser_representations::clock::Clock;
@@ -168,6 +168,9 @@ pub(crate) struct RunScope {
     pub(crate) bindings: Arc<Bindings>,
     /// The run's fake clock (`clock.rs`); uninstalled in every frame at run end.
     pub(crate) clock: Arc<Clock>,
+    /// What the run's hooks swapped into calls' arguments, scrubbed from every agent call's log
+    /// and error text (`action_hooks/swapped.rs`).
+    pub(crate) swapped: Arc<SwappedValues>,
 }
 
 impl RunScope {
@@ -186,6 +189,7 @@ impl RunScope {
             artifacts: Arc::default(),
             bindings: Arc::default(),
             clock: Arc::default(),
+            swapped: Arc::default(),
         }
     }
 
@@ -653,6 +657,9 @@ pub(crate) struct CallEntry {
     hook_before: Mutex<Option<BeforeHookResult>>,
     /// What `afterAction` decided, once it has.
     hook_after: OnceLock<AfterHookResult>,
+    /// The run's swapped values, set for an agent call (`CallEntry::scrub_with`): its log and
+    /// error text never name one.
+    swapped: OnceLock<Arc<SwappedValues>>,
     /// Test-only: how long `abort` holds between waking the call and logging, in ms.
     #[cfg(test)]
     abort_pause_ms: AtomicU64,
@@ -730,6 +737,7 @@ impl CallEntry {
             end: OnceLock::new(),
             hook_before: Mutex::new(None),
             hook_after: OnceLock::new(),
+            swapped: OnceLock::new(),
             #[cfg(test)]
             abort_pause_ms: AtomicU64::new(0),
         }
@@ -819,13 +827,45 @@ impl CallEntry {
     /// Ends the call with `result` and returns its folded log, which the reply carries. Only
     /// the first end counts.
     pub(crate) fn finish(&self, result: CallResult) -> Vec<String> {
-        let log = self.folded_log();
+        let log = self.scrub_log(self.folded_log());
         let _first = self.end.set(CallEnd {
-            result,
+            result: self.scrub_result(result),
             duration: self.started.elapsed(),
             log: log.clone(),
         });
         log
+    }
+
+    /// Scrubs this call's log and error text of what the run's hooks swap in, from now on: an
+    /// agent call's, which the script reads (`action_hooks/swapped.rs`). A hook's call keeps
+    /// the real values its own realm needs.
+    pub(crate) fn scrub_with(&self, swapped: Arc<SwappedValues>) {
+        let _first = self.swapped.set(swapped);
+    }
+
+    /// `text` without a value the run's hooks swapped in, for a call that scrubs.
+    pub(crate) fn scrubbed(&self, text: String) -> String {
+        match self.swapped.get() {
+            Some(swapped) => swapped.scrubbed(text),
+            None => text,
+        }
+    }
+
+    fn scrub_log(&self, log: Vec<String>) -> Vec<String> {
+        if self.swapped.get().is_none() {
+            return log;
+        }
+        log.into_iter().map(|line| self.scrubbed(line)).collect()
+    }
+
+    fn scrub_result(&self, result: CallResult) -> CallResult {
+        match result {
+            CallResult::Error { name, message } => CallResult::Error {
+                name,
+                message: self.scrubbed(message),
+            },
+            result => result,
+        }
     }
 
     /// The call log after Playwright's `compressCallLog`, ending with a note when lines were
@@ -863,6 +903,9 @@ impl CallEntry {
                 self.folded_log(),
             ),
         };
+        // Again as the run reads it: a call still running, or a value swapped in after it ended,
+        // is scrubbed too.
+        let (result, log) = (self.scrub_result(result), self.scrub_log(log));
         // A hook's call log may echo what it typed (`fill("…")`), and its error message what it
         // navigated to (`… at <url>`); its reply carried both to the hook's own realm, and the
         // record keeps neither: no log, and the error's name with a fixed message.
