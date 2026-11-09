@@ -41,8 +41,9 @@ use crate::browser_representations::bindings::Bindings;
 use crate::browser_representations::clock::Clock;
 use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
+use crate::hooks::HookSandbox;
 use crate::playwright_methods::evaluate::Handles;
-use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
+use crate::run::{CallLocation, CallOrigin, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
 /// Every handler returns this; `?` on [`Progress::race`] is how a handler gives up.
@@ -161,6 +162,9 @@ pub(crate) struct RunScope {
     pub(crate) bindings: Arc<Bindings>,
     /// The run's fake clock (`clock.rs`); uninstalled in every frame at run end.
     pub(crate) clock: Arc<Clock>,
+    /// The run's hook sandbox (`hooks.rs`), set once it starts; never set for a run without
+    /// hooks. The call path fires the action hooks through it (hooks feature 3).
+    pub(crate) hooks: Arc<OnceLock<HookSandbox>>,
 }
 
 impl RunScope {
@@ -176,6 +180,7 @@ impl RunScope {
             artifacts: Arc::default(),
             bindings: Arc::default(),
             clock: Arc::default(),
+            hooks: Arc::default(),
         }
     }
 
@@ -423,6 +428,7 @@ impl Progress {
             guid: "frame@T".to_string(),
             method: "click".to_string(),
             title: Some("Click"),
+            origin: CallOrigin::Agent,
             params: Value::Null,
             location: None,
             input: true,
@@ -577,6 +583,8 @@ pub(crate) struct CallEntry {
     guid: String,
     method: String,
     title: Option<&'static str>,
+    /// Who sent the call. A hook's call keeps no params, location or log ([`CallEntry::new`]).
+    origin: CallOrigin,
     params: Value,
     /// `params` as JSON text, in bytes: what keeping the record costs before any log.
     params_bytes: usize,
@@ -618,6 +626,8 @@ pub(crate) struct CallStart {
     pub(crate) guid: String,
     pub(crate) method: String,
     pub(crate) title: Option<&'static str>,
+    /// The dispatcher's origin, never the message's (`Dispatcher::for_hooks`).
+    pub(crate) origin: CallOrigin,
     pub(crate) params: Value,
     pub(crate) location: Option<CallLocation>,
     /// Whether the method writes input, so its delivery is tracked.
@@ -631,15 +641,23 @@ impl CallEntry {
             guid,
             method,
             title,
+            origin,
             params,
             location,
             input,
         } = start;
+        // A hook may type a secret into the page (hooks design D11): its call's params and
+        // location are never held, so no record, debugger or log can hand them back.
+        let (params, location) = match origin {
+            CallOrigin::Agent => (params, location),
+            CallOrigin::Hook => (Value::Null, None),
+        };
         Self {
             call_id,
             guid,
             method,
             title,
+            origin,
             params_bytes: params.to_string().len(),
             params,
             location,
@@ -654,9 +672,19 @@ impl CallEntry {
         }
     }
 
-    /// The call's params as the script sent them.
+    /// The call's params as the script sent them; `null` for a hook's call.
     pub(crate) fn params(&self) -> &Value {
         &self.params
+    }
+
+    /// Who sent the call (`Dispatcher::for_hooks`): the call path skips the hooks for a hook's
+    /// own calls (hooks feature 3).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "hooks feature 3's seam: the call path skips hooks for a hook's calls")
+    )]
+    pub(crate) fn origin(&self) -> CallOrigin {
+        self.origin
     }
 
     /// Playwright's `ProgressController.abort` for this call: logs `operation was aborted:
@@ -733,6 +761,12 @@ impl CallEntry {
                 self.folded_log(),
             ),
         };
+        // A hook's call log may echo what it typed (`fill("…")`); its reply carried the log to
+        // the hook's own realm, and the record keeps none.
+        let log = match self.origin {
+            CallOrigin::Agent => log,
+            CallOrigin::Hook => Vec::new(),
+        };
         let started_at_ms = self
             .started_at
             .duration_since(UNIX_EPOCH)
@@ -744,6 +778,7 @@ impl CallEntry {
             guid: self.guid.clone(),
             method: self.method.clone(),
             title: self.title.map(str::to_string),
+            origin: self.origin,
             params: self.params.clone(),
             location: self.location,
             started_at_ms,
@@ -756,6 +791,9 @@ impl CallEntry {
 
     /// What a kept record's log costs against [`MAX_TRACE_BYTES`], on top of its params.
     fn log_bytes(&self) -> usize {
+        if self.origin == CallOrigin::Hook {
+            return 0;
+        }
         match self.end.get() {
             Some(end) => end.log.iter().map(String::len).sum(),
             None => self.folded_log().iter().map(String::len).sum(),
@@ -1028,6 +1066,7 @@ mod tests {
                 guid: "frame@T".to_string(),
                 method: "click".to_string(),
                 title: Some("Click"),
+                origin: CallOrigin::Agent,
                 params: Value::Null,
                 location: None,
                 input: true,
@@ -1064,6 +1103,7 @@ mod tests {
             guid: "frame@T".to_string(),
             method: "click".to_string(),
             title: Some("Click"),
+            origin: CallOrigin::Agent,
             params,
             location: None,
             input,

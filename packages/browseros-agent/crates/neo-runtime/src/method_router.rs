@@ -128,7 +128,7 @@ use crate::playwright_methods::waits::{
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
-use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::run::{CallLocation, CallOrigin, CallRecord, CallResult, DroppedCalls, RunEnd};
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
 /// the realm ends. Tasks still running keep their state and records read `Unfinished`.
@@ -152,7 +152,8 @@ const HIGHLIGHTS_WAIT: Duration = Duration::from_secs(1);
 /// awaiting them, so without a cap one run could hold any amount of the server's memory.
 /// Playwright has no such cap; a script that awaits its calls, or a `Promise.all` over a page's
 /// worth of locators, stays far below it. A call that ends calls in flight skips it with its
-/// claim on what it ends ([`Inner::release_claim`]), so a full run can still let go.
+/// claim on what it ends ([`Dispatcher::release_claim`]), so a full run can still let go. A run's
+/// hook realm has caps of its own, the same size.
 const MAX_CALLS_IN_FLIGHT: usize = 64;
 
 /// The most request bytes (each call's message as the SDK sent it) one run's unfinished calls
@@ -236,44 +237,74 @@ const _: () = assert!(
     "a pointer action gained a result: reply with it in method_router::serve",
 );
 
-/// Owns every browser call of one run. Cheap to clone: the bridge holds one, `Runtime::run`
-/// another. Call tasks hold their `Progress`, entry and the trace, never a `Dispatcher`, so the
-/// last clone drops once the realm is gone and the run is done with it (or its future was
-/// dropped). Then `_ending` cancels the run's end token, and every call stops at its next await.
+/// Owns every browser call of one realm of a run. Cheap to clone: the bridge holds one,
+/// `Runtime::run` another. Call tasks hold their `Progress`, entry and the trace, never a
+/// `Dispatcher`, so the last clone drops once the realms are gone and the run is done with it
+/// (or its future was dropped). Then `_ending` cancels the run's end token, and every call stops
+/// at its next await.
+///
+/// A run with hooks has two: the agent's ([`Dispatcher::new`]) and the hook realm's
+/// ([`Dispatcher::for_hooks`]). Both share the run's [`Inner`] (tabs, records, call ids, write
+/// orders); each has its own [`Side`]. A call's origin is the side's, fixed when the realm's
+/// bridge captured its dispatcher: no message field can decide it, since the agent's script may
+/// call its own bridge with any message (`quickjs_bridge.rs`).
 #[derive(Clone)]
-pub(crate) struct Dispatcher(Arc<Inner>);
+pub(crate) struct Dispatcher {
+    inner: Arc<Inner>,
+    side: Arc<Side>,
+}
 
+/// What every dispatcher of one run shares.
 struct Inner {
     /// Owns every session attached for this run; frame calls resolve their own tab here.
     tabs: Tabs,
     run: RunScope,
     trace: Trace,
-    /// What the run's unfinished calls hold, bounded at admission.
-    in_flight: Arc<InFlight>,
-    /// The URL-predicate navigation waits open between their calls.
-    cursors: Arc<Cursors<FrameCursor>>,
-    /// The admitted calls a script's `signal` can still abort, by message id (`abort.rs`).
-    aborts: Arc<Aborts>,
     next_call_id: AtomicU64,
     /// The `setContent` writes into each frame, in arrival order (`content.rs`).
     write_order: WriteOrder,
     /// Each page's `localStorage` and `sessionStorage` calls, in arrival order (`web_storage.rs`):
     /// Playwright's server sends them in the order the script made them.
     storage_order: WriteOrder,
-    /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
-    /// wins; otherwise calls read [`RunEnd::Cancelled`].
+    /// Cancels `run.ended` when the last `Dispatcher` drops, the hook realm's included. A
+    /// reason `finish` recorded first wins; otherwise calls read [`RunEnd::Cancelled`].
     _ending: DropGuard,
 }
 
-/// What admitted one call ([`Inner::admit`]): its share of the in-flight caps, or the claim of
-/// a call that ends calls in flight.
+/// What one realm's dispatcher keeps to itself. The hook realm has its own message ids (its SDK
+/// counts from 1 too), so a shared abort registry would let one realm abort the other's calls;
+/// and its own caps, so an agent holding all 64 calls in flight cannot starve the hooks.
+struct Side {
+    /// Who sends this dispatcher's calls; every record it opens says so.
+    origin: CallOrigin,
+    /// What this realm's unfinished calls hold, bounded at admission.
+    in_flight: Arc<InFlight>,
+    /// The URL-predicate navigation waits open between their calls.
+    cursors: Arc<Cursors<FrameCursor>>,
+    /// The admitted calls this realm's `signal`s can still abort, by message id (`abort.rs`).
+    aborts: Arc<Aborts>,
+}
+
+impl Side {
+    fn new(origin: CallOrigin) -> Self {
+        Self {
+            origin,
+            in_flight: Arc::default(),
+            cursors: Arc::default(),
+            aborts: Arc::default(),
+        }
+    }
+}
+
+/// What admitted one call ([`Dispatcher::admit`]): its share of the in-flight caps, or the claim
+/// of a call that ends calls in flight.
 struct Admission {
     share: Option<Admitted>,
     release: Option<ReleaseClaim>,
 }
 
 /// Neo: a call that ends calls in flight, which the in-flight caps never refuse, or a full run
-/// could not let go, with its claim on the one thing it ends ([`Inner::release_claim`]). Each
+/// could not let go, with its claim on the one thing it ends ([`Dispatcher::release_claim`]). Each
 /// claim is one per thing at a time, and goes back when it drops without having ended it, so
 /// such calls never outnumber what they end; a call naming nothing real, or a second call for
 /// the same thing, takes an ordinary share. Held until just before the call replies.
@@ -297,9 +328,9 @@ enum ReleaseClaim {
     Close,
 }
 
-impl Inner {
-    /// Admits `route`: its release claim ([`Inner::release_claim`]), or else a share of the
-    /// in-flight caps.
+impl Dispatcher {
+    /// Admits `route`: its release claim ([`Dispatcher::release_claim`]), or else a share of
+    /// this realm's in-flight caps.
     fn admit(
         &self,
         route: &ObjectCall,
@@ -310,7 +341,7 @@ impl Inner {
         let share = if release.is_some() {
             None
         } else {
-            Some(self.in_flight.admit(bytes)?)
+            Some(self.side.in_flight.admit(bytes)?)
         };
         Ok(Admission { share, release })
     }
@@ -324,7 +355,7 @@ impl Inner {
         target: Option<&(Arc<PageEntry>, FrameScope)>,
     ) -> Option<ReleaseClaim> {
         if let Some(cursor) = ending_cursor(route) {
-            return self.cursors.begin_ending(cursor).map(ReleaseClaim::Ending);
+            return self.side.cursors.begin_ending(cursor).map(ReleaseClaim::Ending);
         }
         match route {
             ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => {
@@ -334,6 +365,7 @@ impl Inner {
             ObjectCall::Binding(
                 BindingRoute::Resolve { guid, .. } | BindingRoute::Reject { guid, .. },
             ) => self
+                .inner
                 .run
                 .bindings
                 .begin_answering(guid)
@@ -353,7 +385,9 @@ impl Inner {
             _ => None,
         }
     }
+}
 
+impl Inner {
     /// A `setContent` call takes its place in its frame's write order as it arrives, and a
     /// storage call its place in its page's storage order.
     fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
@@ -567,26 +601,52 @@ enum Route {
 }
 
 impl Dispatcher {
+    /// The agent realm's dispatcher, the first of the run.
     pub(crate) fn new(tabs: Tabs, run: RunScope) -> Self {
-        Self(Arc::new(Inner {
-            tabs,
-            _ending: run.ended.clone().drop_guard(),
-            run,
-            trace: Trace::default(),
-            in_flight: Arc::default(),
-            cursors: Arc::default(),
-            aborts: Arc::default(),
-            next_call_id: AtomicU64::new(1),
-            write_order: WriteOrder::default(),
-            storage_order: WriteOrder::default(),
-        }))
+        Self {
+            inner: Arc::new(Inner {
+                tabs,
+                _ending: run.ended.clone().drop_guard(),
+                run,
+                trace: Trace::default(),
+                next_call_id: AtomicU64::new(1),
+                write_order: WriteOrder::default(),
+                storage_order: WriteOrder::default(),
+            }),
+            side: Arc::new(Side::new(CallOrigin::Agent)),
+        }
+    }
+
+    /// The run's hook realm's dispatcher (`hooks.rs`): the same run (tabs, records, call ids,
+    /// write orders), and a side of its own: origin [`CallOrigin::Hook`], its own abort registry,
+    /// in-flight caps and navigation cursors. No debugger ever holds its calls.
+    ///
+    /// The hook realm's bridge is the only holder of this value, so only that realm's calls are
+    /// recorded as a hook's (hooks design D7). It holds the run's `Inner` while the hook realm
+    /// lives: `HookSandbox`'s close, at run end or when the run's future drops, is what lets go.
+    pub(crate) fn for_hooks(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            side: Arc::new(Side::new(CallOrigin::Hook)),
+        }
+    }
+
+    /// Who sends this dispatcher's calls. The call path reads it to skip the hooks for a hook's
+    /// own calls (hooks feature 3); every record it opens carries it (`CallEntry::origin`).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "hooks feature 3's seam: the call path skips hooks for a hook's calls")
+    )]
+    pub(crate) fn origin(&self) -> CallOrigin {
+        self.side.origin
     }
 
     /// `__neo_runtime.call`: one Playwright message in, one Playwright reply out, as JSON text.
     /// Synchronous so the call starts before the realm polls anything. Every message with a
     /// readable envelope gets a reply, failures included, and a trace record.
     pub(crate) fn call(&self, message: &str) -> PendingReply {
-        let inner = &self.0;
+        let inner = &self.inner;
+        let origin = self.side.origin;
         let Message {
             id,
             guid,
@@ -610,7 +670,14 @@ impl Dispatcher {
         let object = self
             .platform_object(&guid)
             .unwrap_or_else(|| object_kind(&guid, target.is_some()));
-        let debugged = debugger_context(&object, target.as_ref(), &inner.run.init_scripts);
+        // No debugger holds a hook's call: the hooks run outside the script being debugged, and a
+        // held hook call would hold the agent's call waiting on it.
+        let debugged = match origin {
+            CallOrigin::Agent => {
+                debugger_context(&object, target.as_ref(), &inner.run.init_scripts)
+            }
+            CallOrigin::Hook => None,
+        };
         let Routed { meta, route } = route(object, &method, params.clone());
         let route = route.map(|call| inner.ordered(&guid, call));
         let metadata = metadata.unwrap_or(Metadata {
@@ -624,13 +691,14 @@ impl Dispatcher {
             guid,
             method,
             title: meta.and_then(|meta| meta.title),
+            origin,
             params: params.unwrap_or_else(|| json!({})),
             location: call_location(&metadata),
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
         }));
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
-            let admission = inner.admit(&route, target.as_ref(), message.len())?;
+            let admission = self.admit(&route, target.as_ref(), message.len())?;
             Ok((route, admission))
         });
         let (route, admission) = match admitted {
@@ -650,7 +718,7 @@ impl Dispatcher {
         // after always finds it. The SDK's ids are integers; any other id cannot be aborted.
         let abortable = id
             .as_u64()
-            .map(|message_id| inner.aborts.register(message_id, &entry));
+            .map(|message_id| self.side.aborts.register(message_id, &entry));
         let (reply, receiver) = oneshot::channel();
         let call_reply = CallReply {
             entry: Arc::clone(&entry),
@@ -665,7 +733,7 @@ impl Dispatcher {
         let timeout = metadata.timeout.unwrap_or(0.0);
         let run = inner.run.clone();
         let tabs = inner.tabs.clone();
-        let cursors = Arc::clone(&inner.cursors);
+        let cursors = Arc::clone(&self.side.cursors);
         inner.run.tasks.spawn(async move {
             if let Some(resumed) = held
                 && let Err(stopped) = released(&run, resumed).await
@@ -700,7 +768,7 @@ impl Dispatcher {
         | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(params)) =
             route
         {
-            self.0.tabs.test_id().set(&params.test_id_attribute_name);
+            self.inner.tabs.test_id().set(&params.test_id_attribute_name);
         }
         let (meta, context) = debugged?;
         self.hold(meta, &context, metadata, entry)
@@ -709,7 +777,7 @@ impl Dispatcher {
     /// The run's browser, a context it created or a context's debugger, by guid
     /// (`browser_methods.rs`, `debugger.rs`); `None` for every other object.
     fn platform_object(&self, guid: &str) -> Option<ObjectKind> {
-        let created = self.0.tabs.created();
+        let created = self.inner.tabs.created();
         let object = if guid == BROWSER_GUID {
             PlatformObject::Browser
         } else if let Some(context) = created.find(guid) {
@@ -733,7 +801,7 @@ impl Dispatcher {
         metadata: &Metadata,
         entry: &CallEntry,
     ) -> Option<oneshot::Receiver<()>> {
-        self.0.tabs.debuggers().before_call(
+        self.inner.tabs.debuggers().before_call(
             &CallToGate {
                 context,
                 meta,
@@ -743,7 +811,7 @@ impl Dispatcher {
                 params: entry.params(),
                 title: metadata.title.as_deref(),
             },
-            self.0.tabs.events(),
+            self.inner.tabs.events(),
         )
     }
 
@@ -751,7 +819,7 @@ impl Dispatcher {
     /// The call stops at its next race or check and replies `AbortError` with `reason`; an id
     /// no call holds any more (it replied already) is ignored, as Playwright ignores one.
     pub(crate) fn abort(&self, id: u64, reason: String) {
-        self.0.aborts.abort(id, reason);
+        self.side.aborts.abort(id, reason);
     }
 
     /// Ends the run's calls after the realm is gone: records why the run ended (the first
@@ -762,29 +830,29 @@ impl Dispatcher {
     /// [`HIGHLIGHTS_WAIT`] of their own before returning the records and dropped-calls summary.
     pub(crate) async fn finish(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
         let deadline = Instant::now() + RECORDS_WAIT;
-        let run = &self.0.run;
+        let run = &self.inner.run;
         run.end(reason);
         // Before anything below waits: what the run holds is held by no live run from now on,
         // however its release goes (`TabInput::mark_ended`).
-        self.0.tabs.mark_input_ended();
+        self.inner.tabs.mark_input_ended();
         // What the run installed on the tabs it leaves open goes first, as `context.close()`
         // lets go of it, each part on a budget of its own: removal never waits on a call still
         // running, so no document loaded after the run returns runs one of its init scripts, no page keeps one of its
         // bindings, and none gets its session overrides (`Tabs::release_run_scoped`).
-        self.0.tabs.release_run_scoped(run).await;
+        self.inner.tabs.release_run_scoped(run).await;
         // Then the run's clock, on a budget of its own: no page the run leaves open keeps its
         // fake timers (`clock.rs`). Only at run end: Playwright's `context.close()` of a
         // connected browser leaves a page's installed clock as it is.
-        let _restored = time::timeout(PAGE_END_WAIT, run.clock.close(&self.0.tabs)).await;
+        let _restored = time::timeout(PAGE_END_WAIT, run.clock.close(&self.inner.tabs)).await;
         // The realm is gone with its listeners: from now on the watchers answer dialogs
         // themselves, and a dialog a listener left open gets the default answer before the
         // sessions detach (`Dialogs::left_open`).
-        self.0.tabs.events().close();
-        let _answered = time::timeout_at(deadline, answer_left_open(&self.0.tabs)).await;
+        self.inner.tabs.events().close();
+        let _answered = time::timeout_at(deadline, answer_left_open(&self.inner.tabs)).await;
         // Every request a route handler left paused goes on, and no tab keeps pausing requests
         // for a run that is over (`routes.rs`).
         let _routed = time::timeout_at(deadline, async {
-            let sessions = self.0.tabs.attached_sessions();
+            let sessions = self.inner.tabs.attached_sessions();
             future::join_all(sessions.iter().map(|session| routes::finish(session))).await;
         })
         .await;
@@ -793,28 +861,28 @@ impl Dispatcher {
         // release is a task of the run's tracker, started before the tracker closes, so the
         // drain below waits for it and `Runtime::drain` for what the budget leaves running:
         // no budget cuts a release off, and no other cleanup goes before one.
-        self.0.tabs.release_input();
+        self.inner.tabs.release_input();
         // The contexts the run created go with it, their pages too (`browser_methods.rs`).
         let _disposed =
-            time::timeout_at(deadline, browser_methods::dispose_all(&self.0.tabs)).await;
-        let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
+            time::timeout_at(deadline, browser_methods::dispose_all(&self.inner.tabs)).await;
+        let _created = time::timeout_at(deadline, self.inner.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
         // Releases each session's handle group on its page's tracked task, before the sessions
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
-        let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
+        let _refreshed = time::timeout_at(deadline, self.inner.tabs.refresh_closing()).await;
         // The run's highlights show over the user's tab; none may outlive the run that made it.
         // They go last, on their own budget: a document that does not answer (a busy
         // out-of-process frame) delays the outcome, never a release.
-        let sessions = self.0.tabs.attached_sessions();
+        let sessions = self.inner.tabs.attached_sessions();
         let _hidden = time::timeout(HIGHLIGHTS_WAIT, async {
             for session in &sessions {
                 highlight::hide_at_run_end(session).await;
             }
         })
         .await;
-        self.0.trace.take(reason)
+        self.inner.trace.take(reason)
     }
 }
 
@@ -2417,6 +2485,7 @@ mod tests {
             guid: format!("frame@{PAGE}"),
             method: "click".to_string(),
             title: Some("Click"),
+            origin: CallOrigin::Agent,
             params: json!({"selector":"#nothing"}),
             location: None,
             input: true,
@@ -3548,6 +3617,7 @@ mod tests {
             guid: format!("frame@{PAGE}"),
             method: "neo:nextNavigation".to_string(),
             title: Some("Wait for navigation"),
+            origin: CallOrigin::Agent,
             params: json!({"response":false}),
             location: None,
             input: false,
@@ -3876,6 +3946,7 @@ mod review_abort_priority {
             guid: format!("frame@{PAGE}"),
             method: "click".to_string(),
             title: Some("Click"),
+            origin: CallOrigin::Agent,
             params: json!({"selector":"#nothing"}),
             location: None,
             input: true,

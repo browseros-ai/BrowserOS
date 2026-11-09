@@ -65,6 +65,7 @@ async fn run(runtime: &Runtime, page: &PageId, code: &str, timeout: Duration) ->
             timeout,
             cancel: CancellationToken::new(),
             artifacts: None,
+            hooks: None,
         })
         .await
 }

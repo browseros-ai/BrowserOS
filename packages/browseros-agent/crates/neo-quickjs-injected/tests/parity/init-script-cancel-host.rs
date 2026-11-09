@@ -42,6 +42,7 @@ async fn cancel_during_setup() {
             runtime.run(RunRequest {
             code: "await page.context().addInitScript(()=>{window.oldRunInit=17});await page.evaluate(()=>0);await new Promise(()=>{})".into(),
             page: PageId::new(target), timeout: Duration::from_secs(30), cancel, artifacts: None,
+            hooks: None,
         }).await
         }
     });

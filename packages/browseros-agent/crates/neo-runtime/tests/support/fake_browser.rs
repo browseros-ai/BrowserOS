@@ -337,6 +337,7 @@ pub fn run_request(code: &str, timeout: Duration, cancel: CancellationToken) -> 
         timeout,
         cancel,
         artifacts: None,
+        hooks: None,
     }
 }
 

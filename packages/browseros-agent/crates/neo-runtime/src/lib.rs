@@ -61,6 +61,7 @@ mod chromium_bridge;
 mod deadline;
 mod debugger;
 mod events;
+mod hooks;
 mod method_router;
 mod mime;
 mod playwright_methods;
@@ -73,7 +74,8 @@ mod url_match;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{
-    CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunBinary, RunEnd,
-    RunError, RunOutcome, RunPage, RunRequest, RunStatus,
+    CallLocation, CallOrigin, CallRecord, CallResult, Delivery, DroppedCalls, HOOK_BUDGET,
+    HostCallback, HostRequest, PageId, RunBinary, RunEnd, RunError, RunHooks, RunOutcome, RunPage,
+    RunRequest, RunStatus,
 };
 pub use runtime::{Runtime, RuntimeError};

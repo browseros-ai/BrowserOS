@@ -1542,6 +1542,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::run::CallOrigin;
     use crate::browser_representations::page::TabInputs;
     use crate::chromium_bridge::browser_connection_settings::Switches;
     use crate::deadline::Deadline;
@@ -1560,6 +1561,7 @@ mod tests {
             guid: "context@default".to_string(),
             method: "grantPermissions".to_string(),
             title: None,
+            origin: CallOrigin::Agent,
             params: json!({}),
             location: None,
             input: false,

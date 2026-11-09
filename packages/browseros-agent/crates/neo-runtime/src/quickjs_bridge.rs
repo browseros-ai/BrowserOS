@@ -29,7 +29,16 @@
 //! call keeps going while the script spins or a getter blocks, and dropping the realm drops only
 //! the wait, never the call. The reply carries the event watermark W (`events.rs`): the SDK runs
 //! the listeners of every event up to W before the call's caller continues, Playwright's order.
+//!
+//! A run with hooks has a second realm (`hooks.rs`) with its own `__neo_runtime` of the same
+//! shape ([`install_hooks`]), every closure bound to that realm's state: its own getters, its
+//! `log` writing the hook trace, its own dispatcher (origin hook, own abort registry), and no
+//! events: `subscribe` does nothing, `drain` is always empty, `nextEvents` never resolves. It never
+//! touches the agent's `EventHub` or `Logs`. The realm boundary is the trust boundary: each
+//! bridge holds exactly one dispatcher, so which bridge a call came through, not anything in its
+//! message, decides whose call it is.
 
+use std::future;
 use std::future::Future;
 use std::mem;
 use std::sync::{Arc, Mutex};
@@ -79,7 +88,7 @@ pub(crate) fn frame_guid_of(page: &PageId, frame: &str) -> String {
     }
 }
 
-/// Installs `__neo_runtime` as a global of the realm `ctx`.
+/// Installs `__neo_runtime` as a global of the agent's realm `ctx`.
 pub(crate) fn install<'js>(
     ctx: &Ctx<'js>,
     getters: Getters,
@@ -88,57 +97,7 @@ pub(crate) fn install<'js>(
 ) -> rquickjs::Result<()> {
     let tabs = getters.tabs.clone();
     let bridge = Object::new(ctx.clone())?;
-    bridge.set(
-        "get",
-        Func::from(move |ctx: Ctx<'js>, request: String| getters.get(&ctx, &request)),
-    )?;
-    let log = logs.clone();
-    bridge.set("log", Func::from(move |line: String| log.push(line)))?;
-    let aborts = dispatcher.clone();
-    bridge.set(
-        "abort",
-        // Synchronous, inside the signal's `abort` listener: the call stops at its next race or
-        // check and replies `AbortError`. An id that is not a call in flight is ignored.
-        Func::from(move |id: i64, reason: String| {
-            if let Ok(id) = u64::try_from(id) {
-                aborts.abort(id, reason);
-            }
-        }),
-    )?;
-    let calls = dispatcher.clone();
-    bridge.set(
-        "call",
-        // The reply text alone: what the realm's tests drive Rust with directly. The SDK uses
-        // `callWithEvents`, so its listeners run before the reply's caller continues.
-        Func::from(Async(move |ctx: Ctx<'js>, message: String| {
-            let reply = calls.call(&message);
-            async move {
-                reply
-                    .await
-                    .map(|(reply, _)| reply)
-                    .map_err(|error| throw_named(&ctx, "Error", &error.to_string()))
-            }
-        })),
-    )?;
-    bridge.set(
-        "callWithEvents",
-        // rquickjs makes the promise now and polls this future only while the script awaits.
-        // That is enough because the future only waits for the reply: `Dispatcher::call` has
-        // already started the call on a tokio task. An `Err` rejects the promise with a named
-        // `Error`; only an unreadable envelope (an SDK bug) or a run ending under the call does.
-        Func::from(Async(move |ctx: Ctx<'js>, message: String| {
-            let reply = dispatcher.call(&message);
-            async move {
-                let (reply, watermark) = reply
-                    .await
-                    .map_err(|error| throw_named(&ctx, "Error", &error.to_string()))?;
-                let answer = Object::new(ctx.clone())?;
-                answer.set("reply", reply)?;
-                answer.set("events", i64::try_from(watermark).unwrap_or(i64::MAX))?;
-                Ok::<_, rquickjs::Error>(answer)
-            }
-        })),
-    )?;
+    install_calls(&bridge, getters, logs.clone(), dispatcher, Watermark::Events)?;
     let subscriptions = tabs.clone();
     bridge.set(
         "subscribe",
@@ -175,6 +134,103 @@ pub(crate) fn install<'js>(
         })),
     )?;
     ctx.globals().set("__neo_runtime", bridge)
+}
+
+/// Installs `__neo_runtime` as a global of a run's hook realm `ctx` (`hooks.rs`): the agent's
+/// shape, with `getters` of its own, `log` appending to the hook `trace`, and `dispatcher` the
+/// run's hook dispatcher (`Dispatcher::for_hooks`). Hook listeners never fire (a documented
+/// limit): `subscribe` does nothing, `drain` answers `[]` and `nextEvents` never resolves, so the
+/// hook realm never takes, delays or reorders an event of the agent's.
+pub(crate) fn install_hooks<'js>(
+    ctx: &Ctx<'js>,
+    getters: Getters,
+    trace: Logs,
+    dispatcher: Dispatcher,
+) -> rquickjs::Result<()> {
+    let bridge = Object::new(ctx.clone())?;
+    install_calls(&bridge, getters, trace, dispatcher, Watermark::None)?;
+    bridge.set("subscribe", Func::from(|_request: String| {}))?;
+    bridge.set("drain", Func::from(|_until: i64| "[]".to_string()))?;
+    bridge.set(
+        "nextEvents",
+        // Never resolves; dropped with the hook realm.
+        Func::from(Async(|| future::pending::<rquickjs::Result<()>>())),
+    )?;
+    ctx.globals().set("__neo_runtime", bridge)
+}
+
+/// Whether a call's answer carries the run's event watermark (the agent's realm) or always 0
+/// (the hook realm, which delivers no events).
+#[derive(Clone, Copy)]
+enum Watermark {
+    Events,
+    None,
+}
+
+/// The members both realms' bridges share: `get` on `getters`, `log` into `logs`, and `abort`,
+/// `call` and `callWithEvents` on `dispatcher`, the one dispatcher this bridge ever holds.
+fn install_calls<'js>(
+    bridge: &Object<'js>,
+    getters: Getters,
+    logs: Logs,
+    dispatcher: Dispatcher,
+    watermark: Watermark,
+) -> rquickjs::Result<()> {
+    bridge.set(
+        "get",
+        Func::from(move |ctx: Ctx<'js>, request: String| getters.get(&ctx, &request)),
+    )?;
+    bridge.set("log", Func::from(move |line: String| logs.push(line)))?;
+    let aborts = dispatcher.clone();
+    bridge.set(
+        "abort",
+        // Synchronous, inside the signal's `abort` listener: the call stops at its next race or
+        // check and replies `AbortError`. An id that is not a call in flight is ignored.
+        Func::from(move |id: i64, reason: String| {
+            if let Ok(id) = u64::try_from(id) {
+                aborts.abort(id, reason);
+            }
+        }),
+    )?;
+    let calls = dispatcher.clone();
+    bridge.set(
+        "call",
+        // The reply text alone: what the realm's tests drive Rust with directly. The SDK uses
+        // `callWithEvents`, so its listeners run before the reply's caller continues.
+        Func::from(Async(move |ctx: Ctx<'js>, message: String| {
+            let reply = calls.call(&message);
+            async move {
+                reply
+                    .await
+                    .map(|(reply, _)| reply)
+                    .map_err(|error| throw_named(&ctx, "Error", &error.to_string()))
+            }
+        })),
+    )?;
+    bridge.set(
+        "callWithEvents",
+        // rquickjs makes the promise now and polls this future only while the script awaits.
+        // That is enough because the future only waits for the reply: `Dispatcher::call` has
+        // already started the call on a tokio task. An `Err` rejects the promise with a named
+        // `Error`; only an unreadable envelope (an SDK bug) or a run ending under the call does.
+        Func::from(Async(move |ctx: Ctx<'js>, message: String| {
+            let reply = dispatcher.call(&message);
+            async move {
+                let (reply, events) = reply
+                    .await
+                    .map_err(|error| throw_named(&ctx, "Error", &error.to_string()))?;
+                let events = match watermark {
+                    Watermark::Events => events,
+                    Watermark::None => 0,
+                };
+                let answer = Object::new(ctx.clone())?;
+                answer.set("reply", reply)?;
+                answer.set("events", i64::try_from(events).unwrap_or(i64::MAX))?;
+                Ok::<_, rquickjs::Error>(answer)
+            }
+        })),
+    )?;
+    Ok(())
 }
 
 /// `__neo_runtime.subscribe`: the script's listening to `event` on a page or the context turned

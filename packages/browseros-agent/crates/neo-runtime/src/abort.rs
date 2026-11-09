@@ -367,6 +367,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+    use crate::run::CallOrigin;
     use crate::progress::{CallStart, ErrorName};
 
     fn entry() -> Arc<CallEntry> {
@@ -375,6 +376,7 @@ mod tests {
             guid: "frame@T".to_string(),
             method: "click".to_string(),
             title: Some("Click"),
+            origin: CallOrigin::Agent,
             params: Value::Null,
             location: None,
             input: true,
