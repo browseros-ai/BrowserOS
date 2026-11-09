@@ -147,6 +147,7 @@ async fn tests_that_blocking_page_script_stops_every_page_script_and_the_bridge_
         );
     }
     assert_eq!(calls(&outcome, "evaluateExpression").len(), 3);
+    tab.close().await;
 }
 
 /// Done when 3: a hook replaces `keyboard.type`'s text; the box receives the hook's text, while
@@ -172,6 +173,7 @@ async fn tests_that_replaced_arguments_take_effect_and_the_outcome_keeps_the_scr
     assert_eq!(record.result, CallResult::Ok);
     let json = serde_json::to_string(&outcome).unwrap();
     assert!(!json.contains("s3cret"), "{json}");
+    tab.close().await;
 }
 
 /// Done when 4: `afterAction` replaces `title`'s result (the script reads the replacement, the
@@ -216,6 +218,7 @@ async fn tests_that_after_action_replaces_notes_and_fails_the_call_after_it_ran(
         "the host reads why: {:?}",
         outcome.hook_trace
     );
+    tab.close().await;
 }
 
 /// Done when 5: a `beforeAction` hook that itself calls `page.evaluate` while it blocks the
@@ -257,4 +260,5 @@ async fn tests_that_a_hooks_own_page_script_runs_unhooked_while_the_agents_is_bl
         .collect();
     assert_eq!(agents.len(), 1);
     assert_eq!(before(agents[0]), Some(BeforeHookResult::Blocked));
+    tab.close().await;
 }
