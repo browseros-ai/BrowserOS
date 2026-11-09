@@ -579,6 +579,11 @@ const MAX_CALL_RECORDS: usize = 1000;
 /// final.
 const MAX_TRACE_BYTES: usize = 1024 * 1024;
 
+/// Neo: the message a hook call's record gives its error, in place of the error's own: messages
+/// such as navigation's `… at <url>` echo the call's arguments, which a hook may have taken from a
+/// secret. The hook's realm still gets the real reply; the record keeps the error's name.
+const HOOK_CALL_FAILED: &str = "a hook's browser call failed; its message stays with the hook";
+
 /// The durable state of one call, shared by its `Progress` and the run's `Trace`.
 pub(crate) struct CallEntry {
     call_id: u64,
@@ -766,11 +771,19 @@ impl CallEntry {
                 self.folded_log(),
             ),
         };
-        // A hook's call log may echo what it typed (`fill("…")`); its reply carried the log to
-        // the hook's own realm, and the record keeps none.
-        let log = match self.origin {
-            CallOrigin::Agent => log,
-            CallOrigin::Hook => Vec::new(),
+        // A hook's call log may echo what it typed (`fill("…")`), and its error message what it
+        // navigated to (`… at <url>`); its reply carried both to the hook's own realm, and the
+        // record keeps neither: no log, and the error's name with a fixed message.
+        let (result, log) = match (self.origin, result) {
+            (CallOrigin::Agent, result) => (result, log),
+            (CallOrigin::Hook, CallResult::Error { name, .. }) => (
+                CallResult::Error {
+                    name,
+                    message: HOOK_CALL_FAILED.to_string(),
+                },
+                Vec::new(),
+            ),
+            (CallOrigin::Hook, result) => (result, Vec::new()),
         };
         let started_at_ms = self
             .started_at
@@ -1095,6 +1108,28 @@ mod tests {
         assert_eq!(record.location, None);
         assert!(record.log.is_empty());
         assert_eq!(record.delivery, Some(Delivery::NotSent));
+
+        let failed = Arc::new(CallEntry::new(CallStart {
+            call_id: 2,
+            guid: "frame@T".to_string(),
+            method: "goto".to_string(),
+            title: Some("Navigate"),
+            origin: CallOrigin::Hook,
+            params: serde_json::json!({"url": "https://a.test/?token=s3cret"}),
+            location: None,
+            input: false,
+        }));
+        failed.finish(CallResult::Error {
+            name: "Error".to_string(),
+            message: "net::ERR_NAME_NOT_RESOLVED at https://a.test/?token=s3cret".to_string(),
+        });
+        let record = failed.record(RunEnd::Settled);
+        let CallResult::Error { name, message } = &record.result else {
+            panic!("the record keeps the error: {:?}", record.result);
+        };
+        assert_eq!(name, "Error", "the error's name is kept");
+        assert!(!message.contains("s3cret"), "{message}");
+        assert!(!serde_json::to_string(&record).unwrap().contains("s3cret"));
     }
 
     #[tokio::test]

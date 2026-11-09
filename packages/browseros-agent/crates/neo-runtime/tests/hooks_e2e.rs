@@ -15,7 +15,9 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use browser::{Fixture, Tab};
-use neo_runtime::{CallOrigin, PageId, RunHooks, RunOutcome, RunRequest, RunStatus, Runtime};
+use neo_runtime::{
+    CallOrigin, CallResult, PageId, RunHooks, RunOutcome, RunRequest, RunStatus, Runtime,
+};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -195,15 +197,20 @@ async fn tests_that_spinning_and_waiting_hooks_fail_closed_within_their_budget()
 }
 
 /// Cases 4 and 5: a hook's own `page.goto` really navigates and is recorded as the hook's, with
-/// no params; the agent's calls stay the agent's, even one that calls the bridge directly with
-/// forged fields.
+/// no params, and a failed one's error message never carries the URL it was given; the agent's
+/// calls stay the agent's, even one that calls the bridge directly with forged fields.
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_a_hooks_calls_are_its_own_and_the_agent_cannot_forge_one() {
     let Some(tab) = open().await else { return };
     let runtime = tab.runtime().await;
     let other = format!("{}/other", tab.origin);
+    // The failing goto runs last, in afterRun: a failed navigation commits Chromium's error page a
+    // moment later, which would interrupt a navigation started after it.
     let hooks = RunHooks::new(format!(
-        "neo.on('beforeRun', async (event) => {{ await event.page.goto({other:?}) }})"
+        "neo.on('beforeRun', async (event) => {{ await event.page.goto({other:?}) }})
+         neo.on('afterRun', async (event) => {{
+           await event.page.goto('http://neo-hooks-probe.invalid/login?token=SECRET123').catch(() => {{}})
+         }})"
     ));
     // The agent knows its frame's guid only as Neo spells it; the test spells it for it.
     let code = format!(
@@ -237,6 +244,7 @@ async fn tests_that_a_hooks_calls_are_its_own_and_the_agent_cannot_forge_one() {
             (CallOrigin::Hook, "goto"),
             (CallOrigin::Agent, "title"),
             (CallOrigin::Agent, "title"),
+            (CallOrigin::Hook, "goto"),
         ]
     );
     let goto = &outcome.calls[0];
@@ -244,10 +252,22 @@ async fn tests_that_a_hooks_calls_are_its_own_and_the_agent_cannot_forge_one() {
     assert_eq!((goto.location, goto.log.is_empty()), (None, true));
     let forged = &outcome.calls[1];
     assert_eq!(forged.params, json!({}));
+    let failed = &outcome.calls[3];
+    assert!(
+        matches!(failed.result, CallResult::Error { .. }),
+        "{:?}",
+        failed.result
+    );
     let json = serde_json::to_value(&outcome.calls).unwrap();
     assert_eq!(json[0]["origin"], "hook");
+    assert_eq!(json[3]["origin"], "hook");
     assert!(json[1].get("origin").is_none() && json[2].get("origin").is_none());
-    assert_eq!(tab.evaluate("location.pathname").await, json!("/other"));
+    assert!(
+        !serde_json::to_string(&outcome)
+            .unwrap()
+            .contains("SECRET123"),
+        "a hook's failed call never echoes its URL into the outcome"
+    );
     tab.close().await;
 }
 
