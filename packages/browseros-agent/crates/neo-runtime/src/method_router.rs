@@ -12,11 +12,13 @@
 //!         ├─ Trace += CallEntry                 every message with an id leaves a record
 //!         ├─ early failure → reply now, no call log (Playwright's dispatcher does the same)
 //!         ├─ admit against the in-flight caps   past them → an early failure too
+//!         ├─ HookPlan, its place in CallOrder   a run with action hooks (`action_hooks.rs`)
 //!         ├─ Aborts += message id               `__neo_runtime.abort(id, reason)` reaches it
 //!         └─ run.tasks.spawn(serve)             runs while JS spins, outlives the realm
+//!              ├─ CallHooks::before             beforeAction of a call with no element
 //!              ├─ events.ready(page)            what the page's subscriptions switched on
 //!              ├─ click::click(&page, &options, &progress)   prepares the tab first
-//!              ├─ entry.finish(…)
+//!              ├─ AfterHook::apply; entry.finish(…)
 //!              └─ events.barrier(); reply ({id} | {id, error:{error:{message,name}}, log}, W)
 //!  run end: Dispatcher::finish(reason)
 //!    record the reason → cancel `ended` → mark the run's input ended on every tab
@@ -32,10 +34,11 @@
 //! call starts inside the native call itself, not when the realm first polls the returned
 //! future, so a call the script never awaits still runs.
 
+use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -70,6 +73,10 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
+use crate::action_hooks::element::{ElementOptions, Rerouted};
+use crate::action_hooks::{
+    ActionHooks, CallHooks, CallOrder, CallRoute, ElementRoute, Gated, HookPlan, ReplyHooks,
+};
 use crate::actions::{ActionKind, NeoMethod, ServedMethod, SpecCommand};
 use crate::browser_representations::bindings::{self, Answering, BindingRoute, Outcome};
 use crate::browser_representations::clock::{self, ClockRoute};
@@ -90,6 +97,7 @@ use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::keyboard_input::KeyboardTab;
 use crate::debugger::{CallToGate, DEBUGGER_PREFIX, DEFAULT_CONTEXT};
 use crate::events::{ALL_PAGES, EventHub};
+use crate::hooks::ActionEvent;
 use crate::playwright_methods::browser_methods::{self, BROWSER_GUID, CreatedContext};
 use crate::playwright_methods::capture::{
     self, Capture, ELEMENT_HANDLE_SCREENSHOT_META, ElementScreenshotParams, NEO_SCREENSHOT_META,
@@ -118,7 +126,7 @@ use crate::playwright_methods::history::{
 use crate::playwright_methods::lists;
 use crate::playwright_methods::navigate::{self, GotoOptions};
 use crate::playwright_methods::page_and_context_methods;
-use crate::playwright_methods::press::{self, PressOptions};
+use crate::playwright_methods::press::{self, KeyInput, PressOptions};
 use crate::playwright_methods::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::playwright_methods::set_input_files;
 use crate::playwright_methods::states::{self, StateOptions};
@@ -129,6 +137,7 @@ use crate::playwright_methods::waits::{
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
+use crate::quickjs_bridge;
 use crate::run::{CallLocation, CallOrigin, CallRecord, CallResult, DroppedCalls, RunEnd};
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
@@ -292,11 +301,12 @@ struct Inner {
     run: RunScope,
     trace: Trace,
     next_call_id: AtomicU64,
-    /// The `setContent` writes into each frame, in arrival order (`content.rs`).
-    write_order: WriteOrder,
+    /// The `setContent` writes into each frame, in arrival order (`content.rs`). Shared with
+    /// the tasks of calls held at their hook gate, which take their turn once decided.
+    write_order: Arc<WriteOrder>,
     /// Each page's `localStorage` and `sessionStorage` calls, in arrival order (`web_storage.rs`):
     /// Playwright's server sends them in the order the script made them.
-    storage_order: WriteOrder,
+    storage_order: Arc<WriteOrder>,
     /// Cancels `run.ended` when the last `Dispatcher` drops, the hook realm's included. A
     /// reason `finish` recorded first wins; otherwise calls read [`RunEnd::Cancelled`].
     _ending: DropGuard,
@@ -314,17 +324,31 @@ struct Side {
     cursors: Arc<Cursors<FrameCursor>>,
     /// The admitted calls this realm's `signal`s can still abort, by message id (`abort.rs`).
     aborts: Arc<Aborts>,
+    /// The run's action hooks: the agent's side only. The hook realm's side has none, so a
+    /// hook's own calls are never hooked, whatever their message says (hooks design D7).
+    hooks: Option<AgentHooks>,
 }
 
 impl Side {
-    fn new(origin: CallOrigin) -> Self {
+    fn new(origin: CallOrigin, hooks: Option<AgentHooks>) -> Self {
         Self {
             origin,
             in_flight: Arc::default(),
             cursors: Arc::default(),
             aborts: Arc::default(),
+            hooks,
         }
     }
+}
+
+/// The agent dispatcher's action hooks (`action_hooks.rs`).
+#[derive(Default)]
+struct AgentHooks {
+    /// Set once, when the run's hook sandbox starts ([`Dispatcher::set_action_hooks`]); never for
+    /// a run without hooks, whose calls then pay one `get()` each and nothing else.
+    slot: OnceLock<Arc<dyn ActionHooks>>,
+    /// The run's `beforeAction` invocations, in call order.
+    order: Arc<CallOrder>,
 }
 
 /// What admitted one call ([`Dispatcher::admit`]): its share of the in-flight caps, or the claim
@@ -385,39 +409,27 @@ impl Dispatcher {
         route: &ObjectCall,
         target: Option<&(Arc<PageEntry>, FrameScope)>,
     ) -> Option<ReleaseClaim> {
-        if let Some(cursor) = ending_cursor(route) {
-            return self
+        match claim_key(route)? {
+            ClaimKey::Ending(cursor) => self
                 .side
                 .cursors
                 .begin_ending(cursor)
-                .map(ReleaseClaim::Ending);
-        }
-        match route {
-            ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => {
+                .map(ReleaseClaim::Ending),
+            ClaimKey::Resolving(uid) => {
                 let page = target?.0.attached_session()?;
-                locator_handlers::begin_resolving(&page, params.uid).map(ReleaseClaim::Resolving)
+                locator_handlers::begin_resolving(&page, uid).map(ReleaseClaim::Resolving)
             }
-            ObjectCall::Binding(
-                BindingRoute::Resolve { guid, .. } | BindingRoute::Reject { guid, .. },
-            ) => self
+            ClaimKey::Answering(guid) => self
                 .inner
                 .run
                 .bindings
-                .begin_answering(guid)
+                .begin_answering(&guid)
                 .map(ReleaseClaim::Answering),
-            // Playwright: `client/browserContext.ts` `BrowserContext._onRoute`: `await route._innerContinue(true /* isFallback */).catch(() => {});`
-            ObjectCall::Intercepted(
-                index,
-                routes::InterceptedCall::Answer(RouteCall::Continue(params)),
-            ) if params.is_fallback => {
+            ClaimKey::Continuing(index) => {
                 let page = target?.0.attached_session()?;
-                page.routes
-                    .begin_continuing(*index)
-                    .map(ReleaseClaim::Route)
+                page.routes.begin_continuing(index).map(ReleaseClaim::Route)
             }
-            // The context's close and the browser's: the run's disconnection (#3190).
-            route if disconnects(route) => Some(ReleaseClaim::Close),
-            _ => None,
+            ClaimKey::Close => Some(ReleaseClaim::Close),
         }
     }
 }
@@ -425,15 +437,66 @@ impl Dispatcher {
 impl Inner {
     /// A `setContent` call takes its place in its frame's write order as it arrives, and a
     /// storage call its place in its page's storage order.
-    fn ordered(&self, guid: &str, mut call: ObjectCall) -> ObjectCall {
-        match &mut call {
-            ObjectCall::Frame(Route::FrameSetContent(_, turn)) => {
-                *turn = Some(self.write_order.turn(guid));
-            }
-            ObjectCall::Storage(_, turn) => *turn = Some(self.storage_order.turn(guid)),
-            _ => {}
+    fn ordered(&self, guid: &str, call: ObjectCall) -> ObjectCall {
+        take_turn(&self.write_order, &self.storage_order, guid, call)
+    }
+}
+
+/// `call` with its place in `guid`'s write order (`setContent`) or storage order (web storage);
+/// any other call as it is.
+fn take_turn(
+    write_order: &WriteOrder,
+    storage_order: &WriteOrder,
+    guid: &str,
+    mut call: ObjectCall,
+) -> ObjectCall {
+    match &mut call {
+        ObjectCall::Frame(Route::FrameSetContent(_, turn)) => {
+            *turn = Some(write_order.turn(guid));
         }
-        call
+        ObjectCall::Storage(_, turn) => *turn = Some(storage_order.turn(guid)),
+        _ => {}
+    }
+    call
+}
+
+/// What a call that ends calls in flight would claim ([`ReleaseClaim`]), named without claiming
+/// it: [`Inner::release_claim`] claims it, and a hook's replacement arguments must name the
+/// same (`Regate::reroute`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClaimKey {
+    /// A URL-predicate wait's finish or release, by cursor.
+    Ending(u64),
+    /// A running locator handler's completion, by uid.
+    Resolving(i64),
+    /// A waiting binding call's answer, by guid.
+    Answering(String),
+    /// A paused route's own fallback continuation, by index.
+    Continuing(u64),
+    /// The context's close or the browser's.
+    Close,
+}
+
+/// The claim `route` would make among the calls in flight; `None` for a call that ends none.
+fn claim_key(route: &ObjectCall) -> Option<ClaimKey> {
+    if let Some(cursor) = ending_cursor(route) {
+        return Some(ClaimKey::Ending(cursor));
+    }
+    match route {
+        ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => {
+            Some(ClaimKey::Resolving(params.uid))
+        }
+        ObjectCall::Binding(
+            BindingRoute::Resolve { guid, .. } | BindingRoute::Reject { guid, .. },
+        ) => Some(ClaimKey::Answering(guid.clone())),
+        // Playwright: `client/browserContext.ts` `BrowserContext._onRoute`: `await route._innerContinue(true /* isFallback */).catch(() => {});`
+        ObjectCall::Intercepted(
+            index,
+            routes::InterceptedCall::Answer(RouteCall::Continue(params)),
+        ) if params.is_fallback => Some(ClaimKey::Continuing(*index)),
+        // The context's close and the browser's: the run's disconnection (#3190).
+        route if disconnects(route) => Some(ClaimKey::Close),
+        _ => None,
     }
 }
 
@@ -645,16 +708,17 @@ impl Dispatcher {
                 run,
                 trace: Trace::default(),
                 next_call_id: AtomicU64::new(1),
-                write_order: WriteOrder::default(),
-                storage_order: WriteOrder::default(),
+                write_order: Arc::default(),
+                storage_order: Arc::default(),
             }),
-            side: Arc::new(Side::new(CallOrigin::Agent)),
+            side: Arc::new(Side::new(CallOrigin::Agent, Some(AgentHooks::default()))),
         }
     }
 
     /// The run's hook realm's dispatcher (`hooks.rs`): the same run (tabs, records, call ids,
     /// write orders), and a side of its own: origin [`CallOrigin::Hook`], its own abort registry,
-    /// in-flight caps and navigation cursors. No debugger ever holds its calls.
+    /// in-flight caps and navigation cursors, and no action hooks at all, so none of its calls
+    /// can be hooked (hooks design D7). No debugger ever holds its calls.
     ///
     /// The hook realm's bridge is the only holder of this value, so only that realm's calls are
     /// recorded as a hook's (hooks design D7). It holds the run's `Inner` while the hook realm
@@ -662,8 +726,26 @@ impl Dispatcher {
     pub(crate) fn for_hooks(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
-            side: Arc::new(Side::new(CallOrigin::Hook)),
+            side: Arc::new(Side::new(CallOrigin::Hook, None)),
         }
+    }
+
+    /// Hands the run's action hooks to the agent's dispatcher, once: `Runtime::run` does when the
+    /// run's hook sandbox starts. `false` for the hook realm's dispatcher, which has no place for
+    /// them, and when they are set already.
+    pub(crate) fn set_action_hooks(&self, hooks: Arc<dyn ActionHooks>) -> bool {
+        self.side
+            .hooks
+            .as_ref()
+            .is_some_and(|agent| agent.slot.set(hooks).is_ok())
+    }
+
+    /// The run's action hooks and their call order (`action_hooks.rs`): only the agent's
+    /// dispatcher has them, and only once the run's hooks started. Which dispatcher holds the
+    /// call decides, never a field of the message (hooks design D7).
+    fn action_hooks(&self) -> Option<(&Arc<dyn ActionHooks>, &Arc<CallOrder>)> {
+        let agent = self.side.hooks.as_ref()?;
+        Some((agent.slot.get()?, &agent.order))
     }
 
     /// The context whose debugger sees this realm's call ([`debugger_context`]); none for a hook's
@@ -697,13 +779,12 @@ impl Dispatcher {
         }
     }
 
-    /// Who sends this dispatcher's calls. The call path reads it to skip the hooks for a hook's
-    /// own calls (hooks feature 3); every record it opens carries it (`CallEntry::origin`).
+    /// Who sends this dispatcher's calls; every record it opens carries it (`CallEntry::origin`).
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "hooks feature 3's seam: the call path skips hooks for a hook's calls"
+            reason = "the tests read it; the call path needs no check, as only the agent's side has hooks"
         )
     )]
     pub(crate) fn origin(&self) -> CallOrigin {
@@ -726,6 +807,10 @@ impl Dispatcher {
     /// `__neo_runtime.call`: one Playwright message in, one Playwright reply out, as JSON text.
     /// Synchronous so the call starts before the realm polls anything. Every message with a
     /// readable envelope gets a reply, failures included, and a trace record.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one native call routes, records, admits, orders and spawns a call in sequence"
+    )]
     pub(crate) fn call(&self, message: &str) -> PendingReply {
         let inner = &self.inner;
         let origin = self.side.origin;
@@ -746,18 +831,61 @@ impl Dispatcher {
             .platform_object(&guid)
             .unwrap_or_else(|| object_kind(&guid, target.is_some()));
         let debugged = self.debugged(&object, target.as_ref());
+        // A run with action hooks keeps the object with the plan, to route a hook's replacement
+        // arguments as the script's own (`Regate::reroute`).
+        let hooks = self.action_hooks();
+        let frame_call = matches!(object, ObjectKind::Frame);
+        let kept = hooks.map(|hooks| (hooks, object.clone()));
         let Routed { meta, route } = route(object, &method, params.clone());
-        let route = route
-            .and_then(|call| self.allowed(call))
-            .map(|call| inner.ordered(&guid, call));
+        let plan = kept
+            .zip(meta)
+            .and_then(|(((hooks, order), object), served)| {
+                HookPlan::new(hooks, served).map(|plan| (plan, order, object))
+            });
+        // A call held at its hook gate settles nothing in call order before its hook decides.
+        let gated = plan.as_ref().is_some_and(|(plan, ..)| plan.gates());
+        let route = route.and_then(|call| self.allowed(call));
+        let route = if gated {
+            route
+        } else {
+            route.map(|call| inner.ordered(&guid, call))
+        };
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
             title: None,
             internal: None,
             timeout: None,
         });
+        let call_id = inner.next_call_id.fetch_add(1, Ordering::Relaxed);
+        // What the hooks see, and how the call path routes the call at its gate.
+        let planned = plan.map(|(plan, order, object)| {
+            let served = plan.served();
+            let event = call_event(
+                served,
+                &guid,
+                &method,
+                params.clone().unwrap_or_else(|| json!({})),
+                call_location(&metadata),
+                target.as_ref(),
+                debugged.as_deref(),
+            );
+            let regate = Regate {
+                object,
+                method: method.clone(),
+                served,
+                guid: guid.clone(),
+                claim: route.as_ref().ok().and_then(claim_key),
+                claimed: false,
+                target: route.as_ref().ok().and_then(element_target),
+                tabs: inner.tabs.clone(),
+                write_order: Arc::clone(&inner.write_order),
+                storage_order: Arc::clone(&inner.storage_order),
+                in_flight: Arc::clone(&self.side.in_flight),
+            };
+            (plan, order, event, regate)
+        });
         let entry = Arc::new(CallEntry::new(CallStart {
-            call_id: inner.next_call_id.fetch_add(1, Ordering::Relaxed),
+            call_id,
             guid,
             method,
             title: meta.and_then(|meta| meta.title),
@@ -767,6 +895,20 @@ impl Dispatcher {
             location: call_location(&metadata),
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
         }));
+        // The agent's script reads its calls' logs and errors: none may name a value a hook
+        // swapped in or typed itself (`action_hooks/swapped.rs`). A hook's own call needs the
+        // real values; what it types is remembered before it can reach the page.
+        match origin {
+            CallOrigin::Agent => entry.scrub_with(Arc::clone(&inner.run.swapped)),
+            CallOrigin::Hook => {
+                if let Ok(call) = &route {
+                    inner.run.swapped.remember_typed(typed_values(call));
+                    if let Some(arg) = scripted_argument(call) {
+                        inner.run.swapped.remember_serialized(&arg.value);
+                    }
+                }
+            }
+        }
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
             let admission = self.admit(&route, target.as_ref(), message.len())?;
@@ -775,6 +917,10 @@ impl Dispatcher {
         let (route, admission) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
+                let error = PlaywrightError {
+                    message: entry.scrubbed(error.message),
+                    ..error
+                };
                 entry.finish(error.to_result());
                 inner.trace.finished(&entry);
                 let watermark = inner.tabs.events().seq();
@@ -784,10 +930,24 @@ impl Dispatcher {
         let closed = closed_token(&route, target.as_ref());
         let held = self.in_call_order(
             &route,
+            gated,
             meta.map(ServedMethod::meta).zip(debugged),
             &metadata,
             &entry,
         );
+        // Its place in the hooks' call order, now: a later call's hook must not decide first.
+        let claimed = admission.release.is_some();
+        let hooks = planned.map(|(plan, order, event, mut regate)| {
+            regate.claimed = claimed;
+            plan.admitted(
+                event,
+                call_id,
+                frame_call,
+                order,
+                held.is_some(),
+                move || regate,
+            )
+        });
         // The run's disconnection outlives the stop it gives every other call of the run.
         let disconnecting = disconnects(&route);
         // Registered before the call returns to JS, so the abort listener the SDK adds right
@@ -805,12 +965,15 @@ impl Dispatcher {
             share: admission.share,
             release: admission.release,
             abortable,
+            hooks: None,
+            charge: None,
         };
         let timeout = metadata.timeout.unwrap_or(0.0);
         let run = inner.run.clone();
         let tabs = inner.tabs.clone();
         let cursors = Arc::clone(&self.side.cursors);
         inner.run.tasks.spawn(async move {
+            let mut call_reply = call_reply;
             if let Some(resumed) = held
                 && let Err(stopped) = released(&run, resumed).await
             {
@@ -819,7 +982,29 @@ impl Dispatcher {
                 }
                 return;
             }
-            let progress = Progress::new(entry, timeout, run, closed);
+            let mut hooks = hooks;
+            // After the debugger's hold, before the call's own timeout starts: beforeAction.
+            let route = match hooks.as_mut() {
+                Some(gate) => match gate.before(&run, &entry, GatedCall::new(route)).await {
+                    Gated::Run(GatedCall { call, charge }) => {
+                        call_reply.charge = charge;
+                        call
+                    }
+                    Gated::Refused(error) => {
+                        finish_reply(Err(error.into()), call_reply).await;
+                        return;
+                    }
+                    Gated::Stopped => return,
+                },
+                None => route,
+            };
+            // The call runs from here: what its hooks do to its reply ([`never_ran`] takes
+            // afterAction back from a call that stops before its handler starts), and an element
+            // action's checkpoint, which its handler reaches through its progress.
+            let element_gate = hooks.as_ref().and_then(CallHooks::element_gate);
+            call_reply.hooks = hooks.and_then(|hooks| hooks.ran(&run)).map(Box::new);
+            let progress =
+                Progress::new(entry, timeout, run, closed).with_element_gate(element_gate);
             let progress = if disconnecting {
                 progress.closing_the_context()
             } else {
@@ -832,22 +1017,19 @@ impl Dispatcher {
 
     /// What a call settles in call order, before its task starts, however the call tasks
     /// interleave: every call after `setTestIdAttribute` sees the new attribute, and the
-    /// debugger of the call's context decides whether it waits before it starts.
+    /// debugger of the call's context decides whether it waits before it starts. A call
+    /// `gated` by its hook sets the attribute only once allowed, with the arguments it runs
+    /// with (`Regate::settle`); its debugger still decides now.
     fn in_call_order(
         &self,
         route: &ObjectCall,
+        gated: bool,
         debugged: Option<(&'static MethodMeta, String)>,
         metadata: &Metadata,
         entry: &CallEntry,
     ) -> Option<oneshot::Receiver<()>> {
-        if let ObjectCall::Context(BrowserContextCall::SetTestIdAttributeName(params))
-        | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(params)) =
-            route
-        {
-            self.inner
-                .tabs
-                .test_id()
-                .set(&params.test_id_attribute_name);
+        if !gated {
+            set_test_id(&self.inner.tabs, route);
         }
         let (meta, context) = debugged?;
         self.hold(meta, &context, metadata, entry)
@@ -1802,10 +1984,21 @@ struct CallReply {
     release: Option<ReleaseClaim>,
     /// The call's place in the abort registry; `None` for an id that is not an integer.
     abortable: Option<Registration>,
+    /// What the call's hooks do to its reply, set once it passed its gate and runs
+    /// (`action_hooks.rs`). Boxed, as its future is in [`finish_reply`]: only a hooked call pays
+    /// for either.
+    hooks: Option<Box<ReplyHooks>>,
+    /// The in-flight charge of a hook's replacement arguments (`Regate::reroute`), given back
+    /// with the call's own share.
+    charge: Option<Admitted>,
 }
 
 /// Attachment can block or be cancelled independently of a frame handler. Once attached,
 /// `serve` retains its original contract: the `PageSession` always belongs to this call's tab.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one dispatch over every route; a call stopped before its handler replies in its arm"
+)]
 async fn serve_call(
     tabs: Tabs,
     cursors: Arc<Cursors<FrameCursor>>,
@@ -1818,7 +2011,8 @@ async fn serve_call(
     // that would not race its progress first. A run that ended meanwhile outranks the abort
     // (`Progress::race`'s order): the handler starts and its first race reports the end.
     if let Err(error) = progress.pending_abort() {
-        finish_reply(Err(error), reply).await;
+        drop(route);
+        never_ran(error, reply).await;
         return;
     }
     // A page's call waits for what the run's subscriptions switched on there (console messages,
@@ -1840,7 +2034,8 @@ async fn serve_call(
         && reply.events.enabling(gate)
         && let Err(error) = progress.race(reply.events.ready(gate)).await
     {
-        finish_reply(Err(error), reply).await;
+        drop(route);
+        never_ran(error, reply).await;
         return;
     }
     let result = match (route, target) {
@@ -1887,13 +2082,18 @@ async fn serve_call(
                     if reply.events.enabling(page_id(&page))
                         && let Err(error) = progress.race(reply.events.ready(page_id(&page))).await
                     {
-                        finish_reply(Err(error), reply).await;
+                        drop(route);
+                        never_ran(error, reply).await;
                         return;
                     }
                     serve(FrameTab { page, scope }, &cursors, route, progress, reply).await;
                     return;
                 }
-                Err(error) => Err(error),
+                Err(error) => {
+                    drop(route);
+                    never_ran(error, reply).await;
+                    return;
+                }
             }
         }
         (ObjectCall::Device(call), Some((page, _))) => {
@@ -1905,31 +2105,63 @@ async fn serve_call(
                     };
                     devices::serve(&tab, &call, &progress).await.map(|()| None)
                 }
-                Err(error) => Err(error),
+                Err(error) => {
+                    drop(call);
+                    never_ran(error, reply).await;
+                    return;
+                }
             }
         }
         // A hop's objects exist only after a goto on this page's session, which stays attached
         // for the run.
-        (ObjectCall::Network(call), Some((page, _))) => match page.attached_session() {
-            Some(session) => responses::serve(&session, call, &progress).await,
-            None => Err(PlaywrightError::target_closed().into()),
-        },
+        (ObjectCall::Network(call), Some((page, _))) => {
+            let Some(session) = page.attached_session() else {
+                drop(call);
+                never_ran(PlaywrightError::target_closed().into(), reply).await;
+                return;
+            };
+            responses::serve(&session, call, &progress).await
+        }
         // A dialog exists only after its tab's watcher saw it open on this run's session.
-        (ObjectCall::Dialog(index, call), Some((page, _))) => match page.attached_session() {
-            Some(session) => dialogs::serve(&session, index, call, &progress).await,
-            None => Err(PlaywrightError::target_closed().into()),
-        },
+        (ObjectCall::Dialog(index, call), Some((page, _))) => {
+            let Some(session) = page.attached_session() else {
+                drop(call);
+                never_ran(PlaywrightError::target_closed().into(), reply).await;
+                return;
+            };
+            dialogs::serve(&session, index, call, &progress).await
+        }
         // A paused request exists only after its tab's watcher handed it to this run.
-        (ObjectCall::Intercepted(index, call), Some((page, _))) => match page.attached_session() {
-            Some(session) => routes::serve_intercepted(&session, index, call, &progress).await,
-            None => Err(PlaywrightError::target_closed().into()),
-        },
+        (ObjectCall::Intercepted(index, call), Some((page, _))) => {
+            let Some(session) = page.attached_session() else {
+                drop(call);
+                never_ran(PlaywrightError::target_closed().into(), reply).await;
+                return;
+            };
+            routes::serve_intercepted(&session, index, call, &progress).await
+        }
         (ObjectCall::Download(guid, call), _) => {
             downloads::serve(&tabs, &guid, call, &progress).await
         }
-        _ => Err(PlaywrightError::target_closed().into()),
+        // No handler serves this call on this target (its page is gone): it never ran.
+        (unserved, _) => {
+            drop(unserved);
+            never_ran(PlaywrightError::target_closed().into(), reply).await;
+            return;
+        }
     };
     finish_reply(result, reply).await;
+}
+
+/// Replies to a call that stopped before its handler started: aborted, its page or frame not
+/// ready, its session gone. It never ran, so no afterAction sees it (`ReplyHooks::never_ran`).
+/// The caller drops the call's route first, so a write or storage turn it holds goes before the
+/// reply waits on anything.
+async fn never_ran(error: CallError, mut reply: CallReply) {
+    if let Some(hooks) = reply.hooks.as_mut() {
+        hooks.never_ran();
+    }
+    finish_reply(Err(error), reply).await;
 }
 
 /// A clock command (`clock.rs`), raced against the call's progress; it answers `{}`.
@@ -1996,7 +2228,8 @@ async fn serve(
     // forms tests' fake does not implement, so they are answered here; every other route goes
     // through `serve_route`.
     if let Some(error) = unsupported_child_call(&page.scope, &route) {
-        finish_reply(Err(error.into()), reply).await;
+        drop(route);
+        never_ran(error.into(), reply).await;
         return;
     }
     let result = match route {
@@ -2285,14 +2518,36 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         share,
         release,
         abortable,
+        hooks,
+        charge,
     } = target;
     // The outcome is decided: an abort from now on is ignored, as Playwright drops a call's
     // controller before it replies.
     drop(abortable);
-    let (record, answer) = match result {
+    let answer = match result {
         Err(CallError::RunEnded(_)) => return,
-        Ok(value) => (CallResult::Ok, Ok(value)),
-        Err(CallError::Playwright(error)) => (error.to_result(), Err(error)),
+        Ok(value) => Ok(value),
+        Err(CallError::Playwright(error)) => Err(error),
+    };
+    // The hooks see the outcome first: afterAction may swap it or fail the call closed, and
+    // what no reply may carry goes. A run that ends meanwhile gets no reply and leaves the entry
+    // open, as any call the run ended.
+    let answer = match hooks {
+        Some(hooks) => match Box::pin(hooks.finish(&entry, answer)).await {
+            Some(answer) => answer,
+            None => return,
+        },
+        None => answer,
+    };
+    // The script can copy what it reads into its own value: no error text it gets names a value
+    // a hook swapped in (an agent call's entry scrubs; a hook's keeps it).
+    let answer = answer.map_err(|error| PlaywrightError {
+        message: entry.scrubbed(error.message),
+        ..error
+    });
+    let record = match &answer {
+        Ok(_) => CallResult::Ok,
+        Err(error) => error.to_result(),
     };
     let log = entry.finish(record);
     trace.finished(&entry);
@@ -2301,10 +2556,282 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     events.barrier().await;
     // Given back before the reply leaves, so a script that awaited this call can start another
     // at once. A call that never replies gives them back as its task ends.
-    drop((share, release));
+    drop((share, release, charge));
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
+}
+
+/// How the call path routes a call gated by its hook once the hook decides
+/// (`CallHooks::before`): the hook's arguments as the script's own, and the call's ordered
+/// turns. It sits inside the call's hooks, so a gated call cannot run without it.
+struct Regate {
+    object: ObjectKind,
+    method: String,
+    served: ServedMethod,
+    guid: String,
+    /// What the script's call claims among the calls in flight; a replacement must claim the
+    /// same, or it would end something the script's call was not admitted for.
+    claim: Option<ClaimKey>,
+    /// Whether the script's call was admitted on its claim, which the caps never refuse, rather
+    /// than on a share of them; set at admission.
+    claimed: bool,
+    /// The element the script's element action aims at; a replacement must aim at the same.
+    target: Option<AimedAt>,
+    tabs: Tabs,
+    write_order: Arc<WriteOrder>,
+    storage_order: Arc<WriteOrder>,
+    /// The run's in-flight caps, which a replacement's own bytes are charged against.
+    in_flight: Arc<InFlight>,
+}
+
+/// A gated call, with the in-flight charge of a hook's replacement arguments when it runs with
+/// them.
+struct GatedCall {
+    call: ObjectCall,
+    charge: Option<Admitted>,
+}
+
+impl GatedCall {
+    fn new(call: ObjectCall) -> Self {
+        Self { call, charge: None }
+    }
+}
+
+/// Neo: a hook's replacement arguments are re-checked like the script's own params (hooks
+/// design, Error handling): routed on the same object and method, the same command, the same
+/// claim, and admitted against the in-flight caps as the script's call was (a call that ends
+/// calls in flight never is). Anything else fails the call closed; the reason, which may quote
+/// the arguments, is for the host-only trace.
+impl CallRoute for Regate {
+    type Call = GatedCall;
+
+    fn reroute(&self, args: Value) -> Result<GatedCall, String> {
+        let bytes = args.to_string().len();
+        let Routed { meta, route } = route(self.object.clone(), &self.method, Some(args));
+        let call = route.map_err(|error| format!("they do not decode: {}", error.message))?;
+        if !meta.is_some_and(|rerouted| same_command(rerouted, self.served)) {
+            return Err(format!(
+                "they route to another command than {}.{}",
+                self.served.interface, self.served.method
+            ));
+        }
+        if claim_key(&call) != self.claim {
+            return Err("they change what the call ends among the calls in flight".to_string());
+        }
+        // A call admitted on its claim is never refused by the caps, or a full run could not let
+        // go ([`ReleaseClaim`]); its claim bounds it to one per thing, so its replacement is not
+        // charged either. Every other replacement is charged, as the script's call took a share.
+        let charge = if self.claimed {
+            None
+        } else {
+            Some(
+                self.in_flight
+                    .charge(bytes)
+                    .map_err(|error| format!("they do not fit: {}", error.message))?,
+            )
+        };
+        Ok(GatedCall { call, charge })
+    }
+
+    fn settle(&self, gated: GatedCall) -> GatedCall {
+        let call = take_turn(
+            &self.write_order,
+            &self.storage_order,
+            &self.guid,
+            gated.call,
+        );
+        set_test_id(&self.tabs, &call);
+        GatedCall { call, ..gated }
+    }
+}
+
+/// Neo: an element action's replacement arguments are re-checked like the script's own params
+/// (hooks design, Error handling), as every hooked call's are ([`CallRoute::reroute`]), and must
+/// aim at the element the hook was asked about: the same selector and strictness, and for a drag
+/// the same target. They become the options the action's handler acts with on that element.
+impl ElementRoute for Regate {
+    fn reroute_element(&self, args: Value) -> Result<Rerouted, String> {
+        let GatedCall { call, charge } = CallRoute::reroute(self, args)?;
+        if self.target.is_none() || element_target(&call) != self.target {
+            return Err("they change the element the call acts on".to_string());
+        }
+        let options =
+            element_options(call).ok_or_else(|| "they route to no element action".to_string())?;
+        Ok(Rerouted {
+            options,
+            charge: charge.map(|charge| Box::new(charge) as Box<dyn Any + Send + Sync>),
+        })
+    }
+}
+
+/// What an element action aims at, as its route reads it: a hook's replacement arguments may
+/// change how the action acts, never where.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AimedAt {
+    selector: String,
+    strict: bool,
+    /// A drag's target selector.
+    drop_target: Option<String>,
+}
+
+/// The element `call` aims at, for each element action (`Action::element_action`); `None` for
+/// any other call.
+fn element_target(call: &ObjectCall) -> Option<AimedAt> {
+    let ObjectCall::Frame(route) = call else {
+        return None;
+    };
+    let aimed = |selector: &str, strict: bool| AimedAt {
+        selector: selector.to_string(),
+        strict,
+        drop_target: None,
+    };
+    Some(match route {
+        Route::FramePointer(options) => aimed(&options.selector, options.strict),
+        Route::FrameFill(options) => aimed(&options.selector, options.strict),
+        Route::FramePress(options) | Route::FrameType(options) => {
+            aimed(&options.selector, options.strict)
+        }
+        Route::FrameDragAndDrop(options) => AimedAt {
+            drop_target: Some(options.target.selector.clone()),
+            ..aimed(&options.source.selector, options.source.strict)
+        },
+        Route::FrameSetChecked(options) => aimed(&options.click.selector, options.click.strict),
+        Route::FrameSelectOption(options) => aimed(&options.selector, options.strict),
+        Route::FrameSetInputFiles(params) => {
+            aimed(&params.selector, params.strict.unwrap_or(false))
+        }
+        Route::FrameDrop(params) => aimed(&params.selector, params.strict.unwrap_or(false)),
+        Route::FrameFocus(target)
+        | Route::FrameBlur(target)
+        | Route::FrameScrollIntoViewIfNeeded(target)
+        | Route::FrameSelectText(target, _) => aimed(&target.selector, target.strict),
+        _ => return None,
+    })
+}
+
+/// The options an element action's handler acts with, from its route: the type each handler
+/// reads back (`ElementAction::Options`, `element_ops.rs` `attached`).
+fn element_options(call: ObjectCall) -> Option<ElementOptions> {
+    let ObjectCall::Frame(route) = call else {
+        return None;
+    };
+    Some(match route {
+        Route::FramePointer(options) => Arc::new(options),
+        Route::FrameFill(options) => Arc::new(options),
+        Route::FramePress(options) | Route::FrameType(options) => Arc::new(options),
+        Route::FrameDragAndDrop(options) => Arc::new(options),
+        Route::FrameSetChecked(options) => Arc::new(options),
+        Route::FrameSelectOption(options) => Arc::new(options),
+        Route::FrameSetInputFiles(params) => Arc::new(params),
+        Route::FrameDrop(params) => Arc::new(params),
+        Route::FrameFocus(target)
+        | Route::FrameBlur(target)
+        | Route::FrameScrollIntoViewIfNeeded(target) => Arc::new(target),
+        Route::FrameSelectText(target, force) => Arc::new((target, force)),
+        _ => return None,
+    })
+}
+
+/// What a call hands page script: the serialized `arg` of an evaluation (`evaluate*`, `$eval`,
+/// `$$eval`, a handle's `evaluate`, `waitForFunction`) or a `dispatchEvent`'s event init. A hook's
+/// own such call is remembered for the scrub (`action_hooks/swapped.rs`): it may set a box's
+/// value by script.
+fn scripted_argument(call: &ObjectCall) -> Option<&evaluate::SerializedArgument> {
+    let ObjectCall::Frame(route) = call else {
+        return None;
+    };
+    match route {
+        Route::FrameEval(
+            EvalCall::Frame(evaluation)
+            | EvalCall::Handle { evaluation, .. }
+            | EvalCall::EvalOnSelector { evaluation, .. }
+            | EvalCall::EvalOnSelectorAll { evaluation, .. }
+            | EvalCall::WaitForFunction { evaluation, .. }
+            | EvalCall::WaitForFunctionOnElement { evaluation, .. },
+        ) => Some(&evaluation.arg),
+        Route::FrameEval(EvalCall::DispatchEvent { event_init, .. })
+        | Route::FrameDispatchEvent(DispatchOptions { event_init, .. }) => Some(event_init),
+        _ => None,
+    }
+}
+
+/// What a call types into the page: a fill's value, a type's text, `keyboard.type` and
+/// `insertText`'s text, a select option's values. Never a selector or a key name. A hook's own
+/// such call is remembered for the scrub (`action_hooks/swapped.rs`), as a swap is.
+fn typed_values(call: &ObjectCall) -> Vec<&str> {
+    match call {
+        ObjectCall::Frame(Route::FrameFill(options)) => vec![options.value.as_str()],
+        ObjectCall::Frame(Route::FrameType(options)) => match &options.keys {
+            KeyInput::Type(text) => vec![text.as_str()],
+            KeyInput::Press(_) => Vec::new(),
+        },
+        ObjectCall::Frame(Route::FrameSelectOption(options)) => options
+            .options
+            .iter()
+            .flat_map(|option| {
+                [
+                    option.value_or_label.as_deref(),
+                    option.value.as_deref(),
+                    option.label.as_deref(),
+                ]
+            })
+            .flatten()
+            .collect(),
+        ObjectCall::Device(
+            DeviceCall::KeyboardType { text, .. } | DeviceCall::KeyboardInsertText { text },
+        ) => vec![text.as_str()],
+        _ => Vec::new(),
+    }
+}
+
+/// Whether `a` and `b` are one command: the same interface, method and action.
+fn same_command(a: ServedMethod, b: ServedMethod) -> bool {
+    a.interface == b.interface && a.method == b.method && a.action() == b.action()
+}
+
+/// `setTestIdAttribute`'s new attribute, for every call after it.
+fn set_test_id(tabs: &Tabs, route: &ObjectCall) {
+    if let ObjectCall::Context(BrowserContextCall::SetTestIdAttributeName(params))
+    | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(params)) = route
+    {
+        tabs.test_id().set(&params.test_id_attribute_name);
+    }
+}
+
+/// What a call's action hooks see of it as it arrives: its labels, method, object and `args`,
+/// where the script made it, and the guids of its page, frame and context, from which the hook
+/// realm builds real Playwright objects (`action_hooks.rs`).
+fn call_event(
+    served: ServedMethod,
+    guid: &str,
+    method: &str,
+    args: Value,
+    location: Option<CallLocation>,
+    target: Option<&(Arc<PageEntry>, FrameScope)>,
+    debugged: Option<&str>,
+) -> ActionEvent {
+    let action = served.action();
+    let (page, frame) = target.map_or((None, None), |(page, scope)| {
+        let frame = match scope {
+            FrameScope::Main => quickjs_bridge::frame_guid(&page.id),
+            FrameScope::Frame(frame) => quickjs_bridge::frame_guid_of(&page.id, frame),
+        };
+        (Some(quickjs_bridge::page_guid(&page.id)), Some(frame))
+    });
+    ActionEvent {
+        kind: Some(action.kind().as_str()),
+        group: Some(action.group().as_str()),
+        method: method.to_string(),
+        guid: guid.to_string(),
+        args,
+        location,
+        page,
+        frame,
+        context: format!("context@{}", debugged.unwrap_or(DEFAULT_CONTEXT)),
+        locator: None,
+        element: None,
+    }
 }
 
 /// The typed handler dispatch, also used by the skeleton's tests with click's existing fake.
@@ -2491,6 +3018,8 @@ struct Load {
 /// it, or the runtime dropped it).
 struct Admitted {
     in_flight: Arc<InFlight>,
+    /// 1 for a call's share, 0 for a charge of bytes alone ([`InFlight::charge`]).
+    calls: usize,
     bytes: usize,
 }
 
@@ -2498,12 +3027,22 @@ impl InFlight {
     /// Takes a share for a call whose message is `bytes` long, or refuses it with the cap it
     /// would pass. Neo-only, so the message names Neo: Playwright's server has no such cap.
     fn admit(self: &Arc<Self>, bytes: usize) -> Result<Admitted, PlaywrightError> {
+        self.take(1, bytes)
+    }
+
+    /// Charges `bytes` more against the byte cap alone, for a call already admitted: a hook's
+    /// replacement arguments (`Regate::reroute`).
+    fn charge(self: &Arc<Self>, bytes: usize) -> Result<Admitted, PlaywrightError> {
+        self.take(0, bytes)
+    }
+
+    fn take(self: &Arc<Self>, calls: usize, bytes: usize) -> Result<Admitted, PlaywrightError> {
         let Ok(mut load) = self.0.lock() else {
             return Err(PlaywrightError::error(
                 "neo-runtime: the run's in-flight calls cannot be counted",
             ));
         };
-        if load.calls >= MAX_CALLS_IN_FLIGHT {
+        if calls > 0 && load.calls >= MAX_CALLS_IN_FLIGHT {
             return Err(PlaywrightError::error(format!(
                 "neo-runtime: a run may have at most {MAX_CALLS_IN_FLIGHT} browser calls in \
                  flight; await one before starting another"
@@ -2517,10 +3056,11 @@ impl InFlight {
                 load.bytes
             )));
         }
-        load.calls += 1;
+        load.calls += calls;
         load.bytes += bytes;
         Ok(Admitted {
             in_flight: Arc::clone(self),
+            calls,
             bytes,
         })
     }
@@ -2529,7 +3069,7 @@ impl InFlight {
 impl Drop for Admitted {
     fn drop(&mut self) {
         if let Ok(mut load) = self.in_flight.0.lock() {
-            load.calls -= 1;
+            load.calls -= self.calls;
             load.bytes -= self.bytes;
         }
     }
@@ -2657,6 +3197,8 @@ mod tests {
                 share: None,
                 release: None,
                 abortable: None,
+                hooks: None,
+                charge: None,
             },
         );
         run.end(RunEnd::Settled);
@@ -4084,6 +4626,8 @@ mod tests {
                 share: Some(in_flight.admit(10).expect("under the caps")),
                 release: None,
                 abortable: None,
+                hooks: None,
+                charge: None,
             },
         ));
         let _reply = receiver.await.expect("the call replied");
@@ -4426,6 +4970,8 @@ mod review_abort_priority {
                 share: None,
                 release: None,
                 abortable: None,
+                hooks: None,
+                charge: None,
             },
         );
         // Neither stop can race scheduling: the handler future has never been polled.

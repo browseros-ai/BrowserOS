@@ -36,15 +36,17 @@ use tokio_util::task::TaskTracker;
 use tracing::info;
 
 use crate::abort::CallAbort;
+use crate::action_hooks::swapped::UNTRACKED;
+use crate::action_hooks::{ElementGate, SwappedValues};
 use crate::artifacts::Artifacts;
 use crate::browser_representations::bindings::Bindings;
 use crate::browser_representations::clock::Clock;
 use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
-use crate::hooks::HookSandbox;
 use crate::playwright_methods::evaluate::Handles;
 use crate::run::{
-    CallAction, CallLocation, CallOrigin, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd,
+    AfterHookResult, BeforeHookResult, CallAction, CallHookRecord, CallLocation, CallOrigin,
+    CallRecord, CallResult, Delivery, DroppedCalls, RunEnd,
 };
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
@@ -167,9 +169,9 @@ pub(crate) struct RunScope {
     pub(crate) bindings: Arc<Bindings>,
     /// The run's fake clock (`clock.rs`); uninstalled in every frame at run end.
     pub(crate) clock: Arc<Clock>,
-    /// The run's hook sandbox (`hooks.rs`), set once it starts; never set for a run without
-    /// hooks. The call path fires the action hooks through it (hooks feature 3).
-    pub(crate) hooks: Arc<OnceLock<HookSandbox>>,
+    /// What the run's hooks swapped into calls' arguments, scrubbed from every agent call's log
+    /// and error text (`action_hooks/swapped.rs`).
+    pub(crate) swapped: Arc<SwappedValues>,
 }
 
 impl RunScope {
@@ -188,7 +190,7 @@ impl RunScope {
             artifacts: Arc::default(),
             bindings: Arc::default(),
             clock: Arc::default(),
-            hooks: Arc::default(),
+            swapped: Arc::default(),
         }
     }
 
@@ -240,6 +242,9 @@ pub(crate) struct Progress {
     /// The run's [`RunScope::context_closed`], or, for the context's own close, a token never
     /// cancelled: that call finishes its acknowledgement after stopping the others.
     context_closed: CancellationToken,
+    /// The element checkpoint of an element action whose run's hooks want its beforeAction
+    /// (hooks feature 4); `None` for every other call, which pays one check for it.
+    element_gate: Option<Arc<ElementGate>>,
 }
 
 impl Progress {
@@ -271,7 +276,15 @@ impl Progress {
             run,
             page_closed,
             context_closed,
+            element_gate: None,
         }
+    }
+
+    /// The call's element checkpoint (`action_hooks/element.rs`), when its hooks want one.
+    #[must_use]
+    pub(crate) fn with_element_gate(mut self, gate: Option<Arc<ElementGate>>) -> Self {
+        self.element_gate = gate;
+        self
     }
 
     /// The context's own close: it outlives the stop it gives every other call of the run.
@@ -427,6 +440,24 @@ impl Progress {
     /// The call's delivery cell; `None` for a method the spec does not flag `input`.
     pub(crate) fn delivery(&self) -> Option<&Arc<DeliveryCell>> {
         self.entry.delivery.as_ref()
+    }
+
+    /// The call's element checkpoint, which only an element action whose run's hooks want its
+    /// beforeAction has (hooks feature 4).
+    pub(crate) fn element_gate(&self) -> Option<&Arc<ElementGate>> {
+        self.element_gate.as_ref()
+    }
+
+    /// Records what the call's beforeAction decided at its element checkpoint; the latest
+    /// decision is the record's.
+    pub(crate) fn record_hook_before(&self, result: BeforeHookResult) {
+        self.entry.hook_before(result);
+    }
+
+    /// Hides the call's log from its reply and its record from now on, for a call that runs
+    /// with a hook's arguments (`CallEntry::hide_log`).
+    pub(crate) fn hide_log(&self) {
+        self.entry.hide_log();
     }
 
     /// The run's artifact directory, where a `path` option writes.
@@ -622,6 +653,14 @@ pub(crate) struct CallEntry {
     abort: CallAbort,
     /// Set once by whoever ends the call; absent while it runs.
     end: OnceLock<CallEnd>,
+    /// What `beforeAction` decided, once it has (`action_hooks.rs`). An element action asks
+    /// again for each new element it finds, so its latest decision is the one kept.
+    hook_before: Mutex<Option<BeforeHookResult>>,
+    /// What `afterAction` decided, once it has.
+    hook_after: OnceLock<AfterHookResult>,
+    /// The run's swapped values, set for an agent call (`CallEntry::scrub_with`): its log and
+    /// error text never name one.
+    swapped: OnceLock<Arc<SwappedValues>>,
     /// Test-only: how long `abort` holds between waking the call and logging, in ms.
     #[cfg(test)]
     abort_pause_ms: AtomicU64,
@@ -635,6 +674,9 @@ struct CallLog {
     lines: Vec<String>,
     /// Lines past [`MAX_CALL_LOG_LINES`], counted.
     dropped: usize,
+    /// Set when the call runs with a hook's arguments ([`CallEntry::hide_log`]): it keeps no
+    /// line from then on, and reads as empty.
+    hidden: bool,
 }
 
 struct CallEnd {
@@ -694,6 +736,9 @@ impl CallEntry {
             delivery: input.then(Arc::default),
             abort: CallAbort::default(),
             end: OnceLock::new(),
+            hook_before: Mutex::new(None),
+            hook_after: OnceLock::new(),
+            swapped: OnceLock::new(),
             #[cfg(test)]
             abort_pause_ms: AtomicU64::new(0),
         }
@@ -704,13 +749,13 @@ impl CallEntry {
         &self.params
     }
 
-    /// Who sent the call (`Dispatcher::for_hooks`): the call path skips the hooks for a hook's
-    /// own calls (hooks feature 3).
+    /// Who sent the call (`Dispatcher::for_hooks`); its record says so. The call path needs no
+    /// origin check: only the agent's dispatcher has action hooks (`method_router.rs` `Side`).
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "hooks feature 3's seam: the call path skips hooks for a hook's calls"
+            reason = "the tests read it; the record reads the field itself"
         )
     )]
     pub(crate) fn origin(&self) -> CallOrigin {
@@ -749,16 +794,83 @@ impl CallEntry {
         self.abort.error()
     }
 
+    /// Resolves with the call's `AbortError` once the script aborts it, for a wait the call
+    /// makes before its `Progress` exists (its hook gate, `action_hooks.rs`).
+    pub(crate) async fn aborted(&self) -> PlaywrightError {
+        self.abort.aborted().await
+    }
+
+    /// Records what `beforeAction` decided; the latest decision counts (an element action asks
+    /// again about each new element it finds).
+    pub(crate) fn hook_before(&self, result: BeforeHookResult) {
+        if let Ok(mut before) = self.hook_before.lock() {
+            *before = Some(result);
+        }
+    }
+
+    /// Records what `afterAction` decided; only the first decision counts.
+    pub(crate) fn hook_after(&self, result: AfterHookResult) {
+        let _first = self.hook_after.set(result);
+    }
+
+    /// The call runs with a hook's arguments: its log would name them (a typed value, a URL),
+    /// so it keeps no log from now on, neither in its reply nor in its record (hooks design
+    /// D11). Call before the call runs, so no line is ever written.
+    pub(crate) fn hide_log(&self) {
+        if let Ok(mut log) = self.log.lock() {
+            *log = CallLog {
+                hidden: true,
+                ..CallLog::default()
+            };
+        }
+    }
+
     /// Ends the call with `result` and returns its folded log, which the reply carries. Only
     /// the first end counts.
     pub(crate) fn finish(&self, result: CallResult) -> Vec<String> {
-        let log = self.folded_log();
+        let log = self.scrub_log(self.folded_log());
         let _first = self.end.set(CallEnd {
-            result,
+            result: self.scrub_result(result),
             duration: self.started.elapsed(),
             log: log.clone(),
         });
         log
+    }
+
+    /// Scrubs this call's log and error text of what the run's hooks swap in, from now on: an
+    /// agent call's, which the script reads (`action_hooks/swapped.rs`). A hook's call keeps
+    /// the real values its own realm needs.
+    pub(crate) fn scrub_with(&self, swapped: Arc<SwappedValues>) {
+        let _first = self.swapped.set(swapped);
+    }
+
+    /// The error text `text` without a value the run's hooks swapped in, for a call that
+    /// scrubs; past the scrub's caps, its fixed text (`swapped::UNTRACKED`): fail closed.
+    pub(crate) fn scrubbed(&self, text: String) -> String {
+        match self.swapped.get() {
+            Some(swapped) if swapped.overflowed() => UNTRACKED.to_string(),
+            Some(swapped) => swapped.scrubbed(text),
+            None => text,
+        }
+    }
+
+    /// `log` without a value the run's hooks swapped in; past the scrub's caps, no log at all.
+    fn scrub_log(&self, log: Vec<String>) -> Vec<String> {
+        match self.swapped.get() {
+            Some(swapped) if swapped.overflowed() => Vec::new(),
+            Some(swapped) => log.into_iter().map(|line| swapped.scrubbed(line)).collect(),
+            None => log,
+        }
+    }
+
+    fn scrub_result(&self, result: CallResult) -> CallResult {
+        match result {
+            CallResult::Error { name, message } => CallResult::Error {
+                name,
+                message: self.scrubbed(message),
+            },
+            result => result,
+        }
     }
 
     /// The call log after Playwright's `compressCallLog`, ending with a note when lines were
@@ -767,6 +879,9 @@ impl CallEntry {
         let Ok(log) = self.log.lock() else {
             return Vec::new();
         };
+        if log.hidden {
+            return Vec::new();
+        }
         let note = (log.dropped > 0).then(|| log.dropped_note());
         let mut raw: Vec<&str> = log.header.iter().map(String::as_str).collect();
         raw.extend(log.lines.iter().map(String::as_str));
@@ -777,7 +892,9 @@ impl CallEntry {
     /// Changes the raw log. A poisoned lock (a panic while logging) drops the change: logging
     /// never fails a call, as `console.log` never fails the script.
     fn update_log(&self, change: impl FnOnce(&mut CallLog)) {
-        if let Ok(mut log) = self.log.lock() {
+        if let Ok(mut log) = self.log.lock()
+            && !log.hidden
+        {
             change(&mut log);
         }
     }
@@ -791,6 +908,9 @@ impl CallEntry {
                 self.folded_log(),
             ),
         };
+        // Again as the run reads it: a call still running, or a value swapped in after it ended,
+        // is scrubbed too.
+        let (result, log) = (self.scrub_result(result), self.scrub_log(log));
         // A hook's call log may echo what it typed (`fill("…")`), and its error message what it
         // navigated to (`… at <url>`); its reply carried both to the hook's own realm, and the
         // record keeps neither: no log, and the error's name with a fixed message.
@@ -823,9 +943,17 @@ impl CallEntry {
             started_at_ms,
             duration,
             result,
+            hook: self.hook_record(),
             delivery: self.delivery.as_ref().map(|cell| cell.delivery()),
             log,
         }
+    }
+
+    /// The hooks' decisions for the record; `None` when no hook decided anything.
+    fn hook_record(&self) -> Option<CallHookRecord> {
+        let before = self.hook_before.lock().ok().and_then(|before| *before);
+        let after = self.hook_after.get().copied();
+        (before.is_some() || after.is_some()).then_some(CallHookRecord { before, after })
     }
 
     /// What a kept record's log costs against [`MAX_TRACE_BYTES`], on top of its params.
@@ -842,6 +970,9 @@ impl CallEntry {
 
 impl CallLog {
     fn push(&mut self, line: String) {
+        if self.hidden {
+            return;
+        }
         if self.lines.len() < MAX_CALL_LOG_LINES {
             self.lines.push(line);
         } else {
