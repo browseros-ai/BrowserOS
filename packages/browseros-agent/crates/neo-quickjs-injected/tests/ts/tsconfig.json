@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "skipLibCheck": false,
+    "exactOptionalPropertyTypes": true,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["../../hooks.d.ts", "../../hooks-kinds.d.ts", "./*.ts"]
+}

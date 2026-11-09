@@ -6,7 +6,7 @@
   "description": "Neo's Playwright-shaped SDK. Runs inside neo-runtime's QuickJS realm, which embeds dist/sdk.js.",
   "scripts": {
     "build": "bun build.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests/ts",
     "test": "bun test tests/unit",
     "test:parity": "node --test --test-concurrency=1 'tests/parity/*.test.mjs'"
   },
