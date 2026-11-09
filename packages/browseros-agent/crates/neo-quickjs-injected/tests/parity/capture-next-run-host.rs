@@ -38,6 +38,7 @@ async fn cancel_and_reuse_runtime() {
                     timeout: Duration::from_secs(30),
                     cancel,
                     artifacts: None,
+                    session: None,
                 })
                 .await
         }
@@ -58,7 +59,7 @@ async fn cancel_and_reuse_runtime() {
         let outcome = task.await.expect("run task");
         assert_eq!(outcome.status, RunStatus::Cancelled, "{outcome:#?}");
     }
-    let later=runtime.run(RunRequest{code:"const b=await page.screenshot({clip:{x:0,y:0,width:10,height:10}});return {alpha:b[25]===6||b[25]===4}".into(),page:PageId::new(target),timeout:Duration::from_secs(10),cancel:CancellationToken::new(),artifacts:None}).await;
+    let later=runtime.run(RunRequest{code:"const b=await page.screenshot({clip:{x:0,y:0,width:10,height:10}});return {alpha:b[25]===6||b[25]===4}".into(),page:PageId::new(target),timeout:Duration::from_secs(10),cancel:CancellationToken::new(),artifacts:None,session:None}).await;
     assert_eq!(later.status, RunStatus::Ok, "{later:#?}");
     time::timeout(Duration::from_secs(10), runtime.drain())
         .await

@@ -47,6 +47,7 @@ async fn cancel_during_setup() {
                     timeout: Duration::from_secs(30),
                     cancel,
                     artifacts: None,
+                    session: None,
                 })
                 .await
         }

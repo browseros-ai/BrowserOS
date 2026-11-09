@@ -49,6 +49,7 @@ async fn held_cleanup_keeps_other_calls_live() {
                     timeout: Duration::from_secs(30),
                     cancel,
                     artifacts: None,
+                    session: None,
                 })
                 .await
         }
@@ -69,6 +70,7 @@ async fn held_cleanup_keeps_other_calls_live() {
             timeout: Duration::from_secs(20),
             cancel: CancellationToken::new(),
             artifacts: None,
+            session: None,
         })
         .await;
     assert_eq!(second.status, RunStatus::Ok, "{second:?}");

@@ -33,6 +33,7 @@ async fn main() {
             timeout: Duration::from_secs(30),
             cancel,
             artifacts: None,
+            session: None,
         })
         .await;
     println!("{}", serde_json::json!({ "stage": "outcome", "outcome": outcome }));

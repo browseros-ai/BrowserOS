@@ -34,6 +34,7 @@ async fn main() {
             timeout: Duration::from_secs(30),
             cancel,
             artifacts: None,
+            session: None,
         })
         .await;
     println!("{:?}", outcome.status);
