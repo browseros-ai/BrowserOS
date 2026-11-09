@@ -1109,9 +1109,11 @@ fn closed_token(
     }
 }
 
-/// Neo: why the hook realm's dispatcher refuses a call [`refused_for_hooks`] names: the run's
-/// state it would change belongs to the agent's script, and the events it relies on never reach
-/// the hook realm.
+/// Deviation: `client/page.ts` `Page.route`: `await this._updateInterceptionPatterns();` Playwright
+/// sets a page's route patterns for whoever calls it, as it exposes bindings, adds locator handlers
+/// and sets the test id attribute; Neo refuses those calls to a run's hooks with this message
+/// ([`refused_for_hooks`]): the run's state they would replace belongs to the agent's script, and
+/// the events they rely on never reach the hook realm.
 const HOOKS_REFUSE: &str = "a hook cannot replace the run's routes, bindings, locator handlers \
      or test id attribute, which the agent's script owns, and no event reaches a hook";
 
