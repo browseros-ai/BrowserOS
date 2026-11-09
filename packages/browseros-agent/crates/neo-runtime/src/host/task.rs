@@ -31,6 +31,8 @@ use crate::run::PageId;
 
 /// Neo policy (§6.9): complete, unwatched entries leave RAM an hour after settlement.
 const RETAIN_SETTLED: Duration = Duration::from_hours(1);
+/// Neo: recheck settled sessions retained by watchers once a minute after retention expires, so the host writer does not spin.
+const SETTLED_SWEEP_INTERVAL: Duration = Duration::from_mins(1);
 /// Neo policy (§6.5): refusal finalizes the row's absence before completion can be flushed.
 pub(super) const JOB_INGRESS: usize = 1024;
 
@@ -721,7 +723,7 @@ impl Task {
             .filter_map(|fence| match fence {
                 Fence::Retry(at) => Some(*at),
                 Fence::Complete(at) => {
-                    Some((*at + RETAIN_SETTLED).max(Instant::now() + Duration::from_mins(1)))
+                    Some((*at + RETAIN_SETTLED).max(Instant::now() + SETTLED_SWEEP_INTERVAL))
                 }
                 Fence::Flushing => None,
             })

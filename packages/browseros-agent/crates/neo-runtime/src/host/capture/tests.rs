@@ -23,6 +23,25 @@ use crate::host::presence::Presences;
 use crate::host::view::{FollowView, ShownTab};
 use crate::run::PageId;
 
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_100_MS: Duration = Duration::from_millis(100);
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_1500_MS: Duration = Duration::from_millis(1500);
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_200_MS: Duration = Duration::from_millis(200);
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_250_MS: Duration = Duration::from_millis(250);
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_1_MIN: Duration = Duration::from_mins(1);
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_1_S: Duration = Duration::from_secs(1);
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_10_S: Duration = Duration::from_secs(10);
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_2_S: Duration = Duration::from_secs(2);
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_3_S: Duration = Duration::from_secs(3);
+
 struct Harness {
     hub: Arc<CaptureHub>,
     browser: FakeHostCdp,
@@ -118,7 +137,7 @@ fn mp4_box(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
 /// The stream's next item, or `None` once it has ended. A stream that neither yields nor ends
 /// within 10 s of tokio time fails the test, so `None` always means "ended", never "stalled".
 async fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
-    time::timeout(Duration::from_secs(10), stream.next())
+    time::timeout(WAIT_10_S, stream.next())
         .await
         .expect("the stream neither yielded nor ended within 10 s")
 }
@@ -288,7 +307,7 @@ async fn acks_are_paced_to_the_quality_frame_rate() {
     let acks = h.browser.wait_for("Page.screencastFrameAck", 2).await;
     // `low` is 4 fps: the second ack waits a quarter second after the first.
     assert!(
-        acks[1].at - acks[0].at >= Duration::from_millis(250),
+        acks[1].at - acks[0].at >= WAIT_250_MS,
         "acks {:?} apart",
         acks[1].at - acks[0].at
     );
@@ -315,7 +334,7 @@ async fn the_capture_stops_a_grace_period_after_its_last_viewer_leaves() {
     );
 
     drop(again);
-    time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    time::sleep(STOP_GRACE + WAIT_2_S).await;
     let stops = h.browser.wait_for("Page.stopScreencast", 1).await;
     assert_eq!(
         stops[0].session.as_deref(),
@@ -349,7 +368,7 @@ async fn screencast_follows_a_view_change_at_once() {
     assert_eq!(h.target_of(&second), "target-2", "the new current tab");
     // claw-server re-read the session every second; the view's change is the wake-up.
     assert!(
-        switched < Duration::from_millis(100),
+        switched < WAIT_100_MS,
         "switched {switched:?} after the view changed"
     );
     h.browser.frame(&second, b"tab two", Some(1.0));
@@ -365,7 +384,7 @@ async fn screencast_follows_a_view_change_at_once() {
         "frames of the new current tab"
     );
 
-    time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    time::sleep(STOP_GRACE + WAIT_2_S).await;
     let stops = h.browser.wait_for("Page.stopScreencast", 1).await;
     assert_eq!(
         stops[0].session.as_deref(),
@@ -532,14 +551,14 @@ async fn a_viewer_that_stops_reading_does_not_keep_an_ended_session_capturing() 
     // Neither viewer reads anything while the browser keeps producing.
     for n in 0..6 {
         h.browser.frame(&capture, &[n], Some(f64::from(n) + 1.0));
-        time::sleep(Duration::from_millis(200)).await;
+        time::sleep(WAIT_200_MS).await;
     }
     h.browser
         .push_recording(&recording, &[init, fragments.concat()].concat());
-    time::sleep(Duration::from_secs(1)).await;
+    time::sleep(WAIT_1_S).await;
 
     h.show(ended());
-    time::sleep(Duration::from_secs(3)).await;
+    time::sleep(WAIT_3_S).await;
 
     assert_eq!(
         h.browser.sent("Page.stopScreencast").len(),
@@ -565,7 +584,7 @@ async fn an_unpinned_screencast_waits_for_the_sessions_next_tab() {
     h.show(live(&[]));
     h.browser.detach(&first);
     assert!(
-        still_open(&mut frames, Duration::from_secs(3)).await,
+        still_open(&mut frames, WAIT_3_S).await,
         "a live session between tabs keeps its stream open"
     );
 
@@ -587,12 +606,12 @@ async fn an_earlier_grace_timer_does_not_cut_a_later_grace_period_short() {
     h.browser.wait_for("Page.startScreencast", 1).await;
 
     drop(first); // t=0: the first grace period starts
-    time::sleep(Duration::from_secs(2)).await;
+    time::sleep(WAIT_2_S).await;
     let second = h.screencast(Quality::High, None).await;
-    time::sleep(Duration::from_secs(2)).await;
+    time::sleep(WAIT_2_S).await;
     drop(second); // t=4: a new grace period, ending at t=9
 
-    time::sleep(Duration::from_millis(1500)).await; // t=5.5
+    time::sleep(WAIT_1500_MS).await; // t=5.5
     assert!(
         h.browser.sent("Page.stopScreencast").is_empty(),
         "the first grace timer did not stop the capture"
@@ -618,7 +637,7 @@ async fn a_slow_tab_switch_does_not_keep_a_departed_viewer_capturing() {
     let first = h.browser.session_of("Page.startScreencast", 0).await;
 
     // The session moves to tab 2 while the browser is slow to attach.
-    h.browser.delay_attaches(Duration::from_mins(1));
+    h.browser.delay_attaches(WAIT_1_MIN);
     h.show(live(&[2, 1]));
     // Tab 1's presence and capture, then tab 2's presence.
     h.browser.wait_for("Target.attachToTarget", 3).await;
@@ -626,7 +645,7 @@ async fn a_slow_tab_switch_does_not_keep_a_departed_viewer_capturing() {
 
     // The viewer left mid-switch, so tab 1's capture stops after its grace period, not after
     // the browser finally answers.
-    time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    time::sleep(STOP_GRACE + WAIT_2_S).await;
     let stops = h.browser.sent("Page.stopScreencast");
     assert_eq!(
         stops.first().and_then(|stop| stop.session.clone()),
@@ -646,7 +665,7 @@ async fn withholding_ends_streams_and_a_waiting_frame_never_leaves() {
     let capture = h.browser.session_of("Page.startScreencast", 0).await;
     h.browser.frame(&capture, b"before the secret", Some(1.0));
     // Unread, the frame now waits in the viewer's slot.
-    time::sleep(Duration::from_millis(100)).await;
+    time::sleep(WAIT_100_MS).await;
 
     h.view.send_modify(|view| view.withheld = true);
 
@@ -711,12 +730,12 @@ async fn a_stalled_viewer_is_dropped_after_thirty_seconds() {
     let capture = h.browser.session_of("Page.startScreencast", 0).await;
 
     h.browser.frame(&capture, b"never read", Some(1.0));
-    time::sleep(VIEWER_STALL.saturating_sub(Duration::from_secs(1))).await;
+    time::sleep(VIEWER_STALL.saturating_sub(WAIT_1_S)).await;
     assert!(
         h.browser.sent("Page.stopScreencast").is_empty(),
         "a viewer inside the stall window keeps its capture"
     );
-    time::sleep(Duration::from_secs(1) + STOP_GRACE + Duration::from_secs(1)).await;
+    time::sleep(WAIT_1_S + STOP_GRACE + WAIT_1_S).await;
 
     assert_eq!(
         h.browser.sent("Page.stopScreencast").len(),
@@ -914,7 +933,7 @@ async fn a_video_stays_on_its_tab_and_ends_when_the_tab_leaves_the_view() {
 
     h.show(live(&[2, 1]));
     assert!(
-        still_open(&mut video, Duration::from_secs(2)).await,
+        still_open(&mut video, WAIT_2_S).await,
         "a video does not follow the current tab"
     );
     assert_eq!(

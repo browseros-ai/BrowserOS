@@ -130,15 +130,20 @@ fn page_target(info: target::TargetInfo) -> Option<PageTarget> {
 /// attached on. `apps/claw-server/src/services/capture/link.rs:19-20` (origin/main).
 pub(crate) const WATCHDOG_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Neo: claw-server's `CdpPortTransport::connect` (`apps/claw-server/src/services/capture/ports.rs`), bounding host connection startup to 2 s per attempt.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+/// Neo: claw-server's `CdpPortTransport::connect` (`apps/claw-server/src/services/capture/ports.rs`), spacing retries so a lost browser does not spin the host socket.
+const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+
 /// The host side's own client: connect within 2 s with one retry, and reconnect every second
 /// for as long as it takes. The default policy exits the process when reconnects run out.
 /// `apps/claw-server/src/services/capture/ports.rs:122-131` (origin/main).
 pub(crate) fn connect_options(port: u16) -> ConnectOptions {
     ConnectOptions {
-        connect_timeout: Duration::from_secs(2),
+        connect_timeout: CONNECT_TIMEOUT,
         connect_max_retries: 1,
         reconnect_policy: ReconnectPolicy::KeepTrying,
-        reconnect_delay: Duration::from_secs(1),
+        reconnect_delay: RECONNECT_DELAY,
         reconnect_max_retries: usize::MAX,
         ..ConnectOptions::new(port)
     }

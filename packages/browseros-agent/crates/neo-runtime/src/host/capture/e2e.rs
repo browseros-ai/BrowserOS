@@ -25,6 +25,13 @@ use crate::host::view::{FollowView, ShownTab};
 use crate::run::PageId;
 use browser::{Fixture, Tab};
 
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_50_MS: Duration = Duration::from_millis(50);
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_10_S: Duration = Duration::from_secs(10);
+/// Neo: a fixed test-clock interval for bounded waits and simulated browser delays; independent of production policy.
+const WAIT_5_S: Duration = Duration::from_secs(5);
+
 /// A page that never stops changing, so a tab that paints keeps sending frames: a compositor
 /// animation runs at the display rate while the tab paints, and not at all while it does not.
 const ANIMATED: &str = "<title>animated</title><style>@keyframes slide { from { transform: \
@@ -76,7 +83,7 @@ async fn a_background_tab_streams_through_its_presence_and_records_av1() {
         .expect("a screencast of the background tab");
     let mut seen = Vec::new();
     while seen.len() < 3 {
-        let frame = time::timeout(Duration::from_secs(10), frames.next())
+        let frame = time::timeout(WAIT_10_S, frames.next())
             .await
             .expect("frames keep coming from the background tab")
             .expect("the screencast stays open");
@@ -98,7 +105,7 @@ async fn a_background_tab_streams_through_its_presence_and_records_av1() {
         .await
         .expect("a recording of the background tab");
     let started = Instant::now();
-    let init = time::timeout(Duration::from_secs(5), video.next())
+    let init = time::timeout(WAIT_5_S, video.next())
         .await
         .expect("the init segment within 5 s")
         .expect("the video stays open");
@@ -108,7 +115,7 @@ async fn a_background_tab_streams_through_its_presence_and_records_av1() {
             .all(|kind| contains(&init, *kind)),
         "an AV1 fragmented MP4's init segment"
     );
-    let left = Duration::from_secs(5).saturating_sub(started.elapsed());
+    let left = WAIT_5_S.saturating_sub(started.elapsed());
     let fragment = time::timeout(left, video.next())
         .await
         .expect("a fragment within 5 s of the recording's start")
@@ -145,7 +152,7 @@ async fn tab_id(tab: &Tab) -> TabId {
 /// Waits until the fixture tab reports `visibility`; a tab sent behind another reports `hidden`
 /// a moment later.
 async fn wait_for_visibility(tab: &Tab, visibility: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + WAIT_5_S;
     loop {
         let now = tab.evaluate("document.visibilityState").await;
         if now == json!(visibility) {
@@ -155,7 +162,7 @@ async fn wait_for_visibility(tab: &Tab, visibility: &str) {
             Instant::now() < deadline,
             "the tab stayed {now} instead of {visibility}"
         );
-        time::sleep(Duration::from_millis(50)).await;
+        time::sleep(WAIT_50_MS).await;
     }
 }
 
