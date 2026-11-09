@@ -5,6 +5,9 @@
 //! ```text
 //! Runtime::run                           runtime.rs: starting tab, run lifetime, outcome
 //!   ├─ Tabs::open                        tabs.rs: context scope, ordered page registry
+//!   ├─ HookSandbox                       hooks.rs: only for a run with hooks; a second realm on
+//!   │                                    its own actor task: load, beforeRun, afterRun; its
+//!   │                                    bridge holds Dispatcher::for_hooks (origin hook)
 //!   └─ quickjs::run                        quickjs.rs: fresh QuickJS and embedded neo-quickjs-injected
 //!        └─ __neo_runtime                quickjs_bridge.rs: JS/Rust boundary
 //!             ├─ get → Tabs              live pages, URL, initializer, opener and closed state
@@ -12,6 +15,7 @@
 //!             │                          page_events.rs (one tab's watcher), frame_events.rs
 //!             │                          (its frame tree), discovery.rs (new tabs, popups)
 //!             └─ Dispatcher::call        method_router.rs: target routing, task, trace, reply
+//!                  ├─ action_hooks       a call with no element: beforeAction, afterAction
 //!                  ├─ page_and_context_methods  context/page lifecycle; tracked creation and cleanup
 //!                  ├─ browser_methods    the run's Browser: created contexts, close, disposal
 //!                  ├─ debugger           context.debugger: holds a call before it starts
@@ -55,12 +59,15 @@ extern crate self as neo_runtime;
 mod fake_browser;
 
 mod abort;
+mod action_hooks;
+pub mod actions;
 mod artifacts;
 mod browser_representations;
 mod chromium_bridge;
 mod deadline;
 mod debugger;
 mod events;
+mod hooks;
 mod method_router;
 mod mime;
 mod playwright_methods;
@@ -71,9 +78,11 @@ mod run;
 mod runtime;
 mod url_match;
 
+pub use actions::{ActionGroup, ActionKind};
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{
-    CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunBinary, RunEnd,
-    RunError, RunOutcome, RunPage, RunRequest, RunStatus,
+    AfterHookResult, BeforeHookResult, CallAction, CallHookRecord, CallLocation, CallOrigin,
+    CallRecord, CallResult, Delivery, DroppedCalls, HOOK_BUDGET, HostCallback, HostRequest, PageId,
+    RunBinary, RunEnd, RunError, RunHooks, RunOutcome, RunPage, RunRequest, RunStatus,
 };
 pub use runtime::{Runtime, RuntimeError};

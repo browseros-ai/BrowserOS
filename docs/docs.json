@@ -42,6 +42,7 @@
             "group": "Reference",
             "pages": [
               "neo/privacy",
+              "neo/hooks",
               "changelog",
               "contributing"
             ]

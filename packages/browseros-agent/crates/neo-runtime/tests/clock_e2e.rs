@@ -306,6 +306,7 @@ fn start(tab: &Tab, runtime: &Runtime, code: &str) -> (CancellationToken, JoinHa
         timeout: Duration::from_secs(30),
         cancel: cancel.clone(),
         artifacts: None,
+        hooks: None,
     };
     let runtime = runtime.clone();
     (

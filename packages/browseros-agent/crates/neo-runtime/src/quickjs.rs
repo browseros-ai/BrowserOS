@@ -13,7 +13,8 @@ use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rquickjs::function::{Async, Func};
+use rquickjs::function::{Async, IntoArgs};
+use rquickjs::runtime::InterruptHandler;
 use rquickjs::{
     AsyncContext, AsyncRuntime, CatchResultExt, CaughtError, Coerced, Constructor, Ctx, FromJs,
     Function, Object, Promise, TypedArray,
@@ -35,13 +36,15 @@ const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STACK_BYTES: usize = 512 * 1024;
 
 /// neo-quickjs-injected's bundle. Evaluating it defines no globals; its completion value is
-/// `{ createRun }`. `scripts/neo-check.sh` fails when it is stale.
+/// `{ createRun, createHooks }`: the agent's realm calls `createRun`, a run's hook realm
+/// (`hooks.rs`) `createHooks`, each on a fresh evaluation, so the SDK's module state is per realm.
+/// `scripts/neo-check.sh` fails when it is stale.
 ///
 /// `ctx.eval` names its frames `eval_script`, and only the agent's code, built by the
 /// `AsyncFunction` constructor, has frames named `<input>`. neo-quickjs-injected's
 /// `captureLocation` relies on that to find the agent's call site in a stack
 /// (`tests/realm_limits.rs` pins it).
-const SDK_BUNDLE: &str = include_str!(concat!(
+pub(crate) const SDK_BUNDLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../neo-quickjs-injected/dist/sdk.js"
 ));
@@ -151,14 +154,15 @@ const INSTALL_SDK_GLOBALS: &str = r"(globals) => {
 /// its `uncaught` promise, and the run ends with that error at once instead of running on. The
 /// realm's own `abort` listeners and timer callbacks report theirs the same way
 /// (`abort::REALM_GLOBALS`, `HOST_GLOBALS`).
-const RACE_UNCAUGHT: &str =
+pub(crate) const RACE_UNCAUGHT: &str =
     "(script, uncaught, aborts, timers) => Promise.race([script, uncaught, aborts, timers])";
 
 /// How many lines QuickJS reports before the agent's line 1 in an `AsyncFunction`-constructed
 /// function (`async function anonymous(page,context,playwright\n) {\n`). Measured by probe P4 and pinned by
 /// `tests/realm_limits.rs`, which reads the line a call records, so a QuickJS upgrade that
-/// changes the wrapper fails that test, not every recorded location.
-const AGENT_LINE_OFFSET: u32 = 2;
+/// changes the wrapper fails that test, not every recorded location. A hook file's wrapper
+/// (`anonymous(neo\n) {\n`) has the same two lines; a hook's call keeps no location anyway.
+pub(crate) const AGENT_LINE_OFFSET: u32 = 2;
 
 /// What the realm needs to know about the run's page.
 pub(crate) struct Script {
@@ -222,16 +226,8 @@ async fn evaluate(
     dispatcher: Dispatcher,
     deadline: Deadline,
 ) -> Result<Returned, RunError> {
-    let runtime = AsyncRuntime::new().map_err(|error| engine_error(&error))?;
-    runtime.set_memory_limit(MEMORY_LIMIT_BYTES).await;
-    runtime.set_max_stack_size(MAX_STACK_BYTES).await;
     let interrupt = deadline.clone();
-    runtime
-        .set_interrupt_handler(Some(Box::new(move || interrupt.stop().is_some())))
-        .await;
-    let context = AsyncContext::full(&runtime)
-        .await
-        .map_err(|error| engine_error(&error))?;
+    let (_runtime, context) = new_realm(Box::new(move || interrupt.stop().is_some())).await?;
     context
         .async_with(async |ctx| {
             let (returned, export) = start(&ctx, script, getters, logs, dispatcher, deadline)
@@ -258,33 +254,21 @@ fn start<'js>(
     deadline: Deadline,
 ) -> rquickjs::Result<(Promise<'js>, Function<'js>)> {
     quickjs_bridge::install(ctx, getters, logs, dispatcher)?;
-    let sleep = Func::from(Async(move |delay_ms: f64| {
-        let deadline = deadline.clone();
-        async move { deadline.sleep(delay_from_millis(delay_ms)).await }
-    }));
-    let install_host_globals: Function<'js> = ctx.eval(HOST_GLOBALS)?;
-    let timer_uncaught: rquickjs::Value<'js> = install_host_globals.call((sleep,))?;
-    // After the host globals: `AbortSignal.timeout` schedules with their `setTimeout`.
-    let install_abort_globals: Function<'js> = ctx.eval(abort::REALM_GLOBALS)?;
-    let abort_uncaught: rquickjs::Value<'js> = install_abort_globals.call(())?;
+    let sleep = Function::new(
+        ctx.clone(),
+        Async(move |delay_ms: f64| {
+            let deadline = deadline.clone();
+            async move { deadline.sleep(delay_from_millis(delay_ms)).await }
+        }),
+    )?;
+    let [timer_uncaught, abort_uncaught] = install_platform_globals(ctx, sleep)?;
 
     let sdk: Object<'js> = ctx.eval(SDK_BUNDLE)?;
     let create_run: Function<'js> = sdk.get("createRun")?;
-    let init = Object::new(ctx.clone())?;
-    init.set("page", script.page_guid)?;
-    init.set("mainFrame", script.frame_guid)?;
-    init.set("context", "context@default")?;
-    init.set("browser", browser_methods::BROWSER_GUID)?;
-    init.set("url", script.url)?;
-    init.set(
-        "testIdAttribute",
-        playwright_injected_methods::TEST_ID_ATTRIBUTE,
-    )?;
-    init.set("lineOffset", AGENT_LINE_OFFSET)?;
+    let init = sdk_init(ctx, script.page_guid, script.frame_guid, script.url)?;
     let objects: Object<'js> = create_run.call((init,))?;
     // Before the agent's function is built, so its code sees them as Node globals.
-    let install_sdk_globals: Function<'js> = ctx.eval(INSTALL_SDK_GLOBALS)?;
-    install_sdk_globals.call::<_, ()>((objects.get::<_, Object<'js>>("globals")?,))?;
+    install_sdk_globals(ctx, &objects)?;
     let page: rquickjs::Value<'js> = objects.get("page")?;
     let context: rquickjs::Value<'js> = objects.get("context")?;
     // Playwright's `Playwright` object, the script's third parameter: `chromium` and the other
@@ -293,12 +277,7 @@ fn start<'js>(
     let uncaught: rquickjs::Value<'js> = objects.get("uncaught")?;
     let export: Function<'js> = objects.get("exportValue")?;
 
-    // The AsyncFunction constructor, as Playwright users write `new AsyncFunction(...)`: the
-    // code is a function body that cannot close the wrapper early, and a syntax error in it
-    // throws a SyntaxError here.
-    let async_function: Constructor<'js> = ctx.eval("(async () => {}).constructor")?;
-    let agent_function: Function<'js> =
-        async_function.construct(("page", "context", "playwright", script.code))?;
+    let agent_function = async_function(ctx, ("page", "context", "playwright", script.code))?;
     let script: Promise<'js> = agent_function.call((page, context, playwright))?;
     let race: Function<'js> = ctx.eval(RACE_UNCAUGHT)?;
     Ok((
@@ -307,9 +286,86 @@ fn start<'js>(
     ))
 }
 
+/// A fresh QuickJS runtime and context with the realm limits every run's realms share: the
+/// memory cap, the stack cap, and `interrupt`, which QuickJS calls while JS runs and which
+/// stops the running JS (an uncatchable error) once it returns `true`. The runtime must outlive
+/// the context; the caller holds both.
+pub(crate) async fn new_realm(
+    interrupt: InterruptHandler,
+) -> Result<(AsyncRuntime, AsyncContext), RunError> {
+    let runtime = AsyncRuntime::new().map_err(|error| engine_error(&error))?;
+    runtime.set_memory_limit(MEMORY_LIMIT_BYTES).await;
+    runtime.set_max_stack_size(MAX_STACK_BYTES).await;
+    runtime.set_interrupt_handler(Some(interrupt)).await;
+    let context = AsyncContext::full(&runtime)
+        .await
+        .map_err(|error| engine_error(&error))?;
+    Ok((runtime, context))
+}
+
+/// Installs the host globals ([`HOST_GLOBALS`], whose timers wait on `sleep(ms)`) and then the
+/// abort globals (`abort::REALM_GLOBALS`) in `ctx`, before any SDK code runs. Returns the
+/// promises that reject with the first uncaught timer and abort-listener error, which the realm
+/// races with whatever it awaits ([`RACE_UNCAUGHT`]).
+pub(crate) fn install_platform_globals<'js>(
+    ctx: &Ctx<'js>,
+    sleep: Function<'js>,
+) -> rquickjs::Result<[rquickjs::Value<'js>; 2]> {
+    let install_host_globals: Function<'js> = ctx.eval(HOST_GLOBALS)?;
+    let timer_uncaught: rquickjs::Value<'js> = install_host_globals.call((sleep,))?;
+    // After the host globals: `AbortSignal.timeout` schedules with their `setTimeout`.
+    let install_abort_globals: Function<'js> = ctx.eval(abort::REALM_GLOBALS)?;
+    let abort_uncaught: rquickjs::Value<'js> = install_abort_globals.call(())?;
+    Ok([timer_uncaught, abort_uncaught])
+}
+
+/// What neo-quickjs-injected's `createRun` and `createHooks` both take about the run: its page
+/// and main frame, the run's context and browser, the page's URL at the start, the test id
+/// attribute and the wrapper's line offset.
+pub(crate) fn sdk_init<'js>(
+    ctx: &Ctx<'js>,
+    page_guid: String,
+    frame_guid: String,
+    url: String,
+) -> rquickjs::Result<Object<'js>> {
+    let init = Object::new(ctx.clone())?;
+    init.set("page", page_guid)?;
+    init.set("mainFrame", frame_guid)?;
+    init.set("context", "context@default")?;
+    init.set("browser", browser_methods::BROWSER_GUID)?;
+    init.set("url", url)?;
+    init.set(
+        "testIdAttribute",
+        playwright_injected_methods::TEST_ID_ATTRIBUTE,
+    )?;
+    init.set("lineOffset", AGENT_LINE_OFFSET)?;
+    Ok(init)
+}
+
+/// Puts the `globals` of the object `createRun` or `createHooks` returned on `ctx`'s global
+/// object ([`INSTALL_SDK_GLOBALS`]).
+pub(crate) fn install_sdk_globals<'js>(
+    ctx: &Ctx<'js>,
+    objects: &Object<'js>,
+) -> rquickjs::Result<()> {
+    let install: Function<'js> = ctx.eval(INSTALL_SDK_GLOBALS)?;
+    install.call::<_, ()>((objects.get::<_, Object<'js>>("globals")?,))
+}
+
+/// The `AsyncFunction` constructor, as Playwright users write `new AsyncFunction(...)`, applied
+/// to `params_and_body` (each parameter's name, then the code): the code is a function body
+/// that cannot close the wrapper early, and a syntax error in it throws a `SyntaxError` here.
+pub(crate) fn async_function<'js>(
+    ctx: &Ctx<'js>,
+    params_and_body: impl IntoArgs<'js>,
+) -> rquickjs::Result<Function<'js>> {
+    let constructor: Constructor<'js> = ctx.eval("(async () => {}).constructor")?;
+    constructor.construct(params_and_body)
+}
+
 /// `setTimeout` delays in JS milliseconds. A delay too large for a `Duration` is due after
 /// any deadline, which [`Deadline::sleep`] treats as never.
-fn delay_from_millis(delay_ms: f64) -> Duration {
+pub(crate) fn delay_from_millis(delay_ms: f64) -> Duration {
     Duration::try_from_secs_f64(delay_ms / 1000.0).unwrap_or(Duration::MAX)
 }
 
@@ -320,34 +376,14 @@ fn delay_from_millis(delay_ms: f64) -> Duration {
 /// copies its bytes out of the realm here, outside its memory limit, and marks its place with this
 /// run's random marker key; [`lift_binaries`] then takes the marks out of the JSON. A page cannot
 /// forge a mark: it never sees the marker.
-fn to_json<'js>(
+pub(crate) fn to_json<'js>(
     ctx: &Ctx<'js>,
     export: &Function<'js>,
     value: rquickjs::Value<'js>,
 ) -> Result<Returned, RunError> {
-    let shipped = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
-    let sink = Arc::clone(&shipped);
-    let ship = Function::new(
-        ctx.clone(),
-        move |bytes: TypedArray<'js, u8>| -> rquickjs::Result<f64> {
-            let Some(bytes) = bytes.as_bytes() else {
-                return Err(rquickjs::Error::new_from_js_message(
-                    "Uint8Array",
-                    "bytes",
-                    "its buffer is detached",
-                ));
-            };
-            let mut shipped = sink.lock().map_err(|_| {
-                rquickjs::Error::new_from_js_message("Uint8Array", "bytes", "poisoned")
-            })?;
-            shipped.push(bytes.to_vec());
-            // Exact: a realm cannot hold 2^53 binaries.
-            #[expect(clippy::cast_precision_loss, reason = "a count far below 2^53")]
-            Ok((shipped.len() - 1) as f64)
-        },
-    )
-    .map_err(|error| RunError::new("Error", error.to_string()))?;
-    let marker = format!("neo:binary:{:016x}", RandomState::new().hash_one(0_u8));
+    let shipped = Shipped::default();
+    let ship = ship(ctx, &shipped).map_err(|error| RunError::new("Error", error.to_string()))?;
+    let marker = binary_marker();
     let text: Option<String> = match export.call((value, ship, marker.as_str())).catch(ctx) {
         Ok(text) => text,
         Err(error) => return Err(script_error(ctx, error)),
@@ -358,17 +394,66 @@ fn to_json<'js>(
     let mut value: Value = serde_json::from_str(&text)
         .map_err(|error| RunError::new("Error", format!("return value is not JSON: {error}")))?;
     let shipped = shipped
-        .lock()
-        .map(|mut shipped| mem::take(&mut *shipped))
-        .map_err(|_| RunError::new("Error", "returned binaries were lost".to_string()))?;
+        .take()
+        .ok_or_else(|| RunError::new("Error", "returned binaries were lost".to_string()))?;
     let binaries = lift_binaries(&mut value, &marker, shipped);
     Ok((Some(value), binaries))
+}
+
+/// The bytes `exportValue`'s `ship` copied out of a realm, in the order it shipped them.
+#[derive(Clone, Default)]
+pub(crate) struct Shipped(Arc<Mutex<Vec<Vec<u8>>>>);
+
+impl Shipped {
+    /// Every binary shipped so far, taken; `None` if a panic while shipping poisoned the sink.
+    pub(crate) fn take(&self) -> Option<Vec<Vec<u8>>> {
+        self.0
+            .lock()
+            .ok()
+            .map(|mut shipped| mem::take(&mut *shipped))
+    }
+}
+
+/// neo-quickjs-injected's `ship(bytes)`: copies a `Uint8Array`'s bytes into `shipped`, outside
+/// the realm's memory limit, and answers its index there, which `exportValue` writes under the
+/// marker ([`binary_marker`]).
+pub(crate) fn ship<'js>(ctx: &Ctx<'js>, shipped: &Shipped) -> rquickjs::Result<Function<'js>> {
+    let sink = shipped.clone();
+    Function::new(
+        ctx.clone(),
+        move |bytes: TypedArray<'js, u8>| -> rquickjs::Result<f64> {
+            let Some(bytes) = bytes.as_bytes() else {
+                return Err(rquickjs::Error::new_from_js_message(
+                    "Uint8Array",
+                    "bytes",
+                    "its buffer is detached",
+                ));
+            };
+            let mut shipped = sink.0.lock().map_err(|_| {
+                rquickjs::Error::new_from_js_message("Uint8Array", "bytes", "poisoned")
+            })?;
+            shipped.push(bytes.to_vec());
+            // Exact: a realm cannot hold 2^53 binaries.
+            #[expect(clippy::cast_precision_loss, reason = "a count far below 2^53")]
+            Ok((shipped.len() - 1) as f64)
+        },
+    )
+}
+
+/// A fresh random marker key for one export's binaries: the realm's code never sees it, so no
+/// value can forge a mark.
+pub(crate) fn binary_marker() -> String {
+    format!("neo:binary:{:016x}", RandomState::new().hash_one(0_u8))
 }
 
 /// Takes `marker` out of every object of `value` that carries it, pairing each with the bytes
 /// `shipped` holds at its index and its JSON pointer, in the order JSON wrote them. Recursion is
 /// bounded by `serde_json`'s parse depth (128).
-fn lift_binaries(value: &mut Value, marker: &str, shipped: Vec<Vec<u8>>) -> Vec<RunBinary> {
+pub(crate) fn lift_binaries(
+    value: &mut Value,
+    marker: &str,
+    shipped: Vec<Vec<u8>>,
+) -> Vec<RunBinary> {
     fn walk(
         value: &mut Value,
         marker: &str,
@@ -420,7 +505,7 @@ fn lift_binaries(value: &mut Value, marker: &str, shipped: Vec<Vec<u8>>) -> Vec<
 
 /// Names a thrown value the way the script saw it: an `Error`'s own `name` and `message`,
 /// or `Error` plus the text of a thrown non-Error value.
-fn script_error<'js>(ctx: &Ctx<'js>, error: CaughtError<'js>) -> RunError {
+pub(crate) fn script_error<'js>(ctx: &Ctx<'js>, error: CaughtError<'js>) -> RunError {
     match error {
         CaughtError::Exception(exception) => {
             let name: Option<Coerced<String>> = exception.as_object().get("name").ok();

@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tracing::debug;
 
+use crate::actions::{ActionKind, NeoMethod};
 use crate::browser_representations::init_scripts::{self, InitScripts};
 use crate::browser_representations::page::{FrameTab, PageSession};
 use crate::browser_representations::tabs::Tabs;
@@ -43,16 +44,20 @@ macro_rules! clock_meta {
     ($name:ident, $method:literal, $title:literal, $subtitle:expr, $params:expr) => {
         /// Neo: the trace metadata of this `BrowserContext` clock command
         /// (`neo-runtime-spec/spec/playwright/browserContext.yml`).
-        pub(crate) static $name: MethodMeta = MethodMeta {
-            interface: "BrowserContext",
-            method: $method,
-            title: Some($title),
-            subtitle: $subtitle,
-            group: None,
-            render_params: $params,
-            internal: false,
-            flags: &[],
-        };
+        pub(crate) static $name: NeoMethod = NeoMethod::new(
+            MethodMeta {
+                interface: "BrowserContext",
+                method: $method,
+                title: Some($title),
+                subtitle: $subtitle,
+                group: None,
+                render_params: $params,
+                internal: false,
+                flags: &[],
+            },
+            ActionKind::Clock,
+            false,
+        );
     };
 }
 
@@ -186,12 +191,12 @@ pub(crate) fn serves(method: &str) -> bool {
 pub(crate) fn decode(
     method: &str,
     params: Option<Value>,
-) -> Option<(&'static MethodMeta, Result<ClockRoute, PlaywrightError>)> {
+) -> Option<(&'static NeoMethod, Result<ClockRoute, PlaywrightError>)> {
     fn with<T: DeserializeOwned>(
-        meta: &'static MethodMeta,
+        meta: &'static NeoMethod,
         params: Option<Value>,
         route: impl FnOnce(T) -> ClockRoute,
-    ) -> (&'static MethodMeta, Result<ClockRoute, PlaywrightError>) {
+    ) -> (&'static NeoMethod, Result<ClockRoute, PlaywrightError>) {
         let decoded = serde_json::from_value::<T>(params.unwrap_or_else(|| json!({})))
             .map(route)
             .map_err(|error| {

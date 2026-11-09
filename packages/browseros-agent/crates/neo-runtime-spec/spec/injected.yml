@@ -441,6 +441,10 @@ Injected:
         hitPoint: Point?
         # Playwright's `trial`: block every intercepted event, hit or not.
         blockAllEvents: boolean
+        # Neo: a forced input on an element an action hook decided about (hooks feature 4) keeps
+        # its hit check, and a hit inside a `<label>` of the element passes too: it activates the
+        # same control (a custom checkbox's styled box over its input).
+        followLabel: boolean
       returns:
         outcome: HitTargetSetup
 

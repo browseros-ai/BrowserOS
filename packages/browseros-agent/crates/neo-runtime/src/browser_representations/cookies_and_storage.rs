@@ -1548,6 +1548,7 @@ mod tests {
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::{CallEntry, CallStart, RunScope};
+    use crate::run::CallOrigin;
 
     fn call_progress() -> Progress {
         progress_ending_with(CancellationToken::new())
@@ -1560,6 +1561,8 @@ mod tests {
             guid: "context@default".to_string(),
             method: "grantPermissions".to_string(),
             title: None,
+            origin: CallOrigin::Agent,
+            action: None,
             params: json!({}),
             location: None,
             input: false,
