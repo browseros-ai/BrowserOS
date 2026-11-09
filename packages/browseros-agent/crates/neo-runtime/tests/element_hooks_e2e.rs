@@ -59,6 +59,84 @@ neo.on('beforeAction', { kinds: ['fill'] }, async (event) => {
   return { replaceArgs: { ...event.args, value: SECRET } };
 });
 ";
+/// Neo: the login form, whose password box mirrors its value into its `value` attribute on every
+/// input, as React's controlled inputs do: the attribute then shows in every preview of the box.
+const MIRROR: &str = "<!doctype html><title>Login</title><form id=login>\
+    <label for=user>Username</label><input id=user type=text>\
+    <label for=pw>Password</label><input id=pw type=password>\
+    <button id=submit type=submit>Sign in</button></form><script>window.__submitted = 0;\
+    const pw = document.getElementById('pw');\
+    pw.addEventListener('input', () => pw.setAttribute('value', pw.value));\
+    document.getElementById('login').addEventListener('submit', (event) => {\
+    event.preventDefault(); window.__submitted += 1 })</script>";
+/// Neo: two buttons side by side; each counts its clicks.
+const BUTTONS: &str = "<!doctype html><title>Pay</title>\
+    <style>button{position:absolute;top:20px;width:100px;height:40px}\
+    #safe{left:20px}#pay{left:200px}</style>\
+    <button id=safe onclick='window.__safe=(window.__safe||0)+1'>Safe</button>\
+    <button id=pay onclick='window.__pay=(window.__pay||0)+1'>Pay</button>";
+/// Neo: one button whose label names the site: "Next" on 127.0.0.1, "Pay" on any other host.
+/// The same markup on both; each counts its clicks.
+const NEXT_OR_PAY: &str = "<!doctype html><title>Checkout</title>\
+    <button id=b onclick='window.__clicks=(window.__clicks||0)+1'>?</button>\
+    <script>document.getElementById('b').textContent = \
+    location.hostname === '127.0.0.1' ? 'Next' : 'Pay';</script>";
+/// Neo: two checkboxes, the terms and a newsletter.
+const CHECKBOXES: &str = "<!doctype html><title>Sign up</title>\
+    <label><input id=terms type=checkbox> Terms</label>\
+    <label><input id=news type=checkbox> News</label>";
+/// Neo: a click policy that asks about each clicked element by its page and label, and holds
+/// "Next" for a while (as a hook asking the owner would); it blocks "Pay".
+const ASK_PAY: &str = "
+neo.on('beforeAction', { kinds: ['click'] }, async (event, ctx) => {
+  const info = await event.element.evaluate((e) => location.host + ' ' + e.textContent);
+  (ctx.state.asked ??= []).push(info);
+  if (info.endsWith('Pay')) return { block: 'paying needs the owner' };
+  await event.page.waitForTimeout(2500);
+});
+neo.on('afterRun', (event, ctx) => ({ note: JSON.stringify(ctx.state.asked ?? []) }));
+";
+/// Neo: the script clicks `#b`; half a second later, while the click's hook holds it, it
+/// navigates the tab to `OTHER`; it returns how the click ended.
+const NAVIGATE_DURING_CLICK: &str = "
+const clicking = page.click('#b', { timeout: 15000 })
+  .then(() => 'clicked', (e) => e.name);
+await page.waitForTimeout(500);
+await page.goto(OTHER + '/login');
+return { click: await clicking };
+";
+/// Neo: the swap for `type`, on the bank's password box only (`BANK`), held a while as a vault
+/// lookup would be.
+const BANK_TYPE: &str = "
+neo.on('beforeAction', { kinds: ['type'] }, async (event, ctx) => {
+  if (event.args.text !== '{{password}}') return;
+  const info = await event.element.evaluate((e) => [location.origin, e.type]);
+  (ctx.state.asked ??= []).push(info.join(' '));
+  if (info[1] !== 'password') return { block: REASON };
+  if (info[0] !== BANK) return { block: 'not the bank' };
+  await event.page.waitForTimeout(2500);
+  return { replaceArgs: { ...event.args, text: SECRET } };
+});
+neo.on('afterRun', (event, ctx) => ({ note: JSON.stringify(ctx.state.asked ?? []) }));
+";
+/// Neo: the swap for `type` and `press`: a placeholder typed into a password box becomes the
+/// real password; any other key goes as written.
+const TYPE_SWAP: &str = "
+neo.on('beforeAction', { kinds: ['type', 'press'] }, async (event, ctx) => {
+  (ctx.state.kinds ??= []).push(event.kind);
+  if (event.args.text !== '{{password}}') return;
+  const type = await event.element.evaluate((e) => e.type);
+  if (type !== 'password') return { block: REASON };
+  return { replaceArgs: { ...event.args, text: SECRET } };
+});
+neo.on('afterRun', (event, ctx) => ({ note: JSON.stringify(ctx.state.kinds ?? []) }));
+";
+/// Neo: refuses checking the terms, by the pinned element; any other box may be checked.
+const NO_TERMS: &str = "
+neo.on('beforeAction', { kinds: ['check'] }, async (event) => {
+  if ((await event.element.evaluate((e) => e.id)) === 'terms') return { block: 'the owner reads the terms' };
+});
+";
 /// Neo: the swap's script: it fills `#pw` with the placeholder, logs what it holds and returns
 /// its own variables.
 const SWAP_SCRIPT: &str = "
@@ -171,13 +249,18 @@ neo.on('afterRun', (event, ctx) => ({ note: JSON.stringify(ctx.state.seen ?? [])
 ";
 
 async fn open() -> Option<Tab> {
+    open_page(LOGIN).await
+}
+
+/// A fresh browser on `page`, served at `/login` on the fixture's origin, under any host name.
+async fn open_page(page: &str) -> Option<Tab> {
     let binary = browser::e2e_browser()?;
     Some(
         Tab::open(
             binary,
             Fixture {
                 slow_response: Duration::ZERO,
-                pages: vec![("/login".to_string(), LOGIN.to_string())],
+                pages: vec![("/login".to_string(), page.to_string())],
             },
             "/login",
         )
@@ -594,5 +677,257 @@ async fn tests_that_a_retry_that_finds_another_element_asks_the_hook_again() {
         "{fill:?}"
     );
     assert_no_secret(&outcome);
+    tab.close().await;
+}
+
+/// Review P1-1: the page mirrors the box's value into its `value` attribute, so after the swapped
+/// fill every preview of the box shows the real password: the next call's log (a `press`, which
+/// no hook touches) and a strict-mode error the script keeps. None of it may hold the secret.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_page_mirroring_the_secret_cannot_leak_it_through_later_logs_and_errors() {
+    let Some(tab) = open_page(MIRROR).await else {
+        return;
+    };
+    let code = "
+await page.fill('#pw', '{{password}}');
+await page.press('#pw', 'Enter');
+const strict = await page.locator('input').click({ timeout: 1000 }).then(() => 'clicked', (e) => e.message);
+return { strict };
+";
+    let outcome = run(&tab, code, &[SWAP]).await;
+    assert_eq!(
+        tab.evaluate("document.getElementById('pw').getAttribute('value')")
+            .await,
+        json!(SECRET),
+        "the page mirrored the secret, so the checks below mean something"
+    );
+    let press = only_agent_call(&outcome, "press");
+    assert!(
+        press.log.iter().any(|line| line.contains("<input")),
+        "the press's log names the box: {press:?}"
+    );
+    let strict = outcome.value.as_ref().map(|value| value["strict"].clone());
+    assert!(
+        strict
+            .as_ref()
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("strict mode")),
+        "the script kept a strict-mode error naming the boxes: {strict:?}"
+    );
+    assert_no_secret(&outcome);
+    tab.close().await;
+}
+
+/// Review P1-2: the click's hook is asked about "Next" on 127.0.0.1; while it holds the click, the
+/// script navigates the tab to another site (another renderer process), where `#b` is "Pay". The
+/// click's retry finds that node: the hook is asked again, and blocks it.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_retry_on_another_site_asks_the_hook_again() {
+    let Some(tab) = open_page(NEXT_OR_PAY).await else {
+        return;
+    };
+    let other = tab.origin.replace("127.0.0.1", "localhost");
+    let code = format!("const OTHER = {other:?};\n{NAVIGATE_DURING_CLICK}");
+    let outcome = run(&tab, &code, &[ASK_PAY]).await;
+    let page_now = tab
+        .evaluate(
+            "[location.hostname, document.getElementById('b')?.textContent, window.__clicks ?? 0]",
+        )
+        .await;
+    assert_eq!(
+        page_now,
+        json!(["localhost", "Pay", 0]),
+        "Pay was never clicked"
+    );
+    let asked: Vec<Value> = outcome
+        .notes
+        .iter()
+        .map(|note| serde_json::from_str(note).expect("the hook notes JSON"))
+        .collect();
+    let [Value::Array(asked)] = &asked[..] else {
+        panic!("one note: {asked:?}");
+    };
+    assert_eq!(
+        asked.len(),
+        2,
+        "asked about Next, then about Pay: {asked:?}"
+    );
+    assert!(asked[1].as_str().is_some_and(|info| info.ends_with("Pay")));
+    let click = only_agent_call(&outcome, "click");
+    assert_eq!(before(click), Some(BeforeHookResult::Blocked), "{click:?}");
+    assert_eq!(click.delivery, Some(Delivery::NotSent), "{click:?}");
+    tab.close().await;
+}
+
+/// Review P1-2's control: the same flow, navigating within the site (the same renderer process).
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_retry_on_the_same_site_asks_the_hook_again() {
+    let Some(tab) = open_page(NEXT_OR_PAY).await else {
+        return;
+    };
+    let code = format!("const OTHER = {:?};\n{NAVIGATE_DURING_CLICK}", tab.origin);
+    let second_blocks = "
+neo.on('beforeAction', { kinds: ['click'] }, async (event, ctx) => {
+  ctx.state.asked = (ctx.state.asked ?? 0) + 1;
+  if (ctx.state.asked > 1) return { block: 'second question' };
+  await event.page.waitForTimeout(2500);
+});
+neo.on('afterRun', (event, ctx) => ({ note: String(ctx.state.asked ?? 0) }));
+";
+    let outcome = run(&tab, &code, &[second_blocks]).await;
+    assert_eq!(
+        outcome.notes,
+        ["2"],
+        "asked again about the new document's node"
+    );
+    assert_eq!(
+        tab.evaluate("window.__clicks ?? 0").await,
+        json!(0),
+        "nothing was clicked"
+    );
+    tab.close().await;
+}
+
+/// Review P1-2 with a secret: `type` swaps the placeholder into the bank's box only. While the hook
+/// waits for the vault, the script navigates to another site; the retry finds `#pw` there, the
+/// hook is asked again and refuses, and the other site's box never gets the password.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_swap_decided_on_one_site_never_types_into_another() {
+    let Some(tab) = open().await else { return };
+    let bank = tab.origin.clone();
+    let other = bank.replace("127.0.0.1", "localhost");
+    let code = format!(
+        "const OTHER = {other:?};
+const typing = page.type('#pw', '{{{{password}}}}', {{ timeout: 15000 }})
+  .then(() => 'typed', (e) => e.name);
+await page.waitForTimeout(500);
+await page.goto(OTHER + '/login');
+return {{ typed: await typing }};
+"
+    );
+    let hooks = format!("const BANK = {bank:?};\n{BANK_TYPE}");
+    let outcome = run(&tab, &code, &[&hooks]).await;
+    let page_now = tab
+        .evaluate("[location.hostname, document.getElementById('pw')?.value ?? null]")
+        .await;
+    assert_eq!(page_now[0], json!("localhost"));
+    assert_ne!(
+        page_now[1],
+        json!(SECRET),
+        "the bank's password went to the other site"
+    );
+    let asked: Vec<Value> = outcome
+        .notes
+        .iter()
+        .map(|note| serde_json::from_str(note).expect("the hook notes JSON"))
+        .collect();
+    let [Value::Array(asked)] = &asked[..] else {
+        panic!("one note: {asked:?}");
+    };
+    assert_eq!(
+        asked.len(),
+        2,
+        "asked on the bank, then on the other site: {asked:?}"
+    );
+    assert_no_secret(&outcome);
+    tab.close().await;
+}
+
+/// Review P2-1: the hook refuses clicks on `#pay`, by the pinned element. A forced click on `#safe`
+/// at a position that lands on `#pay` keeps its hit check: it never clicks `#pay`.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_forced_click_cannot_land_on_another_element_than_the_hooks() {
+    let Some(tab) = open_page(BUTTONS).await else {
+        return;
+    };
+    let hooks = "
+neo.on('beforeAction', { kinds: ['click'] }, async (event) => {
+  if ((await event.element.evaluate((e) => e.id)) === 'pay') return { block: 'paying needs the owner' };
+});
+";
+    let code = "
+const direct = await page.click('#pay', { timeout: 2000 }).then(() => 'clicked', (e) => e.name);
+const forced = await page.click('#safe', { force: true, position: { x: 230, y: 20 }, timeout: 2000 })
+  .then(() => 'clicked', (e) => e.name);
+const plain = await page.click('#safe', { force: true, timeout: 2000 }).then(() => 'clicked', (e) => e.name);
+return { direct, forced, plain };
+";
+    let outcome = run(&tab, code, &[hooks]).await;
+    assert_eq!(
+        tab.evaluate("[window.__safe ?? 0, window.__pay ?? 0]")
+            .await,
+        json!([1, 0]),
+        "only the forced click that stays on #safe landed: {:?}",
+        outcome.value
+    );
+    assert_eq!(
+        outcome.value,
+        Some(json!({ "direct": "Error", "forced": "TimeoutError", "plain": "clicked" }))
+    );
+    tab.close().await;
+}
+
+/// Review tests 3: a swapped `type` types the real password into the box, and a `press` after it
+/// is asked about too; nothing the model reads holds the secret.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_swapped_type_types_the_real_password() {
+    let Some(tab) = open().await else { return };
+    let code = "
+await page.type('#pw', '{{password}}');
+await page.press('#pw', 'Enter');
+return 'typed';
+";
+    let outcome = run(&tab, code, &[TYPE_SWAP]).await;
+    assert_eq!(value_of(&tab, "pw").await, json!(SECRET));
+    assert_eq!(
+        outcome.notes,
+        [r#"["type","press"]"#],
+        "{:?}",
+        outcome.notes
+    );
+    let typed = only_agent_call(&outcome, "type");
+    assert_eq!(typed.params["text"], json!(PLACEHOLDER), "{typed:?}");
+    assert_eq!(
+        before(typed),
+        Some(BeforeHookResult::ArgsReplaced),
+        "{typed:?}"
+    );
+    assert_eq!(typed.delivery, Some(Delivery::Done), "{typed:?}");
+    assert_no_secret(&outcome);
+    tab.close().await;
+}
+
+/// Review tests 3: an element-keyed `check` policy: the hook refuses checking the terms by the
+/// pinned box; the newsletter box is checked, the terms box stays unchecked and its record says
+/// blocked with nothing sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_check_policy_reads_the_pinned_box() {
+    let Some(tab) = open_page(CHECKBOXES).await else {
+        return;
+    };
+    let code = "
+await page.check('#news');
+const terms = await page.check('#terms', { timeout: 2000 }).then(() => 'checked', (e) => e.name);
+return { terms };
+";
+    let outcome = run(&tab, code, &[NO_TERMS]).await;
+    assert_eq!(outcome.value, Some(json!({ "terms": "Error" })));
+    assert_eq!(
+        tab.evaluate(
+            "[document.getElementById('news').checked, document.getElementById('terms').checked]"
+        )
+        .await,
+        json!([true, false])
+    );
+    let checks = agent_calls(&outcome, "check");
+    assert_eq!(checks.len(), 2, "{checks:?}");
+    assert_eq!(
+        (before(checks[0]), checks[0].delivery),
+        (Some(BeforeHookResult::Allowed), Some(Delivery::Done))
+    );
+    assert_eq!(
+        (before(checks[1]), checks[1].delivery),
+        (Some(BeforeHookResult::Blocked), Some(Delivery::NotSent))
+    );
     tab.close().await;
 }
