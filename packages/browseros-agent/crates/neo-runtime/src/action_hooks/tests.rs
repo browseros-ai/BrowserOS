@@ -1,6 +1,6 @@
 //! Neo: tests of the action hooks of actions that target no element (hooks feature 3). The
 //! gate's order, decisions and stops run under paused time against a scripted fake of the hook
-//! sandbox.
+//! sandbox; then real calls go through the run's dispatcher to the fake browser.
 
 use std::future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -9,7 +9,9 @@ use std::time::Duration;
 use futures_util::FutureExt;
 use neo_runtime_spec::serve::{FrameClickParams, FrameTitleParams, PageMouseClickParams};
 use serde_json::json;
+use tokio::runtime::Handle;
 use tokio::sync::oneshot;
+use tokio::task;
 use tokio::time;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -17,9 +19,16 @@ use tokio_util::task::TaskTracker;
 
 use super::*;
 use crate::actions::SpecCommand;
+use crate::browser_representations::cookies_and_storage::Permissions;
+use crate::browser_representations::page::TabInputs;
+use crate::browser_representations::tabs::Tabs;
+use crate::chromium_bridge::browser_connection_settings::Switches;
 use crate::deadline::Deadline;
+use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+use crate::method_router::{BridgeError, Dispatcher};
+use crate::playwright_methods::screenshot::TabScreenshots;
 use crate::progress::{CallStart, ErrorName, Progress, Trace};
-use crate::run::{CallHookRecord, CallRecord, RunEnd};
+use crate::run::{CallHookRecord, CallRecord, CallResult, Delivery, PageId, RunEnd};
 
 type BeforeScript = Box<
     dyn Fn(usize, ActionEvent) -> BoxFuture<'static, Result<ActionDecision, HookFailure>>
@@ -117,6 +126,10 @@ impl FakeHooks {
             .filter(|(seen, ..)| *seen == hook)
             .map(|(_, event, ended)| (event.clone(), ended.clone()))
             .collect()
+    }
+
+    fn invocations(&self) -> usize {
+        self.events.lock().unwrap().len()
     }
 }
 
@@ -847,5 +860,670 @@ async fn tests_that_after_action_races_the_run_but_not_an_abort() {
     assert_eq!(
         record(&entry_aborted).hook,
         Some(after_record(AfterHookResult::Kept))
+    );
+}
+
+/// A run's dispatcher on the fake browser's tab, with `hooks` as its action hooks.
+struct Harness {
+    browser: FakeBrowser,
+    dispatcher: Dispatcher,
+    run: RunScope,
+}
+
+impl Harness {
+    async fn start(hooks: Option<Arc<dyn ActionHooks>>, run_timeout: Duration) -> Self {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let run = RunScope::new(
+            Deadline::new(run_timeout, CancellationToken::new()),
+            tasks.clone(),
+        );
+        if let Some(hooks) = hooks {
+            assert!(run.action_hooks.set(hooks).is_ok());
+        }
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            TabScreenshots::default(),
+            Switches::default(),
+            Permissions::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("opening the fake tab: {error:?}"));
+        let dispatcher = Dispatcher::new(tabs, run.clone());
+        Self {
+            browser,
+            dispatcher,
+            run,
+        }
+    }
+
+    /// The reply to a message the script sends straight to its bridge, as JSON.
+    async fn call(&self, message: &Value) -> Result<Value, BridgeError> {
+        let (text, _) = self.dispatcher.call(&message.to_string()).await?;
+        Ok(serde_json::from_str(&text).unwrap())
+    }
+
+    /// Where each mouse event the page received happened.
+    fn mouse_events(&self) -> Vec<(Value, Value)> {
+        self.browser
+            .exchanges()
+            .into_iter()
+            .filter(|exchange| exchange.method() == "Input.dispatchMouseEvent")
+            .map(|exchange| {
+                let params = &exchange.command["params"];
+                (params["x"].clone(), params["y"].clone())
+            })
+            .collect()
+    }
+
+    /// The HTML of every `setContent` write the page received, in order.
+    fn writes(&self) -> Vec<Value> {
+        self.browser
+            .exchanges()
+            .into_iter()
+            .filter(|exchange| {
+                exchange.method() == "Runtime.callFunctionOn"
+                    && exchange.command["params"]["arguments"][0]["value"] == "writeContent"
+            })
+            .map(|exchange| exchange.command["params"]["arguments"][1]["value"]["html"].clone())
+            .collect()
+    }
+
+    async fn records(&self, reason: RunEnd) -> Vec<CallRecord> {
+        self.dispatcher.finish(reason).await.0
+    }
+}
+
+fn frame_guid() -> String {
+    format!("frame@{PAGE}")
+}
+
+fn page_guid() -> String {
+    format!("page@{PAGE}")
+}
+
+fn message(id: u64, guid: &str, method: &str, params: Value, metadata: Value) -> Value {
+    let mut message = json!({ "id": id, "guid": guid, "method": method });
+    message["params"] = params;
+    message["metadata"] = metadata;
+    message
+}
+
+fn mouse_click(id: u64, x: f64, y: f64) -> Value {
+    message(
+        id,
+        &page_guid(),
+        "mouseClick",
+        json!({ "x": x, "y": y }),
+        json!({}),
+    )
+}
+
+fn hooks_of(fake: &Arc<FakeHooks>) -> Arc<dyn ActionHooks> {
+    Arc::<FakeHooks>::clone(fake)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_hooked_call_sees_its_event_and_runs_when_allowed() {
+    let timeline = Timeline::default();
+    let fake = Arc::new(FakeHooks::new(&timeline));
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    // A message straight to the bridge, flagged internal as the SDK's own calls are: the flag
+    // decides nothing about hooks.
+    let metadata = json!({
+        "location": { "file": "run.js", "line": 3, "column": 7 },
+        "internal": true,
+    });
+    let reply = harness
+        .call(&message(1, &frame_guid(), "title", json!({}), metadata))
+        .await
+        .unwrap();
+    assert_eq!(
+        reply,
+        json!({ "id": 1, "result": { "value": "Fake page" } })
+    );
+    let expected = ActionEvent {
+        kind: Some("title"),
+        group: Some("read"),
+        method: "title".to_string(),
+        guid: frame_guid(),
+        args: json!({}),
+        location: Some(CallLocation {
+            line: 3,
+            column: Some(7),
+        }),
+        page: Some(page_guid()),
+        frame: Some(frame_guid()),
+        context: "context@default".to_string(),
+        locator: None,
+        element: None,
+    };
+    assert_eq!(fake.events(ActionHook::Before), [(expected.clone(), None)]);
+    assert_eq!(
+        fake.events(ActionHook::After),
+        [(
+            expected,
+            Some(ActionEnd::Result(json!({ "value": "Fake page" })))
+        )]
+    );
+    let records = harness.records(RunEnd::Settled).await;
+    assert_eq!(
+        records[0].hook,
+        Some(CallHookRecord {
+            before: Some(BeforeHookResult::Allowed),
+            after: Some(AfterHookResult::Kept),
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_frame_calls_selector_reaches_the_hook_as_its_locator() {
+    let timeline = Timeline::default();
+    let fake = Arc::new(FakeHooks::new(&timeline).wanting(|hook, _| hook == ActionHook::Before));
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let params = json!({ "selector": "#go", "strict": true });
+    let _reply = harness
+        .call(&message(
+            1,
+            &frame_guid(),
+            "textContent",
+            params.clone(),
+            json!({ "timeout": 100 }),
+        ))
+        .await
+        .unwrap();
+    let (seen, _) = fake.events(ActionHook::Before).remove(0);
+    assert_eq!((seen.kind, seen.group), (Some("textContent"), Some("read")));
+    assert_eq!(seen.args, params);
+    assert_eq!(
+        seen.locator,
+        Some(LocatorRef {
+            frame: frame_guid(),
+            selector: "#go".to_string(),
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_blocked_input_call_sends_no_input() {
+    let timeline = Timeline::default();
+    let allow = Arc::new(FakeHooks::new(&timeline));
+    let allowed = Harness::start(Some(hooks_of(&allow)), Duration::from_secs(30)).await;
+    assert_eq!(
+        allowed.call(&mouse_click(1, 10.0, 20.0)).await.unwrap(),
+        json!({ "id": 1 })
+    );
+    assert!(
+        !allowed.mouse_events().is_empty(),
+        "an allowed click is sent"
+    );
+    assert_eq!(
+        allowed.records(RunEnd::Settled).await[0].delivery,
+        Some(Delivery::Done)
+    );
+
+    let block = Arc::new(
+        FakeHooks::new(&timeline)
+            .before(|_, _| decided(Ok(ActionDecision::Block("no clicking".to_string())))),
+    );
+    let blocked = Harness::start(Some(hooks_of(&block)), Duration::from_secs(30)).await;
+    let reply = blocked.call(&mouse_click(1, 10.0, 20.0)).await.unwrap();
+    assert_eq!(reply["error"]["error"]["name"], "Error");
+    let message = reply["error"]["error"]["message"].as_str().unwrap();
+    assert!(message.contains("no clicking"), "{reply}");
+    assert!(
+        blocked.mouse_events().is_empty(),
+        "no input reached the page"
+    );
+    let record = blocked.records(RunEnd::Settled).await.remove(0);
+    assert_eq!(record.delivery, Some(Delivery::NotSent));
+    assert!(matches!(record.result, CallResult::Error { .. }));
+    assert_eq!(record.hook, Some(before_record(BeforeHookResult::Blocked)));
+    assert_eq!(
+        block.invocations(),
+        1,
+        "afterAction never sees a blocked call"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_replaced_arguments_run_and_the_record_keeps_the_scripts() {
+    let timeline = Timeline::default();
+    let fake = Arc::new(FakeHooks::new(&timeline).before(|_, _| {
+        decided(Ok(ActionDecision::ReplaceArgs(
+            json!({ "x": 30.0, "y": 40.0 }),
+        )))
+    }));
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    assert_eq!(
+        harness.call(&mouse_click(1, 10.0, 20.0)).await.unwrap(),
+        json!({ "id": 1 })
+    );
+    let events = harness.mouse_events();
+    assert!(!events.is_empty());
+    assert!(
+        events
+            .iter()
+            .all(|position| *position == (json!(30.0), json!(40.0))),
+        "the click ran with the hook's arguments: {events:?}"
+    );
+    let (seen, _) = fake.events(ActionHook::After).remove(0);
+    assert_eq!(seen.args, json!({ "x": 30.0, "y": 40.0 }));
+    let record = harness.records(RunEnd::Settled).await.remove(0);
+    assert_eq!(record.params, json!({ "x": 10.0, "y": 20.0 }));
+    assert_eq!(
+        record.hook,
+        Some(CallHookRecord {
+            before: Some(BeforeHookResult::ArgsReplaced),
+            after: Some(AfterHookResult::Kept),
+        })
+    );
+    assert!(record.log.is_empty());
+    assert_eq!(record.delivery, Some(Delivery::Done));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_call_run_with_replaced_arguments_keeps_no_call_log() {
+    let timeline = Timeline::default();
+    let read = |selector: &str| {
+        message(
+            1,
+            &frame_guid(),
+            "textContent",
+            json!({ "selector": selector, "strict": true }),
+            json!({ "timeout": 300 }),
+        )
+    };
+    // The same read without a swap: it waits for its element, and its log says so.
+    let allow = Arc::new(FakeHooks::new(&timeline));
+    let allowed = Harness::start(Some(hooks_of(&allow)), Duration::from_secs(30)).await;
+    let reply = allowed.call(&read("#nothing")).await.unwrap();
+    assert_eq!(reply["error"]["error"]["name"], "TimeoutError");
+    assert_ne!(reply["log"], json!([]), "{reply}");
+    assert!(!allowed.records(RunEnd::Settled).await[0].log.is_empty());
+
+    let swap = Arc::new(FakeHooks::new(&timeline).before(|_, _| {
+        decided(Ok(ActionDecision::ReplaceArgs(
+            json!({ "selector": "#s3cret", "strict": true }),
+        )))
+    }));
+    let swapped = Harness::start(Some(hooks_of(&swap)), Duration::from_secs(30)).await;
+    let reply = swapped.call(&read("#nothing")).await.unwrap();
+    assert_eq!(reply["error"]["error"]["name"], "TimeoutError");
+    assert_eq!(reply["log"], json!([]), "{reply}");
+    assert!(!reply.to_string().contains("s3cret"), "{reply}");
+    let record = swapped.records(RunEnd::Settled).await.remove(0);
+    assert!(record.log.is_empty());
+    assert_eq!(record.params["selector"], "#nothing");
+    let (seen, _) = swap.events(ActionHook::After).remove(0);
+    assert_eq!(
+        seen.locator,
+        Some(LocatorRef {
+            frame: frame_guid(),
+            selector: "#s3cret".to_string(),
+        }),
+        "the hook's own arguments name the locator it sees after"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_replaced_result_and_a_note_reach_the_script_and_the_ledger() {
+    let timeline = Timeline::default();
+    let fake = Arc::new(FakeHooks::new(&timeline).after(|_, _| {
+        decided(Ok(AfterDecision {
+            replace: Some(Replaced {
+                value: Some(json!({ "value": "Hooked" })),
+                binaries: Vec::new(),
+            }),
+            notes: vec!["the title was redacted".to_string()],
+        }))
+    }));
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let reply = harness
+        .call(&message(1, &frame_guid(), "title", json!({}), json!({})))
+        .await
+        .unwrap();
+    assert_eq!(reply, json!({ "id": 1, "result": { "value": "Hooked" } }));
+    assert_eq!(
+        harness.run.hook_ledger.take_notes(),
+        ["the title was redacted"]
+    );
+    let record = harness.records(RunEnd::Settled).await.remove(0);
+    assert_eq!(record.result, CallResult::Ok);
+    assert_eq!(
+        record.hook,
+        Some(CallHookRecord {
+            before: Some(BeforeHookResult::Allowed),
+            after: Some(AfterHookResult::Replaced),
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_replacement_of_the_wrong_shape_fails_the_call() {
+    let timeline = Timeline::default();
+    let fake = Arc::new(FakeHooks::new(&timeline).after(|_, _| decided(Ok(replaced(json!(42))))));
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let reply = harness
+        .call(&message(1, &frame_guid(), "title", json!({}), json!({})))
+        .await
+        .unwrap();
+    assert_eq!(reply["error"]["error"]["name"], "Error");
+    assert_eq!(reply.get("result"), None, "{reply}");
+    let record = harness.records(RunEnd::Settled).await.remove(0);
+    assert!(matches!(record.result, CallResult::Error { .. }));
+    assert_eq!(
+        record.hook.and_then(|hook| hook.after),
+        Some(AfterHookResult::Failed)
+    );
+    assert_eq!(harness.run.hook_ledger.take_trace().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_failing_hooks_fail_closed_around_an_input_call() {
+    let failures = [
+        HookFailure::Threw("Error: s3cret".to_string()),
+        HookFailure::Timeout,
+        HookFailure::BadDecision("{\"allow\":\"s3cret\"}".to_string()),
+    ];
+    for failure in failures {
+        // Before: the click never runs.
+        let timeline = Timeline::default();
+        let failed = failure.clone();
+        let fake =
+            Arc::new(FakeHooks::new(&timeline).before(move |_, _| decided(Err(failed.clone()))));
+        let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+        let reply = harness.call(&mouse_click(1, 10.0, 20.0)).await.unwrap();
+        assert_eq!(reply["error"]["error"]["name"], "Error", "{failure:?}");
+        assert!(!reply.to_string().contains("s3cret"), "{reply}");
+        assert!(harness.mouse_events().is_empty(), "{failure:?}");
+        let record = harness.records(RunEnd::Settled).await.remove(0);
+        assert_eq!(record.delivery, Some(Delivery::NotSent), "{failure:?}");
+        assert_eq!(record.hook, Some(before_record(BeforeHookResult::Failed)));
+        assert_eq!(harness.run.hook_ledger.take_trace().len(), 1);
+
+        // After: the click ran; it fails, and its delivery still says it was sent.
+        let failed = failure.clone();
+        let fake = Arc::new(
+            FakeHooks::new(&timeline)
+                .wanting(|hook, _| hook == ActionHook::After)
+                .after(move |_, _| decided(Err(failed.clone()))),
+        );
+        let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+        let reply = harness.call(&mouse_click(1, 10.0, 20.0)).await.unwrap();
+        assert_eq!(reply["error"]["error"]["name"], "Error", "{failure:?}");
+        assert!(!reply.to_string().contains("s3cret"), "{reply}");
+        assert!(!harness.mouse_events().is_empty(), "{failure:?}");
+        let record = harness.records(RunEnd::Settled).await.remove(0);
+        assert_eq!(record.delivery, Some(Delivery::Done), "{failure:?}");
+        assert_eq!(record.hook, Some(after_record(AfterHookResult::Failed)));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_replaced_arguments_the_command_refuses_block_the_call() {
+    let timeline = Timeline::default();
+    let fake = Arc::new(FakeHooks::new(&timeline).before(|_, _| {
+        decided(Ok(ActionDecision::ReplaceArgs(
+            json!({ "x": "s3cret", "y": 20 }),
+        )))
+    }));
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let reply = harness.call(&mouse_click(1, 10.0, 20.0)).await.unwrap();
+    assert_eq!(reply["error"]["error"]["name"], "Error");
+    assert!(!reply.to_string().contains("s3cret"), "{reply}");
+    assert!(harness.mouse_events().is_empty());
+    let record = harness.records(RunEnd::Settled).await.remove(0);
+    assert_eq!(record.delivery, Some(Delivery::NotSent));
+    assert_eq!(record.hook, Some(before_record(BeforeHookResult::Failed)));
+    assert_eq!(record.params, json!({ "x": 10.0, "y": 20.0 }));
+    let trace = harness.run.hook_ledger.take_trace();
+    assert_eq!(trace.len(), 1, "{trace:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_hooked_calls_are_decided_in_call_order() {
+    let timeline = Timeline::default();
+    let decisions = timeline.clone();
+    // The first call's hook takes longest.
+    let fake = Arc::new(FakeHooks::new(&timeline).before(move |invocation, event| {
+        let delay = Duration::from_millis(if invocation == 0 { 300 } else { 0 });
+        let decisions = decisions.clone();
+        async move {
+            time::sleep(delay).await;
+            decisions.push(format!("decided {}", tag(&event)));
+            Ok(ActionDecision::Allow)
+        }
+        .boxed()
+    }));
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let title_on = |id: u64, line: u64| {
+        message(
+            id,
+            &frame_guid(),
+            "title",
+            json!({}),
+            json!({ "location": { "file": "run.js", "line": line } }),
+        )
+    };
+    let (first, second) = (title_on(1, 1), title_on(2, 2));
+    let (first, second) = tokio::join!(harness.call(&first), harness.call(&second));
+    assert_eq!(first.unwrap()["result"], json!({ "value": "Fake page" }));
+    assert_eq!(second.unwrap()["result"], json!({ "value": "Fake page" }));
+    let lines: Vec<String> = timeline
+        .lines()
+        .into_iter()
+        .filter(|line| !line.starts_with("after"))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "before line 1",
+            "decided line 1",
+            "before line 2",
+            "decided line 2"
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_the_gate_wait_does_not_count_against_the_calls_timeout() {
+    let timeline = Timeline::default();
+    let fake = Arc::new(
+        FakeHooks::new(&timeline)
+            .before(|_, _| later(Duration::from_millis(1500), Ok(ActionDecision::Allow))),
+    );
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let reply = harness
+        .call(&message(
+            1,
+            &frame_guid(),
+            "title",
+            json!({}),
+            json!({ "timeout": 1000 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        reply,
+        json!({ "id": 1, "result": { "value": "Fake page" } })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_an_abort_at_the_gate_replies_abort_error() {
+    let timeline = Timeline::default();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let abandoned = Arc::clone(&dropped);
+    let fake = Arc::new(FakeHooks::new(&timeline).before(move |_, _| never(&abandoned)));
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let title = message(7, &frame_guid(), "title", json!({}), json!({}));
+    let call = harness.call(&title);
+    let abort = async {
+        while fake.invocations() == 0 {
+            task::yield_now().await;
+        }
+        harness.dispatcher.abort(7, "stop waiting".to_string());
+    };
+    let (reply, ()) = tokio::join!(call, abort);
+    let reply = reply.unwrap();
+    assert_eq!(reply["error"]["error"]["name"], "AbortError");
+    assert_eq!(reply["error"]["error"]["message"], "stop waiting");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "the invocation is abandoned"
+    );
+    let record = harness.records(RunEnd::Settled).await.remove(0);
+    assert_eq!(
+        record.result,
+        CallResult::Error {
+            name: "AbortError".to_string(),
+            message: "stop waiting".to_string(),
+        }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_the_run_deadline_at_the_gate_ends_the_call() {
+    let timeline = Timeline::default();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let abandoned = Arc::clone(&dropped);
+    let fake = Arc::new(FakeHooks::new(&timeline).before(move |_, _| never(&abandoned)));
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_millis(500)).await;
+    let reply = harness
+        .call(&message(1, &frame_guid(), "title", json!({}), json!({})))
+        .await;
+    assert!(matches!(reply, Err(BridgeError::NoReply)), "{reply:?}");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "the invocation is abandoned"
+    );
+    let record = harness.records(RunEnd::Timeout).await.remove(0);
+    assert_eq!(
+        record.result,
+        CallResult::Unfinished {
+            reason: RunEnd::Timeout
+        }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_element_actions_unwanted_kinds_and_runs_without_hooks_are_not_hooked() {
+    let timeline = Timeline::default();
+    let fake = Arc::new(FakeHooks::new(&timeline));
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let click = message(
+        1,
+        &frame_guid(),
+        "click",
+        json!({ "selector": "#go", "strict": true }),
+        json!({}),
+    );
+    assert_eq!(harness.call(&click).await.unwrap(), json!({ "id": 1 }));
+    let fill = message(
+        2,
+        &frame_guid(),
+        "fill",
+        json!({ "selector": "#go", "strict": true, "value": "x" }),
+        json!({ "timeout": 100 }),
+    );
+    let _reply = harness.call(&fill).await.unwrap();
+    assert_eq!(
+        fake.asked.load(Ordering::SeqCst),
+        0,
+        "element actions are feature 4's"
+    );
+    assert_eq!(fake.invocations(), 0);
+    let records = harness.records(RunEnd::Settled).await;
+    assert!(records.iter().all(|record| record.hook.is_none()));
+
+    let unwanted = Arc::new(FakeHooks::new(&timeline).wanting(|_, kind| kind != "title"));
+    let harness = Harness::start(Some(hooks_of(&unwanted)), Duration::from_secs(30)).await;
+    let title = message(1, &frame_guid(), "title", json!({}), json!({}));
+    let reply = harness.call(&title).await.unwrap();
+    assert_eq!(
+        reply,
+        json!({ "id": 1, "result": { "value": "Fake page" } })
+    );
+    assert_eq!(
+        unwanted.asked.load(Ordering::SeqCst),
+        2,
+        "one question per hook"
+    );
+    assert_eq!(unwanted.invocations(), 0);
+    assert_eq!(harness.records(RunEnd::Settled).await[0].hook, None);
+
+    let harness = Harness::start(None, Duration::from_secs(30)).await;
+    let reply = harness.call(&title).await.unwrap();
+    assert_eq!(
+        reply,
+        json!({ "id": 1, "result": { "value": "Fake page" } })
+    );
+    assert_eq!(harness.records(RunEnd::Settled).await[0].hook, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_set_content_held_at_its_gate_lets_the_hooks_own_write_go_first() {
+    let timeline = Timeline::default();
+    let (release, released) = oneshot::channel::<()>();
+    let released = Mutex::new(Some(released));
+    // Only the agent's write is hooked; the second stands in for the hook realm's own call,
+    // which phase 2 skips by its origin.
+    let first_ask = AtomicBool::new(true);
+    let fake = Arc::new(
+        FakeHooks::new(&timeline)
+            .wanting(move |hook, _| {
+                hook == ActionHook::Before && first_ask.swap(false, Ordering::SeqCst)
+            })
+            .before(move |_, _| match released.lock().unwrap().take() {
+                Some(released) => async move {
+                    let _released = released.await;
+                    Ok(ActionDecision::Allow)
+                }
+                .boxed(),
+                None => decided(Ok(ActionDecision::Allow)),
+            }),
+    );
+    let harness = Arc::new(Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await);
+    let write = |id: u64, html: &str| {
+        message(
+            id,
+            &frame_guid(),
+            "setContent",
+            json!({ "html": html, "waitUntil": "commit" }),
+            json!({}),
+        )
+    };
+    let agent = {
+        let harness = Arc::clone(&harness);
+        let message = write(1, "<p>agent</p>");
+        tokio::spawn(async move { harness.call(&message).await })
+    };
+    while fake.invocations() == 0 {
+        task::yield_now().await;
+    }
+    let hook_write = time::timeout(
+        Duration::from_secs(10),
+        harness.call(&write(2, "<p>hook</p>")),
+    )
+    .await;
+    assert!(
+        matches!(hook_write, Ok(Ok(_))),
+        "the hook's write never waited for the held one: {hook_write:?}"
+    );
+    assert!(
+        !agent.is_finished(),
+        "the agent's write is still held at its gate"
+    );
+    release.send(()).unwrap();
+    let agent_reply = time::timeout(Duration::from_secs(10), agent).await;
+    assert!(matches!(agent_reply, Ok(Ok(Ok(_)))), "{agent_reply:?}");
+    assert_eq!(
+        harness.writes(),
+        [json!("<p>hook</p>"), json!("<p>agent</p>")]
     );
 }
