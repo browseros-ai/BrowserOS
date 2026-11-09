@@ -57,6 +57,7 @@ neo-quickjs-injected/src/web-error.ts
 neo-quickjs-injected/src/web-storage.ts
 neo-runtime-spec/src/binary.rs
 neo-runtime/src/abort.rs
+neo-runtime/src/actions.rs
 neo-runtime/src/artifacts.rs
 neo-runtime/src/browser_representations/bindings.rs
 neo-runtime/src/browser_representations/clock.rs

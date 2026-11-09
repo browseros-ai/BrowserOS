@@ -37,6 +37,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 use tracing::debug;
 
+use crate::actions::{ActionKind, NeoMethod};
 use crate::browser_representations::network::{HopId, NetworkLog, PauseTarget};
 use crate::browser_representations::page::PageSession;
 use crate::browser_representations::tabs::Tabs;
@@ -99,16 +100,20 @@ const FETCHED_CONTINUE: &str = "route.continue: the route's request was fetched 
 
 /// Neo: `route.fetch` on a route's guid. Playwright's client performs it in Node; Neo's browser
 /// sends the routed request itself ([`fetch`]).
-pub(crate) static FETCH_META: MethodMeta = MethodMeta {
-    interface: "Route",
-    method: "neo:fetch",
-    title: Some("Fetch request"),
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
+pub(crate) static FETCH_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Route",
+        method: "neo:fetch",
+        title: Some("Fetch request"),
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::Fetch,
+    false,
+);
 
 /// `route.fetch`'s overrides and redirect bound, as the SDK sends them.
 #[derive(Debug, Deserialize)]

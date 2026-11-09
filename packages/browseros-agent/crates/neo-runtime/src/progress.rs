@@ -44,7 +44,7 @@ use crate::deadline::{Deadline, Stop};
 use crate::hooks::HookSandbox;
 use crate::playwright_methods::evaluate::Handles;
 use crate::run::{
-    CallLocation, CallOrigin, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd,
+    CallAction, CallLocation, CallOrigin, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd,
 };
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
@@ -446,6 +446,7 @@ impl Progress {
             method: "click".to_string(),
             title: Some("Click"),
             origin: CallOrigin::Agent,
+            action: None,
             params: Value::Null,
             location: None,
             input: true,
@@ -607,6 +608,7 @@ pub(crate) struct CallEntry {
     title: Option<&'static str>,
     /// Who sent the call. A hook's call keeps no params, location or log ([`CallEntry::new`]).
     origin: CallOrigin,
+    action: Option<CallAction>,
     params: Value,
     /// `params` as JSON text, in bytes: what keeping the record costs before any log.
     params_bytes: usize,
@@ -650,6 +652,7 @@ pub(crate) struct CallStart {
     pub(crate) title: Option<&'static str>,
     /// The dispatcher's origin, never the message's (`Dispatcher::for_hooks`).
     pub(crate) origin: CallOrigin,
+    pub(crate) action: Option<CallAction>,
     pub(crate) params: Value,
     pub(crate) location: Option<CallLocation>,
     /// Whether the method writes input, so its delivery is tracked.
@@ -664,6 +667,7 @@ impl CallEntry {
             method,
             title,
             origin,
+            action,
             params,
             location,
             input,
@@ -680,6 +684,7 @@ impl CallEntry {
             method,
             title,
             origin,
+            action,
             params_bytes: params.to_string().len(),
             params,
             location,
@@ -812,6 +817,7 @@ impl CallEntry {
             method: self.method.clone(),
             title: self.title.map(str::to_string),
             origin: self.origin,
+            action: self.action,
             params: self.params.clone(),
             location: self.location,
             started_at_ms,
@@ -1097,6 +1103,7 @@ mod tests {
             method: "fill".to_string(),
             title: Some("Fill"),
             origin: CallOrigin::Hook,
+            action: None,
             params: serde_json::json!({"selector": "#p", "value": "s3cret"}),
             location: Some(CallLocation {
                 line: 2,
@@ -1130,6 +1137,7 @@ mod tests {
             method: "goto".to_string(),
             title: Some("Navigate"),
             origin: CallOrigin::Hook,
+            action: None,
             params: serde_json::json!({"url": "https://a.test/?token=s3cret"}),
             location: None,
             input: false,
@@ -1160,6 +1168,7 @@ mod tests {
                 method: "click".to_string(),
                 title: Some("Click"),
                 origin: CallOrigin::Agent,
+                action: None,
                 params: Value::Null,
                 location: None,
                 input: true,
@@ -1197,6 +1206,7 @@ mod tests {
             method: "click".to_string(),
             title: Some("Click"),
             origin: CallOrigin::Agent,
+            action: None,
             params,
             location: None,
             input,

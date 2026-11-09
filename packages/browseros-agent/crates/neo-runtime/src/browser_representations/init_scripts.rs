@@ -41,6 +41,7 @@ use tokio::sync::{Mutex, oneshot};
 use tokio::time::{self, Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
+use crate::actions::{ActionKind, NeoMethod};
 use crate::browser_representations::bindings::Bindings;
 use crate::browser_representations::page::PageSession;
 use crate::debugger::DEFAULT_CONTEXT;
@@ -50,39 +51,51 @@ use crate::progress::{PlaywrightError, RunScope};
 pub(crate) const DISPOSABLE_PREFIX: &str = "disposable@";
 
 /// Neo: `Page.addInitScript`'s trace metadata (`neo-runtime-spec/spec/playwright/page.yml`).
-pub(crate) static PAGE_ADD_INIT_SCRIPT_META: MethodMeta = MethodMeta {
-    interface: "Page",
-    method: "addInitScript",
-    title: Some("Add init script"),
-    subtitle: None,
-    group: Some(MethodGroup::Configuration),
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
+pub(crate) static PAGE_ADD_INIT_SCRIPT_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Page",
+        method: "addInitScript",
+        title: Some("Add init script"),
+        subtitle: None,
+        group: Some(MethodGroup::Configuration),
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::AddInitScript,
+    false,
+);
 /// Neo: `BrowserContext.addInitScript`'s trace metadata
 /// (`neo-runtime-spec/spec/playwright/browserContext.yml`).
-pub(crate) static CONTEXT_ADD_INIT_SCRIPT_META: MethodMeta = MethodMeta {
-    interface: "BrowserContext",
-    method: "addInitScript",
-    title: Some("Add init script"),
-    subtitle: None,
-    group: Some(MethodGroup::Configuration),
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
+pub(crate) static CONTEXT_ADD_INIT_SCRIPT_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "BrowserContext",
+        method: "addInitScript",
+        title: Some("Add init script"),
+        subtitle: None,
+        group: Some(MethodGroup::Configuration),
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::AddInitScript,
+    false,
+);
 /// Neo: `Disposable.dispose`'s trace metadata (`neo-runtime-spec/spec/playwright/core.yml`).
-pub(crate) static DISPOSABLE_DISPOSE_META: MethodMeta = MethodMeta {
-    interface: "Disposable",
-    method: "dispose",
-    title: None,
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: true,
-    flags: &[],
-};
+pub(crate) static DISPOSABLE_DISPOSE_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Disposable",
+        method: "dispose",
+        title: None,
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: true,
+        flags: &[],
+    },
+    ActionKind::Dispose,
+    false,
+);
 
 /// An init script command, routed by `method_router.rs`.
 #[derive(Debug)]

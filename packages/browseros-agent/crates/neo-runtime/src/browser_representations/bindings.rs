@@ -54,6 +54,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
+use crate::actions::{ActionKind, NeoMethod};
 use crate::browser_representations::init_scripts::{self, InitScripts, Link, Rank, until_gone};
 use crate::browser_representations::page::{FrameTab, PageSession};
 use crate::browser_representations::tabs::Tabs;
@@ -82,50 +83,66 @@ const DISPOSABLE: &str = "disposable@binding.";
 const RUN_ENDED: &str = "Target page, context or browser has been closed";
 
 /// Neo: `Page.exposeBinding`'s trace metadata (`neo-runtime-spec/spec/playwright/page.yml`).
-pub(crate) static PAGE_EXPOSE_BINDING_META: MethodMeta = MethodMeta {
-    interface: "Page",
-    method: "exposeBinding",
-    title: Some("Expose binding"),
-    subtitle: None,
-    group: Some(MethodGroup::Configuration),
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
+pub(crate) static PAGE_EXPOSE_BINDING_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Page",
+        method: "exposeBinding",
+        title: Some("Expose binding"),
+        subtitle: None,
+        group: Some(MethodGroup::Configuration),
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::ExposeBinding,
+    false,
+);
 /// Neo: `BrowserContext.exposeBinding`'s trace metadata
 /// (`neo-runtime-spec/spec/playwright/browserContext.yml`).
-pub(crate) static CONTEXT_EXPOSE_BINDING_META: MethodMeta = MethodMeta {
-    interface: "BrowserContext",
-    method: "exposeBinding",
-    title: Some("Expose binding"),
-    subtitle: None,
-    group: Some(MethodGroup::Configuration),
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
+pub(crate) static CONTEXT_EXPOSE_BINDING_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "BrowserContext",
+        method: "exposeBinding",
+        title: Some("Expose binding"),
+        subtitle: None,
+        group: Some(MethodGroup::Configuration),
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::ExposeBinding,
+    false,
+);
 /// Neo: `BindingCall.resolve`'s trace metadata (`neo-runtime-spec/spec/playwright/playwright.yml`).
-pub(crate) static BINDING_CALL_RESOLVE_META: MethodMeta = MethodMeta {
-    interface: "BindingCall",
-    method: "resolve",
-    title: None,
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: true,
-    flags: &[],
-};
+pub(crate) static BINDING_CALL_RESOLVE_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "BindingCall",
+        method: "resolve",
+        title: None,
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: true,
+        flags: &[],
+    },
+    ActionKind::BindingCall,
+    false,
+);
 /// Neo: `BindingCall.reject`'s trace metadata (`neo-runtime-spec/spec/playwright/playwright.yml`).
-pub(crate) static BINDING_CALL_REJECT_META: MethodMeta = MethodMeta {
-    interface: "BindingCall",
-    method: "reject",
-    title: None,
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: true,
-    flags: &[],
-};
+pub(crate) static BINDING_CALL_REJECT_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "BindingCall",
+        method: "reject",
+        title: None,
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: true,
+        flags: &[],
+    },
+    ActionKind::BindingCall,
+    false,
+);
 
 /// A binding command, routed by `method_router.rs`.
 #[derive(Debug)]
@@ -208,7 +225,7 @@ impl Thrown {
 pub(crate) fn decode_expose(
     context: bool,
     params: Option<Value>,
-) -> (&'static MethodMeta, Result<BindingRoute, PlaywrightError>) {
+) -> (&'static NeoMethod, Result<BindingRoute, PlaywrightError>) {
     let meta = if context {
         &CONTEXT_EXPOSE_BINDING_META
     } else {
@@ -230,7 +247,7 @@ pub(crate) fn decode_call(
     guid: &str,
     method: &str,
     params: Option<Value>,
-) -> Option<(&'static MethodMeta, Result<BindingRoute, PlaywrightError>)> {
+) -> Option<(&'static NeoMethod, Result<BindingRoute, PlaywrightError>)> {
     let guid = guid.to_string();
     match method {
         "resolve" => Some((

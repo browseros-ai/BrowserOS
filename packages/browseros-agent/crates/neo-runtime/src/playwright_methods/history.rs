@@ -1019,6 +1019,7 @@ mod tests {
             method: "goBack".to_string(),
             title: Some("Go back"),
             origin: CallOrigin::Agent,
+            action: None,
             params: json!({}),
             location: None,
             input: false,

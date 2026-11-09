@@ -697,6 +697,7 @@ mod tests {
             method: "saveAs".to_string(),
             title: None,
             origin: CallOrigin::Agent,
+            action: None,
             params: json!({}),
             location: None,
             input: false,

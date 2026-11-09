@@ -377,6 +377,7 @@ mod tests {
             method: "click".to_string(),
             title: Some("Click"),
             origin: CallOrigin::Agent,
+            action: None,
             params: Value::Null,
             location: None,
             input: true,

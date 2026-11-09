@@ -456,6 +456,7 @@ mod tests {
             method: "goto".to_string(),
             title: Some("Navigate"),
             origin: CallOrigin::Agent,
+            action: None,
             params: json!({}),
             location: None,
             input: false,

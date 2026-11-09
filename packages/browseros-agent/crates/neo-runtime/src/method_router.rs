@@ -70,6 +70,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
+use crate::actions::{ActionKind, NeoMethod, ServedMethod, SpecCommand};
 use crate::browser_representations::bindings::{self, Answering, BindingRoute, Outcome};
 use crate::browser_representations::clock::{self, ClockRoute};
 use crate::browser_representations::cookies_and_storage::StateFile;
@@ -163,69 +164,99 @@ const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
 
 // Playwright implements these on its eventful client. Neo has a call/reply bridge, so its
 // Frame extensions keep the whole wait in Rust. Wire shapes live in waits.rs and neo-commands.ts.
-static WAIT_FOR_URL_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "neo:waitForURL",
-    title: Some("Wait for URL"),
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
-static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "neo:waitForLoadState",
-    title: Some("Wait for load state"),
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
+/// Neo: metadata and action for a runtime navigation wait command.
+pub(crate) static WAIT_FOR_URL_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "neo:waitForURL",
+        title: Some("Wait for URL"),
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::WaitForURL,
+    false,
+);
+/// Neo: metadata and action for a runtime navigation wait command.
+pub(crate) static WAIT_FOR_LOAD_STATE_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "neo:waitForLoadState",
+        title: Some("Wait for load state"),
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::WaitForLoadState,
+    false,
+);
 // Playwright's client `waitForNavigation` (`@apiCall({ title: 'Wait for navigation' })`). A
 // glob or RegExp `url` is one call; a predicate is a cursor the realm steps through
 // (`history.rs`), one navigation per `neo:nextNavigation`, closed by `neo:finishNavigation`.
-static WAIT_FOR_NAVIGATION_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "neo:waitForNavigation",
-    title: Some("Wait for navigation"),
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
-static NEXT_NAVIGATION_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "neo:nextNavigation",
-    title: Some("Wait for navigation"),
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
-static FINISH_NAVIGATION_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "neo:finishNavigation",
-    title: Some("Wait for navigation"),
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
-static RELEASE_NAVIGATION_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "neo:releaseNavigation",
-    title: Some("Wait for navigation"),
-    subtitle: None,
-    group: None,
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
+/// Neo: metadata and action for a runtime navigation wait command.
+pub(crate) static WAIT_FOR_NAVIGATION_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "neo:waitForNavigation",
+        title: Some("Wait for navigation"),
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::WaitForNavigation,
+    false,
+);
+/// Neo: metadata and action for a runtime navigation wait command.
+pub(crate) static NEXT_NAVIGATION_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "neo:nextNavigation",
+        title: Some("Wait for navigation"),
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::WaitForNavigation,
+    false,
+);
+/// Neo: metadata and action for a runtime navigation wait command.
+pub(crate) static FINISH_NAVIGATION_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "neo:finishNavigation",
+        title: Some("Wait for navigation"),
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::WaitForNavigation,
+    false,
+);
+/// Neo: metadata and action for a runtime navigation wait command.
+pub(crate) static RELEASE_NAVIGATION_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "neo:releaseNavigation",
+        title: Some("Wait for navigation"),
+        subtitle: None,
+        group: None,
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::WaitForNavigation,
+    false,
+);
 // `serve` replies to a pointer action with `{id}` and no `result`, which is right only while
 // Playwright's spec declares no `returns` for `Frame.click`, `dblclick`, `hover` and `tap`. A
 // spec that gives one a result stops this compiling.
@@ -467,7 +498,7 @@ impl Future for PendingReply {
 /// A message after routing: the method's metadata when the call named one Neo knows, and what
 /// to run or why not.
 struct Routed {
-    meta: Option<&'static MethodMeta>,
+    meta: Option<ServedMethod>,
     route: Result<ObjectCall, PlaywrightError>,
 }
 
@@ -725,6 +756,7 @@ impl Dispatcher {
             method,
             title: meta.and_then(|meta| meta.title),
             origin,
+            action: meta.map(|meta| meta.action().into()),
             params: params.unwrap_or_else(|| json!({})),
             location: call_location(&metadata),
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
@@ -744,7 +776,12 @@ impl Dispatcher {
             }
         };
         let closed = closed_token(&route, target.as_ref());
-        let held = self.in_call_order(&route, meta.zip(debugged), &metadata, &entry);
+        let held = self.in_call_order(
+            &route,
+            meta.map(ServedMethod::meta).zip(debugged),
+            &metadata,
+            &entry,
+        );
         // The run's disconnection outlives the stop it gives every other call of the run.
         let disconnecting = disconnects(&route);
         // Registered before the call returns to JS, so the abort listener the SDK adds right
@@ -984,7 +1021,7 @@ async fn init_call(
 /// reach that context's pages only, as each Playwright context keeps its own.
 fn context_init_script(context: &str, params: Option<Value>) -> Routed {
     Routed {
-        meta: Some(&CONTEXT_ADD_INIT_SCRIPT_META),
+        meta: Some((&CONTEXT_ADD_INIT_SCRIPT_META).into()),
         route: init_scripts::source_of(&CONTEXT_ADD_INIT_SCRIPT_META, params).map(|source| {
             ObjectCall::Init(InitRoute::Context {
                 context: context.to_string(),
@@ -1011,7 +1048,7 @@ fn route_init(
             Ok(context_init_script(&context.id, params))
         }
         ObjectKind::Page if method == PAGE_ADD_INIT_SCRIPT_META.method => Ok(Routed {
-            meta: Some(&PAGE_ADD_INIT_SCRIPT_META),
+            meta: Some((&PAGE_ADD_INIT_SCRIPT_META).into()),
             route: init_scripts::source_of(&PAGE_ADD_INIT_SCRIPT_META, params)
                 .map(|source| ObjectCall::Init(InitRoute::Page(source))),
         }),
@@ -1021,7 +1058,7 @@ fn route_init(
         {
             let (meta, _) = bindings::decode_expose(true, params);
             Ok(Routed {
-                meta: Some(meta),
+                meta: Some(meta.into()),
                 route: Err(browser_methods::created_state(method)),
             })
         }
@@ -1031,7 +1068,7 @@ fn route_init(
             let (meta, route) =
                 bindings::decode_expose(matches!(object, ObjectKind::Context), params);
             Ok(Routed {
-                meta: Some(meta),
+                meta: Some(meta.into()),
                 route: route.map(ObjectCall::Binding),
             })
         }
@@ -1039,13 +1076,13 @@ fn route_init(
             let (meta, route) = clock::decode(method, params)
                 .unwrap_or_else(|| unreachable!("clock::serves names every clock command"));
             Ok(Routed {
-                meta: Some(meta),
+                meta: Some(meta.into()),
                 route: route.map(ObjectCall::Clock),
             })
         }
         ObjectKind::BindingCall(guid) => Ok(match bindings::decode_call(&guid, method, params) {
             Some((meta, route)) => Routed {
-                meta: Some(meta),
+                meta: Some(meta.into()),
                 route: route.map(ObjectCall::Binding),
             },
             None => Routed {
@@ -1058,7 +1095,8 @@ fn route_init(
         }),
         ObjectKind::Disposable(guid) => {
             Ok(Routed {
-                meta: Some(&DISPOSABLE_DISPOSE_META),
+                meta: (method == DISPOSABLE_DISPOSE_META.method)
+                    .then(|| (&DISPOSABLE_DISPOSE_META).into()),
                 route: if method == DISPOSABLE_DISPOSE_META.method {
                     Ok(ObjectCall::Init(InitRoute::Dispose(guid)))
                 } else {
@@ -1186,14 +1224,28 @@ fn decode_platform(
     object: PlatformObject,
     method: &str,
     params: Option<Value>,
-) -> Result<(&'static MethodMeta, Result<ObjectCall, PlaywrightError>), CallDecodeError> {
+) -> Result<(ServedMethod, Result<ObjectCall, PlaywrightError>), CallDecodeError> {
     match object {
-        PlatformObject::Browser => BrowserCall::decode(method, params)
-            .map(|call| (call.meta(), Ok(ObjectCall::Browser(Box::new(call))))),
-        PlatformObject::CreatedContext(context) => BrowserContextCall::decode(method, params)
-            .map(|call| (call.meta(), Ok(ObjectCall::CreatedContext(context, call)))),
-        PlatformObject::Debugger(context) => DebuggerCall::decode(method, params)
-            .map(|call| (call.meta(), Ok(ObjectCall::Debugger(context, call)))),
+        PlatformObject::Browser => BrowserCall::decode(method, params).map(|call| {
+            (
+                ServedMethod::from(&call),
+                Ok(ObjectCall::Browser(Box::new(call))),
+            )
+        }),
+        PlatformObject::CreatedContext(context) => {
+            BrowserContextCall::decode(method, params).map(|call| {
+                (
+                    ServedMethod::from(&call),
+                    Ok(ObjectCall::CreatedContext(context, call)),
+                )
+            })
+        }
+        PlatformObject::Debugger(context) => DebuggerCall::decode(method, params).map(|call| {
+            (
+                ServedMethod::from(&call),
+                Ok(ObjectCall::Debugger(context, call)),
+            )
+        }),
     }
 }
 
@@ -1249,6 +1301,10 @@ fn storage_or_page(call: PageCall) -> ObjectCall {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one routing match retains each receiver's decoded metadata"
+)]
 fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
     let (object, params) = match route_init(object, method, params) {
         Ok(routed) => return routed,
@@ -1258,13 +1314,13 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         ObjectKind::Context => {
             let path = neo_path(params.as_ref());
             BrowserContextCall::decode(method, params)
-                .map(|call| (call.meta(), context_call(call, path)))
+                .map(|call| (ServedMethod::from(&call), context_call(call, path)))
         }
         ObjectKind::Platform(object) => decode_platform(object, method, params),
         ObjectKind::Page => {
             let path = neo_path(params.as_ref());
             PageCall::decode(method, params).map(|call| {
-                let meta = call.meta();
+                let meta = ServedMethod::from(&call);
                 let routed = match DeviceCall::from_page_call(call) {
                     Ok(device) => device.map(ObjectCall::Device),
                     Err(call) => page_call(call, path),
@@ -1279,12 +1335,16 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             if let Some(routed) = route_frame_extension(method, params.as_ref()) {
                 return routed;
             }
-            FrameCall::decode(method, params)
-                .map(|call| (call.meta(), route_frame_call(call).map(ObjectCall::Frame)))
+            FrameCall::decode(method, params).map(|call| {
+                (
+                    ServedMethod::from(&call),
+                    route_frame_call(call).map(ObjectCall::Frame),
+                )
+            })
         }
         ObjectKind::Network(NetworkObject::Request, hop) => RequestCall::decode(method, params)
             .map(|call| {
-                let meta = call.meta();
+                let meta = ServedMethod::from(&call);
                 (
                     meta,
                     Ok(ObjectCall::Network(NetworkCall::Request(hop, call))),
@@ -1292,7 +1352,7 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             }),
         ObjectKind::Network(NetworkObject::Response, hop) => ResponseCall::decode(method, params)
             .map(|call| {
-                let meta = call.meta();
+                let meta = ServedMethod::from(&call);
                 (
                     meta,
                     Ok(ObjectCall::Network(NetworkCall::Response(hop, call))),
@@ -1304,15 +1364,19 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             }
             let (meta, call) = evaluate::route_handle(&guid, method, params.as_ref());
             return Routed {
-                meta,
+                meta: meta.map(ServedMethod::from),
                 route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
             };
         }
-        ObjectKind::Dialog(index) => DialogCall::decode(method, params)
-            .map(|call| (call.meta(), Ok(ObjectCall::Dialog(index, call)))),
+        ObjectKind::Dialog(index) => DialogCall::decode(method, params).map(|call| {
+            (
+                ServedMethod::from(&call),
+                Ok(ObjectCall::Dialog(index, call)),
+            )
+        }),
         ObjectKind::Intercepted(index) if method == routes::FETCH_META.method => {
             return Routed {
-                meta: Some(&routes::FETCH_META),
+                meta: Some((&routes::FETCH_META).into()),
                 route: decode_neo_params::<routes::NeoRouteFetchParams>(
                     params,
                     &routes::FETCH_META,
@@ -1323,12 +1387,16 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             };
         }
         ObjectKind::Intercepted(index) => RouteCall::decode(method, params).map(|call| {
-            let meta = call.meta();
+            let meta = ServedMethod::from(&call);
             let route = ObjectCall::Intercepted(index, routes::InterceptedCall::Answer(call));
             (meta, Ok(route))
         }),
-        ObjectKind::Download(guid) => ArtifactCall::decode(method, params)
-            .map(|call| (call.meta(), Ok(ObjectCall::Download(guid, call)))),
+        ObjectKind::Download(guid) => ArtifactCall::decode(method, params).map(|call| {
+            (
+                ServedMethod::from(&call),
+                Ok(ObjectCall::Download(guid, call)),
+            )
+        }),
         // `route_init` answers every Disposable and BindingCall message.
         ObjectKind::Disposable(_) | ObjectKind::BindingCall(_) | ObjectKind::Unknown => {
             return Routed {
@@ -1343,10 +1411,7 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
             route,
         },
         Err(error) => Routed {
-            meta: match &error {
-                CallDecodeError::InvalidParams { meta, .. } => Some(*meta),
-                CallDecodeError::UnknownMethod { .. } => None,
-            },
+            meta: ServedMethod::decode_error(&error),
             route: Err(PlaywrightError::error(error.to_string())),
         },
     }
@@ -1356,7 +1421,7 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
 /// another method.
 fn route_neo_screenshot(method: &str, params: Option<&Value>) -> Option<Routed> {
     (method == NEO_SCREENSHOT_META.method).then(|| Routed {
-        meta: Some(&NEO_SCREENSHOT_META),
+        meta: Some((&NEO_SCREENSHOT_META).into()),
         route: decode_neo_params::<NeoScreenshotParams>(params.cloned(), &NEO_SCREENSHOT_META)
             .map(|params| ObjectCall::Capture(Capture::Locator(Box::new(params)))),
     })
@@ -1365,7 +1430,7 @@ fn route_neo_screenshot(method: &str, params: Option<&Value>) -> Option<Routed> 
 /// `ElementHandle.screenshot` on a handle guid (`capture.rs`), or `None` for another method.
 fn route_handle_screenshot(guid: &str, method: &str, params: Option<&Value>) -> Option<Routed> {
     (method == ELEMENT_HANDLE_SCREENSHOT_META.method).then(|| Routed {
-        meta: Some(&ELEMENT_HANDLE_SCREENSHOT_META),
+        meta: Some((&ELEMENT_HANDLE_SCREENSHOT_META).into()),
         route: decode_neo_params::<ElementScreenshotParams>(
             params.cloned(),
             &ELEMENT_HANDLE_SCREENSHOT_META,
@@ -1444,7 +1509,7 @@ fn page_call(
 fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed> {
     if method == WAIT_FOR_URL_META.method {
         return Some(Routed {
-            meta: Some(&WAIT_FOR_URL_META),
+            meta: Some((&WAIT_FOR_URL_META).into()),
             route: decode_neo_params::<NeoWaitForUrlParams>(params.cloned(), &WAIT_FOR_URL_META)
                 .and_then(|params| WaitForUrlOptions::from_params(&params))
                 .map(|options| ObjectCall::Frame(Route::FrameWaitForUrl(options))),
@@ -1453,7 +1518,7 @@ fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed>
     if method == FrameDispatchEventParams::META.method {
         // Playwright: `server/dispatchers/frameDispatcher.ts` `FrameDispatcher.dispatchEvent`: `return this._frame.dispatchEvent(progress, params, params.type, parseArgument(params.eventInit));`
         return Some(Routed {
-            meta: Some(FrameDispatchEventParams::META),
+            meta: Some(FrameDispatchEventParams::METHOD),
             route: decode_neo_params::<DispatchEventParams>(
                 params.cloned(),
                 FrameDispatchEventParams::META,
@@ -1472,13 +1537,13 @@ fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed>
     }
     if let Some((meta, call)) = evaluate::route_frame(method, params) {
         return Some(Routed {
-            meta: Some(meta),
+            meta: Some(meta.into()),
             route: call.map(|call| ObjectCall::Frame(Route::FrameEval(call))),
         });
     }
     if method == WAIT_FOR_LOAD_STATE_META.method {
         return Some(Routed {
-            meta: Some(&WAIT_FOR_LOAD_STATE_META),
+            meta: Some((&WAIT_FOR_LOAD_STATE_META).into()),
             route: decode_neo_params::<NeoWaitForLoadStateParams>(
                 params.cloned(),
                 &WAIT_FOR_LOAD_STATE_META,
@@ -1497,7 +1562,7 @@ fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed>
         && !elements.is_empty()
     {
         return Some(Routed {
-            meta: Some(FrameSelectOptionParams::META),
+            meta: Some(FrameSelectOptionParams::METHOD),
             route: select_option_with_elements(params, elements),
         });
     }
@@ -1569,7 +1634,7 @@ fn route_element_command(method: &str, params: Option<Value>) -> Option<Routed> 
         return None;
     };
     Some(Routed {
-        meta: Some(meta),
+        meta: Some(meta.into()),
         route: route.map(ObjectCall::Frame),
     })
 }
@@ -1601,7 +1666,7 @@ fn route_navigation_wait(method: &str, params: Option<&Value>) -> Option<Routed>
         return None;
     };
     Some(Routed {
-        meta: Some(meta),
+        meta: Some(meta.into()),
         route: route.map(ObjectCall::Frame),
     })
 }
@@ -2387,7 +2452,7 @@ pub(crate) fn encode_result<C: Command>(result: &C::Result) -> Result<Option<Val
 /// generated spec cannot create (`frame_element.rs`).
 fn route_frame_element(method: &str) -> Option<Routed> {
     (method == frame_element::FRAME_ELEMENT_META.method).then(|| Routed {
-        meta: Some(&frame_element::FRAME_ELEMENT_META),
+        meta: Some((&frame_element::FRAME_ELEMENT_META).into()),
         route: Ok(ObjectCall::Frame(Route::FrameFrameElement)),
     })
 }
@@ -2557,6 +2622,7 @@ mod tests {
             method: "click".to_string(),
             title: Some("Click"),
             origin: CallOrigin::Agent,
+            action: None,
             params: json!({"selector":"#nothing"}),
             location: None,
             input: true,
@@ -3993,6 +4059,7 @@ mod tests {
             method: "neo:nextNavigation".to_string(),
             title: Some("Wait for navigation"),
             origin: CallOrigin::Agent,
+            action: None,
             params: json!({"response":false}),
             location: None,
             input: false,
@@ -4322,6 +4389,7 @@ mod review_abort_priority {
             method: "click".to_string(),
             title: Some("Click"),
             origin: CallOrigin::Agent,
+            action: None,
             params: json!({"selector":"#nothing"}),
             location: None,
             input: true,
