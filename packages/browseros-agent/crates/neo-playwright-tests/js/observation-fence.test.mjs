@@ -81,9 +81,16 @@ liveTest(
     let browser
     let fence
     try {
+      const beforeAttach = await owned.snapshot()
       browser = await playwright.chromium.connectOverCDP(owned.endpoint)
       const page = browser.contexts()[0].pages()[0]
       await page.setViewportSize({ width: 1280, height: 720 })
+      const afterAttach = await owned.snapshot()
+      assert.deepEqual(
+        afterAttach.events,
+        beforeAttach.events,
+        'reference attachment must not add an unmatched startup focus event',
+      )
       await page.setContent(
         '<title>observation boundary</title><p>unchanged</p>',
       )

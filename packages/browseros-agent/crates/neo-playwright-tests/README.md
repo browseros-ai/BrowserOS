@@ -47,6 +47,8 @@ The two engines run sequentially on fresh processes and profiles, using the same
 
 Final effects are captured at the fixture boundary, before disconnecting the reference client resets its CDP viewport. The native fixture reaches that boundary after its single run and cleanup drain. A bounded file handshake keeps the independent observer in charge; a missing acknowledgement or lost snapshot stays an infrastructure error, with no later snapshot substituted.
 
+Both initial blank pages also receive Playwright's default focus emulation before either engine attaches, so reference setup cannot contribute an unmatched focus event. Events from the original bodies and native cleanup remain measured without filtering.
+
 The corpus includes 45 complete page suites, two complete tab suites and the single `HE-012` bringToFront case. `corpus.json` lists all 136 page suites, each inclusion/exclusion reason and every source digest. The only spec edit is the owner's explicit headless skip waiver for HE-012. Its test body stays unchanged. Other changes are the browser fixture seam and nonzero server port allocation. The overlay records all before/after digests.
 
 Each unique run directory under `target/neo-playwright-tests/runs/` contains `scoreboard.json`, `missing-methods.json`, collection metadata and exclusive per-case evidence. Set `NEO_TESTS_OUTPUT` to choose a different output parent and `NEO_TESTS_PLAYWRIGHT_SOURCE` to use another prepared directory. CI can retain those JSON files; filtered runs carry their catalog/selection counts and never overwrite a complete report.

@@ -48,6 +48,7 @@ test('upstream defaults explicitly establish the original 1280 by 720 context co
       'Emulation.setDeviceMetricsOverride',
       'Emulation.setEmulatedMedia',
       'Emulation.setLocaleOverride',
+      'Emulation.setFocusEmulationEnabled',
       'Browser.setDownloadBehavior',
     ],
   )
@@ -61,10 +62,11 @@ test('upstream defaults explicitly establish the original 1280 by 720 context co
     screenOrientation: { angle: 0, type: 'landscapePrimary' },
   })
   assert.ok(
-    calls.slice(1, 4).every((call) => call.session === 'observer-session'),
+    calls.slice(1, 5).every((call) => call.session === 'observer-session'),
   )
   assert.equal(calls[3].params.locale, 'en-US')
-  assert.deepEqual(calls[4].params, {
+  assert.deepEqual(calls[4].params, { enabled: true })
+  assert.deepEqual(calls[5].params, {
     behavior: 'allowAndName',
     downloadPath: '/owned/downloads',
     eventsEnabled: true,

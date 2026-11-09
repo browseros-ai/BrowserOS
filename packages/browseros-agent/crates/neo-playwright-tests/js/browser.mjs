@@ -293,6 +293,14 @@ export async function bootstrapInitialPage(
     sessionId,
   )
   await cdp.send('Emulation.setLocaleOverride', { locale: 'en-US' }, sessionId)
+  // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._client.send('Emulation.setFocusEmulationEnabled', { enabled: true }));`
+  // Establish the same initial focus before either engine attaches. Otherwise reference
+  // setup adds a trusted focus event that never came from the original test body.
+  await cdp.send(
+    'Emulation.setFocusEmulationEnabled',
+    { enabled: true },
+    sessionId,
+  )
   if (downloadPath)
     await cdp.send('Browser.setDownloadBehavior', {
       behavior: 'allowAndName',
