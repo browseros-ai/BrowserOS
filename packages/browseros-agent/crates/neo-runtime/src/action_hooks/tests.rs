@@ -2066,3 +2066,59 @@ async fn tests_that_a_storage_call_held_at_its_gate_lets_the_hooks_own_storage_c
         [json!("hook"), json!("agent")]
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_replaced_call_that_ends_calls_in_flight_is_never_refused_by_the_caps() {
+    let timeline = Timeline::default();
+    // Only the context's close is hooked: its arguments are replaced.
+    let fake = Arc::new(
+        FakeHooks::new(&timeline)
+            .wanting(|hook, kind| hook == ActionHook::Before && kind == "close")
+            .before(|_, _| {
+                decided(Ok(ActionDecision::ReplaceArgs(
+                    json!({ "reason": "the hook closes it" }),
+                )))
+            }),
+    );
+    let harness = Arc::new(Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await);
+    // An unhooked wait whose message holds the whole byte cap.
+    let mut filler = message(
+        1,
+        &frame_guid(),
+        "waitForTimeout",
+        json!({ "waitTimeout": 60_000, "padding": "" }),
+        json!({}),
+    );
+    let room = (8 << 20) - filler.to_string().len();
+    filler["params"]["padding"] = json!("x".repeat(room));
+    assert_eq!(filler.to_string().len(), 8 << 20);
+    // Admitted as it is sent, before anything below.
+    let waiting = tokio::spawn(harness.dispatcher.call(&filler.to_string()));
+    // A call that needs a share is refused now: the wait holds the cap.
+    let refused = harness
+        .call(&message(2, &frame_guid(), "title", json!({}), json!({})))
+        .await
+        .unwrap();
+    assert_eq!(refused["error"]["error"]["name"], "Error", "{refused}");
+
+    let close = message(3, "context@default", "close", json!({}), json!({}));
+    let reply = time::timeout(Duration::from_secs(10), harness.call(&close)).await;
+    let reply = reply.unwrap().unwrap();
+    assert_eq!(
+        reply,
+        json!({ "id": 3 }),
+        "the close ran with the hook's arguments"
+    );
+    let waited = time::timeout(Duration::from_secs(10), waiting).await;
+    let (waited, _) = waited.unwrap().unwrap().unwrap();
+    let waited: Value = serde_json::from_str(&waited).unwrap();
+    assert_eq!(
+        waited["error"]["error"]["name"], "TargetClosedError",
+        "the close let the run go: {waited}"
+    );
+    // The wait's 8 MiB of params pass the run's record budget, so later calls keep no record;
+    // the hook saw the close, and nothing else.
+    let (seen, _) = fake.events(ActionHook::Before).remove(0);
+    assert_eq!(seen.method, "close");
+    assert_eq!(fake.invocations(), 1);
+}

@@ -2560,8 +2560,9 @@ impl GatedCall {
 
 /// Neo: a hook's replacement arguments are re-checked like the script's own params (hooks
 /// design, Error handling): routed on the same object and method, the same command, the same
-/// claim, and admitted against the in-flight caps. Anything else fails the call closed; the
-/// reason, which may quote the arguments, is for the host-only trace.
+/// claim, and admitted against the in-flight caps as the script's call was (a call that ends
+/// calls in flight never is). Anything else fails the call closed; the reason, which may quote
+/// the arguments, is for the host-only trace.
 impl CallRoute for Regate {
     type Call = GatedCall;
 
@@ -2578,14 +2579,18 @@ impl CallRoute for Regate {
         if claim_key(&call) != self.claim {
             return Err("they change what the call ends among the calls in flight".to_string());
         }
-        let charge = self
-            .in_flight
-            .charge(bytes)
-            .map_err(|error| format!("they do not fit: {}", error.message))?;
-        Ok(GatedCall {
-            call,
-            charge: Some(charge),
-        })
+        // A call that ends calls in flight is never refused by the caps, or a full run could not
+        // let go ([`ReleaseClaim`]); its claim bounds it to one per thing, so its replacement is
+        // not charged either. Every other replacement is charged as the script's call was.
+        let charge = match self.claim {
+            Some(_) => None,
+            None => Some(
+                self.in_flight
+                    .charge(bytes)
+                    .map_err(|error| format!("they do not fit: {}", error.message))?,
+            ),
+        };
+        Ok(GatedCall { call, charge })
     }
 
     fn settle(&self, gated: GatedCall) -> GatedCall {
