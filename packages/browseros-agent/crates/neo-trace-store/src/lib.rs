@@ -10,6 +10,8 @@
 //! ```
 //!
 //! `TraceStore` is the crate's whole surface; SeaORM stays behind `pub(crate)` (`db.rs`).
+//! Hosts stop runs, await [`Runtime::drain`](neo_runtime::Runtime::drain), then call
+//! [`TraceStore::close`]. An outcome alone does not end the runtime's remaining writes.
 
 use std::error::Error;
 use std::io;
@@ -171,6 +173,8 @@ pub struct TraceStore {
     inner: Arc<Inner>,
 }
 
+/// Shared by every store clone. Shutdown serializes pool cleanup and retains the file lock
+/// until SQLite has released its handles, so another opener cannot race an unfinished writer.
 struct Inner {
     readers: DatabaseConnection,
     read_only: bool,
@@ -378,7 +382,10 @@ impl TraceStore {
         health
     }
 
-    /// Seal producer admission, then drain within budget. On timeout the task is cancelled;
+    /// Hosts must stop runs, await `runtime.drain()`, then call `close`: late runtime writes
+    /// still emit delivery and settlement events, which a closed ingest cannot accept.
+    ///
+    /// Seals producer admission, then drains within budget. On timeout the task is cancelled;
     /// pool cleanup retains the OS lock until SQLite has finished any in-flight operation.
     pub async fn close(&self, budget: Duration) -> StoreHealth {
         let deadline = Instant::now() + budget;

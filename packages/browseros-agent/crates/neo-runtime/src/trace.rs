@@ -361,7 +361,8 @@ pub enum RunEvent {
         call: u64,
         parent: Option<u64>,
         page: Option<PageRef>,
-        /// The call's record, built the way `RunOutcome::calls` builds them.
+        /// Frozen at first publication. `RunOutcome::calls` can know a later delivery after
+        /// its drain; sinks receive that correction through `DeliverySettled`.
         record: Arc<CallRecord>,
         /// The record's params were cut to fit.
         params_truncated: bool,

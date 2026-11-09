@@ -98,6 +98,8 @@ const SUMMARY_LIMITS: [Limits; 4] = [
 /// Platform: a Unicode scalar uses at most four UTF-8 bytes, each three bytes when percent encoded (`url::form_urlencoded`).
 const MAX_PATTERN_BYTES: usize = MATCH_CHARS * 12;
 
+/// One pass's summary budget. The same traversal tightens these limits until the JSON fits,
+/// so every supported param shape follows one bounded redaction policy.
 #[derive(Clone, Copy)]
 struct Limits {
     /// Bytes per kept string or key.

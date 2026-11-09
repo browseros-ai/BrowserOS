@@ -14,7 +14,7 @@ mod support;
 use std::time::Duration;
 
 use fake_browser::{FakeBrowser, PAGE_URL, Replies, Reply};
-use neo_runtime::{EndCause, GetterField, RunOutcome, RunStatus};
+use neo_runtime::{Delivery, EndCause, GetterField, RunOutcome, RunStatus};
 use neo_trace_store::{
     CallQuery, CallState, GetterOutcome, RunQuery, RunState, StoreConfig, TraceStore, Unfinished,
 };
@@ -137,8 +137,8 @@ async fn check(end: End) {
         },
         cancel.clone(),
     );
-    // Poll the realm on its own host task, as the server does. The admission observer must
-    // not share that task with a synchronous getter's block_in_place handoff.
+    // Poll the realm on its own host task, as the server does. The admission observer stays
+    // independent of synchronous getters' block_in_place handoffs.
     let (drop_tx, drop_rx) = oneshot::channel();
     let pending = tokio::spawn({
         let runtime = runtime.clone();
@@ -178,7 +178,7 @@ async fn check(end: End) {
     assert_eq!(calls[0].unfinished, unfinished, "{end:?}");
     if matches!(end, End::OwnTimeout) {
         assert_eq!(calls[0].error.as_ref().unwrap().name, "TimeoutError");
-        assert_eq!(calls[0].delivery, Some(neo_runtime::Delivery::Done));
+        assert_eq!(calls[0].delivery, Some(Delivery::Done));
         assert_eq!(outcome.as_ref().unwrap().value, Some(json!("TimeoutError")));
     }
     if let Some(outcome) = outcome {

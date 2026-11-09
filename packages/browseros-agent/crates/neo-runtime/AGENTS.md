@@ -45,3 +45,7 @@ Amazon's anonymous cart write, and keep one Rust `Runtime` across submitted scri
 Operations are recorded only through `method_router.rs`'s `CallEntry` or the getter door
 (`Getters::get`), never from a handler. Every record goes through `src/trace/redact.rs`;
 new free-text params are secret unless their metadata explicitly classifies them.
+
+A store host shuts down in this order: stop admitting runs, cancel/await active runs,
+await `runtime.drain()`, then close the store. The outcome's bounded drain can precede
+late input acknowledgements; the runtime's full drain preserves their settlement events.

@@ -8,4 +8,6 @@ Owns operation-trace persistence: SQLite schema, typed reads, a synchronous runt
 - Migrations use only SchemaManager builders, frozen per-migration idens and guarded DDL. Never edit an applied migration after release. Keep the private `neo_trace_migrations` ledger and run all pending steps in one transaction. Add a fixture for every new prefix; the array is sized by `MIGRATION_NAMES`.
 - Retention deletes children first in transactions of at most 10,000 child rows. Never use a parameter per run or cascading deletes that defeat that bound. Privacy tombstones must survive captures that complete late.
 
-From `packages/browseros-agent`, use private Cargo directories and run `scripts/neo-check.sh`, `cargo test -p neo-trace-store --locked`, and `cargo check --workspace --locked`. Tests build public events by hand; no browser is needed.
+- Shutdown order: stop admitting runs and cancel/await active runs, await `runtime.drain()`, then call `traces.close(budget)`. Outcomes may precede late input acknowledgements; closing ingest before the runtime drains would lose their final delivery and settlement events.
+
+From `packages/browseros-agent`, use private Cargo directories and run `scripts/neo-check.sh`, `cargo test -p neo-trace-store --locked`, and `cargo check --workspace --locked`. Unit tests build public events by hand; `tests/runtime_store.rs` drives a real Runtime against fake CDP. `tests/store_e2e.rs` uses an isolated browser and skips without `NEO_E2E_BROWSER`.
