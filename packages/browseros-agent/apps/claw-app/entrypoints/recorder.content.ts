@@ -58,12 +58,14 @@ export default defineContentScript({
     })
 
     let recorderActive = false
+    let recorderStopped = false
     let stopRecording: (() => void) | null = null
     // WXT invalidates the previous instance when the updated script is injected.
     // Release rrweb observers so existing tabs recover
     // without navigation or a second recorder living alongside the old one.
     const stopRecorder = () => {
       recorderActive = false
+      recorderStopped = true
       try {
         stopRecording?.()
       } catch (error) {
@@ -107,27 +109,49 @@ export default defineContentScript({
       chrome.runtime.onMessage.removeListener(onMessage)
     })
 
-    try {
-      // Mask every input through maskInputFn (rrweb selects inputs to mask by type,
-      // not by attribute), which keeps ordinary fields readable and masks only
-      // password and payment-card fields, matching the server's audit redaction.
-      const stop = rrweb.record({
-        maskAllInputs: true,
-        maskInputFn: maskRecorderInput,
-        sampling: {
-          mousemove: false,
-          scroll: 250,
-          media: 500,
-          input: 'last',
-        },
-        recordCanvas: false,
-        emit: buffer.emit,
-      })
-      stopRecording = typeof stop === 'function' ? stop : null
-      recorderActive = stopRecording !== null
-    } catch (error) {
-      console.warn('[browseros-claw replay] rrweb.record threw', error)
-      buffer.close()
+    const startRecorder = () => {
+      try {
+        // Mask every input through maskInputFn (rrweb selects inputs to mask by type,
+        // not by attribute), which keeps ordinary fields readable and masks only
+        // password and payment-card fields, matching the server's audit redaction.
+        const stop = rrweb.record({
+          maskAllInputs: true,
+          maskInputFn: maskRecorderInput,
+          sampling: {
+            mousemove: false,
+            scroll: 250,
+            media: 500,
+            input: 'last',
+          },
+          recordCanvas: false,
+          emit: buffer.emit,
+        })
+        stopRecording = typeof stop === 'function' ? stop : null
+        recorderActive = stopRecording !== null
+      } catch (error) {
+        console.warn('[browseros-claw replay] rrweb.record threw', error)
+        buffer.close()
+      }
     }
+
+    // Only a definite "off" skips recording; a missing answer keeps it on.
+    void recordingAllowed().then((allowed) => {
+      // A stop or a newer script instance may land before the answer does.
+      if (ctx.isInvalid || recorderStopped) return
+      if (allowed) startRecorder()
+      else buffer.close()
+    })
   },
 })
+
+/** Asks the background whether the person records task replays. */
+async function recordingAllowed(): Promise<boolean> {
+  try {
+    const response = (await chrome.runtime.sendMessage({
+      type: 'recorder-enabled',
+    } satisfies RecorderMessage)) as { enabled?: unknown } | undefined
+    return response?.enabled !== false
+  } catch {
+    return true
+  }
+}

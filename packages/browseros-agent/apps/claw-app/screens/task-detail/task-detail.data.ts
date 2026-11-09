@@ -30,6 +30,8 @@ export interface TaskDetailScreenData {
   replay: ReplaySession
   /** False only once settings say the agents may not ask for help. */
   humanHelpEnabled: boolean
+  /** False only once settings say tasks are not recorded for replay. */
+  sessionReplaysEnabled: boolean
   isPending: boolean
   isError: boolean
   error: Error | null
@@ -49,6 +51,8 @@ export function useTaskDetailScreenData(
   const replay = useReplaySession(sessionId)
   const settings = useAgentSettings()
 
+  const sessionReplaysEnabled = settings.data?.sessionReplaysEnabled ?? true
+
   const dispatches = detailQuery.data?.dispatches ?? []
   const { steps, hiddenCount } = describeSteps(dispatches)
   const { steps: allSteps } = describeSteps(dispatches, { includeHidden: true })
@@ -63,12 +67,13 @@ export function useTaskDetailScreenData(
     lastPageUrl: lastPageUrl(dispatches),
     replay,
     humanHelpEnabled: settings.data?.humanHelpEnabled ?? true,
+    sessionReplaysEnabled,
     // Waiting on the recording check too means the player opens in its final
     // shape, with or without controls, instead of growing them a moment later.
     isPending:
       detailQuery.isPending ||
       screenshotsQuery.isPending ||
-      replay.recordingState === 'checking',
+      (sessionReplaysEnabled && replay.recordingState === 'checking'),
     isError: detailQuery.isError || screenshotsQuery.isError,
     error:
       (detailQuery.error as Error | null) ??

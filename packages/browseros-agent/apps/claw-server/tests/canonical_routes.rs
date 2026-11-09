@@ -284,7 +284,6 @@ async fn test_app() -> anyhow::Result<TestApp> {
         session_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
-        replay_retention_days: 7,
         dev_mode: false,
         native: Default::default(),
         mode: Default::default(),
@@ -2082,9 +2081,10 @@ async fn get_agent_settings(app: &TestApp) -> anyhow::Result<(StatusCode, Vec<u8
 fn assert_agent_settings(body: &serde_json::Value, human_help: bool) {
     assert_eq!(body["humanHelpEnabled"], json!(human_help));
     assert!(body["taskCleanupTipEnabled"].is_boolean());
+    assert!(body["sessionReplaysEnabled"].is_boolean());
     assert_eq!(
         body.as_object().map(serde_json::Map::len),
-        Some(2),
+        Some(3),
         "the reply must carry nothing else"
     );
 }
@@ -2142,6 +2142,59 @@ async fn tests_that_cleanup_tip_is_on_by_default_and_saved_independently() -> an
 }
 
 #[tokio::test]
+async fn tests_that_opting_out_of_session_replays_stores_no_new_replay() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (_, bytes) = get_agent_settings(&app).await?;
+    assert_eq!(json_body(&bytes)?["sessionReplaysEnabled"], true);
+
+    let (status, bytes) =
+        put_agent_settings(&app, json!({ "sessionReplaysEnabled": false }).to_string()).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_agent_settings(&json_body(&bytes)?, true);
+    assert_eq!(json_body(&bytes)?["sessionReplaysEnabled"], false);
+
+    let post_batch = |batch_id: &'static str| {
+        let router = app.router.clone();
+        async move {
+            request_with_headers(
+                &router,
+                "POST",
+                "/api/v1/recordings/events",
+                Some("application/x-ndjson"),
+                &[
+                    ("x-recording-tab-id", "101"),
+                    (
+                        "x-recording-document-id",
+                        "33D25F3CF060E81B14070BC356FF1871",
+                    ),
+                    ("x-recording-batch-id", batch_id),
+                ],
+                "{\"ts\":100,\"data\":{\"id\":\"a\"}}\n",
+            )
+            .await
+        }
+    };
+    let (status, _, bytes) = post_batch("batch-off").await?;
+    assert_eq!(status, StatusCode::OK);
+    // The recorder is told to stop and the batch still drains from its outbox.
+    assert_eq!(json_body(&bytes)?, json!({ "accepted": 0, "stop": true }));
+    assert_eq!(app.state.recordings.recording_bytes_total().await?, 0);
+    assert!(
+        !app.state.config.browserclaw_dir.join("replays").exists(),
+        "no replay file may be written while replays are off"
+    );
+
+    let (status, _) =
+        put_agent_settings(&app, json!({ "sessionReplaysEnabled": true }).to_string()).await?;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, bytes) = post_batch("batch-on").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?["accepted"], 1);
+    assert!(app.state.recordings.recording_bytes_total().await? > 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_cleanup_only_updates_preserve_the_saved_human_help_choice() -> anyhow::Result<()>
 {
     let app = test_app().await?;
@@ -2190,7 +2243,8 @@ async fn tests_that_a_non_boolean_human_help_setting_is_rejected() -> anyhow::Re
         let error = json_body(&bytes)?;
         assert_eq!(error["code"], "invalid_request", "{body}");
         assert_eq!(
-            error["message"], "humanHelpEnabled and taskCleanupTipEnabled must be booleans",
+            error["message"],
+            "humanHelpEnabled, taskCleanupTipEnabled and sessionReplaysEnabled must be booleans",
             "{body}"
         );
     }
@@ -2232,6 +2286,55 @@ async fn audit_cleanup_runs_and_returns_usage() -> anyhow::Result<()> {
     let body = json_body(&bytes)?;
     assert_eq!(body["sessionsDeleted"], 0);
     assert!(body["usage"]["totalBytes"].is_number());
+    Ok(())
+}
+
+#[tokio::test]
+async fn audit_storage_counts_and_cleanup_purges_aged_legacy_replay_files() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let replays = app.state.config.browserclaw_dir.join("replays");
+    tokio::fs::create_dir_all(&replays).await?;
+    let aged = replays.join("session-old.ndjson");
+    let fresh = replays.join("session-new.ndjson");
+    tokio::fs::write(&aged, vec![b'x'; 4096]).await?;
+    tokio::fs::write(&fresh, vec![b'y'; 1024]).await?;
+    // Past the default 7-day window.
+    std::fs::File::options()
+        .write(true)
+        .open(&aged)?
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(10 * 24 * 60 * 60))?;
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/audit/storage",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    assert_eq!(body["usage"]["recordingBytes"], 5120);
+    assert_eq!(body["usage"]["totalBytes"], 5120);
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "POST",
+        "/api/v1/audit/cleanup",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    assert!(
+        body["bytesReclaimed"]
+            .as_i64()
+            .is_some_and(|freed| freed >= 4096)
+    );
+    assert_eq!(body["usage"]["recordingBytes"], 1024);
+    assert!(!aged.exists());
+    assert!(fresh.exists());
     Ok(())
 }
 

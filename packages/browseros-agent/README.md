@@ -47,7 +47,6 @@ Production build and upload scripts read `.env.production` plus exported process
 | `ports.proxy` | Browser proxy port emitted by Chromium |
 | `directories.resources` | Packaged resources root |
 | `flags.devMode` | Run as a dev server beside the installed app: its own state dir, and no automatic agent config provisioning. Defaults to on for debug builds |
-| `replay.retentionDays` | Days to keep session replays |
 | `instance.*` | Optional browser and client metadata |
 
 Default local ports are `9100` for the server, `9000` for CDP, and `9300` for the extension. The dev supervisor may pick others; see the contributing guide.

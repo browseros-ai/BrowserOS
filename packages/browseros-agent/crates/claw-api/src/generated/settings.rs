@@ -20,14 +20,22 @@ pub struct AgentSettings {
     /// Whether successful MCP tool replies include a tip to close the task's tab group when finished.
     #[serde(rename = "taskCleanupTipEnabled")]
     pub task_cleanup_tip_enabled: bool,
+    /// Whether pages are recorded for task replays. When false, no new replay is stored and History shows each step's picture instead of the replay.
+    #[serde(rename = "sessionReplaysEnabled")]
+    pub session_replays_enabled: bool,
 }
 
 impl AgentSettings {
     /// User settings for the tools BrowserOS neo offers to agents.
-    pub fn new(human_help_enabled: bool, task_cleanup_tip_enabled: bool) -> AgentSettings {
+    pub fn new(
+        human_help_enabled: bool,
+        task_cleanup_tip_enabled: bool,
+        session_replays_enabled: bool,
+    ) -> AgentSettings {
         AgentSettings {
             human_help_enabled,
             task_cleanup_tip_enabled,
+            session_replays_enabled,
         }
     }
 }
@@ -63,6 +71,12 @@ pub struct UpdateAgentSettingsRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub task_cleanup_tip_enabled: Option<bool>,
+    /// Omit to preserve the saved session replay preference.
+    #[serde(
+        rename = "sessionReplaysEnabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_replays_enabled: Option<bool>,
 }
 
 impl UpdateAgentSettingsRequest {
@@ -70,6 +84,7 @@ impl UpdateAgentSettingsRequest {
         UpdateAgentSettingsRequest {
             human_help_enabled: None,
             task_cleanup_tip_enabled: None,
+            session_replays_enabled: None,
         }
     }
 }

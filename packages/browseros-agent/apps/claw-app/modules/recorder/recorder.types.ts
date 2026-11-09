@@ -18,7 +18,13 @@ export interface RecorderStopMessage {
   type: 'recorder-stop'
 }
 
+/** Asked by a new page before it starts recording; answered with `{ enabled }`. */
+export interface RecorderEnabledMessage {
+  type: 'recorder-enabled'
+}
+
 export type RecorderMessage =
   | RecorderEventsMessage
   | RecorderResnapshotMessage
   | RecorderStopMessage
+  | RecorderEnabledMessage
