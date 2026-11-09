@@ -18,8 +18,8 @@
 
 use serde_json::{Value, json};
 
+use crate::browser_representations::network::{Happening, HopId, LogError, NetworkLog};
 use crate::events::{CONTEXT_GUID, EventHub};
-use crate::network::{Happening, HopId, LogError, NetworkLog};
 
 /// Queues the event of each happening the run listens to, in the order the log reported them.
 pub(crate) fn emit(hub: &EventHub, page_guid: &str, log: &NetworkLog, happenings: &[Happening]) {

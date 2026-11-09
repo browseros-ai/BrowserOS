@@ -37,13 +37,13 @@ use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use crate::click::PageError;
-use crate::network::{HopId, NetworkLog, PauseTarget};
-use crate::page::PageSession;
+use crate::browser_representations::network::{HopId, NetworkLog, PauseTarget};
+use crate::browser_representations::page::PageSession;
+use crate::browser_representations::tabs::Tabs;
+use crate::chromium_bridge::playwright_injected_methods;
+use crate::playwright_methods::click::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::tabs::Tabs;
 use crate::url_match::{self, SerializedUrlMatch, UrlMatcher};
-use crate::world;
 
 /// Neo: the `route@` guid prefix; the rest is `<targetId>:<n>`, minted by the run.
 const ROUTE_PREFIX: &str = "route@";
@@ -801,7 +801,7 @@ impl Routes {
 
     /// Neo: claims the continuation the SDK sends on its own for pause `index` once none of its
     /// handlers took it, for the dispatcher to admit outside its in-flight cap
-    /// (`dispatch.rs` `Inner::release_claim`): it lets the page's request go and adds no work.
+    /// (`method_router.rs` `Inner::release_claim`): it lets the page's request go and adds no work.
     /// `None` unless the run was handed the pause, its answer is not taken, and no other call
     /// holds the claim, so such calls never outnumber the pauses the run holds.
     pub(crate) fn begin_continuing(self: &Arc<Self>, index: u64) -> Option<Continuing> {
@@ -1281,7 +1281,7 @@ async fn send_all(page: &PageSession, answers: Vec<Answer>) {
 
 /// Neo: a CDP error turning the pausing over, as the script sees it.
 fn cdp_error(error: &CdpError) -> PlaywrightError {
-    if world::classify(error) == PageError::Closed {
+    if playwright_injected_methods::classify(error) == PageError::Closed {
         PlaywrightError::target_closed()
     } else {
         PlaywrightError::error(error.to_string())

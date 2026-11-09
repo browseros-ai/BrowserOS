@@ -2,7 +2,7 @@
  * Neo: the realm's `crypto`, the two Web Crypto calls a Node Playwright script uses for random
  * values: `crypto.randomUUID()` and `crypto.getRandomValues()`. QuickJS has neither, and its
  * `Math.random` is not a CSPRNG, so the bytes come from Rust (`randomValues` in
- * `runtime-bridge.ts`, an OS-seeded CSPRNG). `realm.rs` installs it (`globals.ts`).
+ * `runtime-bridge.ts`, an OS-seeded CSPRNG). `quickjs.rs` installs it (`globals.ts`).
  *
  * `crypto.subtle` is not served: Playwright scripts do not hash or sign, and it is large.
  */

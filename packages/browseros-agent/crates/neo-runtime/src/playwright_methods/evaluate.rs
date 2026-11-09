@@ -44,16 +44,16 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use tokio::time;
 
-use crate::click::{self, LoopAWaits, PageError};
-use crate::frame_selector;
-use crate::frames::{FrameContext, FrameScope};
-use crate::main_world::{
+use crate::browser_representations::page::{FrameTab, GroupGuard, PageSession};
+use crate::chromium_bridge::frame_selector;
+use crate::chromium_bridge::frames::{FrameContext, FrameScope};
+use crate::chromium_bridge::main_world::{
     self, BuiltExpression, Called, ContextPin, DocumentId, Installed, MainFunction,
 };
-use crate::page::{FrameTab, GroupGuard, PageSession};
+use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup};
+use crate::playwright_methods::click::{self, LoopAWaits, PageError};
+use crate::playwright_methods::reads::SelectorTab;
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
-use crate::reads::SelectorTab;
-use crate::world::{self, ObjectGroup};
 
 /// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
 pub(crate) const HANDLE_PREFIX: &str = "handle@";
@@ -1293,7 +1293,7 @@ async fn watch_commits(tab: &FrameTab, progress: &Progress) -> Result<(), CallEr
     progress
         .race(PageSession::prepare(tab))
         .await?
-        .map_err(|error| page_error(world::classify(&error)).into())
+        .map_err(|error| page_error(playwright_injected_methods::classify(&error)).into())
 }
 
 /// [`invoke`], with `late` deciding what becomes of an answer that arrives after the call

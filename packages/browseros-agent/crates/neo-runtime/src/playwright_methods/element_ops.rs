@@ -40,16 +40,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
-use crate::click::{
+use crate::browser_representations::page::{FrameTab, GroupGuard, InputPermit, ResolvedElement};
+use crate::chromium_bridge::frame_selector;
+use crate::playwright_methods::click::{
     self, ActionResult, ElementAction, NotReady, PageError, Resolved, Scroll, StatesCheck, Stop,
     Tab,
 };
-use crate::evaluate::{self, CreatedHandle, EvalCall, MainCallback, SerializedArgument};
-use crate::forms::{FocusOutcome, FormTab};
-use crate::frame_selector;
-use crate::page::{FrameTab, GroupGuard, InputPermit, ResolvedElement};
+use crate::playwright_methods::evaluate::{
+    self, CreatedHandle, EvalCall, MainCallback, SerializedArgument,
+};
+use crate::playwright_methods::forms::{FocusOutcome, FormTab};
+use crate::playwright_methods::reads::SelectorTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::reads::SelectorTab;
 
 // ---------------------------------------------------------------------------------------------
 // The Neo commands.
@@ -272,7 +274,7 @@ impl<T: ElementOpsTab> ElementAction<T> for Focus {
 /// `eventInit` already in the page's format and its handles named by guid
 /// (`neo-quickjs-injected/src/js-handle.ts` `serializeArgument`). The generated
 /// `FrameDispatchEventParams` types `eventInit` in the protocol's format, so the frame route
-/// decodes these instead (`dispatch.rs` `route_frame_extension`).
+/// decodes these instead (`method_router.rs` `route_frame_extension`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DispatchEventParams {

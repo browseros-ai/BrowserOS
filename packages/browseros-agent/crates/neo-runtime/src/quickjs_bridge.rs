@@ -44,18 +44,18 @@ use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::task;
 
-use crate::browser_calls::{self, BROWSER_GUID};
+use crate::browser_representations::network::{HopId, LogError, ObjectKind as NetworkObject};
+use crate::browser_representations::tabs::Tabs;
+use crate::chromium_bridge::page_events;
 use crate::deadline::{Deadline, Stop};
 use crate::debugger;
-use crate::dispatch::Dispatcher;
-use crate::evaluate::Handles;
 use crate::events::{self, CONTEXT_GUID};
-use crate::getters::{self, FrameField};
-use crate::network::{HopId, LogError, ObjectKind as NetworkObject};
-use crate::page_events;
+use crate::method_router::Dispatcher;
+use crate::playwright_methods::browser_methods::{self, BROWSER_GUID};
+use crate::playwright_methods::evaluate::Handles;
+use crate::playwright_methods::getters::{self, FrameField};
 use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunError};
-use crate::tabs::Tabs;
 use crate::url_match::{self, SerializedUrlMatch, UrlPart};
 
 /// The guid the realm gives a run's page, in the `<type>@<id>` form Playwright's protocol uses.
@@ -514,7 +514,7 @@ impl PureRead {
     fn answer(self) -> Result<Value, GetError> {
         match self {
             Self::Devices(_) => {
-                serde_json::from_str(browser_calls::DEVICE_DESCRIPTORS).map_err(|error| {
+                serde_json::from_str(browser_methods::DEVICE_DESCRIPTORS).map_err(|error| {
                     GetError::Page(PlaywrightError::error(format!(
                         "neo-runtime: the device descriptors are unreadable: {error}"
                     )))
@@ -653,7 +653,7 @@ impl Getters {
     }
 
     /// The getters of the run's browser, its debuggers and the contexts it created
-    /// (`browser_calls.rs`, `debugger.rs`), or `None` for any other object.
+    /// (`browser_methods.rs`, `debugger.rs`), or `None` for any other object.
     fn platform(&self, request: &ObjectRequest) -> Option<Result<Value, GetError>> {
         if let Some(context) = request.guid.strip_prefix(debugger::DEBUGGER_PREFIX) {
             return Some(match request.field {
@@ -680,7 +680,7 @@ impl Getters {
         }
         if request.guid == BROWSER_GUID {
             return Some(match request.field {
-                GetterField::Version => self.wait(browser_calls::version(&self.tabs)),
+                GetterField::Version => self.wait(browser_methods::version(&self.tabs)),
                 GetterField::IsConnected => Ok(json!(self.tabs.cdp().is_connected())),
                 _ => Err(GetError::BadRequest("not a browser getter".to_string())),
             });
@@ -692,7 +692,7 @@ impl Getters {
             )));
         }
         Some(self.wait(async {
-            serde_json::to_value(browser_calls::context_pages(&self.tabs, &context).await?)
+            serde_json::to_value(browser_methods::context_pages(&self.tabs, &context).await?)
                 .map_err(|error| PlaywrightError::error(error.to_string()))
         }))
     }
@@ -847,7 +847,7 @@ mod tests {
     use serde_json::Value;
 
     use super::{GetRequest, MAX_RANDOM_BYTES, PureRead, random_values};
-    use crate::getters;
+    use crate::playwright_methods::getters;
     use crate::url_match::UrlPart;
 
     #[test]

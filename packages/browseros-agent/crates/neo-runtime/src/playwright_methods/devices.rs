@@ -24,9 +24,9 @@ use neo_runtime_spec::serve::{
     PageCall, PageMouseClickParamsButton, PageMouseDownParamsButton, PageMouseUpParamsButton,
 };
 
-use crate::click::{self, MouseButton, MouseClick, PageError, PressReport};
-use crate::input_devices::{self, Devices, EffectSink, Plan};
-use crate::keyboard::{self, KeyboardTab, Platform};
+use crate::chromium_bridge::keyboard_input::{self, KeyboardTab, Platform};
+use crate::chromium_bridge::mouse_and_touch_input::{self, Devices, EffectSink, Plan};
+use crate::playwright_methods::click::{self, MouseButton, MouseClick, PageError, PressReport};
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// One device call, decoded from its Page command.
@@ -259,53 +259,66 @@ fn plan<D: Devices>(
     let mut plan = Plan::default();
     // Key calls always read the platform; the others plan no key.
     let platform = platform.unwrap_or(Platform::Linux);
-    let unknown = |unknown: keyboard::UnknownKey| -> CallError {
+    let unknown = |unknown: keyboard_input::UnknownKey| -> CallError {
         PlaywrightError::error(unknown.to_string()).into()
     };
     match call {
         DeviceCall::KeyboardDown { key } => {
-            keyboard::plan_key_down(&mut plan, &mut simulated, key, platform, &owner)
+            keyboard_input::plan_key_down(&mut plan, &mut simulated, key, platform, &owner)
                 .map_err(unknown)?;
         }
         DeviceCall::KeyboardUp { key } => {
-            keyboard::plan_key_up(&mut plan, &mut simulated, key, platform, None)
+            keyboard_input::plan_key_up(&mut plan, &mut simulated, key, platform, None)
                 .map_err(unknown)?;
         }
         DeviceCall::KeyboardPress { key, delay } => {
-            keyboard::plan_press(&mut plan, &mut simulated, key, platform, &owner, *delay)
+            keyboard_input::plan_press(&mut plan, &mut simulated, key, platform, &owner, *delay)
                 .map_err(unknown)?;
         }
         DeviceCall::KeyboardType { text, delay } => {
-            keyboard::plan_type(&mut plan, &mut simulated, text, platform, &owner, *delay);
+            keyboard_input::plan_type(&mut plan, &mut simulated, text, platform, &owner, *delay);
         }
         DeviceCall::KeyboardInsertText { text } => {
-            keyboard::plan_insert_text(&mut plan, &mut simulated, text);
+            keyboard_input::plan_insert_text(&mut plan, &mut simulated, text);
         }
         DeviceCall::MouseMove { x, y, steps } => {
-            input_devices::plan_free_move(&mut plan, &mut simulated, (*x, *y), *steps);
+            mouse_and_touch_input::plan_free_move(&mut plan, &mut simulated, (*x, *y), *steps);
         }
         DeviceCall::MouseDown {
             button,
             click_count,
         } => {
-            input_devices::plan_down(&mut plan, &mut simulated, *button, *click_count, &owner);
+            mouse_and_touch_input::plan_down(
+                &mut plan,
+                &mut simulated,
+                *button,
+                *click_count,
+                &owner,
+            );
         }
         DeviceCall::MouseUp {
             button,
             click_count,
         } => {
-            input_devices::plan_up(&mut plan, &mut simulated, *button, *click_count, None);
+            mouse_and_touch_input::plan_up(&mut plan, &mut simulated, *button, *click_count, None);
         }
         DeviceCall::MouseClick { x, y, click } => {
             // Playwright: `server/input.ts` `Mouse.move`: `const { steps = 1 } = options;`
             let steps = 1;
-            input_devices::plan_click(&mut plan, &mut simulated, (*x, *y), click, steps, &owner);
+            mouse_and_touch_input::plan_click(
+                &mut plan,
+                &mut simulated,
+                (*x, *y),
+                click,
+                steps,
+                &owner,
+            );
         }
         DeviceCall::MouseWheel { delta_x, delta_y } => {
-            input_devices::plan_wheel(&mut plan, &mut simulated, *delta_x, *delta_y);
+            mouse_and_touch_input::plan_wheel(&mut plan, &mut simulated, *delta_x, *delta_y);
         }
         DeviceCall::TouchscreenTap { x, y } => {
-            input_devices::plan_tap(&mut plan, &mut simulated, (*x, *y));
+            mouse_and_touch_input::plan_tap(&mut plan, &mut simulated, (*x, *y));
         }
     }
     Ok(plan)
@@ -331,8 +344,8 @@ mod tests {
     use tokio::time;
 
     use super::*;
-    use crate::click::tests::{FakeTab, fake_owner};
-    use crate::input_devices::{InputDevices, KeyboardState, MouseState};
+    use crate::chromium_bridge::mouse_and_touch_input::{InputDevices, KeyboardState, MouseState};
+    use crate::playwright_methods::click::tests::{FakeTab, fake_owner};
     use crate::progress::ErrorName;
     use crate::run::Delivery;
 

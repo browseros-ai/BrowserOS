@@ -31,7 +31,7 @@ use neo_runtime_spec::serve::{FrameChannel, FrameInitializer};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::frames::FrameInfo;
+use crate::chromium_bridge::frames::FrameInfo;
 
 /// One frame change for the run's listeners: the Neo event method on the page's guid, the
 /// listener event a script subscribes to (page and context share the name), and its params.

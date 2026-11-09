@@ -21,8 +21,8 @@
 
 use neo_runtime_spec::serve::{FrameDragAndDropParams, FrameDragAndDropParamsScroll, Point};
 
-use crate::click::{self, PointerAction, PointerOptions};
-use crate::keyboard::KeyboardTab;
+use crate::chromium_bridge::keyboard_input::KeyboardTab;
+use crate::playwright_methods::click::{self, PointerAction, PointerOptions};
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// `Frame.dragAndDrop`'s options, as its two pointer actions.
@@ -99,7 +99,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::click::tests::FakeTab;
+    use crate::playwright_methods::click::tests::FakeTab;
     use crate::run::Delivery;
     use neo_runtime_spec::injected::Point;
 

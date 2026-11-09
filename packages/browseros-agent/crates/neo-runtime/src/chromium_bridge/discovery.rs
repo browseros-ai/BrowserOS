@@ -34,9 +34,9 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tracing::warn;
 
+use crate::browser_representations::tabs::Tabs;
+use crate::chromium_bridge::browser_connection_settings::{Setting, Switch};
 use crate::events::{EventHub, Flushes};
-use crate::switch::{Setting, Switch};
-use crate::tabs::Tabs;
 
 /// Neo: the target types discovery reports. Tabs are `page` targets; without the filter, every
 /// extension worker and browser UI target would cross the run's event ring too.
@@ -44,7 +44,7 @@ fn page_filter() -> Value {
     json!([{ "type": "page" }])
 }
 
-/// Neo: target discovery as a setting the `Runtime`'s runs share (`switch.rs`): on for page
+/// Neo: target discovery as a setting the `Runtime`'s runs share (`browser_connection_settings.rs`): on for page
 /// targets while any run listens for new pages, off once the last lets go.
 pub(crate) static DISCOVERY: Setting = Setting {
     method: "Target.setDiscoverTargets",

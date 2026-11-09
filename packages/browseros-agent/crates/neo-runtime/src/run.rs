@@ -200,7 +200,7 @@ impl RunOutcome {
         }
     }
 
-    /// Attaches the bytes of the binaries the returned `value` holds (`realm.rs` `to_json`).
+    /// Attaches the bytes of the binaries the returned `value` holds (`quickjs.rs` `to_json`).
     pub(crate) fn with_binaries(self, binaries: Vec<RunBinary>) -> Self {
         Self { binaries, ..self }
     }

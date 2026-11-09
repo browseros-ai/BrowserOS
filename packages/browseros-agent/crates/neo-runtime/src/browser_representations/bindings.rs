@@ -54,18 +54,18 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use crate::bridge;
-use crate::contexts::ContextFrames;
+use crate::browser_representations::init_scripts::{self, InitScripts, Link, Rank, until_gone};
+use crate::browser_representations::page::{FrameTab, PageSession};
+use crate::browser_representations::tabs::Tabs;
+use crate::chromium_bridge::contexts::ContextFrames;
+use crate::chromium_bridge::frames::{FrameContext, FrameScope};
+use crate::chromium_bridge::main_world::{BuiltExpression, ContextPin};
 use crate::debugger::DEFAULT_CONTEXT;
-use crate::evaluate::{self, Handles, SerializedArgument};
 use crate::events::{CONTEXT_GUID, Emitted, Flushes};
-use crate::frames::{FrameContext, FrameScope};
-use crate::init_scripts::{self, InitScripts, Link, Rank, until_gone};
-use crate::main_world::{BuiltExpression, ContextPin};
-use crate::page::{FrameTab, PageSession};
+use crate::playwright_methods::evaluate::{self, Handles, SerializedArgument};
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::quickjs_bridge;
 use crate::run::PageId;
-use crate::tabs::Tabs;
 
 /// Playwright: `server/page.ts` `PageBinding.kBindingName`: `static kBindingName = '__playwright__binding__';`
 pub(crate) const BINDING_NAME: &str = "__playwright__binding__";
@@ -74,7 +74,7 @@ pub(crate) const BINDING_NAME: &str = "__playwright__binding__";
 pub(crate) const BINDING_CALL_PREFIX: &str = "bindingcall@";
 
 /// Neo: an exposed binding's `Disposable` guid, inside `init_scripts.rs`'s `disposable@` space,
-/// which `dispatch.rs` routes here.
+/// which `method_router.rs` routes here.
 const DISPOSABLE: &str = "disposable@binding.";
 
 /// Neo: the reason a call still waiting at run end rejects with in the page: Playwright's words
@@ -127,7 +127,7 @@ pub(crate) static BINDING_CALL_REJECT_META: MethodMeta = MethodMeta {
     flags: &[],
 };
 
-/// A binding command, routed by `dispatch.rs`.
+/// A binding command, routed by `method_router.rs`.
 #[derive(Debug)]
 pub(crate) enum BindingRoute {
     /// `Page.exposeBinding`, on the call's page.
@@ -801,7 +801,7 @@ impl Bindings {
             self.next.fetch_add(1, Ordering::Relaxed)
         );
         let page_id = PageId::new(prepared.target.clone());
-        let page_guid = bridge::page_guid(&page_id);
+        let page_guid = quickjs_bridge::page_guid(&page_id);
         let owner = if binding == Some(true) {
             page_guid.clone()
         } else {
@@ -809,7 +809,7 @@ impl Bindings {
         };
         let params = json!({ "binding": {
             "guid": guid,
-            "frame": { "guid": bridge::frame_guid_of(&page_id, &frame) },
+            "frame": { "guid": quickjs_bridge::frame_guid_of(&page_id, &frame) },
             "page": { "guid": page_guid },
             "name": payload.name,
             "args": payload.serialized_args,

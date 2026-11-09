@@ -7,7 +7,7 @@ use neo_runtime_spec::serve::{
 };
 use url::Url;
 
-use crate::click::PageError;
+use crate::playwright_methods::click::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// Validated navigation options. Unsupported lifecycle modes fail before preparation or logs.

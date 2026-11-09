@@ -34,7 +34,7 @@ use crate::progress::{CallEntry, PlaywrightError};
 /// Evaluates to a function that installs both globals and returns a promise that rejects with
 /// the first error an `abort` listener throws. Node reports such an error as uncaught and
 /// exits; the realm races the promise with the script, so the run ends with that error at
-/// once, as it does for an `EventEmitter` listener's (`realm.rs`).
+/// once, as it does for an `EventEmitter` listener's (`quickjs.rs`).
 ///
 /// Deviation: `client/connection.ts` `Connection.sendMessageToServer`: `signal.addEventListener('abort', abortListener, { once: true });`
 /// Node's signal is an `EventTarget` whose listeners get an `Event`; the realm has neither

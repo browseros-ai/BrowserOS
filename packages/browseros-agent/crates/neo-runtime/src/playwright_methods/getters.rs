@@ -21,14 +21,14 @@ use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time;
 use tokio::time::Instant;
 
-use crate::bridge;
-use crate::click::PageError;
-use crate::frames::{FrameInfo, FrameScope, Host};
-use crate::page;
-use crate::page::PageState;
+use crate::browser_representations::page;
+use crate::browser_representations::page::PageState;
+use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::chromium_bridge::frames::{FrameInfo, FrameScope, Host};
+use crate::playwright_methods::click::PageError;
 use crate::progress::PlaywrightError;
+use crate::quickjs_bridge;
 use crate::run::PageId;
-use crate::tabs::{PageEntry, Tabs};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
 
 /// Frame fields. The main URL comes directly from history; other fields read a fresh tree.
@@ -449,9 +449,9 @@ fn frame_record(
 
 fn frame_guid(page: &PageId, frame: &FrameInfo) -> String {
     if frame.parent.is_none() {
-        bridge::frame_guid(page)
+        quickjs_bridge::frame_guid(page)
     } else {
-        bridge::frame_guid_of(page, &frame.id)
+        quickjs_bridge::frame_guid_of(page, &frame.id)
     }
 }
 
@@ -572,15 +572,15 @@ mod tests {
     use super::{
         FrameField, FrameMetadata, frame, frame_records, frame_value, matches_url, watch_frame_host,
     };
+    use crate::browser_representations::cookies_and_storage::Permissions;
+    use crate::browser_representations::page::TabInputs;
+    use crate::browser_representations::tabs::{PageEntry, Tabs};
+    use crate::chromium_bridge::browser_connection_settings::Switches;
+    use crate::chromium_bridge::frames::{FrameInfo, FrameScope, Host};
     use crate::fake_browser::{FakeBrowser, FrameReplies, PAGE, PAGE_URL, Replies};
-    use crate::frames::{FrameInfo, FrameScope, Host};
-    use crate::page::TabInputs;
+    use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::ErrorName;
     use crate::run::PageId;
-    use crate::screenshot::TabScreenshots;
-    use crate::session_state::Permissions;
-    use crate::switch::Switches;
-    use crate::tabs::{PageEntry, Tabs};
     use crate::url_match::SerializedUrlMatch;
 
     fn tree() -> Vec<FrameInfo> {

@@ -21,8 +21,8 @@ use tokio::sync::Mutex;
 use tokio_util::task::TaskTracker;
 use tracing::debug;
 
-use crate::discovery;
-use crate::downloads;
+use crate::browser_representations::downloads;
+use crate::chromium_bridge::discovery;
 
 /// A setting of the connection: the CDP method that switches it, and its params on (`true`) or
 /// off, for the scope it was switched on in (a browser context id, or none).

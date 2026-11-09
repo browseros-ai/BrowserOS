@@ -16,11 +16,11 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 
-use crate::click::PageError;
-use crate::main_world::MainWorld;
-use crate::page::Session;
+use crate::browser_representations::page::Session;
+use crate::chromium_bridge::main_world::MainWorld;
+use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup, World};
+use crate::playwright_methods::click::PageError;
 use crate::run::PageId;
-use crate::world::{self, ObjectGroup, World};
 
 /// The document from which a call starts resolving selectors.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,7 +150,7 @@ impl Host {
     }
 
     pub(crate) fn classify(&self, error: &CdpError) -> PageError {
-        world::classify_host(error, self.is_child())
+        playwright_injected_methods::classify_host(error, self.is_child())
     }
 }
 
@@ -269,7 +269,7 @@ impl Frames {
                 None,
             )
             .await
-            .map_err(|error| world::classify(&error))?;
+            .map_err(|error| playwright_injected_methods::classify(&error))?;
         let targets = targets["targetInfos"].as_array().ok_or_else(|| {
             PageError::Contract("Target.getTargets returned no targetInfos".to_string())
         })?;
@@ -338,8 +338,8 @@ impl Frames {
             json!({"filter":[{"type":"iframe"}]}),
             None,
         );
-        let (local, targets) =
-            tokio::try_join!(local, targets).map_err(|error| world::classify(&error))?;
+        let (local, targets) = tokio::try_join!(local, targets)
+            .map_err(|error| playwright_injected_methods::classify(&error))?;
         let mut frames = local_tree(&local)?;
         let targets = targets["targetInfos"].as_array().ok_or_else(|| {
             PageError::Contract("Target.getTargets returned no targetInfos".to_string())
@@ -474,7 +474,7 @@ impl Frames {
             ))
             .await
             .map_err(|error| PageError::Contract(format!("attaching to a child frame: {error}")))?
-            .map_err(|error| world::classify_host(&error, true))?;
+            .map_err(|error| playwright_injected_methods::classify_host(&error, true))?;
         let gone = CancellationToken::new();
         let stop = CancellationToken::new();
         let watch = stop.clone().drop_guard();

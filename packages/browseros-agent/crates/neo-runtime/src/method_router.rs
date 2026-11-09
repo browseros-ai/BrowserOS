@@ -70,65 +70,65 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
-use crate::bindings::{self, Answering, BindingRoute, Outcome};
-use crate::browser_calls::{self, BROWSER_GUID, CreatedContext};
-use crate::capture::{
+use crate::browser_representations::bindings::{self, Answering, BindingRoute, Outcome};
+use crate::browser_representations::clock::{self, ClockRoute};
+use crate::browser_representations::cookies_and_storage::StateFile;
+use crate::browser_representations::dialogs;
+use crate::browser_representations::downloads;
+use crate::browser_representations::init_scripts::{
+    self, CONTEXT_ADD_INIT_SCRIPT_META, DISPOSABLE_DISPOSE_META, InitRoute, InitScripts,
+    PAGE_ADD_INIT_SCRIPT_META,
+};
+use crate::browser_representations::locator_handlers::{self, Resolving};
+use crate::browser_representations::network::{HopId, ObjectKind as NetworkObject};
+use crate::browser_representations::page::{DialogAnswer, FrameTab, PageSession};
+use crate::browser_representations::responses::{self, NetworkCall};
+use crate::browser_representations::routes;
+use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::chromium_bridge::frames::FrameScope;
+use crate::chromium_bridge::keyboard_input::KeyboardTab;
+use crate::debugger::{CallToGate, DEBUGGER_PREFIX, DEFAULT_CONTEXT};
+use crate::events::{ALL_PAGES, EventHub};
+use crate::playwright_methods::browser_methods::{self, BROWSER_GUID, CreatedContext};
+use crate::playwright_methods::capture::{
     self, Capture, ELEMENT_HANDLE_SCREENSHOT_META, ElementScreenshotParams, NEO_SCREENSHOT_META,
     NeoScreenshotParams,
 };
-use crate::check::{self, CheckOptions};
-use crate::click::{self, PointerOptions};
-use crate::clock::{self, ClockRoute};
-use crate::content::{self, SetContentOptions, WriteOrder, WriteTurn};
-use crate::debugger::{CallToGate, DEBUGGER_PREFIX, DEFAULT_CONTEXT};
-use crate::devices::{self, DeviceCall};
-use crate::dialogs;
-use crate::downloads;
-use crate::drag::{self, DragOptions};
-use crate::drop_on;
-use crate::element_ops::{
+use crate::playwright_methods::check::{self, CheckOptions};
+use crate::playwright_methods::click::{self, PointerOptions};
+use crate::playwright_methods::content::{self, SetContentOptions, WriteOrder, WriteTurn};
+use crate::playwright_methods::devices::{self, DeviceCall};
+use crate::playwright_methods::drag::{self, DragOptions};
+use crate::playwright_methods::drop_on;
+use crate::playwright_methods::element_ops::{
     self, BOUNDING_BOX_META, DispatchEventParams, DispatchOptions, ElementTarget, NeoElementParams,
     NeoSelectTextParams, SCROLL_INTO_VIEW_META, SELECT_TEXT_META,
 };
-use crate::evaluate::{self, EvalCall};
-use crate::events::{ALL_PAGES, EventHub};
-use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
-use crate::forms::FormTab;
-use crate::frame_element;
-use crate::frames::FrameScope;
-use crate::highlight::{self, HighlightOptions};
-use crate::history::{
+use crate::playwright_methods::evaluate::{self, EvalCall};
+use crate::playwright_methods::fill::{self, FillOptions, InputValueOptions, SelectOptions};
+use crate::playwright_methods::forms::FormTab;
+use crate::playwright_methods::frame_element;
+use crate::playwright_methods::highlight::{self, HighlightOptions};
+use crate::playwright_methods::history::{
     self, Cursors, Ending, FinishNavigationOptions, FrameCursor, NeoFinishNavigationParams,
     NeoNavigationResult, NeoNextNavigationParams, NeoReleaseNavigationParams,
     NeoWaitForNavigationParams, WaitForNavigationOptions,
 };
-use crate::init_scripts::{
-    self, CONTEXT_ADD_INIT_SCRIPT_META, DISPOSABLE_DISPOSE_META, InitRoute, InitScripts,
-    PAGE_ADD_INIT_SCRIPT_META,
-};
-use crate::keyboard::KeyboardTab;
-use crate::lists;
-use crate::locator_handlers::{self, Resolving};
-use crate::navigate::{self, GotoOptions};
-use crate::network::{HopId, ObjectKind as NetworkObject};
-use crate::page::{DialogAnswer, FrameTab, PageSession};
-use crate::press::{self, PressOptions};
-use crate::progress::{
-    CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
-};
-use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
-use crate::responses::{self, NetworkCall};
-use crate::routes;
-use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
-use crate::session_state::StateFile;
-use crate::set_input_files;
-use crate::states::{self, StateOptions};
-use crate::tab_calls;
-use crate::tabs::{PageEntry, Tabs};
-use crate::waits::{
+use crate::playwright_methods::lists;
+use crate::playwright_methods::navigate::{self, GotoOptions};
+use crate::playwright_methods::page_and_context_methods;
+use crate::playwright_methods::press::{self, PressOptions};
+use crate::playwright_methods::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
+use crate::playwright_methods::set_input_files;
+use crate::playwright_methods::states::{self, StateOptions};
+use crate::playwright_methods::waits::{
     self, NeoWaitForLoadStateParams, NeoWaitForUrlParams, WaitForLoadStateOptions,
     WaitForSelectorOptions, WaitForUrlOptions, WaitTab,
 };
+use crate::progress::{
+    CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
+};
+use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
 /// the realm ends. Tasks still running keep their state and records read `Unfinished`.
@@ -233,7 +233,7 @@ const _: () = assert!(
         && <FrameDblclickParams as Command>::VOID_RESULT
         && <FrameHoverParams as Command>::VOID_RESULT
         && <FrameTapParams as Command>::VOID_RESULT,
-    "a pointer action gained a result: reply with it in dispatch::serve",
+    "a pointer action gained a result: reply with it in method_router::serve",
 );
 
 /// Owns every browser call of one run. Cheap to clone: the bridge holds one, `Runtime::run`
@@ -459,7 +459,7 @@ enum ObjectKind {
     Unknown,
 }
 
-/// The objects of the run's platform (`browser_calls.rs`, `debugger.rs`).
+/// The objects of the run's platform (`browser_methods.rs`, `debugger.rs`).
 #[derive(Clone)]
 enum PlatformObject {
     /// The run's `Browser`, `browser@default`.
@@ -707,7 +707,7 @@ impl Dispatcher {
     }
 
     /// The run's browser, a context it created or a context's debugger, by guid
-    /// (`browser_calls.rs`, `debugger.rs`); `None` for every other object.
+    /// (`browser_methods.rs`, `debugger.rs`); `None` for every other object.
     fn platform_object(&self, guid: &str) -> Option<ObjectKind> {
         let created = self.0.tabs.created();
         let object = if guid == BROWSER_GUID {
@@ -794,8 +794,9 @@ impl Dispatcher {
         // drain below waits for it and `Runtime::drain` for what the budget leaves running:
         // no budget cuts a release off, and no other cleanup goes before one.
         self.0.tabs.release_input();
-        // The contexts the run created go with it, their pages too (`browser_calls.rs`).
-        let _disposed = time::timeout_at(deadline, browser_calls::dispose_all(&self.0.tabs)).await;
+        // The contexts the run created go with it, their pages too (`browser_methods.rs`).
+        let _disposed =
+            time::timeout_at(deadline, browser_methods::dispose_all(&self.0.tabs)).await;
         let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
         let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
@@ -917,7 +918,7 @@ fn route_init(
             let (meta, _) = bindings::decode_expose(true, params);
             Ok(Routed {
                 meta: Some(meta),
-                route: Err(browser_calls::created_state(method)),
+                route: Err(browser_methods::created_state(method)),
             })
         }
         ObjectKind::Context | ObjectKind::Page
@@ -1073,7 +1074,7 @@ async fn binding_call(
             // (platform) A created context's page has none: bindings are the run's own
             // context's.
             if page.context.get().is_some() {
-                return Err(browser_calls::created_state("exposeBinding").into());
+                return Err(browser_methods::created_state("exposeBinding").into());
             }
             let session = progress.race(tabs.session(&page)).await??;
             let guid = progress
@@ -1633,19 +1634,21 @@ async fn serve_call(
         return;
     }
     let result = match (route, target) {
-        (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
+        (ObjectCall::Context(call), _) => {
+            page_and_context_methods::context(&tabs, call, &progress).await
+        }
         (ObjectCall::StorageState(file, path), _) => {
-            tab_calls::state_file(&tabs, file, path, &progress).await
+            page_and_context_methods::state_file(&tabs, file, path, &progress).await
         }
         (ObjectCall::Init(route), target) => init_call(&tabs, target, route, &progress).await,
         (ObjectCall::Storage(call, turn), Some((page, _))) => {
-            tab_calls::storage(&tabs, &page, call, turn, &progress).await
+            page_and_context_methods::storage(&tabs, &page, call, turn, &progress).await
         }
         (ObjectCall::Binding(route), target) => binding_call(&tabs, target, route, &progress).await,
         (ObjectCall::Clock(route), _) => clock_call(&tabs, route, &progress).await,
-        (ObjectCall::Browser(call), _) => browser_calls::browser(&tabs, *call, &progress).await,
+        (ObjectCall::Browser(call), _) => browser_methods::browser(&tabs, *call, &progress).await,
         (ObjectCall::CreatedContext(context, call), _) => {
-            browser_calls::context(&tabs, &context, call, &progress).await
+            browser_methods::context(&tabs, &context, call, &progress).await
         }
         (ObjectCall::Debugger(context, call), _) => {
             tabs.debuggers().serve(&context, &call, tabs.events())
@@ -1658,7 +1661,7 @@ async fn serve_call(
             {
                 show_scripts(&tabs, &page, &session, &progress).await;
             }
-            tab_calls::page(&tabs, &page, call, &progress).await
+            page_and_context_methods::page(&tabs, &page, call, &progress).await
         }
         (ObjectCall::Capture(call), Some((page, scope))) => {
             capture::serve(&tabs, &page, scope, call, &progress).await
@@ -2364,7 +2367,7 @@ fn encode_reply(
 
 #[cfg(test)]
 mod tests {
-    use crate::press::KeyInput;
+    use crate::playwright_methods::press::KeyInput;
     use std::collections::BTreeMap;
     use std::env;
     use std::fs;
@@ -2376,17 +2379,17 @@ mod tests {
     use super::*;
     use neo_runtime_spec::injected::Point;
 
-    use crate::click::tests::FakeTab;
+    use crate::browser_representations::cookies_and_storage::Permissions;
+    use crate::browser_representations::page::TabInputs;
+    use crate::chromium_bridge::browser_connection_settings::Switches;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
-    use crate::forms::SelectOption;
-    use crate::page::TabInputs;
+    use crate::playwright_methods::click::tests::FakeTab;
+    use crate::playwright_methods::forms::SelectOption;
+    use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::PageId;
-    use crate::screenshot::TabScreenshots;
-    use crate::session_state::Permissions;
-    use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -3835,13 +3838,13 @@ mod tests {
 #[cfg(test)]
 mod review_abort_priority {
     use super::*;
+    use crate::browser_representations::cookies_and_storage::Permissions;
+    use crate::browser_representations::page::TabInputs;
+    use crate::chromium_bridge::browser_connection_settings::Switches;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
-    use crate::page::TabInputs;
+    use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::run::PageId;
-    use crate::screenshot::TabScreenshots;
-    use crate::session_state::Permissions;
-    use crate::switch::Switches;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 

@@ -10,7 +10,7 @@ import { Playwright } from './playwright'
 import { onReplyEvents } from './runtime-bridge'
 
 /**
- * What neo-runtime hands `createRun` at run start (`realm.rs` `start`). Every value comes from
+ * What neo-runtime hands `createRun` at run start (`quickjs.rs` `start`). Every value comes from
  * a Rust constant or the run's tab, so the SDK derives nothing on its own.
  */
 export interface RunInit {

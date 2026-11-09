@@ -9,11 +9,11 @@ use neo_runtime_spec::serve::{
     FrameCheckParams, FrameCheckParamsScroll, FrameUncheckParams, FrameUncheckParamsScroll,
 };
 
-use crate::click::{
+use crate::playwright_methods::click::{
     self, ActionResult, ElementAction, MouseButton, MouseClick, PageError, PointerAction,
     PointerOptions, Stop, WaitAfter,
 };
-use crate::forms::{CheckedState, FormTab};
+use crate::playwright_methods::forms::{CheckedState, FormTab};
 use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
 use crate::run::Delivery;
 
@@ -181,9 +181,9 @@ mod tests {
     use neo_runtime_spec::injected::ElementState;
 
     use super::*;
-    use crate::click::tests::{ArmAnswer, FakeTab, Step, Writes};
-    use crate::click::{PageError, StatesCheck, Verdict};
-    use crate::forms::CheckedState;
+    use crate::playwright_methods::click::tests::{ArmAnswer, FakeTab, Step, Writes};
+    use crate::playwright_methods::click::{PageError, StatesCheck, Verdict};
+    use crate::playwright_methods::forms::CheckedState;
     use crate::progress::ErrorName;
     use crate::run::Delivery;
 

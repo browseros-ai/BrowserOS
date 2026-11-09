@@ -7,7 +7,7 @@
 //! ```text
 //!  page.setViewportSize(s)   size = {viewport: s, screen: s} → Emulation.setDeviceMetricsOverride
 //!  page.emulateMedia(o)      media ⊕= o → Emulation.setEmulatedMedia   main + child sessions
-//!  context page attached     prepare(): the created context's options (browser_calls.rs)
+//!  context page attached     prepare(): the created context's options (browser_methods.rs)
 //!  OOPIF session attached    child_attached(): the context's per-frame options and media
 //! ```
 //!
@@ -36,10 +36,10 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
-use crate::frames::Host;
-use crate::page::PageSession;
+use crate::browser_representations::page::PageSession;
+use crate::browser_representations::tabs;
+use crate::chromium_bridge::frames::Host;
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::tabs;
 
 /// Playwright: `server/chromium/crPage.ts` `FrameSession._updateViewport`: `insets = { width: 24, height: 88 };`
 const HEADFUL_INSETS: (i64, i64) = (24, 88);
@@ -88,7 +88,7 @@ pub(crate) struct EmulatedMedia {
 }
 
 /// The options of a context the run created (`browser.newContext`) that its pages emulate,
-/// validated by `browser_calls.rs`. Playwright's `types.BrowserContextOptions`, cut to the
+/// validated by `browser_methods.rs`. Playwright's `types.BrowserContextOptions`, cut to the
 /// options Neo serves.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[expect(

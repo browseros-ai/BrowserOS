@@ -46,15 +46,15 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, OwnedMutexGuard, oneshot};
 use tracing::debug;
 
-use crate::capture;
-use crate::click::{self, NotReady, PageError, Scroll, StatesCheck, Tab};
-use crate::evaluate::HandleEntry;
-use crate::frame_selector;
-use crate::frames::{FrameContext, FrameScope};
-use crate::page::{FrameTab, GroupGuard, PageSession, ResolvedElement};
+use crate::browser_representations::page::{FrameTab, GroupGuard, PageSession, ResolvedElement};
+use crate::chromium_bridge::frame_selector;
+use crate::chromium_bridge::frames::{FrameContext, FrameScope};
+use crate::playwright_methods::capture;
+use crate::playwright_methods::click::{self, NotReady, PageError, Scroll, StatesCheck, Tab};
+use crate::playwright_methods::evaluate::HandleEntry;
+use crate::playwright_methods::waits::{self, WaitForSelectorOptions};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::run::PageId;
-use crate::waits::{self, WaitForSelectorOptions};
 
 /// Playwright: `server/screenshotter.ts` `Screenshotter._maskElements`: `options.maskColor || '#F0F'`
 const DEFAULT_MASK_COLOR: &str = "#F0F";
@@ -210,7 +210,7 @@ impl ScreenshotOptions {
 type Turn = Arc<OwnedMutexGuard<()>>;
 
 /// One `Runtime`'s screenshot turns, one per tab, each shared by every run the `Runtime` makes on
-/// that tab, as [`TabInputs`](crate::page::TabInputs) shares the tab's input. Every Neo run on a
+/// that tab, as [`TabInputs`](crate::browser_representations::page::TabInputs) shares the tab's input. Every Neo run on a
 /// tab captures the same page, so they share its queue: a run a host cancels or drops mid-capture
 /// leaves cleanup tasks holding the turn (the background reset, the page restore), and the next
 /// run's capture waits until they have run, instead of capturing over a transparent background

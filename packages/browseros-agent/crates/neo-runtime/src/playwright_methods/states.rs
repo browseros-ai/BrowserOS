@@ -20,11 +20,11 @@ use neo_runtime_spec::injected::{
     ReadableElementState,
 };
 
-use crate::click::{LoopAWaits, PageError, SelectorFacts, Stop};
-use crate::frame_selector;
-use crate::page::FrameTab;
+use crate::browser_representations::page::FrameTab;
+use crate::chromium_bridge::frame_selector;
+use crate::playwright_methods::click::{LoopAWaits, PageError, SelectorFacts, Stop};
+use crate::playwright_methods::reads::{self, Matched, SelectorTab};
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::reads::{self, Matched, SelectorTab};
 
 /// A state read's selector and Playwright's strict matching option.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -31,7 +31,7 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
-use crate::network::HopId;
+use crate::browser_representations::network::HopId;
 
 /// Playwright: `server/frames.ts` `Frame._startNetworkIdleTimer`: `}, 500);`
 const NETWORK_IDLE_QUIET: Duration = Duration::from_millis(500);

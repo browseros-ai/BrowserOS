@@ -2,7 +2,7 @@
  * Neo's own frame commands: browser calls Playwright's protocol does not have. Playwright's
  * client builds `waitForURL`, `waitForLoadState` and `waitForNavigation` itself, over the
  * server's `navigated` and `loadstate` events (`client/frame.ts` at 26137face). Neo's bridge
- * carries one reply per call and no events, so Rust owns each wait (`neo-runtime/src/waits.rs`
+ * carries one reply per call and no events, so Rust owns each wait (`neo-runtime/src/playwright_methods/waits.rs`
  * and `history.rs`: its deadline, its wake-ups, its cleanup), and the SDK sends one call that
  * replies once the wait is met.
  *
@@ -11,7 +11,7 @@
  *    {"id":7,"guid":"frame@T","method":"neo:waitForURL",
  *     "params":{"url":{"glob":"https://a.test/done.html"},"waitUntil":"load"},
  *     "metadata":{"location":{…},"timeout":30000}}
- *    ── Rust: dispatch.rs decodes it before the spec's FrameCall; waits.rs waits ──▶
+ *    ── Rust: method_router.rs decodes it before the spec's FrameCall; waits.rs waits ──▶
  *    ◀ {"id":7,"result":{}}  → undefined
  *
  *  page.waitForNavigation({ url: (url) => url.pathname === '/done' })
@@ -29,7 +29,7 @@
  * 2. These types are hand-written here and in Rust (`waits.rs` `NeoWaitForUrlParams`,
  *    `NeoWaitForLoadStateParams`, `history.rs` `NeoWaitForNavigationParams`,
  *    `NeoNextNavigationParams`, `NeoFinishNavigationParams`), not generated: both sides pin the
- *    exact JSON in a unit test (`tests/unit/waits.test.ts`, dispatch.rs's decode tests). Change
+ *    exact JSON in a unit test (`tests/unit/waits.test.ts`, method_router.rs's decode tests). Change
  *    one side, change both.
  * 3. `url` is a string glob or a `RegExp`, serialized as Playwright's `serializeURLMatch` without
  *    `urlPattern` (QuickJS has no `URLPattern`), and matched in Rust. A predicate function
@@ -105,7 +105,7 @@ export type ElementScreenshotParams = Omit<
 
 /** `neo:scrollIntoViewIfNeeded` and `neo:boundingBox`: Playwright's `Locator` methods that its
  * client reaches through an `ElementHandle` (`_withElement`), which Rust serves whole
- * (`neo-runtime/src/element_ops.rs`). */
+ * (`neo-runtime/src/playwright_methods/element_ops.rs`). */
 export type NeoElementParams = { selector: string; strict: boolean }
 
 /** `neo:selectText`, with `ElementHandle.selectText`'s `force`. */

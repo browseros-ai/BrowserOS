@@ -41,12 +41,12 @@ use tokio::sync::{OnceCell, oneshot};
 use tokio_util::task::TaskTracker;
 use tracing::debug;
 
-use crate::bridge;
-use crate::emulation::{ContextEmulation, EmulatedMedia, Size};
-use crate::page::PageSession;
+use crate::browser_representations::emulation::{ContextEmulation, EmulatedMedia, Size};
+use crate::browser_representations::page::PageSession;
+use crate::browser_representations::tabs::{self, CreatedPage, PageEntry, Tabs};
 use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::quickjs_bridge;
 use crate::run::PageId;
-use crate::tabs::{self, CreatedPage, PageEntry, Tabs};
 
 /// Neo: the guid of the run's `Browser`, the BrowserOS it is attached to.
 pub(crate) const BROWSER_GUID: &str = "browser@default";
@@ -266,7 +266,7 @@ pub(crate) async fn context(
         // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.pause`: `// Debugger will take care of this.`
         // `setTestIdAttributeName`: applied for the run before the call started (`Dispatcher::call`).
         BrowserContextCall::Pause(_) | BrowserContextCall::SetTestIdAttributeName(_) => Ok(None),
-        // Session state (`session_state.rs`) is the run's own context's.
+        // Session state (`cookies_and_storage.rs`) is the run's own context's.
         call @ (BrowserContextCall::AddCookies(_)
         | BrowserContextCall::Cookies(_)
         | BrowserContextCall::StorageState(_)
@@ -422,7 +422,7 @@ async fn new_page(
     }
     encode(&BrowserContextNewPageResult {
         page: PageChannel {
-            guid: bridge::page_guid(&entry.id),
+            guid: quickjs_bridge::page_guid(&entry.id),
         },
     })
 }

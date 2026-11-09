@@ -7,13 +7,13 @@ use std::sync::{Arc, OnceLock};
 use neo_runtime_spec::injected::ElementState;
 use neo_runtime_spec::serve::{FrameFillParams, FrameInputValueParams, FrameSelectOptionParams};
 
-use crate::click::{
+use crate::chromium_bridge::keyboard_input::{self, KeyboardTab, Platform};
+use crate::chromium_bridge::mouse_and_touch_input::{Devices, Plan};
+use crate::playwright_methods::click::{
     self, ActionResult, ElementAction, LoopAWaits, NotReady, PageError, PressReport, Stop, Tab,
 };
-use crate::evaluate::HandleEntry;
-use crate::forms::{FillOutcome, FormTab, SelectOption, SelectOutcome};
-use crate::input_devices::{Devices, Plan};
-use crate::keyboard::{self, KeyboardTab, Platform};
+use crate::playwright_methods::evaluate::HandleEntry;
+use crate::playwright_methods::forms::{FillOutcome, FormTab, SelectOption, SelectOutcome};
 use crate::progress::{CallError, DeliveryCell, InputTicket, PlaywrightError, Progress};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +47,7 @@ pub(crate) struct SelectOptions {
 }
 
 impl SelectOptions {
-    /// The generated params never carry `elements`: `dispatch.rs` takes them out of the wire
+    /// The generated params never carry `elements`: `method_router.rs` takes them out of the wire
     /// first (their channel type has no values) and hands their guids to
     /// [`SelectOptions::with_elements`].
     pub(crate) fn from_params(params: FrameSelectOptionParams) -> Self {
@@ -296,7 +296,7 @@ fn plan_fill_input<D: Devices>(
     let mut plan = Plan::default();
     match delete {
         Some(platform) => {
-            keyboard::plan_press(
+            keyboard_input::plan_press(
                 &mut plan,
                 &mut simulated,
                 "Delete",
@@ -307,7 +307,7 @@ fn plan_fill_input<D: Devices>(
             .map_err(|unknown| PageError::Contract(unknown.to_string()))?;
         }
         None => {
-            keyboard::plan_insert_text(&mut plan, &mut simulated, value);
+            keyboard_input::plan_insert_text(&mut plan, &mut simulated, value);
         }
     }
     Ok(plan)
@@ -448,9 +448,9 @@ mod tests {
     use tokio_util::task::TaskTracker;
 
     use super::*;
-    use crate::click::tests::{FakeTab, Step, Writes};
     use crate::deadline::Deadline;
-    use crate::forms::InputValueMatch;
+    use crate::playwright_methods::click::tests::{FakeTab, Step, Writes};
+    use crate::playwright_methods::forms::InputValueMatch;
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope, Trace};
     use crate::run::{Delivery, RunEnd};
 

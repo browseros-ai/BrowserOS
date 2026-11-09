@@ -3,14 +3,14 @@
 //! The owner's constraint: page JavaScript never bypasses one narrow, deliberate path. In Neo
 //! that path is four files of `neo-runtime`:
 //!
-//! - `src/world.rs`, Neo's isolated (utility) world: `Page.createIsolatedWorld` and
+//! - `src/chromium_bridge/playwright_injected_methods.rs`, Neo's isolated (utility) world: `Page.createIsolatedWorld` and
 //!   `Runtime.callFunctionOn`, for every read and action.
-//! - `src/main_world.rs`, the page's own world, for Playwright's evaluations: `Runtime.callFunctionOn`
+//! - `src/chromium_bridge/main_world.rs`, the page's own world, for Playwright's evaluations: `Runtime.callFunctionOn`
 //!   only, on the `UtilityScript` it builds there, and on a page object an event named (the
 //!   built `(object) => object`, which keeps it in a run's handle group).
-//! - `src/init_scripts.rs`, the agent's init scripts: `Page.addScriptToEvaluateOnNewDocument` and
+//! - `src/browser_representations/init_scripts.rs`, the agent's init scripts: `Page.addScriptToEvaluateOnNewDocument` and
 //!   `Page.removeScriptToEvaluateOnNewDocument`, in the page's own world only (no `worldName`).
-//! - `src/bindings.rs`, `exposeBinding`: `Runtime.addBinding` and `Runtime.removeBinding` of
+//! - `src/browser_representations/bindings.rs`, `exposeBinding`: `Runtime.addBinding` and `Runtime.removeBinding` of
 //!   Playwright's one CDP binding, which runs no script; the page half is built artifacts it hands
 //!   to `init_scripts.rs` and `main_world.rs`.
 //!
@@ -60,10 +60,13 @@ const GUARDED: &[&str] = &[
 /// relative to `crates/`.
 const ALLOWED: &[(&str, &[&str])] = &[
     (
-        "neo-runtime/src/world.rs",
+        "neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
         &["Runtime.callFunctionOn", "Page.createIsolatedWorld"],
     ),
-    ("neo-runtime/src/main_world.rs", &["Runtime.callFunctionOn"]),
+    (
+        "neo-runtime/src/chromium_bridge/main_world.rs",
+        &["Runtime.callFunctionOn"],
+    ),
     (
         INIT_SCRIPTS,
         &[
@@ -75,10 +78,10 @@ const ALLOWED: &[(&str, &[&str])] = &[
 ];
 
 /// The init scripts' file: its scripts run in the page's own world, so it never names a world.
-const INIT_SCRIPTS: &str = "neo-runtime/src/init_scripts.rs";
+const INIT_SCRIPTS: &str = "neo-runtime/src/browser_representations/init_scripts.rs";
 
 /// The bindings' file: it adds and removes Playwright's CDP binding, and runs no script itself.
-const BINDINGS: &str = "neo-runtime/src/bindings.rs";
+const BINDINGS: &str = "neo-runtime/src/browser_representations/bindings.rs";
 
 /// Where a built artifact lives: the only source a `functionDeclaration` may have.
 const BUILT_PREFIX: &str = "/../neo-playwright-injected/dist/";
@@ -133,7 +136,7 @@ fn tests_that_only_the_two_world_doors_reach_page_javascript() {
 #[test]
 fn tests_that_a_const_alias_of_a_guarded_method_is_refused() {
     let problems = check(
-        "neo-runtime/src/dispatch.rs",
+        "neo-runtime/src/method_router.rs",
         "const EVAL: &str = \"Runtime.evaluate\";\nfn f() {}\n",
     );
     assert_eq!(problems.len(), 1, "{problems:?}");
@@ -148,7 +151,7 @@ fn tests_that_a_composed_method_name_is_refused() {
         "let m = [domain, \"evaluate\"].join(\".\");",
         "let m = format!(\"{}.{}\", \"Page\", \"addScriptToEvaluateOnNewDocument\");",
     ] {
-        let problems = check("neo-runtime/src/page.rs", line);
+        let problems = check("neo-runtime/src/browser_representations/page.rs", line);
         assert!(!problems.is_empty(), "not refused: {line}");
     }
 }
@@ -156,15 +159,27 @@ fn tests_that_a_composed_method_name_is_refused() {
 #[test]
 fn tests_that_a_method_is_refused_outside_its_file() {
     let send = "self.send(\"Runtime.callFunctionOn\", request).await";
-    assert!(check("neo-runtime/src/main_world.rs", send).is_empty());
-    assert!(check("neo-runtime/src/world.rs", send).is_empty());
-    assert!(!check("neo-runtime/src/evaluate.rs", send).is_empty());
-    assert!(!check("neo-runtime/src/page.rs", send).is_empty());
+    assert!(check("neo-runtime/src/chromium_bridge/main_world.rs", send).is_empty());
+    assert!(
+        check(
+            "neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
+            send
+        )
+        .is_empty()
+    );
+    assert!(!check("neo-runtime/src/playwright_methods/evaluate.rs", send).is_empty());
+    assert!(!check("neo-runtime/src/browser_representations/page.rs", send).is_empty());
     assert!(!check("neo-quickjs-injected/src/x.rs", send).is_empty());
     let world = "self.send(\"Page.createIsolatedWorld\", params)";
-    assert!(check("neo-runtime/src/world.rs", world).is_empty());
     assert!(
-        !check("neo-runtime/src/main_world.rs", world).is_empty(),
+        check(
+            "neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
+            world
+        )
+        .is_empty()
+    );
+    assert!(
+        !check("neo-runtime/src/chromium_bridge/main_world.rs", world).is_empty(),
         "main_world.rs reaches the page's own world only"
     );
     for method in [
@@ -174,11 +189,15 @@ fn tests_that_a_method_is_refused_outside_its_file() {
     ] {
         let line = format!("self.send(\"{method}\", params)");
         assert!(
-            !check("neo-runtime/src/main_world.rs", &line).is_empty(),
+            !check("neo-runtime/src/chromium_bridge/main_world.rs", &line).is_empty(),
             "{method} in main_world.rs"
         );
         assert!(
-            !check("neo-runtime/src/world.rs", &line).is_empty(),
+            !check(
+                "neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
+                &line
+            )
+            .is_empty(),
             "{method} in world.rs"
         );
     }
@@ -199,10 +218,10 @@ fn tests_that_comments_and_test_modules_are_not_code() {
                   fn f() {}\n\
                   #[cfg(test)]\n\
                   mod tests {\n    const X: &str = \"Runtime.evaluate\";\n}\n";
-    assert!(check("neo-runtime/src/page.rs", source).is_empty());
+    assert!(check("neo-runtime/src/browser_representations/page.rs", source).is_empty());
     let after = format!("{source}const Y: &str = \"Runtime.evaluate\";\n");
     assert_eq!(
-        check("neo-runtime/src/page.rs", &after).len(),
+        check("neo-runtime/src/browser_representations/page.rs", &after).len(),
         1,
         "code after a test module is still code"
     );
@@ -212,33 +231,57 @@ fn tests_that_comments_and_test_modules_are_not_code() {
 fn tests_that_a_function_declaration_must_be_a_built_artifact() {
     let built = "const GLUE: &str = include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../neo-playwright-injected/dist/call.js\"));\n";
     let ok = format!("{built}fn f() {{ json!({{\"functionDeclaration\": GLUE}}); }}\n");
-    assert!(check("neo-runtime/src/main_world.rs", &ok).is_empty());
+    assert!(check("neo-runtime/src/chromium_bridge/main_world.rs", &ok).is_empty());
 
     let literal = format!(
         "{built}fn f() {{ json!({{\"functionDeclaration\": \"() => document.title\"}}); }}\n"
     );
-    assert!(!check("neo-runtime/src/main_world.rs", &literal).is_empty());
+    assert!(!check("neo-runtime/src/chromium_bridge/main_world.rs", &literal).is_empty());
 
     let other_const =
         "const JS: &str = \"() => 1\";\nfn f() { json!({\"functionDeclaration\": JS}); }\n";
-    assert!(!check("neo-runtime/src/world.rs", other_const).is_empty());
+    assert!(
+        !check(
+            "neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
+            other_const
+        )
+        .is_empty()
+    );
 
     let wrong_dir = "const JS: &str = include_str!(\"../payload.js\");\nfn f() { json!({\"functionDeclaration\": JS}); }\n";
-    assert!(!check("neo-runtime/src/world.rs", wrong_dir).is_empty());
+    assert!(
+        !check(
+            "neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
+            wrong_dir
+        )
+        .is_empty()
+    );
 
     let relay_ok = format!(
         "{built}impl W {{ async fn run(&self, context: i64, function: &str) {{ json!({{\"functionDeclaration\": function}}); }}\n\
          async fn a(&self) {{ self.run(1, GLUE).await; }} }}\n"
     );
-    assert!(check("neo-runtime/src/world.rs", &relay_ok).is_empty());
+    assert!(
+        check(
+            "neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
+            &relay_ok
+        )
+        .is_empty()
+    );
     let relay_bad = format!(
         "{built}impl W {{ async fn run(&self, context: i64, function: &str) {{ json!({{\"functionDeclaration\": function}}); }}\n\
          async fn a(&self, js: &str) {{ self.run(1, js).await; }} }}\n"
     );
-    assert!(!check("neo-runtime/src/world.rs", &relay_bad).is_empty());
+    assert!(
+        !check(
+            "neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
+            &relay_bad
+        )
+        .is_empty()
+    );
 
     let elsewhere = "fn f() { json!({\"functionDeclaration\": X}); }\n";
-    assert!(!check("neo-runtime/src/evaluate.rs", elsewhere).is_empty());
+    assert!(!check("neo-runtime/src/playwright_methods/evaluate.rs", elsewhere).is_empty());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -796,11 +839,11 @@ fn tests_that_only_init_scripts_rs_adds_init_scripts_and_never_names_a_world() {
             "{method} in init_scripts.rs"
         );
         assert!(
-            !check("neo-runtime/src/page.rs", &send).is_empty(),
+            !check("neo-runtime/src/browser_representations/page.rs", &send).is_empty(),
             "{method} elsewhere"
         );
         assert!(
-            !check("neo-runtime/src/main_world.rs", &send).is_empty(),
+            !check("neo-runtime/src/chromium_bridge/main_world.rs", &send).is_empty(),
             "{method} in main_world.rs"
         );
     }
@@ -826,8 +869,8 @@ fn tests_that_only_bindings_rs_adds_and_removes_the_binding_and_runs_no_script()
         assert!(check(BINDINGS, &send).is_empty(), "{method} in bindings.rs");
         for elsewhere in [
             INIT_SCRIPTS,
-            "neo-runtime/src/page.rs",
-            "neo-runtime/src/main_world.rs",
+            "neo-runtime/src/browser_representations/page.rs",
+            "neo-runtime/src/chromium_bridge/main_world.rs",
         ] {
             assert!(
                 !check(elsewhere, &send).is_empty(),
@@ -879,14 +922,14 @@ fn tests_that_only_an_exact_artifact_include_is_a_built_function() {
     };
     fn probe() { json!({"functionDeclaration": GLUE}); }"#;
     assert!(
-        !check("neo-runtime/src/main_world.rs", source).is_empty(),
+        !check("neo-runtime/src/chromium_bridge/main_world.rs", source).is_empty(),
         "the const mentions an include_str but evaluates to another string"
     );
     let built = r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-playwright-injected/dist/evaluate.js"))"#;
     let accepted = format!(
         "const GLUE: &str = {built};\nfn probe() {{ json!({{\"functionDeclaration\": GLUE}}); }}"
     );
-    assert!(check("neo-runtime/src/main_world.rs", &accepted).is_empty());
+    assert!(check("neo-runtime/src/chromium_bridge/main_world.rs", &accepted).is_empty());
     for initializer in [
         r#"include_str!("/../neo-playwright-injected/dist/evaluate.js")"#,
         r#"include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neo-playwright-injected/dist/../evil.js"))"#,
@@ -899,7 +942,7 @@ fn tests_that_only_an_exact_artifact_include_is_a_built_function() {
             "const GLUE: &str = {initializer};\nfn probe() {{ json!({{\"functionDeclaration\": GLUE}}); }}"
         );
         assert!(
-            !check("neo-runtime/src/main_world.rs", &source).is_empty(),
+            !check("neo-runtime/src/chromium_bridge/main_world.rs", &source).is_empty(),
             "not refused: {initializer}"
         );
     }
@@ -911,7 +954,7 @@ fn tests_that_only_an_exact_artifact_include_is_a_built_function() {
     ] {
         let source = format!("const GLUE: &str = {built};\n{shadow}");
         assert!(
-            !check("neo-runtime/src/main_world.rs", &source).is_empty(),
+            !check("neo-runtime/src/chromium_bridge/main_world.rs", &source).is_empty(),
             "a re-bound name passed: {shadow}"
         );
     }

@@ -26,7 +26,7 @@ export type DropPayload = {
 
 /** Playwright: `client/fileUtils.ts` `fileUploadSizeLimit`: `export const fileUploadSizeLimit = 50 * 1024 * 1024;`
  *
- * Deviation: `client/elementHandle.ts` `convertInputFiles`: `throw new Error('Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.');` Playwright sends buffers up to this limit; Neo's dispatcher holds at most 8 MiB of a run's requests in flight (neo-runtime `dispatch.rs` `MAX_REQUEST_BYTES_IN_FLIGHT`), so buffers past about 6 MiB (base64 grows them by a third) are refused with its Error naming that bound; a path in the artifact directory takes any size. */
+ * Deviation: `client/elementHandle.ts` `convertInputFiles`: `throw new Error('Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.');` Playwright sends buffers up to this limit; Neo's dispatcher holds at most 8 MiB of a run's requests in flight (neo-runtime `method_router.rs` `MAX_REQUEST_BYTES_IN_FLIGHT`), so buffers past about 6 MiB (base64 grows them by a third) are refused with its Error naming that bound; a path in the artifact directory takes any size. */
 const FILE_UPLOAD_SIZE_LIMIT = 50 * 1024 * 1024
 
 type WirePayloads = NonNullable<FrameSetInputFilesParams['payloads']>

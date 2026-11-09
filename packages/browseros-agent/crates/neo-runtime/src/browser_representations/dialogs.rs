@@ -19,10 +19,10 @@ use neo_runtime_spec::serve::{DialogCall, DialogInitializer, PageChannel};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::click::PageError;
-use crate::page::{DialogAnswer, PageSession};
+use crate::browser_representations::page::{DialogAnswer, PageSession};
+use crate::chromium_bridge::playwright_injected_methods;
+use crate::playwright_methods::click::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::world;
 
 /// Neo: the `dialog@` guid prefix; the rest is `<targetId>:<n>`, minted by the run.
 const DIALOG_PREFIX: &str = "dialog@";
@@ -239,7 +239,9 @@ fn answer_error(error: &CdpError) -> PlaywrightError {
         CdpError::Protocol { message, .. } => PlaywrightError::error(format!(
             "Protocol error (Page.handleJavaScriptDialog): {message}"
         )),
-        error if world::classify(error) == PageError::Closed => PlaywrightError::target_closed(),
+        error if playwright_injected_methods::classify(error) == PageError::Closed => {
+            PlaywrightError::target_closed()
+        }
         error => PlaywrightError::error(error.to_string()),
     }
 }

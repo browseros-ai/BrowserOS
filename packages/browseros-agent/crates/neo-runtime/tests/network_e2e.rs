@@ -1,4 +1,4 @@
-//! Every request of a page on a real BrowserOS neo (`src/network.rs`, `src/network_events.rs`,
+//! Every request of a page on a real BrowserOS neo (`src/browser_representations/network.rs`, `src/chromium_bridge/network_events.rs`,
 //! neo-quickjs-injected `network.ts`): a busy page's requests each reach the run's listeners
 //! exactly once, as one object per request; the network log keeps a bounded number of requests, and
 //! an object past that bound answers Neo's error naming it; and a run that listened leaves nothing

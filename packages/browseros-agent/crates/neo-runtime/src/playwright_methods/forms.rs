@@ -21,10 +21,12 @@ pub(crate) use neo_runtime_spec::injected::{
     FormSelectOption as SelectOption, InjectedElementStateResult as CheckedState,
 };
 
-use crate::click::{PageError, Tab};
-use crate::evaluate::{self, HandleEntry};
-use crate::frame_selector;
-use crate::page::{FrameTab, GroupGuard, InputPermit, PageSession, ResolvedElement};
+use crate::browser_representations::page::{
+    FrameTab, GroupGuard, InputPermit, PageSession, ResolvedElement,
+};
+use crate::chromium_bridge::frame_selector;
+use crate::playwright_methods::click::{PageError, Tab};
+use crate::playwright_methods::evaluate::{self, HandleEntry};
 use crate::progress::InputTicket;
 
 /// The result of the one fill evaluation. `NeedsInput` retains the original ticket for the
@@ -408,7 +410,7 @@ pub(crate) mod tests {
     use tokio::time;
 
     use super::*;
-    use crate::click::tests::{FakeTab, Step};
+    use crate::playwright_methods::click::tests::{FakeTab, Step};
     use crate::progress::DeliveryCell;
     use crate::run::Delivery;
 

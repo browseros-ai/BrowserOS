@@ -1,6 +1,6 @@
 /**
  * Neo: the realm's `TextEncoder` and `TextDecoder` (WHATWG Encoding Standard), which QuickJS lacks
- * and a Node Playwright script has as globals. `realm.rs` installs both (`globals.ts`).
+ * and a Node Playwright script has as globals. `quickjs.rs` installs both (`globals.ts`).
  *
  * UTF-8 only: Node built with full ICU also decodes legacy encodings (`windows-1252`,
  * `utf-16le`, …); here those labels throw the `RangeError` Node throws for an encoding it lacks.

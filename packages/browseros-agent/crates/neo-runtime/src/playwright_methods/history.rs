@@ -49,14 +49,16 @@ use serde_json::json;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::click::PageError;
-use crate::frames::FrameScope;
-use crate::navigate::{self, Lifecycle, Navigation, NavigationTab, Observation};
-use crate::page::FrameTab;
+use crate::browser_representations::page::FrameTab;
+use crate::chromium_bridge::frames::FrameScope;
+use crate::chromium_bridge::playwright_injected_methods;
+use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::navigate::{
+    self, Lifecycle, Navigation, NavigationTab, Observation,
+};
+use crate::playwright_methods::waits::{self, WaitObservation, WaitTab};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
-use crate::waits::{self, WaitObservation, WaitTab};
-use crate::world;
 
 /// Deviation: `client/frame.ts` `Frame.waitForNavigation` the most URL-predicate waits one run
 /// may run at once; Playwright's waiter has no cap. Every wait ends its cursor however it ends
@@ -762,7 +764,9 @@ fn history_error(method: &str, error: &CdpError) -> PlaywrightError {
         CdpError::Protocol { message, .. } => {
             PlaywrightError::error(format!("Protocol error ({method}): {message}"))
         }
-        error if world::classify(error) == PageError::Closed => PlaywrightError::target_closed(),
+        error if playwright_injected_methods::classify(error) == PageError::Closed => {
+            PlaywrightError::target_closed()
+        }
         error => PlaywrightError::error(error.to_string()),
     }
 }
@@ -783,7 +787,7 @@ mod tests {
 
     use super::*;
     use crate::deadline::Deadline;
-    use crate::navigate::{NavigateReply, NavigationState};
+    use crate::playwright_methods::navigate::{NavigateReply, NavigationState};
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope};
 
     const START: &str = "https://a.test/start";

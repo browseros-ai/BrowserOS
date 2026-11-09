@@ -1,6 +1,6 @@
 /**
  * The reply half of Neo's wire. Rust encodes a success, a page error, a timeout and a closed tab
- * with its own errors, call-log folding and envelope (`neo-runtime/src/dispatch.rs`, which writes
+ * with its own errors, call-log folding and envelope (`neo-runtime/src/method_router.rs`, which writes
  * `neo-runtime/tests/fixtures/replies.json`); this rebuilds each into the error a script sees.
  */
 

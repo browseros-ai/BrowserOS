@@ -30,12 +30,12 @@ use tokio::sync::Notify;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::click::{PageError, Tab};
-use crate::frame_selector;
-use crate::navigate::{self, Observation};
-use crate::page::FrameTab;
+use crate::browser_representations::page::FrameTab;
+use crate::chromium_bridge::frame_selector;
+use crate::playwright_methods::click::{PageError, Tab};
+use crate::playwright_methods::navigate::{self, Observation};
+use crate::playwright_methods::waits::{WaitObservation, WaitTab};
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::waits::{WaitObservation, WaitTab};
 
 /// Neo: Playwright's `Frame._content` error, word for word, for a document that changed under
 /// the read.

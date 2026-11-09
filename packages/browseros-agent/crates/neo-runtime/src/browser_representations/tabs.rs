@@ -23,29 +23,29 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tracing::debug;
 
-use crate::bridge;
-use crate::browser_calls::{self, CreatedContext, CreatedContexts};
-use crate::click::PageError;
+use crate::browser_representations::cookies_and_storage::{self, Overrides, Permissions};
+use crate::browser_representations::dialogs;
+use crate::browser_representations::downloads::{self, Downloads, Opened};
+use crate::browser_representations::init_scripts;
+use crate::browser_representations::network::HopId;
+use crate::browser_representations::page::{FrameTab, PageSession, PageSetup, Session, TabInputs};
+use crate::browser_representations::routes::{self, ContextRoutes};
+use crate::chromium_bridge::browser_connection_settings::Switches;
+use crate::chromium_bridge::discovery::{self, TargetInfo};
+use crate::chromium_bridge::frames::{FrameContext, FrameScope};
+use crate::chromium_bridge::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
+use crate::chromium_bridge::playwright_injected_methods::TestIdAttribute;
 use crate::debugger::{DEFAULT_CONTEXT, Debuggers};
-use crate::dialogs;
-use crate::discovery::{self, TargetInfo};
-use crate::dispatch::PAGE_END_WAIT;
-use crate::downloads::{self, Downloads, Opened};
-use crate::evaluate::{self, Handles};
 use crate::events::{ALL_PAGES, CONTEXT_GUID, Enabling, EventHub, Needs};
-use crate::frames::{FrameContext, FrameScope};
-use crate::getters;
-use crate::init_scripts;
-use crate::network::HopId;
-use crate::page::{FrameTab, PageSession, PageSetup, Session, TabInputs};
-use crate::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
+use crate::method_router::PAGE_END_WAIT;
+use crate::playwright_methods::browser_methods::{self, CreatedContext, CreatedContexts};
+use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::evaluate::{self, Handles};
+use crate::playwright_methods::getters;
+use crate::playwright_methods::screenshot::TabScreenshots;
 use crate::progress::{PlaywrightError, RunScope};
-use crate::routes::{self, ContextRoutes};
+use crate::quickjs_bridge;
 use crate::run::{PageId, RunPage};
-use crate::screenshot::TabScreenshots;
-use crate::session_state::{self, Overrides, Permissions};
-use crate::switch::Switches;
-use crate::world::TestIdAttribute;
 
 /// Neo: how long `ConsoleMessage.args()` waits for its arguments' handles. A page a dialog holds
 /// answers no call until the dialog is answered, which the script may be about to do.
@@ -68,7 +68,7 @@ struct Inner {
     pages: Mutex<Vec<Arc<PageEntry>>>,
     /// The run's event queue and subscriptions, shared with every page session it attaches.
     events: EventHub,
-    /// The contexts the run created with `browser.newContext` (`browser_calls.rs`).
+    /// The contexts the run created with `browser.newContext` (`browser_methods.rs`).
     created: CreatedContexts,
     /// `context.debugger` of the run's own context and of each context it created.
     debuggers: Debuggers,
@@ -89,7 +89,7 @@ struct Inner {
     downloads_enabling: Mutex<Option<Enabling>>,
     /// The downloads the run's `download` events handed out.
     downloads: Downloads,
-    /// The run's session-scoped state, which each session it attaches gets (`session_state.rs`).
+    /// The run's session-scoped state, which each session it attaches gets (`cookies_and_storage.rs`).
     overrides: Arc<Overrides>,
     /// The `Runtime`'s permission grants, and this run's id among them.
     permissions: Permissions,
@@ -234,7 +234,7 @@ impl Tabs {
             downloads: Downloads::default(),
             overrides: Arc::default(),
             permissions,
-            run_id: session_state::next_run(),
+            run_id: cookies_and_storage::next_run(),
         }));
         let entry = tabs.register(page.clone(), false)?;
         // The scope read above already checked this tab. Avoid a second startup read so
@@ -291,7 +291,7 @@ impl Tabs {
     /// Every page this run has attached a session to, in first-seen order.
     /// (platform) [`Self::attached`] of the run's own context: a tab of a context
     /// `browser.newContext` created is a page of that context, which the run's own bindings and
-    /// session state never reach (`bindings.rs`, `session_state.rs`).
+    /// session state never reach (`bindings.rs`, `cookies_and_storage.rs`).
     pub(crate) fn own_attached(&self) -> Vec<(Arc<PageEntry>, Arc<PageSession>)> {
         self.attached()
             .into_iter()
@@ -418,7 +418,7 @@ impl Tabs {
         // Its context-level events answer to that context's listeners.
         self.0
             .events
-            .set_owner(&bridge::page_guid(&entry.id), &context.guid);
+            .set_owner(&quickjs_bridge::page_guid(&entry.id), &context.guid);
         Ok(entry)
     }
 
@@ -471,7 +471,7 @@ impl Tabs {
                 }
                 let session = self.attach(entry).await?;
                 // A created context's page emulates its options before any call on it runs.
-                browser_calls::prepare(entry, &session).await?;
+                browser_methods::prepare(entry, &session).await?;
                 // A context listener covers every page of its context the run has a session
                 // on, this one from now on. Registered before the call that attached it
                 // continues, so that call waits for the enable (`EventHub::ready`). The page's
@@ -775,7 +775,7 @@ impl Tabs {
     /// back, in one place that each area adding such state releases it from: the run's init
     /// scripts (`init_scripts.rs`) and exposed bindings (`bindings.rs`), its session overrides (extra headers, offline mode,
     /// geolocation; HTTP credentials hold none while `setHTTPCredentials` is pending), its
-    /// permission grants (`session_state.rs`) and its routes' paused requests (`routes.rs`). `context.close()` awaits it before it resolves and
+    /// permission grants (`cookies_and_storage.rs`) and its routes' paused requests (`routes.rs`). `context.close()` awaits it before it resolves and
     /// `Dispatcher::finish` runs it, so a closed context and an ended run let go the same way.
     /// Each part marks itself released before it waits, so an attach or a call still running
     /// installs nothing after it, and waits [`PAGE_END_WAIT`] at most: scripts, bindings and
@@ -1007,12 +1007,12 @@ impl Tabs {
         self.register(owner, false).ok()
     }
 
-    /// The run's session-scoped state (`session_state.rs`).
+    /// The run's session-scoped state (`cookies_and_storage.rs`).
     pub(crate) fn overrides(&self) -> &Overrides {
         &self.0.overrides
     }
 
-    /// The `Runtime`'s permission grants (`session_state.rs`).
+    /// The `Runtime`'s permission grants (`cookies_and_storage.rs`).
     pub(crate) fn permissions(&self) -> &Permissions {
         &self.0.permissions
     }
@@ -1037,9 +1037,9 @@ impl Tabs {
             .and_then(|opener| self.entry(&PageId::new(opener.clone())))
             .filter(|opener| !opener.closed.is_cancelled());
         let listening = hub.subscribed(CONTEXT_GUID, "page")
-            || opener
-                .as_ref()
-                .is_some_and(|opener| hub.subscribed(&bridge::page_guid(&opener.id), "popup"));
+            || opener.as_ref().is_some_and(|opener| {
+                hub.subscribed(&quickjs_bridge::page_guid(&opener.id), "popup")
+            });
         if !listening {
             return;
         }
@@ -1063,7 +1063,7 @@ impl Tabs {
         }
         let mut record = created_page(&entry, info.url.clone(), closed);
         record.initializer.opener = opener.map(|opener| PageChannel {
-            guid: bridge::page_guid(&opener.id),
+            guid: quickjs_bridge::page_guid(&opener.id),
         });
         match serde_json::to_value(&record) {
             Ok(record) => {
@@ -1448,7 +1448,7 @@ pub(crate) fn cdp_error(error: &CdpError) -> PlaywrightError {
 }
 
 fn created_page(entry: &PageEntry, url: String, closed: bool) -> CreatedPage {
-    let frame = bridge::frame_guid(&entry.id);
+    let frame = quickjs_bridge::frame_guid(&entry.id);
     // Playwright's page record carries its viewport: what its session emulates now, else its
     // context's. A page of the run's own context emulates none until the script sets one.
     let viewport = entry
@@ -1461,7 +1461,7 @@ fn created_page(entry: &PageEntry, url: String, closed: bool) -> CreatedPage {
                 .and_then(|context| context.emulation.viewport)
         });
     CreatedPage {
-        guid: bridge::page_guid(&entry.id),
+        guid: quickjs_bridge::page_guid(&entry.id),
         initializer: PageInitializer {
             main_frame: FrameChannel {
                 guid: frame.clone(),

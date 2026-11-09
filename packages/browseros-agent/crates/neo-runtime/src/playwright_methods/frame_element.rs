@@ -18,10 +18,10 @@ use neo_runtime_spec::injected::InjectedPreviewNodeParams;
 use neo_runtime_spec::{MethodGroup, MethodMeta};
 use serde_json::json;
 
-use crate::click::PageError;
-use crate::evaluate::{self, CreatedHandle};
-use crate::frames::{FrameContext, FrameScope};
-use crate::page::FrameTab;
+use crate::browser_representations::page::FrameTab;
+use crate::chromium_bridge::frames::{FrameContext, FrameScope};
+use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::evaluate::{self, CreatedHandle};
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// Playwright: `server/chromium/crPage.ts` `CRPage.getFrameElement`: `throw new Error('Frame has been detached.');`

@@ -1,4 +1,4 @@
-//! Download reports on a real BrowserOS neo (`src/downloads.rs`, `src/switch.rs`): a run that
+//! Download reports on a real BrowserOS neo (`src/browser_representations/downloads.rs`, `src/chromium_bridge/browser_connection_settings.rs`): a run that
 //! listens for downloads gets the browser's own file, in the profile's download folder, and once
 //! the last listening run of a `Runtime` ends the browser handles downloads as it did before: the
 //! user's next download lands in that folder under the browser's name, and the connection hears

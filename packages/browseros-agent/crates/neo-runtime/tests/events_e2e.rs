@@ -1,4 +1,4 @@
-//! The run's event pipe on a real BrowserOS neo (`src/events.rs`, `src/page_events.rs`,
+//! The run's event pipe on a real BrowserOS neo (`src/events.rs`, `src/chromium_bridge/page_events.rs`,
 //! neo-quickjs-injected `events.ts`): listeners run before the call that caused their event
 //! resolves, an idle script still gets its events, what the page logged before the run is history
 //! and never an event, a dialog a listener leaves open is answered when the run ends, an uncaught

@@ -25,15 +25,15 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tracing::debug;
 
-use crate::click::PageError;
+use crate::browser_representations::init_scripts::{self, InitScripts};
+use crate::browser_representations::page::{FrameTab, PageSession};
+use crate::browser_representations::tabs::Tabs;
+use crate::chromium_bridge::frames::FrameScope;
+use crate::chromium_bridge::main_world::BuiltExpression;
 use crate::debugger::DEFAULT_CONTEXT;
-use crate::evaluate;
-use crate::frames::FrameScope;
-use crate::init_scripts::{self, InitScripts};
-use crate::main_world::BuiltExpression;
-use crate::page::{FrameTab, PageSession};
+use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::evaluate;
 use crate::progress::PlaywrightError;
-use crate::tabs::Tabs;
 
 /// Neo: the browser name Playwright's server hands the clock (`browser.options.name`): Neo's
 /// browser is Chromium's, under the name Playwright gives that.
@@ -107,7 +107,7 @@ pub(crate) enum Given {
     String(String),
 }
 
-/// A clock command, routed by `dispatch.rs`.
+/// A clock command, routed by `method_router.rs`.
 #[derive(Debug, PartialEq)]
 pub(crate) enum ClockRoute {
     Install(Option<Given>),

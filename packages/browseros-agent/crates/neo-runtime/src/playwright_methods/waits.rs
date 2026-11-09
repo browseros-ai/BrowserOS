@@ -36,16 +36,20 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, watch};
 use tokio::time;
 
-use crate::click::{LoopAWaits, PageError, SelectorFacts, Tab};
-use crate::evaluate::{self, CreatedHandle, Handles};
-use crate::frame_selector;
-use crate::frames::{FrameScope, Host};
-use crate::locator_handlers;
-use crate::navigate::{Lifecycle, Navigation, NavigationState, NavigationTab, Observation};
-use crate::page::{FrameState, FrameTab, NavigationObservation, PageSession};
+use crate::browser_representations::locator_handlers;
+use crate::browser_representations::page::{
+    FrameState, FrameTab, NavigationObservation, PageSession,
+};
+use crate::chromium_bridge::frame_selector;
+use crate::chromium_bridge::frames::{FrameScope, Host};
+use crate::chromium_bridge::playwright_injected_methods;
+use crate::playwright_methods::click::{LoopAWaits, PageError, SelectorFacts, Tab};
+use crate::playwright_methods::evaluate::{self, CreatedHandle, Handles};
+use crate::playwright_methods::navigate::{
+    Lifecycle, Navigation, NavigationState, NavigationTab, Observation,
+};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
-use crate::world;
 
 /// Only the operations waits need. Every future is cancel-safe: dropping it loses at most
 /// its answer. There is deliberately no input lock or input operation at this seam.
@@ -787,7 +791,7 @@ impl WaitTab for FrameTab {
     async fn prepare(&self) -> Result<(), PageError> {
         PageSession::prepare(self)
             .await
-            .map_err(|error| world::classify(&error))
+            .map_err(|error| playwright_injected_methods::classify(&error))
     }
 
     async fn describe(&self, selector: &str) -> Result<SelectorFacts, PageError> {
@@ -912,7 +916,7 @@ mod tests {
 
     use super::*;
     use crate::deadline::Deadline;
-    use crate::navigate::{Navigation, NavigationState, Observation};
+    use crate::playwright_methods::navigate::{Navigation, NavigationState, Observation};
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope};
     use crate::run::RunEnd;
 

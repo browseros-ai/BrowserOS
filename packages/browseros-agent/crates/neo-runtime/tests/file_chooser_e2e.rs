@@ -1,4 +1,4 @@
-//! File chooser interception on a real BrowserOS neo (`src/page_events.rs`
+//! File chooser interception on a real BrowserOS neo (`src/chromium_bridge/page_events.rs`
 //! `intercept_file_chooser`): a run that listens for file choosers gets one for a click, and once
 //! the run ends no session of it intercepts the page's choosers any more.
 //!

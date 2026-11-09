@@ -2,7 +2,7 @@
 //! with `chromium/crPage.ts` and `crInput.ts`): this tab's CDP session,
 //! the domains a browser call needs, one watcher task that answers dialogs and tracks
 //! navigations, the tab's input turns and devices ([`TabInputs`]), and the `click::Tab`
-//! implementation over all of it and the utility world (`world.rs`).
+//! implementation over all of it and the utility world (`playwright_injected_methods.rs`).
 //!
 //! This file is mechanism; `click.rs` and `navigate.rs` own policy. Nothing here writes a
 //! call-log line or decides a retry, and policy names no CDP types.
@@ -32,7 +32,7 @@
 //!   `requestAnimationFrame` runs and `checkElementStates`' `stable` resolves (probe P3: 0
 //!   frames before, 30 per 500 ms after). The page also sees itself visible and focused while
 //!   attached. A failure is logged and ignored: a foreground tab paints anyway.
-//! - Not `Runtime.enable` (worlds are found by name, `world.rs`) and not `DOM.enable` (quads,
+//! - Not `Runtime.enable` (worlds are found by name, `playwright_injected_methods.rs`) and not `DOM.enable` (quads,
 //!   box models and scrolls by `objectId` need none, probe P2). A run that listens to console
 //!   messages or page errors, or reads their history, enables Runtime and Log on its own
 //!   ([`PageSession::enable_runtime`]); the watcher then also feeds `page_events.rs`.
@@ -69,32 +69,34 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tracing::{debug, warn};
 
-use crate::click::{
+use crate::browser_representations::emulation::PageEmulation;
+use crate::browser_representations::init_scripts::{self, Link, until_gone};
+use crate::browser_representations::locator_handlers::{self, LocatorHandlers};
+use crate::browser_representations::network::{Happening, Lookup, NetworkLog};
+use crate::browser_representations::routes::{Answer, ContextRoutes, Pause, Routes};
+use crate::chromium_bridge::frame_selector::{self, FrameOwner};
+use crate::chromium_bridge::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
+use crate::chromium_bridge::keyboard_input;
+use crate::chromium_bridge::mouse_and_touch_input::{
+    self, Devices, Effect, EffectSink, InputDevices, InputSender, Owner, Plan,
+};
+use crate::chromium_bridge::page_events::PageEvents;
+use crate::chromium_bridge::playwright_injected_methods::{
+    self, ObjectGroup, TestIdAttribute, World,
+};
+use crate::events::{EventHub, Flushes};
+use crate::playwright_methods::click::{
     Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
     StatesCheck, Stop, Tab, Verdict,
 };
-use crate::emulation::PageEmulation;
-use crate::events::{EventHub, Flushes};
-use crate::frame_selector::{self, FrameOwner};
-use crate::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
-use crate::highlight::Highlights;
-use crate::init_scripts::{self, Link, until_gone};
-use crate::input_devices::{
-    self, Devices, Effect, EffectSink, InputDevices, InputSender, Owner, Plan,
-};
-use crate::keyboard;
-use crate::locator_handlers::{self, LocatorHandlers};
-use crate::navigate::{
+use crate::playwright_methods::highlight::Highlights;
+use crate::playwright_methods::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
-use crate::network::{Happening, Lookup, NetworkLog};
-use crate::network_idle::{IdleChange, SharedIdle};
-use crate::page_events::PageEvents;
+use crate::playwright_methods::network_idle::{IdleChange, SharedIdle};
 use crate::progress::InputTicket;
 use crate::progress::{PlaywrightError, Progress};
-use crate::routes::{Answer, ContextRoutes, Pause, Routes};
 use crate::run::PageId;
-use crate::world::{self, ObjectGroup, TestIdAttribute, World};
 
 /// Detaching is best effort. It runs in the background after a run, so this bound only keeps
 /// a hung browser from piling up detach tasks.
@@ -1270,7 +1272,7 @@ impl NavigationTab for FrameTab {
     async fn prepare(&self) -> Result<(), PageError> {
         PageSession::prepare(self)
             .await
-            .map_err(|error| world::classify(&error))?;
+            .map_err(|error| playwright_injected_methods::classify(&error))?;
         // Title's navigation fallback must not hide a detached direct frame as an empty title.
         if matches!(self.scope, FrameScope::Frame(_)) {
             self.context().await?;
@@ -1279,12 +1281,12 @@ impl NavigationTab for FrameTab {
     }
 
     async fn track_network(&self) -> Result<u64, PageError> {
-        self.enable_network()
-            .await
-            .map_err(|error| match world::classify(&error) {
+        self.enable_network().await.map_err(
+            |error| match playwright_injected_methods::classify(&error) {
                 PageError::Closed => PageError::Closed,
                 _ => PageError::Contract(format!("Network.enable failed: {error}")),
-            })?;
+            },
+        )?;
         Ok(self.network.lags())
     }
 
@@ -1332,7 +1334,7 @@ impl NavigationTab for FrameTab {
                 CdpError::Protocol { message, .. } => {
                     PlaywrightError::error(format!("Protocol error (Page.navigate): {message}"))
                 }
-                error if world::classify(&error) == PageError::Closed => {
+                error if playwright_injected_methods::classify(&error) == PageError::Closed => {
                     PlaywrightError::target_closed()
                 }
                 error => PlaywrightError::error(error.to_string()),
@@ -1365,7 +1367,7 @@ fn new_group(page: &Arc<PageSession>, frame: &Arc<FrameContext>, purpose: &str) 
 // ---------------------------------------------------------------------------------------------
 
 /// A tab's input: its turn lock, and inside it the tab's keyboard and mouse
-/// (`input_devices.rs`), so only a call holding the turn reaches them.
+/// (`mouse_and_touch_input.rs`), so only a call holding the turn reaches them.
 #[derive(Default)]
 pub(crate) struct TabInput {
     /// The turn, granted in arrival order.
@@ -1391,7 +1393,7 @@ impl TabInput {
 
 /// One `Runtime`'s input locks, one per tab, each shared by every run the `Runtime` makes on
 /// that tab. A tab has one keyboard and one mouse, whose state lives in its lock, and its
-/// document one hit-target slot that every call and every Neo run on it share (`world.rs`): a
+/// document one hit-target slot that every call and every Neo run on it share (`playwright_injected_methods.rs`): a
 /// setup replaces whatever interceptor is armed, and an event is judged by whichever interceptor
 /// is armed when it lands. So two clicks whose input overlaps judge each other's events: one
 /// click's events are blocked by the other's interceptor while its own, which never saw them,
@@ -2790,7 +2792,7 @@ impl Tab for FrameTab {
     async fn prepare(&self) -> Result<(), PageError> {
         PageSession::prepare(self)
             .await
-            .map_err(|error| world::classify(&error))
+            .map_err(|error| playwright_injected_methods::classify(&error))
     }
 
     async fn describe(&self, selector: &str) -> Result<SelectorFacts, PageError> {
@@ -3096,7 +3098,7 @@ impl Tab for FrameTab {
         }
     }
 
-    /// Starts the input writer of `plan` (`input_devices::start_writer`) on the run's tracker
+    /// Starts the input writer of `plan` (`mouse_and_touch_input::start_writer`) on the run's tracker
     /// now, with an `Arc` of this page (so of the session), the ticket, the turn and the armed
     /// interceptor, and returns a future of its report: dropping the future (the call stopped)
     /// cuts any remaining `delay` short, and the writer still sends every owed release and
@@ -3111,7 +3113,7 @@ impl Tab for FrameTab {
         armed: Option<ArmedInterceptor>,
         input: InputPermit,
     ) -> impl Future<Output = (PressReport, Option<ArmedInterceptor>)> + Send {
-        let written = input_devices::start_writer(
+        let written = mouse_and_touch_input::start_writer(
             |task| self.spawn(task),
             Arc::clone(&self.page),
             plan,
@@ -3203,7 +3205,7 @@ impl Tab for FrameTab {
         mut watched: NavigationWatch,
     ) -> Result<Vec<String>, PageError> {
         if let Err(error) = self.send("Page.enable", json!({})).await
-            && world::classify(&error) == PageError::Closed
+            && playwright_injected_methods::classify(&error) == PageError::Closed
         {
             return Err(PageError::Closed);
         }
@@ -3405,7 +3407,7 @@ fn pixels(value: i64) -> f64 {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Input, written by `input_devices.rs`.
+// Input, written by `mouse_and_touch_input.rs`.
 // ---------------------------------------------------------------------------------------------
 
 /// Every input writer sends through the session at its socket incarnation.
@@ -3557,9 +3559,10 @@ async fn write_run_releases(sender: &impl InputSender, permit: &InputPermit) {
     };
     let owner = permit.owner();
     let mut plan = Plan::default();
-    keyboard::plan_key_releases(&mut plan, &mut simulated, &owner);
-    input_devices::plan_button_releases(&mut plan, &mut simulated, &owner);
-    let written = input_devices::write_plan(sender, permit, &plan, &CancellationToken::new()).await;
+    keyboard_input::plan_key_releases(&mut plan, &mut simulated, &owner);
+    mouse_and_touch_input::plan_button_releases(&mut plan, &mut simulated, &owner);
+    let written =
+        mouse_and_touch_input::write_plan(sender, permit, &plan, &CancellationToken::new()).await;
     if let Some(Err(error)) = written.outcomes.iter().find(|outcome| outcome.is_err()) {
         debug!(%error, "releasing the run's held input failed");
     }
@@ -3807,7 +3810,7 @@ mod tests {
     async fn tests_that_a_run_is_marked_ended_without_waiting_for_the_turn() {
         use std::slice;
 
-        use crate::keyboard::SHIFT;
+        use crate::chromium_bridge::keyboard_input::SHIFT;
 
         let tab = Arc::new(TabInput::default());
         let a = SessionId("A".to_string());
@@ -4477,7 +4480,7 @@ mod tests {
     #[tokio::test]
     async fn tests_that_observers_created_before_preparation_receive_watcher_updates() {
         use crate::fake_browser::{FakeBrowser, PAGE, Replies};
-        use crate::waits::WaitTab;
+        use crate::playwright_methods::waits::WaitTab;
 
         let browser = FakeBrowser::start(Replies::default()).await;
         let id = PageId::new(PAGE.to_string());
@@ -4927,7 +4930,7 @@ mod tests {
     // The actual input turn and writer, with just one CDP acknowledgement held until
     // after the run's cleanup has marked its owner and exhausted its turn-wait budget.
     async fn review_end_before_late_input(restore: bool) {
-        use crate::keyboard::{Platform, SHIFT};
+        use crate::chromium_bridge::keyboard_input::{Platform, SHIFT};
 
         let tab = Arc::new(TabInput::default());
         let owner_a = SessionId("review-A".to_string());
@@ -4946,14 +4949,14 @@ mod tests {
         let mut simulated = a.snapshot().expect("initial devices");
         let mut plan = Plan::default();
         if restore {
-            let changes = keyboard::plan_ensure_modifiers(
+            let changes = keyboard_input::plan_ensure_modifiers(
                 &mut plan,
                 &mut simulated,
                 0,
                 Platform::Linux,
                 &owner_a,
             );
-            keyboard::plan_restore_modifiers(
+            keyboard_input::plan_restore_modifiers(
                 &mut plan,
                 &mut simulated,
                 &changes,
@@ -4961,7 +4964,7 @@ mod tests {
                 &owner_a,
             );
         } else {
-            keyboard::plan_key_down(
+            keyboard_input::plan_key_down(
                 &mut plan,
                 &mut simulated,
                 "Shift",
@@ -4975,7 +4978,8 @@ mod tests {
         let stopped = CancellationToken::new();
         let writer_stop = stopped.clone();
         let writer = tokio::spawn(async move {
-            let result = input_devices::write_plan(&writer_sender, &a, &plan, &writer_stop).await;
+            let result =
+                mouse_and_touch_input::write_plan(&writer_sender, &a, &plan, &writer_stop).await;
             drop(a);
             result
         });
@@ -5008,13 +5012,13 @@ mod tests {
 
     // The second half of `review_end_before_late_input`, unchanged: B presses Shift and ends.
     async fn review_b_presses_shift_and_ends(tab: &Arc<TabInput>, owner_b: SessionId) {
-        use crate::input_devices::KeyboardState;
-        use crate::keyboard::Platform;
+        use crate::chromium_bridge::keyboard_input::Platform;
+        use crate::chromium_bridge::mouse_and_touch_input::KeyboardState;
 
         let b = InputPermit::take(tab, owner_b.clone()).await;
         let mut simulated = b.snapshot().expect("devices after late input");
         let mut down_b = Plan::default();
-        keyboard::plan_key_down(
+        keyboard_input::plan_key_down(
             &mut down_b,
             &mut simulated,
             "Shift",
@@ -5024,14 +5028,16 @@ mod tests {
         .expect("B's Shift");
         let immediate = ReviewDelayedInput::new(false);
         let _down =
-            input_devices::write_plan(&immediate, &b, &down_b, &CancellationToken::new()).await;
+            mouse_and_touch_input::write_plan(&immediate, &b, &down_b, &CancellationToken::new())
+                .await;
         let mut simulated = b.snapshot().expect("B's devices");
         let mut end_b = Plan::default();
-        keyboard::plan_key_releases(&mut end_b, &mut simulated, &owner_b);
-        input_devices::plan_button_releases(&mut end_b, &mut simulated, &owner_b);
+        keyboard_input::plan_key_releases(&mut end_b, &mut simulated, &owner_b);
+        mouse_and_touch_input::plan_button_releases(&mut end_b, &mut simulated, &owner_b);
         let releasing = ReviewDelayedInput::new(false);
         let _end =
-            input_devices::write_plan(&releasing, &b, &end_b, &CancellationToken::new()).await;
+            mouse_and_touch_input::write_plan(&releasing, &b, &end_b, &CancellationToken::new())
+                .await;
         assert_eq!(
             releasing.events(),
             ["keyUp"],
@@ -5056,8 +5062,8 @@ mod tests {
     /// still go out.
     #[tokio::test(start_paused = true)]
     async fn tests_that_an_ended_runs_writer_sends_only_what_it_owes() {
-        use crate::input_devices::KeyboardState;
-        use crate::keyboard::{Platform, SHIFT};
+        use crate::chromium_bridge::keyboard_input::{Platform, SHIFT};
+        use crate::chromium_bridge::mouse_and_touch_input::KeyboardState;
 
         let tab = Arc::new(TabInput::default());
         let a = SessionId("A".to_string());
@@ -5073,15 +5079,16 @@ mod tests {
         tab.mark_ended(&a);
         let mut simulated = permit.snapshot().expect("devices");
         let mut press = Plan::default();
-        keyboard::plan_key_down(&mut press, &mut simulated, "a", Platform::Linux, &a).expect("a");
+        keyboard_input::plan_key_down(&mut press, &mut simulated, "a", Platform::Linux, &a)
+            .expect("a");
         let sender = ReviewDelayedInput::new(false);
         let never = CancellationToken::new();
-        let _pressed = input_devices::write_plan(&sender, &permit, &press, &never).await;
+        let _pressed = mouse_and_touch_input::write_plan(&sender, &permit, &press, &never).await;
         assert!(sender.events().is_empty(), "an ended run presses nothing");
         let mut simulated = permit.snapshot().expect("devices");
         let mut end = Plan::default();
-        keyboard::plan_key_releases(&mut end, &mut simulated, &a);
-        let _released = input_devices::write_plan(&sender, &permit, &end, &never).await;
+        keyboard_input::plan_key_releases(&mut end, &mut simulated, &a);
+        let _released = mouse_and_touch_input::write_plan(&sender, &permit, &end, &never).await;
         assert_eq!(sender.events(), ["keyUp"], "its release still goes out");
         assert_eq!(permit.devices().keyboard, KeyboardState::default());
     }
@@ -5312,7 +5319,7 @@ mod tests {
 
     impl FuzzCall {
         fn random(rng: &mut Seeded) -> Self {
-            use crate::keyboard::{CONTROL, SHIFT};
+            use crate::chromium_bridge::keyboard_input::{CONTROL, SHIFT};
             const KEYS: [&str; 4] = ["Shift", "Control", "a", "Escape"];
             const MASKS: [u8; 4] = [0, SHIFT, CONTROL, SHIFT | CONTROL];
             const POINTS: [(f64, f64); 3] = [(10.0, 10.0), (60.0, 40.0), (250.0, 60.0)];
@@ -5332,28 +5339,41 @@ mod tests {
         }
 
         fn plan(self, plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
-            use crate::click::MouseButton;
-            use crate::keyboard::Platform;
+            use crate::chromium_bridge::keyboard_input::Platform;
+            use crate::playwright_methods::click::MouseButton;
             let linux = Platform::Linux;
             match self {
                 Self::Down(key) => {
-                    keyboard::plan_key_down(plan, simulated, key, linux, owner).expect("key");
+                    keyboard_input::plan_key_down(plan, simulated, key, linux, owner).expect("key");
                 }
                 Self::Up(key) => {
-                    keyboard::plan_key_up(plan, simulated, key, linux, None).expect("key");
+                    keyboard_input::plan_key_up(plan, simulated, key, linux, None).expect("key");
                 }
                 Self::Modifiers(target) => {
-                    let changes =
-                        keyboard::plan_ensure_modifiers(plan, simulated, target, linux, owner);
-                    keyboard::plan_restore_modifiers(plan, simulated, &changes, linux, owner);
+                    let changes = keyboard_input::plan_ensure_modifiers(
+                        plan, simulated, target, linux, owner,
+                    );
+                    keyboard_input::plan_restore_modifiers(plan, simulated, &changes, linux, owner);
                 }
                 Self::Click(target) => {
-                    let changes =
-                        keyboard::plan_ensure_modifiers(plan, simulated, target, linux, owner);
-                    let down =
-                        input_devices::plan_down(plan, simulated, MouseButton::Left, 1, owner);
-                    input_devices::plan_up(plan, simulated, MouseButton::Left, 1, Some(down));
-                    keyboard::plan_restore_modifiers(plan, simulated, &changes, linux, owner);
+                    let changes = keyboard_input::plan_ensure_modifiers(
+                        plan, simulated, target, linux, owner,
+                    );
+                    let down = mouse_and_touch_input::plan_down(
+                        plan,
+                        simulated,
+                        MouseButton::Left,
+                        1,
+                        owner,
+                    );
+                    mouse_and_touch_input::plan_up(
+                        plan,
+                        simulated,
+                        MouseButton::Left,
+                        1,
+                        Some(down),
+                    );
+                    keyboard_input::plan_restore_modifiers(plan, simulated, &changes, linux, owner);
                 }
                 Self::Press(right) => {
                     let button = if right {
@@ -5361,7 +5381,7 @@ mod tests {
                     } else {
                         MouseButton::Left
                     };
-                    input_devices::plan_down(plan, simulated, button, 1, owner);
+                    mouse_and_touch_input::plan_down(plan, simulated, button, 1, owner);
                 }
                 Self::Release(right) => {
                     let button = if right {
@@ -5369,9 +5389,11 @@ mod tests {
                     } else {
                         MouseButton::Left
                     };
-                    input_devices::plan_up(plan, simulated, button, 1, None);
+                    mouse_and_touch_input::plan_up(plan, simulated, button, 1, None);
                 }
-                Self::Move(to, steps) => input_devices::plan_free_move(plan, simulated, to, steps),
+                Self::Move(to, steps) => {
+                    mouse_and_touch_input::plan_free_move(plan, simulated, to, steps);
+                }
             }
         }
     }
@@ -5433,7 +5455,8 @@ mod tests {
                 let mut simulated = permit.snapshot().expect("devices");
                 let mut plan = Plan::default();
                 call.plan(&mut plan, &mut simulated, &owner);
-                let written = input_devices::write_plan(&sender, &permit, &plan, &stop).await;
+                let written =
+                    mouse_and_touch_input::write_plan(&sender, &permit, &plan, &stop).await;
                 let mut browser = sender.browser.lock().expect("browser");
                 browser.released.clear();
                 // A call whose every write was answered resolves, a drag's skipped press

@@ -70,8 +70,8 @@ use neo_runtime_spec::serve::{
     FrameTapParamsModifiersItem, FrameTapParamsScroll, Point as WirePoint,
 };
 
-use crate::input_devices::{self, Devices, EffectSink, Plan};
-use crate::keyboard::{self, KeyboardModifier, KeyboardTab, Platform};
+use crate::chromium_bridge::keyboard_input::{self, KeyboardModifier, KeyboardTab, Platform};
+use crate::chromium_bridge::mouse_and_touch_input::{self, Devices, EffectSink, Plan};
 use crate::progress::{
     AckedInput, CallError, DeliveryCell, InputTicket, PlaywrightError, Progress,
 };
@@ -1201,9 +1201,10 @@ fn plan_pointer_input<D: Devices>(
     let owner = input.owner();
     let mut plan = Plan::default();
     let target = match (&options.modifiers, options.platform) {
-        (Some(modifiers), Some(platform)) => {
-            Some((keyboard::modifiers_mask(modifiers, platform), platform))
-        }
+        (Some(modifiers), Some(platform)) => Some((
+            keyboard_input::modifiers_mask(modifiers, platform),
+            platform,
+        )),
         (Some(_), None) => {
             return Err(PlaywrightError::error(
                 "neo-runtime: a pointer action's modifiers came without the platform",
@@ -1213,30 +1214,49 @@ fn plan_pointer_input<D: Devices>(
         (None, _) => None,
     };
     let changes = target.map(|(mask, platform)| {
-        keyboard::plan_ensure_modifiers(&mut plan, &mut simulated, mask, platform, &owner)
+        keyboard_input::plan_ensure_modifiers(&mut plan, &mut simulated, mask, platform, &owner)
     });
     let to = (point.x, point.y);
     match options.action.input() {
         PointerInput::Move => {
-            input_devices::plan_free_move(&mut plan, &mut simulated, to, options.steps);
+            mouse_and_touch_input::plan_free_move(&mut plan, &mut simulated, to, options.steps);
         }
         PointerInput::MoveAndDown => {
             // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `await this._page.mouse.move(progress, point.x, point.y);`
-            input_devices::plan_free_move(&mut plan, &mut simulated, to, 1);
-            input_devices::plan_down(&mut plan, &mut simulated, MouseButton::Left, 1, &owner);
+            mouse_and_touch_input::plan_free_move(&mut plan, &mut simulated, to, 1);
+            mouse_and_touch_input::plan_down(
+                &mut plan,
+                &mut simulated,
+                MouseButton::Left,
+                1,
+                &owner,
+            );
         }
         PointerInput::MoveAndUp => {
             // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `await this._page.mouse.move(progress, point.x, point.y, { steps: options.steps });`
-            input_devices::plan_free_move(&mut plan, &mut simulated, to, options.steps);
-            input_devices::plan_up(&mut plan, &mut simulated, MouseButton::Left, 1, None);
+            mouse_and_touch_input::plan_free_move(&mut plan, &mut simulated, to, options.steps);
+            mouse_and_touch_input::plan_up(&mut plan, &mut simulated, MouseButton::Left, 1, None);
         }
         PointerInput::Click(click) => {
-            input_devices::plan_click(&mut plan, &mut simulated, to, &click, options.steps, &owner);
+            mouse_and_touch_input::plan_click(
+                &mut plan,
+                &mut simulated,
+                to,
+                &click,
+                options.steps,
+                &owner,
+            );
         }
-        PointerInput::Tap => input_devices::plan_tap(&mut plan, &mut simulated, to),
+        PointerInput::Tap => mouse_and_touch_input::plan_tap(&mut plan, &mut simulated, to),
     }
     if let (Some((_, platform)), Some(changes)) = (target, changes) {
-        keyboard::plan_restore_modifiers(&mut plan, &mut simulated, &changes, platform, &owner);
+        keyboard_input::plan_restore_modifiers(
+            &mut plan,
+            &mut simulated,
+            &changes,
+            platform,
+            &owner,
+        );
     }
     Ok(plan)
 }
@@ -1498,8 +1518,8 @@ pub(crate) mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::forms::tests::FormSteps;
-    use crate::input_devices::{Effect, EffectSink, InputDevices, Owner};
+    use crate::chromium_bridge::mouse_and_touch_input::{Effect, EffectSink, InputDevices, Owner};
+    use crate::playwright_methods::forms::tests::FormSteps;
     use crate::progress::ErrorName;
     use crate::run::Delivery;
 
@@ -2775,7 +2795,7 @@ pub(crate) mod tests {
         };
         {
             let mut devices = tab.devices.lock().expect("devices");
-            devices.keyboard.modifiers = keyboard::SHIFT;
+            devices.keyboard.modifiers = keyboard_input::SHIFT;
             devices.keyboard.pressed = vec![("ShiftLeft", fake_owner())];
         }
         let click = |params: serde_json::Value| {
@@ -2848,7 +2868,11 @@ pub(crate) mod tests {
             "ControlOrMeta on mac, in kModifiers order both ways"
         );
         let keyboard = tab.devices.lock().expect("devices").keyboard.clone();
-        assert_eq!(keyboard.modifiers, keyboard::SHIFT, "Shift is held again");
+        assert_eq!(
+            keyboard.modifiers,
+            keyboard_input::SHIFT,
+            "Shift is held again"
+        );
         assert_eq!(keyboard.pressed, [("ShiftLeft", fake_owner())]);
     }
 

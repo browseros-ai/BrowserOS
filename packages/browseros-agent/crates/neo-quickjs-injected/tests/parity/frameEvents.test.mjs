@@ -157,7 +157,7 @@ const cases = [
     // of its own). frame-hierarchy.spec.ts "FR-025 should send events when frames are
     // manipulated dynamically", for such a frame once the script has reached it: Neo attaches
     // an out-of-process frame when the run first reads into it (here page.frame()), so the
-    // frame's own first commit, before that, is not reported (neo-runtime/src/frame_events.rs,
+    // frame's own first commit, before that, is not reported (neo-runtime/src/chromium_bridge/frame_events.rs,
     // Deviation); its later navigations and its removal are, as in Playwright.
     name: 'a cross-site iframe the script has reached navigates and detaches the same',
     path: '/frame-events.html',

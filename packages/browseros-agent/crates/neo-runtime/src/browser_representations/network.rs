@@ -11,7 +11,7 @@
 //!                                                              └▶ network_events.rs: request,
 //!                                                                 response, requestFinished/Failed
 //!  navigate.rs goto ── navigation(loaderId) ──▶ the final hop's response, once known
-//!  dispatch.rs / bridge.rs ── HopId ──▶ initializers, raw headers, sizes, timing, failure
+//!  method_router.rs / quickjs_bridge.rs ── HopId ──▶ initializers, raw headers, sizes, timing, failure
 //! ```
 //!
 //! Every request with a frame is recorded, except a `data:` URL (Playwright drops those): the

@@ -18,8 +18,8 @@ use tokio::sync::oneshot;
 use tokio::time;
 use tracing::debug;
 
-use crate::capture;
-use crate::page::PageSession;
+use crate::browser_representations::page::PageSession;
+use crate::playwright_methods::capture;
 use crate::progress::{self, CallError, PlaywrightError, Progress};
 
 /// Playwright: `server/chromium/crPdf.ts` `CRPDF.generate`: `let paperWidth = 8.5;`
@@ -389,9 +389,9 @@ mod tests {
     use tokio_util::task::TaskTracker;
 
     use super::*;
+    use crate::browser_representations::page::{PageSetup, Session};
     use crate::events::EventHub;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
-    use crate::page::{PageSetup, Session};
     use crate::run::PageId;
 
     /// A session on the fake's tab, with its own tracker and closed token.

@@ -6,8 +6,8 @@
 //! ```text
 //!  JS page.screenshot({ path: 'a.png', mask: [loc] })
 //!    {"guid":"page@T","method":"screenshot","params":{"type":"png","mask":[…],"path":"a.png"}}
-//!    └─ dispatch::route: PageCall::decode (Playwright's params; `path` is ignored there)
-//!         + dispatch::neo_path (Neo's `path` from the same params) → Capture::Page
+//!    └─ method_router::route: PageCall::decode (Playwright's params; `path` is ignored there)
+//!         + method_router::neo_path (Neo's `path` from the same params) → Capture::Page
 //!  JS locator.screenshot()
 //!    {"guid":"frame@T","method":"neo:screenshot","params":{"selector":"#a",…}} → Capture::Locator
 //! ```
@@ -29,15 +29,15 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::artifacts::{self, ArtifactPath, Artifacts};
-use crate::click::PageError;
-use crate::dispatch::encode_result;
-use crate::frames::FrameScope;
-use crate::page::{FrameTab, PageSession};
-use crate::pdf;
+use crate::browser_representations::page::{FrameTab, PageSession};
+use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::chromium_bridge::frames::FrameScope;
+use crate::chromium_bridge::playwright_injected_methods;
+use crate::method_router::encode_result;
+use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::pdf;
+use crate::playwright_methods::screenshot::{self, Mask, ScreenshotOptions, ScreenshotParams};
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::screenshot::{self, Mask, ScreenshotOptions, ScreenshotParams};
-use crate::tabs::{PageEntry, Tabs};
-use crate::world;
 
 /// `locator.screenshot`'s call, with Playwright's `ElementHandle.screenshot` title.
 /// Neo: one call stands for Playwright's `waitForSelector` and `ElementHandle.screenshot`, under
@@ -67,7 +67,7 @@ pub(crate) static ELEMENT_HANDLE_SCREENSHOT_META: MethodMeta = MethodMeta {
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
 
-/// The calls this module serves, routed by `dispatch::route`.
+/// The calls this module serves, routed by `method_router::route`.
 #[derive(Debug)]
 pub(crate) enum Capture {
     Page {
@@ -281,7 +281,7 @@ pub(crate) fn protocol_error(method: &str, error: &CdpError) -> CallError {
         CdpError::Protocol { message, .. } => {
             PlaywrightError::error(format!("Protocol error ({method}): {message}")).into()
         }
-        error if world::classify(error) == PageError::Closed => {
+        error if playwright_injected_methods::classify(error) == PageError::Closed => {
             PlaywrightError::target_closed().into()
         }
         error => PlaywrightError::error(error.to_string()).into(),

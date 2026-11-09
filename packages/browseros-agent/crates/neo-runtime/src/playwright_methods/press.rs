@@ -11,7 +11,7 @@
 //!   │ wait for the tab's input turn → a press unless noWaitAfter: watch navigations
 //!   │ focus (selection reset unless it already had focus)
 //!   │   not connected → turn released; "element was detached from the DOM, retrying"
-//!   │ plan the keys (keyboard.rs) │ an unknown token → Error, no key sent
+//!   │ plan the keys (keyboard_input.rs) │ an unknown token → Error, no key sent
 //!   │ nothing to type (`type('')`) → done, NotSent
 //!   │ begin ticket → the input writer (detached) → acked: Done │ failed: the call ends, Unknown
 //!   │ turn released → a press unless noWaitAfter: the barrier, `  navigated to "<url>"` per commit
@@ -31,10 +31,12 @@ use std::time::Duration;
 
 use neo_runtime_spec::serve::{FramePressParams, FrameTypeParams};
 
-use crate::click::{self, ActionResult, ElementAction, PageError, PressReport, Stop};
-use crate::forms::{FocusOutcome, FormTab};
-use crate::input_devices::{Devices, Plan};
-use crate::keyboard::{self, KeyboardTab, Platform};
+use crate::chromium_bridge::keyboard_input::{self, KeyboardTab, Platform};
+use crate::chromium_bridge::mouse_and_touch_input::{Devices, Plan};
+use crate::playwright_methods::click::{
+    self, ActionResult, ElementAction, PageError, PressReport, Stop,
+};
+use crate::playwright_methods::forms::{FocusOutcome, FormTab};
 use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
 
 /// What the call types into its element: one press, or a text.
@@ -172,7 +174,7 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
         let mut simulated = input.snapshot()?;
         let mut plan = Plan::default();
         match &self.options.keys {
-            KeyInput::Press(key) => keyboard::plan_press(
+            KeyInput::Press(key) => keyboard_input::plan_press(
                 &mut plan,
                 &mut simulated,
                 key,
@@ -181,7 +183,7 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
                 self.options.key_delay(),
             )
             .map_err(|unknown| PlaywrightError::error(unknown.to_string()))?,
-            KeyInput::Type(text) => keyboard::plan_type(
+            KeyInput::Type(text) => keyboard_input::plan_type(
                 &mut plan,
                 &mut simulated,
                 text,
@@ -243,8 +245,8 @@ mod tests {
     use tokio::time;
 
     use super::*;
-    use crate::click::tests::{FakeTab, Step, Writes};
-    use crate::forms::tests::FormSteps;
+    use crate::playwright_methods::click::tests::{FakeTab, Step, Writes};
+    use crate::playwright_methods::forms::tests::FormSteps;
     use crate::progress::ErrorName;
     use crate::run::Delivery;
 

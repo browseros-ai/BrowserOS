@@ -46,21 +46,21 @@ use tokio::time;
 use tracing::debug;
 use url::{Origin, Url};
 
-use crate::bridge;
-use crate::console::{
+use crate::browser_representations::console::{
     self, ConsoleApiCalled, ConsoleRecord, ExceptionThrown, History, LogEntryAdded, PageErrorRecord,
 };
-use crate::contexts::ContextFrames;
-use crate::dialogs::{self, Dialogs};
+use crate::browser_representations::dialogs::{self, Dialogs};
+use crate::browser_representations::network::{Happening, NetworkLog};
+use crate::browser_representations::page::{Applied, DialogAnswer};
+use crate::browser_representations::routes::Channel;
+use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::chromium_bridge::contexts::ContextFrames;
+use crate::chromium_bridge::frame_events::FrameModel;
+use crate::chromium_bridge::frames::{self, Host};
+use crate::chromium_bridge::network_events;
 use crate::events::{CONTEXT_GUID, Emitted, EventHub, Needs};
-use crate::frame_events::FrameModel;
-use crate::frames::{self, Host};
-use crate::network::{Happening, NetworkLog};
-use crate::network_events;
-use crate::page::{Applied, DialogAnswer};
-use crate::routes::Channel;
+use crate::quickjs_bridge;
 use crate::run::PageId;
-use crate::tabs::{PageEntry, Tabs};
 
 /// Neo: how long an out-of-process frame's first call waits for that frame's console to turn on.
 /// A frame frozen by its page's dialog may never answer; the call then goes on without it.
@@ -101,10 +101,10 @@ pub(crate) struct PageEvents {
     /// the run's discovery reported.
     lifecycle_live: Arc<AtomicBool>,
     /// What the run does with an out-of-process frame's session once [`Self::child_attached`]
-    /// is done with it: the run's session state (`session_state.rs`).
+    /// is done with it: the run's session state (`cookies_and_storage.rs`).
     on_child: Arc<OnceLock<ChildSessionHook>>,
     /// The origins this tab's frames navigated to since the run attached, in the order first
-    /// seen: what `storageState()` reads (`session_state.rs`).
+    /// seen: what `storageState()` reads (`cookies_and_storage.rs`).
     visited: Arc<Mutex<Vec<String>>>,
     /// The frame of each main-world context of the tab's session and of its frame hosts, fed
     /// here in socket order (`contexts.rs`): `bindings.rs` names a binding call's frame with it.
@@ -165,7 +165,7 @@ impl PageEvents {
     ) -> Self {
         Self {
             hub,
-            page_guid: bridge::page_guid(&PageId::new(target.to_string())),
+            page_guid: quickjs_bridge::page_guid(&PageId::new(target.to_string())),
             target: target.to_string(),
             cdp,
             session,
@@ -1247,8 +1247,8 @@ mod tests {
 
     #[tokio::test]
     async fn tests_that_the_lifecycle_replay_is_history_except_on_a_discovered_page() {
+        use crate::browser_representations::page::Fired;
         use crate::fake_browser::{FakeBrowser, Replies};
-        use crate::page::Fired;
 
         let browser = FakeBrowser::start(Replies::default()).await;
         let cdp = browser.cdp().await;

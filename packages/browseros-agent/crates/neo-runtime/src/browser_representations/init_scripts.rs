@@ -41,9 +41,9 @@ use tokio::sync::{Mutex, oneshot};
 use tokio::time::{self, Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-use crate::bindings::Bindings;
+use crate::browser_representations::bindings::Bindings;
+use crate::browser_representations::page::PageSession;
 use crate::debugger::DEFAULT_CONTEXT;
-use crate::page::PageSession;
 use crate::progress::{PlaywrightError, RunScope};
 
 /// Neo: the guid prefix of an init script's `Disposable`, which the SDK disposes by guid.
@@ -84,7 +84,7 @@ pub(crate) static DISPOSABLE_DISPOSE_META: MethodMeta = MethodMeta {
     flags: &[],
 };
 
-/// An init script command, routed by `dispatch.rs`.
+/// An init script command, routed by `method_router.rs`.
 #[derive(Debug)]
 pub(crate) enum InitRoute {
     /// `Page.addInitScript`, on the call's page.

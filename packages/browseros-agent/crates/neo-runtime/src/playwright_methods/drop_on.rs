@@ -30,13 +30,13 @@ use tokio::fs;
 use tokio::sync::oneshot;
 
 use crate::artifacts::{Artifacts, ExistingPath};
-use crate::click::{
+use crate::browser_representations::page::{FrameTab, InputPermit, ResolvedElement};
+use crate::mime;
+use crate::playwright_methods::click::{
     self, ActionResult, Arming, ElementAction, NotReady, PageError, StatesCheck, Stop, Tab, Verdict,
 };
-use crate::mime;
-use crate::page::{FrameTab, InputPermit, ResolvedElement};
+use crate::playwright_methods::set_input_files::{self, LocalFiles, WirePayload};
 use crate::progress::{CallError, DeliveryCell, InputTicket, PlaywrightError, Progress};
-use crate::set_input_files::{self, LocalFiles, WirePayload};
 
 /// Playwright: `server/frames.ts` `Frame.drop`: `throw new Error('At least one of "files" or "data" must be provided.');`
 const NOTHING_TO_DROP: &str = "At least one of \"files\" or \"data\" must be provided.";
@@ -435,7 +435,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::click::tests::FakeTab;
+    use crate::playwright_methods::click::tests::FakeTab;
     use crate::run::Delivery;
 
     thread_local! {

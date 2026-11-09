@@ -34,10 +34,10 @@ use serde_json::json;
 use tokio::sync::oneshot;
 
 use crate::artifacts::{Artifacts, ExistingPath};
-use crate::click::{self, ActionResult, ElementAction, PageError, Stop, Tab};
-use crate::frames::FrameContext;
+use crate::browser_representations::page::{FrameTab, GroupGuard, ResolvedElement};
+use crate::chromium_bridge::frames::FrameContext;
 use crate::mime;
-use crate::page::{FrameTab, GroupGuard, ResolvedElement};
+use crate::playwright_methods::click::{self, ActionResult, ElementAction, PageError, Stop, Tab};
 use crate::progress::{CallError, DeliveryCell, InputTicket, PlaywrightError, Progress};
 
 /// Playwright: `server/fileUploadUtils.ts` `prepareFilesForUpload`: `mimeType: payload.mimeType || mime.getType(payload.name) || 'application/octet-stream',`
@@ -557,7 +557,7 @@ pub(crate) mod tests {
     use std::future;
 
     use super::*;
-    use crate::click::tests::FakeTab;
+    use crate::playwright_methods::click::tests::FakeTab;
     use crate::progress::ErrorName;
     use crate::run::Delivery;
 

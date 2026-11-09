@@ -23,13 +23,13 @@ use std::sync::{Arc, Mutex};
 use neo_runtime_spec::serve::FrameWaitForSelectorParamsState as SelectorState;
 use tokio::sync::watch;
 
-use crate::click::{SelectorFacts, Tab};
-use crate::evaluate::CreatedHandle;
-use crate::frames::FrameScope;
-use crate::page::{FrameTab, PageSession};
+use crate::browser_representations::page::{FrameTab, PageSession};
+use crate::chromium_bridge::frames::FrameScope;
+use crate::playwright_methods::click::{SelectorFacts, Tab};
+use crate::playwright_methods::evaluate::CreatedHandle;
+use crate::playwright_methods::states::{self, StateOptions};
+use crate::playwright_methods::waits::{self, WaitForSelectorOptions};
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::states::{self, StateOptions};
-use crate::waits::{self, WaitForSelectorOptions};
 
 /// Neo: one tab's handlers, in registration order, and how many checkpoints are running a
 /// handler right now.

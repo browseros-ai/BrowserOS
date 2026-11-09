@@ -39,10 +39,10 @@ use tracing::debug;
 use url::{Origin, Url};
 
 use crate::artifacts::{ArtifactPath, Artifacts};
-use crate::page::PageSession;
+use crate::browser_representations::page::PageSession;
+use crate::browser_representations::tabs::{self, PageEntry, Tabs};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::run::PageId;
-use crate::tabs::{self, PageEntry, Tabs};
 
 /// Playwright: `server/network.ts` `kMaxCookieExpiresDateInSeconds`: `export const kMaxCookieExpiresDateInSeconds = 253402300799;`
 const MAX_COOKIE_EXPIRES_SECONDS: f64 = 253_402_300_799.0;
@@ -1003,7 +1003,7 @@ pub(crate) fn set_http_credentials() -> Result<(), CallError> {
 }
 
 /// `context.storageState` and `context.setStorageState`, each with the `path` the spec's params
-/// lack (`dispatch.rs` `neo_path`): written to or read from the run's artifact directory.
+/// lack (`method_router.rs` `neo_path`): written to or read from the run's artifact directory.
 pub(crate) enum StateFile {
     Export(BrowserContextStorageStateParams),
     Import(BrowserContextSetStorageStateParams),
@@ -1542,12 +1542,12 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::browser_representations::page::TabInputs;
+    use crate::chromium_bridge::browser_connection_settings::Switches;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
-    use crate::page::TabInputs;
+    use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::{CallEntry, CallStart, RunScope};
-    use crate::screenshot::TabScreenshots;
-    use crate::switch::Switches;
 
     fn call_progress() -> Progress {
         progress_ending_with(CancellationToken::new())

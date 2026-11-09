@@ -20,12 +20,14 @@ use rquickjs::{
 };
 use serde_json::Value;
 
-use crate::bridge::{Getters, Logs};
+use crate::chromium_bridge::playwright_injected_methods;
 use crate::deadline::Deadline;
-use crate::dispatch::Dispatcher;
 use crate::events::EventHub;
+use crate::method_router::Dispatcher;
+use crate::playwright_methods::browser_methods;
+use crate::quickjs_bridge::{Getters, Logs};
 use crate::run::{RunBinary, RunError, RunOutcome};
-use crate::{abort, bridge, browser_calls, world};
+use crate::{abort, quickjs_bridge};
 
 const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 // Well under a tokio worker's 2 MiB native stack, so deep JS recursion throws a RangeError
@@ -255,7 +257,7 @@ fn start<'js>(
     dispatcher: Dispatcher,
     deadline: Deadline,
 ) -> rquickjs::Result<(Promise<'js>, Function<'js>)> {
-    bridge::install(ctx, getters, logs, dispatcher)?;
+    quickjs_bridge::install(ctx, getters, logs, dispatcher)?;
     let sleep = Func::from(Async(move |delay_ms: f64| {
         let deadline = deadline.clone();
         async move { deadline.sleep(delay_from_millis(delay_ms)).await }
@@ -272,9 +274,12 @@ fn start<'js>(
     init.set("page", script.page_guid)?;
     init.set("mainFrame", script.frame_guid)?;
     init.set("context", "context@default")?;
-    init.set("browser", browser_calls::BROWSER_GUID)?;
+    init.set("browser", browser_methods::BROWSER_GUID)?;
     init.set("url", script.url)?;
-    init.set("testIdAttribute", world::TEST_ID_ATTRIBUTE)?;
+    init.set(
+        "testIdAttribute",
+        playwright_injected_methods::TEST_ID_ATTRIBUTE,
+    )?;
     init.set("lineOffset", AGENT_LINE_OFFSET)?;
     let objects: Object<'js> = create_run.call((init,))?;
     // Before the agent's function is built, so its code sees them as Node globals.

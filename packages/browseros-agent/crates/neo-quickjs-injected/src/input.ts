@@ -6,7 +6,7 @@
  * `page.keyboard`, `page.mouse` and `page.touchscreen`: each method sends Playwright's own
  * Page command (`keyboardDown` … `touchscreenTap`) to the page's tab, with no timeout, as
  * Playwright's client sends them (`kNoTimeout`); the run's deadline still bounds them. Rust
- * keeps the tab's keyboard and mouse state between calls (neo-runtime `input_devices.rs`), so a
+ * keeps the tab's keyboard and mouse state between calls (neo-runtime `mouse_and_touch_input.rs`), so a
  * key from `down` stays held for later calls until `up`, or until the run ends, when Neo
  * releases what the run left held.
  *

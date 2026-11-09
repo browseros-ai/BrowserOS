@@ -2,7 +2,7 @@
 //! `resolveSmartModifierString`), `usKeyboardLayout.ts`, `macEditingCommands.ts` and
 //! `chromium/crInput.ts` (`RawKeyboardImpl`), as of Playwright 26137face; none of the four changed
 //! since v1.64.1. It plans key input into a [`Plan`] from the tab's keyboard state
-//! (`input_devices.rs`), which the one input writer sends.
+//! (`mouse_and_touch_input.rs`), which the one input writer sends.
 //!
 //! ```text
 //!  plan_press / plan_key_down / plan_key_up / plan_type / plan_insert_text
@@ -11,7 +11,7 @@
 //!    releases, `delay` before a keyUp right after its keyDown
 //!  plan_ensure_modifiers / plan_restore_modifiers
 //!    Playwright's `ensureModifiers` around an action's input, and its restore
-//!  KeyboardTab::write(plan)        the detached input writer (`input_devices::start_writer`)
+//!  KeyboardTab::write(plan)        the detached input writer (`mouse_and_touch_input::start_writer`)
 //!  KeyboardTab::platform()         `Browser.getVersion`'s userAgent → mac, win or linux
 //! ```
 //!
@@ -35,13 +35,13 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::click::{PageError, PressReport, Tab};
-use crate::input_devices::{
+use crate::browser_representations::page::{FrameTab, InputPermit};
+use crate::chromium_bridge::mouse_and_touch_input::{
     self, DragStep, Effect, InputDevices, KeyboardState, Owner, Plan, Planned,
 };
-use crate::page::{FrameTab, InputPermit};
+use crate::chromium_bridge::playwright_injected_methods;
+use crate::playwright_methods::click::{PageError, PressReport, Tab};
 use crate::progress::InputTicket;
-use crate::world;
 
 // ---------------------------------------------------------------------------------------------
 // The seam: what key input needs from a tab, beyond click's.
@@ -56,7 +56,7 @@ pub(crate) trait KeyboardTab: Tab {
     fn platform(&self) -> impl Future<Output = Result<Platform, PageError>> + Send;
 
     /// Starts writing `plan` on a detached writer task *before it returns*, and gives back a
-    /// future of the writer's report (`input_devices::start_writer`): the ticket and the turn
+    /// future of the writer's report (`mouse_and_touch_input::start_writer`): the ticket and the turn
     /// move into the writer, which marks the ticket and records each event in the tab's devices
     /// however the caller ends. Dropping the returned future (the call stopped) cuts a `delay`
     /// short and starts no further keyDown, while every key the writer may have pressed is still
@@ -75,7 +75,7 @@ impl KeyboardTab for FrameTab {
         let user_agent = self
             .user_agent()
             .await
-            .map_err(|error| world::classify(&error))?;
+            .map_err(|error| playwright_injected_methods::classify(&error))?;
         Ok(Platform::from_user_agent(&user_agent))
     }
 
@@ -85,7 +85,7 @@ impl KeyboardTab for FrameTab {
         ticket: InputTicket,
         input: InputPermit,
     ) -> impl Future<Output = PressReport> + Send {
-        let written = input_devices::start_writer(
+        let written = mouse_and_touch_input::start_writer(
             |task| self.spawn(task),
             Arc::clone(&self.page),
             plan,
@@ -493,7 +493,7 @@ pub(crate) fn plan_restore_modifiers(
 pub(crate) fn plan_key_releases(plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
     // First, before any release: whatever this run still holds once its end is over (a release
     // that is refused, fails or never goes out) is held by no live run.
-    input_devices::plan_retire(plan, simulated, owner);
+    mouse_and_touch_input::plan_retire(plan, simulated, owner);
     // What this run holds, newest first, and what only ended runs hold (a release that failed
     // at an earlier run's end).
     let mut held: Vec<&'static str> = Vec::new();
@@ -1258,8 +1258,8 @@ mod tests {
     use tokio::time::Instant;
 
     use super::*;
-    use crate::click::tests::{FakeInput, FakeTab, Step, Writes, fake_owner};
-    use crate::input_devices::{Devices, EffectSink, InputSender};
+    use crate::chromium_bridge::mouse_and_touch_input::{Devices, EffectSink, InputSender};
+    use crate::playwright_methods::click::tests::{FakeInput, FakeTab, Step, Writes, fake_owner};
     use crate::progress::DeliveryCell;
     use crate::run::Delivery;
 
@@ -1884,7 +1884,7 @@ mod tests {
         ticket: InputTicket,
         turn: Turn,
     ) -> impl Future<Output = PressReport> + Send {
-        let written = input_devices::start_writer(
+        let written = mouse_and_touch_input::start_writer(
             |task| {
                 tokio::spawn(task);
             },
@@ -2144,7 +2144,7 @@ mod tests {
             ticket: InputTicket,
             input: FakeInput,
         ) -> impl Future<Output = PressReport> + Send {
-            let written = input_devices::start_writer(
+            let written = mouse_and_touch_input::start_writer(
                 |task| {
                     tokio::spawn(task);
                 },

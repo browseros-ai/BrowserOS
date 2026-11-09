@@ -1,7 +1,7 @@
 //! Playwright's methods: what each call a script makes (`click`, `fill`, `goto`, `textContent`, ...) does.
 
 pub(crate) mod aria_yaml;
-pub(crate) mod browser_calls;
+pub(crate) mod browser_methods;
 pub(crate) mod capture;
 pub(crate) mod check;
 pub(crate) mod click;
@@ -20,11 +20,11 @@ pub(crate) mod history;
 pub(crate) mod lists;
 pub(crate) mod navigate;
 pub(crate) mod network_idle;
+pub(crate) mod page_and_context_methods;
 pub(crate) mod pdf;
 pub(crate) mod press;
 pub(crate) mod reads;
 pub(crate) mod screenshot;
 pub(crate) mod set_input_files;
 pub(crate) mod states;
-pub(crate) mod tab_calls;
 pub(crate) mod waits;

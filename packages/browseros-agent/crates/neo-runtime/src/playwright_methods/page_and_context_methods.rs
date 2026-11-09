@@ -1,4 +1,4 @@
-//! Context and Page wire handlers. Frame handlers stay in `dispatch::serve` and receive
+//! Context and Page wire handlers. Frame handlers stay in `method_router::serve` and receive
 //! their own page's session; these lifecycle calls use the same registry and closure tokens.
 
 use std::sync::Arc;
@@ -22,23 +22,23 @@ use neo_runtime_spec::serve::{
 use serde_json::{Value, json};
 use tracing::debug;
 
-use crate::bridge;
-use crate::browser_calls;
-use crate::click::PageError;
-use crate::content::WriteTurn;
+use crate::browser_representations::cookies_and_storage::{self, StateFile};
+use crate::browser_representations::emulation::{self, Size};
+use crate::browser_representations::page::{FrameTab, PageSession};
+use crate::browser_representations::routes::{self, Patterns};
+use crate::browser_representations::tabs::{self, PageEntry, Tabs};
+use crate::browser_representations::web_storage;
+use crate::chromium_bridge::frames::FrameScope;
 use crate::debugger::DEFAULT_CONTEXT;
-use crate::dispatch::encode_result;
-use crate::emulation::{self, Size};
-use crate::frames::FrameScope;
-use crate::highlight;
-use crate::history::{self, HistoryOptions};
-use crate::navigate;
-use crate::page::{FrameTab, PageSession};
+use crate::method_router::encode_result;
+use crate::playwright_methods::browser_methods;
+use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::content::WriteTurn;
+use crate::playwright_methods::highlight;
+use crate::playwright_methods::history::{self, HistoryOptions};
+use crate::playwright_methods::navigate;
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::routes::{self, Patterns};
-use crate::session_state::{self, StateFile};
-use crate::tabs::{self, PageEntry, Tabs};
-use crate::web_storage;
+use crate::quickjs_bridge;
 
 pub(crate) async fn context(
     tabs: &Tabs,
@@ -76,7 +76,7 @@ pub(crate) async fn context(
             }
             let result = BrowserContextNewPageResult {
                 page: PageChannel {
-                    guid: bridge::page_guid(&entry.id),
+                    guid: quickjs_bridge::page_guid(&entry.id),
                 },
             };
             let value = serde_json::to_value(result)
@@ -85,7 +85,7 @@ pub(crate) async fn context(
             Ok(Some(value))
         }
         BrowserContextCall::Close(_) => {
-            browser_calls::disconnect(tabs, progress).await?;
+            browser_methods::disconnect(tabs, progress).await?;
             Ok(None)
         }
         // Playwright: `server/dispatchers/browserContextDispatcher.ts` `BrowserContextDispatcher.pause`: `// Debugger will take care of this.`
@@ -95,11 +95,11 @@ pub(crate) async fn context(
             context_patterns(tabs, params, progress).await
         }
         BrowserContextCall::Cookies(params) => {
-            let cookies = session_state::cookies(tabs, &params.urls, progress).await?;
+            let cookies = cookies_and_storage::cookies(tabs, &params.urls, progress).await?;
             encode_result::<BrowserContextCookiesParams>(&BrowserContextCookiesResult { cookies })
         }
         BrowserContextCall::AddCookies(params) => {
-            session_state::add_cookies(tabs, params.cookies, progress).await?;
+            cookies_and_storage::add_cookies(tabs, params.cookies, progress).await?;
             Ok(None)
         }
         BrowserContextCall::SetExtraHTTPHeaders(params) => {
@@ -139,7 +139,7 @@ pub(crate) async fn context(
             Ok(None)
         }
         BrowserContextCall::SetHTTPCredentials(_) => {
-            session_state::set_http_credentials()?;
+            cookies_and_storage::set_http_credentials()?;
             Ok(None)
         }
         BrowserContextCall::StorageState(params) => {
@@ -170,24 +170,24 @@ pub(crate) async fn state_file(
                 .filter(|path| !path.is_empty())
                 .map(|path| artifacts.check("path", &path))
                 .transpose()?;
-            let state = session_state::storage_state(tabs, &params, progress).await?;
+            let state = cookies_and_storage::storage_state(tabs, &params, progress).await?;
             if let Some(path) = &path {
-                session_state::write_state(artifacts, path, &state).await?;
+                cookies_and_storage::write_state(artifacts, path, &state).await?;
             }
             encode_result::<BrowserContextStorageStateParams>(&state)
         }
         StateFile::Import(params) => {
             let state = match path {
-                Some(path) => Some(session_state::read_state(artifacts, &path).await?),
+                Some(path) => Some(cookies_and_storage::read_state(artifacts, &path).await?),
                 None => params.storage_state,
             };
-            session_state::set_storage_state(tabs, state, progress).await?;
+            cookies_and_storage::set_storage_state(tabs, state, progress).await?;
             Ok(None)
         }
     }
 }
 
-/// `page.setExtraHTTPHeaders`: the page's own, over the context's (`session_state.rs`).
+/// `page.setExtraHTTPHeaders`: the page's own, over the context's (`cookies_and_storage.rs`).
 async fn set_page_headers(
     tabs: &Tabs,
     entry: &Arc<PageEntry>,
@@ -196,7 +196,7 @@ async fn set_page_headers(
 ) -> Result<(), CallError> {
     // (platform) The page's own headers go over its context's: the run's own context's.
     if entry.context.get().is_some() {
-        return Err(browser_calls::created_state("setExtraHTTPHeaders").into());
+        return Err(browser_methods::created_state("setExtraHTTPHeaders").into());
     }
     let page = progress.race(tabs.session(entry)).await??;
     tabs.overrides()
@@ -204,7 +204,7 @@ async fn set_page_headers(
         .await
 }
 
-/// Neo: `dispatch::route` hands every `Page.screenshot` and `Page.pdf` to `capture.rs`, so one
+/// Neo: `method_router::route` hands every `Page.screenshot` and `Page.pdf` to `capture.rs`, so one
 /// reaching the tab-lifecycle handler is a routing bug, reported as such.
 const CAPTURE_MISROUTED: &str = "neo-runtime: a capture reached the tab-lifecycle handler";
 
@@ -273,7 +273,7 @@ pub(crate) async fn page(
         PageCall::SetNetworkInterceptionPatterns(params) => {
             return set_page_patterns(tabs, entry, params, progress).await;
         }
-        // `dispatch::route` hands these to [`storage`], in their page's storage order.
+        // `method_router::route` hands these to [`storage`], in their page's storage order.
         PageCall::WebStorageItems(_)
         | PageCall::WebStorageGetItem(_)
         | PageCall::WebStorageSetItem(_)
@@ -515,13 +515,13 @@ async fn console_page(
     Ok(page)
 }
 
-/// Neo: a storage call reaching the tab-lifecycle handler, which `dispatch::route` never does.
+/// Neo: a storage call reaching the tab-lifecycle handler, which `method_router::route` never does.
 const STORAGE_MISROUTED: &str = "neo-runtime: a storage call reached the tab-lifecycle handler";
 
 /// A `page.localStorage` / `page.sessionStorage` call on `entry`'s main frame, in call order:
 /// after the session's one shared preparation, it waits for every earlier storage call of the
 /// page to finish, so no call overtakes an earlier one, as Playwright's server sends them in
-/// order. Its place (`turn`) was taken as it arrived (`dispatch.rs` `Inner::ordered`).
+/// order. Its place (`turn`) was taken as it arrived (`method_router.rs` `Inner::ordered`).
 pub(crate) async fn storage(
     tabs: &Tabs,
     entry: &Arc<PageEntry>,

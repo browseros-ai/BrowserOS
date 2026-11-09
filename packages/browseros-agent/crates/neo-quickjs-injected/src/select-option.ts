@@ -1,6 +1,6 @@
 /** Playwright's `client/elementHandle.ts` value conversion: ElementHandle values travel as
  * `elements`, which neo-runtime adopts into the select's world and Playwright's injected script
- * matches by node identity (`dispatch.rs`, `forms.rs`); any other value as option objects. */
+ * matches by node identity (`method_router.rs`, `forms.rs`); any other value as option objects. */
 import type { FrameSelectOptionParams } from '@browseros/neo-runtime-spec/serve'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import { ElementHandle } from './element-handle'

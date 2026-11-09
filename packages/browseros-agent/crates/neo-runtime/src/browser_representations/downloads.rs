@@ -47,13 +47,13 @@ use tokio::sync::watch;
 use tracing::{debug, warn};
 
 use crate::artifacts::Artifacts;
-use crate::bridge;
-use crate::discovery::{self, TargetInfo};
-use crate::dispatch::encode_result;
+use crate::browser_representations::tabs::{self, Tabs};
+use crate::chromium_bridge::browser_connection_settings::{Setting, Switches};
+use crate::chromium_bridge::discovery::{self, TargetInfo};
 use crate::events::{CONTEXT_GUID, Flushes};
+use crate::method_router::encode_result;
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::switch::{Setting, Switches};
-use crate::tabs::{self, Tabs};
+use crate::quickjs_bridge;
 
 /// Neo: the guid prefix of a run's downloads; the rest is the browser's download guid.
 pub(crate) const DOWNLOAD_PREFIX: &str = "download@";
@@ -404,7 +404,7 @@ async fn began_on(tabs: &Tabs, began: DownloadWillBegin, opened: Option<&Opened>
         debug!(frame = %began.frame_id, "a download began in no tab of the run's context");
         return;
     };
-    let page_guid = bridge::page_guid(&page.id);
+    let page_guid = quickjs_bridge::page_guid(&page.id);
     let hub = tabs.events();
     if !hub.wants(&page_guid, "download", "download") {
         return;
@@ -531,13 +531,13 @@ mod tests {
 
     use super::*;
     use crate::artifacts::RunArtifact;
+    use crate::browser_representations::cookies_and_storage::Permissions;
+    use crate::browser_representations::page::TabInputs;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
-    use crate::page::TabInputs;
+    use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::{CallEntry, CallStart, RunScope};
     use crate::run::PageId;
-    use crate::screenshot::TabScreenshots;
-    use crate::session_state::Permissions;
 
     fn progress(guid: &str, state: &str, file_path: Option<&str>) -> DownloadProgress {
         DownloadProgress {

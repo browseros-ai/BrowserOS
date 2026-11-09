@@ -38,10 +38,10 @@ use tokio::sync::oneshot;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-use crate::click::{MouseButton, MouseClick, PageError, PressReport};
-use crate::keyboard::TextTail;
+use crate::chromium_bridge::keyboard_input::TextTail;
+use crate::chromium_bridge::playwright_injected_methods;
+use crate::playwright_methods::click::{MouseButton, MouseClick, PageError, PressReport};
 use crate::progress::InputTicket;
-use crate::world;
 
 /// The run that pressed a key or a button: its own CDP session on the tab, since every run
 /// attaches a session of its own.
@@ -76,7 +76,7 @@ pub(crate) struct DragState {
 /// Playwright's `Keyboard` state.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct KeyboardState {
-    /// `_pressedModifiers`, as CDP's modifiers mask (`keyboard.rs` `ALT` … `SHIFT`).
+    /// `_pressedModifiers`, as CDP's modifiers mask (`keyboard_input.rs` `ALT` … `SHIFT`).
     pub(crate) modifiers: u8,
     /// `_pressedKeys`: every held key's code, oldest first, once for each run that holds it,
     /// so a run's end releases a key only when no other live run holds it too.
@@ -377,7 +377,7 @@ impl Planned {
 pub(crate) struct Plan {
     pub(crate) commands: Vec<Planned>,
     /// The text `keyboard.type` has still to type, planned a chunk at a time as the writer
-    /// reaches it (`keyboard.rs` `TextTail`), so a long text never holds a command per
+    /// reaches it (`keyboard_input.rs` `TextTail`), so a long text never holds a command per
     /// character in memory.
     pub(crate) tail: Option<TextTail>,
 }
@@ -714,7 +714,7 @@ fn retire(plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
     plan.commands[at].always = true;
 }
 
-/// Neo: [`retire`] for `keyboard.rs`'s key releases.
+/// Neo: [`retire`] for `keyboard_input.rs`'s key releases.
 pub(crate) fn plan_retire(plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
     retire(plan, simulated, owner);
 }
@@ -1160,7 +1160,7 @@ pub(crate) fn report(written: &Written, ticket: InputTicket) -> PressReport {
         Some(error) => {
             drop(ticket);
             PressReport::Failed {
-                closed: world::classify(error) == PageError::Closed,
+                closed: playwright_injected_methods::classify(error) == PageError::Closed,
                 message: error.to_string(),
             }
         }
@@ -1236,7 +1236,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::keyboard::{self, Platform, SHIFT};
+    use crate::chromium_bridge::keyboard_input::{self, Platform, SHIFT};
     use crate::progress::DeliveryCell;
     use crate::run::Delivery;
 
@@ -1247,7 +1247,7 @@ mod tests {
     async fn tests_that_a_long_text_is_typed_a_chunk_at_a_time() {
         let text = "ab".repeat(500);
         let mut plan = Plan::default();
-        keyboard::plan_type(
+        keyboard_input::plan_type(
             &mut plan,
             &mut InputDevices::default(),
             &text,
@@ -1299,7 +1299,7 @@ mod tests {
         let mut simulated = InputDevices::default();
         let mut setup = Plan::default();
         for holder in ["A", "B"] {
-            keyboard::plan_key_down(
+            keyboard_input::plan_key_down(
                 &mut setup,
                 &mut simulated,
                 "Shift",
@@ -1321,7 +1321,7 @@ mod tests {
         );
         let turn = Turn::of(simulated.clone(), "A");
         let mut release = Plan::default();
-        keyboard::plan_key_releases(&mut release, &mut simulated, &run("A"));
+        keyboard_input::plan_key_releases(&mut release, &mut simulated, &run("A"));
         plan_button_releases(&mut release, &mut simulated, &run("A"));
         assert_eq!(release.writes(), 0, "A's end writes nothing B still holds");
         let sender = Sender::answering([]);
@@ -1331,14 +1331,14 @@ mod tests {
         assert_eq!(held.keyboard.pressed, [("ShiftLeft", run("B"))]);
         assert_eq!(
             held.keyboard.modifiers,
-            keyboard::SHIFT,
+            keyboard_input::SHIFT,
             "Shift still down for B"
         );
         assert_eq!(held.mouse.buttons, [(MouseButton::Left, run("B"))]);
 
         let mut simulated = held;
         let mut release = Plan::default();
-        keyboard::plan_key_releases(&mut release, &mut simulated, &run("B"));
+        keyboard_input::plan_key_releases(&mut release, &mut simulated, &run("B"));
         plan_button_releases(&mut release, &mut simulated, &run("B"));
         let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
         assert_eq!(
@@ -1426,7 +1426,7 @@ mod tests {
         };
         let mut simulated = running.clone();
         let mut plan = Plan::default();
-        keyboard::plan_press(
+        keyboard_input::plan_press(
             &mut plan,
             &mut simulated,
             "Escape",
@@ -1549,7 +1549,7 @@ mod tests {
         ] {
             let mut simulated = running.clone();
             let mut end_a = Plan::default();
-            keyboard::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
+            keyboard_input::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
             plan_button_releases(&mut end_a, &mut simulated, &run("A"));
             let turn = Turn::of(running.clone(), "observer");
             let sender = Sender::answering([answer]);
@@ -1568,7 +1568,7 @@ mod tests {
 
             let mut simulated = after;
             let mut end_b = Plan::default();
-            keyboard::plan_key_releases(&mut end_b, &mut simulated, &run("B"));
+            keyboard_input::plan_key_releases(&mut end_b, &mut simulated, &run("B"));
             plan_button_releases(&mut end_b, &mut simulated, &run("B"));
             let sender = Sender::answering([]);
             let _written = write_plan(&sender, &turn, &end_b, &CancellationToken::new()).await;
@@ -1590,13 +1590,19 @@ mod tests {
         let mut simulated = InputDevices::default();
         let mut setup = Plan::default();
         for key in ["Shift", "Control"] {
-            keyboard::plan_key_down(&mut setup, &mut simulated, key, Platform::Linux, &run("A"))
-                .expect("key");
+            keyboard_input::plan_key_down(
+                &mut setup,
+                &mut simulated,
+                key,
+                Platform::Linux,
+                &run("A"),
+            )
+            .expect("key");
         }
         plan_down(&mut setup, &mut simulated, MouseButton::Left, 1, &run("A"));
         let turn = Turn::of(simulated.clone(), "A");
         let mut release = Plan::default();
-        keyboard::plan_key_releases(&mut release, &mut simulated, &run("A"));
+        keyboard_input::plan_key_releases(&mut release, &mut simulated, &run("A"));
         plan_button_releases(&mut release, &mut simulated, &run("A"));
         let sender = Sender::answering([Answer::Fail, Answer::Ok, Answer::Ok]);
         let _written = write_plan(&sender, &turn, &release, &CancellationToken::new()).await;
@@ -1618,7 +1624,7 @@ mod tests {
     async fn review_failed_cleanup_does_not_leave_a_live_holder() {
         let mut devices = InputDevices::default();
         let mut setup = Plan::default();
-        keyboard::plan_key_down(
+        keyboard_input::plan_key_down(
             &mut setup,
             &mut devices,
             "Shift",
@@ -1629,15 +1635,15 @@ mod tests {
         let observer = Turn::of(devices.clone(), "observer");
 
         let mut end_a = Plan::default();
-        keyboard::plan_key_releases(&mut end_a, &mut devices, &run("A"));
+        keyboard_input::plan_key_releases(&mut end_a, &mut devices, &run("A"));
         let failed = Sender::answering([Answer::Fail]);
         let written = write_plan(&failed, &observer, &end_a, &CancellationToken::new()).await;
         assert!(written.outcomes[0].is_err());
-        assert_eq!(observer.devices().keyboard.modifiers, keyboard::SHIFT);
+        assert_eq!(observer.devices().keyboard.modifiers, keyboard_input::SHIFT);
 
         let mut devices = observer.devices();
         let mut down_b = Plan::default();
-        keyboard::plan_key_down(
+        keyboard_input::plan_key_down(
             &mut down_b,
             &mut devices,
             "Shift",
@@ -1650,7 +1656,7 @@ mod tests {
 
         let mut devices = observer.devices();
         let mut end_b = Plan::default();
-        keyboard::plan_key_releases(&mut end_b, &mut devices, &run("B"));
+        keyboard_input::plan_key_releases(&mut end_b, &mut devices, &run("B"));
         let release = Sender::answering([]);
         let _written = write_plan(&release, &observer, &end_b, &CancellationToken::new()).await;
         assert_eq!(
@@ -1877,7 +1883,7 @@ mod tests {
     fn tests_that_a_held_modifier_and_button_reach_later_input() {
         let mut simulated = InputDevices::default();
         let mut plan = Plan::default();
-        keyboard::plan_key_down(&mut plan, &mut simulated, "Shift", Platform::Mac, &run("A"))
+        keyboard_input::plan_key_down(&mut plan, &mut simulated, "Shift", Platform::Mac, &run("A"))
             .expect("Shift");
         plan_down(&mut plan, &mut simulated, MouseButton::Right, 1, &run("A"));
         let mut later = Plan::default();
@@ -1942,7 +1948,7 @@ mod tests {
     fn tests_that_modifiers_are_ensured_around_the_input_and_restored() {
         let mut simulated = InputDevices::default();
         let mut setup = Plan::default();
-        keyboard::plan_key_down(
+        keyboard_input::plan_key_down(
             &mut setup,
             &mut simulated,
             "Control",
@@ -1952,7 +1958,7 @@ mod tests {
         .expect("Control");
         let before = simulated.clone();
         let mut plan = Plan::default();
-        let changes = keyboard::plan_ensure_modifiers(
+        let changes = keyboard_input::plan_ensure_modifiers(
             &mut plan,
             &mut simulated,
             SHIFT,
@@ -1967,7 +1973,7 @@ mod tests {
             1,
             &run("A"),
         );
-        keyboard::plan_restore_modifiers(
+        keyboard_input::plan_restore_modifiers(
             &mut plan,
             &mut simulated,
             &changes,
@@ -2026,7 +2032,7 @@ mod tests {
     async fn tests_that_a_stopped_writer_still_writes_what_it_owes() {
         let mut simulated = InputDevices::default();
         let mut plan = Plan::default();
-        let changes = keyboard::plan_ensure_modifiers(
+        let changes = keyboard_input::plan_ensure_modifiers(
             &mut plan,
             &mut simulated,
             SHIFT,
@@ -2042,7 +2048,7 @@ mod tests {
             1,
             &run("A"),
         );
-        keyboard::plan_restore_modifiers(
+        keyboard_input::plan_restore_modifiers(
             &mut plan,
             &mut simulated,
             &changes,
@@ -2141,7 +2147,7 @@ mod tests {
     async fn tests_that_a_failed_release_leaves_the_key_held() {
         let mut simulated = InputDevices::default();
         let mut plan = Plan::default();
-        keyboard::plan_press(
+        keyboard_input::plan_press(
             &mut plan,
             &mut simulated,
             "Shift",
@@ -2166,7 +2172,7 @@ mod tests {
         let mut simulated = InputDevices::default();
         let mut setup = Plan::default();
         for (key, owner) in [("Shift", "A"), ("a", "B"), ("Control", "A")] {
-            keyboard::plan_key_down(
+            keyboard_input::plan_key_down(
                 &mut setup,
                 &mut simulated,
                 key,
@@ -2185,7 +2191,7 @@ mod tests {
         );
         plan_down(&mut setup, &mut simulated, MouseButton::Left, 1, &run("B"));
         let mut plan = Plan::default();
-        keyboard::plan_key_releases(&mut plan, &mut simulated, &run("A"));
+        keyboard_input::plan_key_releases(&mut plan, &mut simulated, &run("A"));
         plan_button_releases(&mut plan, &mut simulated, &run("A"));
         let released: Vec<String> = sent_events(&plan)
             .iter()
@@ -2315,7 +2321,7 @@ mod tests {
         let held = || {
             let mut simulated = InputDevices::default();
             let mut setup = Plan::default();
-            keyboard::plan_key_down(
+            keyboard_input::plan_key_down(
                 &mut setup,
                 &mut simulated,
                 "Shift",
@@ -2328,7 +2334,7 @@ mod tests {
         };
         let end_of = |simulated: &mut InputDevices| {
             let mut end = Plan::default();
-            keyboard::plan_key_releases(&mut end, simulated, &run("A"));
+            keyboard_input::plan_key_releases(&mut end, simulated, &run("A"));
             plan_button_releases(&mut end, simulated, &run("A"));
             end
         };
@@ -2375,7 +2381,7 @@ mod tests {
         // In each case a later run's end releases what A left, held by no live run.
         let mut simulated = turn.devices();
         let mut later = Plan::default();
-        keyboard::plan_key_releases(&mut later, &mut simulated, &run("B"));
+        keyboard_input::plan_key_releases(&mut later, &mut simulated, &run("B"));
         plan_button_releases(&mut later, &mut simulated, &run("B"));
         let sender = Sender::answering([]);
         let _written = write_plan(&sender, &turn, &later, &CancellationToken::new()).await;
@@ -2397,7 +2403,7 @@ mod tests {
     async fn review_recheck2_epoch_refusal_still_retires_the_finished_owner() {
         let mut simulated = InputDevices::default();
         let mut setup = Plan::default();
-        keyboard::plan_key_down(
+        keyboard_input::plan_key_down(
             &mut setup,
             &mut simulated,
             "Shift",
@@ -2407,7 +2413,7 @@ mod tests {
         .expect("key");
         let turn = Turn::of(simulated.clone(), "observer");
         let mut end_a = Plan::default();
-        keyboard::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
+        keyboard_input::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
         plan_button_releases(&mut end_a, &mut simulated, &run("A"));
         let refused = Sender::answering([Answer::Refuse]);
         let written = write_plan(&refused, &turn, &end_a, &CancellationToken::new()).await;
@@ -2417,7 +2423,7 @@ mod tests {
         ));
         let mut simulated = turn.devices();
         let mut down_b = Plan::default();
-        keyboard::plan_key_down(
+        keyboard_input::plan_key_down(
             &mut down_b,
             &mut simulated,
             "Shift",
@@ -2429,7 +2435,7 @@ mod tests {
         let _down = write_plan(&sender, &turn, &down_b, &CancellationToken::new()).await;
         let mut simulated = turn.devices();
         let mut end_b = Plan::default();
-        keyboard::plan_key_releases(&mut end_b, &mut simulated, &run("B"));
+        keyboard_input::plan_key_releases(&mut end_b, &mut simulated, &run("B"));
         plan_button_releases(&mut end_b, &mut simulated, &run("B"));
         let released = Sender::answering([]);
         let _end = write_plan(&released, &turn, &end_b, &CancellationToken::new()).await;
@@ -2449,7 +2455,7 @@ mod tests {
         for live_b in [false, true] {
             let mut simulated = InputDevices::default();
             let mut setup = Plan::default();
-            keyboard::plan_key_down(
+            keyboard_input::plan_key_down(
                 &mut setup,
                 &mut simulated,
                 "Shift",
@@ -2460,7 +2466,7 @@ mod tests {
             plan_down(&mut setup, &mut simulated, MouseButton::Left, 1, &run("A"));
             let turn = Turn::of(simulated.clone(), "observer");
             let mut end_a = Plan::default();
-            keyboard::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
+            keyboard_input::plan_key_releases(&mut end_a, &mut simulated, &run("A"));
             plan_button_releases(&mut end_a, &mut simulated, &run("A"));
             let failed = Sender::answering([Answer::Fail, Answer::Fail]);
             let _end = write_plan(&failed, &turn, &end_a, &CancellationToken::new()).await;
@@ -2468,7 +2474,7 @@ mod tests {
             if live_b {
                 let mut simulated = turn.devices();
                 let mut down_b = Plan::default();
-                keyboard::plan_key_down(
+                keyboard_input::plan_key_down(
                     &mut down_b,
                     &mut simulated,
                     "Shift",
@@ -2486,7 +2492,11 @@ mod tests {
                 .await;
                 let mut simulated = turn.devices();
                 let mut observer_end = Plan::default();
-                keyboard::plan_key_releases(&mut observer_end, &mut simulated, &run("observer"));
+                keyboard_input::plan_key_releases(
+                    &mut observer_end,
+                    &mut simulated,
+                    &run("observer"),
+                );
                 plan_button_releases(&mut observer_end, &mut simulated, &run("observer"));
                 let sender = Sender::answering([]);
                 let _end =
@@ -2499,7 +2509,7 @@ mod tests {
             let owner = if live_b { run("B") } else { run("observer") };
             let mut simulated = turn.devices();
             let mut final_end = Plan::default();
-            keyboard::plan_key_releases(&mut final_end, &mut simulated, &owner);
+            keyboard_input::plan_key_releases(&mut final_end, &mut simulated, &owner);
             plan_button_releases(&mut final_end, &mut simulated, &owner);
             let sender = Sender::answering([]);
             let _end = write_plan(&sender, &turn, &final_end, &CancellationToken::new()).await;

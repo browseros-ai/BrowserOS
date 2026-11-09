@@ -870,7 +870,7 @@ export class BrowserContext extends ChannelOwner {
 
   /** Playwright: `client/browserContext.ts` `BrowserContext.grantPermissions`: `await this._channel.grantPermissions({ permissions, ...options }, kNoTimeout);`
    * The run's own grant, on `origin` or every origin, over the user's settings until the run
-   * clears it or ends (neo-runtime `session_state.rs` `Permissions`). */
+   * clears it or ends (neo-runtime `cookies_and_storage.rs` `Permissions`). */
   async grantPermissions(
     permissions: string[],
     options?: { origin?: string },
@@ -897,7 +897,7 @@ export class BrowserContext extends ChannelOwner {
   }
 
   /** Playwright: `client/browserContext.ts` `BrowserContext.setHTTPCredentials`: `await this._channel.setHTTPCredentials({ httpCredentials: toHttpCredentialsProtocol(httpCredentials || undefined) }, kNoTimeout);`
-   * Neo refuses it for now (neo-runtime `session_state.rs`): its routes do not yet answer a
+   * Neo refuses it for now (neo-runtime `cookies_and_storage.rs`): its routes do not yet answer a
    * server's credentials challenge. */
   async setHTTPCredentials(
     httpCredentials: HttpCredentials | HttpCredentials[] | null,
@@ -919,7 +919,7 @@ export class BrowserContext extends ChannelOwner {
   /**
    * Playwright: `client/browserContext.ts` `BrowserContext.storageState`: `const state = await this._channel.storageState({ indexedDB: options.indexedDB, opfs: options.opfs, credentials: options.credentials }, kNoTimeout);`
    * Every cookie of the user's browser, and the `localStorage` of the origins the run's pages
-   * visited and still have open (neo-runtime `session_state.rs`).
+   * visited and still have open (neo-runtime `cookies_and_storage.rs`).
    *
    * Deviation: `client/browserContext.ts` `BrowserContext.storageState`: `await fs.promises.writeFile(options.path, JSON.stringify(state, undefined, 2), 'utf8');`
    * Playwright writes `path` anywhere on its host. `path` travels with the call, and neo-runtime
@@ -953,10 +953,10 @@ export class BrowserContext extends ChannelOwner {
    * Playwright: `client/browserContext.ts` `BrowserContext.setStorageState`: `await this._channel.setStorageState({ storageState: state }, kNoTimeout);`
    * Adds the state's cookies and replaces each listed origin's `localStorage` through the run's
    * open page on it; nothing else of the user's browser is cleared (neo-runtime
-   * `session_state.rs`, Deviation).
+   * `cookies_and_storage.rs`, Deviation).
    *
    * A state file's path travels with the call, and neo-runtime reads it inside the run's
-   * artifact directory only (`session_state.rs` `read_state`, Deviation).
+   * artifact directory only (`cookies_and_storage.rs` `read_state`, Deviation).
    */
   async setStorageState(
     storageState: string | BrowserContextSetStorageStateParams['storageState'],

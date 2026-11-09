@@ -24,12 +24,14 @@ use neo_runtime_spec::serve::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::click::PageError;
-use crate::dispatch::encode_result;
-use crate::network::{self, HopId, LogError, NetworkLog, Refetch, Settled};
-use crate::page::PageSession;
+use crate::browser_representations::network::{
+    self, HopId, LogError, NetworkLog, Refetch, Settled,
+};
+use crate::browser_representations::page::PageSession;
+use crate::chromium_bridge::playwright_injected_methods;
+use crate::method_router::encode_result;
+use crate::playwright_methods::click::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::world;
 
 /// A call on one hop's `Request` or `Response`.
 #[derive(Debug)]
@@ -215,7 +217,9 @@ fn body_error(error: CdpError) -> PlaywrightError {
         CdpError::Protocol { message, .. } => PlaywrightError::error(format!(
             "Protocol error (Network.getResponseBody): {message}\n{BODY_GONE}"
         )),
-        error if world::classify(&error) == PageError::Closed => PlaywrightError::target_closed(),
+        error if playwright_injected_methods::classify(&error) == PageError::Closed => {
+            PlaywrightError::target_closed()
+        }
         error => PlaywrightError::error(error.to_string()),
     }
 }

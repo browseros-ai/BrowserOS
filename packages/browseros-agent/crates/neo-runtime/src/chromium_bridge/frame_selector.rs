@@ -7,9 +7,9 @@ use neo_runtime_spec::injected::{InjectedFrameOwnerByRefParams, InjectedFrameOwn
 use neo_runtime_spec::{Element, Handle};
 use serde_json::{Value, json};
 
-use crate::click::PageError;
-use crate::frames::{FrameContext, FrameScope};
-use crate::page::{FrameTab, GroupGuard};
+use crate::browser_representations::page::{FrameTab, GroupGuard};
+use crate::chromium_bridge::frames::{FrameContext, FrameScope};
+use crate::playwright_methods::click::PageError;
 
 use crate::progress;
 

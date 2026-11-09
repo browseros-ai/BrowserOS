@@ -9,7 +9,7 @@
 //! ```text
 //!  JS page.localStorage.setItem('k', 'v')
 //!    {"guid":"page@T","method":"webStorageSetItem","params":{"kind":"local","name":"k","value":"v"}}
-//!    └─ tab_calls::page → serve → the main frame's glue `webStorageSetItem` → {}
+//!    └─ page_and_context_methods::page → serve → the main frame's glue `webStorageSetItem` → {}
 //! ```
 
 use std::sync::Arc;
@@ -28,13 +28,13 @@ use neo_runtime_spec::serve::{
 };
 use serde_json::Value;
 
-use crate::dispatch::encode_result;
-use crate::frames::FrameScope;
-use crate::navigate::page_error;
-use crate::page::{FrameTab, PageSession};
+use crate::browser_representations::page::{FrameTab, PageSession};
+use crate::chromium_bridge::frames::FrameScope;
+use crate::method_router::encode_result;
+use crate::playwright_methods::navigate::page_error;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
-/// Neo: what a non-storage `PageCall` reaching [`serve`] answers; `tab_calls::page` routes only
+/// Neo: what a non-storage `PageCall` reaching [`serve`] answers; `page_and_context_methods::page` routes only
 /// the five `webStorage*` calls here.
 const NOT_A_STORAGE_CALL: &str = "neo-runtime: not a WebStorage call";
 

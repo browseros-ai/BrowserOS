@@ -9,11 +9,11 @@ use std::future::Future;
 use neo_runtime_spec::injected::InjectedQueryCountParams;
 use neo_runtime_spec::serve::FrameQueryCountResult;
 
-use crate::click::PageError;
-use crate::frame_selector;
-use crate::page::FrameTab;
+use crate::browser_representations::page::FrameTab;
+use crate::chromium_bridge::frame_selector;
+use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::reads::SelectorTab;
 use crate::progress::{CallError, PlaywrightError, Progress};
-use crate::reads::SelectorTab;
 
 /// Collection page reads; futures are cancel-safe, losing only their answer when dropped.
 pub(crate) trait ListTab: SelectorTab {
@@ -93,7 +93,7 @@ mod tests {
     use tokio::time;
 
     use super::*;
-    use crate::click::SelectorFacts;
+    use crate::playwright_methods::click::SelectorFacts;
     use crate::progress::ErrorName;
 
     const SELECTOR: &str = ".item";

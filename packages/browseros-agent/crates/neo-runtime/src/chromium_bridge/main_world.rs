@@ -1,6 +1,6 @@
 //! Neo: the only door from Rust into a frame's MAIN world, where Playwright runs every page
 //! evaluation (`page.evaluate`, `locator.evaluate`, `JSHandle.evaluate`), as opposed to the
-//! utility world (`world.rs`) where every Neo read and action runs. It runs exactly three built
+//! utility world (`playwright_injected_methods.rs`) where every Neo read and action runs. It runs exactly three built
 //! functions of neo-playwright-injected, never anything else: `dist/utility.js` builds Playwright's
 //! `UtilityScript`, and `dist/evaluate.js` / `dist/json-value.js` call it. The agent's code only
 //! ever travels as an argument value of `evaluate.js`.
@@ -47,10 +47,10 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::sync::{Mutex, OnceCell};
 
-use crate::click::PageError;
-use crate::evaluate::js_string;
-use crate::frames::FrameContext;
-use crate::world::{self, ObjectGroup};
+use crate::chromium_bridge::frames::FrameContext;
+use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup};
+use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::evaluate::js_string;
 
 /// `() => new UtilityScript(globalThis, false)`.
 /// Playwright: `server/javascript.ts` `ExecutionContext._utilityScript`
@@ -192,7 +192,7 @@ impl BuiltExpression {
 }
 
 /// Neo: the object group of every document's `UtilityScript` and its anchor document. Never
-/// released by Neo, as `world.rs`'s glue group: Chromium frees it with the run's session, and a
+/// released by Neo, as `playwright_injected_methods.rs`'s glue group: Chromium frees it with the run's session, and a
 /// new document's install replaces the old one's dead objects.
 const MAIN_WORLD_GROUP: &str = "neo-main-world";
 
@@ -320,7 +320,7 @@ impl Installed {
 fn main_initializer() -> InjectedInitializer {
     InjectedInitializer {
         is_utility_world: false,
-        ..world::initializer()
+        ..playwright_injected_methods::initializer()
     }
 }
 

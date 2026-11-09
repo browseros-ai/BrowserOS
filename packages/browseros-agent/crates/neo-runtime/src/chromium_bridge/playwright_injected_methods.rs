@@ -45,14 +45,14 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::click::PageError;
+use crate::playwright_methods::click::PageError;
 
 /// Neo's isolated world. Distinct from BrowserOS core's `browseros` and Playwright's
 /// `__playwright_utility_world_<guid>`: worlds are shared by name across every client of the
 /// tab, and shared by every Neo run on the tab, which is what makes the install reusable.
 pub(crate) const WORLD_NAME: &str = "__neo_utility_world__";
 
-/// The attribute `getByTestId` selects by. One constant for both halves: `realm.rs` hands it to
+/// The attribute `getByTestId` selects by. One constant for both halves: `quickjs.rs` hands it to
 /// neo-quickjs-injected's `createRun`, which sets Playwright's module-level test id attribute, and
 /// [`initializer`] gives it to the page's `InjectedScript`. Two copies could drift into a
 /// `getByTestId` locator that never matches anything.

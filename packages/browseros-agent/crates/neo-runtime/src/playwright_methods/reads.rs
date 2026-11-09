@@ -81,10 +81,10 @@ use neo_runtime_spec::serve::{
     FrameInnerTextParams, FrameInnerTextResult, FrameTextContentParams, FrameTextContentResult,
 };
 
-use crate::aria_yaml;
-use crate::click::{self, LoopAWaits, PageError, SelectorFacts};
-use crate::frame_selector::{self, FrameOwner};
-use crate::page::FrameTab;
+use crate::browser_representations::page::FrameTab;
+use crate::chromium_bridge::frame_selector::{self, FrameOwner};
+use crate::playwright_methods::aria_yaml;
+use crate::playwright_methods::click::{self, LoopAWaits, PageError, SelectorFacts};
 use crate::progress::{CallError, ErrorName, PlaywrightError, Progress};
 
 /// The selector Playwright snapshots a frame's document by when the caller gave none
