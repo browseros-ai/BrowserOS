@@ -9,6 +9,7 @@ use serde::{Serialize, Serializer};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::actions::{Action, ActionGroup, ActionKind};
 use crate::artifacts::RunArtifact;
 use crate::deadline::Stop;
 
@@ -253,6 +254,9 @@ pub struct CallRecord {
     pub guid: String,
     /// Playwright's wire method, such as `click`.
     pub method: String,
+    /// The fixed policy label; absent only when the call names no served method.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<CallAction>,
     /// Playwright's trace title for the method, such as `Click`; `None` when the call named no
     /// method Neo serves on that object. Neo records no `apiName`: it never crosses the wire.
     pub title: Option<String>,
@@ -272,6 +276,22 @@ pub struct CallRecord {
     /// The call log folded as Playwright's error messages show it, kept for successful calls
     /// too.
     pub log: Vec<String>,
+}
+
+/// The action label serialized in a call record. Its group is derived from its kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CallAction {
+    pub kind: ActionKind,
+    pub group: ActionGroup,
+}
+
+impl From<Action> for CallAction {
+    fn from(action: Action) -> Self {
+        Self {
+            kind: action.kind(),
+            group: action.group(),
+        }
+    }
 }
 
 /// `metadata.location` of a call, without its file, which is always the agent's `run.js`.

@@ -1560,6 +1560,7 @@ mod tests {
             guid: "context@default".to_string(),
             method: "grantPermissions".to_string(),
             title: None,
+            action: None,
             params: json!({}),
             location: None,
             input: false,

@@ -1176,6 +1176,7 @@ mod tests {
                 guid: "frame@T".to_string(),
                 method: "wait".to_string(),
                 title: None,
+                action: None,
                 params: json!({}),
                 location: None,
                 input: false,

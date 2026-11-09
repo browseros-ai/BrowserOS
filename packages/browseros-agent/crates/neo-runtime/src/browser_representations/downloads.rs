@@ -695,6 +695,7 @@ mod tests {
             guid: "download@G".to_string(),
             method: "saveAs".to_string(),
             title: None,
+            action: None,
             params: json!({}),
             location: None,
             input: false,

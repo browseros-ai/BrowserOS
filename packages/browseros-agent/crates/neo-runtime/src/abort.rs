@@ -375,6 +375,7 @@ mod tests {
             guid: "frame@T".to_string(),
             method: "click".to_string(),
             title: Some("Click"),
+            action: None,
             params: Value::Null,
             location: None,
             input: true,

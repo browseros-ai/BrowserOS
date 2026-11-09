@@ -301,7 +301,7 @@ fn check(relative: &str, source: &str) -> Vec<String> {
     };
     let tokens = without_test_modules(&all);
     let mut problems = Vec::new();
-    for token in &tokens {
+    for (index, token) in tokens.iter().enumerate() {
         let Token::Str { text, line } = token else {
             continue;
         };
@@ -312,7 +312,7 @@ fn check(relative: &str, source: &str) -> Vec<String> {
                 ));
             }
         }
-        if composes_method(text) {
+        if composes_method(text) && !action_kind_label(relative, &tokens, index) {
             problems.push(format!(
                 "{relative}:{line}: {text:?} composes a guarded CDP method name"
             ));
@@ -355,6 +355,40 @@ fn check(relative: &str, source: &str) -> Vec<String> {
     let built = built_consts(source, &tokens);
     problems.extend(declarations(relative, &tokens, !allowed.is_empty(), &built));
     problems
+}
+
+/// Neo: the classifier's exact `Evaluate` match arm is a policy label. This exception grants
+/// no CDP method or function declaration permission, even elsewhere in the same file.
+fn action_kind_label(relative: &str, tokens: &[Token], index: usize) -> bool {
+    let arm = ["Self", ":", ":", "Evaluate", "=", ">"];
+    relative == "neo-runtime/src/actions.rs"
+        && matches!(tokens.get(index), Some(Token::Str { text, .. }) if text == "evaluate")
+        && index >= arm.len()
+        && arm
+            .iter()
+            .enumerate()
+            .all(|(offset, part)| tokens[index - arm.len() + offset].is(part))
+        && tokens.get(index + 1).is_some_and(|token| token.is(","))
+}
+
+#[test]
+fn tests_that_an_action_label_does_not_grant_page_script_access() {
+    let file = "neo-runtime/src/actions.rs";
+    let label = "impl ActionKind { fn as_str(self) -> &'static str { match self { Self::Evaluate => \"evaluate\", } } }";
+    assert!(check(file, label).is_empty(), "an action's name is data");
+    assert!(
+        !check("neo-runtime/src/probe.rs", label).is_empty(),
+        "the exception belongs only to the classifier"
+    );
+    for source in [
+        "const METHOD: &str = \"evaluate\";",
+        "let method = [domain, \"evaluate\"].join(\".\");",
+        "self.send(\"Runtime.evaluate\", params)",
+        "self.send(\"Runtime.callFunctionOn\", params)",
+        "json!({\"functionDeclaration\": CODE})",
+    ] {
+        assert!(!check(file, source).is_empty(), "guarded: {source}");
+    }
 }
 
 /// The literals of every `concat!(…)`, joined as the macro joins them, with its line.

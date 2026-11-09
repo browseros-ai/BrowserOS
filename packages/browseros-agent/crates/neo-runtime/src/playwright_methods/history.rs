@@ -1017,6 +1017,7 @@ mod tests {
             guid: "page@T".to_string(),
             method: "goBack".to_string(),
             title: Some("Go back"),
+            action: None,
             params: json!({}),
             location: None,
             input: false,
