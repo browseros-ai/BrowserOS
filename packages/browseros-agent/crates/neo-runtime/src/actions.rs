@@ -5,6 +5,9 @@
 
 #![deny(clippy::wildcard_enum_match_arm)]
 
+#[cfg(test)]
+mod author_docs;
+
 use std::ops::Deref;
 
 use neo_runtime_spec::serve;

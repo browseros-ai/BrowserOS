@@ -1,0 +1,260 @@
+---
+title: "Hook author guide"
+description: "Use trusted JavaScript hooks to approve Neo runs, filter results, and ask your host for data."
+keywords: ["Neo hooks", "beforeRun", "afterRun", "hook sandbox", "ctx.host", "MCP elicitation"]
+---
+
+Hooks let a trusted host police agent scripts. For example, Zuzu's Go service can keep credentials and approval rules outside the agent, then supply a hook file with each Neo run.
+
+<Warning>
+This guide covers the current run-level hooks and host bridge. `beforeAction` and `afterAction` register but **do not fire on browser calls yet**. Element checks and password swapping are coming. A run-level approval does not enforce rules on individual actions.
+</Warning>
+
+## Trust boundary
+
+The host supplies hook code and `meta` separately from the agent's script. With hooks, Neo creates a second QuickJS sandbox per run. The agent cannot read its code, metadata, state, host bridge, trace, or hook-created handles. Call origin comes from the receiving sandbox; forging bridge fields cannot turn an agent call into a hook call. Without hooks, no second sandbox is created.
+
+The host must attach its trusted hooks on every protected run; letting the agent choose or omit them defeats that boundary. Both sandboxes share the browser pages. Values deliberately returned, noted, or written into a page can become visible to the agent.
+
+## Write a hook file
+
+A hook file is the **body of an async function receiving `neo`**, not an ES module. Register handlers while that file loads. Registration inside a handler or after loading throws. Put helpers and registrations in the file; compile TypeScript to JavaScript without runtime imports before sending it.
+
+```javascript
+neo.on('beforeRun', async (event, ctx) => {
+  ctx.state.startUrl = event.page.url();
+  const approved = await ctx.host('policy.canRun', {
+    script: event.script,
+    meta: ctx.meta,
+  });
+  if (approved !== true) return { block: 'Owner approval required' };
+});
+
+neo.on('afterRun', (event, ctx) => {
+  ctx.trace('finished', event.status, ctx.state.startUrl);
+  return { note: 'Run policy checked' };
+});
+```
+
+The shape is `neo.on(event, handler)` or `neo.on(event, filter, handler)`. Only action events accept a filter object: `{ kinds: ['fill'], groups: ['type'] }` matches a kind **or** a group. Omit the filter, or use `null`/`undefined`, to match all. At least one list is required; empty lists match nothing. Names are case-sensitive. The current runtime checks strings, not membership in the vocabulary; the declarations catch misspellings.
+
+### Author types
+
+Declarations live in `packages/browseros-agent/crates/neo-quickjs-injected/hooks.d.ts`, with generated names in `hooks-kinds.d.ts`. They sit outside `src/` so author tooling does not change the runtime bundle. Reference `hooks.d.ts` from your TypeScript hook file, adjusting the relative path:
+
+```typescript
+/// <reference path="./hooks.d.ts" />
+```
+
+Keep both declaration files together and provide `playwright-core` types. They declare the injected `neo` and use Playwright's `Page`, `BrowserContext`, `Frame`, and `Locator` types. These types aid editing; Neo's supported methods and restrictions still apply. Action types describe the existing sandbox interface, not delivered action enforcement; no `element` field is declared yet.
+
+## Events and decisions
+
+Every handler receives `(event, ctx)` and may be async. Run events include the starting `page`, `context`, and frozen `meta`.
+
+| Event | Event fields | Allowed return |
+| --- | --- | --- |
+| `beforeRun` | `script`, `page`, `context`, `meta` | `undefined`, `{ allow: true }`, or `{ block: 'reason' }` |
+| `afterRun` | `status`, optional `value` or `error`, `page`, `context`, `meta` | `undefined`, `{ replace: value }`, `{ note: 'text' }`, or both `replace` and `note` |
+| `beforeAction` — coming | `kind`, `group`, `method`, `args`, optional `location`, `page`, `frame`, `locator`; `context`, `meta` | Before-run decisions, plus `{ replaceArgs: object }` |
+| `afterAction` — coming | Action fields, plus optional `result` or `error` | After-run decisions; planned replacements must match the method's result shape |
+
+`afterRun.status` is `ok`, `error`, `timeout`, or `cancelled`; errors are plain `{ name, message }` objects. `value` is absent for an undefined return. A blocked run skips `afterRun`. `beforeRun` cannot rewrite the script. `afterRun` may replace only an `ok` run's value.
+
+For the coming action interface, `args` are wire argument objects, not positional Playwright arguments. Location has one-based `line` and optional `column`. The sandbox currently accepts nullable `kind`/`group`; page, frame, and locator exist only when the action supplies them.
+
+Return exactly an allowed shape. `{}`, `null`, `false`, `{ allow: false }`, an empty block reason, mixed before decisions, unknown keys, and a non-string note fail validation. The SDK checks own keys, including non-enumerable and symbol keys. `{ replace: undefined }` means replace with undefined; omitting `replace` means keep. Replacement arguments must serialize to a JSON object. Replacement results must be exportable.
+
+Handlers run in registration order. The first block stops later before handlers. In the sandbox's action interface, argument replacements chain: each later handler sees the latest arguments. After handlers likewise see earlier replacements; notes accumulate in order. Each handler gets fresh payload data, so editing `event.args` alone is not a replacement. Return a decision. Playwright objects and `ctx.state` remain shared.
+
+### `ctx`
+
+| Member | Meaning |
+| --- | --- |
+| `meta` | Deep-frozen JSON copy, also on `event.meta`. Direct runtime default: `null`; MCP default: `{}`. |
+| `state` | One mutable plain object shared by all handlers for this run. Mutate its properties. |
+| `signal` | This invocation's abort signal. Budget expiry aborts it; load/before-run also stop on the run deadline or cancellation. |
+| `trace(...values)` | Append to the host-only hook trace. Hook `console` output goes there too. |
+| `host(name, args)` | Ask the host and await its JSON answer. |
+
+`ctx` itself is frozen. No state persists automatically into another run.
+
+## Failure, deadlines, and visible output
+
+Hooks fail closed on a throw, rejected promise, invalid decision, load error, exhausted budget, endless await, spinning JavaScript, memory/stack exhaustion, or an uncaught timer/listener error. An uncaught asynchronous error can also poison later invocations.
+
+| Situation | Outcome |
+| --- | --- |
+| `beforeRun` returns a block | `status: "blocked"`; the script never starts; the model sees the supplied reason. |
+| Loading or `beforeRun` fails | `status: "blocked"`; generic error: `the run's hooks failed before its script started`. |
+| Run deadline/cancel wins during load or `beforeRun` | Keep `timeout` or `cancelled`. |
+| `afterRun` fails on an `ok` or `error` run | `status: "error"`; value and binaries withheld; generic error: `the run's afterRun hook failed, so its result is withheld`. |
+| `afterRun` fails or tries to replace after timeout/cancel | Keep the original status and Neo error; discard that invocation's notes; trace the failure. |
+
+`afterRun` runs after timeout/cancel once loading succeeded, including when `beforeRun` was interrupted. It is skipped if loading failed or the run was blocked. Each invocation, and loading separately, gets **5 seconds** by default. Handlers within one event share that budget. Invocations queue in order; a job's budget starts when it executes. Embedders can change it with `RunHooks::with_budget`; MCP cannot set it yet.
+
+Loading and `beforeRun` also race the run's deadline. `afterRun` gets its full budget even after timeout/cancel, so hook completion can extend beyond the run timeout; normal cleanup adds its own bounds. Its browser calls, synchronous getters, and host requests still fail once the run has stopped. Its signal is not immediately aborted just because the run ended. Abort listeners get at most 100 ms of cleanup time.
+
+The hook realm has the agent realm's 64 MiB memory and 512 KiB stack limits. It is frozen between invocations. Timers and unawaited browser work may resume in a later invocation under that invocation's budget. Await your work; hooks are not a background service.
+
+Explicit block reasons, replacements, and notes reach the model: keep secrets out of them. Notes retain at most **1,000 entries / 1 MiB**, then an overflow note. `RunOutcome::hook_trace` is host-only and excluded from JSON, including MCP output. Hook trace lines have the same cap; Neo's failure lines have a separate **100-entry / 64 KiB** allowance so noisy tracing cannot hide failure details.
+
+Hook browser calls remain visible as records with `origin: "hook"`, but `params` is `null`, location is absent, and log is empty. Their recorded errors retain the name with a generic message; the hook itself receives the original error and call log. Host exchanges create no browser-call record. Agent records still carry the agent's own arguments.
+
+<Warning>
+`afterRun` receives binary placeholders such as `{ type: 'Buffer', bytes: 123 }`, not the original bytes. Any `replace` discards **all original result binaries**, even if you spread `event.value` and edit one field. Only binaries newly exported by the replacement survive. Returning a note without replacement preserves the originals. Hook filtering does not erase earlier browser effects, logs, records, or artifact files.
+</Warning>
+
+## Kinds and groups
+
+Every served command has one kind and one group, including calls whose arguments fail decoding. Unknown commands have no action label. Receiver forms share a kind; some wire commands share a family (`keyboard`, `mouse`, `evaluate`, `clock`, `webStorage`, or `waitForNavigation`). The table and TypeScript unions below come from `actions::served()`, not a second hand-maintained list.
+
+{/* Regenerate from packages/browseros-agent: NEO_RUNTIME_WRITE_FIXTURES=1 cargo test -p neo-runtime --locked --lib author_docs */}
+{/* BEGIN GENERATED HOOK KINDS */}
+
+| Group | Kinds |
+| --- | --- |
+| `capture` | `pdf`, `screenshot` |
+| `control` | `bindingCall`, `clearConsoleMessages`, `clearPageErrors`, `debugger`, `dispose`, `hideHighlight`, `highlight`, `locatorHandler`, `pause`, `requestGC`, `setTestIdAttributeName` |
+| `dialog` | `accept`, `dismiss` |
+| `emulation` | `emulateMedia`, `setViewportSize` |
+| `files` | `cancel`, `delete`, `saveAs`, `setInputFiles` |
+| `focus` | `blur`, `focus`, `scrollIntoView`, `selectText` |
+| `navigate` | `goBack`, `goForward`, `goto`, `reload` |
+| `network` | `abort`, `continue`, `fetch`, `fulfill`, `route`, `setExtraHTTPHeaders`, `setHTTPCredentials`, `setOffline` |
+| `pageScript` | `addInitScript`, `addScriptTag`, `addStyleTag`, `clock`, `dispatchEvent`, `evaluate`, `exposeBinding`, `setContent`, `waitForFunction` |
+| `permissions` | `clearPermissions`, `grantPermissions`, `setGeolocation` |
+| `pointer` | `check`, `click`, `dblclick`, `dragAndDrop`, `drop`, `hover`, `mouse`, `tap`, `touch`, `uncheck` |
+| `read` | `ariaSnapshot`, `body`, `boundingBox`, `consoleMessages`, `content`, `count`, `failure`, `frameElement`, `getAttribute`, `getProperty`, `getPropertyList`, `httpVersion`, `innerHTML`, `innerText`, `inputValue`, `isChecked`, `isDisabled`, `isEditable`, `isEnabled`, `isHidden`, `isVisible`, `jsonValue`, `pageErrors`, `path`, `querySelector`, `querySelectorAll`, `rawRequestHeaders`, `rawResponseHeaders`, `requests`, `resolveSelector`, `response`, `securityDetails`, `serverAddr`, `sizes`, `textContent`, `title` |
+| `select` | `selectOption` |
+| `storage` | `addCookies`, `cookies`, `setStorageState`, `storageState`, `webStorage` |
+| `tabs` | `bringToFront`, `close`, `newContext`, `newPage`, `runBeforeUnload` |
+| `type` | `fill`, `keyboard`, `press`, `type` |
+| `wait` | `waitForLoadState`, `waitForNavigation`, `waitForSelector`, `waitForTimeout`, `waitForURL` |
+
+{/* END GENERATED HOOK KINDS */}
+
+Options never change a command's group: screenshot/PDF with `path` stay `capture`, `storageState` stays `storage`, and dropping files stays `pointer`. `dispatchEvent` and `setContent` are `pageScript`: both can run site code. These labels alone do not enforce policy.
+
+Element targeting is also per command: a required selector, source/target selectors, or an `ElementHandle` receiver marks an element action. Optional-selector commands such as `ariaSnapshot` and `waitForFunction` are not element actions. Locator-handler registration only stores a selector. Raw keyboard, mouse, and touch have no pinned element. Runtime classification is compile-checked; its metadata lookup scans the served table, while routed calls already carry their label.
+
+## Ask your host with `ctx.host`
+
+`await ctx.host(name, args)` requires a non-empty name. Omitted arguments become `null`. Arguments pass through JSON serialization; cycles and BigInt reject. Use plain JSON values. The encoded request envelope (`name` plus `args`) and encoded answer are each capped at **1 MiB**.
+
+No callback, callback failure, an oversized request/answer, a stopped run, or an ended invocation rejects inside the hook. A hook can catch the rejection and decide; an uncaught rejection fails closed. Host error text stays with the hook unless the author explicitly exposes it.
+
+Waiting consumes the invocation budget, including network round trips; there is no separate host timeout. Ending the invocation or run drops the callback future, even while the realm is frozen. A buffered response cannot resolve in a later invocation. Leftover timer work can start under a later job, but an ended invocation's `ctx.host` is rejected: do not retain it for later use.
+
+### Embed `neo-runtime` directly
+
+Supply a `HostCallback` with `RunHooks::with_host` and put the resulting hooks on `RunRequest::hooks`:
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+use neo_runtime::{HostCallback, RunHooks};
+use serde_json::json;
+
+let callback: HostCallback = Arc::new(|request| Box::pin(async move {
+    match request.name.as_str() {
+        "policy.canRun" => Ok(json!(true)), // Replace with your policy check.
+        _ => Err("unknown host operation".to_string()),
+    }
+}));
+let hooks = RunHooks::new(hook_code)
+    .with_meta(json!({"task": "sign in"}))
+    .with_host(callback)
+    .with_budget(Duration::from_secs(5));
+// request.hooks = Some(hooks);
+```
+
+### MCP carrier
+
+On claw-server's SDK v2 `run` tool, send `hooks` (JavaScript string) and optional `meta` (object) alongside `code`. `meta` requires `hooks`; neither is accepted with `result` retrieval. Unknown arguments are rejected. The older hosted Neo SDK is outside this contract.
+
+The host request is an MCP **`elicitation/create` form request**:
+
+```json
+{
+  "method": "elicitation/create",
+  "params": {
+    "mode": "form",
+    "message": "Neo hook host request: vault.login",
+    "_meta": {
+      "com.browseros.neo/host": {
+        "name": "vault.login",
+        "args": { "origin": "https://example.com" }
+      }
+    },
+    "requestedSchema": {
+      "type": "object",
+      "properties": { "json": { "type": "string" } },
+      "required": ["json"]
+    }
+  }
+}
+```
+
+Answer with `action: "accept"` and JSON **text** in `content.json`, for example `{ "action": "accept", "content": { "json": "{\"approved\":true}" } }`. Neo parses that text into the hook's value. Decline, cancel, missing/invalid `json`, an RPC failure, or missing form-elicitation capability rejects the host call.
+
+Clients using protocol **2026-07-28 or later** use **SEP-2322 multi-round-trip (MRTR)**: the tool returns `InputRequiredResult` with `inputRequests.host` and `requestState`. The client handles the elicitation and retries the same tool call with `inputResponses` and that state. Neo resumes the same run; it never replays the script.
+
+There are at most **9 host exchanges per run** on this continuation path. Concurrent host calls each consume a round; the tenth rejects. Each single-use state token rotates and is bound to the original arguments, client info, and protocol. Mismatched, replayed, or expired continuations are refused. At most 128 runs may be parked; a full pool rejects a host request.
+
+Between requests, no HTTP connection is attached to the run. A disconnected client is noticed at hook-budget expiry, which frees the parked run and cancels it; shutdown also frees parked runs. A client handler error can end the Go call before it receives a `blocked` outcome.
+
+Legacy sessions use an in-flight `elicitation/create` instead. The current legacy branch does not apply the nine-round counter; the hook budget still applies. Stateless HTTP response POSTs are not a usable in-flight carrier in the current server transport, which is why modern clients use continuations. Host answers and `hook_trace` are excluded from MCP results; `notes` and `status: "blocked"` pass through.
+
+### What Zuzu must add
+
+In `cell/mirrord/internal/neo/client.go`, keep protocol `2026-07-28`, `DisableStandaloneSSE: true`, and `MaxRetries: -1`. With the tested Go SDK v1.8.0, add an elicitation handler; its default middleware handles the continuation:
+
+```go
+mcp.NewClient(&mcp.Implementation{Name: "zuzu", Version: "1"}, &mcp.ClientOptions{
+    ElicitationHandler: func(ctx context.Context, req *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+        host, ok := req.Params.GetMeta()["com.browseros.neo/host"]
+        if !ok { return &mcp.ElicitResult{Action: "decline"}, nil }
+        answer, err := mirrordAnswer(ctx, host) // Dispatch name + args to trusted policy/vault code.
+        if err != nil { return &mcp.ElicitResult{Action: "decline"}, nil }
+        text, err := json.Marshal(answer)
+        if err != nil { return &mcp.ElicitResult{Action: "decline"}, nil }
+        return &mcp.ElicitResult{
+            Action: "accept", Content: map[string]any{"json": string(text)},
+        }, nil
+    },
+})
+```
+
+`mirrordAnswer` is Zuzu's implementation. It must validate the operation and its arguments. Send the hook file as `hooks` and its context as `meta` in each `run` call. The full password-swap, submit-guard, and read-redaction example will follow with action and element enforcement.
+
+## What hooks cannot see
+
+Even after action hooks arrive, they will not observe:
+
+- Synchronous getters such as `page.url()`, `page.isClosed()`, or `context.pages()`.
+- Listener side effects without a browser call, including subscriptions for dialogs, downloads, file choosers, and requests.
+- SDK/runtime work done automatically: unhandled-dialog dismissal, unhandled-route continuation, and run-end cleanup.
+- Individual operations performed inside page JavaScript after an evaluation starts. Policies needing that boundary must restrict the `pageScript` group once action enforcement arrives.
+
+Hooks share pages with the agent. Agent routes, bindings, and init scripts can observe or alter effects of a hook's browser calls, including faking a navigation response. Page checks alone are not a secret boundary; such policies also need control over `network` and `pageScript`.
+
+### Current limitations
+
+- Hook listeners **never fire**. `page.on`/`off`/`removeAllListeners` do not change agent subscriptions. Event waits cannot receive browser events in the hook realm.
+- Hooks cannot replace route patterns or answer routes, expose bindings/functions or answer binding calls, add/remove/resolve locator handlers, or change the run's test-id attribute. Those calls fail before changing shared state. `selectors.setTestIdAttribute` swallows its fire-and-forget refusal: local hook locators can use the new name while the tab-level attribute stays unchanged, and an error record remains. Custom selector registration is already unsupported by the SDK.
+- Extra headers, offline mode, HTTP credentials, `clearPermissions`, and the run's fake clock are shared setters: **last writer wins**, whether hook or agent.
+- Hook calls bypass debugger holds and have separate abort registries, navigation cursors, and in-flight caps (**64 calls / 8 MiB**). They still share the run's **1,000-record / 1 MiB** record allowance and write/storage ordering. A busy hook can crowd out agent records. Action integration must avoid waiting behind the very write it is deciding.
+- Exporting binary copies from a realm has no aggregate cap outside the realm's memory limit. The host JSON cap does not bound result binaries.
+
+## beforeAction and afterAction
+
+<Note>
+**TODO — coming in phase 2.** Registrations, filters, event construction, and decision folding exist in the sandbox. The browser call path does not invoke them yet. Planned behavior: gate non-element calls before they start; allow, block, or replace validated arguments; then inspect the result/error and permit shape-checked result replacement or notes. Hook-origin calls will skip hooks. Failures before execution must block delivery; failures afterward must report that the action already ran. Call timeout and record semantics will be documented with the implementation.
+</Note>
+
+## Element actions and the pinned element
+
+<Note>
+**TODO — coming in phase 2.** The design calls for `beforeAction` after finding the element, with that exact element pinned for the check and action. A retry that finds a different element must run the hook again. This will support password substitution without recording the substituted value; records retain the agent's original arguments. The current SDK does not expose `event.element`. The working Zuzu example and supported element methods will be added when this implementation lands.
+</Note>
