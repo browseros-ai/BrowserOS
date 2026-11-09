@@ -99,12 +99,19 @@ pub(crate) enum OnSession {}
 /// page. Written on the tab's session at its socket incarnation.
 pub(crate) enum Write {}
 
+/// A release of input a run left held: a key's `keyUp`, a button's `mouseReleased`, a drag's
+/// `dragCancel`. A call writes one under its delivery record like any write; a run's end writes
+/// one with no record at all ([`Session::release`]), since no call wrote what it releases.
+pub(crate) enum Release {}
+
 impl sealed::Sealed for OnBrowser {}
 impl Via for OnBrowser {}
 impl sealed::Sealed for OnSession {}
 impl Via for OnSession {}
 impl sealed::Sealed for Write {}
 impl Via for Write {}
+impl sealed::Sealed for Release {}
+impl Via for Release {}
 
 /// A CDP command neo-runtime sends, declared with [`command!`] in `cdp/<domain>.rs`.
 pub(crate) trait Command: Serialize + sealed::Sealed {
@@ -236,6 +243,43 @@ impl Input {
             method: self.method,
             params: format!("{}{value}{}", &self.params[..start], &self.params[end..]),
         }
+    }
+}
+
+/// A planned [`Release`]: its method and params, serialized now as [`Input`] serializes a write.
+/// Only [`ReleaseInput::new`] makes one, from a `Release` command, whose constructor writes only
+/// that release, so [`Session::release`], the one write that takes no delivery record, can write
+/// nothing else.
+#[derive(Clone, PartialEq)]
+pub(crate) struct ReleaseInput(Input);
+
+impl ReleaseInput {
+    /// `command`, serialized now ([`Input::new`]).
+    pub(crate) fn new<C: Command<Via = Release>>(command: &C) -> Self {
+        Self(Input {
+            method: C::METHOD,
+            params: serde_json::to_string(command).unwrap_or_default(),
+        })
+    }
+
+    /// The release as a write, for a call that writes it under its own delivery record.
+    pub(crate) fn input(&self) -> &Input {
+        &self.0
+    }
+
+    /// [`Input::with_number`]: the held modifiers and buttons patched in, still this release.
+    #[must_use]
+    pub(crate) fn with_number(&self, name: &str, value: i64) -> Self {
+        Self(self.0.with_number(name, value))
+    }
+}
+
+impl fmt::Debug for ReleaseInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ReleaseInput")
+            .field(&self.0)
+            .finish()
     }
 }
 
@@ -392,6 +436,20 @@ impl Session {
         input: &Input,
         _delivery: &InputTicket,
     ) -> Result<(), CdpError> {
+        self.browser
+            .client
+            .send_raw_json_at_epoch(self.epoch, input.method, &input.params, Some(&self.id))
+            .await
+            .map(drop)
+    }
+
+    /// Writes a run end's release at the session's socket incarnation, with no delivery record:
+    /// no call wrote what it releases, so none has a delivery to record it in. Only a
+    /// [`ReleaseInput`] goes out so, which only a [`Release`] command makes, so every other page
+    /// write still needs its call's record. A refused release (`ConnectionEpochChanged`) went
+    /// nowhere, as a refused write did ([`Self::write`]).
+    pub(crate) async fn release(&self, release: &ReleaseInput) -> Result<(), CdpError> {
+        let input = &release.0;
         self.browser
             .client
             .send_raw_json_at_epoch(self.epoch, input.method, &input.params, Some(&self.id))

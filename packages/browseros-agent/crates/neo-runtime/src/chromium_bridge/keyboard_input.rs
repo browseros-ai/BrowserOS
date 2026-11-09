@@ -549,10 +549,11 @@ fn key_command(event: &KeyEvent, owner: &Owner) -> Planned {
         KeyEvent::Down(down) if down.code == "Escape" => DragStep::Escape,
         _ => DragStep::None,
     };
-    Planned {
-        drag,
-        ..Planned::write(event, effect)
-    }
+    let planned = match event {
+        KeyEvent::Up(up) => Planned::release(&input::ReleaseKey::new(up), effect),
+        KeyEvent::Down(_) => Planned::write(event, effect),
+    };
+    Planned { drag, ..planned }
 }
 
 /// `Keyboard.press`'s `split`: a `+` ends a token only when the token so far is not empty, so a
@@ -1209,8 +1210,9 @@ mod tests {
     use tokio::time::Instant;
 
     use super::*;
-    use crate::chromium_bridge::cdp;
-    use crate::chromium_bridge::mouse_and_touch_input::{Devices, EffectSink, InputSender};
+    use crate::chromium_bridge::mouse_and_touch_input::{
+        Devices, EffectSink, InputSender, Pen, PlannedInput,
+    };
     use crate::playwright_methods::click::tests::{FakeInput, FakeTab, Step, Writes, fake_owner};
     use crate::progress::DeliveryCell;
     use crate::run::Delivery;
@@ -1745,11 +1747,8 @@ mod tests {
     }
 
     impl InputSender for FakeSender {
-        async fn send_input(
-            &self,
-            input: &cdp::Input,
-            _delivery: &InputTicket,
-        ) -> Result<(), CdpError> {
+        async fn send_input(&self, input: &PlannedInput, _pen: Pen<'_>) -> Result<(), CdpError> {
+            let input = input.input();
             let sent = Sent {
                 at: self.start.elapsed(),
                 method: input.method(),
@@ -2070,11 +2069,8 @@ mod tests {
     }
 
     impl InputSender for TabSender {
-        async fn send_input(
-            &self,
-            input: &cdp::Input,
-            _delivery: &InputTicket,
-        ) -> Result<(), CdpError> {
+        async fn send_input(&self, input: &PlannedInput, _pen: Pen<'_>) -> Result<(), CdpError> {
+            let input = input.input();
             let sent = Sent {
                 at: Duration::ZERO,
                 method: input.method(),

@@ -1,7 +1,7 @@
 //! The `Input` domain as neo-runtime uses it: the mouse, key, touch and drag events of an input
 //! plan, a fill's typed text, and drag interception (`chromium_bridge/mouse_and_touch_input.rs`,
-//! `keyboard_input.rs`). Every command here is a write ([`Write`]), bound to the session's
-//! socket incarnation.
+//! `keyboard_input.rs`). Every command here is a write ([`Write`]) or a release ([`Release`]),
+//! bound to the session's socket incarnation.
 //!
 //! Neo: browseros-cdp's generated params and events, made from BrowserOS's pinned protocol,
 //! under each method's name, written in their protocol order; a local type only where its doc
@@ -11,7 +11,7 @@ use browseros_cdp::input as generated;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Ignored, Write, command, event};
+use super::{Ignored, Release, Write, command, event};
 
 pub(crate) use generated::{
     DispatchMouseEventParams as DispatchMouseEvent, SetInterceptDragsParams as SetInterceptDrags,
@@ -105,6 +105,77 @@ pub(crate) struct TouchPoint {
     pub(crate) y: f64,
 }
 
+/// A key's release: one `Input.dispatchKeyEvent` `keyUp`, byte for byte as [`KeyUp`] writes it.
+/// A release ([`Release`]), so a run's end may write it with no call to record it. Local: its one
+/// constructor makes only a `keyUp`, whatever `KeyUp` it is given.
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(crate) struct ReleaseKey(KeyUp);
+
+impl ReleaseKey {
+    pub(crate) fn new(up: &KeyUp) -> Self {
+        Self(KeyUp {
+            kind: "keyUp",
+            ..*up
+        })
+    }
+}
+
+/// A button's release: one `Input.dispatchMouseEvent` `mouseReleased` at a point, with the
+/// buttons the tab still holds after it, as [`DispatchMouseEvent`] writes it. A release
+/// ([`Release`]). Local: its one constructor makes only a `mouseReleased`.
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(crate) struct ReleaseMouse(DispatchMouseEvent);
+
+impl ReleaseMouse {
+    pub(crate) fn new(
+        (x, y): (f64, f64),
+        button: &str,
+        buttons: i64,
+        click_count: i64,
+        modifiers: i64,
+    ) -> Self {
+        Self(DispatchMouseEvent {
+            r#type: "mouseReleased".to_string(),
+            x,
+            y,
+            modifiers: Some(modifiers),
+            button: Some(button.to_string()),
+            buttons: Some(buttons),
+            click_count: Some(click_count),
+            ..DispatchMouseEvent::default()
+        })
+    }
+}
+
+/// A drag's cancel: one `Input.dispatchDragEvent` `dragCancel` at the drag's last point, with no
+/// data and no modifiers, as Playwright's `DragManager.cancelDrag` writes it. A release
+/// ([`Release`]): a run's end cancels a drag its released button held. Local: its one constructor
+/// makes only a `dragCancel`, its fields in [`DispatchDragEvent`]'s order.
+#[derive(Serialize)]
+pub(crate) struct CancelDrag {
+    data: Value,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    x: f64,
+    y: f64,
+}
+
+impl CancelDrag {
+    /// Playwright: `server/chromium/crDragDrop.ts` `DragManager.cancelDrag`: `dragOperationsMask: 0xFFFF,`
+    const OPERATIONS_ALL: i64 = 0xFFFF;
+
+    pub(crate) fn new((x, y): (f64, f64)) -> Self {
+        Self {
+            data: serde_json::json!({ "items": [], "dragOperationsMask": Self::OPERATIONS_ALL }),
+            kind: "dragCancel",
+            x,
+            y,
+        }
+    }
+}
+
 /// `Input.insertText {text}`. Local: the generated params derive `Debug`, and the text may be a
 /// secret that a fill types.
 #[derive(Serialize)]
@@ -115,10 +186,16 @@ pub(crate) struct InsertText<'a> {
 command! {
     // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `await progress.race(this._crPage._mainFrameSession._client.send('Input.dispatchDragEvent', {`
     DispatchDragEvent<'_> => "Input.dispatchDragEvent", Write, Ignored;
+    // Playwright: `server/chromium/crDragDrop.ts` `DragManager.cancelDrag`: `type: 'dragCancel',`
+    CancelDrag => "Input.dispatchDragEvent", Release, Ignored;
     // Playwright: `server/chromium/crInput.ts` `RawKeyboardImpl.keydown`: `await progress.race(this._client.send('Input.dispatchKeyEvent', {`
     KeyEvent => "Input.dispatchKeyEvent", Write, Ignored;
+    // Playwright: `server/chromium/crInput.ts` `RawKeyboardImpl.keyup`: `type: 'keyUp',`
+    ReleaseKey => "Input.dispatchKeyEvent", Release, Ignored;
     // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.down`: `await progress.race(this._client.send('Input.dispatchMouseEvent', {`
     DispatchMouseEvent => "Input.dispatchMouseEvent", Write, Ignored;
+    // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.up`: `type: 'mouseReleased',`
+    ReleaseMouse => "Input.dispatchMouseEvent", Release, Ignored;
     // Playwright: `server/chromium/crInput.ts` `RawTouchscreenImpl.tap`: `this._client.send('Input.dispatchTouchEvent', {`
     DispatchTouchEvent => "Input.dispatchTouchEvent", Write, Ignored;
     // Playwright: `server/chromium/crInput.ts` `RawKeyboardImpl.sendText`: `await progress.race(this._client.send('Input.insertText', { text }));`
@@ -130,4 +207,53 @@ command! {
 event! {
     // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `client.on('Input.dragIntercepted', onDragIntercepted!);`
     DragIntercepted => "Input.dragIntercepted";
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// A command's bytes as `cdp::Input` and `cdp::ReleaseInput` write them.
+    fn bytes(command: &impl Serialize) -> String {
+        serde_json::to_string(command).expect("the command serializes")
+    }
+
+    #[test]
+    fn tests_that_a_release_writes_the_bytes_of_the_write_it_stands_for() {
+        let up = KeyUp {
+            kind: "keyUp",
+            modifiers: 8,
+            key: "Shift",
+            windows_virtual_key_code: 16,
+            code: "ShiftLeft",
+            location: 1,
+            is_keypad: false,
+        };
+        assert_eq!(bytes(&ReleaseKey::new(&up)), bytes(&KeyEvent::Up(up)));
+        let released = DispatchMouseEvent {
+            r#type: "mouseReleased".to_string(),
+            x: 10.5,
+            y: 20.0,
+            modifiers: Some(2),
+            button: Some("left".to_string()),
+            buttons: Some(0),
+            click_count: Some(1),
+            ..DispatchMouseEvent::default()
+        };
+        assert_eq!(
+            bytes(&ReleaseMouse::new((10.5, 20.0), "left", 0, 1, 2)),
+            bytes(&released)
+        );
+        let data = json!({ "items": [], "dragOperationsMask": 0xFFFF });
+        let cancel = DispatchDragEvent {
+            data: &data,
+            modifiers: None,
+            kind: "dragCancel",
+            x: 3.0,
+            y: 4.0,
+        };
+        assert_eq!(bytes(&CancelDrag::new((3.0, 4.0))), bytes(&cancel));
+    }
 }

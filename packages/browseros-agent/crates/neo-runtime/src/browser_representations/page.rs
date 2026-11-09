@@ -80,7 +80,7 @@ use crate::chromium_bridge::frame_selector::{self, FrameOwner};
 use crate::chromium_bridge::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
 use crate::chromium_bridge::keyboard_input;
 use crate::chromium_bridge::mouse_and_touch_input::{
-    self, Devices, Effect, EffectSink, InputDevices, InputSender, Owner, Plan,
+    self, Devices, Effect, EffectSink, InputDevices, InputSender, Owner, Pen, Plan, PlannedInput,
 };
 use crate::chromium_bridge::page_events::PageEvents;
 use crate::chromium_bridge::playwright_injected_methods::{
@@ -96,7 +96,7 @@ use crate::playwright_methods::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
 use crate::playwright_methods::network_idle::{IdleChange, SharedIdle};
-use crate::progress::{DeliveryCell, InputTicket, PlaywrightError, Progress};
+use crate::progress::{InputTicket, PlaywrightError, Progress};
 use crate::run::PageId;
 
 /// Detaching is best effort. It runs in the background after a run, so this bound only keeps
@@ -3386,11 +3386,23 @@ fn pixels(value: i64) -> f64 {
 // Input, written by `mouse_and_touch_input.rs`.
 // ---------------------------------------------------------------------------------------------
 
-/// Every input writer writes through the door's session, at its socket incarnation
-/// ([`cdp::Session::write`]).
+/// Every input writer writes through the door's session, at its socket incarnation: a call's
+/// writes under its delivery record ([`cdp::Session::write`]), a run end's releases under none
+/// ([`cdp::Session::release`]).
 impl InputSender for Arc<PageSession> {
-    async fn send_input(&self, input: &cdp::Input, delivery: &InputTicket) -> Result<(), CdpError> {
-        self.session.door.write(input, delivery).await
+    async fn send_input(&self, input: &PlannedInput, pen: Pen<'_>) -> Result<(), CdpError> {
+        match (pen, input) {
+            (Pen::Call(delivery), _) => self.session.door.write(input.input(), delivery).await,
+            (Pen::RunEnd, PlannedInput::Release(release)) => {
+                self.session.door.release(release).await
+            }
+            // A run's end plans only releases (`write_run_releases`); any other write has no
+            // record to go under, so it is refused before anything goes out.
+            (Pen::RunEnd, PlannedInput::Write(input)) => Err(CdpError::Transport(format!(
+                "{} is not a release, and a run's end writes only releases",
+                input.method()
+            ))),
+        }
     }
 
     /// Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `await progress.race(client.send('Input.setInterceptDrags', { enabled: true }));`
@@ -3400,7 +3412,7 @@ impl InputSender for Arc<PageSession> {
     /// drag Chromium intercepted.
     async fn move_intercepting_drag(
         &self,
-        moved: &cdp::Input,
+        moved: &PlannedInput,
         delivery: &InputTicket,
     ) -> Result<Option<Value>, CdpError> {
         let frames = self.drag_frames().await;
@@ -3420,7 +3432,7 @@ impl InputSender for Arc<PageSession> {
             PageSession::cleanup_drag(&frames).await;
             return Err(error);
         }
-        let moved = self.session.door.write(moved, delivery).await;
+        let moved = self.session.door.write(moved.input(), delivery).await;
         let started = PageSession::cleanup_drag(&frames).await;
         let disabled = self.session.door.write(&intercept(false), delivery).await;
         moved?;
@@ -3535,15 +3547,9 @@ async fn write_run_releases(sender: &impl InputSender, permit: &InputPermit) {
     let mut plan = Plan::default();
     keyboard_input::plan_key_releases(&mut plan, &mut simulated, &owner);
     mouse_and_touch_input::plan_button_releases(&mut plan, &mut simulated, &owner);
-    // No call's delivery records a run end's releases: this record exists only because every
-    // write takes one, and nobody reads it.
-    let record = Arc::new(DeliveryCell::default());
-    let Ok(delivery) = record.begin() else {
-        return;
-    };
     let written = mouse_and_touch_input::write_plan(
         sender,
-        &delivery,
+        Pen::RunEnd,
         permit,
         &plan,
         &CancellationToken::new(),
@@ -3582,6 +3588,7 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use super::*;
+    use crate::progress::DeliveryCell;
 
     const SESSION: &str = "S1";
     const MAIN: &str = "MAIN";
@@ -4897,11 +4904,8 @@ mod tests {
     }
 
     impl InputSender for ReviewDelayedInput {
-        async fn send_input(
-            &self,
-            input: &cdp::Input,
-            _delivery: &InputTicket,
-        ) -> Result<(), CdpError> {
+        async fn send_input(&self, input: &PlannedInput, _pen: Pen<'_>) -> Result<(), CdpError> {
+            let input = input.input();
             let value: Value = serde_json::from_str(input.params()).expect("input params");
             self.events.lock().expect("events").push(
                 value["type"]
@@ -4970,7 +4974,7 @@ mod tests {
         let writer = tokio::spawn(async move {
             let result = mouse_and_touch_input::write_plan(
                 &writer_sender,
-                &unread_ticket(),
+                Pen::Call(&unread_ticket()),
                 &a,
                 &plan,
                 &writer_stop,
@@ -5025,7 +5029,7 @@ mod tests {
         let immediate = ReviewDelayedInput::new(false);
         let _down = mouse_and_touch_input::write_plan(
             &immediate,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &b,
             &down_b,
             &CancellationToken::new(),
@@ -5038,7 +5042,7 @@ mod tests {
         let releasing = ReviewDelayedInput::new(false);
         let _end = mouse_and_touch_input::write_plan(
             &releasing,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &b,
             &end_b,
             &CancellationToken::new(),
@@ -5089,16 +5093,26 @@ mod tests {
             .expect("a");
         let sender = ReviewDelayedInput::new(false);
         let never = CancellationToken::new();
-        let _pressed =
-            mouse_and_touch_input::write_plan(&sender, &unread_ticket(), &permit, &press, &never)
-                .await;
+        let _pressed = mouse_and_touch_input::write_plan(
+            &sender,
+            Pen::Call(&unread_ticket()),
+            &permit,
+            &press,
+            &never,
+        )
+        .await;
         assert!(sender.events().is_empty(), "an ended run presses nothing");
         let mut simulated = permit.snapshot().expect("devices");
         let mut end = Plan::default();
         keyboard_input::plan_key_releases(&mut end, &mut simulated, &a);
-        let _released =
-            mouse_and_touch_input::write_plan(&sender, &unread_ticket(), &permit, &end, &never)
-                .await;
+        let _released = mouse_and_touch_input::write_plan(
+            &sender,
+            Pen::Call(&unread_ticket()),
+            &permit,
+            &end,
+            &never,
+        )
+        .await;
         assert_eq!(sender.events(), ["keyUp"], "its release still goes out");
         assert_eq!(permit.devices().keyboard, KeyboardState::default());
     }
@@ -5261,11 +5275,8 @@ mod tests {
     }
 
     impl InputSender for FuzzSender {
-        async fn send_input(
-            &self,
-            input: &cdp::Input,
-            _delivery: &InputTicket,
-        ) -> Result<(), CdpError> {
+        async fn send_input(&self, input: &PlannedInput, _pen: Pen<'_>) -> Result<(), CdpError> {
+            let input = input.input();
             let method = input.method();
             let event: Value = serde_json::from_str(input.params()).expect("input params");
             let (answer, held_back) = {
@@ -5303,10 +5314,10 @@ mod tests {
         /// starts three times in four, which Chromium hands over (`Input.dragIntercepted`).
         async fn move_intercepting_drag(
             &self,
-            moved: &cdp::Input,
+            moved: &PlannedInput,
             delivery: &InputTicket,
         ) -> Result<Option<Value>, CdpError> {
-            self.send_input(moved, delivery).await?;
+            self.send_input(moved, Pen::Call(delivery)).await?;
             let mut browser = self.browser.lock().expect("browser");
             let left_down = browser
                 .down
@@ -5476,7 +5487,7 @@ mod tests {
                 call.plan(&mut plan, &mut simulated, &owner);
                 let written = mouse_and_touch_input::write_plan(
                     &sender,
-                    &unread_ticket(),
+                    Pen::Call(&unread_ticket()),
                     &permit,
                     &plan,
                     &stop,

@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use browseros_cdp::{CdpError, SessionId};
 use futures_util::future;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::oneshot;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -307,7 +307,7 @@ impl InputDevices {
 pub(crate) struct Planned {
     /// The write, its params already JSON and written as planned, or `None` for a change of
     /// state that writes nothing (a move of no steps still moves Playwright's pointer).
-    pub(crate) input: Option<cdp::Input>,
+    pub(crate) input: Option<PlannedInput>,
     pub(crate) effect: Effect,
     /// The command this one undoes (a release its press, a modifier restore the change it
     /// restores): written even after the writer stopped when that one may have been written,
@@ -324,6 +324,43 @@ pub(crate) struct Planned {
     pub(crate) always: bool,
     /// What Chromium's drag manager makes of the command, decided as it is written.
     pub(crate) drag: DragStep,
+}
+
+/// Neo: one planned write: an ordinary write, or a release ([`cdp::Release`]): a `keyUp`, a
+/// `mouseReleased` or a `dragCancel`, which a run's end writes with no call's delivery record
+/// ([`Pen::RunEnd`]). A call writes either under its own record.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PlannedInput {
+    Write(cdp::Input),
+    Release(cdp::ReleaseInput),
+}
+
+/// Neo: a planned write as it goes out, and as a stop patches it.
+impl PlannedInput {
+    /// The write as it goes out under a call's delivery record, a release's included.
+    pub(crate) fn input(&self) -> &cdp::Input {
+        match self {
+            Self::Write(input) => input,
+            Self::Release(release) => release.input(),
+        }
+    }
+
+    /// [`cdp::Input::with_number`], keeping a release a release.
+    fn with_number(&self, name: &str, value: i64) -> Self {
+        match self {
+            Self::Write(input) => Self::Write(input.with_number(name, value)),
+            Self::Release(release) => Self::Release(release.with_number(name, value)),
+        }
+    }
+}
+
+/// Neo: what a writer writes under. A call's writes all go under its delivery record (the
+/// ticket it began); a run's end has no call, so its releases go under none
+/// ([`cdp::Session::release`]), and nothing but a release may go out there.
+#[derive(Clone, Copy)]
+pub(crate) enum Pen<'a> {
+    Call(&'a InputTicket),
+    RunEnd,
 }
 
 /// Neo: how a command meets a drag, decided as it is written (Playwright's `RawMouseImpl`,
@@ -351,8 +388,20 @@ impl Planned {
     /// `command`, written on its own, undoing nothing, its params as its struct serializes them,
     /// so key events keep Playwright's field order ([`cdp::Input`]).
     pub(crate) fn write<C: Command<Via = cdp::Write>>(command: &C, effect: Effect) -> Self {
+        Self::of(PlannedInput::Write(cdp::Input::new(command)), effect)
+    }
+
+    /// `command`, a release, written on its own, undoing nothing ([`PlannedInput::Release`]).
+    pub(crate) fn release<C: Command<Via = cdp::Release>>(command: &C, effect: Effect) -> Self {
+        Self::of(
+            PlannedInput::Release(cdp::ReleaseInput::new(command)),
+            effect,
+        )
+    }
+
+    fn of(input: PlannedInput, effect: Effect) -> Self {
         Self {
-            input: Some(cdp::Input::new(command)),
+            input: Some(input),
             effect,
             undoes: None,
             with_next: false,
@@ -365,13 +414,15 @@ impl Planned {
     /// The planned write's method, `None` for a change of state.
     #[cfg(test)]
     pub(crate) fn method(&self) -> Option<&'static str> {
-        self.input.as_ref().map(cdp::Input::method)
+        self.input.as_ref().map(|input| input.input().method())
     }
 
     /// The planned write's params, empty for a change of state.
     #[cfg(test)]
     pub(crate) fn params(&self) -> &str {
-        self.input.as_ref().map_or("", cdp::Input::params)
+        self.input
+            .as_ref()
+            .map_or("", |input| input.input().params())
     }
 
     /// A change of state that writes nothing.
@@ -559,21 +610,18 @@ pub(crate) fn plan_up(
     let effect = Effect::ButtonUp { button };
     let mut released = simulated.clone();
     released.apply(&effect, true);
-    let params = DispatchMouseEvent {
-        r#type: "mouseReleased".to_string(),
-        x: simulated.mouse.x,
-        y: simulated.mouse.y,
-        modifiers: Some(i64::from(simulated.keyboard.modifiers)),
-        button: Some(button_name(button).to_string()),
-        buttons: Some(released.buttons_mask()),
-        click_count: Some(click_count),
-        ..DispatchMouseEvent::default()
-    };
+    let release = input::ReleaseMouse::new(
+        (simulated.mouse.x, simulated.mouse.y),
+        button_name(button),
+        released.buttons_mask(),
+        click_count,
+        i64::from(simulated.keyboard.modifiers),
+    );
     // Playwright: `server/chromium/crInput.ts` `RawMouseImpl.up`: `await this._dragManager.drop(progress, x, y, modifiers);`
     let command = Planned {
         undoes,
         drag: DragStep::Up,
-        ..Planned::write(&params, effect)
+        ..Planned::release(&release, effect)
     };
     plan.push(simulated, command)
 }
@@ -740,11 +788,11 @@ pub(crate) fn plan_retire(plan: &mut Plan, simulated: &mut InputDevices, owner: 
 /// through `cdp::Session::write`), or a recording fake under paused time in the tests. Every
 /// write carries the call's delivery record.
 pub(crate) trait InputSender: Send + Sync + 'static {
-    /// Writes one planned `Input.*` command.
+    /// Writes one planned `Input.*` command under `pen`.
     fn send_input(
         &self,
-        input: &cdp::Input,
-        delivery: &InputTicket,
+        input: &PlannedInput,
+        pen: Pen<'_>,
     ) -> impl Future<Output = Result<(), CdpError>> + Send;
 
     /// Playwright's `DragManager.interceptDragCausedByMove` around one `mouseMoved` (`moved`)
@@ -752,10 +800,14 @@ pub(crate) trait InputSender: Send + Sync + 'static {
     /// the page did not prevent, else `None`. A sender that cannot see the page just moves.
     fn move_intercepting_drag(
         &self,
-        moved: &cdp::Input,
+        moved: &PlannedInput,
         delivery: &InputTicket,
     ) -> impl Future<Output = Result<Option<Value>, CdpError>> + Send {
-        async move { self.send_input(moved, delivery).await.map(|()| None) }
+        async move {
+            self.send_input(moved, Pen::Call(delivery))
+                .await
+                .map(|()| None)
+        }
     }
 }
 
@@ -808,14 +860,14 @@ pub(crate) struct Written {
 /// the session is gone. A `pause` is cut short too.
 pub(crate) async fn write_plan(
     sender: &impl InputSender,
-    delivery: &InputTicket,
+    pen: Pen<'_>,
     sink: &impl EffectSink,
     plan: &Plan,
     cut_short: &CancellationToken,
 ) -> Written {
     let mut writer = Writer::default();
     writer
-        .write(sender, delivery, sink, &plan.commands, cut_short)
+        .write(sender, pen, sink, &plan.commands, cut_short)
         .await;
     let mut planned = plan.writes();
     let mut typed = true;
@@ -835,7 +887,7 @@ pub(crate) async fn write_plan(
             };
             planned += chunk.writes();
             writer
-                .write(sender, delivery, sink, &chunk.commands, cut_short)
+                .write(sender, pen, sink, &chunk.commands, cut_short)
                 .await;
         }
     }
@@ -857,8 +909,8 @@ struct Writer {
 /// Neo: one command as the writer sends it: as planned (its params patched after a stop),
 /// replaced by a drag event, or written as nothing (a press while a drag runs).
 enum Outgoing {
-    Planned(Option<cdp::Input>),
-    Drag { input: cdp::Input, ends: bool },
+    Planned(Option<PlannedInput>),
+    Drag { input: PlannedInput, ends: bool },
     Skipped,
 }
 
@@ -868,7 +920,7 @@ impl Writer {
     async fn write(
         &mut self,
         sender: &impl InputSender,
-        delivery: &InputTicket,
+        pen: Pen<'_>,
         sink: &impl EffectSink,
         commands: &[Planned],
         cut_short: &CancellationToken,
@@ -893,9 +945,7 @@ impl Writer {
                     self.stopped = true;
                 }
                 if !self.stopped {
-                    written[index] = self
-                        .free_move(sender, delivery, sink, &commands[index])
-                        .await;
+                    written[index] = self.free_move(sender, pen, sink, &commands[index]).await;
                 }
                 index += 1;
                 continue;
@@ -949,7 +999,7 @@ impl Writer {
                 batch.push((at, outgoing));
             }
             // Each command's write as it goes out, owned here so the sends below can borrow it.
-            let outgoing: Vec<(usize, Option<cdp::Input>, bool)> = batch
+            let outgoing: Vec<(usize, Option<PlannedInput>, bool)> = batch
                 .into_iter()
                 .map(|(at, outgoing)| match outgoing {
                     Outgoing::Skipped => (at, None, false),
@@ -961,7 +1011,7 @@ impl Writer {
                 .collect();
             let sends = outgoing.iter().map(|(at, input, ends)| async move {
                 match input {
-                    Some(input) => (*at, Some(sender.send_input(input, delivery).await), *ends),
+                    Some(input) => (*at, Some(sender.send_input(input, pen).await), *ends),
                     None => (*at, None, *ends),
                 }
             });
@@ -1016,20 +1066,24 @@ impl Writer {
     async fn free_move(
         &mut self,
         sender: &impl InputSender,
-        delivery: &InputTicket,
+        pen: Pen<'_>,
         sink: &impl EffectSink,
         command: &Planned,
     ) -> bool {
         let (Some(input), Effect::Moved { x, y }) = (&command.input, &command.effect) else {
             return false;
         };
+        // A move is never owed, so a run's end, which writes only what it owes, never moves.
+        let Pen::Call(delivery) = pen else {
+            return false;
+        };
         let (x, y) = (*x, *y);
         let devices = sink.devices();
         let modifiers = i64::from(devices.keyboard.modifiers);
-        let planned: Value = serde_json::from_str(input.params()).unwrap_or_default();
+        let planned: Value = serde_json::from_str(input.input().params()).unwrap_or_default();
         let result = if let Some(drag) = &devices.drag {
             let over = drag_event("dragOver", x, y, &drag.data, modifiers);
-            let result = sender.send_input(&over, delivery).await;
+            let result = sender.send_input(&over, pen).await;
             sink.apply(&command.effect, result.is_ok());
             sink.apply(&Effect::DragMoved { x, y }, result.is_ok());
             result
@@ -1039,7 +1093,7 @@ impl Writer {
                     sink.apply(&command.effect, true);
                     let enter = drag_event("dragEnter", x, y, &data, modifiers);
                     sink.apply(&Effect::DragStarted { data, x, y }, true);
-                    sender.send_input(&enter, delivery).await
+                    sender.send_input(&enter, pen).await
                 }
                 Ok(None) => {
                     sink.apply(&command.effect, true);
@@ -1051,7 +1105,7 @@ impl Writer {
                 }
             }
         } else {
-            let result = sender.send_input(input, delivery).await;
+            let result = sender.send_input(input, pen).await;
             sink.apply(&command.effect, result.is_ok());
             result
         };
@@ -1077,7 +1131,7 @@ fn drag_outgoing(command: &Planned, devices: &InputDevices) -> Option<Outgoing> 
         command
             .input
             .as_ref()
-            .and_then(|input| serde_json::from_str::<Value>(input.params()).ok())
+            .and_then(|input| serde_json::from_str::<Value>(input.input().params()).ok())
             .unwrap_or_default()
     };
     match command.drag {
@@ -1094,33 +1148,25 @@ fn drag_outgoing(command: &Planned, devices: &InputDevices) -> Option<Outgoing> 
             })
         }
         DragStep::Cancel | DragStep::Escape => Some(Outgoing::Drag {
-            // Playwright: `server/chromium/crDragDrop.ts` `DragManager.cancelDrag`: `type: 'dragCancel',`
-            input: cdp::Input::new(&input::DispatchDragEvent {
-                data: &json!({ "items": [], "dragOperationsMask": DRAG_OPERATIONS_ALL }),
-                modifiers: None,
-                kind: "dragCancel",
-                x: drag.x,
-                y: drag.y,
-            }),
+            input: PlannedInput::Release(cdp::ReleaseInput::new(&input::CancelDrag::new((
+                drag.x, drag.y,
+            )))),
             ends: true,
         }),
         DragStep::None | DragStep::Move => None,
     }
 }
 
-/// Playwright: `server/chromium/crDragDrop.ts` `DragManager.cancelDrag`: `dragOperationsMask: 0xFFFF,`
-const DRAG_OPERATIONS_ALL: i64 = 0xFFFF;
-
 /// Neo: one `Input.dispatchDragEvent`, as Playwright's `DragManager` builds it: the event, its
 /// point, the intercepted drag's data and the held modifiers.
-fn drag_event(kind: &str, x: f64, y: f64, data: &Value, modifiers: i64) -> cdp::Input {
-    cdp::Input::new(&input::DispatchDragEvent {
+fn drag_event(kind: &str, x: f64, y: f64, data: &Value, modifiers: i64) -> PlannedInput {
+    PlannedInput::Write(cdp::Input::new(&input::DispatchDragEvent {
         data,
         modifiers: Some(modifiers),
         kind,
         x,
         y,
-    })
+    }))
 }
 
 /// Neo: the `Input` methods the writer tells apart, named once, by their declarations.
@@ -1133,10 +1179,10 @@ const TOUCH: &str = input::DispatchTouchEvent::METHOD;
 /// Neo: `command`'s write with the modifiers (and, for a mouse event, the buttons) that
 /// `after`, the tab once this command is applied, holds; `None` for any other command. Only
 /// the numbers change, in place, so the params keep Playwright's field order.
-fn actual_params(command: &Planned, after: &InputDevices) -> Option<cdp::Input> {
+fn actual_params(command: &Planned, after: &InputDevices) -> Option<PlannedInput> {
     let input = command.input.as_ref()?;
     let modifiers = i64::from(after.keyboard.modifiers);
-    match input.method() {
+    match input.input().method() {
         KEY | TOUCH => Some(input.with_number("modifiers", modifiers)),
         MOUSE => Some(
             input
@@ -1209,7 +1255,8 @@ pub(crate) fn start_writer<D: Devices, C: Send + 'static>(
     let (report_sender, receiver) = oneshot::channel();
     let writer_cut_short = cut_short.clone();
     spawn(Box::pin(async move {
-        let written = write_plan(&sender, &ticket, &turn, &plan, &writer_cut_short).await;
+        let written =
+            write_plan(&sender, Pen::Call(&ticket), &turn, &plan, &writer_cut_short).await;
         let reported = report(&written, ticket);
         // Every command is answered: the tab's next input may start.
         drop(turn);
@@ -1279,7 +1326,7 @@ mod tests {
         let sender = Sender::answering([]);
         let written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &plan,
             &CancellationToken::new(),
@@ -1304,7 +1351,7 @@ mod tests {
         };
         let delivery = unread_ticket();
         let (written, ()) = tokio::join!(
-            write_plan(&sender, &delivery, &turn, &plan, &cut_short),
+            write_plan(&sender, Pen::Call(&delivery), &turn, &plan, &cut_short),
             stopper
         );
         assert!(!written.complete, "the rest of the text never went out");
@@ -1356,7 +1403,7 @@ mod tests {
         let sender = Sender::answering([]);
         let _written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &release,
             &CancellationToken::new(),
@@ -1378,7 +1425,7 @@ mod tests {
         plan_button_releases(&mut release, &mut simulated, &run("B"));
         let _written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &release,
             &CancellationToken::new(),
@@ -1409,7 +1456,7 @@ mod tests {
         let turn = Turn::of(InputDevices::default(), "A");
         let written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &plan,
             &CancellationToken::new(),
@@ -1439,7 +1486,7 @@ mod tests {
         let turn = Turn::of(InputDevices::default(), "A");
         let written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &plan,
             &CancellationToken::new(),
@@ -1496,7 +1543,7 @@ mod tests {
         let turn = Turn::of(running.clone(), "A");
         let _written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &plan,
             &CancellationToken::new(),
@@ -1523,7 +1570,7 @@ mod tests {
         let turn = Turn::of(running.clone(), "A");
         let written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &plan,
             &CancellationToken::new(),
@@ -1546,7 +1593,7 @@ mod tests {
         let turn = Turn::of(running, "A");
         let _written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &release,
             &CancellationToken::new(),
@@ -1591,7 +1638,7 @@ mod tests {
         let turn = Turn::of(running, "observer");
         let written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &end_a,
             &CancellationToken::new(),
@@ -1640,7 +1687,7 @@ mod tests {
             let sender = Sender::answering([answer]);
             let never = CancellationToken::new();
             let delivery = unread_ticket();
-            let write = write_plan(&sender, &delivery, &turn, &end_a, &never);
+            let write = write_plan(&sender, Pen::Call(&delivery), &turn, &end_a, &never);
             if exit == "dropped" {
                 let dropped = time::timeout(Duration::from_secs(1), write).await;
                 assert!(dropped.is_err(), "the run's deadline dropped it");
@@ -1659,7 +1706,7 @@ mod tests {
             let sender = Sender::answering([]);
             let _written = write_plan(
                 &sender,
-                &unread_ticket(),
+                Pen::Call(&unread_ticket()),
                 &turn,
                 &end_b,
                 &CancellationToken::new(),
@@ -1700,7 +1747,7 @@ mod tests {
         let sender = Sender::answering([Answer::Fail, Answer::Ok, Answer::Ok]);
         let _written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &release,
             &CancellationToken::new(),
@@ -1739,7 +1786,7 @@ mod tests {
         let failed = Sender::answering([Answer::Fail]);
         let written = write_plan(
             &failed,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &observer,
             &end_a,
             &CancellationToken::new(),
@@ -1761,7 +1808,7 @@ mod tests {
         let sender = Sender::answering([]);
         let _written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &observer,
             &down_b,
             &CancellationToken::new(),
@@ -1774,7 +1821,7 @@ mod tests {
         let release = Sender::answering([]);
         let _written = write_plan(
             &release,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &observer,
             &end_b,
             &CancellationToken::new(),
@@ -1800,7 +1847,7 @@ mod tests {
         plan.commands
             .iter()
             .filter_map(|command| command.input.as_ref())
-            .map(|input| serde_json::from_str(input.params()).expect("params are JSON"))
+            .map(|input| serde_json::from_str(input.input().params()).expect("params are JSON"))
             .collect()
     }
 
@@ -1847,11 +1894,8 @@ mod tests {
     }
 
     impl InputSender for Sender {
-        async fn send_input(
-            &self,
-            input: &cdp::Input,
-            _delivery: &InputTicket,
-        ) -> Result<(), CdpError> {
+        async fn send_input(&self, input: &PlannedInput, _pen: Pen<'_>) -> Result<(), CdpError> {
+            let input = input.input();
             let params: Value = serde_json::from_str(input.params()).expect("params are JSON");
             let kind = match input.method() {
                 "Input.insertText" => "insertText".to_string(),
@@ -1881,10 +1925,10 @@ mod tests {
 
         async fn move_intercepting_drag(
             &self,
-            moved: &cdp::Input,
+            moved: &PlannedInput,
             delivery: &InputTicket,
         ) -> Result<Option<Value>, CdpError> {
-            self.send_input(moved, delivery).await?;
+            self.send_input(moved, Pen::Call(delivery)).await?;
             let drag = self.drags.lock().expect("drags").pop_front().flatten();
             self.sent.lock().expect("sent").push(
                 if drag.is_some() {
@@ -2257,7 +2301,7 @@ mod tests {
         let started = time::Instant::now();
         let written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &plan,
             &CancellationToken::new(),
@@ -2301,7 +2345,7 @@ mod tests {
         let turn = Turn::of(InputDevices::default(), "A");
         let written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &plan,
             &CancellationToken::new(),
@@ -2384,7 +2428,7 @@ mod tests {
         let (cell, ticket) = fresh_ticket();
         let written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn(),
             &tap(),
             &CancellationToken::new(),
@@ -2461,7 +2505,7 @@ mod tests {
         let (cell, ticket) = fresh_ticket();
         let written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn(),
             &tap(),
             &CancellationToken::new(),
@@ -2509,7 +2553,14 @@ mod tests {
         let cut_short = CancellationToken::new();
         cut_short.cancel();
         let sender = Sender::answering([]);
-        let _written = write_plan(&sender, &unread_ticket(), &turn, &end, &cut_short).await;
+        let _written = write_plan(
+            &sender,
+            Pen::Call(&unread_ticket()),
+            &turn,
+            &end,
+            &cut_short,
+        )
+        .await;
         assert_eq!(sender.sent(), ["keyUp", "mouseReleased"], "cut short");
         assert_eq!(turn.devices().keyboard, KeyboardState::default());
         assert!(turn.devices().ended.is_empty() && turn.devices().mouse.buttons.is_empty());
@@ -2521,7 +2572,7 @@ mod tests {
         let sender = Sender::answering([Answer::Gone, Answer::Gone]);
         let _written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &end,
             &CancellationToken::new(),
@@ -2543,7 +2594,7 @@ mod tests {
             Duration::from_secs(1),
             write_plan(
                 &sender,
-                &unread_ticket(),
+                Pen::Call(&unread_ticket()),
                 &turn,
                 &end,
                 &CancellationToken::new(),
@@ -2561,7 +2612,7 @@ mod tests {
         let sender = Sender::answering([]);
         let _written = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &later,
             &CancellationToken::new(),
@@ -2600,7 +2651,7 @@ mod tests {
         let refused = Sender::answering([Answer::Refuse]);
         let written = write_plan(
             &refused,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &end_a,
             &CancellationToken::new(),
@@ -2623,7 +2674,7 @@ mod tests {
         let sender = Sender::answering([]);
         let _down = write_plan(
             &sender,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &down_b,
             &CancellationToken::new(),
@@ -2636,7 +2687,7 @@ mod tests {
         let released = Sender::answering([]);
         let _end = write_plan(
             &released,
-            &unread_ticket(),
+            Pen::Call(&unread_ticket()),
             &turn,
             &end_b,
             &CancellationToken::new(),
@@ -2674,7 +2725,7 @@ mod tests {
             let failed = Sender::answering([Answer::Fail, Answer::Fail]);
             let _end = write_plan(
                 &failed,
-                &unread_ticket(),
+                Pen::Call(&unread_ticket()),
                 &turn,
                 &end_a,
                 &CancellationToken::new(),
@@ -2695,7 +2746,7 @@ mod tests {
                 plan_down(&mut down_b, &mut simulated, MouseButton::Left, 1, &run("B"));
                 let _down = write_plan(
                     &Sender::answering([]),
-                    &unread_ticket(),
+                    Pen::Call(&unread_ticket()),
                     &turn,
                     &down_b,
                     &CancellationToken::new(),
@@ -2712,7 +2763,7 @@ mod tests {
                 let sender = Sender::answering([]);
                 let _end = write_plan(
                     &sender,
-                    &unread_ticket(),
+                    Pen::Call(&unread_ticket()),
                     &turn,
                     &observer_end,
                     &CancellationToken::new(),
@@ -2731,7 +2782,7 @@ mod tests {
             let sender = Sender::answering([]);
             let _end = write_plan(
                 &sender,
-                &unread_ticket(),
+                Pen::Call(&unread_ticket()),
                 &turn,
                 &final_end,
                 &CancellationToken::new(),
