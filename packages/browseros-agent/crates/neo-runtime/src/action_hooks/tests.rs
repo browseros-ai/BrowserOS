@@ -956,14 +956,19 @@ impl Harness {
 
     /// The HTML of every `setContent` write the page received, in order.
     fn writes(&self) -> Vec<Value> {
+        self.glue_calls("writeContent", "html")
+    }
+
+    /// The `field` of every call of the glue function `name` the page received, in order.
+    fn glue_calls(&self, name: &str, field: &str) -> Vec<Value> {
         self.browser
             .exchanges()
             .into_iter()
             .filter(|exchange| {
                 exchange.method() == "Runtime.callFunctionOn"
-                    && exchange.command["params"]["arguments"][0]["value"] == "writeContent"
+                    && exchange.command["params"]["arguments"][0]["value"] == name
             })
-            .map(|exchange| exchange.command["params"]["arguments"][1]["value"]["html"].clone())
+            .map(|exchange| exchange.command["params"]["arguments"][1]["value"][field].clone())
             .collect()
     }
 
@@ -1578,6 +1583,16 @@ fn set_content(id: u64, html: &str) -> Value {
     )
 }
 
+fn set_item(id: u64, value: &str) -> Value {
+    message(
+        id,
+        &page_guid(),
+        "webStorageSetItem",
+        json!({ "kind": "local", "name": "k", "value": value }),
+        json!({}),
+    )
+}
+
 /// A hook that replaces every call's arguments with `args`, and wants no `afterAction`.
 fn replacing(timeline: &Timeline, args: &Value) -> Arc<FakeHooks> {
     let args = args.clone();
@@ -1962,4 +1977,71 @@ async fn tests_that_replaced_arguments_are_admitted_like_the_scripts() {
             "cursor {cursor}: {reply}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_hooked_writes_into_one_frame_go_in_arrival_order() {
+    let timeline = Timeline::default();
+    // The first write's hook takes longest.
+    let fake = Arc::new(
+        FakeHooks::new(&timeline)
+            .wanting(|hook, _| hook == ActionHook::Before)
+            .before(|invocation, _| {
+                let delay = Duration::from_millis(if invocation == 0 { 300 } else { 0 });
+                later(delay, Ok(ActionDecision::Allow))
+            }),
+    );
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let (first, second) = (
+        set_content(1, "<p>first</p>"),
+        set_content(2, "<p>second</p>"),
+    );
+    let (first, second) = tokio::join!(harness.call(&first), harness.call(&second));
+    assert!(first.is_ok() && second.is_ok());
+    assert_eq!(
+        harness.writes(),
+        [json!("<p>first</p>"), json!("<p>second</p>")]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_storage_call_held_at_its_gate_lets_the_hooks_own_storage_call_go_first() {
+    let timeline = Timeline::default();
+    let (release, released) = oneshot::channel::<()>();
+    let released = Mutex::new(Some(released));
+    // Only the agent's call is hooked; the second stands in for the hook realm's own call.
+    let fake = Arc::new(
+        FakeHooks::new(&timeline)
+            .wanting(first_asks(1))
+            .before(move |_, _| match released.lock().unwrap().take() {
+                Some(released) => async move {
+                    let _released = released.await;
+                    Ok(ActionDecision::Allow)
+                }
+                .boxed(),
+                None => decided(Ok(ActionDecision::Allow)),
+            }),
+    );
+    let harness = Arc::new(Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await);
+    let agent = {
+        let harness = Arc::clone(&harness);
+        tokio::spawn(async move { harness.call(&set_item(1, "agent")).await })
+    };
+    while fake.invocations() == 0 {
+        task::yield_now().await;
+    }
+    let hook_call =
+        time::timeout(Duration::from_secs(10), harness.call(&set_item(2, "hook"))).await;
+    assert!(matches!(hook_call, Ok(Ok(_))), "{hook_call:?}");
+    assert!(
+        !agent.is_finished(),
+        "the agent's call is still held at its gate"
+    );
+    release.send(()).unwrap();
+    let agent_reply = time::timeout(Duration::from_secs(10), agent).await;
+    assert!(matches!(agent_reply, Ok(Ok(Ok(_)))), "{agent_reply:?}");
+    assert_eq!(
+        harness.glue_calls("webStorageSetItem", "value"),
+        [json!("hook"), json!("agent")]
+    );
 }
