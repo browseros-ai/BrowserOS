@@ -82,6 +82,7 @@ neo-runtime/src/debugger.rs
 neo-runtime/src/events.rs
 neo-runtime/src/hooks.rs
 neo-runtime/src/hooks/decision.rs
+neo-runtime/src/hooks/host.rs
 neo-runtime/src/hooks/realm.rs
 neo-runtime/src/mime.rs
 neo-runtime/src/playwright_methods/browser_methods.rs
