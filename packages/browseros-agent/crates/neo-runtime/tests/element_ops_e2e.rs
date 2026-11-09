@@ -38,8 +38,10 @@ return 'done'";
 
 const MAIN_OVERLAYS: &str =
     "document.documentElement.querySelectorAll(':scope > x-pw-glass').length";
-const CHILD_OVERLAYS: &str = "document.querySelector('#child').contentDocument\
-    .documentElement.querySelectorAll(':scope > x-pw-glass').length";
+/// Neo: a srcdoc's document can exist before its root. Return null while it loads so the
+/// readiness poll keeps waiting; the final cleanup assertions still require a zero count.
+const CHILD_OVERLAYS: &str = "document.querySelector('#child')?.contentDocument\
+    ?.documentElement?.querySelectorAll(':scope > x-pw-glass').length ?? null";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_a_run_removes_its_highlight_overlays_when_it_ends() {
