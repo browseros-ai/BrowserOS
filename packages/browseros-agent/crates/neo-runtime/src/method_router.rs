@@ -871,6 +871,7 @@ impl Dispatcher {
                 served,
                 guid: guid.clone(),
                 claim: route.as_ref().ok().and_then(claim_key),
+                claimed: false,
                 tabs: inner.tabs.clone(),
                 write_order: Arc::clone(&inner.write_order),
                 storage_order: Arc::clone(&inner.storage_order),
@@ -912,7 +913,9 @@ impl Dispatcher {
             &entry,
         );
         // Its place in the hooks' call order, now: a later call's hook must not decide first.
-        let hooks = planned.map(|(plan, order, event, regate)| {
+        let claimed = admission.release.is_some();
+        let hooks = planned.map(|(plan, order, event, mut regate)| {
+            regate.claimed = claimed;
             plan.admitted(
                 event,
                 call_id,
@@ -2538,6 +2541,9 @@ struct Regate {
     /// What the script's call claims among the calls in flight; a replacement must claim the
     /// same, or it would end something the script's call was not admitted for.
     claim: Option<ClaimKey>,
+    /// Whether the script's call was admitted on its claim, which the caps never refuse, rather
+    /// than on a share of them; set at admission.
+    claimed: bool,
     tabs: Tabs,
     write_order: Arc<WriteOrder>,
     storage_order: Arc<WriteOrder>,
@@ -2579,16 +2585,17 @@ impl CallRoute for Regate {
         if claim_key(&call) != self.claim {
             return Err("they change what the call ends among the calls in flight".to_string());
         }
-        // A call that ends calls in flight is never refused by the caps, or a full run could not
-        // let go ([`ReleaseClaim`]); its claim bounds it to one per thing, so its replacement is
-        // not charged either. Every other replacement is charged as the script's call was.
-        let charge = match self.claim {
-            Some(_) => None,
-            None => Some(
+        // A call admitted on its claim is never refused by the caps, or a full run could not let
+        // go ([`ReleaseClaim`]); its claim bounds it to one per thing, so its replacement is not
+        // charged either. Every other replacement is charged, as the script's call took a share.
+        let charge = if self.claimed {
+            None
+        } else {
+            Some(
                 self.in_flight
                     .charge(bytes)
                     .map_err(|error| format!("they do not fit: {}", error.message))?,
-            ),
+            )
         };
         Ok(GatedCall { call, charge })
     }

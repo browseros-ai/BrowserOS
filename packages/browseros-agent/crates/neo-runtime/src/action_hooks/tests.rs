@@ -2181,3 +2181,21 @@ async fn tests_that_a_call_meeting_its_runs_closed_hooks_stops_without_a_hook_fa
     );
     assert_eq!(fake.take_failures().len(), 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_replacement_is_charged_unless_its_call_holds_a_claim() {
+    let timeline = Timeline::default();
+    // A binding call's answer names a claim, but for a binding call nobody waits on it takes a
+    // share, so its replacement's bytes are charged, and a 9 MiB result is past the cap.
+    let padded = json!({ "result": { "value": { "s": "x".repeat(9 << 20) }, "handles": [] } });
+    let fake = replacing(&timeline, &padded);
+    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
+    let small = json!({ "result": { "value": { "v": "undefined" }, "handles": [] } });
+    let resolve = message(1, "bindingcall@nobody", "resolve", small, json!({}));
+    let reply = harness.call(&resolve).await.unwrap();
+    assert_eq!(reply["error"]["error"]["name"], "Error", "{reply}");
+    let record = harness.records(RunEnd::Settled).await.remove(0);
+    assert_eq!(record.hook, Some(before_record(BeforeHookResult::Failed)));
+    let failures = fake.take_failures();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+}

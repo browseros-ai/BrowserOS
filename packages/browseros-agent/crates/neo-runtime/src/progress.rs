@@ -709,13 +709,13 @@ impl CallEntry {
         &self.params
     }
 
-    /// Who sent the call (`Dispatcher::for_hooks`): the call path skips the hooks for a hook's
-    /// own calls (hooks feature 3).
+    /// Who sent the call (`Dispatcher::for_hooks`); its record says so. The call path needs no
+    /// origin check: only the agent's dispatcher has action hooks (`method_router.rs` `Side`).
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "hooks feature 3's seam: the call path skips hooks for a hook's calls"
+            reason = "the tests read it; the record reads the field itself"
         )
     )]
     pub(crate) fn origin(&self) -> CallOrigin {
