@@ -150,8 +150,11 @@ pub(crate) struct RunScope {
     /// (`Tabs::release_input`). `Dispatcher::finish` waits on it, bounded, so records read
     /// final deliveries; `Runtime::drain` waits for what is left.
     pub(crate) tasks: TaskTracker,
-    /// The run's JS handles (`evaluate.rs`); closed at run end, which releases their groups.
+    /// The run's JS handles (`evaluate.rs`) as the agent's script sees them; closed at run end,
+    /// which releases their groups.
     pub(crate) handles: Arc<Handles>,
+    /// The same handles as the run's hook realm sees them (`Handles::for_hooks`).
+    pub(crate) hook_handles: Arc<Handles>,
     /// The run's init scripts (`init_scripts.rs`); removed from every session at run end.
     pub(crate) init_scripts: Arc<InitScripts>,
     /// Cancelled when the script closes the run's context (`page_and_context_methods.rs` `close_context`):
@@ -171,12 +174,15 @@ pub(crate) struct RunScope {
 
 impl RunScope {
     pub(crate) fn new(deadline: Deadline, tasks: TaskTracker) -> Self {
+        let handles = Arc::new(Handles::default());
+        let hook_handles = Arc::new(handles.for_hooks());
         Self {
             deadline,
             ended: CancellationToken::new(),
             end_reason: Arc::default(),
             tasks,
-            handles: Arc::default(),
+            handles,
+            hook_handles,
             init_scripts: Arc::default(),
             context_closed: CancellationToken::new(),
             artifacts: Arc::default(),
@@ -189,6 +195,14 @@ impl RunScope {
     /// The run's artifact directory and its record of written files.
     pub(crate) fn with_artifacts(self, artifacts: Arc<Artifacts>) -> Self {
         Self { artifacts, ..self }
+    }
+
+    /// The run's handles as calls of `origin` see them.
+    pub(crate) fn handles_for(&self, origin: CallOrigin) -> &Arc<Handles> {
+        match origin {
+            CallOrigin::Agent => &self.handles,
+            CallOrigin::Hook => &self.hook_handles,
+        }
     }
 
     /// Records `reason` (the first one wins) and cancels `ended`.
@@ -385,9 +399,10 @@ impl Progress {
 
     /// `metadata.timeout` in ms as the client sent it, `0.0` for none: Playwright caps loop A's
     /// backoff by it.
-    /// The run's JS handles, for the evaluation calls (`evaluate.rs`).
+    /// The run's JS handles as this call's realm sees them, for the evaluation calls
+    /// (`evaluate.rs`): the agent's script never sees a hook's.
     pub(crate) fn handles(&self) -> &Handles {
-        &self.run.handles
+        self.run.handles_for(self.entry.origin)
     }
 
     /// The run's init scripts (`init_scripts.rs`).

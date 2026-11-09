@@ -324,3 +324,73 @@ async fn tests_that_after_run_runs_after_a_timeout_and_a_failing_one_withholds_t
     );
     tab.close().await;
 }
+
+/// Review P1-3: a handle a hook created names nothing to the agent's script, as a disposed one's
+/// guid does, so the agent can neither read nor dispose of it; the hook keeps using it.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_the_agent_cannot_use_a_hooks_handle() {
+    let Some(tab) = open().await else { return };
+    let runtime = tab.runtime().await;
+    let hooks = RunHooks::new(
+        "neo.on('beforeRun', async (event, ctx) => {
+           globalThis.kept = await event.page.evaluateHandle(() => ({ secret: 'HANDLE-SECRET' }))
+           ctx.trace(kept._guid)
+         })
+         neo.on('afterRun', async (event, ctx) => {
+           ctx.trace(JSON.stringify(await kept.jsonValue()))
+         })",
+    );
+    // The agent reads its own handle's guid and tries every guid the run minted just before it.
+    let code = "const own = (await page.evaluateHandle(() => 1))._guid
+      const dot = own.lastIndexOf('.')
+      const prefix = own.slice(0, dot + 1)
+      const n = Number(own.slice(dot + 1))
+      const tried = []
+      for (let i = Math.max(1, n - 3); i < n; i++)
+        for (const method of ['jsonValue', 'dispose']) {
+          const message = { id: 9000 + tried.length, guid: prefix + i, method, params: {} }
+          const { reply } = await __neo_runtime.callWithEvents(JSON.stringify(message))
+          const parsed = JSON.parse(reply)
+          tried.push({ guid: message.guid, method, error: parsed.error?.error?.name ?? null,
+            result: parsed.result ?? null })
+        }
+      return tried";
+    let outcome = run(&runtime, &tab, code, Some(hooks), RUN_TIMEOUT).await;
+    assert_eq!(
+        outcome.status,
+        RunStatus::Ok,
+        "{:?} {outcome:?}",
+        outcome.hook_trace
+    );
+    let hook_guid = outcome
+        .hook_trace
+        .first()
+        .expect("the hook traced its handle's guid")
+        .clone();
+    let tried = outcome
+        .value
+        .clone()
+        .expect("the agent returns what it tried");
+    let tried = tried.as_array().expect("a list");
+    assert!(
+        tried
+            .iter()
+            .any(|attempt| attempt["guid"] == json!(hook_guid)),
+        "the agent tried the hook's handle {hook_guid}: {tried:?}"
+    );
+    for attempt in tried {
+        assert_eq!(attempt["error"], "TargetClosedError", "{attempt}");
+        assert_eq!(attempt["result"], Value::Null, "{attempt}");
+    }
+    let json = serde_json::to_string(&outcome).unwrap();
+    assert!(!json.contains("HANDLE-SECRET"), "{json}");
+    assert!(
+        outcome
+            .hook_trace
+            .iter()
+            .any(|line| line.contains("HANDLE-SECRET")),
+        "the hook still reads its handle after the agent's attempts: {:?}",
+        outcome.hook_trace
+    );
+    tab.close().await;
+}

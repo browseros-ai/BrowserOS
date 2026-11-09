@@ -689,7 +689,7 @@ impl Dispatcher {
         let target = inner.tabs.resolve(&guid).or_else(|| {
             inner
                 .run
-                .handles
+                .handles_for(origin)
                 .frame_guid(&guid)
                 .and_then(|frame| inner.tabs.resolve(&frame))
         });

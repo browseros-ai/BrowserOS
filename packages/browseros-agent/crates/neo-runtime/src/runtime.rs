@@ -238,8 +238,9 @@ impl Runtime {
             released: false,
         };
         // The hook sandbox exists only for a run with hooks; without, nothing below costs a thing.
+        // Dropping it (this future dropped included) closes it, so its realm lets go of the run.
         let sandbox = hooks.map(|hooks| {
-            let handles = Arc::clone(&dispatcher.run_scope().handles);
+            let handles = Arc::clone(&dispatcher.run_scope().hook_handles);
             let parts = RealmParts {
                 page_guid: page_guid.clone(),
                 frame_guid: frame_guid.clone(),

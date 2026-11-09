@@ -54,6 +54,7 @@ use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup};
 use crate::playwright_methods::click::{self, LoopAWaits, PageError};
 use crate::playwright_methods::reads::SelectorTab;
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
+use crate::run::CallOrigin;
 
 /// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
 pub(crate) const HANDLE_PREFIX: &str = "handle@";
@@ -840,8 +841,22 @@ fn decode<T: for<'de> Deserialize<'de>>(
     })
 }
 
-/// One run's handles: guid → what it names, and the run's handle group of each session.
+/// One run's handles as one of its realms sees them: guid → what it names, in a table the run's
+/// realms share, and the run's handle group of each session.
+///
+/// Neo: a run with hooks has two views of one table (review P1-3). Each handle is tagged with the
+/// realm whose call created it. The agent's view sees only the agent's handles: a hook's handle
+/// may hold what the hook read for its own policy, so to the agent its guid names nothing, as a
+/// disposed handle's does. The hook realm's view ([`Handles::for_hooks`]) sees every handle, so
+/// a hook can act on what the agent's script holds.
 pub(crate) struct Handles {
+    /// The realm that creates and looks up handles through this view.
+    origin: CallOrigin,
+    table: Arc<HandleTable>,
+}
+
+/// The run's handles, shared by its realms' views.
+struct HandleTable {
     /// This run's random token in every guid it mints: runs in other processes (each `neo_run`)
     /// count handles from 1 too, and a guid kept from one must never name another's handle.
     run: String,
@@ -854,6 +869,8 @@ pub(crate) struct Handles {
 
 /// What a guid names.
 pub(crate) struct HandleEntry {
+    /// The realm whose call created the handle; only the hook realm sees a hook's.
+    origin: CallOrigin,
     /// The handle's frame, as a frame guid (`frame@T` or `frame@T/F`), which routes its calls.
     frame_guid: String,
     /// The frame document the handle was created in, and the session that owns its object.
@@ -903,19 +920,38 @@ enum Remote {
 }
 
 impl Default for Handles {
+    /// A run's table, as its agent's script sees it.
     fn default() -> Self {
         let mut hasher = RandomState::new().build_hasher();
         hasher.write_u64(NEXT_RUN.fetch_add(1, Ordering::Relaxed));
         Self {
-            run: format!("{:016x}", hasher.finish()),
-            entries: Mutex::default(),
-            groups: Mutex::default(),
-            closed: AtomicBool::default(),
+            origin: CallOrigin::Agent,
+            table: Arc::new(HandleTable {
+                run: format!("{:016x}", hasher.finish()),
+                entries: Mutex::default(),
+                groups: Mutex::default(),
+                closed: AtomicBool::default(),
+            }),
         }
     }
 }
 
+/// Whether a realm of origin `viewer` may use a handle a call of origin `creator` created: the
+/// hook realm uses any, the agent's script only its own.
+fn visible(viewer: CallOrigin, creator: CallOrigin) -> bool {
+    viewer == CallOrigin::Hook || creator == CallOrigin::Agent
+}
+
 impl Handles {
+    /// The same table as the run's hook realm sees it: every handle, and each it creates the
+    /// hook's.
+    pub(crate) fn for_hooks(&self) -> Self {
+        Self {
+            origin: CallOrigin::Hook,
+            table: Arc::clone(&self.table),
+        }
+    }
+
     /// The element handle `guid` for a call that acts on its node (`ElementHandle.screenshot`),
     /// refused for a `JSHandle` as Playwright's dispatcher refuses `method` on one, and closed
     /// when the run has no such handle.
@@ -929,8 +965,15 @@ impl Handles {
         self.entry(guid).map(|entry| entry.frame_guid.clone())
     }
 
+    /// The handle `guid` names, if this view sees it.
     fn entry(&self, guid: &str) -> Option<Arc<HandleEntry>> {
-        self.entries.lock().ok()?.get(guid).cloned()
+        self.table
+            .entries
+            .lock()
+            .ok()?
+            .get(guid)
+            .filter(|entry| visible(self.origin, entry.origin))
+            .cloned()
     }
 
     /// Playwright: `server/dispatchers/dispatcher.ts` `DispatcherConnection._tChannelImplFromWire`: `no object with guid ${guid}`
@@ -962,11 +1005,12 @@ impl Handles {
     /// Releases every handle group the run created and forgets every guid. Called at run end;
     /// the releases run on the pages' tracked tasks (`GroupGuard`).
     pub(crate) fn close(&self) {
-        self.closed.store(true, Ordering::SeqCst);
-        if let Ok(mut entries) = self.entries.lock() {
+        let table = &self.table;
+        table.closed.store(true, Ordering::SeqCst);
+        if let Ok(mut entries) = table.entries.lock() {
             entries.clear();
         }
-        let groups = self
+        let groups = table
             .groups
             .lock()
             .map(|mut groups| mem::take(&mut *groups))
@@ -980,8 +1024,8 @@ impl Handles {
         tab: &FrameTab,
         frame: &Arc<FrameContext>,
     ) -> Result<Arc<GroupGuard>, PageError> {
-        let mut groups = self.groups.lock().map_err(|_| table_error())?;
-        if self.closed.load(Ordering::SeqCst) {
+        let mut groups = self.table.groups.lock().map_err(|_| table_error())?;
+        if self.table.closed.load(Ordering::SeqCst) {
             return Err(PageError::Closed);
         }
         Ok(Arc::clone(
@@ -1002,7 +1046,7 @@ impl Handles {
     ) -> Result<CreatedHandle, PageError> {
         let guid = format!(
             "{HANDLE_PREFIX}{}.{}",
-            self.run,
+            self.table.run,
             NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
         );
         let main = tab.frames.main();
@@ -1011,13 +1055,14 @@ impl Handles {
         } else {
             format!("frame@{}/{}", main.id, frame.id)
         };
-        let mut entries = self.entries.lock().map_err(|_| table_error())?;
-        if self.closed.load(Ordering::SeqCst) {
+        let mut entries = self.table.entries.lock().map_err(|_| table_error())?;
+        if self.table.closed.load(Ordering::SeqCst) {
             return Err(PageError::Closed);
         }
         entries.insert(
             guid.clone(),
             Arc::new(HandleEntry {
+                origin: self.origin,
                 frame_guid,
                 frame: Arc::clone(frame),
                 document,
@@ -1036,8 +1081,17 @@ impl Handles {
         })
     }
 
+    /// Forgets the handle `guid` names, if this view sees it: the agent's script cannot dispose
+    /// of a hook's handle.
     fn forget(&self, guid: &str) -> Option<Arc<HandleEntry>> {
-        self.entries.lock().ok()?.remove(guid)
+        let mut entries = self.table.entries.lock().ok()?;
+        if !entries
+            .get(guid)
+            .is_some_and(|entry| visible(self.origin, entry.origin))
+        {
+            return None;
+        }
+        entries.remove(guid)
     }
 }
 
@@ -3183,5 +3237,24 @@ mod tests {
         let handles = Handles::default();
         handles.close();
         assert!(handles.frame_guid("handle@1").is_none());
+    }
+
+    /// The agent's script sees only its own handles; the hook realm sees every handle; both views
+    /// are one table, so the run's end closes both.
+    #[test]
+    fn tests_that_only_the_hook_realm_sees_a_hooks_handles() {
+        assert!(visible(CallOrigin::Agent, CallOrigin::Agent));
+        assert!(!visible(CallOrigin::Agent, CallOrigin::Hook));
+        assert!(visible(CallOrigin::Hook, CallOrigin::Agent));
+        assert!(visible(CallOrigin::Hook, CallOrigin::Hook));
+        let agent = Handles::default();
+        let hooks = agent.for_hooks();
+        assert_eq!(
+            (agent.origin, hooks.origin),
+            (CallOrigin::Agent, CallOrigin::Hook)
+        );
+        assert!(Arc::ptr_eq(&agent.table, &hooks.table));
+        agent.close();
+        assert!(hooks.table.closed.load(Ordering::SeqCst));
     }
 }
