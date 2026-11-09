@@ -28,9 +28,9 @@ use std::collections::HashMap;
 
 use browseros_cdp::CdpEvent;
 use neo_runtime_spec::serve::{FrameChannel, FrameInitializer};
-use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::chromium_bridge::cdp::{self, page};
 use crate::chromium_bridge::frames::FrameInfo;
 
 /// One frame change for the run's listeners: the Neo event method on the page's guid, the
@@ -55,46 +55,6 @@ struct Known {
 pub(crate) struct FrameModel {
     target: String,
     frames: HashMap<String, Known>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FrameAttached {
-    frame_id: String,
-    parent_frame_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FrameDetached {
-    frame_id: String,
-    #[serde(default)]
-    reason: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct FrameNavigated {
-    frame: NavigatedFrame,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NavigatedFrame {
-    id: String,
-    #[serde(default)]
-    parent_id: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    url: String,
-    #[serde(default)]
-    url_fragment: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NavigatedWithinDocument {
-    frame_id: String,
-    url: String,
 }
 
 impl FrameModel {
@@ -131,61 +91,48 @@ impl FrameModel {
 
     pub(crate) fn apply(&mut self, event: &CdpEvent) -> Vec<FrameChange> {
         let mut changes = Vec::new();
-        let params = event.params.clone();
-        match event.method.as_str() {
-            "Page.frameAttached" => {
-                if let Ok(FrameAttached {
-                    frame_id,
-                    parent_frame_id,
-                }) = serde_json::from_value(params)
-                    && !self.frames.contains_key(&frame_id)
-                {
-                    self.frames.insert(
-                        frame_id.clone(),
-                        Known {
-                            parent: Some(parent_frame_id),
-                            ..Known::default()
-                        },
-                    );
-                    changes.push(self.change("frameAttached", "frameattached", &frame_id));
-                }
+        if let Some(page::FrameAttached {
+            frame_id,
+            parent_frame_id: Some(parent_frame_id),
+        }) = cdp::decode(event)
+        {
+            if !self.frames.contains_key(&frame_id) {
+                self.frames.insert(
+                    frame_id.clone(),
+                    Known {
+                        parent: Some(parent_frame_id),
+                        ..Known::default()
+                    },
+                );
+                changes.push(self.change("frameAttached", "frameattached", &frame_id));
             }
-            "Page.frameDetached" => {
-                if let Ok(FrameDetached { frame_id, reason }) = serde_json::from_value(params)
-                    && reason.as_deref() != Some("swap")
-                    && frame_id != self.target
-                {
-                    self.detach(&frame_id, true, &mut changes);
-                }
+        } else if let Some(page::FrameDetached { frame_id, reason }) = cdp::decode(event) {
+            if reason.as_deref() != Some("swap") && frame_id != self.target {
+                self.detach(&frame_id, true, &mut changes);
             }
-            "Page.frameNavigated" => {
-                if let Ok(FrameNavigated { frame }) = serde_json::from_value(params) {
-                    let url = format!("{}{}", frame.url, frame.url_fragment.unwrap_or_default());
-                    if self.frames.contains_key(&frame.id) {
-                        self.detach(&frame.id, false, &mut changes);
-                    }
-                    let parent = (frame.id != self.target)
-                        .then_some(frame.parent_id)
-                        .flatten();
-                    let known = self.frames.entry(frame.id.clone()).or_default();
-                    known.url = url;
-                    known.name = frame.name.unwrap_or_default();
-                    if known.parent.is_none() {
-                        known.parent = parent;
-                    }
-                    changes.push(self.navigated(&frame.id));
-                }
+        } else if let Some(page::FrameNavigated { frame, .. }) = cdp::decode(event) {
+            let url = format!("{}{}", frame.url, frame.url_fragment.unwrap_or_default());
+            if self.frames.contains_key(&frame.id) {
+                self.detach(&frame.id, false, &mut changes);
             }
-            "Page.navigatedWithinDocument" => {
-                if let Ok(NavigatedWithinDocument { frame_id, url }) =
-                    serde_json::from_value(params)
-                    && let Some(known) = self.frames.get_mut(&frame_id)
-                {
-                    known.url = url;
-                    changes.push(self.navigated(&frame_id));
-                }
+            let parent = (frame.id != self.target)
+                .then_some(frame.parent_id)
+                .flatten();
+            let known = self.frames.entry(frame.id.clone()).or_default();
+            known.url = url;
+            known.name = frame.name.unwrap_or_default();
+            if known.parent.is_none() {
+                known.parent = parent;
             }
-            _ => {}
+            changes.push(self.navigated(&frame.id));
+        } else if let Some(page::NavigatedWithinDocument {
+            frame_id,
+            url: Some(url),
+        }) = cdp::decode(event)
+            && let Some(known) = self.frames.get_mut(&frame_id)
+        {
+            known.url = url;
+            changes.push(self.navigated(&frame_id));
         }
         changes
     }

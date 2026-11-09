@@ -27,10 +27,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::CdpError;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tracing::warn;
 
@@ -65,34 +64,7 @@ fn discovery_params(on: bool, _scope: Option<&str>) -> Value {
     .unwrap_or_default()
 }
 
-/// What `Target.targetCreated`, `Target.targetInfoChanged` and `Target.getTargets` report of a
-/// target.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct TargetInfo {
-    pub(crate) target_id: String,
-    #[serde(rename = "type")]
-    pub(crate) kind: String,
-    #[serde(default)]
-    pub(crate) url: String,
-    /// The target whose frame opened this one, set even for `noopener` (measured).
-    #[serde(default)]
-    pub(crate) opener_id: Option<String>,
-    #[serde(default)]
-    pub(crate) browser_context_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetEvent {
-    target_info: TargetInfo,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetDestroyed {
-    target_id: String,
-}
+pub(crate) use crate::chromium_bridge::cdp::target::TargetInfo;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,11 +83,12 @@ pub(crate) fn is_initial_empty(url: &str) -> bool {
 pub(crate) async fn run(tabs: Tabs, discovery: Switch) {
     let hub = tabs.events().clone();
     let cdp = tabs.cdp().clone();
+    let browser = cdp::Browser::new(cdp.clone());
     // Subscribed first: every target event from here on reaches this receiver, the replay too.
-    let events = cdp.events();
+    let events = browser.events();
     let flushes = hub.watcher();
     let started = async {
-        let baseline = cdp::Browser::new(cdp.clone())
+        let baseline = browser
             .send(target::GetTargets {
                 filter: Some(page_filter()),
             })
@@ -149,7 +122,7 @@ pub(crate) async fn run(tabs: Tabs, discovery: Switch) {
 }
 
 async fn watch(
-    mut events: broadcast::Receiver<CdpEvent>,
+    mut events: cdp::Events,
     mut flushes: Flushes,
     tabs: &Tabs,
     hub: &EventHub,
@@ -228,34 +201,34 @@ impl Targets {
     /// The report one browser-level target event makes, if any: a page target's first non-empty
     /// URL (its first commit), or its end while still on its initial empty document. Each target
     /// reports at most once.
-    fn on(&mut self, event: &CdpEvent) -> Option<Report> {
-        if event.session_id.is_some() {
+    fn on(&mut self, event: &cdp::Raw) -> Option<Report> {
+        if event.session().is_some() {
             return None;
         }
-        match event.method.as_str() {
-            "Target.targetCreated" | "Target.targetInfoChanged" => {
-                let TargetEvent { target_info: info } =
-                    serde_json::from_value::<TargetEvent>(event.params.clone()).ok()?;
-                if info.kind != "page" || self.known.contains(&info.target_id) {
-                    return None;
-                }
-                if is_initial_empty(&info.url) {
-                    self.pending.insert(info.target_id.clone(), info);
-                    return None;
-                }
-                self.pending.remove(&info.target_id);
-                self.known.insert(info.target_id.clone());
-                Some((info, false))
+        if event.is::<target::TargetCreated>() || event.is::<target::TargetInfoChanged>() {
+            let info = event
+                .decode::<target::TargetCreated>()
+                .map(|created| created.target_info)
+                .or_else(|| {
+                    event
+                        .decode::<target::TargetInfoChanged>()
+                        .map(|changed| changed.target_info)
+                })?;
+            if info.kind != "page" || self.known.contains(&info.target_id) {
+                return None;
             }
-            "Target.targetDestroyed" => {
-                let TargetDestroyed { target_id } =
-                    serde_json::from_value::<TargetDestroyed>(event.params.clone()).ok()?;
-                let info = self.pending.remove(&target_id)?;
-                self.known.insert(target_id);
-                Some((info, true))
+            if is_initial_empty(&info.url) {
+                self.pending.insert(info.target_id.clone(), info);
+                return None;
             }
-            _ => None,
+            self.pending.remove(&info.target_id);
+            self.known.insert(info.target_id.clone());
+            return Some((info, false));
         }
+        let target::TargetDestroyed { target_id } = event.decode()?;
+        let info = self.pending.remove(&target_id)?;
+        self.known.insert(target_id);
+        Some((info, true))
     }
 
     /// Every pending page, known from now on.
@@ -285,13 +258,18 @@ mod tests {
 
     #[test]
     fn tests_that_target_events_decode_what_browseros_sends() {
-        let event: TargetEvent = serde_json::from_value(json!({
-            "targetInfo": {
-                "targetId": "POPUP", "type": "page", "url": "", "openerId": "OPENER",
-                "canAccessOpener": false, "openerFrameId": "OPENER", "attached": false,
-                "browserContextId": "CONTEXT",
-            }
-        }))
+        let event = cdp::Raw::fixture(
+            "Target.targetCreated",
+            None,
+            json!({
+                "targetInfo": {
+                    "targetId": "POPUP", "type": "page", "url": "", "openerId": "OPENER",
+                    "canAccessOpener": false, "openerFrameId": "OPENER", "attached": false,
+                    "browserContextId": "CONTEXT",
+                }
+            }),
+        )
+        .decode::<target::TargetCreated>()
         .unwrap();
         assert_eq!(event.target_info.target_id, "POPUP");
         assert_eq!(event.target_info.opener_id.as_deref(), Some("OPENER"));
@@ -317,27 +295,37 @@ mod tests {
         assert!(targets.pending.contains_key("OPENING"));
     }
 
-    fn target_event(method: &str, target: &str, kind: &str, url: &str) -> CdpEvent {
-        CdpEvent {
-            method: method.to_string(),
-            params: json!({ "targetInfo": {
+    fn target_event(method: &str, target: &str, kind: &str, url: &str) -> cdp::Raw {
+        on_session(method, None, target, kind, url)
+    }
+
+    fn on_session(
+        method: &str,
+        session: Option<&str>,
+        target: &str,
+        kind: &str,
+        url: &str,
+    ) -> cdp::Raw {
+        cdp::Raw::fixture(
+            method,
+            session,
+            json!({ "targetInfo": {
                 "targetId": target, "type": kind, "url": url, "openerId": "OPENER",
                 "browserContextId": "CONTEXT",
             }}),
-            session_id: None,
-        }
+        )
     }
 
-    fn destroyed(target: &str) -> CdpEvent {
-        CdpEvent {
-            method: "Target.targetDestroyed".to_string(),
-            params: json!({ "targetId": target }),
-            session_id: None,
-        }
+    fn destroyed(target: &str) -> cdp::Raw {
+        cdp::Raw::fixture(
+            "Target.targetDestroyed",
+            None,
+            json!({ "targetId": target }),
+        )
     }
 
     /// What each event of a sequence reports: `Some((target, closed))` or `None`.
-    fn reports(targets: &mut Targets, events: &[CdpEvent]) -> Vec<Option<(String, bool)>> {
+    fn reports(targets: &mut Targets, events: &[cdp::Raw]) -> Vec<Option<(String, bool)>> {
         events
             .iter()
             .map(|event| {
@@ -403,8 +391,13 @@ mod tests {
     #[test]
     fn tests_that_a_session_event_and_a_lag_are_handled_as_the_watcher_needs() {
         let mut targets = Targets::default();
-        let mut attached = target_event("Target.targetInfoChanged", "S", "page", "https://a/");
-        attached.session_id = Some(browseros_cdp::SessionId::from("session"));
+        let attached = on_session(
+            "Target.targetInfoChanged",
+            Some("session"),
+            "S",
+            "page",
+            "https://a/",
+        );
         assert!(
             targets.on(&attached).is_none(),
             "a session's own target events"

@@ -188,7 +188,8 @@ impl Host {
     }
 
     /// Every CDP event the host's connection receives from now on; [`Host::session_id`] picks
-    /// this host's.
+    /// this host's. Raw for the readers in `playwright_methods/` that do not read through the
+    /// door yet (`content.rs`, `evaluate.rs` by way of `main_world::replaced_during`).
     pub(crate) fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.session.cdp.events()
     }
@@ -504,7 +505,7 @@ impl Frames {
         let cdp = self.main.host.session.cdp.clone();
         // Subscribe before attaching: even a detach delivered before the attach reply must
         // cancel this host. The tracked task reads a late reply and drops unclaimed sessions.
-        let events = cdp.events();
+        let events = self.main.host.cdp.events();
         let session = self
             .tasks
             .spawn(Session::attach(
@@ -750,7 +751,7 @@ fn preorder(frames: &[FrameInfo], main: &str) -> Vec<FrameInfo> {
 /// Chromium never answers some requests after removing an OOPIF. Fail them on detach instead
 /// of waiting for CDP's request timeout; lost events conservatively discard this host too.
 async fn watch_host(
-    mut events: broadcast::Receiver<CdpEvent>,
+    mut events: cdp::Events,
     session: SessionId,
     gone: CancellationToken,
     stop: CancellationToken,
@@ -760,8 +761,11 @@ async fn watch_host(
         let event = tokio::select! { biased; () = stop.cancelled() => return, event = events.recv() => event };
         match event {
             Ok(event)
-                if event.method == "Target.detachedFromTarget"
-                    && event.params["sessionId"].as_str() == Some(session.as_str()) =>
+                if event
+                    .decode::<target::DetachedFromTarget>()
+                    .is_some_and(|detached| {
+                        detached.session_id.as_deref() == Some(session.as_str())
+                    }) =>
             {
                 break;
             }
@@ -866,7 +870,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_child_detach_cancels_its_host() {
-        let (events, receiver) = broadcast::channel(16);
+        let (events, receiver) = cdp::Ring::new(16);
         let gone = CancellationToken::new();
         let watch = watch_host(
             receiver,
@@ -876,11 +880,11 @@ mod tests {
             Weak::new(),
         );
         events
-            .send(CdpEvent {
-                method: "Target.detachedFromTarget".to_string(),
-                params: json!({"sessionId":"child-session"}),
-                session_id: None,
-            })
+            .send(cdp::Raw::fixture(
+                "Target.detachedFromTarget",
+                None,
+                json!({"sessionId":"child-session"}),
+            ))
             .unwrap();
         watch.await;
         assert!(gone.is_cancelled());

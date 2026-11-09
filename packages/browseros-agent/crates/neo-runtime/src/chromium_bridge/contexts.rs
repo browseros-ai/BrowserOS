@@ -17,6 +17,8 @@ use std::sync::Mutex;
 
 use browseros_cdp::{CdpEvent, SessionId};
 
+use crate::chromium_bridge::cdp::{self, runtime};
+
 /// Neo: how many destroyed contexts a map keeps naming their frames, oldest dropped first: a
 /// session's every navigation destroys a few, and a map lives as long as its producer.
 const DEAD_KEPT: usize = 1024;
@@ -79,42 +81,36 @@ impl ContextFrames {
         let Ok(mut contexts) = self.0.lock() else {
             return;
         };
-        match event.method.as_str() {
-            "Runtime.executionContextCreated" => {
-                let context = &event.params["context"];
-                let aux = &context["auxData"];
-                if let (Some(id), Some(frame), Some(true)) = (
-                    context["id"].as_i64(),
-                    aux["frameId"].as_str(),
-                    aux["isDefault"].as_bool(),
-                ) {
-                    contexts.frames.insert(
-                        (session.to_string(), id),
-                        Context {
-                            frame: frame.to_string(),
-                            unique: context["uniqueId"].as_str().map(str::to_string),
-                            died: None,
-                        },
-                    );
-                }
+        if let Some(created) = cdp::decode::<runtime::ExecutionContextCreated>(event) {
+            let context = created.context;
+            if let (Some(id), Some(frame), Some(true)) = (
+                context.id,
+                context.aux_data.frame_id,
+                context.aux_data.is_default,
+            ) {
+                contexts.frames.insert(
+                    (session.to_string(), id),
+                    Context {
+                        frame,
+                        unique: context.unique_id,
+                        died: None,
+                    },
+                );
             }
-            "Runtime.executionContextDestroyed" => {
-                if let Some(id) = event.params["executionContextId"].as_i64() {
-                    contexts.kill((session.to_string(), id));
-                }
+        } else if let Some(destroyed) = cdp::decode::<runtime::ExecutionContextDestroyed>(event) {
+            if let Some(id) = destroyed.execution_context_id {
+                contexts.kill((session.to_string(), id));
             }
-            "Runtime.executionContextsCleared" => {
-                let owned: Vec<(String, i64)> = contexts
-                    .frames
-                    .iter()
-                    .filter(|((owner, _), context)| owner == session && context.died.is_none())
-                    .map(|(key, _)| key.clone())
-                    .collect();
-                for key in owned {
-                    contexts.kill(key);
-                }
+        } else if cdp::is::<runtime::ExecutionContextsCleared>(event) {
+            let owned: Vec<(String, i64)> = contexts
+                .frames
+                .iter()
+                .filter(|((owner, _), context)| owner == session && context.died.is_none())
+                .map(|(key, _)| key.clone())
+                .collect();
+            for key in owned {
+                contexts.kill(key);
             }
-            _ => {}
         }
     }
 

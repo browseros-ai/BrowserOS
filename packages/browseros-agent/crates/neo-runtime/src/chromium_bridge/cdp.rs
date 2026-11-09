@@ -31,7 +31,7 @@
 #![expect(
     dead_code,
     unused_imports,
-    reason = "the door and every declaration land before their callers move onto them"
+    reason = "every command and event the crate names is declared here; the callers in browser_representations/ and playwright_methods/ move onto the door next"
 )]
 
 pub(crate) mod browser;
@@ -236,6 +236,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        dead_code,
+        reason = "page.rs's session reads its id through the door once it moves onto it"
+    )]
     pub(crate) fn id(&self) -> &SessionId {
         &self.id
     }
@@ -340,6 +344,10 @@ pub(crate) struct Raw(CdpEvent);
 impl Raw {
     /// Whether the event came on `session`. The root session's `Target.detachedFromTarget` does
     /// not: it names the detached session in its params.
+    #[expect(
+        dead_code,
+        reason = "browser_representations' watchers read through the door once they move onto it"
+    )]
     pub(crate) fn on_session(&self, session: &SessionId) -> bool {
         self.0.session_id.as_ref() == Some(session)
     }

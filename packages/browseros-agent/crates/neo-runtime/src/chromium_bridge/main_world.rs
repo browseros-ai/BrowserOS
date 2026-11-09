@@ -47,7 +47,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::sync::{Mutex, OnceCell};
 
-use crate::chromium_bridge::cdp::{dom, runtime};
+use crate::chromium_bridge::cdp::{self, dom, page, runtime};
 use crate::chromium_bridge::frames::FrameContext;
 use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup};
 use crate::playwright_methods::click::PageError;
@@ -225,16 +225,12 @@ pub(crate) fn replaced_during(
         if event.session_id.as_ref() != Some(session) {
             continue;
         }
-        let gone = match event.method.as_str() {
-            "Page.frameNavigated" => {
-                let navigated = &event.params["frame"];
-                navigated["id"].as_str() == Some(frame.id.as_str())
-                    || navigated.get("parentId").is_none()
-            }
-            "Page.frameDetached" => event.params["frameId"].as_str() == Some(frame.id.as_str()),
-            _ => false,
-        };
-        if gone {
+        let navigated = cdp::decode::<page::FrameNavigated>(&event).is_some_and(|navigated| {
+            navigated.frame.id == frame.id || navigated.frame.parent_id.is_none()
+        });
+        let detached = cdp::decode::<page::FrameDetached>(&event)
+            .is_some_and(|detached| detached.frame_id == frame.id);
+        if navigated || detached {
             return true;
         }
     }
