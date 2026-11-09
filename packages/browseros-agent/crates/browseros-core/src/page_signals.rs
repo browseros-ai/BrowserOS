@@ -303,8 +303,8 @@ impl PageSignals {
     /// Sessions do not keep `Runtime` enabled: while it is, the page's own console calls
     /// serialize their arguments for the inspector, which pages time to detect DevTools and
     /// then blank or close themselves. Enabling it makes the browser replay the stored
-    /// history before it answers; the disable is pipelined behind the enable so the page
-    /// never runs a task of its own while reporting is on.
+    /// history before it answers; the disable follows the enable immediately on the same
+    /// session, in order, so reporting is on only for the brief span between the pair.
     pub async fn harvest_console(
         &self,
         page_id: &PageId,
@@ -317,12 +317,14 @@ impl PageSignals {
             return Ok(());
         }
         let mut events = self.cdp.events();
-        let (enabled, disabled) = tokio::join!(
-            session.send_value("Runtime.enable", json!({})),
-            session.send_value("Runtime.disable", json!({})),
-        );
-        enabled?;
-        disabled?;
+        // Enable, then disable, as an ordered pair on the same session. send_value re-runs
+        // page admission before each call, so issuing the two concurrently let their
+        // admissions finish out of order and could put Runtime.disable on the wire before
+        // Runtime.enable, leaving reporting on (the live test uses an unguarded session and
+        // misses this). CDP keeps a session's messages in order, so an ordered pair always
+        // applies enable before disable.
+        session.send_value("Runtime.enable", json!({})).await?;
+        session.send_value("Runtime.disable", json!({})).await?;
         loop {
             let event = match events.try_recv() {
                 Ok(event) => event,
@@ -641,15 +643,25 @@ impl PageSignals {
         let mut state = self.state();
         let page = state.pages.entry(page_id.clone()).or_default();
         if let Some(logged) = entry.timestamp_us {
+            // Dedupe replayed history by (level, location, text), not text alone: two
+            // entries can share a microsecond timestamp yet differ in level or source (for
+            // example a warn and an error with the same message), and keying on text alone
+            // would drop the second and lose a distinct error.
+            let key = format!(
+                "{}\u{1f}{}\u{1f}{}",
+                entry.level.as_str(),
+                entry.location().unwrap_or_default(),
+                entry.text
+            );
             match &mut page.console_watermark {
                 Some((newest, _)) if logged < *newest => return,
-                Some((newest, texts)) if logged == *newest => {
-                    if texts.contains(&entry.text) {
+                Some((newest, keys)) if logged == *newest => {
+                    if keys.contains(&key) {
                         return;
                     }
-                    texts.push(entry.text.clone());
+                    keys.push(key);
                 }
-                watermark => *watermark = Some((logged, vec![entry.text.clone()])),
+                watermark => *watermark = Some((logged, vec![key])),
             }
         }
         entry.sequence = page.next_console_sequence;
@@ -1351,6 +1363,39 @@ mod tests {
         assert_eq!(
             texts(&signals.console_entries(&page_id)),
             vec!["first", "same instant", "second"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn distinct_levels_sharing_a_timestamp_are_both_kept()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (signals, connection, page_id) = harness();
+        let session =
+            ProtocolSession::for_session(connection.clone(), SessionId::from("session-7"));
+        // Same text and microsecond, different level: the warning must not mask the error.
+        connection.store_console(
+            "Runtime.consoleAPICalled",
+            json!({
+                "type": "warning",
+                "args": [{ "type": "string", "value": "failed" }],
+                "timestamp": 1.0
+            }),
+        );
+        connection.store_console("Runtime.consoleAPICalled", console_error("failed", 1.0));
+        signals.harvest_console(&page_id, &session).await?;
+
+        let levels: Vec<_> = signals
+            .console_entries(&page_id)
+            .iter()
+            .map(|entry| (entry.level, entry.text.clone()))
+            .collect();
+        assert_eq!(
+            levels,
+            vec![
+                (super::ConsoleLevel::Warning, "failed".to_string()),
+                (super::ConsoleLevel::Error, "failed".to_string()),
+            ]
         );
         Ok(())
     }
