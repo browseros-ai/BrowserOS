@@ -28,6 +28,8 @@ const WAITING_PER_TARGET: usize = 256;
 const WAITING_TARGETS: usize = 1024;
 /// Neo: eight concurrent facts reads keep browser work bounded while unrelated targets can progress.
 const FACTS_IN_FLIGHT: usize = 8;
+/// Neo: cap pending stills at 1024 across all sessions so completed facts cannot bypass ingress/target bounds while screenshot slots are busy (design §6.5).
+const PENDING_STILLS: usize = 1024;
 
 /// Neo: share screenshot slots process-wide, including other runtimes and commands whose caller timed out, so timed-out work cannot exceed the browser concurrency bound.
 static STILL_SLOTS: Semaphore = Semaphore::const_new(cdp::SCREENSHOT_SLOTS);
@@ -188,6 +190,18 @@ impl Worker {
                         && !work.newest.is_cancelled()
                         && !work.tainted() =>
                 {
+                    // Replacement remains newest-wins even at capacity. A new session that
+                    // cannot enter this stage drops its Work, settling permanent absence.
+                    if !self.pending.contains_key(&work.job.session)
+                        && self.pending.len() >= PENDING_STILLS
+                    {
+                        self.refused += 1;
+                        warn!(
+                            refused = self.refused,
+                            "host pending still bound reached; finalizing absence"
+                        );
+                        continue;
+                    }
                     self.pending
                         .insert(work.job.session.clone(), Still { work, facts });
                 }
@@ -266,6 +280,7 @@ mod tests {
 
     use super::*;
     use crate::fake_host_cdp::FakeHostCdp;
+    use crate::host::TabId;
     use crate::host::sessions::Job;
 
     static ONE_WORKER: Mutex<()> = Mutex::const_new(());
@@ -498,6 +513,80 @@ mod tests {
         time::sleep(Duration::from_secs(2)).await;
         assert_eq!(STILL_SLOTS.available_permits(), 2);
         h.settled(1).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pending_stills_are_bounded_across_sessions_and_excess_settles() {
+        let _turn = ONE_WORKER.lock().await;
+        let _slots = STILL_SLOTS
+            .acquire_many(u32::try_from(cdp::SCREENSHOT_SLOTS).unwrap())
+            .await
+            .unwrap();
+        let mut h = Harness::new().await;
+        let (_input, waiting) = mpsc::channel(1);
+        let (results, _output) = mpsc::channel(1);
+        let mut worker = Worker {
+            link: Arc::clone(&h.link),
+            presences: Arc::new(Presences::new(Arc::clone(&h.link))),
+            jobs: Jobs { waiting, results },
+            targets: HashMap::new(),
+            reads: FuturesUnordered::new(),
+            pending: HashMap::new(),
+            stills: FuturesUnordered::new(),
+            shutdown: h.shutdown.clone(),
+            refused: 0,
+        };
+        let page = PageId::new("one".to_string());
+        let facts = CallArtifacts {
+            tab: TabId::parse(1).unwrap(),
+            url: "https://one.test/".to_string(),
+            title: "one".to_string(),
+            screenshot: None,
+        };
+        // Feed completed facts while screenshot slots are unavailable: the pending stage must
+        // impose its own bound after jobs have left target/ingress accounting.
+        for session in 0..=1024 {
+            let mut work = h.work(JobKind::Still, session, "one");
+            work.job.session = SessionKey::new(format!("session-{session}"));
+            worker
+                .read_done((page.clone(), vec![work], Ok(Some(facts.clone()))))
+                .await;
+        }
+        assert_eq!(
+            worker.pending.len(),
+            1024,
+            "pending stills need a cap across sessions"
+        );
+        assert_eq!(worker.refused, 1);
+        assert_eq!(
+            h.settlements.try_recv().unwrap(),
+            SessionKey::new("session-1024")
+        );
+        assert!(
+            !worker
+                .pending
+                .contains_key(&SessionKey::new("session-1024"))
+        );
+        let mut replacement = h.work(JobKind::Still, 1025, "one");
+        replacement.job.session = SessionKey::new("session-0");
+        worker
+            .read_done((page, vec![replacement], Ok(Some(facts))))
+            .await;
+        assert_eq!(worker.pending.len(), 1024, "newest wins even at the cap");
+        assert_eq!(worker.refused, 1);
+        assert_eq!(
+            h.settlements.try_recv().unwrap(),
+            SessionKey::new("session-0")
+        );
+        assert_eq!(
+            worker.pending[&SessionKey::new("session-0")]
+                .work
+                .job
+                .call_id,
+            Some(1025)
+        );
+        drop(worker);
+        h.settled(1024).await;
     }
 
     #[tokio::test(start_paused = true)]
