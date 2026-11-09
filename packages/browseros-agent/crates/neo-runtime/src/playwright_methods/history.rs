@@ -1012,19 +1012,22 @@ mod tests {
     }
 
     fn progress(timeout: f64) -> Progress {
-        let entry = Arc::new(CallEntry::new(CallStart {
+        let entry = CallEntry::for_test(CallStart {
+            parent: None,
+            page: None,
+            shape: &[],
             timeout_ms: None,
-            call_id: 1,
             guid: "page@T".to_string(),
             method: "goBack".to_string(),
-            title: Some("Go back"),
+            title: Some("Go back".into()),
             params: json!({}),
             location: None,
             input: false,
-        }));
+        });
         let run = RunScope::new(
             Deadline::new(Duration::from_mins(1), CancellationToken::new()),
             TaskTracker::new(),
+            Default::default(),
         );
         Progress::new(entry, timeout, run, CancellationToken::new())
     }

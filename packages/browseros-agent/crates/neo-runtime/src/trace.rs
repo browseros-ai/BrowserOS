@@ -17,6 +17,12 @@
 //! thread, and the last holder of a call's state may emit from `Drop`, outside tokio. So a sink
 //! only queues; it can neither slow a run nor fail it.
 
+pub(crate) mod redact;
+mod tap;
+#[cfg(test)]
+pub(crate) use tap::testing;
+pub(crate) use tap::{RunTap, micros};
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;

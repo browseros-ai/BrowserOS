@@ -899,8 +899,8 @@ impl WaitTab for FrameTab {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use neo_runtime_spec::injected::SelectorMatch;
@@ -1170,17 +1170,20 @@ mod tests {
             let scope = RunScope::new(
                 Deadline::new(Duration::from_millis(deadline), cancel.clone()),
                 TaskTracker::new(),
+                Default::default(),
             );
-            let entry = Arc::new(CallEntry::new(CallStart {
+            let entry = CallEntry::for_test(CallStart {
+                parent: None,
+                page: None,
+                shape: &[],
                 timeout_ms: None,
-                call_id: 1,
                 guid: "frame@T".to_string(),
                 method: "wait".to_string(),
                 title: None,
                 params: json!({}),
                 location: None,
                 input: false,
-            }));
+            });
             let progress = Progress::new(entry, timeout, scope.clone(), closed.clone());
             Self {
                 progress,

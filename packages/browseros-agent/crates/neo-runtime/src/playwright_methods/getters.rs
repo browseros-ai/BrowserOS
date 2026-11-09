@@ -638,6 +638,7 @@ mod tests {
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
+            crate::trace::RunTap::detached(),
         )
         .await
         .unwrap_or_else(|error| panic!("open fixture: {error:?}"));
@@ -822,6 +823,7 @@ mod tests {
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
+            crate::trace::RunTap::detached(),
         )
         .await
         .unwrap();

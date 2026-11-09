@@ -81,7 +81,7 @@ pub(crate) async fn context(
             };
             let value = serde_json::to_value(result)
                 .map_err(|error| PlaywrightError::error(error.to_string()))?;
-            created.keep();
+            created.keep(progress.call_id());
             Ok(Some(value))
         }
         BrowserContextCall::Close(_) => {

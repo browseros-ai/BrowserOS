@@ -645,19 +645,21 @@ mod tests {
             let run = RunScope::new(
                 Deadline::new(Duration::from_secs(30), CancellationToken::new()),
                 TaskTracker::new(),
+                Default::default(),
             );
-            let entry = Arc::new(CallEntry::new(CallStart {
+            let trace = Trace::default();
+            let entry = trace.call(CallStart {
+                parent: None,
+                page: None,
+                shape: &[],
                 timeout_ms: None,
-                call_id: 1,
                 guid: "frame@test".into(),
                 method: "fill".into(),
                 title: None,
                 params: serde_json::Value::Null,
                 location: None,
                 input: true,
-            }));
-            let trace = Trace::default();
-            trace.push(Arc::clone(&entry));
+            });
             let progress = Progress::new(Arc::clone(&entry), 100.0, run, CancellationToken::new());
             let result = fill(&tab, &fill_options(), &progress).await;
             is_error(&result, ErrorName::TimeoutError);
@@ -742,17 +744,20 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(run_timeout, CancellationToken::new()),
             TaskTracker::new(),
+            Default::default(),
         );
-        let entry = Arc::new(CallEntry::new(CallStart {
+        let entry = CallEntry::for_test(CallStart {
+            parent: None,
+            page: None,
+            shape: &[],
             timeout_ms: None,
-            call_id: 1,
             guid: "frame@test".into(),
             method: "forms".into(),
             title: None,
             params: serde_json::Value::Null,
             location: None,
             input,
-        }));
+        });
         (
             Progress::new(entry, timeout, run.clone(), CancellationToken::new()),
             run,

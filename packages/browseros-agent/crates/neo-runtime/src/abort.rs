@@ -370,16 +370,18 @@ mod tests {
     use crate::progress::{CallStart, ErrorName};
 
     fn entry() -> Arc<CallEntry> {
-        Arc::new(CallEntry::new(CallStart {
+        CallEntry::for_test(CallStart {
+            parent: None,
+            page: None,
+            shape: &[],
             timeout_ms: None,
-            call_id: 1,
             guid: "frame@T".to_string(),
             method: "click".to_string(),
-            title: Some("Click"),
+            title: Some("Click".into()),
             params: Value::Null,
             location: None,
             input: true,
-        }))
+        })
     }
 
     #[test]

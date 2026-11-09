@@ -187,8 +187,8 @@ pub(crate) async fn run(
     dispatcher: Dispatcher,
     deadline: Deadline,
     events: EventHub,
+    logs: Logs,
 ) -> RunOutcome {
-    let logs = Logs::default();
     let evaluated = evaluate(script, getters, logs.clone(), dispatcher, deadline.clone());
     // Dropping `evaluated` here drops the whole realm mid-script, timers and pending
     // promises included; nothing outlives the run.
@@ -204,20 +204,20 @@ pub(crate) async fn run(
     }
     let result = match ended {
         Ok(result) => result,
-        Err(stop) => return RunOutcome::stopped(run_id, stop, deadline.timeout(), logs.take()),
+        Err(stop) => return RunOutcome::stopped(run_id, stop, deadline.timeout(), Vec::new()),
     };
     // A stop that fired during evaluation decides the outcome, however the script ended. It
     // reaches the script as a JS error from the interrupt handler or from a getter waiting on
     // CDP, and a getter's `TimeoutError` or cancellation error is catchable, so a script can
     // swallow it and return normally. Only the deadline knows the run did not finish in time.
     if let Some(stop) = deadline.stop() {
-        return RunOutcome::stopped(run_id, stop, deadline.timeout(), logs.take());
+        return RunOutcome::stopped(run_id, stop, deadline.timeout(), Vec::new());
     }
     match result {
         Ok((value, binaries)) => {
-            RunOutcome::returned(run_id, value, logs.take()).with_binaries(binaries)
+            RunOutcome::returned(run_id, value, Vec::new()).with_binaries(binaries)
         }
-        Err(error) => RunOutcome::failed(run_id, error, logs.take()),
+        Err(error) => RunOutcome::failed(run_id, error, Vec::new()),
     }
 }
 

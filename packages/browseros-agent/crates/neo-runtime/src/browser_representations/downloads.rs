@@ -522,7 +522,6 @@ async fn delete(tabs: &Tabs, guid: &str, progress: &Progress) -> Result<Option<V
 #[cfg(test)]
 mod tests {
     use std::fs::{read_to_string, write};
-    use std::sync::Arc;
     use std::time::Duration;
 
     use tokio::runtime::Handle;
@@ -690,19 +689,22 @@ mod tests {
     }
 
     fn call_progress() -> Progress {
-        let entry = Arc::new(CallEntry::new(CallStart {
+        let entry = CallEntry::for_test(CallStart {
+            parent: None,
+            page: None,
+            shape: &[],
             timeout_ms: None,
-            call_id: 1,
             guid: "download@G".to_string(),
             method: "saveAs".to_string(),
             title: None,
             params: json!({}),
             location: None,
             input: false,
-        }));
+        });
         let run = RunScope::new(
             Deadline::new(Duration::from_mins(1), CancellationToken::new()),
             TaskTracker::new(),
+            Default::default(),
         );
         Progress::new(entry, 0.0, run, CancellationToken::new())
     }
@@ -726,6 +728,7 @@ mod tests {
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
+            crate::trace::RunTap::detached(),
         )
         .await
         .unwrap_or_else(|error| panic!("open: {error:?}"));

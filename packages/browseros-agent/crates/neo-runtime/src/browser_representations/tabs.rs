@@ -46,6 +46,7 @@ use crate::playwright_methods::screenshot::TabScreenshots;
 use crate::progress::{PlaywrightError, RunScope};
 use crate::quickjs_bridge;
 use crate::run::{PageId, RunPage};
+use crate::trace::{PageRef, RunEvent, RunTap};
 
 /// Neo: how long `ConsoleMessage.args()` waits for its arguments' handles. A page a dialog holds
 /// answers no call until the dialog is answered, which the script may be about to do.
@@ -56,6 +57,7 @@ const ARGS_WAIT: Duration = Duration::from_secs(5);
 pub(crate) struct Tabs(Arc<Inner>);
 
 struct Inner {
+    tap: Arc<RunTap>,
     cdp: CdpClient,
     tokio: Handle,
     inputs: TabInputs,
@@ -100,6 +102,8 @@ struct Inner {
 /// getters, and the eventual session watcher all observe the same close.
 pub(crate) struct PageEntry {
     pub(crate) id: PageId,
+    tap: Arc<RunTap>,
+    tab_id: Option<i64>,
     created: AtomicBool,
     closed_by_run: AtomicBool,
     close_requested: AtomicBool,
@@ -127,6 +131,7 @@ struct Scope {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TabInfo {
     target_id: String,
+    tab_id: Option<i64>,
     url: String,
     window_id: Option<i64>,
     live_browser_context_id: Option<String>,
@@ -170,8 +175,11 @@ pub(crate) struct NewPage {
 }
 
 impl NewPage {
-    pub(crate) fn keep(self) {
+    pub(crate) fn keep(self, by_call: u64) {
         self.accepted.store(true, Ordering::Release);
+        // Creation is committed here, after readiness, rather than at the browser's ack:
+        // an unkept transaction can still close its tab without ever handing it to the SDK.
+        self.entry.created_by(by_call);
     }
 }
 
@@ -204,6 +212,7 @@ impl Tabs {
         permissions: Permissions,
         tasks: TaskTracker,
         page: &PageId,
+        tap: Arc<RunTap>,
     ) -> Result<(Self, String), PlaywrightError> {
         let info = tab_info(&cdp, page)
             .await?
@@ -212,6 +221,7 @@ impl Tabs {
             created: CreatedContexts::new(cdp.clone(), tokio.clone()),
             debuggers: Debuggers::default(),
             test_id: Arc::default(),
+            tap,
             cdp,
             tokio,
             inputs,
@@ -236,7 +246,7 @@ impl Tabs {
             permissions,
             run_id: cookies_and_storage::next_run(),
         }));
-        let entry = tabs.register(page.clone(), false)?;
+        let entry = tabs.register(page.clone(), info.tab_id, false)?;
         // The scope read above already checked this tab. Avoid a second startup read so
         // a getter-only run keeps its original connect/check/attach/history call path.
         entry
@@ -380,7 +390,12 @@ impl Tabs {
             .cloned()
     }
 
-    fn register(&self, id: PageId, created: bool) -> Result<Arc<PageEntry>, PlaywrightError> {
+    fn register(
+        &self,
+        id: PageId,
+        tab_id: Option<i64>,
+        created: bool,
+    ) -> Result<Arc<PageEntry>, PlaywrightError> {
         let mut pages = self.0.pages.lock().map_err(|_| {
             PlaywrightError::error("neo-runtime: the run's pages cannot be registered")
         })?;
@@ -392,6 +407,8 @@ impl Tabs {
         }
         let entry = Arc::new(PageEntry {
             id,
+            tap: Arc::clone(&self.0.tap),
+            tab_id,
             created: AtomicBool::new(created),
             closed_by_run: AtomicBool::new(false),
             close_requested: AtomicBool::new(false),
@@ -403,6 +420,10 @@ impl Tabs {
             opener: Mutex::new(None),
         });
         pages.push(Arc::clone(&entry));
+        drop(pages);
+        if !created {
+            entry.opened(false, None);
+        }
         Ok(entry)
     }
 
@@ -413,7 +434,7 @@ impl Tabs {
         created: bool,
         context: &Arc<CreatedContext>,
     ) -> Result<Arc<PageEntry>, PlaywrightError> {
-        let entry = self.register(id, created)?;
+        let entry = self.register(id, None, created)?;
         let _first = entry.context.set(Arc::clone(context));
         // Its context-level events answer to that context's listeners.
         self.0
@@ -628,7 +649,7 @@ impl Tabs {
     pub(crate) async fn pages(&self) -> Result<Vec<CreatedPage>, PlaywrightError> {
         let mut live = HashMap::new();
         for info in self.infos().await? {
-            self.register(PageId::new(info.target_id.clone()), false)?;
+            self.register(PageId::new(info.target_id.clone()), info.tab_id, false)?;
             live.insert(info.target_id, info.url);
         }
         let pages =
@@ -718,7 +739,7 @@ impl Tabs {
                 .into_iter()
                 .find(|info| info.window_id == Some(window.window.window_id))
                 .ok_or_else(|| PlaywrightError::error("the new window has no initial tab"))?;
-            return self.register(PageId::new(info.target_id), true);
+            return self.register(PageId::new(info.target_id), info.tab_id, true);
         } else {
             // A context with no surviving window and no routable identity cannot safely
             // create a tab: omitting both would let BrowserOS choose another profile.
@@ -730,7 +751,7 @@ impl Tabs {
             .send_typed("Browser.createTab", params, None)
             .await
             .map_err(|error| cdp_error(&error))?;
-        self.register(PageId::new(reply.tab.target_id), true)
+        self.register(PageId::new(reply.tab.target_id), reply.tab.tab_id, true)
     }
 
     async fn close_failed_creation(&self, entry: &PageEntry) {
@@ -1004,7 +1025,7 @@ impl Tabs {
         if !self.0.scope.includes(&tab) {
             return None;
         }
-        self.register(owner, false).ok()
+        self.register(owner, tab.tab_id, false).ok()
     }
 
     /// The run's session-scoped state (`cookies_and_storage.rs`).
@@ -1047,7 +1068,7 @@ impl Tabs {
         let Some(closed) = self.new_tab_state(&id, info, closed).await else {
             return;
         };
-        let entry = match self.register(id, false) {
+        let entry = match self.register(id, None, false) {
             Ok(entry) => entry,
             Err(error) => {
                 debug!(?error, "a new page could not be registered");
@@ -1138,7 +1159,7 @@ impl Tabs {
         if !self.0.scope.includes(&tab) {
             return Ok(None);
         }
-        let opener = self.register(opener, false)?;
+        let opener = self.register(opener, tab.tab_id, false)?;
         Ok(Some(created_page(&opener, tab.url, false)))
     }
 
@@ -1381,6 +1402,29 @@ impl PageEntry {
             .map_or_else(|| DEFAULT_CONTEXT.to_string(), |context| context.id.clone())
     }
 
+    pub(crate) fn reference(&self) -> PageRef {
+        PageRef {
+            target: self.id.clone(),
+            tab_id: self.tab_id,
+        }
+    }
+
+    /// A ready newPage is now committed to the script, in either the run's own context or a
+    /// context it created. Registering its target earlier only reserves cleanup ownership.
+    pub(crate) fn created_by(&self, by_call: u64) {
+        self.opened(true, Some(by_call));
+    }
+
+    fn opened(&self, created: bool, by_call: Option<u64>) {
+        self.tap.emit_with(|| RunEvent::PageOpened {
+            run: self.tap.run(),
+            page: self.reference(),
+            created,
+            by_call,
+            offset_us: self.tap.offset_us(),
+        });
+    }
+
     pub(crate) fn request_close(&self) {
         if let Ok(mut metadata) = self.frame_metadata.lock() {
             metadata.closing();
@@ -1394,8 +1438,15 @@ impl PageEntry {
     }
 
     pub(crate) fn closed_by_run(&self) {
-        self.closed_by_run.store(true, Ordering::Release);
+        let first = !self.closed_by_run.swap(true, Ordering::AcqRel);
         self.close_requested.store(false, Ordering::Release);
+        if first {
+            self.tap.emit_with(|| RunEvent::PageClosed {
+                run: self.tap.run(),
+                page: self.id.clone(),
+                offset_us: self.tap.offset_us(),
+            });
+        }
     }
 }
 
@@ -1503,6 +1554,7 @@ mod tests {
             Permissions::default(),
             TaskTracker::new(),
             &PageId::new(PAGE.to_string()),
+            crate::trace::RunTap::detached(),
         )
         .await
         .unwrap();

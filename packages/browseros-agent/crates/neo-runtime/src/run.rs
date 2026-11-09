@@ -208,6 +208,11 @@ impl RunOutcome {
         }
     }
 
+    /// Attaches console lines read once by the run guard, shared with the trace's copy.
+    pub(crate) fn with_logs(self, logs: Vec<String>) -> Self {
+        Self { logs, ..self }
+    }
+
     /// Attaches the bytes of the binaries the returned `value` holds (`quickjs.rs` `to_json`).
     pub(crate) fn with_binaries(self, binaries: Vec<RunBinary>) -> Self {
         Self { binaries, ..self }

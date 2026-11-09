@@ -450,19 +450,22 @@ mod tests {
     }
 
     fn progress(timeout: f64) -> (Progress, RunScope) {
-        let entry = Arc::new(CallEntry::new(CallStart {
+        let entry = CallEntry::for_test(CallStart {
+            parent: None,
+            page: None,
+            shape: &[],
             timeout_ms: None,
-            call_id: 1,
             guid: "frame@T".to_string(),
             method: "goto".to_string(),
-            title: Some("Navigate"),
+            title: Some("Navigate".into()),
             params: json!({}),
             location: None,
             input: false,
-        }));
+        });
         let run = RunScope::new(
             Deadline::new(Duration::from_mins(1), CancellationToken::new()),
             TaskTracker::new(),
+            Default::default(),
         );
         (
             Progress::new(entry, timeout, run.clone(), CancellationToken::new()),

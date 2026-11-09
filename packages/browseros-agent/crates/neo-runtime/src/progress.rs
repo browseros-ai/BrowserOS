@@ -5,7 +5,8 @@
 //! realm and never only in the call's task. Three things can end a call early and none may lose
 //! its record: the run deadline drops the realm, the script returning drops it too, and the
 //! end-of-run wait can leave a task running past the run. So the record is derived from the
-//! entry when the run reads it ([`Trace::take`]), never assembled by whoever ended the call.
+//! entry by its gated publication, never assembled by whoever ended the call. The outcome
+//! reads the same snapshot, so late replies cannot rewrite a sealed call.
 //!
 //! ```text
 //!   dispatch ──creates──▶ CallEntry ◀──holds── Trace (run)          read once, after `finish`'s wait
@@ -18,16 +19,17 @@
 //! finds the call's entry by its message id and aborts it there, so the `Progress` and the record
 //! read the same reason.
 
+use std::borrow::Cow;
+use std::fmt;
 use std::future;
 use std::future::Future;
-#[cfg(test)]
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(test)]
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
+use neo_runtime_spec::ParamShape;
 use serde_json::Value;
 use tokio::time;
 use tokio::time::Instant;
@@ -43,6 +45,8 @@ use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
 use crate::playwright_methods::evaluate::Handles;
 use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
+use crate::trace::redact::{self, Scrubber};
+use crate::trace::{PageRef, RunEvent, RunTap, micros, unix_ms};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
 /// Every handler returns this; `?` on [`Progress::race`] is how a handler gives up.
@@ -141,7 +145,8 @@ pub(crate) struct RunScope {
     /// Cancelled by `Dispatcher::finish`, or by the last `Dispatcher` dropping.
     pub(crate) ended: CancellationToken,
     /// Set once, before `ended` is cancelled, so every call reports the same reason. Unset when
-    /// `ended` fired because the dispatcher dropped: read as [`RunEnd::Cancelled`].
+    /// `ended` fired because the dispatcher dropped: read as [`RunEnd::Cancelled`]. The run's
+    /// tap shares the cell, so a call cut off after the run is recorded with the same reason.
     end_reason: Arc<OnceLock<RunEnd>>,
     /// The run's call tasks, every task they start, and the run-end input releases
     /// (`Tabs::release_input`). `Dispatcher::finish` waits on it, bounded, so records read
@@ -164,11 +169,15 @@ pub(crate) struct RunScope {
 }
 
 impl RunScope {
-    pub(crate) fn new(deadline: Deadline, tasks: TaskTracker) -> Self {
+    pub(crate) fn new(
+        deadline: Deadline,
+        tasks: TaskTracker,
+        end_reason: Arc<OnceLock<RunEnd>>,
+    ) -> Self {
         Self {
             deadline,
             ended: CancellationToken::new(),
-            end_reason: Arc::default(),
+            end_reason,
             tasks,
             handles: Arc::default(),
             init_scripts: Arc::default(),
@@ -402,6 +411,10 @@ impl Progress {
         self.timeout_ms
     }
 
+    pub(crate) fn call_id(&self) -> u64 {
+        self.entry.call_id
+    }
+
     /// The call's delivery cell; `None` for a method the spec does not flag `input`.
     pub(crate) fn delivery(&self) -> Option<&Arc<DeliveryCell>> {
         self.entry.delivery.as_ref()
@@ -418,19 +431,14 @@ impl Progress {
     /// A progress for `click.rs`'s policy tests: an input call with Playwright's `timeout`, in
     /// a run whose deadline is far away, on a tab that never closes.
     pub(crate) fn for_test(timeout_ms: f64) -> Self {
-        let entry = Arc::new(CallEntry::new(CallStart {
-            timeout_ms: None,
-            call_id: 1,
-            guid: "frame@T".to_string(),
-            method: "click".to_string(),
-            title: Some("Click"),
-            params: Value::Null,
-            location: None,
-            input: true,
-        }));
+        let entry = CallEntry::for_test(CallStart {
+            timeout_ms: Some(timeout_ms),
+            ..CallStart::for_test("click", true)
+        });
         let run = RunScope::new(
             Deadline::new(Duration::from_hours(1), CancellationToken::new()),
             TaskTracker::new(),
+            Arc::default(),
         );
         Self::new(entry, timeout_ms, run, CancellationToken::new())
     }
@@ -453,11 +461,41 @@ impl Progress {
 /// ```
 ///
 /// `begin` succeeds only from `NotSent`, so after input whose fate is unknown or done no code
-/// path can write it again. A call that writes in two parts says so first
-/// ([`DeliveryCell::expect_more`]): then the first part's `acked()` leaves the cell `Unknown`,
-/// and only the second part's makes it `Done`.
-#[derive(Debug, Default)]
-pub(crate) struct DeliveryCell(AtomicU8, AtomicBool);
+/// path can write it again. A two-part drag declares `expect_more` before its first write:
+/// only the second acknowledgement can mark the whole call Done.
+#[derive(Default)]
+pub(crate) struct DeliveryCell {
+    state: AtomicU8,
+    more: AtomicBool,
+    call: Option<(Arc<RunTap>, u64)>,
+    /// Set before `AfterCall` while the entry still holds this cell. Its final Drop therefore
+    /// cannot publish a correction until `AfterCall` has reached every sink.
+    reported: OnceLock<Delivery>,
+    input_sent: AtomicBool,
+}
+
+impl fmt::Debug for DeliveryCell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeliveryCell")
+            .field("delivery", &self.delivery())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for DeliveryCell {
+    fn drop(&mut self) {
+        if let (Some((tap, call)), Some(reported)) = (&self.call, self.reported.get()) {
+            let delivery = self.delivery();
+            if delivery != *reported {
+                tap.emit_with(|| RunEvent::DeliverySettled {
+                    run: tap.run(),
+                    call: *call,
+                    delivery,
+                });
+            }
+        }
+    }
+}
 
 const NOT_SENT: u8 = 0;
 const UNKNOWN: u8 = 1;
@@ -482,7 +520,7 @@ pub(crate) struct InputAlreadySent;
 impl DeliveryCell {
     /// The delivery this cell proves now.
     pub(crate) fn delivery(&self) -> Delivery {
-        match self.0.load(Ordering::Acquire) {
+        match self.state.load(Ordering::Acquire) {
             NOT_SENT => Delivery::NotSent,
             DONE => Delivery::Done,
             _ => Delivery::Unknown,
@@ -493,16 +531,24 @@ impl DeliveryCell {
 impl DeliveryCell {
     /// Called just before an attempt hands its first input event to the writer.
     pub(crate) fn begin(self: &Arc<Self>) -> Result<InputTicket, InputAlreadySent> {
-        // The first of two parts completes only itself.
-        let done = if self.1.load(Ordering::Acquire) {
+        let done = if self.more.load(Ordering::Acquire) {
             UNKNOWN
         } else {
             DONE
         };
-        self.0
+        self.state
             .compare_exchange(NOT_SENT, UNKNOWN, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| InputTicket(Arc::clone(self), NOT_SENT, done))
-            .map_err(|_| InputAlreadySent)
+            .map_err(|_| InputAlreadySent)?;
+        if !self.input_sent.swap(true, Ordering::AcqRel)
+            && let Some((tap, call)) = &self.call
+        {
+            tap.emit_with(|| RunEvent::InputSent {
+                run: tap.run(),
+                call: *call,
+                offset_us: tap.offset_us(),
+            });
+        }
+        Ok(InputTicket(Arc::clone(self), NOT_SENT, done))
     }
 
     /// A call that writes its input in two parts (`dragAndDrop`'s move and down, then its move
@@ -510,7 +556,7 @@ impl DeliveryCell {
     /// late (after the call gave up on it), leaves the cell `Unknown`, and only the second
     /// part's makes it `Done`. So a drag that stops before its drop is never `Done`.
     pub(crate) fn expect_more(&self) {
-        self.1.store(true, Ordering::Release);
+        self.more.store(true, Ordering::Release);
     }
 
     /// The second part's ticket. After a first part that wrote input the cell stays `Unknown`,
@@ -518,8 +564,8 @@ impl DeliveryCell {
     /// (a trial) it begins as any first input does.
     pub(crate) fn begin_more(self: &Arc<Self>) -> Result<InputTicket, InputAlreadySent> {
         // The second part's acknowledgement completes the call.
-        self.1.store(false, Ordering::Release);
-        match self.0.load(Ordering::Acquire) {
+        self.more.store(false, Ordering::Release);
+        match self.state.load(Ordering::Acquire) {
             NOT_SENT => self.begin(),
             UNKNOWN => Ok(InputTicket(Arc::clone(self), UNKNOWN, DONE)),
             _ => Err(InputAlreadySent),
@@ -531,12 +577,12 @@ impl InputTicket {
     /// The writer proved nothing was written (browseros-cdp refuses a send at a stale epoch
     /// before writing it): back to `NotSent`.
     pub(crate) fn unsent(self) {
-        self.0.0.store(self.1, Ordering::Release);
+        self.0.state.store(self.1, Ordering::Release);
     }
 
     /// Every event was acknowledged.
     pub(crate) fn acked(self) -> AckedInput {
-        self.0.0.store(self.2, Ordering::Release);
+        self.0.state.store(self.2, Ordering::Release);
         AckedInput(self.0, self.1)
     }
 }
@@ -545,7 +591,7 @@ impl AckedInput {
     /// Neo's hit-target interceptor stopped a press that landed on another element, before the
     /// page's handlers saw it (`Delivery::NotSent` says how far it got): back to `NotSent`.
     pub(crate) fn blocked(self) {
-        self.0.0.store(self.1, Ordering::Release);
+        self.0.state.store(self.1, Ordering::Release);
     }
 
     /// The events reached the page: stays `Done`.
@@ -563,6 +609,10 @@ impl AckedInput {
 /// without bound.
 const MAX_CALL_LOG_LINES: usize = 1000;
 
+/// Records carry only a bounded copy of the reply's folded log. These limits never change
+/// the raw log returned to JavaScript, which remains Playwright's.
+const MAX_RECORD_LOG_LINES: usize = 200;
+
 /// The most call records a run keeps: the first calls to arrive.
 const MAX_CALL_RECORDS: usize = 1000;
 
@@ -572,13 +622,22 @@ const MAX_CALL_RECORDS: usize = 1000;
 /// final.
 const MAX_TRACE_BYTES: usize = 1024 * 1024;
 
-/// The durable state of one call, shared by its `Progress` and the run's `Trace`.
+/// The durable state of one call, shared by its `Progress` and the run's `Trace`. Its record
+/// (`RunOutcome::calls`) is derived from it, redacted ([`CallEntry::record`]).
 pub(crate) struct CallEntry {
+    /// The run's shared trace state: its secrets now, its sinks for the call's events.
+    tap: Arc<RunTap>,
     call_id: u64,
+    parent: Option<u64>,
+    page: Option<PageRef>,
+    published: AtomicBool,
+    snapshot: OnceLock<(Arc<CallRecord>, bool)>,
     guid: String,
     method: String,
-    title: Option<&'static str>,
+    title: Option<Cow<'static, str>>,
+    /// As the SDK sent them. Only [`redact::summarize`] reads them for a record.
     params: Value,
+    shape: &'static [ParamShape],
     /// `params` as JSON text, in bytes: what keeping the record costs before any log.
     params_bytes: usize,
     location: Option<CallLocation>,
@@ -607,6 +666,8 @@ struct CallLog {
     dropped: usize,
 }
 
+/// The first terminal result and its raw reply log. Keeping it separate from the redacted
+/// snapshot lets a sealed call reject late finishes without changing JavaScript's reply.
 struct CallEnd {
     result: CallResult,
     duration: Duration,
@@ -614,13 +675,19 @@ struct CallEnd {
     log: Vec<String>,
 }
 
-/// What a call is, known when it arrives.
+/// What a call is, known when it arrives at the door.
 pub(crate) struct CallStart {
-    pub(crate) call_id: u64,
+    pub(crate) parent: Option<u64>,
+    pub(crate) page: Option<PageRef>,
     pub(crate) guid: String,
     pub(crate) method: String,
-    pub(crate) title: Option<&'static str>,
+    /// The method's trace title, such as `Fill "{value}"`. Kept as the template: rendering it
+    /// would inline the params it names.
+    pub(crate) title: Option<Cow<'static, str>>,
     pub(crate) params: Value,
+    /// The method's params by kind (`MethodMeta::params`); empty for a method Neo does not
+    /// know, so a record keeps none of its strings.
+    pub(crate) shape: &'static [ParamShape],
     pub(crate) location: Option<CallLocation>,
     pub(crate) timeout_ms: Option<f64>,
     /// Whether the method writes input, so its delivery is tracked.
@@ -628,30 +695,50 @@ pub(crate) struct CallStart {
 }
 
 impl CallEntry {
-    pub(crate) fn new(start: CallStart) -> Self {
+    /// The entry of call `call_id` of `tap`'s run. Registers the call's `Secret`-kind params
+    /// with the run before the call can log anything, so its own log and error are scrubbed.
+    fn new(tap: Arc<RunTap>, call_id: u64, start: CallStart) -> Self {
         let CallStart {
-            call_id,
+            parent,
+            page,
             guid,
             method,
             title,
             params,
+            shape,
             location,
             timeout_ms,
             input,
         } = start;
+        redact::register_secrets(&params, shape, tap.secrets());
+        let delivery = input.then(|| {
+            Arc::new(DeliveryCell {
+                call: Some((Arc::clone(&tap), call_id)),
+                state: AtomicU8::new(NOT_SENT),
+                more: AtomicBool::new(false),
+                reported: OnceLock::new(),
+                input_sent: AtomicBool::new(false),
+            })
+        });
         Self {
+            tap,
             call_id,
+            parent,
+            page,
+            published: AtomicBool::new(false),
+            snapshot: OnceLock::new(),
             guid,
             method,
             title,
-            params_bytes: params.to_string().len(),
+            params_bytes: redact::json_len(&params),
             params,
+            shape,
             location,
             timeout_ms,
             started_at: SystemTime::now(),
             started: Instant::now(),
             log: Mutex::default(),
-            delivery: input.then(Arc::default),
+            delivery,
             abort: CallAbort::default(),
             end: OnceLock::new(),
             #[cfg(test)]
@@ -729,35 +816,125 @@ impl CallEntry {
         }
     }
 
-    fn record(&self, reason: RunEnd) -> CallRecord {
+    /// The call's record, redacted: params summarized by kind ([`redact::summarize`]), and its
+    /// log and error message scrubbed of the run's secrets. Whether the summary was cut comes
+    /// with it. What the script saw (the reply) is never redacted; this is only ever a record.
+    fn record(&self) -> (CallRecord, bool) {
         let (result, duration, log) = match self.end.get() {
             Some(end) => (end.result.clone(), end.duration, end.log.clone()),
             None => (
-                CallResult::Unfinished { reason },
+                CallResult::Unfinished {
+                    reason: self.reason(),
+                },
                 self.started.elapsed(),
                 self.folded_log(),
             ),
         };
-        let started_at_ms = self
-            .started_at
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |since| {
-                u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-            });
-        CallRecord {
+        let scrubber = self.tap.secrets().scrubber();
+        let mut summary = redact::summarize(&self.params, self.shape);
+        summary.params = scrubber.scrub_value(&summary.params);
+        if redact::json_len(&summary.params) > redact::MAX_SUMMARY_BYTES {
+            summary.params = Value::Object(serde_json::Map::new());
+            summary.truncated = true;
+        }
+        let record = CallRecord {
             call_id: self.call_id,
-            guid: self.guid.clone(),
-            method: self.method.clone(),
-            title: self.title.map(str::to_string),
-            params: self.params.clone(),
+            guid: scrubber.scrub(&self.guid).into_owned(),
+            method: scrubber.scrub(&self.method).into_owned(),
+            title: self
+                .title
+                .as_deref()
+                .map(|title| scrubber.scrub(title).into_owned()),
+            params: summary.params,
             location: self.location,
             timeout_ms: self.timeout_ms,
-            started_at_ms,
+            started_at_ms: unix_ms(self.started_at),
             duration,
-            result,
+            result: scrubbed_result(result, &scrubber),
             delivery: self.delivery.as_ref().map(|cell| cell.delivery()),
-            log,
+            log: log
+                .iter()
+                .take(MAX_RECORD_LOG_LINES)
+                .map(|line| scrubber.scrub_cut(line, redact::MAX_LINE_BYTES))
+                .collect(),
+        };
+        (record, summary.truncated)
+    }
+
+    fn reason(&self) -> RunEnd {
+        self.tap
+            .end_cell()
+            .get()
+            .copied()
+            .unwrap_or(RunEnd::Cancelled)
+    }
+
+    /// First end wins, including a run sealing a task that outlived its drain. The raw reply
+    /// remains the handler's answer; only the record is frozen here.
+    fn seal(&self, reason: RunEnd) {
+        if self.end.get().is_none() {
+            self.finish(CallResult::Unfinished { reason });
         }
+    }
+
+    /// One snapshot feeds both sinks and `RunOutcome`. No sink is called while initializing it:
+    /// concurrent finish/seal/publish paths can safely wait for that initialization.
+    fn snapshot(&self) -> &(Arc<CallRecord>, bool) {
+        self.snapshot.get_or_init(|| {
+            self.seal(self.reason());
+            let (record, truncated) = self.record();
+            if let (Some(cell), Some(delivery)) = (&self.delivery, record.delivery) {
+                let _reported = cell.reported.set(delivery);
+            }
+            (Arc::new(record), truncated)
+        })
+    }
+
+    /// The only `AfterCall` door. A task publishes after sending its reply; sealing and Drop
+    /// are its backstops. An entry holds its delivery cell through this synchronous emission,
+    /// so the cell's last Drop can only emit `DeliverySettled` afterwards.
+    pub(crate) fn publish(&self) {
+        if self.published.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if self.tap.listening() {
+            let (record, params_truncated) = self.snapshot();
+            self.tap.emit(&RunEvent::AfterCall {
+                run: self.tap.run(),
+                call: self.call_id,
+                parent: self.parent,
+                page: self.page.clone(),
+                record: Arc::clone(record),
+                params_truncated: *params_truncated,
+                offset_us: self.tap.offset_us(),
+            });
+        }
+    }
+
+    fn before(&self) {
+        self.tap.emit_with(|| {
+            let scrubber = self.tap.secrets().scrubber();
+            RunEvent::BeforeCall {
+                run: self.tap.run(),
+                call: self.call_id,
+                parent: self.parent,
+                object: scrubber.scrub(&self.guid).into_owned(),
+                page: self.page.clone(),
+                method: scrubber.scrub(&self.method).into_owned(),
+                title: self
+                    .title
+                    .as_deref()
+                    .map(|title| scrubber.scrub(title).into_owned()),
+                selector: self
+                    .params
+                    .get("selector")
+                    .and_then(Value::as_str)
+                    .map(|text| scrubber.scrub_cut(text, redact::MAX_SUMMARY_BYTES)),
+                location: self.location,
+                started_at_ms: unix_ms(self.started_at),
+                offset_us: micros(self.started.duration_since(self.tap.start())),
+            }
+        });
     }
 
     /// What a kept record's log costs against [`MAX_TRACE_BYTES`], on top of its params.
@@ -766,6 +943,51 @@ impl CallEntry {
             Some(end) => end.log.iter().map(String::len).sum(),
             None => self.folded_log().iter().map(String::len).sum(),
         }
+    }
+}
+
+impl Drop for CallEntry {
+    fn drop(&mut self) {
+        self.publish();
+    }
+}
+
+#[cfg(test)]
+impl CallEntry {
+    /// An entry in a run no sink listens to, outside any trace, for tests that only need a
+    /// call's `Progress`.
+    pub(crate) fn for_test(start: CallStart) -> Arc<Self> {
+        Arc::new(Self::new(RunTap::detached(), 1, start))
+    }
+}
+
+#[cfg(test)]
+impl CallStart {
+    /// A call of `method` on `frame@T` with no params.
+    pub(crate) fn for_test(method: &str, input: bool) -> Self {
+        Self {
+            parent: None,
+            page: None,
+            guid: "frame@T".to_string(),
+            method: method.to_string(),
+            title: None,
+            params: Value::Null,
+            shape: &[],
+            location: None,
+            timeout_ms: None,
+            input,
+        }
+    }
+}
+
+/// `result` with its error message scrubbed of the run's secrets.
+fn scrubbed_result(result: CallResult, scrubber: &Scrubber) -> CallResult {
+    match result {
+        CallResult::Error { name, message } => CallResult::Error {
+            name,
+            message: scrubber.scrub_cut(&message, redact::MAX_ERROR_BYTES),
+        },
+        CallResult::Ok | CallResult::Unfinished { .. } => result,
     }
 }
 
@@ -787,7 +1009,8 @@ impl CallLog {
     }
 }
 
-/// Every call of one run. The dispatcher appends; the run reads once, after `finish`'s wait.
+/// Every call of one run. The dispatcher opens each call here; the run reads once, after
+/// `finish`'s wait.
 ///
 /// Memory stays bounded: at most [`MAX_CALL_RECORDS`] entries are held, each entry's log is
 /// capped by [`MAX_CALL_LOG_LINES`], and kept records total at most [`MAX_TRACE_BYTES`], params
@@ -799,8 +1022,20 @@ impl CallLog {
 ///
 /// Calls that are kept but unfinished hold logs not yet charged; the dispatcher's in-flight cap
 /// bounds how many there are.
-#[derive(Clone, Default)]
-pub(crate) struct Trace(Arc<Mutex<TraceInner>>);
+#[derive(Clone)]
+pub(crate) struct Trace(Arc<TraceShared>);
+
+/// Outcome bookkeeping and dense call numbers shared by the run and its dispatch tasks.
+/// Entries own their publication separately, so the outcome's caps cannot suppress events.
+struct TraceShared {
+    tap: Arc<RunTap>,
+    /// The next call's number: a run's calls are numbered in arrival order from 1, nested calls
+    /// included, so `calls_made` is the last number handed out.
+    next_call: AtomicU64,
+    /// Messages the door could not read as a call, which therefore have no number.
+    unreadable: AtomicU64,
+    inner: Mutex<TraceInner>,
+}
 
 #[derive(Default)]
 struct TraceInner {
@@ -820,26 +1055,61 @@ struct TraceInner {
 }
 
 impl Trace {
-    /// Registers a call that just arrived: kept, its params charged, while the caps allow;
-    /// otherwise counted.
-    pub(crate) fn push(&self, entry: Arc<CallEntry>) {
-        let Ok(mut trace) = self.0.lock() else {
-            return;
-        };
-        trace.arrived += 1;
-        let fits = trace.kept_bytes + entry.params_bytes <= MAX_TRACE_BYTES;
-        if trace.full || trace.arrived > MAX_CALL_RECORDS || !fits {
-            trace.full |= !fits;
-            trace.drop_entry(&entry);
-        } else {
-            trace.kept_bytes += entry.params_bytes;
-            trace.kept.push((entry, false));
+    pub(crate) fn new(tap: Arc<RunTap>) -> Self {
+        Self(Arc::new(TraceShared {
+            tap,
+            next_call: AtomicU64::new(1),
+            unreadable: AtomicU64::new(0),
+            inner: Mutex::default(),
+        }))
+    }
+
+    /// Opens the entry of a call that just arrived and registers it: kept, its params charged,
+    /// while the caps allow; otherwise counted.
+    pub(crate) fn call(&self, start: CallStart) -> Arc<CallEntry> {
+        let call_id = self.0.next_call.fetch_add(1, Ordering::Relaxed);
+        let entry = Arc::new(CallEntry::new(Arc::clone(&self.0.tap), call_id, start));
+        self.push(&entry);
+        entry
+    }
+
+    fn push(&self, entry: &Arc<CallEntry>) {
+        let mut retired = Retired::default();
+        if let Ok(mut trace) = self.0.inner.lock() {
+            trace.arrived += 1;
+            let fits = trace.kept_bytes + entry.params_bytes <= MAX_TRACE_BYTES;
+            if trace.full || trace.arrived > MAX_CALL_RECORDS || !fits {
+                trace.full |= !fits;
+                trace.drop_entry(entry, &mut retired);
+            } else {
+                trace.kept_bytes += entry.params_bytes;
+                trace.kept.push((Arc::clone(entry), false));
+            }
         }
+        // The realm cannot finish while this synchronous door is on its stack. Publish the
+        // start outside the lock, before handing the entry back to any task that can end it.
+        entry.before();
+    }
+
+    /// Counts a message the door could not read as a call.
+    pub(crate) fn count_unreadable(&self) {
+        self.0.unreadable.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// How many calls the run made: every call number handed out.
+    pub(crate) fn calls_made(&self) -> u64 {
+        self.0.next_call.load(Ordering::Relaxed) - 1
+    }
+
+    /// How many messages the door could not read as a call.
+    pub(crate) fn unreadable_calls(&self) -> u64 {
+        self.0.unreadable.load(Ordering::Relaxed)
     }
 
     /// Charges a kept call's log when it finishes. Called right after [`CallEntry::finish`].
     pub(crate) fn finished(&self, entry: &Arc<CallEntry>) {
-        let Ok(mut trace) = self.0.lock() else {
+        let mut retired = Retired::default();
+        let Ok(mut trace) = self.0.inner.lock() else {
             return;
         };
         if let Some(index) = trace
@@ -847,27 +1117,45 @@ impl Trace {
             .iter()
             .position(|(kept, _)| Arc::ptr_eq(kept, entry))
         {
-            trace.charge(index);
+            trace.charge(index, &mut retired);
         }
     }
 
     /// The run's records, in arrival order, and the dropped calls. A call with no end is
-    /// `Unfinished { reason }`, its duration runs to now, and its delivery is whatever its cell
-    /// proves at this moment. Logs one `tracing` event per record.
+    /// `Unfinished { reason }`. Entries already published keep that snapshot; open entries are
+    /// sealed here with their current delivery. Records are built after the lock is released, and one
+    /// `tracing` event is logged per record.
     pub(crate) fn take(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
-        let Ok(mut trace) = self.0.lock() else {
-            return (Vec::new(), None);
-        };
-        let mut index = 0;
-        while index < trace.kept.len() {
-            if trace.kept[index].1 || trace.charge(index) {
-                index += 1;
+        let mut retired = Retired::default();
+        let (kept, dropped) = {
+            let Ok(mut trace) = self.0.inner.lock() else {
+                return (Vec::new(), None);
+            };
+            for (entry, _) in &trace.kept {
+                entry.seal(reason);
             }
-        }
-        let records: Vec<CallRecord> = trace
-            .kept
-            .drain(..)
-            .map(|(entry, _)| entry.record(reason))
+            let mut index = 0;
+            while index < trace.kept.len() {
+                if trace.kept[index].1 || trace.charge(index, &mut retired) {
+                    index += 1;
+                }
+            }
+            let kept: Vec<Arc<CallEntry>> = trace.kept.drain(..).map(|(entry, _)| entry).collect();
+            let live = trace.dropped_live.iter().map(|cell| cell.delivery());
+            let dropped = (trace.dropped_count > 0).then(|| DroppedCalls {
+                count: trace.dropped_count,
+                delivery: live.chain(trace.dropped_worst).max(),
+            });
+            (kept, dropped)
+        };
+        // Freeze ends before releasing any entry, then publish outside the trace lock.
+        // A late finish loses to the seal and cannot rewrite either consumer's record.
+        let records: Vec<CallRecord> = kept
+            .iter()
+            .map(|entry| {
+                entry.publish();
+                entry.snapshot().0.as_ref().clone()
+            })
             .collect();
         for record in &records {
             info!(
@@ -879,26 +1167,40 @@ impl Trace {
                 "browser call"
             );
         }
-        let live = trace.dropped_live.iter().map(|cell| cell.delivery());
-        let dropped = (trace.dropped_count > 0).then(|| DroppedCalls {
-            count: trace.dropped_count,
-            delivery: live.chain(trace.dropped_worst).max(),
-        });
         (records, dropped)
     }
 
     /// How many dropped calls' cells the trace still holds.
     #[cfg(test)]
     fn dropped_cells_held(&self) -> usize {
-        self.0.lock().map_or(0, |trace| trace.dropped_live.len())
+        self.0
+            .inner
+            .lock()
+            .map_or(0, |trace| trace.dropped_live.len())
     }
+}
+
+#[cfg(test)]
+impl Default for Trace {
+    /// The trace of a run no sink listens to.
+    fn default() -> Self {
+        Self::new(RunTap::detached())
+    }
+}
+
+/// Owners removed while the trace is locked. Destruction is deferred until its lock is gone:
+/// the last entry or delivery owner can emit synchronously from Drop.
+#[derive(Default)]
+struct Retired {
+    entries: Vec<Arc<CallEntry>>,
+    cells: Vec<Arc<DeliveryCell>>,
 }
 
 impl TraceInner {
     /// Charges `kept[index]`'s log. Returns whether it stays kept: a record admitted before the
     /// budget ran out keeps its place while its log fits. Past the budget it moves to the
     /// dropped count, its params' charge is returned, and every later call is dropped too.
-    fn charge(&mut self, index: usize) -> bool {
+    fn charge(&mut self, index: usize, retired: &mut Retired) -> bool {
         let bytes = self.kept[index].0.log_bytes();
         if self.kept_bytes + bytes <= MAX_TRACE_BYTES {
             self.kept_bytes += bytes;
@@ -908,7 +1210,8 @@ impl TraceInner {
         self.full = true;
         let (entry, _) = self.kept.remove(index);
         self.kept_bytes -= entry.params_bytes;
-        self.drop_entry(&entry);
+        self.drop_entry(&entry, retired);
+        retired.entries.push(entry);
         false
     }
 
@@ -917,19 +1220,25 @@ impl TraceInner {
     /// entry, an [`InputTicket`] or an [`AckedInput`], each of which holds it, so once the
     /// trace's `Arc` is the last one the cell's delivery is final. That keeps `dropped_live` to the dropped calls still
     /// running, however many calls a run drops.
-    fn drop_entry(&mut self, entry: &CallEntry) {
+    fn drop_entry(&mut self, entry: &CallEntry, retired: &mut Retired) {
         self.dropped_count += 1;
         let Some(cell) = entry.delivery.clone() else {
             return;
         };
         let mut worst = self.dropped_worst;
-        self.dropped_live.retain(|held| {
-            let others = Arc::strong_count(held) > 1;
-            if !others {
-                worst = worst.max(Some(held.delivery()));
-            }
-            others
-        });
+        self.dropped_live = self
+            .dropped_live
+            .drain(..)
+            .filter_map(|held| {
+                if Arc::strong_count(&held) > 1 {
+                    Some(held)
+                } else {
+                    worst = worst.max(Some(held.delivery()));
+                    retired.cells.push(held);
+                    None
+                }
+            })
+            .collect();
         self.dropped_worst = worst;
         self.dropped_live.push(cell);
     }
@@ -1027,18 +1336,21 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(Duration::from_hours(1), CancellationToken::new()),
             TaskTracker::new(),
+            Default::default(),
         );
         let entry = || {
-            Arc::new(CallEntry::new(CallStart {
+            CallEntry::for_test(CallStart {
+                parent: None,
+                page: None,
+                shape: &[],
                 timeout_ms: None,
-                call_id: 1,
                 guid: "frame@T".to_string(),
                 method: "click".to_string(),
-                title: Some("Click"),
+                title: Some("Click".into()),
                 params: Value::Null,
                 location: None,
                 input: true,
-            }))
+            })
         };
         let waiting = Progress::new(entry(), 0.0, run.clone(), CancellationToken::new());
         let closing = Progress::new(entry(), 0.0, run.clone(), CancellationToken::new())
@@ -1061,32 +1373,205 @@ mod tests {
         assert!(later.check().is_err(), "and a call after it never starts");
     }
 
-    fn entry(call_id: u64, input: bool) -> Arc<CallEntry> {
-        entry_with_params(call_id, input, serde_json::json!({ "selector": "#go" }))
+    use crate::trace::testing;
+
+    #[test]
+    fn finish_seal_and_drop_publish_once_under_threads() {
+        for _ in 0..10_000 {
+            let (tap, recording) = testing::tap();
+            let trace = Trace::new(tap);
+            let entry = entry(&trace, false);
+            thread::scope(|scope| {
+                let finishing = Arc::clone(&entry);
+                scope.spawn(move || {
+                    finishing.finish(CallResult::Ok);
+                    finishing.publish();
+                });
+                scope.spawn(move || {
+                    trace.take(RunEnd::Timeout);
+                });
+                drop(entry);
+            });
+            let events = recording.events.lock().unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, RunEvent::AfterCall { .. }))
+                    .count(),
+                1
+            );
+            assert!(matches!(
+                events.first(),
+                Some(RunEvent::BeforeCall { call: 1, .. })
+            ));
+            assert!(matches!(events.last(), Some(RunEvent::RunSettled { .. })));
+            assert_eq!(*recording.dropped_after.lock().unwrap(), Some(events.len()));
+        }
     }
 
-    fn entry_with_params(call_id: u64, input: bool, params: Value) -> Arc<CallEntry> {
-        Arc::new(CallEntry::new(CallStart {
-            timeout_ms: None,
-            call_id,
-            guid: "frame@T".to_string(),
-            method: "click".to_string(),
-            title: Some("Click"),
+    #[test]
+    fn call_and_delivery_drop_emit_without_a_tokio_runtime() {
+        let (tap, recording) = testing::tap();
+        let trace = Trace::new(tap);
+        let entry = entry(&trace, true);
+        let ticket = entry.delivery.as_ref().unwrap().begin().unwrap();
+        drop(trace);
+        thread::spawn(move || {
+            drop(entry);
+            ticket.acked().delivered();
+        })
+        .join()
+        .unwrap();
+        let events = recording.events.lock().unwrap();
+        assert!(matches!(events.as_slice(), [
+            RunEvent::BeforeCall { .. }, RunEvent::InputSent { .. },
+            RunEvent::AfterCall { record, .. },
+            RunEvent::DeliverySettled { delivery: Delivery::Done, .. },
+            RunEvent::RunSettled { .. },
+        ] if record.result == CallResult::Unfinished { reason: RunEnd::Cancelled }));
+        assert_eq!(*recording.dropped_after.lock().unwrap(), Some(events.len()));
+    }
+
+    #[test]
+    fn a_late_finish_cannot_rewrite_a_sealed_record_or_event() {
+        let (tap, recording) = testing::tap();
+        let trace = Trace::new(tap);
+        let entry = entry(&trace, true);
+        let (records, _) = trace.take(RunEnd::Timeout);
+        entry.finish(CallResult::Ok);
+        entry.publish();
+        assert_eq!(entry.snapshot().0.as_ref(), &records[0]);
+        assert_eq!(
+            records[0].result,
+            CallResult::Unfinished {
+                reason: RunEnd::Timeout
+            }
+        );
+        assert_eq!(
+            recording
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| matches!(event, RunEvent::AfterCall { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn delivery_settles_after_after_call_in_every_holder_drop_order() {
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let (tap, recording) = testing::tap();
+            let trace = Trace::new(Arc::clone(&tap));
+            let entry = entry(&trace, true);
+            let run = scope(Duration::from_secs(10));
+            let progress = Progress::new(Arc::clone(&entry), 0.0, run, CancellationToken::new());
+            let ticket = entry.delivery.as_ref().unwrap().begin().unwrap();
+            trace.take(RunEnd::Settled);
+            drop(trace);
+            drop(tap);
+            // Each holder can disappear first. The acknowledgement moves delivery after
+            // the frozen record; its cell outlives both entry and Progress when necessary.
+            let mut entry = Some(entry);
+            let mut progress = Some(progress);
+            let mut ticket = Some(ticket);
+            for index in order {
+                match index {
+                    0 => drop(entry.take()),
+                    1 => drop(progress.take()),
+                    _ => ticket.take().unwrap().acked().delivered(),
+                }
+            }
+            let events = recording.events.lock().unwrap();
+            assert!(matches!(events.as_slice(), [
+                RunEvent::BeforeCall { .. }, RunEvent::InputSent { .. },
+                RunEvent::AfterCall { record, .. },
+                RunEvent::DeliverySettled { delivery: Delivery::Done, .. },
+                RunEvent::RunSettled { .. },
+            ] if record.delivery == Some(Delivery::Unknown)));
+        }
+    }
+
+    #[test]
+    fn unchanged_delivery_emits_no_correction_and_input_sent_is_once() {
+        for delivered_before_record in [false, true] {
+            let (tap, recording) = testing::tap();
+            let trace = Trace::new(tap);
+            let entry = entry(&trace, true);
+            let cell = entry.delivery.as_ref().unwrap();
+            let first = cell.begin().unwrap();
+            assert!(cell.begin().is_err());
+            first.unsent();
+            let second = cell.begin().unwrap();
+            if delivered_before_record {
+                second.acked().delivered();
+            } else {
+                drop(second);
+            }
+            trace.take(RunEnd::Settled);
+            drop(entry);
+            drop(trace);
+            let events = recording.events.lock().unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| matches!(e, RunEvent::InputSent { .. }))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| matches!(e, RunEvent::DeliverySettled { .. }))
+                    .count(),
+                0
+            );
+        }
+        let (tap, recording) = testing::tap();
+        let trace = Trace::new(tap);
+        let _entry = entry(&trace, true);
+        trace.take(RunEnd::Settled);
+        assert!(
+            !recording
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, RunEvent::InputSent { .. }))
+        );
+    }
+
+    /// A click on `#go` that arrives at `trace`.
+    fn entry(trace: &Trace, input: bool) -> Arc<CallEntry> {
+        entry_with_params(trace, input, serde_json::json!({ "selector": "#go" }))
+    }
+
+    fn entry_with_params(trace: &Trace, input: bool, params: Value) -> Arc<CallEntry> {
+        trace.call(CallStart {
             params,
-            location: None,
-            input,
-        }))
+            ..CallStart::for_test("click", input)
+        })
     }
 
     fn scope(run_timeout: Duration) -> RunScope {
         RunScope::new(
             Deadline::new(run_timeout, CancellationToken::new()),
             TaskTracker::new(),
+            Arc::default(),
         )
     }
 
     fn progress(timeout_ms: f64, run: &RunScope, page_closed: &CancellationToken) -> Progress {
-        Progress::new(entry(1, true), timeout_ms, run.clone(), page_closed.clone())
+        let entry = CallEntry::for_test(CallStart::for_test("click", true));
+        Progress::new(entry, timeout_ms, run.clone(), page_closed.clone())
     }
 
     /// Fifty failed attempts fold into a few lines that still name the reason and say how
@@ -1289,7 +1774,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_abort_ends_the_call_with_the_reason_and_logs_it() {
         let run = scope(Duration::from_secs(30));
-        let entry = entry(1, true);
+        let entry = entry(&Trace::default(), true);
         let progress = Progress::new(Arc::clone(&entry), 0.0, run, CancellationToken::new());
         let token = progress.abort_token();
         assert_eq!(progress.pending_abort(), Ok(()));
@@ -1316,7 +1801,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_call_that_folds_its_log_as_its_abort_wakes_it_has_the_abort_line() {
         let run = scope(Duration::from_secs(30));
-        let entry = entry(1, true);
+        let entry = entry(&Trace::default(), true);
         let progress = Progress::new(Arc::clone(&entry), 0.0, run, CancellationToken::new());
         let token = progress.abort_token();
         entry.abort_pause_ms.store(300, Ordering::Relaxed);
@@ -1342,7 +1827,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_abort_wins_a_tie_with_the_call_deadline_and_loses_one_with_the_run() {
         let run = scope(Duration::from_secs(30));
-        let entry = entry(1, true);
+        let entry = entry(&Trace::default(), true);
         let progress = Progress::new(
             Arc::clone(&entry),
             100.0,
@@ -1365,7 +1850,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_run_stop_outranks_a_pending_abort() {
         let run = scope(Duration::from_secs(30));
-        let entry = entry(1, true);
+        let entry = entry(&Trace::default(), true);
         let progress = Progress::new(
             Arc::clone(&entry),
             0.0,
@@ -1391,7 +1876,7 @@ mod tests {
 
     #[test]
     fn an_abort_after_the_call_ended_changes_nothing() {
-        let entry = entry(1, false);
+        let entry = entry(&Trace::default(), false);
         let _log = entry.finish(CallResult::Ok);
         entry.abort("late".to_string());
         assert!(entry.abort_error().is_none());
@@ -1412,10 +1897,8 @@ mod tests {
     #[test]
     fn an_unfinished_call_reads_unfinished_with_its_cells_delivery() {
         let trace = Trace::default();
-        let finished = entry(1, true);
-        let running = entry(2, true);
-        trace.push(Arc::clone(&finished));
-        trace.push(Arc::clone(&running));
+        let finished = entry(&trace, true);
+        let running = entry(&trace, true);
         finished.finish(PlaywrightError::timeout(500.0).to_result());
         trace.finished(&finished);
         let ticket = running
@@ -1459,8 +1942,7 @@ mod tests {
     fn calls_past_the_record_cap_are_counted_with_their_least_safe_delivery() {
         let trace = Trace::default();
         for call_id in 1..=1002 {
-            let entry = entry(call_id, true);
-            trace.push(Arc::clone(&entry));
+            let entry = entry(&trace, true);
             if call_id == 1001 {
                 let _unknown = entry.delivery.as_ref().expect("input").begin();
             }
@@ -1483,9 +1965,8 @@ mod tests {
     fn records_past_the_byte_budget_are_dropped_and_later_calls_with_them() {
         let trace = Trace::default();
         let big = "x".repeat(600 * 1024);
-        let entries: Vec<_> = (1..=3).map(|call_id| entry(call_id, false)).collect();
+        let entries: Vec<_> = (1..=3).map(|_| entry(&trace, false)).collect();
         for entry in &entries {
-            trace.push(Arc::clone(entry));
             let line = big.clone();
             entry.update_log(|log| log.push(line));
         }
@@ -1493,8 +1974,7 @@ mod tests {
             entry.finish(CallResult::Ok);
             trace.finished(entry);
         }
-        let late = entry(4, false);
-        trace.push(Arc::clone(&late));
+        let _late = entry(&trace, false);
 
         let (records, dropped) = trace.take(RunEnd::Settled);
         let kept: Vec<u64> = records.iter().map(|record| record.call_id).collect();
@@ -1518,10 +1998,8 @@ mod tests {
     fn params_past_the_byte_budget_are_not_held_while_the_call_runs() {
         let trace = Trace::default();
         let selector = "x".repeat(600 * 1024);
-        let first = entry_with_params(1, true, serde_json::json!({ "selector": selector }));
-        let second = entry_with_params(2, true, serde_json::json!({ "selector": selector }));
-        trace.push(Arc::clone(&first));
-        trace.push(Arc::clone(&second));
+        let first = entry_with_params(&trace, true, serde_json::json!({ "selector": selector }));
+        let second = entry_with_params(&trace, true, serde_json::json!({ "selector": selector }));
 
         assert_eq!(Arc::strong_count(&first), 2, "the first record is kept");
         assert_eq!(
@@ -1529,8 +2007,7 @@ mod tests {
             1,
             "a second 600 KiB of params does not fit in 1 MiB"
         );
-        let late = entry(3, false);
-        trace.push(Arc::clone(&late));
+        let late = entry(&trace, false);
         assert_eq!(Arc::strong_count(&late), 1, "and nothing after it is kept");
         let (records, dropped) = trace.take(RunEnd::Settled);
         let kept: Vec<u64> = records.iter().map(|record| record.call_id).collect();
@@ -1544,8 +2021,7 @@ mod tests {
     fn dropped_calls_that_ended_fold_into_one_worst_delivery() {
         let trace = Trace::default();
         for call_id in 1..=6000 {
-            let entry = entry(call_id, true);
-            trace.push(Arc::clone(&entry));
+            let entry = entry(&trace, true);
             if call_id == 1001 {
                 let cell = entry.delivery.as_ref().expect("an input call");
                 drop(cell.begin().expect("fresh"));

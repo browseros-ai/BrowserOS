@@ -439,6 +439,14 @@ pub(crate) static FRAME_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
             kind: ParamKind::Plain,
         },
         ParamShape {
+            path: "arg.value.ta.b",
+            kind: ParamKind::Binary,
+        },
+        ParamShape {
+            path: "arg.value.ta.k",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
             path: "selector",
             kind: ParamKind::Selector,
         },
@@ -457,6 +465,14 @@ pub(crate) static FRAME_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
     params: &[
         ParamShape {
             path: "expression",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "arg.value.ta.b",
+            kind: ParamKind::Binary,
+        },
+        ParamShape {
+            path: "arg.value.ta.k",
             kind: ParamKind::Plain,
         },
         ParamShape {
@@ -526,6 +542,14 @@ pub(crate) static ELEMENT_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
             kind: ParamKind::Plain,
         },
         ParamShape {
+            path: "arg.value.ta.b",
+            kind: ParamKind::Binary,
+        },
+        ParamShape {
+            path: "arg.value.ta.k",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
             path: "selector",
             kind: ParamKind::Selector,
         },
@@ -544,6 +568,14 @@ pub(crate) static ELEMENT_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
     params: &[
         ParamShape {
             path: "expression",
+            kind: ParamKind::Plain,
+        },
+        ParamShape {
+            path: "arg.value.ta.b",
+            kind: ParamKind::Binary,
+        },
+        ParamShape {
+            path: "arg.value.ta.k",
             kind: ParamKind::Plain,
         },
         ParamShape {

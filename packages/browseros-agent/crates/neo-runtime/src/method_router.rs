@@ -33,9 +33,9 @@
 //! future, so a call the script never awaits still runs.
 
 use neo_runtime_spec::{ParamKind, ParamShape};
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -279,7 +279,6 @@ struct Inner {
     cursors: Arc<Cursors<FrameCursor>>,
     /// The admitted calls a script's `signal` can still abort, by message id (`abort.rs`).
     aborts: Arc<Aborts>,
-    next_call_id: AtomicU64,
     /// The `setContent` writes into each frame, in arrival order (`content.rs`).
     write_order: WriteOrder,
     /// Each page's `localStorage` and `sessionStorage` calls, in arrival order (`web_storage.rs`):
@@ -592,16 +591,16 @@ enum Route {
 }
 
 impl Dispatcher {
-    pub(crate) fn new(tabs: Tabs, run: RunScope) -> Self {
+    /// The dispatcher of the run whose calls `trace` records.
+    pub(crate) fn new(tabs: Tabs, run: RunScope, trace: Trace) -> Self {
         Self(Arc::new(Inner {
             tabs,
             _ending: run.ended.clone().drop_guard(),
             run,
-            trace: Trace::default(),
+            trace,
             in_flight: Arc::default(),
             cursors: Arc::default(),
             aborts: Arc::default(),
-            next_call_id: AtomicU64::new(1),
             write_order: WriteOrder::default(),
             storage_order: WriteOrder::default(),
         }))
@@ -621,6 +620,8 @@ impl Dispatcher {
         } = match serde_json::from_str(message) {
             Ok(message) => message,
             Err(error) => {
+                // No id, so no call: the run counts it (`RunEnded::unreadable_calls`).
+                inner.trace.count_unreadable();
                 return PendingReply::ready(Err(BridgeError::BadMessage(error.to_string())));
             }
         };
@@ -644,17 +645,18 @@ impl Dispatcher {
             internal: None,
             timeout: None,
         });
-        let entry = Arc::new(CallEntry::new(CallStart {
+        let entry = inner.trace.call(CallStart {
             timeout_ms: metadata.timeout,
-            call_id: inner.next_call_id.fetch_add(1, Ordering::Relaxed),
+            parent: None,
+            page: target.as_ref().map(|(page, _)| page.reference()),
             guid,
             method,
-            title: meta.and_then(|meta| meta.title),
+            title: meta.and_then(|meta| meta.title).map(Cow::Borrowed),
             params: params.unwrap_or_else(|| json!({})),
+            shape: meta.map_or(&[], |meta| meta.params),
             location: call_location(&metadata),
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
-        }));
-        inner.trace.push(Arc::clone(&entry));
+        });
         let admitted = route.and_then(|route| {
             let admission = inner.admit(&route, target.as_ref(), message.len())?;
             Ok((route, admission))
@@ -665,6 +667,7 @@ impl Dispatcher {
                 entry.finish(error.to_result());
                 inner.trace.finished(&entry);
                 let watermark = inner.tabs.events().seq();
+                entry.publish();
                 return PendingReply::ready(Ok((encode_reply(&id, Err(&error), None), watermark)));
             }
         };
@@ -2121,6 +2124,7 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
+    entry.publish();
 }
 
 /// The typed handler dispatch, also used by the skeleton's tests with click's existing fake.
@@ -2416,6 +2420,7 @@ mod tests {
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::PageId;
+    use crate::trace::RunTap;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -2424,7 +2429,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let tasks = TaskTracker::new();
         let deadline = Deadline::new(Duration::from_secs(5), CancellationToken::new());
-        let run = RunScope::new(deadline, tasks.clone());
+        let run = RunScope::new(deadline, tasks.clone(), Arc::default());
         let (tabs, _) = Tabs::open(
             browser.cdp().await,
             Handle::current(),
@@ -2434,22 +2439,18 @@ mod tests {
             Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
+            RunTap::detached(),
         )
         .await
         .unwrap();
         let (page, scope) = tabs.resolve(&format!("frame@{PAGE}")).unwrap();
-        let entry = Arc::new(CallEntry::new(CallStart {
-            timeout_ms: None,
-            call_id: 1,
-            guid: format!("frame@{PAGE}"),
-            method: "click".to_string(),
-            title: Some("Click"),
-            params: json!({"selector":"#nothing"}),
-            location: None,
-            input: true,
-        }));
         let trace = Trace::default();
-        trace.push(Arc::clone(&entry));
+        let entry = trace.call(CallStart {
+            guid: format!("frame@{PAGE}"),
+            params: json!({"selector":"#nothing"}),
+            shape: FrameClickParams::META.params,
+            ..CallStart::for_test("click", true)
+        });
         let progress = Progress::new(Arc::clone(&entry), 0.0, run.clone(), page.closed.clone());
         let route = route_frame("click", json!({"selector":"#nothing"}))
             .route
@@ -2504,6 +2505,7 @@ mod tests {
         let run = RunScope::new(
             Deadline::new(Duration::from_secs(10), CancellationToken::new()),
             tasks.clone(),
+            Arc::default(),
         );
         let (tabs, _) = Tabs::open(
             browser.cdp().await,
@@ -2514,6 +2516,7 @@ mod tests {
             Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
+            RunTap::detached(),
         )
         .await
         .unwrap();
@@ -2525,7 +2528,7 @@ mod tests {
                 .request_close();
         }
         browser.page.lock().unwrap().tab_info_delay = Some(Duration::from_secs(3));
-        let dispatcher = Dispatcher::new(tabs, run);
+        let dispatcher = Dispatcher::new(tabs, run, Trace::default());
         let started = Instant::now();
         dispatcher.finish(RunEnd::Settled).await;
         assert!(
@@ -3570,18 +3573,19 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn tests_that_a_call_gives_its_share_back_before_its_reply_is_sent() {
         let in_flight = Arc::new(InFlight::default());
-        let entry = Arc::new(CallEntry::new(CallStart {
+        let trace = Trace::default();
+        let entry = trace.call(CallStart {
+            parent: None,
+            page: None,
+            shape: &[],
             timeout_ms: None,
-            call_id: 1,
             guid: format!("frame@{PAGE}"),
             method: "neo:nextNavigation".to_string(),
-            title: Some("Wait for navigation"),
+            title: Some("Wait for navigation".into()),
             params: json!({"response":false}),
             location: None,
             input: false,
-        }));
-        let trace = Trace::default();
-        trace.push(Arc::clone(&entry));
+        });
         let (reply, receiver) = oneshot::channel();
         let replied = tokio::spawn(finish_reply(
             Ok(None),
@@ -3883,6 +3887,7 @@ mod review_abort_priority {
         let run = RunScope::new(
             Deadline::new(Duration::from_secs(30), CancellationToken::new()),
             tasks.clone(),
+            Default::default(),
         );
         let (tabs, _) = Tabs::open(
             browser.cdp().await,
@@ -3893,24 +3898,26 @@ mod review_abort_priority {
             Permissions::default(),
             tasks,
             &PageId::new(PAGE.to_string()),
+            crate::trace::RunTap::detached(),
         )
         .await
         .unwrap_or_else(|error| panic!("opening the fake tab: {error:?}"));
         let (page, scope) = tabs
             .resolve(&format!("frame@{PAGE}"))
             .unwrap_or_else(|| panic!("the fake tab must have a main frame"));
-        let entry = Arc::new(CallEntry::new(CallStart {
+        let trace = Trace::default();
+        let entry = trace.call(CallStart {
+            parent: None,
+            page: None,
+            shape: &[],
             timeout_ms: None,
-            call_id: 1,
             guid: format!("frame@{PAGE}"),
             method: "click".to_string(),
-            title: Some("Click"),
+            title: Some("Click".into()),
             params: json!({"selector":"#nothing"}),
             location: None,
             input: true,
-        }));
-        let trace = Trace::default();
-        trace.push(Arc::clone(&entry));
+        });
         let progress = Progress::new(Arc::clone(&entry), 0.0, run.clone(), page.closed.clone());
         let route = route(
             ObjectKind::Frame,

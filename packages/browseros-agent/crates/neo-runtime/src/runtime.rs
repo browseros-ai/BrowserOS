@@ -24,19 +24,22 @@ use crate::browser_representations::cookies_and_storage::Permissions;
 use crate::browser_representations::page::TabInputs;
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::Switches;
-use crate::deadline::Deadline;
+use crate::deadline::{Deadline, Stop};
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
 use crate::playwright_methods::screenshot::TabScreenshots;
-use crate::progress::{ErrorName, RunScope};
+use crate::progress::{ErrorName, RunScope, Trace};
 use crate::quickjs;
 use crate::quickjs::Script;
 use crate::quickjs_bridge;
-use crate::quickjs_bridge::Getters;
+use crate::quickjs_bridge::{Getters, Logs};
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
 #[cfg(feature = "test-host")]
 use crate::test_host::TestHost;
-use crate::trace::{RunId, RunSink, RunStarted, TraceSink};
+use crate::trace::redact;
+use crate::trace::{
+    ConsoleLine, EndCause, RunEvent, RunId, RunSink, RunStarted, RunTap, TraceSink,
+};
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
 const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
@@ -200,13 +203,28 @@ impl Runtime {
         request: RunRequest,
         #[cfg(feature = "test-host")] test_host: Option<Box<dyn TestHost>>,
     ) -> RunOutcome {
-        let run_id = RunId::mint();
-        let started = RunStarted::new(run_id, &request);
-        let _listeners: Vec<Arc<dyn RunSink>> = self
-            .sinks
-            .iter()
-            .filter_map(|sink| sink.run(&started))
-            .collect();
+        // Both public entry points share one guard so test-host transport cannot bypass
+        // run identity, terminal records, or settlement of retained browser work.
+        let guard = RunGuard::start(&self.sinks, &request);
+        let (outcome, cause) = self
+            .execute(
+                &guard,
+                request,
+                #[cfg(feature = "test-host")]
+                test_host,
+            )
+            .await;
+        guard.end(outcome, cause)
+    }
+
+    /// Every exit returns to the run guard, which owns exactly one RunEnded emission.
+    async fn execute(
+        &self,
+        guard: &RunGuard,
+        request: RunRequest,
+        #[cfg(feature = "test-host")] test_host: Option<Box<dyn TestHost>>,
+    ) -> (RunOutcome, EndCause) {
+        let run_id = guard.tap.run();
         let RunRequest {
             code,
             page,
@@ -220,7 +238,10 @@ impl Runtime {
             Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => handle,
             _ => {
                 let message = "neo-runtime runs need tokio's multi-threaded runtime".to_string();
-                return RunOutcome::failed(run_id, RunError::new("Error", message), Vec::new());
+                return (
+                    RunOutcome::failed(run_id, RunError::new("Error", message), Vec::new()),
+                    EndCause::Unsupported,
+                );
             }
         };
 
@@ -232,9 +253,9 @@ impl Runtime {
         self.cleanup.spawn(async move { remaining.wait().await });
         let opened = tokio::select! {
             stop = deadline.reached() => {
-                return RunOutcome::stopped(run_id, stop, deadline.timeout(), Vec::new());
+                return (RunOutcome::stopped(run_id, stop, deadline.timeout(), Vec::new()), stopped_by(stop));
             }
-            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &page) => opened,
+            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &page, Arc::clone(&guard.tap)) => opened,
         };
         let (tabs, url) = match opened {
             Ok(opened) => opened,
@@ -244,7 +265,10 @@ impl Runtime {
                 } else {
                     RunError::new(error.name.as_str(), error.message)
                 };
-                return RunOutcome::failed(run_id, error, Vec::new());
+                return (
+                    RunOutcome::failed(run_id, error, Vec::new()),
+                    EndCause::TabUnavailable,
+                );
             }
         };
 
@@ -260,14 +284,16 @@ impl Runtime {
         // group-release tasks the page spawns, so `finish` waits for them all.
         let artifacts =
             Arc::new(Artifacts::new(artifacts).with_absolute_paths(self.absolute_paths));
-        let run = RunScope::new(deadline.clone(), tasks).with_artifacts(Arc::clone(&artifacts));
+        let run = RunScope::new(deadline.clone(), tasks, guard.tap.end_cell())
+            .with_artifacts(Arc::clone(&artifacts));
         let getters = Getters::new(
             tabs.clone(),
             deadline.clone(),
             tokio,
             Arc::clone(&run.handles),
+            Arc::clone(&guard.tap),
         );
-        let dispatcher = Dispatcher::new(tabs.clone(), run);
+        let dispatcher = Dispatcher::new(tabs.clone(), run, guard.trace.clone());
         let events = tabs.events().clone();
         // A run whose future is dropped lets go of its permission grants on the cleanup tracker.
         let grants = Grants {
@@ -283,15 +309,26 @@ impl Runtime {
             dispatcher.clone(),
             deadline,
             events,
+            guard.logs.clone(),
         )
         .await;
         let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
         grants.disarm();
-        outcome
+        for note in artifacts.notes() {
+            guard.logs.push(note);
+        }
+        let cause = match outcome.status {
+            RunStatus::Ok => EndCause::Returned,
+            RunStatus::Error => EndCause::Threw,
+            RunStatus::Timeout => EndCause::Deadline,
+            RunStatus::Cancelled => EndCause::Cancelled,
+        };
+        let outcome = outcome
             .with_calls(calls, dropped)
             .with_pages(tabs.outcome())
-            .with_artifacts(artifacts.written(), artifacts.notes())
+            .with_artifacts(artifacts.written(), Vec::new());
+        (outcome, cause)
     }
 }
 
@@ -329,5 +366,132 @@ fn run_end_of(outcome: &RunOutcome) -> RunEnd {
         RunStatus::Timeout => RunEnd::Timeout,
         RunStatus::Cancelled => RunEnd::Cancelled,
         RunStatus::Ok | RunStatus::Error => RunEnd::Settled,
+    }
+}
+
+/// One run's frame for its trace: built first, it owns what the run's end reports (the tap,
+/// the trace, the console) and reports it exactly once, through [`RunGuard::end`] when the run
+/// returns, or from `Drop` when the caller dropped the run's future.
+///
+/// Its `Arc` of the tap is one of the last to go: dropped with the guard, after the run's
+/// `RunEnded`, so `RunSettled` waits for it and for every other holder.
+struct RunGuard {
+    tap: Arc<RunTap>,
+    trace: Trace,
+    logs: Logs,
+    /// The script, kept for `RunEnded` only while a sink listens.
+    script: Option<Arc<str>>,
+    ended: bool,
+}
+
+impl RunGuard {
+    /// Mints the run's id and asks each sink, in order, whether it listens, before anything
+    /// can fail.
+    fn start(sinks: &[Arc<dyn TraceSink>], request: &RunRequest) -> Self {
+        let run = RunId::mint();
+        let started = RunStarted::new(run, request);
+        let listeners: Vec<Arc<dyn RunSink>> =
+            sinks.iter().filter_map(|sink| sink.run(&started)).collect();
+        let tap = RunTap::new(run, listeners);
+        let script = tap.listening().then(|| Arc::from(request.code.as_str()));
+        Self {
+            logs: Logs::new(tap.start()),
+            trace: Trace::new(Arc::clone(&tap)),
+            script,
+            tap,
+            ended: false,
+        }
+    }
+
+    /// The run's one exit: reports `RunEnded` from `outcome` and returns it with its console
+    /// lines.
+    fn end(mut self, outcome: RunOutcome, cause: EndCause) -> RunOutcome {
+        self.ended = true;
+        let lines = self.logs.take();
+        if self.tap.listening() {
+            let ended = self.ended_event(
+                outcome.status,
+                cause,
+                outcome.error.as_ref(),
+                outcome.value.as_ref(),
+                &lines,
+            );
+            self.tap.emit(&ended);
+        }
+        outcome.with_logs(lines.into_iter().map(|line| line.text).collect())
+    }
+
+    /// `RunEnded`, its text scrubbed of every secret the run registered and cut to Neo's caps
+    /// (`trace/redact.rs`).
+    fn ended_event(
+        &self,
+        status: RunStatus,
+        cause: EndCause,
+        error: Option<&RunError>,
+        value: Option<&Value>,
+        lines: &[ConsoleLine],
+    ) -> RunEvent {
+        let scrubber = self.tap.secrets().scrubber();
+        // Reject oversized input before copying it. Scrubbing can also expand small values
+        // (replacement markers), so check the bounded copy again before emitting it.
+        let fits = |value: &Value| redact::json_len(value) <= redact::MAX_VALUE_BYTES;
+        let (value, value_truncated) = match value {
+            None => (None, false),
+            Some(value) => {
+                let redacted = fits(value).then(|| scrubber.scrub_value(value));
+                match redacted.filter(fits) {
+                    Some(redacted) => (Some(Arc::new(redacted)), false),
+                    None => (None, true),
+                }
+            }
+        };
+        RunEvent::RunEnded {
+            run: self.tap.run(),
+            status,
+            cause,
+            error: error.map(|error| RunError {
+                name: scrubber.scrub_cut(&error.name, redact::MAX_ERROR_BYTES),
+                message: scrubber.scrub_cut(&error.message, redact::MAX_ERROR_BYTES),
+            }),
+            value,
+            value_truncated,
+            logs: lines
+                .iter()
+                .map(|line| ConsoleLine {
+                    offset_us: line.offset_us,
+                    text: scrubber.scrub_cut(&line.text, redact::MAX_LINE_BYTES),
+                })
+                .collect(),
+            script: self
+                .script
+                .as_deref()
+                .map(|script| Arc::from(scrubber.scrub_cut(script, redact::MAX_SCRIPT_BYTES))),
+            calls_made: self.trace.calls_made(),
+            unreadable_calls: self.trace.unreadable_calls(),
+            duration_us: self.tap.offset_us(),
+        }
+    }
+}
+
+impl Drop for RunGuard {
+    /// Not ended means the caller dropped `run`'s future: no outcome will exist, so the run is
+    /// reported here as cancelled, with the console lines written so far. The realm and the
+    /// dispatcher may go before or after this; the calls they leave behind report themselves
+    /// as they drop.
+    fn drop(&mut self) {
+        if self.ended || !self.tap.listening() {
+            return;
+        }
+        let lines = self.logs.take();
+        let ended = self.ended_event(RunStatus::Cancelled, EndCause::Dropped, None, None, &lines);
+        self.tap.emit(&ended);
+    }
+}
+
+/// How a stop during the tab's opening ended the run.
+fn stopped_by(stop: Stop) -> EndCause {
+    match stop {
+        Stop::Timeout => EndCause::Deadline,
+        Stop::Cancelled => EndCause::Cancelled,
     }
 }

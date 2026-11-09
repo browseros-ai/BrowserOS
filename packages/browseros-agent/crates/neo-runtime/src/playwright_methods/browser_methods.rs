@@ -420,11 +420,13 @@ async fn new_page(
             .race(scripts.show_new(tabs.cdp(), &session, &context.id))
             .await?;
     }
-    encode(&BrowserContextNewPageResult {
+    let value = encode(&BrowserContextNewPageResult {
         page: PageChannel {
             guid: quickjs_bridge::page_guid(&entry.id),
         },
-    })
+    })?;
+    entry.created_by(progress.call_id());
+    Ok(value)
 }
 
 /// Playwright's `BrowserContext.close` of a created context (`CRBrowserContext.doClose`): the

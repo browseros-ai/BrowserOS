@@ -32,6 +32,7 @@
 
 use std::future::Future;
 use std::mem;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use base64::Engine;
@@ -45,6 +46,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::task;
+use tokio::time::Instant;
 
 use crate::browser_representations::network::{HopId, LogError, ObjectKind as NetworkObject};
 use crate::browser_representations::tabs::Tabs;
@@ -60,6 +62,8 @@ use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunError};
 #[cfg(feature = "test-host")]
 use crate::test_host::TestHost;
+use crate::trace::redact;
+use crate::trace::{ConsoleLine, GetterResult, RunEvent, RunTap, micros};
 use crate::url_match::{self, SerializedUrlMatch, UrlPart};
 
 /// The guid the realm gives a run's page, in the `<type>@<id>` form Playwright's protocol uses.
@@ -325,19 +329,23 @@ const MAX_RANDOM_BYTES: usize = 65_536;
 const MAX_LOG_BYTES: usize = 1024 * 1024;
 const MAX_LOG_LINES: usize = 1000;
 
-/// Lines the script wrote with `console`. Shared because the realm owns the JS `log` function
-/// while the run reads the lines back, also after a deadline dropped the realm mid-script.
+/// Lines the script wrote with `console`, each with when it was written. Shared because the
+/// realm owns the JS `log` function while the run reads the lines back, also after a deadline
+/// dropped the realm mid-script. The run creates them (`runtime.rs`), not the realm, so they
+/// outlive a dropped run future too, and its trace still gets the lines written so far.
 ///
 /// Keeps the first lines up to [`MAX_LOG_LINES`] and [`MAX_LOG_BYTES`]. The first line past
 /// either cap ends keeping: it and every later line are only counted, so the kept lines are
 /// always the start of what the script wrote, and [`Logs::take`] ends them with a note saying
 /// how many were dropped. Logging itself never fails, so the cap never throws into the script.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct Logs(Arc<Mutex<LogLines>>);
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct LogLines {
-    kept: Vec<String>,
+    /// When the run started: each line's `offset_us` counts from it.
+    start: Instant,
+    kept: Vec<ConsoleLine>,
     kept_bytes: usize,
     /// Set by the first line that did not fit.
     overflow: Option<Overflow>,
@@ -347,6 +355,8 @@ struct LogLines {
 struct Overflow {
     limit: LogLimit,
     dropped: usize,
+    /// When the first dropped line was written.
+    offset_us: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -356,35 +366,53 @@ enum LogLimit {
 }
 
 impl Logs {
+    /// The console of a run that started at `start`.
+    pub(crate) fn new(start: Instant) -> Self {
+        Self(Arc::new(Mutex::new(LogLines {
+            start,
+            kept: Vec::new(),
+            kept_bytes: 0,
+            overflow: None,
+        })))
+    }
+
     pub(crate) fn push(&self, line: String) {
         if let Ok(mut lines) = self.0.lock() {
             lines.push(line);
         }
     }
 
-    pub(crate) fn take(&self) -> Vec<String> {
+    /// Every line kept so far, then a note when some were dropped, and starts over.
+    pub(crate) fn take(&self) -> Vec<ConsoleLine> {
         let Ok(mut lines) = self.0.lock() else {
             return Vec::new();
         };
-        let LogLines {
-            mut kept, overflow, ..
-        } = mem::take(&mut *lines);
-        kept.extend(overflow.map(|overflow| overflow.note()));
+        let mut kept = mem::take(&mut lines.kept);
+        lines.kept_bytes = 0;
+        kept.extend(lines.overflow.take().map(|overflow| ConsoleLine {
+            offset_us: overflow.offset_us,
+            text: overflow.note(),
+        }));
         kept
     }
 }
 
 impl LogLines {
-    fn push(&mut self, line: String) {
+    fn push(&mut self, text: String) {
+        let offset_us = micros(self.start.elapsed());
         if let Some(overflow) = &mut self.overflow {
             overflow.dropped += 1;
             return;
         }
-        if let Some(limit) = self.limit_passed_by(&line) {
-            self.overflow = Some(Overflow { limit, dropped: 1 });
+        if let Some(limit) = self.limit_passed_by(&text) {
+            self.overflow = Some(Overflow {
+                limit,
+                dropped: 1,
+                offset_us,
+            });
         } else {
-            self.kept_bytes += line.len();
-            self.kept.push(line);
+            self.kept_bytes += text.len();
+            self.kept.push(ConsoleLine { offset_us, text });
         }
     }
 
@@ -415,6 +443,8 @@ impl Overflow {
 
 /// Everything `__neo_runtime.get` needs to answer for one run.
 pub(crate) struct Getters {
+    tap: Arc<RunTap>,
+    next: AtomicU64,
     tabs: Tabs,
     deadline: Deadline,
     tokio: Handle,
@@ -461,6 +491,15 @@ pub enum GetterField {
     Args,
     /// On a file chooser (`filechooser@<targetId>:<n>`): `element()`'s handle record.
     Element,
+    /// Platform-only reads also use the getter door, so every read has one trace identity.
+    #[serde(rename = "matchesURL")]
+    MatchesUrl,
+    Devices,
+    #[serde(rename = "parseURL")]
+    ParseUrl,
+    #[serde(rename = "setURL")]
+    SetUrl,
+    RandomValues,
 }
 
 #[derive(Deserialize)]
@@ -607,8 +646,11 @@ impl Getters {
         deadline: Deadline,
         tokio: Handle,
         handles: Arc<Handles>,
+        tap: Arc<RunTap>,
     ) -> Self {
         Self {
+            tap,
+            next: AtomicU64::new(1),
             tabs,
             deadline,
             tokio,
@@ -616,16 +658,65 @@ impl Getters {
         }
     }
 
-    fn get(&self, ctx: &Ctx<'_>, request: &str) -> rquickjs::Result<String> {
-        match self.answer(request) {
+    fn get(&self, ctx: &Ctx<'_>, text: &str) -> rquickjs::Result<String> {
+        let started = Instant::now();
+        let request: GetRequest = serde_json::from_str(text).map_err(|error| {
+            self.throw(
+                ctx,
+                GetError::BadRequest(format!("bad getter request: {error}")),
+            )
+        })?;
+        let (object, field) = match &request {
+            GetRequest::Object(request) => (request.guid.clone(), request.field),
+            GetRequest::Match(_) => ("platform".to_string(), GetterField::MatchesUrl),
+            GetRequest::Pure(read) => (
+                "platform".to_string(),
+                match read {
+                    PureRead::Devices(_) => GetterField::Devices,
+                    PureRead::Parse(_) => GetterField::ParseUrl,
+                    PureRead::SetUrl(_) => GetterField::SetUrl,
+                    PureRead::Random(_) => GetterField::RandomValues,
+                },
+            ),
+        };
+        let no = self.next.fetch_add(1, Ordering::Relaxed);
+        let answer = self.answer(request);
+        let duration_us = micros(started.elapsed());
+        if let Ok(value) = &answer {
+            redact::register_getter_secrets(field, value, self.tap.secrets());
+        }
+        self.tap.emit_with(|| {
+            let scrubber = self.tap.secrets().scrubber();
+            let result = match &answer {
+                Ok(value) => GetterResult::Ok {
+                    summary: scrubber.scrub_value(&redact::getter_summary(field, value)),
+                },
+                Err(error) => {
+                    let error = self.error(error);
+                    GetterResult::Error {
+                        name: scrubber.scrub_cut(&error.name, redact::MAX_ERROR_BYTES),
+                        message: scrubber.scrub_cut(&error.message, redact::MAX_ERROR_BYTES),
+                    }
+                }
+            };
+            RunEvent::Getter {
+                run: self.tap.run(),
+                no,
+                object: scrubber.scrub(&object).into_owned(),
+                field,
+                page: self.tabs.resolve(&object).map(|(page, _)| page.reference()),
+                result,
+                offset_us: micros(started.duration_since(self.tap.start())),
+                duration_us,
+            }
+        });
+        match answer {
             Ok(value) => Ok(value.to_string()),
             Err(error) => Err(self.throw(ctx, error)),
         }
     }
 
-    fn answer(&self, request: &str) -> Result<Value, GetError> {
-        let request: GetRequest = serde_json::from_str(request)
-            .map_err(|error| GetError::BadRequest(format!("bad getter request: {error}")))?;
+    fn answer(&self, request: GetRequest) -> Result<Value, GetError> {
         let request = match request {
             GetRequest::Object(request) => request,
             GetRequest::Match(request) => {
@@ -706,7 +797,14 @@ impl Getters {
             | GetterField::PausedDetails
             | GetterField::Debugger
             | GetterField::Args
-            | GetterField::Element => Err(GetError::BadRequest("not a page getter".to_string())),
+            | GetterField::Element
+            | GetterField::MatchesUrl
+            | GetterField::Devices
+            | GetterField::ParseUrl
+            | GetterField::SetUrl
+            | GetterField::RandomValues => {
+                Err(GetError::BadRequest("not a page getter".to_string()))
+            }
         }
     }
 
@@ -856,15 +954,19 @@ impl Getters {
         })
     }
 
-    fn throw(&self, ctx: &Ctx<'_>, error: GetError) -> rquickjs::Error {
-        let error = match error {
-            GetError::BadRequest(message) => RunError::new("Error", message),
-            GetError::Page(error) => RunError::new(error.name.as_str(), error.message),
+    fn error(&self, error: &GetError) -> RunError {
+        match error {
+            GetError::BadRequest(message) => RunError::new("Error", message.clone()),
+            GetError::Page(error) => RunError::new(error.name.as_str(), error.message.clone()),
             GetError::Stopped(Stop::Timeout) => RunError::timeout(self.deadline.timeout()),
             GetError::Stopped(Stop::Cancelled) => {
                 RunError::new("Error", "Run cancelled".to_string())
             }
-        };
+        }
+    }
+
+    fn throw(&self, ctx: &Ctx<'_>, error: GetError) -> rquickjs::Error {
+        let error = self.error(&error);
         throw_named(ctx, &error.name, &error.message)
     }
 }
