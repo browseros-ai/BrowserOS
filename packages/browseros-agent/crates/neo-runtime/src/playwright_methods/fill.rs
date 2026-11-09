@@ -190,15 +190,18 @@ struct FillAction<'a> {
 
 impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
     type Output = ();
+    type Options = FillOptions;
 
     async fn act(
         &self,
         tab: &T,
         element: &T::Element,
+        replaced: Option<&FillOptions>,
         progress: &Progress,
     ) -> Result<ActionResult<()>, Stop> {
-        let options = self.options;
-        progress.log(format!("  fill(\"{}\")", options.value));
+        let options = replaced.unwrap_or(self.options);
+        // The script's value, whatever a hook typed instead (hooks design D11).
+        progress.log(format!("  fill(\"{}\")", self.options.value));
         let mut retry = RetryAction::new("fill");
         loop {
             retry.before(tab, options.force, progress).await?;
@@ -321,14 +324,30 @@ struct SelectAction<'a> {
 
 impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
     type Output = Vec<String>;
+    type Options = SelectOptions;
 
     async fn act(
         &self,
         tab: &T,
         element: &T::Element,
+        replaced: Option<&SelectOptions>,
         progress: &Progress,
     ) -> Result<ActionResult<Vec<String>>, Stop> {
-        let options = self.options;
+        let options = replaced.unwrap_or(self.options);
+        // A hook's `elements` are checked as the script's were, against the handles the
+        // script may use.
+        let replaced_elements = match replaced {
+            Some(replaced) => Some(
+                replaced
+                    .elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, guid)| progress.handles().select_element(index, guid))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            None => None,
+        };
+        let elements = replaced_elements.as_deref().unwrap_or(self.elements);
         let mut retry = RetryAction::new("select option");
         loop {
             retry.before(tab, options.force, progress).await?;
@@ -342,7 +361,7 @@ impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
                 .race(tab.select_options(
                     element,
                     &options.options,
-                    self.elements,
+                    elements,
                     options.force,
                     input,
                     ticket,
@@ -452,7 +471,7 @@ mod tests {
     use crate::playwright_methods::click::tests::{FakeTab, Step, Writes};
     use crate::playwright_methods::forms::InputValueMatch;
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope, Trace};
-    use crate::run::{Delivery, RunEnd};
+    use crate::run::{CallOrigin, Delivery, RunEnd};
 
     const TRIP: Duration = Duration::from_millis(1);
 
@@ -544,6 +563,36 @@ mod tests {
                     .position(|call| call == "input released")
                     .expect("released")
         );
+    }
+
+    /// A fill a hook's arguments replaced (hooks feature 4) types their value, and its log
+    /// echoes the script's: nothing but the hidden log keeps the swapped value from the model,
+    /// and this keeps it out even if the log were shown.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_replaced_fill_types_the_hooks_value_and_logs_the_scripts() {
+        let mut tab = FakeTab::ready();
+        needs_input(&mut tab);
+        let progress = Progress::for_test(1000.0);
+        let script = fill_options();
+        let replaced = FillOptions {
+            value: "s3cret".into(),
+            ..fill_options()
+        };
+        let action = FillAction {
+            options: &script,
+            delivery: progress.delivery().expect("input"),
+            platform: OnceLock::new(),
+        };
+        let acted = ElementAction::act(&action, &tab, &1, Some(&replaced), &progress).await;
+        assert!(matches!(acted, Ok(ActionResult::Done(()))));
+        assert_eq!(tab.count("insertText s3cret"), 1, "{:?}", tab.calls());
+        assert_eq!(tab.count("insertText one"), 0);
+        let log = progress.folded_log();
+        assert!(
+            log.iter().any(|line| line.contains("fill(\"one\")")),
+            "{log:?}"
+        );
+        assert!(!log.iter().any(|line| line.contains("s3cret")), "{log:?}");
     }
 
     #[tokio::test(start_paused = true)]
@@ -651,6 +700,8 @@ mod tests {
                 guid: "frame@test".into(),
                 method: "fill".into(),
                 title: None,
+                origin: CallOrigin::Agent,
+                action: None,
                 params: serde_json::Value::Null,
                 location: None,
                 input: true,
@@ -747,6 +798,8 @@ mod tests {
             guid: "frame@test".into(),
             method: "forms".into(),
             title: None,
+            origin: CallOrigin::Agent,
+            action: None,
             params: serde_json::Value::Null,
             location: None,
             input,

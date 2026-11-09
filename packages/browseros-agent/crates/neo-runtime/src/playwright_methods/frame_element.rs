@@ -18,6 +18,7 @@ use neo_runtime_spec::injected::InjectedPreviewNodeParams;
 use neo_runtime_spec::{MethodGroup, MethodMeta};
 use serde_json::json;
 
+use crate::actions::{ActionKind, NeoMethod};
 use crate::browser_representations::page::FrameTab;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::playwright_methods::click::PageError;
@@ -28,16 +29,20 @@ use crate::progress::{CallError, PlaywrightError, Progress};
 const DETACHED: &str = "Frame has been detached.";
 
 /// Neo: `Frame.frameElement`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
-pub(crate) static FRAME_ELEMENT_META: MethodMeta = MethodMeta {
-    interface: "Frame",
-    method: "frameElement",
-    title: Some("Get frame element"),
-    subtitle: None,
-    group: Some(MethodGroup::Getter),
-    render_params: &[],
-    internal: false,
-    flags: &[],
-};
+pub(crate) static FRAME_ELEMENT_META: NeoMethod = NeoMethod::new(
+    MethodMeta {
+        interface: "Frame",
+        method: "frameElement",
+        title: Some("Get frame element"),
+        subtitle: None,
+        group: Some(MethodGroup::Getter),
+        render_params: &[],
+        internal: false,
+        flags: &[],
+    },
+    ActionKind::FrameElement,
+    false,
+);
 
 /// Serves `Frame.frameElement`: the frame's owner element, adopted into its parent's main world.
 /// A frame that is gone, or whose owner is gone, has been detached, as in Playwright.

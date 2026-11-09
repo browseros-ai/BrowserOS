@@ -69,6 +69,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tracing::{debug, warn};
 
+use crate::action_hooks::element::PinnedElement;
 use crate::browser_representations::emulation::PageEmulation;
 use crate::browser_representations::init_scripts::{self, Link, until_gone};
 use crate::browser_representations::locator_handlers::{self, LocatorHandlers};
@@ -89,6 +90,7 @@ use crate::playwright_methods::click::{
     Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
     StatesCheck, Stop, Tab, Verdict,
 };
+use crate::playwright_methods::evaluate::{self, Handles};
 use crate::playwright_methods::highlight::Highlights;
 use crate::playwright_methods::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
@@ -2849,6 +2851,46 @@ impl Tab for FrameTab {
         }))
     }
 
+    /// Both nodes read in the page now (`DOM.describeNode`). The pinned node is read first, from
+    /// the object the pin kept: once its document is gone (a navigation destroyed its world, or
+    /// the frame now runs in another process), CDP cannot find the object and it is another
+    /// node, never a retry. Otherwise both documents are live in one renderer, which numbers its
+    /// nodes once, so equal backend ids are one node. Another frame's element is another node (a
+    /// child frame's context is made again for each document). No page script runs.
+    async fn same_node(
+        &self,
+        pinned: &ResolvedElement,
+        element: &ResolvedElement,
+    ) -> Result<bool, PageError> {
+        if !Arc::ptr_eq(&pinned.frame, &element.frame) {
+            return Ok(false);
+        }
+        let frame = &element.frame;
+        let pinned = match frame
+            .main
+            .backend_of(frame, pinned.handle().id().object_id())
+            .await
+        {
+            Ok(backend) => backend,
+            Err(PageError::Closed) => return Err(PageError::Closed),
+            Err(_) => return Ok(false),
+        };
+        let element = frame
+            .main
+            .backend_of(frame, element.handle().id().object_id())
+            .await?;
+        Ok(pinned == element)
+    }
+
+    async fn pin(
+        &self,
+        element: &ResolvedElement,
+        preview: &str,
+        hooks: &Arc<Handles>,
+    ) -> Result<PinnedElement, PageError> {
+        evaluate::pin_element(self, element, preview, hooks).await
+    }
+
     async fn check_states(
         &self,
         element: &ResolvedElement,
@@ -3075,6 +3117,7 @@ impl Tab for FrameTab {
         element: &ResolvedElement,
         hit_point: Point,
         action: HitTargetAction,
+        follow_label: bool,
         input: InputPermit,
     ) -> impl Future<Output = Result<Arming<ArmedInterceptor>, PageError>> + Send {
         let page = Arc::clone(self);
@@ -3089,7 +3132,14 @@ impl Tab for FrameTab {
                 }
             };
             let (answer, armed) = oneshot::channel();
-            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, action, input);
+            let setup = arm_interceptor(
+                Arc::clone(&page),
+                element,
+                hit_point,
+                action,
+                follow_label,
+                input,
+            );
             page.spawn(async move {
                 // Nobody may be waiting any more; the unsent answer drops here, disarming.
                 let _waiting = answer.send(setup.await);
@@ -3331,6 +3381,7 @@ async fn arm_interceptor(
     element: ResolvedElement,
     hit_point: Option<Point>,
     action: HitTargetAction,
+    follow_label: bool,
     input: InputPermit,
 ) -> Result<Arming<ArmedInterceptor>, PageError> {
     let mark = page.mark();
@@ -3345,6 +3396,7 @@ async fn arm_interceptor(
                 hit_point,
                 // Only Playwright's trial blocks every event, and Neo's trial sends none.
                 block_all_events: false,
+                follow_label,
             },
         )
         .await?;

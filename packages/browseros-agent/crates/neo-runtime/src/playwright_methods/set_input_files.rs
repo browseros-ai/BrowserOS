@@ -205,9 +205,33 @@ pub(crate) async fn set_input_files<T: FilesTab>(
     let Some(delivery) = progress.delivery() else {
         return Err(PlaywrightError::error(NO_DELIVERY_CELL).into());
     };
-    let FrameSetInputFilesParams {
-        selector,
+    let selector = params.selector.clone();
+    let strict = params.strict.unwrap_or(false);
+    let files = prepared(params, progress).await?;
+    // Playwright: `server/frames.ts` `Frame.setInputFiles`: `return dom.assertDone(await this._retryWithProgressIfNotConnected(progress, target, { waitForFrameVisible: false }, (progress, handle, box) => handle._setInputFiles(progress, inputFileItems, box)));`
+    click::retry_with_progress_if_not_connected(
+        tab,
+        &selector,
         strict,
+        false,
+        progress,
+        &SetInputFiles {
+            files: &files,
+            delivery,
+        },
+    )
+    .await
+}
+
+/// The files `params` name, prepared as Playwright prepares them before its loop A. A hook's
+/// replacement arguments are prepared the same way.
+async fn prepared(
+    params: FrameSetInputFilesParams,
+    progress: &Progress,
+) -> Result<InputFiles, CallError> {
+    let FrameSetInputFilesParams {
+        selector: _,
+        strict: _,
         payloads,
         local_directory,
         directory_stream,
@@ -233,27 +257,14 @@ pub(crate) async fn set_input_files<T: FilesTab>(
             .collect()
     });
     // Playwright: `server/frames.ts` `Frame.setInputFiles`: `const inputFileItems = await progress.race(prepareFilesForUpload(this, params));`
-    let files = progress
+    Ok(progress
         .race(prepare_files(
             payloads,
             local_paths,
             unsupported,
             progress.artifacts(),
         ))
-        .await??;
-    // Playwright: `server/frames.ts` `Frame.setInputFiles`: `return dom.assertDone(await this._retryWithProgressIfNotConnected(progress, target, { waitForFrameVisible: false }, (progress, handle, box) => handle._setInputFiles(progress, inputFileItems, box)));`
-    click::retry_with_progress_if_not_connected(
-        tab,
-        &selector,
-        strict.unwrap_or(false),
-        false,
-        progress,
-        &SetInputFiles {
-            files: &files,
-            delivery,
-        },
-    )
-    .await
+        .await??)
 }
 
 /// Playwright: `server/dom.ts` `ElementHandle._setInputFiles`
@@ -268,17 +279,28 @@ pub(crate) struct SetInputFiles<'a> {
 
 impl<T: FilesTab> ElementAction<T> for SetInputFiles<'_> {
     type Output = ();
+    type Options = FrameSetInputFilesParams;
 
     async fn act(
         &self,
         tab: &T,
         element: &T::Element,
+        replaced: Option<&FrameSetInputFilesParams>,
         progress: &Progress,
     ) -> Result<ActionResult<()>, Stop> {
-        let directory = matches!(self.files, InputFiles::Directory(_));
+        // Neo: a hook's replacement sets the files it names, prepared as the script's were.
+        let prepared_files;
+        let files = match replaced {
+            Some(params) => {
+                prepared_files = prepared(params.clone(), progress).await?;
+                &prepared_files
+            }
+            None => self.files,
+        };
+        let directory = matches!(files, InputFiles::Directory(_));
         // Playwright: `server/dom.ts` `ElementHandle._setInputFiles`: `if (result === 'error:notconnected' || !result.asElement())`
         let Some(input) = progress
-            .race(tab.file_input(element, self.files.multiple(), directory))
+            .race(tab.file_input(element, files.multiple(), directory))
             .await??
         else {
             return Ok(ActionResult::NotConnected);
@@ -295,7 +317,7 @@ impl<T: FilesTab> ElementAction<T> for SetInputFiles<'_> {
             .delivery
             .begin()
             .map_err(|_| Stop::from(PlaywrightError::error(SET_AGAIN)))?;
-        let set = match self.files {
+        let set = match files {
             InputFiles::Payloads(payloads) => {
                 progress
                     .race(tab.set_file_payloads(&input, payloads.clone(), ticket))

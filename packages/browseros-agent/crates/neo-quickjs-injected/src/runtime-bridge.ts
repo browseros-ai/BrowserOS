@@ -15,6 +15,8 @@
  * - `drain` takes queued events; `nextEvents` resolves once one is queued (the idle wake).
  * - `get` also serves the pure platform reads QuickJS lacks: URL parses and setters, device
  *   descriptors, random bytes.
+ * - `log` appends one line to the realm's log, where its `console` writes too: the run's logs in
+ *   the agent's realm, the host-only hook trace in a hook realm (`hooks.ts` `ctx.trace`).
  */
 
 import type {
@@ -30,6 +32,7 @@ import type { CreatedChain, Timing } from './network'
 
 declare const __neo_runtime: {
   get(request: string): string
+  log(line: string): void
   callWithEvents(message: string): Promise<{ reply: string; events: number }>
   abort(id: number, reason: string): void
   subscribe(request: string): void
@@ -221,6 +224,11 @@ export async function call(message: string): Promise<string> {
  */
 export function abort(id: number, reason: string): void {
   __neo_runtime.abort(id, reason)
+}
+
+/** Appends `line` to the realm's log: in a hook realm, the hook trace (`hooks.ts` `ctx.trace`). */
+export function log(line: string): void {
+  __neo_runtime.log(line)
 }
 
 /** Turns the run's listening to `event` on `guid` on or off; throws for one Neo cannot produce. */
