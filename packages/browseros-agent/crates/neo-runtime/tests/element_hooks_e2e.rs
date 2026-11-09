@@ -99,6 +99,26 @@ const LABEL_WITH_LINK: &str = "<!doctype html><title>Terms</title>\
     <span id=box style='display:inline-block;width:20px;height:20px;background:#ccc'></span>\
     I agree, and <a id=pay href='#' onclick='window.__pay=(window.__pay||0)+1;return false'>pay now</a>\
     </label>";
+/// Neo: a custom checkbox whose label also holds a script-driven "pay now" control: a span with
+/// a click listener and an ARIA button role, but no tabindex.
+const LABEL_WITH_SPAN_BUTTON: &str = "<!doctype html><title>Terms</title>\
+    <label id=lab for=cb style='display:inline-block;padding:4px'>\
+    <input id=cb type=checkbox style='opacity:0;position:absolute;left:8px;top:8px;width:20px;height:20px;margin:0'>\
+    <span id=box style='display:inline-block;width:20px;height:20px;background:#ccc'></span>\
+    I agree, and <span id=pay role=button onclick='window.__pay=(window.__pay||0)+1'>pay now</span>\
+    </label>";
+/// Neo: the same, with the "pay now" link inside a web component's open shadow root.
+const LABEL_WITH_SHADOW_LINK: &str = "<!doctype html><title>Terms</title>\
+    <label id=lab for=cb style='display:inline-block;padding:4px'>\
+    <input id=cb type=checkbox style='opacity:0;position:absolute;left:8px;top:8px;width:20px;height:20px;margin:0'>\
+    <span id=box style='display:inline-block;width:20px;height:20px;background:#ccc'></span>\
+    I agree, and <pay-link id=host></pay-link>\
+    </label><script>\
+    customElements.define('pay-link', class extends HTMLElement { connectedCallback() {\
+    const root = this.attachShadow({ mode: 'open' });\
+    root.innerHTML = '<a id=pay href=\"#\">pay now</a>';\
+    root.getElementById('pay').addEventListener('click', (e) => { e.preventDefault(); window.__pay = (window.__pay || 0) + 1; });\
+    } });</script>";
 /// Neo: a click policy that asks about each clicked element by its page and label, and holds
 /// "Next" for a while (as a hook asking the owner would); it blocks "Pay".
 const ASK_PAY: &str = "
@@ -1137,4 +1157,59 @@ return 'done';
     );
     assert_no_secret(&outcome);
     tab.close().await;
+}
+
+/// The hook refuses `#pay` by the pinned element; the script force-clicks the checkbox at a
+/// position over `#pay`, inside the checkbox's label. Returns the script's value and the page's
+/// `[pay activations, checked]`.
+async fn forced_into_the_label(page: &str) -> Option<(Option<Value>, Value)> {
+    let tab = open_page(page).await?;
+    let hooks = "
+neo.on('beforeAction', { kinds: ['click'] }, async (event) => {
+  if ((await event.element.evaluate((e) => e.id)) === 'pay') return { block: 'paying needs the owner' };
+});
+";
+    let code = "
+const direct = await page.click('#pay', { timeout: 2000 }).then(() => 'clicked', (e) => e.name);
+const cb = await page.locator('#cb').boundingBox();
+const pay = await page.locator('#pay').boundingBox();
+const position = { x: pay.x + pay.width / 2 - cb.x, y: pay.y + pay.height / 2 - cb.y };
+const forced = await page.click('#cb', { force: true, position, timeout: 2000 })
+  .then(() => 'clicked', (e) => e.name);
+return { direct, forced };
+";
+    let outcome = run(&tab, code, &[hooks]).await;
+    let page_now = tab
+        .evaluate("[window.__pay ?? 0, document.getElementById('cb').checked]")
+        .await;
+    tab.close().await;
+    Some((outcome.value, page_now))
+}
+
+/// Review R4-2: a script-driven "pay now" (a span with an ARIA button role and a click listener,
+/// no tabindex) inside the checkbox's label: a forced click on the checkbox over it never runs it.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_forced_click_through_a_label_never_reaches_a_span_button_inside_it() {
+    let Some((value, page_now)) = forced_into_the_label(LABEL_WITH_SPAN_BUTTON).await else {
+        return;
+    };
+    assert_eq!(page_now, json!([0, false]), "{value:?}");
+    assert_eq!(
+        value,
+        Some(json!({ "direct": "Error", "forced": "TimeoutError" }))
+    );
+}
+
+/// Review R4-1: the "pay now" link inside a web component's shadow root, inside the checkbox's
+/// label: a forced click on the checkbox over it never follows the link.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_forced_click_through_a_label_never_reaches_a_shadow_link_inside_it() {
+    let Some((value, page_now)) = forced_into_the_label(LABEL_WITH_SHADOW_LINK).await else {
+        return;
+    };
+    assert_eq!(page_now, json!([0, false]), "{value:?}");
+    assert_eq!(
+        value,
+        Some(json!({ "direct": "Error", "forced": "TimeoutError" }))
+    );
 }
