@@ -654,6 +654,18 @@ impl Dispatcher {
         &self.inner.run
     }
 
+    /// `call`, unless this is the hook realm's dispatcher and the call is one hooks may not make
+    /// ([`refused_for_hooks`]): then an `Error` that names what the hook tried, before the call
+    /// changes anything.
+    fn allowed(&self, call: ObjectCall) -> Result<ObjectCall, PlaywrightError> {
+        match (self.side.origin, refused_for_hooks(&call)) {
+            (CallOrigin::Hook, Some(what)) => {
+                Err(PlaywrightError::error(format!("{what}: {HOOKS_REFUSE}")))
+            }
+            _ => Ok(call),
+        }
+    }
+
     /// Who sends this dispatcher's calls. The call path reads it to skip the hooks for a hook's
     /// own calls (hooks feature 3); every record it opens carries it (`CallEntry::origin`).
     #[cfg_attr(
@@ -698,7 +710,9 @@ impl Dispatcher {
             .unwrap_or_else(|| object_kind(&guid, target.is_some()));
         let debugged = self.debugged(&object, target.as_ref());
         let Routed { meta, route } = route(object, &method, params.clone());
-        let route = route.map(|call| inner.ordered(&guid, call));
+        let route = route
+            .and_then(|call| self.allowed(call))
+            .map(|call| inner.ordered(&guid, call));
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
             title: None,
@@ -1092,6 +1106,39 @@ fn closed_token(
         CancellationToken::new()
     } else {
         target.map_or_else(CancellationToken::new, |(page, _)| page.closed.clone())
+    }
+}
+
+/// Neo: why the hook realm's dispatcher refuses a call [`refused_for_hooks`] names: the run's
+/// state it would change belongs to the agent's script, and the events it relies on never reach
+/// the hook realm.
+const HOOKS_REFUSE: &str = "a hook cannot replace the run's routes, bindings, locator handlers \
+     or test id attribute, which the agent's script owns, and no event reaches a hook";
+
+/// What a call through the hook realm's dispatcher must not do (review P2-2), as the API that
+/// sends it: replace the patterns of the run's routes (the page's or a context's, which would turn
+/// off the agent's routes and release its paused requests) or answer a paused route, expose a
+/// binding or answer a binding call, register, remove or resolve a locator handler, or set the
+/// run's test id attribute (`selectors.setTestIdAttribute`; `selectors.register` never leaves
+/// the SDK). Each needs events the hook realm never gets, or overwrites what the agent's script
+/// set. `None` for every other call.
+fn refused_for_hooks(call: &ObjectCall) -> Option<&'static str> {
+    match call {
+        ObjectCall::Page(PageCall::SetNetworkInterceptionPatterns(_))
+        | ObjectCall::Context(BrowserContextCall::SetNetworkInterceptionPatterns(_))
+        | ObjectCall::CreatedContext(_, BrowserContextCall::SetNetworkInterceptionPatterns(_))
+        | ObjectCall::Intercepted(..) => Some("route"),
+        ObjectCall::Binding(_) => Some("exposeBinding"),
+        ObjectCall::Page(
+            PageCall::RegisterLocatorHandler(_)
+            | PageCall::UnregisterLocatorHandler(_)
+            | PageCall::ResolveLocatorHandlerNoReply(_),
+        ) => Some("addLocatorHandler"),
+        ObjectCall::Context(BrowserContextCall::SetTestIdAttributeName(_))
+        | ObjectCall::CreatedContext(_, BrowserContextCall::SetTestIdAttributeName(_)) => {
+            Some("selectors.setTestIdAttribute")
+        }
+        _ => None,
     }
 }
 
@@ -2672,6 +2719,150 @@ mod tests {
         assert_eq!(hook_json["origin"], "hook");
         assert_eq!(hook_json["params"], Value::Null);
         assert!(hook_json.get("location").is_none());
+    }
+
+    /// Each class of call a hook may not make is refused on the hook dispatcher, and an ordinary
+    /// call is not.
+    #[test]
+    fn tests_that_hooks_may_not_overwrite_what_the_agent_owns() {
+        let patterns = json!({"patterns": [{"glob": "**/*"}]});
+        let refused = [
+            (
+                "route",
+                route(
+                    ObjectKind::Page,
+                    "setNetworkInterceptionPatterns",
+                    Some(patterns.clone()),
+                ),
+            ),
+            (
+                "route",
+                route(
+                    ObjectKind::Context,
+                    "setNetworkInterceptionPatterns",
+                    Some(patterns),
+                ),
+            ),
+            (
+                "exposeBinding",
+                route(
+                    ObjectKind::Page,
+                    "exposeBinding",
+                    Some(json!({"name": "f"})),
+                ),
+            ),
+            (
+                "exposeBinding",
+                route(
+                    ObjectKind::Context,
+                    "exposeBinding",
+                    Some(json!({"name": "f"})),
+                ),
+            ),
+            (
+                "addLocatorHandler",
+                route(
+                    ObjectKind::Page,
+                    "registerLocatorHandler",
+                    Some(json!({"selector": "#x"})),
+                ),
+            ),
+            (
+                "addLocatorHandler",
+                route(
+                    ObjectKind::Page,
+                    "unregisterLocatorHandler",
+                    Some(json!({"uid": 1})),
+                ),
+            ),
+            (
+                "addLocatorHandler",
+                route(
+                    ObjectKind::Page,
+                    "resolveLocatorHandlerNoReply",
+                    Some(json!({"uid": 1})),
+                ),
+            ),
+            (
+                "selectors.setTestIdAttribute",
+                route(
+                    ObjectKind::Context,
+                    "setTestIdAttributeName",
+                    Some(json!({"testIdAttributeName": "data-x"})),
+                ),
+            ),
+        ];
+        for (what, routed) in refused {
+            let call = routed
+                .route
+                .unwrap_or_else(|error| panic!("{what}: {error:?}"));
+            assert_eq!(refused_for_hooks(&call), Some(what));
+        }
+        let goto = route_frame("goto", json!({"url": "https://a.test/"}))
+            .route
+            .unwrap();
+        assert_eq!(refused_for_hooks(&goto), None);
+    }
+
+    /// A hook's attempt to replace the page's routes is refused before it changes anything: the
+    /// agent's routes still pause the page's requests.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_a_hooks_route_attempt_leaves_the_agents_routes() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let (agent, hooks) = agent_and_hooks(&browser).await;
+        let patterns = |id: u64, list: Value| {
+            json!({
+                "id": id, "guid": format!("page@{PAGE}"),
+                "method": "setNetworkInterceptionPatterns", "params": {"patterns": list},
+            })
+        };
+        let routed = replied(&agent, &patterns(1, json!([{"glob": "**/*"}]))).await;
+        assert!(routed.get("error").is_none(), "{routed}");
+        let refused = replied(&hooks, &patterns(1, json!([]))).await;
+        assert_eq!(refused["error"]["error"]["name"], "Error", "{refused}");
+        let (page, _) = agent.inner.tabs.resolve(&format!("page@{PAGE}")).unwrap();
+        let session = page.attached_session().unwrap();
+        assert!(
+            session.routes.intercepting(),
+            "the agent's routes still pause requests"
+        );
+        assert!(
+            !browser
+                .exchanges()
+                .iter()
+                .any(|exchange| exchange.method() == "Fetch.disable"),
+            "nothing turned the interception off"
+        );
+        let (records, _) = agent.finish(RunEnd::Settled).await;
+        assert_eq!(records[1].origin, CallOrigin::Hook);
+        assert!(matches!(records[1].result, CallResult::Error { .. }));
+    }
+
+    /// The hook realm has in-flight caps of its own: a hook's call is admitted while the agent
+    /// holds all of its own.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_a_hook_call_is_admitted_while_the_agent_holds_its_cap() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let (agent, hooks) = agent_and_hooks(&browser).await;
+        let wait = |id: u64, ms: u64| {
+            json!({
+                "id": id, "guid": format!("frame@{PAGE}"),
+                "method": "waitForTimeout", "params": {"waitTimeout": ms},
+            })
+        };
+        let full = u64::try_from(MAX_CALLS_IN_FLIGHT).unwrap();
+        let held: Vec<PendingReply> = (1..=full)
+            .map(|id| agent.call(&wait(id, 60_000).to_string()))
+            .collect();
+        let refused = replied(&agent, &wait(full + 1, 1)).await;
+        assert_eq!(
+            refused["error"]["error"]["name"], "Error",
+            "the agent is past its cap: {refused}"
+        );
+        let admitted = replied(&hooks, &wait(1, 1)).await;
+        assert!(admitted.get("error").is_none(), "{admitted}");
+        drop(held);
+        agent.finish(RunEnd::Settled).await;
     }
 
     /// A paused debugger holds the agent's next call, never a hook's.
