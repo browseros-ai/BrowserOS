@@ -173,6 +173,10 @@ impl Runtime {
     /// `page.url()` waits for its CDP reply with `tokio::task::block_in_place`, which the
     /// current-thread runtime does not support; on it the run ends with an error before any
     /// script runs.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a run's phases in order: tab, hooks, script, afterRun, finish, late hook lines"
+    )]
     pub async fn run(&self, request: RunRequest) -> RunOutcome {
         let RunRequest {
             code,
@@ -249,12 +253,20 @@ impl Runtime {
                 dispatcher: dispatcher.for_hooks(),
                 realms: Arc::clone(&self.hook_realms),
             };
-            HookSandbox::start(hooks, parts)
+            let sandbox = HookSandbox::start(hooks, parts);
+            // Only the agent's dispatcher fires the action hooks: the hook realm's has no place
+            // for them, so a hook's own calls are never hooked (`action_hooks.rs`).
+            let set = dispatcher.set_action_hooks(Arc::new(HookSandbox::clone(&sandbox)));
+            (sandbox, set)
         });
         let gate = match &sandbox {
-            Some(sandbox) => sandbox.before_run(&code, &deadline).await,
+            Some((sandbox, true)) => sandbox.before_run(&code, &deadline).await,
+            // A fresh dispatcher always takes them; were it not to, the run's action hooks would
+            // be silently off while its run hooks work, so it fails closed instead.
+            Some((sandbox, false)) => sandbox.blocked("the run's action hooks could not be set"),
             None => Gate::Start,
         };
+        let sandbox = sandbox.map(|(sandbox, _)| sandbox);
         let outcome = match gate {
             Gate::Start => {
                 let script = Script {
@@ -276,6 +288,11 @@ impl Runtime {
         let (calls, dropped) = dispatcher.finish(run_end).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
         grants.disarm();
+        // What calls that ended during `finish`'s drain left with the hooks.
+        let outcome = match &sandbox {
+            Some(sandbox) => sandbox.late(outcome),
+            None => outcome,
+        };
         outcome
             .with_calls(calls, dropped)
             .with_pages(tabs.outcome())
