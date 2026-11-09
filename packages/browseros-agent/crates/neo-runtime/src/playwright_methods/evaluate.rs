@@ -46,9 +46,7 @@ use tokio::time;
 
 use crate::action_hooks::element::PinnedElement;
 use crate::actions::{ActionKind, NeoMethod};
-use crate::browser_representations::page::{
-    self, FrameTab, GroupGuard, PageSession, ResolvedElement,
-};
+use crate::browser_representations::page::{FrameTab, GroupGuard, PageSession, ResolvedElement};
 use crate::chromium_bridge::frame_selector;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::chromium_bridge::main_world::{
@@ -3051,9 +3049,9 @@ pub(crate) async fn element_handle_for(
 
 /// Neo: pins a resolved element for the run's hooks (hooks feature 4): [`element_handle_for`] in
 /// `handles`, the run's handles as its hook realm sees them, so the agent's script can never
-/// reach the handle, with the node's key (its frame and backend node id). It reads and adopts
-/// the node, nothing else: no snapshot runs and no `aria-ref` changes. Dropping the pin forgets
-/// its guid at once and releases its object on the page's tracker.
+/// reach the handle; the pin keeps `element` (and its group) to compare later resolutions with.
+/// It adopts the node, nothing else: no snapshot runs and no `aria-ref` changes. Dropping the
+/// pin forgets its guid at once and releases its object on the page's tracker.
 ///
 /// # Errors
 ///
@@ -3065,7 +3063,6 @@ pub(crate) async fn pin_element(
     handles: &Arc<Handles>,
 ) -> Result<PinnedElement, PageError> {
     let frame = &element.frame;
-    let key = page::node_key_of(element).await?;
     let created = element_handle_for(tab, frame, element.handle(), preview, handles).await?;
     let release = PinRelease {
         handles: Arc::clone(handles),
@@ -3077,7 +3074,7 @@ pub(crate) async fn pin_element(
             guid: created.guid,
             preview: created.initializer.preview,
         },
-        key,
+        element.clone(),
         Box::new(release),
     ))
 }

@@ -42,49 +42,27 @@ use crate::run::{BeforeHookResult, Delivery, RunEnd};
 /// element action (`method_router.rs`), which only that action's handler reads, by type.
 pub(crate) type ElementOptions = Arc<dyn Any + Send + Sync>;
 
-/// A DOM node's identity across resolutions: the same node gives an equal key, another node a
-/// different one. Read from the page, never from a preview: the node's backend node id, which
-/// Chromium numbers per renderer process, within its document, named by the frame's world and
-/// the commits that world has seen. A cross-site navigation keeps the frame and may reuse a
-/// backend id in the new process; the document part tells the two apart.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NodeKey {
-    world: u64,
-    document: u64,
-    backend: i64,
-}
-
-impl NodeKey {
-    /// Node `backend` of document `document` of world `world` (`World::instance`,
-    /// `World::generation`).
-    pub(crate) fn new(world: u64, document: u64, backend: i64) -> Self {
-        Self {
-            world,
-            document,
-            backend,
-        }
-    }
-}
-
-/// An element pinned for the run's hooks: the handle they receive, the node it holds, and what
-/// releases it. Dropping it releases the handle, so a hook can never reach a pin after its call.
+/// An element pinned for the run's hooks: the handle they receive, the resolved element it pins,
+/// and what releases it. The resolved element is kept, type-erased, so a later resolution can be
+/// compared with it in the page (`Tab::same_node`); it lives, with its object group, as long as
+/// the pin. Dropping the pin releases the handle, so a hook can never reach a pin after its call.
 pub(crate) struct PinnedElement {
     reference: ElementRef,
-    key: NodeKey,
+    node: Arc<dyn Any + Send + Sync>,
     _release: Box<dyn Any + Send + Sync>,
 }
 
 impl PinnedElement {
-    /// A pin of the node `key` names, handed to hooks as `reference`; `release` frees it as it
-    /// drops.
-    pub(crate) fn new(
+    /// A pin of `node`, a tab's resolved element, handed to hooks as `reference`; `release`
+    /// frees it as it drops.
+    pub(crate) fn new<E: Send + Sync + 'static>(
         reference: ElementRef,
-        key: NodeKey,
+        node: E,
         release: Box<dyn Any + Send + Sync>,
     ) -> Self {
         Self {
             reference,
-            key,
+            node: Arc::new(node),
             _release: release,
         }
     }
@@ -225,7 +203,7 @@ impl ElementGate {
             state
                 .pinned
                 .as_ref()
-                .map(|pinned| pinned.element.key.clone())
+                .map(|pinned| Arc::clone(&pinned.element.node))
         });
         if let Some(pinned) = pinned {
             // The call's input went out already: whatever node this is, the call resolved it to
@@ -237,8 +215,17 @@ impl ElementGate {
             {
                 return Ok(self.decided_options());
             }
-            let key = progress.race(tab.node_key(&resolved.element)).await??;
-            if key == pinned {
+            // Decided in the page, from the pinned node read again: never by a preview, nor by a
+            // number another document may reuse.
+            let same = match pinned.downcast_ref::<T::Element>() {
+                Some(pinned) => {
+                    progress
+                        .race(tab.same_node(pinned, &resolved.element))
+                        .await??
+                }
+                None => false,
+            };
+            if same {
                 return Ok(self.decided_options());
             }
             // Another node: its predecessor's pin goes before this one is minted.

@@ -196,6 +196,29 @@ function judgeRelease(
   }
 }
 
+/**
+ * Deviation: `injected/src/injectedScript.ts` `InjectedScript.expectHitTarget`: `if (hitElement === targetElement)` Playwright accepts a hit on the element or inside it only. Neo keeps the hit check of a forced input on an element an action hook decided about (neo-runtime's hooks feature 4, where Playwright's force has none), and there also accepts a hit inside a `<label>` of the element: the click activates the same control, as on a custom checkbox whose styled box covers its input.
+ *
+ * The node the interceptor judges for `followLabel`: `element`, unless `point` misses it (as
+ * Playwright retargets it, to its button or link) and hits one of its labels.
+ */
+function labelHit(
+  injected: InjectedScript,
+  element: Element,
+  point: { x: number; y: number },
+): Element {
+  const control = injected.retarget(element, 'button-link') ?? element
+  if (injected.expectHitTarget(point, control) === 'done') return element
+  const labels =
+    'labels' in control
+      ? Array.from((control as HTMLInputElement).labels ?? [])
+      : []
+  return (
+    labels.find((label) => injected.expectHitTarget(point, label) === 'done') ??
+    element
+  )
+}
+
 export const glue = {
   title: () => ({ value: document.title }),
 
@@ -508,11 +531,13 @@ export const glue = {
   /** Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `injected.setupHitTargetInterceptor(node, actionType, hitPoint, trial)` */
   setupHitTargetInterceptor: (
     injected,
-    { action, hitPoint, blockAllEvents },
+    { action, hitPoint, blockAllEvents, followLabel },
     element,
   ) => {
+    const target =
+      followLabel && hitPoint ? labelHit(injected, element, hitPoint) : element
     const outcome = injected.setupHitTargetInterceptor(
-      element,
+      target,
       action,
       hitPoint,
       blockAllEvents,
@@ -521,7 +546,7 @@ export const glue = {
       outcome:
         typeof outcome === 'string'
           ? outcome
-          : judgeRelease(injected, element, action, outcome),
+          : judgeRelease(injected, target, action, outcome),
     }
   },
 

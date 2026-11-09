@@ -70,7 +70,7 @@ use neo_runtime_spec::serve::{
     FrameTapParamsModifiersItem, FrameTapParamsScroll, Point as WirePoint,
 };
 
-use crate::action_hooks::element::{self, NodeKey, PinnedElement};
+use crate::action_hooks::element::{self, PinnedElement};
 use crate::chromium_bridge::keyboard_input::{self, KeyboardModifier, KeyboardTab, Platform};
 use crate::chromium_bridge::mouse_and_touch_input::{self, Devices, EffectSink, Plan};
 use crate::playwright_methods::evaluate::Handles;
@@ -89,7 +89,7 @@ use crate::progress::{
 pub(crate) trait Tab: Send + Sync {
     /// One resolved element, held for one loop-A iteration. Dropping it releases it (the real
     /// one owns a CDP object group and releases it on the run's tracker).
-    type Element: Send + Sync;
+    type Element: Send + Sync + 'static;
     /// An armed hit-target interceptor. Dropping one without a successful [`Tab::verdict`]
     /// disarms it in the background, so every path out of an attempt disarms it: a leaked
     /// armed interceptor would keep swallowing mismatched clicks in the user's tab, because the
@@ -129,18 +129,20 @@ pub(crate) trait Tab: Send + Sync {
         strict: bool,
     ) -> impl Future<Output = Result<Option<Resolved<Self::Element>>, PageError>> + Send;
 
-    /// Neo: `element`'s node as a key that is equal for the same DOM node however often it is
-    /// resolved, read in the page: an element action's hooks are asked again only about another
-    /// node (hooks feature 4). `NotConnected` when the node is gone.
-    fn node_key(
+    /// Neo: whether `element` is the node `pinned` holds (hooks feature 4), decided in the page,
+    /// with the pinned node read again from the object its pin kept: a node whose document is
+    /// gone is another node, and the answer is `false`, never a retry; never a number another
+    /// document may reuse, never a preview.
+    fn same_node(
         &self,
+        pinned: &Self::Element,
         element: &Self::Element,
-    ) -> impl Future<Output = Result<NodeKey, PageError>> + Send;
+    ) -> impl Future<Output = Result<bool, PageError>> + Send;
 
     /// Neo: a handle on `element`'s node in `hooks`, the run's handles as its hook realm sees
-    /// them, so the agent's script can never reach it (hooks feature 4), with the node's key.
-    /// It reads the node and adopts it into the main world; it takes no snapshot and touches no
-    /// `aria-ref`. Dropping the pin releases the handle.
+    /// them, so the agent's script can never reach it (hooks feature 4); the pin keeps `element`
+    /// for [`Tab::same_node`]. It adopts the node into the main world; it takes no snapshot and
+    /// touches no `aria-ref`. Dropping the pin releases the handle.
     fn pin(
         &self,
         element: &Self::Element,
@@ -192,11 +194,14 @@ pub(crate) trait Tab: Send + Sync {
     /// task of its own: a caller that stopped waiting leaves an `Armed` nobody takes, which
     /// disarms as it drops. A future dropped before its first poll sends nothing. `input` is
     /// held until the answer, and an armed interceptor keeps it until its stop has answered.
+    /// `follow_label`: a hit inside a `<label>` of the element passes too (a forced input on an
+    /// element a hook decided about, hooks feature 4).
     fn arm(
         &self,
         element: &Self::Element,
         hit_point: Point,
         action: HitTargetAction,
+        follow_label: bool,
         input: Self::Input,
     ) -> impl Future<Output = Result<Arming<Self::Armed>, PageError>> + Send;
 
@@ -1117,12 +1122,21 @@ async fn attempt<T: Tab>(
     // interceptor.
     let input = progress.race(tab.input()).await?;
     // Deviation: `server/dom.ts` `ElementHandle._performPointerAction`: `if (force) {` Playwright's force skips the hit-target check; Neo keeps it for a call whose beforeAction hook decided about its element (hooks feature 4), so a forced input, at a `position` or under an overlay, lands on the element the hook checked, or not at all.
-    let unchecked = options.force && progress.element_gate().is_none();
-    let armed = if unchecked {
+    let hooked_force = options.force && progress.element_gate().is_some();
+    let armed = if options.force && !hooked_force {
         None
     } else {
+        // A forced input keeps its hit check only for a hooked element, where a hit inside one
+        // of its labels also lands on it (a custom checkbox's box, which force clicks through).
+        let follow_label = hooked_force;
         match progress
-            .race(tab.arm(element, point.clone(), action.hit_target(), input.clone()))
+            .race(tab.arm(
+                element,
+                point.clone(),
+                action.hit_target(),
+                follow_label,
+                input.clone(),
+            ))
             .await??
         {
             Arming::Armed(armed) => Some(armed),
@@ -1783,11 +1797,11 @@ pub(crate) mod tests {
         /// Each locator handlers' checkpoint, as how many plans had been pressed before it.
         pub(crate) checkpoints: Mutex<Vec<usize>>,
         /// Which node each `resolve` finds (its `Element`), the last repeating: node 1 by
-        /// default. `node_key` and `pin` name nodes by this number.
+        /// default. `same_node` and `pin` name nodes by this number.
         pub(crate) nodes: Step<u32>,
-        /// The document each `node_key` and `pin` reads its node in, the last repeating: 1 by
-        /// default, so a node number reused by another document is another node.
-        pub(crate) documents: Step<u64>,
+        /// Whether two nodes of one number are in one document, as `same_node` finds, the last
+        /// repeating: `true` by default; `false` stands for a number another document reuses.
+        pub(crate) same_document: Step<bool>,
     }
 
     /// The fake's pin release: it records `unpin <node>` as it drops.
@@ -1845,7 +1859,7 @@ pub(crate) mod tests {
                 plans: Mutex::default(),
                 checkpoints: Mutex::default(),
                 nodes: Step::always(Duration::ZERO, 1),
-                documents: Step::always(Duration::ZERO, 1),
+                same_document: Step::always(Duration::ZERO, true),
             }
         }
 
@@ -1899,10 +1913,10 @@ pub(crate) mod tests {
             }))
         }
 
-        async fn node_key(&self, element: &u32) -> Result<NodeKey, PageError> {
-            self.record(format!("node_key {element}"));
+        async fn same_node(&self, pinned: &u32, element: &u32) -> Result<bool, PageError> {
+            self.record(format!("same_node {pinned} {element}"));
             time::sleep(ROUND_TRIP).await;
-            Ok(NodeKey::new(0, self.documents.next(), i64::from(*element)))
+            Ok(pinned == element && self.same_document.next())
         }
 
         async fn pin(
@@ -1918,7 +1932,7 @@ pub(crate) mod tests {
                     guid: pin_guid(*element),
                     preview: preview.to_string(),
                 },
-                NodeKey::new(0, self.documents.next(), i64::from(*element)),
+                *element,
                 Box::new(FakeUnpin {
                     calls: Arc::clone(&self.calls),
                     node: *element,
@@ -1978,9 +1992,11 @@ pub(crate) mod tests {
             _element: &u32,
             hit_point: Point,
             action: HitTargetAction,
+            follow_label: bool,
             input: FakeInput,
         ) -> Result<Arming<FakeArmed>, PageError> {
-            self.record(format!("arm {action:?} {hit_point:?}"));
+            let labels = if follow_label { " and its labels" } else { "" };
+            self.record(format!("arm {action:?} {hit_point:?}{labels}"));
             Ok(match self.arm.answer().await? {
                 ArmAnswer::Armed => Arming::Armed(FakeArmed {
                     calls: Arc::clone(&self.calls),

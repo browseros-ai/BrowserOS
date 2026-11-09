@@ -69,7 +69,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tracing::{debug, warn};
 
-use crate::action_hooks::element::{NodeKey, PinnedElement};
+use crate::action_hooks::element::PinnedElement;
 use crate::browser_representations::emulation::PageEmulation;
 use crate::browser_representations::init_scripts::{self, Link, until_gone};
 use crate::browser_representations::locator_handlers::{self, LocatorHandlers};
@@ -2655,23 +2655,6 @@ impl Drop for PageSession {
     }
 }
 
-/// Neo: `element`'s node identity (hooks feature 4): its `backendNodeId` (`DOM.describeNode`),
-/// which Chromium keeps for the node across worlds and resolutions, in the document its frame's
-/// world held throughout the read. A commit during it makes it `NotConnected`, so loop A
-/// resolves again: a node read across a commit could take an id the new document reuses.
-pub(crate) async fn node_key_of(element: &ResolvedElement) -> Result<NodeKey, PageError> {
-    let frame = &element.frame;
-    let document = frame.world.generation();
-    let backend = frame
-        .main
-        .backend_of(frame, element.handle().id().object_id())
-        .await?;
-    if frame.world.generation() != document {
-        return Err(PageError::NotConnected);
-    }
-    Ok(NodeKey::new(frame.world.instance(), document, backend))
-}
-
 /// `click::Tab::Element` for the real tab: one element and the group of the resolution that
 /// produced it. The handle dies with the group.
 #[derive(Clone)]
@@ -2868,8 +2851,35 @@ impl Tab for FrameTab {
         }))
     }
 
-    async fn node_key(&self, element: &ResolvedElement) -> Result<NodeKey, PageError> {
-        node_key_of(element).await
+    /// Both nodes read in the page now (`DOM.describeNode`). The pinned node is read first, from
+    /// the object the pin kept: once its document is gone (a navigation destroyed its world, or
+    /// the frame now runs in another process), CDP cannot find the object and it is another
+    /// node, never a retry. Otherwise both documents are live in one renderer, which numbers its
+    /// nodes once, so equal backend ids are one node. Another frame's element is another node (a
+    /// child frame's context is made again for each document). No page script runs.
+    async fn same_node(
+        &self,
+        pinned: &ResolvedElement,
+        element: &ResolvedElement,
+    ) -> Result<bool, PageError> {
+        if !Arc::ptr_eq(&pinned.frame, &element.frame) {
+            return Ok(false);
+        }
+        let frame = &element.frame;
+        let pinned = match frame
+            .main
+            .backend_of(frame, pinned.handle().id().object_id())
+            .await
+        {
+            Ok(backend) => backend,
+            Err(PageError::Closed) => return Err(PageError::Closed),
+            Err(_) => return Ok(false),
+        };
+        let element = frame
+            .main
+            .backend_of(frame, element.handle().id().object_id())
+            .await?;
+        Ok(pinned == element)
     }
 
     async fn pin(
@@ -3107,6 +3117,7 @@ impl Tab for FrameTab {
         element: &ResolvedElement,
         hit_point: Point,
         action: HitTargetAction,
+        follow_label: bool,
         input: InputPermit,
     ) -> impl Future<Output = Result<Arming<ArmedInterceptor>, PageError>> + Send {
         let page = Arc::clone(self);
@@ -3121,7 +3132,14 @@ impl Tab for FrameTab {
                 }
             };
             let (answer, armed) = oneshot::channel();
-            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, action, input);
+            let setup = arm_interceptor(
+                Arc::clone(&page),
+                element,
+                hit_point,
+                action,
+                follow_label,
+                input,
+            );
             page.spawn(async move {
                 // Nobody may be waiting any more; the unsent answer drops here, disarming.
                 let _waiting = answer.send(setup.await);
@@ -3363,6 +3381,7 @@ async fn arm_interceptor(
     element: ResolvedElement,
     hit_point: Option<Point>,
     action: HitTargetAction,
+    follow_label: bool,
     input: InputPermit,
 ) -> Result<Arming<ArmedInterceptor>, PageError> {
     let mark = page.mark();
@@ -3377,6 +3396,7 @@ async fn arm_interceptor(
                 hit_point,
                 // Only Playwright's trial blocks every event, and Neo's trial sends none.
                 block_all_events: false,
+                follow_label,
             },
         )
         .await?;

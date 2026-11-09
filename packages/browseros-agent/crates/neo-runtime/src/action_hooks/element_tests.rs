@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use super::element::{ElementOptions, Rerouted};
 use super::tests::{
     FakeHooks, Harness, Timeline, decided, frame_guid, hooks_of, kept, message, mouse_click, never,
-    record, run_scope,
+    page_guid, record, run_scope,
 };
 use super::*;
 use crate::fake_browser::{GO_NODE, REFUSED_FILL};
@@ -260,7 +260,7 @@ async fn tests_that_a_retry_that_finds_another_element_asks_again_and_one_that_f
     assert_eq!(tab.count("resolve"), 2);
     assert_eq!(tab.count("pin 1"), 1);
     assert_eq!(
-        tab.count("node_key 1"),
+        tab.count("same_node 1 1"),
         1,
         "the second element was identified"
     );
@@ -327,7 +327,7 @@ async fn tests_that_a_node_number_another_document_reuses_is_another_element() {
         Duration::from_millis(33),
         [Ok(StatesCheck::NotConnected), Ok(StatesCheck::Ready)],
     );
-    tab.documents = Step::new(Duration::ZERO, [1, 2]);
+    tab.same_document = Step::always(Duration::ZERO, false);
     let fake = Arc::new(FakeHooks::new(&Timeline::default()));
     let call = paused(&fake, "click", click_args(), 30_000.0);
     let result = click::pointer_action(&tab, &click_options(), &call.progress).await;
@@ -409,6 +409,14 @@ async fn tests_that_a_forced_click_on_a_hooked_element_keeps_its_hit_check() {
         let result = click::pointer_action(&tab, &forced(position), &call.progress).await;
         assert_eq!(result, Err(PlaywrightError::timeout(1000.0).into()));
         assert!(tab.count_prefix("arm ") > 0, "{:?}", tab.calls());
+        assert!(
+            tab.calls()
+                .iter()
+                .filter(|call| call.starts_with("arm "))
+                .all(|call| call.ends_with(" and its labels")),
+            "a hit inside one of its labels passes too: {:?}",
+            tab.calls()
+        );
         assert_eq!(
             tab.count_prefix("press"),
             0,
@@ -636,7 +644,7 @@ async fn tests_that_a_call_without_an_element_gate_mints_no_pin() {
     assert!(
         !tab.calls()
             .iter()
-            .any(|call| call.starts_with("pin") || call.starts_with("node_key")),
+            .any(|call| call.starts_with("pin") || call.starts_with("same_node")),
         "{:?}",
         tab.calls()
     );
@@ -988,6 +996,33 @@ async fn tests_that_replies_after_a_swap_name_it_to_hooks_only() {
     for record in &records {
         let text = serde_json::to_string(&(&record.log, &record.result)).unwrap();
         assert!(!text.contains(SECRET), "{record:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_what_a_hook_types_itself_never_reaches_an_agent_reply() {
+    // No action hooks: a hook realm's own calls still type into the page.
+    let harness = Harness::start(None, Duration::from_secs(30)).await;
+    let typed = harness.hook_call(&fill_go(1, SECRET)).await.unwrap();
+    assert!(typed.get("error").is_none(), "{typed}");
+    assert_eq!(harness.inserted(), [json!(SECRET)]);
+    let inserted = message(
+        2,
+        &page_guid(),
+        "keyboardInsertText",
+        json!({ "text": "Qz7" }),
+        json!({}),
+    );
+    let _reply = harness.hook_call(&inserted).await.unwrap();
+    // Later agent calls whose page errors name what the hook typed.
+    for (id, value) in [(3, SECRET), (4, "Qz7")] {
+        let refused = format!("{REFUSED_FILL}{value}");
+        let reply = harness.call(&fill_go(id, &refused)).await.unwrap();
+        assert_eq!(reply["error"]["error"]["name"], "Error", "{reply}");
+        let message = reply["error"]["error"]["message"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(!message.contains(value), "{reply}");
     }
 }
 

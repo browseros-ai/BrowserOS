@@ -341,6 +341,7 @@ impl DropAction<'_> {
                 element,
                 point.clone(),
                 HitTargetAction::Mouse,
+                false,
                 input.clone(),
             ))
             .await??

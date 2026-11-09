@@ -262,12 +262,13 @@ fn an_armed_interceptor_is_the_handle_its_stop_consumes() {
         action: HitTargetAction::Hover,
         hit_point: Some(Point { x: 40.5, y: 18.0 }),
         block_all_events: false,
+        follow_label: false,
     };
     assert_eq!(
         page_call(&setup).unwrap(),
         (
             "setupHitTargetInterceptor",
-            json!({"action": "hover", "hitPoint": {"x": 40.5, "y": 18.0}, "blockAllEvents": false}),
+            json!({"action": "hover", "hitPoint": {"x": 40.5, "y": 18.0}, "blockAllEvents": false, "followLabel": false}),
             vec!["-7.1.9".to_owned()],
             false
         )
