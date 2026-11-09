@@ -359,6 +359,11 @@ pub(crate) enum LogKind {
     HookTrace,
     /// Neo's own lines in the hook trace, on why a hook failed.
     HookFailures,
+    /// Neo's own lines in the hook trace about single calls: why an action hook failed on one,
+    /// and the real error text of one that ran with a hook's arguments (`action_hooks.rs`). Kept
+    /// apart from [`LogKind::HookFailures`], so many calls cannot push out why a run's hooks
+    /// failed.
+    ActionHooks,
     /// The notes a run's hooks left for the model.
     HookNotes,
 }
@@ -420,7 +425,9 @@ impl LogKind {
     /// The most lines and bytes a list of this kind keeps.
     fn caps(self) -> (usize, usize) {
         match self {
-            Self::Console | Self::HookTrace | Self::HookNotes => (MAX_LOG_LINES, MAX_LOG_BYTES),
+            Self::Console | Self::HookTrace | Self::HookNotes | Self::ActionHooks => {
+                (MAX_LOG_LINES, MAX_LOG_BYTES)
+            }
             Self::HookFailures => (MAX_FAILURE_LINES, MAX_FAILURE_BYTES),
         }
     }
@@ -431,6 +438,7 @@ impl LogKind {
             Self::Console => "console",
             Self::HookTrace => "hook trace",
             Self::HookFailures => "hook failure",
+            Self::ActionHooks => "action hook",
             Self::HookNotes => "hook note",
         }
     }

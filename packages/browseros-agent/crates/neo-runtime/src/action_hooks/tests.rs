@@ -76,6 +76,8 @@ struct FakeHooks {
     /// What the call path left with the hooks, as the run's sandbox keeps it.
     notes: Mutex<Vec<String>>,
     failures: Mutex<Vec<String>>,
+    /// Whether the run is done with its hooks ([`ActionHooks::ended`]).
+    closed: AtomicBool,
 }
 
 impl FakeHooks {
@@ -91,6 +93,7 @@ impl FakeHooks {
             events: Mutex::default(),
             notes: Mutex::default(),
             failures: Mutex::default(),
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -190,6 +193,10 @@ impl ActionHooks for FakeHooks {
 
     fn add_failure(&self, line: String) {
         self.failures.lock().unwrap().push(line);
+    }
+
+    fn ended(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
     }
 }
 
@@ -2121,4 +2128,56 @@ async fn tests_that_a_replaced_call_that_ends_calls_in_flight_is_never_refused_b
     let (seen, _) = fake.events(ActionHook::Before).remove(0);
     assert_eq!(seen.method, "close");
     assert_eq!(fake.invocations(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_call_meeting_its_runs_closed_hooks_stops_without_a_hook_failure() {
+    let timeline = Timeline::default();
+    let gone = || {
+        decided(Err(HookFailure::Realm(
+            "the hook realm is gone".to_string(),
+        )))
+    };
+    let fake = Arc::new(
+        FakeHooks::new(&timeline)
+            .before(move |_, _| gone())
+            .after(move |_, _| {
+                decided(Err(HookFailure::Realm(
+                    "the hook realm is gone".to_string(),
+                )))
+            }),
+    );
+    fake.closed.store(true, Ordering::SeqCst);
+    let run = run_scope(Duration::from_mins(1));
+
+    let entry_before = entry();
+    let mut hooks = admitted(&fake, "late", &Arc::default(), false);
+    assert_eq!(
+        gate(&mut hooks, &run, &entry_before).await,
+        Gated::Stopped,
+        "the call stops as one the run ended"
+    );
+    assert_eq!(record(&entry_before).hook, None, "no hook failed");
+
+    let entry_after = entry();
+    let reply = admitted(&fake, "late", &Arc::default(), false)
+        .ran(&run)
+        .unwrap();
+    assert_eq!(reply.finish(&entry_after, Ok(None)).await, None, "no reply");
+    assert_eq!(record(&entry_after).hook, None);
+    assert!(fake.take_failures().is_empty(), "no failure line");
+
+    // While the run still has its hooks, the same answer is a hook failure.
+    fake.closed.store(false, Ordering::SeqCst);
+    let entry_open = entry();
+    let mut hooks = admitted(&fake, "open", &Arc::default(), false);
+    assert!(matches!(
+        gate(&mut hooks, &run, &entry_open).await,
+        Gated::Refused(_)
+    ));
+    assert_eq!(
+        record(&entry_open).hook,
+        Some(before_record(BeforeHookResult::Failed))
+    );
+    assert_eq!(fake.take_failures().len(), 1);
 }

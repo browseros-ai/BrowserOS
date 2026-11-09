@@ -183,12 +183,21 @@ pub(crate) struct Registration {
 }
 
 impl Registration {
-    /// Why this registration's filter names no real action, if it does not: a kind or a group
-    /// that is none of the run's action labels (`actions.rs`), such as `pagescript` for
-    /// `pageScript`. Such a filter would match nothing, a policy that silently never runs, so
-    /// loading fails instead and the run ends blocked (hooks design D8).
+    /// Why this registration's filter names no real action, if it does not: an empty `kinds` or
+    /// `groups` list, or a kind or a group that is none of the run's action labels
+    /// (`actions.rs`), such as `pagescript` for `pageScript`. Such a filter would match nothing,
+    /// a policy that silently never runs, so loading fails instead and the run ends blocked
+    /// (hooks design D8).
     fn unknown_name(&self) -> Option<String> {
         let event = self.event.name();
+        // An empty list names nothing, and would match nothing: as off as a misspelled name.
+        for (field, names) in [("kinds", &self.kinds), ("groups", &self.groups)] {
+            if names.as_ref().is_some_and(Vec::is_empty) {
+                return Some(format!(
+                    "neo.on('{event}') filters on an empty {field} list"
+                ));
+            }
+        }
         let kind = self
             .kinds
             .iter()

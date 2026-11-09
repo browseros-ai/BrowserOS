@@ -98,6 +98,11 @@ pub(crate) trait ActionHooks: Send + Sync + 'static {
     /// Adds one line on why a hook failed to the run's host-only hook trace
     /// (`RunOutcome::hook_trace`): its text may hold a secret.
     fn add_failure(&self, line: String);
+
+    /// Whether the run is done with its hooks. A call that meets them then (it was still running
+    /// when the script returned) gets no decision because the run ended, not because a hook
+    /// failed: it stops as any call the run ended, with no reply and no failure line.
+    fn ended(&self) -> bool;
 }
 
 /// Neo: the run's hook sandbox is the run's action hooks: each call goes to its own, so its one
@@ -130,6 +135,10 @@ impl ActionHooks for HookSandbox {
 
     fn add_failure(&self, line: String) {
         HookSandbox::add_failure(self, line);
+    }
+
+    fn ended(&self) -> bool {
+        self.closed()
     }
 }
 
@@ -386,6 +395,8 @@ impl<G: CallRoute> CallHooks<G> {
         // Dropping this future (any branch of the race but its own) abandons the invocation.
         let invoked = self.hooks.before_action(self.event.clone());
         let decided = match gate_race(run, entry, invoked).await {
+            // The run is done with its hooks: the call stops as one the run ended.
+            Ok(Err(_)) if self.hooks.ended() => return Gated::Stopped,
             Ok(decided) => decided,
             Err(halt) => return halt,
         };
@@ -592,6 +603,10 @@ impl AfterHook {
             () = run.ended.cancelled() => return None,
             decided = hooks.after_action(event, ended) => decided,
         };
+        // The run is done with its hooks: no reply, as for a call the run ended under.
+        if decided.is_err() && hooks.ended() {
+            return None;
+        }
         let applied = match decided {
             Ok(AfterDecision {
                 replace: None,

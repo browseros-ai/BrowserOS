@@ -28,6 +28,7 @@
 //! the run's `ActionHooks`, which `Runtime::run` hands to the agent's dispatcher only.
 
 use std::borrow::Cow;
+use std::mem;
 use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, OnceLock};
@@ -184,6 +185,9 @@ pub(crate) struct HookSandbox {
     /// Neo's own lines on why a hook failed, kept apart from `trace` under caps of their own and
     /// appended to it, so a hook that fills its trace cannot hide them.
     failures: Logs,
+    /// Neo's lines about single calls' action hooks (`add_failure`), under caps of their own and
+    /// appended after `failures`, so many failed calls cannot push out why the run's hooks failed.
+    action_lines: Logs,
     /// The notes the run's hooks left for the model, capped as the script's `console` is.
     notes: Logs,
     /// Cancelled when the run is done with its hooks, or its future is dropped: the actor ends
@@ -282,6 +286,7 @@ impl HookSandbox {
                 registrations: Arc::default(),
                 trace,
                 failures,
+                action_lines: Logs::of(LogKind::ActionHooks),
                 notes: Logs::of(LogKind::HookNotes),
                 close: close.clone(),
                 page_guid,
@@ -297,11 +302,31 @@ impl HookSandbox {
     }
 
     /// The hook trace so far, taken: what the run's outcome carries as `hook_trace`. The hook's
-    /// own lines come first, then Neo's lines on why a hook failed.
+    /// own lines come first, then Neo's lines on why a hook failed, then its lines about single
+    /// calls' action hooks.
     pub(crate) fn take_trace(&self) -> Vec<String> {
         let mut lines = self.trace.take();
         lines.extend(self.failures.take());
+        lines.extend(self.action_lines.take());
         lines
+    }
+
+    /// Whether the run is done with its hooks: the sandbox closed ([`HookSandbox::close`]). A
+    /// call that meets it then never gets a decision because the run ended, not because a hook
+    /// failed (`action_hooks.rs`).
+    pub(crate) fn closed(&self) -> bool {
+        self.close.is_cancelled()
+    }
+
+    /// What the run's hooks left after [`HookSandbox::end`] took their notes and trace, joined to
+    /// `outcome`'s: a call still running when the script returned ends during
+    /// `Dispatcher::finish`'s drain, after `end`. `Runtime::run` calls it after `finish`.
+    pub(crate) fn late(&self, mut outcome: RunOutcome) -> RunOutcome {
+        let mut notes = mem::take(&mut outcome.notes);
+        notes.extend(self.notes.take());
+        let mut hook_trace = mem::take(&mut outcome.hook_trace);
+        hook_trace.extend(self.take_trace());
+        outcome.with_notes(notes).with_hook_trace(hook_trace)
     }
 
     /// Adds notes a hook left for the model, which the outcome carries, capped
@@ -312,10 +337,10 @@ impl HookSandbox {
         }
     }
 
-    /// Adds one of Neo's lines on why a hook failed (an action hook's, `action_hooks.rs`) to the
-    /// host-only trace, under its caps of its own.
+    /// Adds one of Neo's lines about a single call's action hooks (`action_hooks.rs`) to the
+    /// host-only trace, under caps of its own.
     pub(crate) fn add_failure(&self, line: String) {
-        self.failures.push(line);
+        self.action_lines.push(line);
     }
 
     /// The run's end for its hooks: `afterRun` ([`HookSandbox::after_run`]), then the sandbox
@@ -501,8 +526,9 @@ impl HookSandbox {
     }
 
     /// The run ends blocked before its script, after the hooks failed: `detail` goes to the
-    /// trace, the outcome names no detail.
-    fn blocked(&self, detail: &str) -> Gate {
+    /// trace, the outcome names no detail. `Runtime::run` also ends here a run whose action hooks
+    /// could not be put where its calls find them.
+    pub(crate) fn blocked(&self, detail: &str) -> Gate {
         self.failures.push(format!("neo: {detail}"));
         Gate::End(Box::new(RunOutcome::blocked(RunError::new(
             "Error",

@@ -943,3 +943,32 @@ async fn real_sandbox(browser: &FakeBrowser, code: &str) -> (HookRun, Deadline, 
     );
     (sandbox, deadline, tabs)
 }
+
+/// Lines about single calls keep a list of their own, so many cannot push out why `afterRun`
+/// failed; what calls leave after `end` took the trace (a call still running when the script
+/// returned ends during `Dispatcher::finish`'s drain) joins the outcome in `late`.
+#[tokio::test(start_paused = true)]
+async fn tests_that_late_and_per_call_lines_reach_the_outcome_without_hiding_run_failures() {
+    let (hooks, _tasks) =
+        loaded("neo.on('afterRun', () => { throw new Error('the redactor broke') })").await;
+    for call in 0..150 {
+        hooks.add_failure(format!("neo: beforeAction failed for call {call}"));
+    }
+    let ended = hooks
+        .end(RunOutcome::returned(Some(json!(1)), Vec::new()))
+        .await;
+    assert_eq!(ended.status, RunStatus::Error);
+    assert!(
+        ended
+            .hook_trace
+            .iter()
+            .any(|line| line.contains("afterRun")),
+        "why the result was withheld is still there: {:?}",
+        ended.hook_trace
+    );
+    hooks.add_notes(vec!["late note".to_string()]);
+    hooks.add_failure("neo: late line".to_string());
+    let late = hooks.late(ended);
+    assert!(late.hook_trace.iter().any(|line| line == "neo: late line"));
+    assert_eq!(late.notes, ["late note"]);
+}
