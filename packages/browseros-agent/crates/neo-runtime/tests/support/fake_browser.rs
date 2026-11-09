@@ -117,6 +117,9 @@ pub struct Replies {
     pub closes_at_page_enable: bool,
     /// Optional navigation script for commit/reply ordering tests.
     pub navigation: Option<NavigationScript>,
+    /// `Page.navigate` answers at once with this `errorText`, as Chromium answers a navigation
+    /// that failed before it committed (`net::ERR_NAME_NOT_RESOLVED`).
+    pub navigate_error: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -337,6 +340,7 @@ pub fn run_request(code: &str, timeout: Duration, cancel: CancellationToken) -> 
         timeout,
         cancel,
         artifacts: None,
+        hooks: None,
     }
 }
 
@@ -679,6 +683,9 @@ const EMPTY_RESULTS: &[&str] = &[
     "Emulation.setFocusEmulationEnabled",
     "Runtime.releaseObjectGroup",
     "DOM.scrollIntoViewIfNeeded",
+    "Fetch.enable",
+    "Network.setCacheDisabled",
+    "Fetch.disable",
 ];
 
 fn answer(
@@ -735,6 +742,10 @@ fn answer(
             (json!({ "result": {} }), None)
         }
         method if EMPTY_RESULTS.contains(&method) => (json!({ "result": {} }), now),
+        "Page.navigate" if replies.navigate_error.is_some() => (
+            json!({"result":{"frameId":PAGE,"loaderId":"new","errorText":replies.navigate_error}}),
+            now,
+        ),
         "Page.navigate" => match replies.navigation {
             Some(script) => {
                 let result = if script.same_document {

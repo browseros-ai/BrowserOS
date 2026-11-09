@@ -452,7 +452,7 @@ mod tests {
     use crate::playwright_methods::click::tests::{FakeTab, Step, Writes};
     use crate::playwright_methods::forms::InputValueMatch;
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope, Trace};
-    use crate::run::{Delivery, RunEnd};
+    use crate::run::{CallOrigin, Delivery, RunEnd};
 
     const TRIP: Duration = Duration::from_millis(1);
 
@@ -651,6 +651,8 @@ mod tests {
                 guid: "frame@test".into(),
                 method: "fill".into(),
                 title: None,
+                origin: CallOrigin::Agent,
+                action: None,
                 params: serde_json::Value::Null,
                 location: None,
                 input: true,
@@ -747,6 +749,8 @@ mod tests {
             guid: "frame@test".into(),
             method: "forms".into(),
             title: None,
+            origin: CallOrigin::Agent,
+            action: None,
             params: serde_json::Value::Null,
             location: None,
             input,

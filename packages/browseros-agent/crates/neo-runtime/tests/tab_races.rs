@@ -180,6 +180,7 @@ async fn tests_that_a_listed_page_forced_click_waits_for_another_runs_trial() {
             timeout: Duration::from_secs(10),
             cancel: CancellationToken::new(),
             artifacts: None,
+            hooks: None,
         })
         .await;
     let trial = trial.await.unwrap();

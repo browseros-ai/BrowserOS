@@ -268,7 +268,7 @@ mod tests {
     use super::*;
     use crate::deadline::Deadline;
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope};
-    use crate::run::RunEnd;
+    use crate::run::{CallOrigin, RunEnd};
 
     struct Step {
         at: u64,
@@ -455,6 +455,8 @@ mod tests {
             guid: "frame@T".to_string(),
             method: "goto".to_string(),
             title: Some("Navigate"),
+            origin: CallOrigin::Agent,
+            action: None,
             params: json!({}),
             location: None,
             input: false,

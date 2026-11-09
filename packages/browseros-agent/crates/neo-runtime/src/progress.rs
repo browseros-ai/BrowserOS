@@ -42,7 +42,10 @@ use crate::browser_representations::clock::Clock;
 use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
 use crate::playwright_methods::evaluate::Handles;
-use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
+use crate::run::{
+    AfterHookResult, BeforeHookResult, CallAction, CallHookRecord, CallLocation, CallOrigin,
+    CallRecord, CallResult, Delivery, DroppedCalls, RunEnd,
+};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
 /// Every handler returns this; `?` on [`Progress::race`] is how a handler gives up.
@@ -147,8 +150,11 @@ pub(crate) struct RunScope {
     /// (`Tabs::release_input`). `Dispatcher::finish` waits on it, bounded, so records read
     /// final deliveries; `Runtime::drain` waits for what is left.
     pub(crate) tasks: TaskTracker,
-    /// The run's JS handles (`evaluate.rs`); closed at run end, which releases their groups.
+    /// The run's JS handles (`evaluate.rs`) as the agent's script sees them; closed at run end,
+    /// which releases their groups.
     pub(crate) handles: Arc<Handles>,
+    /// The same handles as the run's hook realm sees them (`Handles::for_hooks`).
+    pub(crate) hook_handles: Arc<Handles>,
     /// The run's init scripts (`init_scripts.rs`); removed from every session at run end.
     pub(crate) init_scripts: Arc<InitScripts>,
     /// Cancelled when the script closes the run's context (`page_and_context_methods.rs` `close_context`):
@@ -165,12 +171,15 @@ pub(crate) struct RunScope {
 
 impl RunScope {
     pub(crate) fn new(deadline: Deadline, tasks: TaskTracker) -> Self {
+        let handles = Arc::new(Handles::default());
+        let hook_handles = Arc::new(handles.for_hooks());
         Self {
             deadline,
             ended: CancellationToken::new(),
             end_reason: Arc::default(),
             tasks,
-            handles: Arc::default(),
+            handles,
+            hook_handles,
             init_scripts: Arc::default(),
             context_closed: CancellationToken::new(),
             artifacts: Arc::default(),
@@ -182,6 +191,14 @@ impl RunScope {
     /// The run's artifact directory and its record of written files.
     pub(crate) fn with_artifacts(self, artifacts: Arc<Artifacts>) -> Self {
         Self { artifacts, ..self }
+    }
+
+    /// The run's handles as calls of `origin` see them.
+    pub(crate) fn handles_for(&self, origin: CallOrigin) -> &Arc<Handles> {
+        match origin {
+            CallOrigin::Agent => &self.handles,
+            CallOrigin::Hook => &self.hook_handles,
+        }
     }
 
     /// Records `reason` (the first one wins) and cancels `ended`.
@@ -378,9 +395,10 @@ impl Progress {
 
     /// `metadata.timeout` in ms as the client sent it, `0.0` for none: Playwright caps loop A's
     /// backoff by it.
-    /// The run's JS handles, for the evaluation calls (`evaluate.rs`).
+    /// The run's JS handles as this call's realm sees them, for the evaluation calls
+    /// (`evaluate.rs`): the agent's script never sees a hook's.
     pub(crate) fn handles(&self) -> &Handles {
-        &self.run.handles
+        self.run.handles_for(self.entry.origin)
     }
 
     /// The run's init scripts (`init_scripts.rs`).
@@ -423,6 +441,8 @@ impl Progress {
             guid: "frame@T".to_string(),
             method: "click".to_string(),
             title: Some("Click"),
+            origin: CallOrigin::Agent,
+            action: None,
             params: Value::Null,
             location: None,
             input: true,
@@ -571,12 +591,20 @@ const MAX_CALL_RECORDS: usize = 1000;
 /// final.
 const MAX_TRACE_BYTES: usize = 1024 * 1024;
 
+/// Neo: the message a hook call's record gives its error, in place of the error's own: messages
+/// such as navigation's `… at <url>` echo the call's arguments, which a hook may have taken from a
+/// secret. The hook's realm still gets the real reply; the record keeps the error's name.
+const HOOK_CALL_FAILED: &str = "a hook's browser call failed; its message stays with the hook";
+
 /// The durable state of one call, shared by its `Progress` and the run's `Trace`.
 pub(crate) struct CallEntry {
     call_id: u64,
     guid: String,
     method: String,
     title: Option<&'static str>,
+    /// Who sent the call. A hook's call keeps no params, location or log ([`CallEntry::new`]).
+    origin: CallOrigin,
+    action: Option<CallAction>,
     params: Value,
     /// `params` as JSON text, in bytes: what keeping the record costs before any log.
     params_bytes: usize,
@@ -590,6 +618,10 @@ pub(crate) struct CallEntry {
     abort: CallAbort,
     /// Set once by whoever ends the call; absent while it runs.
     end: OnceLock<CallEnd>,
+    /// What `beforeAction` decided, once it has (`action_hooks.rs`).
+    hook_before: OnceLock<BeforeHookResult>,
+    /// What `afterAction` decided, once it has.
+    hook_after: OnceLock<AfterHookResult>,
     /// Test-only: how long `abort` holds between waking the call and logging, in ms.
     #[cfg(test)]
     abort_pause_ms: AtomicU64,
@@ -603,6 +635,9 @@ struct CallLog {
     lines: Vec<String>,
     /// Lines past [`MAX_CALL_LOG_LINES`], counted.
     dropped: usize,
+    /// Set when the call runs with a hook's arguments ([`CallEntry::hide_log`]): it keeps no
+    /// line from then on, and reads as empty.
+    hidden: bool,
 }
 
 struct CallEnd {
@@ -618,6 +653,9 @@ pub(crate) struct CallStart {
     pub(crate) guid: String,
     pub(crate) method: String,
     pub(crate) title: Option<&'static str>,
+    /// The dispatcher's origin, never the message's (`Dispatcher::for_hooks`).
+    pub(crate) origin: CallOrigin,
+    pub(crate) action: Option<CallAction>,
     pub(crate) params: Value,
     pub(crate) location: Option<CallLocation>,
     /// Whether the method writes input, so its delivery is tracked.
@@ -631,15 +669,25 @@ impl CallEntry {
             guid,
             method,
             title,
+            origin,
+            action,
             params,
             location,
             input,
         } = start;
+        // A hook may type a secret into the page (hooks design D11): its call's params and
+        // location are never held, so no record, debugger or log can hand them back.
+        let (params, location) = match origin {
+            CallOrigin::Agent => (params, location),
+            CallOrigin::Hook => (Value::Null, None),
+        };
         Self {
             call_id,
             guid,
             method,
             title,
+            origin,
+            action,
             params_bytes: params.to_string().len(),
             params,
             location,
@@ -649,14 +697,29 @@ impl CallEntry {
             delivery: input.then(Arc::default),
             abort: CallAbort::default(),
             end: OnceLock::new(),
+            hook_before: OnceLock::new(),
+            hook_after: OnceLock::new(),
             #[cfg(test)]
             abort_pause_ms: AtomicU64::new(0),
         }
     }
 
-    /// The call's params as the script sent them.
+    /// The call's params as the script sent them; `null` for a hook's call.
     pub(crate) fn params(&self) -> &Value {
         &self.params
+    }
+
+    /// Who sent the call (`Dispatcher::for_hooks`); its record says so. The call path needs no
+    /// origin check: only the agent's dispatcher has action hooks (`method_router.rs` `Side`).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the tests read it; the record reads the field itself"
+        )
+    )]
+    pub(crate) fn origin(&self) -> CallOrigin {
+        self.origin
     }
 
     /// Playwright's `ProgressController.abort` for this call: logs `operation was aborted:
@@ -691,6 +754,34 @@ impl CallEntry {
         self.abort.error()
     }
 
+    /// Resolves with the call's `AbortError` once the script aborts it, for a wait the call
+    /// makes before its `Progress` exists (its hook gate, `action_hooks.rs`).
+    pub(crate) async fn aborted(&self) -> PlaywrightError {
+        self.abort.aborted().await
+    }
+
+    /// Records what `beforeAction` decided; only the first decision counts.
+    pub(crate) fn hook_before(&self, result: BeforeHookResult) {
+        let _first = self.hook_before.set(result);
+    }
+
+    /// Records what `afterAction` decided; only the first decision counts.
+    pub(crate) fn hook_after(&self, result: AfterHookResult) {
+        let _first = self.hook_after.set(result);
+    }
+
+    /// The call runs with a hook's arguments: its log would name them (a typed value, a URL),
+    /// so it keeps no log from now on, neither in its reply nor in its record (hooks design
+    /// D11). Call before the call runs, so no line is ever written.
+    pub(crate) fn hide_log(&self) {
+        if let Ok(mut log) = self.log.lock() {
+            *log = CallLog {
+                hidden: true,
+                ..CallLog::default()
+            };
+        }
+    }
+
     /// Ends the call with `result` and returns its folded log, which the reply carries. Only
     /// the first end counts.
     pub(crate) fn finish(&self, result: CallResult) -> Vec<String> {
@@ -709,6 +800,9 @@ impl CallEntry {
         let Ok(log) = self.log.lock() else {
             return Vec::new();
         };
+        if log.hidden {
+            return Vec::new();
+        }
         let note = (log.dropped > 0).then(|| log.dropped_note());
         let mut raw: Vec<&str> = log.header.iter().map(String::as_str).collect();
         raw.extend(log.lines.iter().map(String::as_str));
@@ -719,7 +813,9 @@ impl CallEntry {
     /// Changes the raw log. A poisoned lock (a panic while logging) drops the change: logging
     /// never fails a call, as `console.log` never fails the script.
     fn update_log(&self, change: impl FnOnce(&mut CallLog)) {
-        if let Ok(mut log) = self.log.lock() {
+        if let Ok(mut log) = self.log.lock()
+            && !log.hidden
+        {
             change(&mut log);
         }
     }
@@ -733,6 +829,20 @@ impl CallEntry {
                 self.folded_log(),
             ),
         };
+        // A hook's call log may echo what it typed (`fill("…")`), and its error message what it
+        // navigated to (`… at <url>`); its reply carried both to the hook's own realm, and the
+        // record keeps neither: no log, and the error's name with a fixed message.
+        let (result, log) = match (self.origin, result) {
+            (CallOrigin::Agent, result) => (result, log),
+            (CallOrigin::Hook, CallResult::Error { name, .. }) => (
+                CallResult::Error {
+                    name,
+                    message: HOOK_CALL_FAILED.to_string(),
+                },
+                Vec::new(),
+            ),
+            (CallOrigin::Hook, result) => (result, Vec::new()),
+        };
         let started_at_ms = self
             .started_at
             .duration_since(UNIX_EPOCH)
@@ -744,18 +854,31 @@ impl CallEntry {
             guid: self.guid.clone(),
             method: self.method.clone(),
             title: self.title.map(str::to_string),
+            origin: self.origin,
+            action: self.action,
             params: self.params.clone(),
             location: self.location,
             started_at_ms,
             duration,
             result,
+            hook: self.hook_record(),
             delivery: self.delivery.as_ref().map(|cell| cell.delivery()),
             log,
         }
     }
 
+    /// The hooks' decisions for the record; `None` when no hook decided anything.
+    fn hook_record(&self) -> Option<CallHookRecord> {
+        let before = self.hook_before.get().copied();
+        let after = self.hook_after.get().copied();
+        (before.is_some() || after.is_some()).then_some(CallHookRecord { before, after })
+    }
+
     /// What a kept record's log costs against [`MAX_TRACE_BYTES`], on top of its params.
     fn log_bytes(&self) -> usize {
+        if self.origin == CallOrigin::Hook {
+            return 0;
+        }
         match self.end.get() {
             Some(end) => end.log.iter().map(String::len).sum(),
             None => self.folded_log().iter().map(String::len).sum(),
@@ -765,6 +888,9 @@ impl CallEntry {
 
 impl CallLog {
     fn push(&mut self, line: String) {
+        if self.hidden {
+            return;
+        }
         if self.lines.len() < MAX_CALL_LOG_LINES {
             self.lines.push(line);
         } else {
@@ -1016,6 +1142,68 @@ pub(crate) fn js_number(value: f64) -> String {
 mod tests {
     use super::*;
 
+    /// A hook may type a secret: its entry never holds the params or location it was given, and
+    /// its record keeps no log, while the reply to the hook's own realm still carries the log.
+    #[test]
+    fn tests_that_a_hooks_entry_keeps_no_params_location_or_log() {
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: "frame@T".to_string(),
+            method: "fill".to_string(),
+            title: Some("Fill"),
+            origin: CallOrigin::Hook,
+            action: None,
+            params: serde_json::json!({"selector": "#p", "value": "s3cret"}),
+            location: Some(CallLocation {
+                line: 2,
+                column: None,
+            }),
+            input: true,
+        }));
+        assert_eq!(entry.origin(), CallOrigin::Hook);
+        assert_eq!(entry.params(), &Value::Null);
+        entry.update_log(|log| log.push("fill(\"s3cret\")".to_string()));
+        let trace = Trace::default();
+        trace.push(Arc::clone(&entry));
+        let reply_log = entry.finish(CallResult::Ok);
+        trace.finished(&entry);
+        assert!(
+            !reply_log.is_empty(),
+            "the hook's realm reads its own call log"
+        );
+        let (records, dropped) = trace.take(RunEnd::Settled);
+        assert!(dropped.is_none());
+        let record = &records[0];
+        assert_eq!(record.origin, CallOrigin::Hook);
+        assert_eq!(record.params, Value::Null);
+        assert_eq!(record.location, None);
+        assert!(record.log.is_empty());
+        assert_eq!(record.delivery, Some(Delivery::NotSent));
+
+        let failed = Arc::new(CallEntry::new(CallStart {
+            call_id: 2,
+            guid: "frame@T".to_string(),
+            method: "goto".to_string(),
+            title: Some("Navigate"),
+            origin: CallOrigin::Hook,
+            action: None,
+            params: serde_json::json!({"url": "https://a.test/?token=s3cret"}),
+            location: None,
+            input: false,
+        }));
+        failed.finish(CallResult::Error {
+            name: "Error".to_string(),
+            message: "net::ERR_NAME_NOT_RESOLVED at https://a.test/?token=s3cret".to_string(),
+        });
+        let record = failed.record(RunEnd::Settled);
+        let CallResult::Error { name, message } = &record.result else {
+            panic!("the record keeps the error: {:?}", record.result);
+        };
+        assert_eq!(name, "Error", "the error's name is kept");
+        assert!(!message.contains("s3cret"), "{message}");
+        assert!(!serde_json::to_string(&record).unwrap().contains("s3cret"));
+    }
+
     #[tokio::test]
     async fn tests_that_closing_the_context_stops_every_other_call_but_itself() {
         let run = RunScope::new(
@@ -1028,6 +1216,8 @@ mod tests {
                 guid: "frame@T".to_string(),
                 method: "click".to_string(),
                 title: Some("Click"),
+                origin: CallOrigin::Agent,
+                action: None,
                 params: Value::Null,
                 location: None,
                 input: true,
@@ -1064,6 +1254,8 @@ mod tests {
             guid: "frame@T".to_string(),
             method: "click".to_string(),
             title: Some("Click"),
+            origin: CallOrigin::Agent,
+            action: None,
             params,
             location: None,
             input,
