@@ -116,6 +116,7 @@ async fn run() -> Result<(), String> {
                 page: PageId::new(page.clone()),
                 timeout: Duration::from_mins(10),
                 cancel: cancel.clone(),
+                artifacts: None,
             },
             Box::new(Host {
                 incoming: Mutex::new(incoming_rx),

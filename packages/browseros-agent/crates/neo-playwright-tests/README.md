@@ -34,7 +34,7 @@ Headless BrowserOS A        Independent I/O thread
                                       |
                             One neo-runtime run         [QuickJS]
                                       |
-                            Actual neo-sdk objects
+                            Actual neo-quickjs-injected objects
                                       |
                             Existing native Dispatcher
                                       |
@@ -43,7 +43,7 @@ Headless BrowserOS A        Independent I/O thread
 Independent read-only observers retain DOM and delivered events.
 ```
 
-The two engines run sequentially on fresh processes and profiles, using the same leased upstream server origins and assets. Cargo runs four independent cases concurrently by default. Every case owns its processes and output files; only the Cargo parent writes the aggregate. No real Playwright object attaches to Neo's browser. Missing `setContent`, `evaluate`, browser-aware assertions and other APIs have no fallback helpers.
+The two engines run sequentially on fresh processes and profiles, using the same leased upstream server origins and assets. Cargo runs four independent cases concurrently by default. Every case owns its processes and output files; only the Cargo parent writes the aggregate. No real Playwright object attaches to Neo's browser. Missing browser methods and browser-aware assertions have no fallback helpers. Unsupported transport values remain explicit evidence gaps.
 
 The corpus includes 45 complete page suites, two complete tab suites and the single `HE-012` bringToFront case. `corpus.json` lists all 136 page suites, each inclusion/exclusion reason and every source digest. The only spec edit is the owner's explicit headless skip waiver for HE-012. Its test body stays unchanged. Other changes are the browser fixture seam and nonzero server port allocation. The overlay records all before/after digests.
 

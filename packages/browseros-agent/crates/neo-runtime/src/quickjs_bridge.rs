@@ -207,7 +207,10 @@ fn install_test_host<'js>(
                 // Dropping the losing receive also releases any transport-side borrow.
                 let frame = tokio::select! {
                     stop = deadline.reached() => {
-                        let error = stopped_error(&deadline, stop);
+                        let error = match stop {
+                            Stop::Timeout => RunError::timeout(deadline.timeout()),
+                            Stop::Cancelled => RunError::new("Error", "Run cancelled".to_string()),
+                        };
                         return Err(throw_named(&ctx, &error.name, &error.message));
                     }
                     result = host.receive() => result
