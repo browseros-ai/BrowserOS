@@ -4,7 +4,8 @@ The upstream pin, canonical store, ownership map, and platform series are one
 input. Product resources and build configuration belong to the build package.
 """
 
-from pathlib import Path
+from collections.abc import Iterator
+from pathlib import Path, PureWindowsPath
 import re
 import subprocess
 
@@ -45,11 +46,40 @@ def load_external_patch_version(root: Path) -> tuple[str, dict[str, str]]:
             raise ValueError("BASE_COMMIT, CHROMIUM_VERSION, and .store.yaml disagree")
         _validate_ownership(store)
         load_v8_patch_base(root)
-        if not (root / "series_patches" / "series").is_file():
+        series_dir = root / "series_patches"
+        if not (series_dir / "series").is_file():
             raise ValueError("series_patches/series is missing")
+        # Validate every platform here, using the execution parser, so a package
+        # cannot consume patch bytes outside the tree bound to resume identity.
+        for series in (series_dir / "series", *sorted(series_dir.glob("series.*"))):
+            list(parse_series(series))
     except (OSError, ValueError, KeyError, yaml.YAMLError) as exc:
         raise ValueError(f"Invalid Chromium patch root {root}: {exc}") from exc
     return version, parts
+
+
+def parse_series(series_path: Path) -> Iterator[str]:
+    """Read ordered patch names confined to the series directory.
+
+    Common and platform files share blank-line and comment handling. Validate
+    both POSIX and Windows path forms so a package stays portable and cannot
+    reference patch bytes outside its package when moved between build hosts.
+    """
+    root = series_path.parent.resolve()
+    for line in series_path.read_text(encoding="utf-8").splitlines():
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        entry = entry.split(" #", 1)[0].strip()
+        path = PureWindowsPath(entry)
+        if (
+            path.drive
+            or path.root
+            or ".." in path.parts
+            or not (root / entry).resolve().is_relative_to(root)
+        ):
+            raise ValueError(f"Series patch path must stay within {root}: {entry}")
+        yield entry
 
 
 def _reject_symlink(path: Path) -> None:

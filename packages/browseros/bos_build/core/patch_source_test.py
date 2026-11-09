@@ -103,6 +103,39 @@ class PatchSourceTest(unittest.TestCase):
                     self._context()
                 path.write_text(before)
 
+    def test_common_and_all_platform_series_reject_outside_paths(self):
+        series = self.external.root / "series_patches"
+        outside = self.external.root.parent / "outside.patch"
+        outside.write_text("external patch bytes")
+        for name in ("series", "series.macos", "series.windows", "series.linux"):
+            for entry in (
+                "../../outside.patch",
+                str(outside),
+                "../chromium_patches/patch",
+                "C:/shared/fix.patch",
+                "C:fix.patch",
+                r"..\outside.patch",
+                r"\shared\fix.patch",
+                "nested/../fix.patch",
+            ):
+                with self.subTest(name=name, entry=entry):
+                    path = series / name
+                    path.write_text(entry + "\n")
+                    with self.assertRaisesRegex(
+                        ValueError, "Series patch path must stay within"
+                    ):
+                        self._context()
+                    path.write_text("")
+
+    def test_contained_series_with_comments_remain_valid(self):
+        series = self.external.root / "series_patches"
+        (series / "nested").mkdir()
+        (series / "nested/fix.patch").write_text("patch bytes")
+        (series / "series.macos").write_text(
+            "# platform patches\n\nnested/fix.patch # note\n"
+        )
+        self.assertEqual(self._context().chromium_version, "158.0.8127.18")
+
     def test_external_input_symlinks_are_rejected(self):
         self.external.with_v8_store()
         self.external.add_patch("chrome/example.cc", "patch")

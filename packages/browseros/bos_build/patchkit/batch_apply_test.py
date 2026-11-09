@@ -181,6 +181,22 @@ class BatchApplyTest(unittest.TestCase):
         base = (self.root / "BASE_COMMIT").read_text()
         self.assertEqual(apply_all_patches(self._ctx(), reset_to=base), (2, []))
 
+    def test_wrong_v8_head_blocks_both_stores_in_every_mode(self):
+        v8_src, _store = self._nested_store()
+        # Identical files let every patch apply; only the revision is wrong.
+        _git(v8_src, "commit", "--allow-empty", "-qm", "different V8 revision")
+        base = (self.root / "BASE_COMMIT").read_text()
+        for options in ({}, {"dry_run": True}, {"reset_to": base}):
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(
+                    RuntimeError, "V8 checkout HEAD does not match"
+                ):
+                    apply_all_patches(self._ctx(), **options)
+                for repo in (self.repo, v8_src):
+                    self.assertEqual(
+                        (repo / "chrome/a.txt").read_text(), "line one\nline two\n"
+                    )
+
     def test_stale_v8_pin_fails_before_chromium_mutation(self):
         _src, store = self._nested_store()
         (store / ".store.yaml").write_text("base_commit: " + "b" * 40 + "\n")

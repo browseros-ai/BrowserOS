@@ -338,6 +338,15 @@ def apply_all_patches(
             raise RuntimeError(
                 "V8 checkout is missing; sync Chromium dependencies first"
             )
+        # A direct patch run can skip source sync. Even reset_to restores only
+        # patch-touched files, so it cannot repair a different dependency HEAD.
+        # Check the checkout before either repository receives any patch edits.
+        head = run_git_command(["git", "rev-parse", "HEAD"], cwd=v8_src)
+        if head.returncode != 0 or head.stdout.strip() != v8_base:
+            raise RuntimeError(
+                f"V8 checkout HEAD does not match patch base {v8_base}; "
+                "sync Chromium dependencies first"
+            )
         stores.append((v8_store, v8_src, "v8/", v8_base if reset_to else None))
     stores.append((chromium_store, build_ctx.chromium_src, "", reset_to))
 
