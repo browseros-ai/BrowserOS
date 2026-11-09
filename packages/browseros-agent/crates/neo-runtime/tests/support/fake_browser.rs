@@ -364,6 +364,16 @@ fn lock<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
 /// The glue object's id in the fake's page.
 pub const GLUE: &str = "glue";
 
+/// The `backendNodeId` of the fake page's document.
+pub const DOCUMENT_NODE: i64 = 1;
+
+/// The `backendNodeId` of the fake page's one button, `#go`.
+pub const GO_NODE: i64 = 42;
+
+/// A `fill` value the fake's page refuses, with a page error that quotes the value, as a
+/// page's own error text may quote what a call typed.
+pub const REFUSED_FILL: &str = "refuse:";
+
 /// One connection's state: how many times each held-back method has been called, and the page
 /// objects the fake handed out.
 #[derive(Default)]
@@ -386,6 +396,10 @@ struct Calls {
     /// Returned page objects by id, with the own properties `Runtime.getProperties` lists.
     objects: HashMap<String, Value>,
     next_object: usize,
+    /// The DOM node each node object the fake handed out holds, by object id, as
+    /// `DOM.describeNode` answers its `backendNodeId`: the document is [`DOCUMENT_NODE`], every
+    /// match of `#go` is [`GO_NODE`], whichever world its object lives in.
+    backends: HashMap<String, i64>,
 }
 
 impl Calls {
@@ -682,6 +696,7 @@ const EMPTY_RESULTS: &[&str] = &[
     "Page.setLifecycleEventsEnabled",
     "Emulation.setFocusEmulationEnabled",
     "Runtime.releaseObjectGroup",
+    "Runtime.releaseObject",
     "DOM.scrollIntoViewIfNeeded",
     "Fetch.enable",
     "Network.setCacheDisabled",
@@ -698,6 +713,7 @@ fn answer(
     if let Some(answer) = tab_command(command, replies, page)
         .or_else(|| frame_command(command, calls, page).map(|reply| (reply, now)))
         .or_else(|| init_script_command(command, calls).map(|reply| (reply, now)))
+        .or_else(|| node_command(command, calls).map(|reply| (reply, now)))
         .or_else(|| input_command(command, replies, calls))
     {
         return answer;
@@ -792,6 +808,31 @@ fn answer(
     }
 }
 
+/// The node commands a pin reads (`DOM.describeNode`) and adopts with (`DOM.resolveNode`): each
+/// node object the fake handed out names its node, in any world.
+fn node_command(command: &Value, calls: &mut Calls) -> Option<Value> {
+    Some(match command["method"].as_str()? {
+        "DOM.describeNode" => {
+            let object = command["params"]["objectId"].as_str().unwrap_or_default();
+            match calls.backends.get(object) {
+                Some(backend) => json!({ "result": { "node": { "backendNodeId": backend } } }),
+                None => {
+                    json!({ "error": { "code": -32000, "message": "Could not find node with given id" } })
+                }
+            }
+        }
+        "DOM.resolveNode" => {
+            let backend = command["params"]["backendNodeId"]
+                .as_i64()
+                .unwrap_or_default();
+            let object = calls.object("main-node");
+            calls.backends.insert(object.clone(), backend);
+            json!({ "result": { "object": { "type": "object", "subtype": "node", "objectId": object } } })
+        }
+        _ => return None,
+    })
+}
+
 /// The init script commands (`src/browser_representations/init_scripts.rs`): a real tab answers each script its own
 /// identifier, and takes its removal and the iframe auto-attach without a word.
 fn init_script_command(command: &Value, calls: &mut Calls) -> Option<Value> {
@@ -825,6 +866,7 @@ fn input_command(
                 (json!({"result":{}}), now)
             },
         ),
+        "Input.insertText" => Some((json!({ "result": {} }), now)),
         "Input.dispatchMouseEvent" => {
             let call = calls.mouse;
             calls.mouse += 1;
@@ -1023,8 +1065,16 @@ fn call_function_on(
             json!({ "result": { "result": { "type": "undefined" } } })
         };
     }
+    // `utility.js` installed on the main world's document: the main world's `UtilityScript`.
+    if params["arguments"].is_null() && params["objectId"].is_string() {
+        let utility = calls.object("utility");
+        return json!({ "result": { "result": { "type": "object", "objectId": utility } } });
+    }
     let name = params["arguments"][0]["value"].as_str().unwrap_or_default();
     let glue_params = &params["arguments"][1]["value"];
+    if let Some(answer) = node_glue(name, glue_params, calls) {
+        return answer;
+    }
     let value = match name {
         "setupDragListeners" => {
             lock(page).drag_listeners = true;
@@ -1058,6 +1108,7 @@ fn call_function_on(
         "resolve" => {
             let properties = if glue_params["selector"] == "#go" {
                 let node = calls.object("node");
+                calls.backends.insert(node.clone(), GO_NODE);
                 json!([
                     property(
                         "element",
@@ -1098,6 +1149,38 @@ fn call_function_on(
         }
     };
     json!({ "result": { "result": { "type": "object", "value": value } } })
+}
+
+/// The glue a pinned fill uses: `document`, the anchor the main world is installed from, and
+/// `fill`, which leaves the typing to `Input.insertText` unless the value is [`REFUSED_FILL`].
+fn node_glue(name: &str, glue_params: &Value, calls: &mut Calls) -> Option<Value> {
+    match name {
+        "document" => {
+            let node = calls.object("document");
+            calls.backends.insert(node.clone(), DOCUMENT_NODE);
+            let properties = json!([property(
+                "node",
+                &json!({ "type": "object", "subtype": "node", "objectId": node })
+            )]);
+            Some(page_object(calls, properties))
+        }
+        "fill" => Some(match glue_params["value"].as_str() {
+            Some(value) if value.starts_with(REFUSED_FILL) => {
+                let description = format!("Error: the page refused to fill {value}");
+                json!({ "result": {
+                    "result": { "type": "object", "subtype": "error", "description": description },
+                    "exceptionDetails": {
+                        "exceptionId": 1, "text": "Uncaught", "lineNumber": 0, "columnNumber": 0,
+                        "exception": { "type": "object", "subtype": "error", "description": description },
+                    },
+                } })
+            }
+            _ => {
+                json!({ "result": { "result": { "type": "object", "value": { "outcome": "needsinput" } } } })
+            }
+        }),
+        _ => None,
+    }
 }
 
 /// A result object holding `properties`, as the glue's handle-holding results come back.

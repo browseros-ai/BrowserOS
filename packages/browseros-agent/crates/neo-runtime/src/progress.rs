@@ -36,6 +36,7 @@ use tokio_util::task::TaskTracker;
 use tracing::info;
 
 use crate::abort::CallAbort;
+use crate::action_hooks::ElementGate;
 use crate::artifacts::Artifacts;
 use crate::browser_representations::bindings::Bindings;
 use crate::browser_representations::clock::Clock;
@@ -236,6 +237,9 @@ pub(crate) struct Progress {
     /// The run's [`RunScope::context_closed`], or, for the context's own close, a token never
     /// cancelled: that call finishes its acknowledgement after stopping the others.
     context_closed: CancellationToken,
+    /// The element checkpoint of an element action whose run's hooks want its beforeAction
+    /// (hooks feature 4); `None` for every other call, which pays one check for it.
+    element_gate: Option<Arc<ElementGate>>,
 }
 
 impl Progress {
@@ -267,7 +271,15 @@ impl Progress {
             run,
             page_closed,
             context_closed,
+            element_gate: None,
         }
+    }
+
+    /// The call's element checkpoint (`action_hooks/element.rs`), when its hooks want one.
+    #[must_use]
+    pub(crate) fn with_element_gate(mut self, gate: Option<Arc<ElementGate>>) -> Self {
+        self.element_gate = gate;
+        self
     }
 
     /// The context's own close: it outlives the stop it gives every other call of the run.
@@ -423,6 +435,24 @@ impl Progress {
     /// The call's delivery cell; `None` for a method the spec does not flag `input`.
     pub(crate) fn delivery(&self) -> Option<&Arc<DeliveryCell>> {
         self.entry.delivery.as_ref()
+    }
+
+    /// The call's element checkpoint, which only an element action whose run's hooks want its
+    /// beforeAction has (hooks feature 4).
+    pub(crate) fn element_gate(&self) -> Option<&Arc<ElementGate>> {
+        self.element_gate.as_ref()
+    }
+
+    /// Records what the call's beforeAction decided at its element checkpoint; the latest
+    /// decision is the record's.
+    pub(crate) fn record_hook_before(&self, result: BeforeHookResult) {
+        self.entry.hook_before(result);
+    }
+
+    /// Hides the call's log from its reply and its record from now on, for a call that runs
+    /// with a hook's arguments (`CallEntry::hide_log`).
+    pub(crate) fn hide_log(&self) {
+        self.entry.hide_log();
     }
 
     /// The run's artifact directory, where a `path` option writes.
@@ -618,8 +648,9 @@ pub(crate) struct CallEntry {
     abort: CallAbort,
     /// Set once by whoever ends the call; absent while it runs.
     end: OnceLock<CallEnd>,
-    /// What `beforeAction` decided, once it has (`action_hooks.rs`).
-    hook_before: OnceLock<BeforeHookResult>,
+    /// What `beforeAction` decided, once it has (`action_hooks.rs`). An element action asks
+    /// again for each new element it finds, so its latest decision is the one kept.
+    hook_before: Mutex<Option<BeforeHookResult>>,
     /// What `afterAction` decided, once it has.
     hook_after: OnceLock<AfterHookResult>,
     /// Test-only: how long `abort` holds between waking the call and logging, in ms.
@@ -697,7 +728,7 @@ impl CallEntry {
             delivery: input.then(Arc::default),
             abort: CallAbort::default(),
             end: OnceLock::new(),
-            hook_before: OnceLock::new(),
+            hook_before: Mutex::new(None),
             hook_after: OnceLock::new(),
             #[cfg(test)]
             abort_pause_ms: AtomicU64::new(0),
@@ -760,9 +791,12 @@ impl CallEntry {
         self.abort.aborted().await
     }
 
-    /// Records what `beforeAction` decided; only the first decision counts.
+    /// Records what `beforeAction` decided; the latest decision counts (an element action asks
+    /// again about each new element it finds).
     pub(crate) fn hook_before(&self, result: BeforeHookResult) {
-        let _first = self.hook_before.set(result);
+        if let Ok(mut before) = self.hook_before.lock() {
+            *before = Some(result);
+        }
     }
 
     /// Records what `afterAction` decided; only the first decision counts.
@@ -869,7 +903,7 @@ impl CallEntry {
 
     /// The hooks' decisions for the record; `None` when no hook decided anything.
     fn hook_record(&self) -> Option<CallHookRecord> {
-        let before = self.hook_before.get().copied();
+        let before = self.hook_before.lock().ok().and_then(|before| *before);
         let after = self.hook_after.get().copied();
         (before.is_some() || after.is_some()).then_some(CallHookRecord { before, after })
     }

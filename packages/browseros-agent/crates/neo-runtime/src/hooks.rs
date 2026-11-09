@@ -111,9 +111,9 @@ pub(crate) struct ActionEvent {
     pub(crate) context: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) locator: Option<LocatorRef>,
-    /// The pinned element's handle guid (hooks feature 4).
+    /// The element an element action found, pinned for the run's hooks (hooks feature 4).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) element: Option<String>,
+    pub(crate) element: Option<ElementRef>,
 }
 
 /// The locator an element action targets: its frame and selector.
@@ -121,6 +121,15 @@ pub(crate) struct ActionEvent {
 pub(crate) struct LocatorRef {
     pub(crate) frame: String,
     pub(crate) selector: String,
+}
+
+/// The pinned element handle an element action's hooks receive (hooks feature 4): its guid,
+/// which only the hook realm can use, and its preview, from which the hook realm's SDK builds a
+/// real `ElementHandle`, as it builds one from any handle record Rust creates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ElementRef {
+    pub(crate) guid: String,
+    pub(crate) preview: String,
 }
 
 /// How an action ended, for `afterAction`.

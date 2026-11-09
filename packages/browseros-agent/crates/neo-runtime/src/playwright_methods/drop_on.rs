@@ -84,9 +84,37 @@ pub(crate) async fn drop_on<T: DropTab>(
     let Some(delivery) = progress.delivery() else {
         return Err(PlaywrightError::error(NO_DELIVERY_CELL).into());
     };
-    let FrameDropParams {
-        selector,
+    let selector = params.selector.clone();
+    let strict = params.strict.unwrap_or(false);
+    let dropping = prepare(params, progress).await?;
+    // Playwright: `server/frames.ts` `Frame.drop`: `dom.assertDone(await this._retryWithProgressIfNotConnected(progress, target, { waitForFrameVisible: true }, (progress, handle, box, frameVisible) => handle._drop(progress, inputFileItems, data, params, frameVisible)));`
+    click::retry_with_progress_if_not_connected(
+        tab,
+        &selector,
         strict,
+        false,
+        progress,
+        &DropAction {
+            dropping: &dropping,
+            delivery,
+        },
+    )
+    .await
+}
+
+/// What one drop carries and where: its files and data, prepared before any element is
+/// resolved, and its point.
+struct Dropping {
+    items: Arc<DropItems>,
+    position: Option<Point>,
+}
+
+/// The drop `params` describe, prepared as Playwright prepares it before its loop A: files read
+/// and typed, data kept in order. A hook's replacement arguments are prepared the same way.
+async fn prepare(params: FrameDropParams, progress: &Progress) -> Result<Dropping, CallError> {
+    let FrameDropParams {
+        selector: _,
+        strict: _,
         position,
         payloads,
         local_paths,
@@ -128,22 +156,10 @@ pub(crate) async fn drop_on<T: DropTab>(
     } else {
         Vec::new()
     };
-    let items = Arc::new(DropItems { payloads, data });
-    let position = position.as_ref().map(click::point);
-    // Playwright: `server/frames.ts` `Frame.drop`: `dom.assertDone(await this._retryWithProgressIfNotConnected(progress, target, { waitForFrameVisible: true }, (progress, handle, box, frameVisible) => handle._drop(progress, inputFileItems, data, params, frameVisible)));`
-    click::retry_with_progress_if_not_connected(
-        tab,
-        &selector,
-        strict.unwrap_or(false),
-        false,
-        progress,
-        &DropAction {
-            items: &items,
-            position: position.as_ref(),
-            delivery,
-        },
-    )
-    .await
+    Ok(Dropping {
+        items: Arc::new(DropItems { payloads, data }),
+        position: position.as_ref().map(click::point),
+    })
 }
 
 /// Playwright: `server/frames.ts` `Frame.drop`: `const inputFileItems = hasFiles ? await progress.race(prepareFilesForUpload(this, params)) : { filePayloads: undefined, localPaths: undefined };`
@@ -222,21 +238,31 @@ fn unreadable(file: &ExistingPath, error: &io::Error) -> PlaywrightError {
 /// Loop B for the drop (`_retryAction` with `_retryPointerAction`): the same element until the
 /// drop is done, the element is detached, or the call stops.
 struct DropAction<'a> {
-    items: &'a Arc<DropItems>,
-    position: Option<&'a Point>,
+    dropping: &'a Dropping,
     delivery: &'a Arc<DeliveryCell>,
 }
 
 /// Playwright: `server/dom.ts` `ElementHandle._retryAction`: `if (!options.skipActionPreChecks && !options.force)`
 impl<T: DropTab> ElementAction<T> for DropAction<'_> {
     type Output = ();
+    type Options = FrameDropParams;
 
     async fn act(
         &self,
         tab: &T,
         element: &T::Element,
+        replaced: Option<&FrameDropParams>,
         progress: &Progress,
     ) -> Result<ActionResult<()>, Stop> {
+        // Neo: a hook's replacement drops what it names, prepared as the script's drop was.
+        let prepared;
+        let dropping = match replaced {
+            Some(params) => {
+                prepared = prepare(params.clone(), progress).await?;
+                &prepared
+            }
+            None => self.dropping,
+        };
         let mut retry = 0;
         loop {
             if retry == 0 {
@@ -250,7 +276,10 @@ impl<T: DropTab> ElementAction<T> for DropAction<'_> {
                 }
             }
             click::wait_out_pending_navigation(tab, progress).await?;
-            let reason = match self.attempt(tab, element, retry, progress).await? {
+            let reason = match self
+                .attempt(tab, element, dropping, retry, progress)
+                .await?
+            {
                 None => return Ok(ActionResult::Done(())),
                 Some(NotReady::NotConnected) => return Ok(ActionResult::NotConnected),
                 Some(reason) => reason,
@@ -272,9 +301,11 @@ impl DropAction<'_> {
         &self,
         tab: &T,
         element: &T::Element,
+        dropping: &Dropping,
         retry: usize,
         progress: &Progress,
     ) -> Result<Option<NotReady>, Stop> {
+        let position = dropping.position.as_ref();
         progress.log("  waiting for element to be visible and stable");
         match progress
             .race(tab.check_states(element, &DROP_STATES, true))
@@ -288,16 +319,16 @@ impl DropAction<'_> {
         progress.log("  scrolling into view if needed");
         let scroll = click::SCROLLS[retry % click::SCROLLS.len()];
         if let Some(reason) = progress
-            .race(tab.scroll(element, scroll, self.position))
+            .race(tab.scroll(element, scroll, position))
             .await??
         {
             return Ok(Some(reason));
         }
         progress.log("  done scrolling");
         let geometry = progress
-            .race(tab.geometry(element, self.position, false))
+            .race(tab.geometry(element, position, false))
             .await??;
-        let point = match click::click_point(&geometry, self.position) {
+        let point = match click::click_point(&geometry, position) {
             Ok(point) => click::round_point(&point),
             Err(reason) => return Ok(Some(reason)),
         };
@@ -326,7 +357,7 @@ impl DropAction<'_> {
             .map_err(|_| Stop::from(PlaywrightError::error(DROP_AGAIN)))?;
         progress.log("  performing drop action");
         let dropped = progress
-            .race(tab.drop_on(element, self.items, point, ticket, input.clone()))
+            .race(tab.drop_on(element, &dropping.items, point, ticket, input.clone()))
             .await?;
         let outcome = match dropped {
             Ok(outcome) => outcome,

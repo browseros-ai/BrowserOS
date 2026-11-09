@@ -69,6 +69,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tracing::{debug, warn};
 
+use crate::action_hooks::element::{NodeKey, PinnedElement};
 use crate::browser_representations::emulation::PageEmulation;
 use crate::browser_representations::init_scripts::{self, Link, until_gone};
 use crate::browser_representations::locator_handlers::{self, LocatorHandlers};
@@ -89,6 +90,7 @@ use crate::playwright_methods::click::{
     Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
     StatesCheck, Stop, Tab, Verdict,
 };
+use crate::playwright_methods::evaluate::{self, Handles};
 use crate::playwright_methods::highlight::Highlights;
 use crate::playwright_methods::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
@@ -2847,6 +2849,26 @@ impl Tab for FrameTab {
             count: u32::try_from(resolved.count).unwrap_or(u32::MAX),
             preview: resolved.preview.unwrap_or_default(),
         }))
+    }
+
+    /// The node's frame and its `backendNodeId` (`DOM.describeNode`), which Chromium keeps for
+    /// the node across worlds and resolutions.
+    async fn node_key(&self, element: &ResolvedElement) -> Result<NodeKey, PageError> {
+        let frame = &element.frame;
+        let backend = frame
+            .main
+            .backend_of(frame, element.handle().id().object_id())
+            .await?;
+        Ok(NodeKey::new(frame.id.clone(), backend))
+    }
+
+    async fn pin(
+        &self,
+        element: &ResolvedElement,
+        preview: &str,
+        hooks: &Arc<Handles>,
+    ) -> Result<PinnedElement, PageError> {
+        evaluate::pin_element(self, element, preview, hooks).await
     }
 
     async fn check_states(

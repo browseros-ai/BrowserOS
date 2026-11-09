@@ -1,12 +1,13 @@
-//! Neo: the action hooks of actions that target no element (hooks feature 3). Before such a
-//! served call runs, the run's hooks may allow it, block it or swap its arguments; after it ran,
-//! they may keep its result, swap it, or leave the model a note. The gate sits in
+//! Neo: the action hooks of every served action (hooks features 3 and 4). Before an action that
+//! targets no element runs, the run's hooks may allow it, block it or swap its arguments; after
+//! it ran, they may keep its result, swap it, or leave the model a note. The gate sits in
 //! `Dispatcher::call`, the one door every browser call takes, so a script that calls
 //! `__neo_runtime.call` itself is hooked like one that uses the SDK.
 //!
 //! ```text
 //!  Dispatcher::call  (sync, in call order)
-//!    ├─ HookPlan::new        element action (F4's) or no hook wants it → None, nothing else
+//!    ├─ HookPlan::new        no hook wants it → None, nothing else; an element action's
+//!    │                       beforeAction is its element checkpoint's (`element.rs`)
 //!    ├─ ordered turns        beforeAction wants it: taken only once it is decided (below)
 //!    └─ HookPlan::admitted   its place in the run's CallOrder, unless the debugger holds it
 //!  the call's task
@@ -30,6 +31,11 @@
 //! The hooks are the run's hook sandbox (feature 2, `hooks.rs`), reached through
 //! [`ActionHooks`], which only the agent's dispatcher holds: the hook realm's dispatcher has no
 //! hooks, so a hook's own calls are never hooked, whatever their message says (hooks design D7).
+//!
+//! An action that targets an element (feature 4) has no gate here: its beforeAction fires once
+//! its element is found, at the element checkpoint ([`element`]), which [`HookPlan::admitted`]
+//! hands the call as an [`ElementGate`]. Its afterAction and its redaction are the same
+//! [`ReplyHooks`] as every other call's.
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -49,6 +55,12 @@ use crate::hooks::{
 use crate::progress::{CallEntry, PlaywrightError, RunScope};
 use crate::run::{AfterHookResult, BeforeHookResult, RunError};
 
+pub(crate) mod element;
+
+pub(crate) use element::{ElementGate, ElementRoute};
+
+#[cfg(test)]
+mod element_tests;
 #[cfg(test)]
 mod tests;
 
@@ -260,17 +272,18 @@ pub(crate) struct HookPlan {
     served: ServedMethod,
     before: bool,
     after: bool,
+    /// An element action: its beforeAction waits for its element ([`element`]), never at the
+    /// gate.
+    element: bool,
 }
 
 impl HookPlan {
-    /// The hooks that see a call of `served`, or `None`: for an element action, whose hooks
-    /// fire once its element is found (feature 4), and for an action no hook wants. Decided by
-    /// the command alone, never by a field of the message, which the script may forge.
+    /// The hooks that see a call of `served`, or `None` for an action no hook wants. An element
+    /// action's beforeAction fires once its element is found (feature 4); every other action's
+    /// before the call starts. Decided by the command alone, never by a field of the message,
+    /// which the script may forge.
     pub(crate) fn new(hooks: &Arc<dyn ActionHooks>, served: ServedMethod) -> Option<Self> {
         let action = served.action();
-        if action.element_action() {
-            return None;
-        }
         let kind = Some(action.kind().as_str());
         let group = Some(action.group().as_str());
         let before = hooks.wants(ActionHook::Before, kind, group);
@@ -280,6 +293,7 @@ impl HookPlan {
             served,
             before,
             after,
+            element: action.element_action(),
         })
     }
 
@@ -291,16 +305,19 @@ impl HookPlan {
     /// Whether `beforeAction` holds the call at its gate. Then whatever the call settles in call
     /// order (its write or storage turn, a new test id attribute) waits for the decision: it
     /// must not happen for a blocked call, and a turn held through the hook's wait would keep
-    /// the hook's own `setContent` waiting behind the call it decides.
+    /// the hook's own `setContent` waiting behind the call it decides. An element action is
+    /// never held there: its question waits for its element.
     pub(crate) fn gates(&self) -> bool {
-        self.before
+        self.before && !self.element
     }
 
     /// The call's hooks once it is admitted, with the event they see; a `frame_call`'s event
     /// names the locator its args carry. A gated call keeps `route` (asked for only then) for
     /// its gate, and takes its place in `order` now, or, when the debugger `held` it, once it
-    /// is released.
-    pub(crate) fn admitted<G: CallRoute>(
+    /// is released. An element action whose beforeAction is wanted keeps `route` in its
+    /// [`ElementGate`] instead, and takes no place: its question comes once its element is
+    /// found, mid-call.
+    pub(crate) fn admitted<G: CallRoute + ElementRoute>(
         self,
         mut event: ActionEvent,
         call_id: u64,
@@ -312,7 +329,16 @@ impl HookPlan {
         if frame_call {
             event.locator = locator_of(&event.guid, &event.args);
         }
+        let mut element = None;
         let before = if !self.before {
+            Before::Unwanted
+        } else if self.element {
+            element = Some(Arc::new(ElementGate::new(
+                Arc::clone(&self.hooks),
+                event.clone(),
+                call_id,
+                Box::new(route()),
+            )));
             Before::Unwanted
         } else if held {
             Before::Held(Arc::clone(order), route())
@@ -328,6 +354,7 @@ impl HookPlan {
             before,
             after: self.after,
             args_replaced: false,
+            element,
         }
     }
 }
@@ -366,6 +393,8 @@ pub(crate) struct CallHooks<G> {
     after: bool,
     /// Set once `beforeAction` replaced the call's arguments ([`ReplyHooks::finish`]).
     args_replaced: bool,
+    /// An element action's beforeAction, which its handler reaches through its `Progress`.
+    element: Option<Arc<ElementGate>>,
 }
 
 impl<G: CallRoute> CallHooks<G> {
@@ -461,9 +490,15 @@ impl<G: CallRoute> CallHooks<G> {
 }
 
 impl<G> CallHooks<G> {
+    /// The element checkpoint's gate of an element action whose beforeAction is wanted, for the
+    /// call's `Progress` (`Progress::with_element_gate`).
+    pub(crate) fn element_gate(&self) -> Option<Arc<ElementGate>> {
+        self.element.clone()
+    }
+
     /// What the call's hooks do to its reply, once it passed its gate and runs: its
     /// `afterAction` when one wants it, and the redaction of a call that runs with a hook's
-    /// arguments. `None` when neither applies.
+    /// arguments, decided at its gate or at its element checkpoint. `None` when neither applies.
     pub(crate) fn ran(self, run: &RunScope) -> Option<ReplyHooks> {
         let Self {
             hooks,
@@ -472,9 +507,10 @@ impl<G> CallHooks<G> {
             call_id,
             after,
             args_replaced,
+            element,
             ..
         } = self;
-        if !after && !args_replaced {
+        if !after && !args_replaced && element.is_none() {
             return None;
         }
         let method = event.method.clone();
@@ -486,6 +522,7 @@ impl<G> CallHooks<G> {
             }),
             hooks,
             args_replaced,
+            element,
             call_id,
             method,
             run: run.clone(),
@@ -501,6 +538,8 @@ pub(crate) struct ReplyHooks {
     hooks: Arc<dyn ActionHooks>,
     /// The call runs with a hook's arguments: an error it replies is redacted.
     args_replaced: bool,
+    /// An element action's checkpoint: what it decided, about which element.
+    element: Option<Arc<ElementGate>>,
     call_id: u64,
     method: String,
     run: RunScope,
@@ -521,19 +560,37 @@ impl ReplyHooks {
     /// none of its own error text, which may quote them (`Unknown permission: <value>`,
     /// `… at <url>`): it keeps the error's name, and the text goes to the host-only trace. `None`
     /// when the run stopped during `afterAction`: no reply, as for any call the run ended.
+    ///
+    /// An element action blocked at its element checkpoint never acted, so no `afterAction`
+    /// sees it; one that acted has its `afterAction` told the element and the arguments it
+    /// acted with. A replacement's in-flight charge is given back here, before the reply.
     pub(crate) async fn finish(
         self,
         entry: &CallEntry,
         outcome: Result<Option<Value>, PlaywrightError>,
     ) -> Option<Result<Option<Value>, PlaywrightError>> {
         let Self {
-            after,
+            mut after,
             hooks,
             args_replaced,
+            element,
             call_id,
             method,
             run,
         } = self;
+        let args_replaced = args_replaced || element.as_ref().is_some_and(|gate| gate.replaced());
+        if let Some(gate) = &element {
+            drop(gate.take_charge());
+            if gate.refused() {
+                after = None;
+            } else if let Some(after) = after.as_mut() {
+                let (acted_on, args) = gate.acted();
+                after.event.element = acted_on;
+                if let Some(args) = args {
+                    after.event.args = args;
+                }
+            }
+        }
         let (outcome, decided) = match after {
             Some(after) => {
                 let (outcome, decided) =
@@ -687,9 +744,13 @@ fn trace_line(event: &str, call_id: u64, method: &str, detail: &str) -> String {
     format!("neo: {event} failed for call {call_id} ({method}): {detail}")
 }
 
-/// The locator a frame call's `args` name: their string `selector` in `frame`.
+/// The locator a frame call's `args` name: their string `selector` in `frame`, or a drag's
+/// `source`, the element its hooks are asked about (feature 4).
 fn locator_of(frame: &str, args: &Value) -> Option<LocatorRef> {
-    let selector = args.get("selector")?.as_str()?;
+    let selector = args
+        .get("selector")
+        .or_else(|| args.get("source"))?
+        .as_str()?;
     Some(LocatorRef {
         frame: frame.to_string(),
         selector: selector.to_string(),

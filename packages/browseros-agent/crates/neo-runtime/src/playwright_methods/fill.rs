@@ -190,15 +190,18 @@ struct FillAction<'a> {
 
 impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
     type Output = ();
+    type Options = FillOptions;
 
     async fn act(
         &self,
         tab: &T,
         element: &T::Element,
+        replaced: Option<&FillOptions>,
         progress: &Progress,
     ) -> Result<ActionResult<()>, Stop> {
-        let options = self.options;
-        progress.log(format!("  fill(\"{}\")", options.value));
+        let options = replaced.unwrap_or(self.options);
+        // The script's value, whatever a hook typed instead (hooks design D11).
+        progress.log(format!("  fill(\"{}\")", self.options.value));
         let mut retry = RetryAction::new("fill");
         loop {
             retry.before(tab, options.force, progress).await?;
@@ -321,14 +324,30 @@ struct SelectAction<'a> {
 
 impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
     type Output = Vec<String>;
+    type Options = SelectOptions;
 
     async fn act(
         &self,
         tab: &T,
         element: &T::Element,
+        replaced: Option<&SelectOptions>,
         progress: &Progress,
     ) -> Result<ActionResult<Vec<String>>, Stop> {
-        let options = self.options;
+        let options = replaced.unwrap_or(self.options);
+        // A hook's `elements` are checked as the script's were, against the handles the
+        // script may use.
+        let replaced_elements = match replaced {
+            Some(replaced) => Some(
+                replaced
+                    .elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, guid)| progress.handles().select_element(index, guid))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            None => None,
+        };
+        let elements = replaced_elements.as_deref().unwrap_or(self.elements);
         let mut retry = RetryAction::new("select option");
         loop {
             retry.before(tab, options.force, progress).await?;
@@ -342,7 +361,7 @@ impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
                 .race(tab.select_options(
                     element,
                     &options.options,
-                    self.elements,
+                    elements,
                     options.force,
                     input,
                     ticket,

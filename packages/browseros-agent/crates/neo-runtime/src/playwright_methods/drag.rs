@@ -18,12 +18,23 @@
 //!
 //! A drag stopped between its halves leaves the left button held, as Playwright's does; the
 //! run's end releases it (cancelling a drag that runs).
+//!
+//! The call's beforeAction hook (hooks feature 4) is asked once, about the source element: the
+//! target half runs with the source's button held, and its selector is in the hook's `args`. A
+//! hook's replacement arguments keep both selectors, and both halves run with them.
+
+use std::sync::Arc;
 
 use neo_runtime_spec::serve::{FrameDragAndDropParams, FrameDragAndDropParamsScroll, Point};
 
 use crate::chromium_bridge::keyboard_input::KeyboardTab;
-use crate::playwright_methods::click::{self, PointerAction, PointerOptions};
-use crate::progress::{CallError, PlaywrightError, Progress};
+use crate::playwright_methods::click::{
+    self, ActionResult, ElementAction, PointerAction, PointerOptions, Stop, Tab,
+};
+use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
+
+/// Neo: dispatch gives every input method a delivery cell; a call without one is a broken route.
+const NO_DELIVERY_CELL: &str = "neo-runtime: Frame.dragAndDrop has no delivery cell";
 
 /// `Frame.dragAndDrop`'s options, as its two pointer actions.
 #[derive(Debug, Clone, PartialEq)]
@@ -85,13 +96,58 @@ pub(crate) async fn drag_and_drop<T: KeyboardTab>(
     options: &DragOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    if let Some(delivery) = progress.delivery() {
-        // Said before the source half, so its acknowledgement, even one that comes after the
-        // call gave up on it, completes only that half: `Done` waits for the drop.
-        delivery.expect_more();
+    // `dragAndDrop` is an input method in the spec, so dispatch always gives it a cell.
+    let Some(delivery) = progress.delivery() else {
+        return Err(PlaywrightError::error(NO_DELIVERY_CELL).into());
+    };
+    // Said before the source half, so its acknowledgement, even one that comes after the call
+    // gave up on it, completes only that half: `Done` waits for the drop.
+    delivery.expect_more();
+    let source = &options.source;
+    let replaced = click::retry_with_progress_if_not_connected(
+        tab,
+        &source.selector,
+        source.strict,
+        source.force,
+        progress,
+        &DragSource { options, delivery },
+    )
+    .await?;
+    let target = replaced
+        .as_ref()
+        .map_or(&options.target, |replaced| &replaced.target);
+    click::pointer_action(tab, target, progress).await
+}
+
+/// Neo: a drag's source half, which its call's beforeAction hook sees (hooks feature 4), with
+/// the drag's options: the script's, or a hook's replacement, which then drives the target half
+/// too.
+struct DragSource<'a> {
+    options: &'a DragOptions,
+    delivery: &'a Arc<DeliveryCell>,
+}
+
+impl<T: Tab> ElementAction<T> for DragSource<'_> {
+    /// The replacement the source half ran with, if a hook replaced the drag's arguments.
+    type Output = Option<DragOptions>;
+    type Options = DragOptions;
+
+    async fn act(
+        &self,
+        tab: &T,
+        element: &T::Element,
+        replaced: Option<&DragOptions>,
+        progress: &Progress,
+    ) -> Result<ActionResult<Option<DragOptions>>, Stop> {
+        let options = replaced.unwrap_or(self.options);
+        Ok(
+            match click::pointer_act(tab, element, &options.source, progress, self.delivery).await?
+            {
+                ActionResult::Done(()) => ActionResult::Done(replaced.cloned()),
+                ActionResult::NotConnected => ActionResult::NotConnected,
+            },
+        )
     }
-    click::pointer_action(tab, &options.source, progress).await?;
-    click::pointer_action(tab, &options.target, progress).await
 }
 
 #[cfg(test)]

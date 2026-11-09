@@ -34,6 +34,7 @@
 //! call starts inside the native call itself, not when the realm first polls the returned
 //! future, so a call the script never awaits still runs.
 
+use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -72,7 +73,10 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
-use crate::action_hooks::{ActionHooks, CallOrder, CallRoute, Gated, HookPlan, ReplyHooks};
+use crate::action_hooks::element::{ElementOptions, Rerouted};
+use crate::action_hooks::{
+    ActionHooks, CallHooks, CallOrder, CallRoute, ElementRoute, Gated, HookPlan, ReplyHooks,
+};
 use crate::actions::{ActionKind, NeoMethod, ServedMethod, SpecCommand};
 use crate::browser_representations::bindings::{self, Answering, BindingRoute, Outcome};
 use crate::browser_representations::clock::{self, ClockRoute};
@@ -872,6 +876,7 @@ impl Dispatcher {
                 guid: guid.clone(),
                 claim: route.as_ref().ok().and_then(claim_key),
                 claimed: false,
+                target: route.as_ref().ok().and_then(element_target),
                 tabs: inner.tabs.clone(),
                 write_order: Arc::clone(&inner.write_order),
                 storage_order: Arc::clone(&inner.storage_order),
@@ -976,9 +981,12 @@ impl Dispatcher {
                 None => route,
             };
             // The call runs from here: what its hooks do to its reply ([`never_ran`] takes
-            // afterAction back from a call that stops before its handler starts).
+            // afterAction back from a call that stops before its handler starts), and an element
+            // action's checkpoint, which its handler reaches through its progress.
+            let element_gate = hooks.as_ref().and_then(CallHooks::element_gate);
             call_reply.hooks = hooks.and_then(|hooks| hooks.ran(&run)).map(Box::new);
-            let progress = Progress::new(entry, timeout, run, closed);
+            let progress =
+                Progress::new(entry, timeout, run, closed).with_element_gate(element_gate);
             let progress = if disconnecting {
                 progress.closing_the_context()
             } else {
@@ -2544,6 +2552,8 @@ struct Regate {
     /// Whether the script's call was admitted on its claim, which the caps never refuse, rather
     /// than on a share of them; set at admission.
     claimed: bool,
+    /// The element the script's element action aims at; a replacement must aim at the same.
+    target: Option<AimedAt>,
     tabs: Tabs,
     write_order: Arc<WriteOrder>,
     storage_order: Arc<WriteOrder>,
@@ -2610,6 +2620,93 @@ impl CallRoute for Regate {
         set_test_id(&self.tabs, &call);
         GatedCall { call, ..gated }
     }
+}
+
+/// Neo: an element action's replacement arguments are re-checked like the script's own params
+/// (hooks design, Error handling), as every hooked call's are ([`CallRoute::reroute`]), and must
+/// aim at the element the hook was asked about: the same selector and strictness, and for a drag
+/// the same target. They become the options the action's handler acts with on that element.
+impl ElementRoute for Regate {
+    fn reroute_element(&self, args: Value) -> Result<Rerouted, String> {
+        let GatedCall { call, charge } = CallRoute::reroute(self, args)?;
+        if self.target.is_none() || element_target(&call) != self.target {
+            return Err("they change the element the call acts on".to_string());
+        }
+        let options =
+            element_options(call).ok_or_else(|| "they route to no element action".to_string())?;
+        Ok(Rerouted {
+            options,
+            charge: charge.map(|charge| Box::new(charge) as Box<dyn Any + Send + Sync>),
+        })
+    }
+}
+
+/// What an element action aims at, as its route reads it: a hook's replacement arguments may
+/// change how the action acts, never where.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AimedAt {
+    selector: String,
+    strict: bool,
+    /// A drag's target selector.
+    drop_target: Option<String>,
+}
+
+/// The element `call` aims at, for each element action (`Action::element_action`); `None` for
+/// any other call.
+fn element_target(call: &ObjectCall) -> Option<AimedAt> {
+    let ObjectCall::Frame(route) = call else {
+        return None;
+    };
+    let aimed = |selector: &str, strict: bool| AimedAt {
+        selector: selector.to_string(),
+        strict,
+        drop_target: None,
+    };
+    Some(match route {
+        Route::FramePointer(options) => aimed(&options.selector, options.strict),
+        Route::FrameFill(options) => aimed(&options.selector, options.strict),
+        Route::FramePress(options) | Route::FrameType(options) => {
+            aimed(&options.selector, options.strict)
+        }
+        Route::FrameDragAndDrop(options) => AimedAt {
+            drop_target: Some(options.target.selector.clone()),
+            ..aimed(&options.source.selector, options.source.strict)
+        },
+        Route::FrameSetChecked(options) => aimed(&options.click.selector, options.click.strict),
+        Route::FrameSelectOption(options) => aimed(&options.selector, options.strict),
+        Route::FrameSetInputFiles(params) => {
+            aimed(&params.selector, params.strict.unwrap_or(false))
+        }
+        Route::FrameDrop(params) => aimed(&params.selector, params.strict.unwrap_or(false)),
+        Route::FrameFocus(target)
+        | Route::FrameBlur(target)
+        | Route::FrameScrollIntoViewIfNeeded(target)
+        | Route::FrameSelectText(target, _) => aimed(&target.selector, target.strict),
+        _ => return None,
+    })
+}
+
+/// The options an element action's handler acts with, from its route: the type each handler
+/// reads back (`ElementAction::Options`, `element_ops.rs` `attached`).
+fn element_options(call: ObjectCall) -> Option<ElementOptions> {
+    let ObjectCall::Frame(route) = call else {
+        return None;
+    };
+    Some(match route {
+        Route::FramePointer(options) => Arc::new(options),
+        Route::FrameFill(options) => Arc::new(options),
+        Route::FramePress(options) | Route::FrameType(options) => Arc::new(options),
+        Route::FrameDragAndDrop(options) => Arc::new(options),
+        Route::FrameSetChecked(options) => Arc::new(options),
+        Route::FrameSelectOption(options) => Arc::new(options),
+        Route::FrameSetInputFiles(params) => Arc::new(params),
+        Route::FrameDrop(params) => Arc::new(params),
+        Route::FrameFocus(target)
+        | Route::FrameBlur(target)
+        | Route::FrameScrollIntoViewIfNeeded(target) => Arc::new(target),
+        Route::FrameSelectText(target, force) => Arc::new((target, force)),
+        _ => return None,
+    })
 }
 
 /// Whether `a` and `b` are one command: the same interface, method and action.

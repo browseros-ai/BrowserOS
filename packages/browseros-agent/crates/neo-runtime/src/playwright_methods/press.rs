@@ -136,19 +136,23 @@ struct PressAction<'a> {
 
 impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
     type Output = ();
+    type Options = PressOptions;
 
     async fn act(
         &self,
         tab: &T,
         element: &T::Element,
+        replaced: Option<&PressOptions>,
         progress: &Progress,
     ) -> Result<ActionResult<()>, Stop> {
+        let options = replaced.unwrap_or(self.options);
         let platform = if let Some(platform) = self.platform.get() {
             *platform
         } else {
             let platform = progress.race(tab.platform()).await??;
             *self.platform.get_or_init(|| platform)
         };
+        // The script's keys, whatever a hook typed instead (hooks design D11).
         progress.log(match &self.options.keys {
             // Playwright: `server/dom.ts` `ElementHandle._press`: `elementHandle.press("${key}")`
             KeyInput::Press(key) => format!("elementHandle.press(\"{key}\")"),
@@ -159,7 +163,7 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
         // Subscribed once the turn is this press's and before any of its input, as click does:
         // the barrier waits for every navigation this press's input requests, and never for one
         // that the input it waited behind requested. A type never waits.
-        let watched = self.options.wait_after.then(|| tab.watch_navigations());
+        let watched = options.wait_after.then(|| tab.watch_navigations());
         match progress
             .race(tab.focus(element, true, input.clone()))
             .await??
@@ -173,14 +177,14 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
         // where Playwright's does, after the focus.
         let mut simulated = input.snapshot()?;
         let mut plan = Plan::default();
-        match &self.options.keys {
+        match &options.keys {
             KeyInput::Press(key) => keyboard_input::plan_press(
                 &mut plan,
                 &mut simulated,
                 key,
                 platform,
                 &input.owner(),
-                self.options.key_delay(),
+                options.key_delay(),
             )
             .map_err(|unknown| PlaywrightError::error(unknown.to_string()))?,
             KeyInput::Type(text) => keyboard_input::plan_type(
@@ -189,7 +193,7 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
                 text,
                 platform,
                 &input.owner(),
-                self.options.key_delay(),
+                options.key_delay(),
             ),
         }
         if plan.writes() == 0 {
@@ -201,7 +205,7 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
         let Ok(ticket) = self.delivery.begin() else {
             return Err(PlaywrightError::error(format!(
                 "neo-runtime: a {} tried to write keys again after input",
-                self.options.method()
+                options.method()
             ))
             .into());
         };

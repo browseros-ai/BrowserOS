@@ -49,27 +49,27 @@ type WantsScript = Box<dyn Fn(ActionHook, &str) -> bool + Send + Sync>;
 /// What happened, in order: the fake's invocations (`before <tag>`, `after <tag>`), what the
 /// scripted hooks pushed (`decided <tag>`) and what the test did (`start <tag>`).
 #[derive(Clone, Default)]
-struct Timeline(Arc<Mutex<Vec<String>>>);
+pub(super) struct Timeline(Arc<Mutex<Vec<String>>>);
 
 impl Timeline {
-    fn push(&self, line: impl Into<String>) {
+    pub(super) fn push(&self, line: impl Into<String>) {
         self.0.lock().unwrap().push(line.into());
     }
 
-    fn lines(&self) -> Vec<String> {
+    pub(super) fn lines(&self) -> Vec<String> {
         self.0.lock().unwrap().clone()
     }
 }
 
 /// A scripted stand-in for the hook sandbox: what it wants, what each invocation decides, and
 /// what it was asked.
-struct FakeHooks {
+pub(super) struct FakeHooks {
     wants: WantsScript,
     before: BeforeScript,
     after: AfterScript,
     timeline: Timeline,
     /// How many times the call path asked `wants`.
-    asked: AtomicUsize,
+    pub(super) asked: AtomicUsize,
     befores: AtomicUsize,
     /// Every event an invocation received, with how the action ended for `afterAction`.
     events: Mutex<Vec<(ActionHook, ActionEvent, Option<ActionEnd>)>>,
@@ -77,12 +77,12 @@ struct FakeHooks {
     notes: Mutex<Vec<String>>,
     failures: Mutex<Vec<String>>,
     /// Whether the run is done with its hooks ([`ActionHooks::ended`]).
-    closed: AtomicBool,
+    pub(super) closed: AtomicBool,
 }
 
 impl FakeHooks {
     /// Wants every action, allows it and keeps its result.
-    fn new(timeline: &Timeline) -> Self {
+    pub(super) fn new(timeline: &Timeline) -> Self {
         Self {
             wants: Box::new(|_, _| true),
             before: Box::new(|_, _| decided(Ok(ActionDecision::Allow))),
@@ -97,14 +97,17 @@ impl FakeHooks {
         }
     }
 
-    fn wanting(self, wants: impl Fn(ActionHook, &str) -> bool + Send + Sync + 'static) -> Self {
+    pub(super) fn wanting(
+        self,
+        wants: impl Fn(ActionHook, &str) -> bool + Send + Sync + 'static,
+    ) -> Self {
         Self {
             wants: Box::new(wants),
             ..self
         }
     }
 
-    fn before(
+    pub(super) fn before(
         self,
         before: impl Fn(usize, ActionEvent) -> BoxFuture<'static, Result<ActionDecision, HookFailure>>
         + Send
@@ -117,7 +120,7 @@ impl FakeHooks {
         }
     }
 
-    fn after(
+    pub(super) fn after(
         self,
         after: impl Fn(ActionEvent, ActionEnd) -> BoxFuture<'static, Result<AfterDecision, HookFailure>>
         + Send
@@ -130,7 +133,7 @@ impl FakeHooks {
         }
     }
 
-    fn events(&self, hook: ActionHook) -> Vec<(ActionEvent, Option<ActionEnd>)> {
+    pub(super) fn events(&self, hook: ActionHook) -> Vec<(ActionEvent, Option<ActionEnd>)> {
         self.events
             .lock()
             .unwrap()
@@ -140,17 +143,17 @@ impl FakeHooks {
             .collect()
     }
 
-    fn invocations(&self) -> usize {
+    pub(super) fn invocations(&self) -> usize {
         self.events.lock().unwrap().len()
     }
 
     /// The notes the call path left so far, taken.
-    fn take_notes(&self) -> Vec<String> {
+    pub(super) fn take_notes(&self) -> Vec<String> {
         mem::take(&mut *self.notes.lock().unwrap())
     }
 
     /// The failure lines the call path left so far, taken.
-    fn take_failures(&self) -> Vec<String> {
+    pub(super) fn take_failures(&self) -> Vec<String> {
         mem::take(&mut *self.failures.lock().unwrap())
     }
 }
@@ -212,11 +215,11 @@ fn tag(event: &ActionEvent) -> String {
     )
 }
 
-fn decided<T: Send + 'static>(decision: T) -> BoxFuture<'static, T> {
+pub(super) fn decided<T: Send + 'static>(decision: T) -> BoxFuture<'static, T> {
     future::ready(decision).boxed()
 }
 
-fn later<T: Send + 'static>(delay: Duration, decision: T) -> BoxFuture<'static, T> {
+pub(super) fn later<T: Send + 'static>(delay: Duration, decision: T) -> BoxFuture<'static, T> {
     async move {
         time::sleep(delay).await;
         decision
@@ -225,7 +228,7 @@ fn later<T: Send + 'static>(delay: Duration, decision: T) -> BoxFuture<'static, 
 }
 
 /// Never decides; sets `dropped` once the call path abandons it.
-fn never<T: Send + 'static>(dropped: &Arc<AtomicBool>) -> BoxFuture<'static, T> {
+pub(super) fn never<T: Send + 'static>(dropped: &Arc<AtomicBool>) -> BoxFuture<'static, T> {
     let flag = SetOnDrop(Arc::clone(dropped));
     async move {
         let _flag = flag;
@@ -242,7 +245,7 @@ impl Drop for SetOnDrop {
     }
 }
 
-fn kept(notes: Vec<String>) -> AfterDecision {
+pub(super) fn kept(notes: Vec<String>) -> AfterDecision {
     AfterDecision {
         replace: None,
         notes,
@@ -277,7 +280,7 @@ fn entry() -> Arc<CallEntry> {
     }))
 }
 
-fn run_scope(timeout: Duration) -> RunScope {
+pub(super) fn run_scope(timeout: Duration) -> RunScope {
     RunScope::new(
         Deadline::new(timeout, CancellationToken::new()),
         TaskTracker::new(),
@@ -327,6 +330,13 @@ impl CallRoute for TestRoute {
     }
 }
 
+/// A `title` call has no element: its route never reaches an element checkpoint.
+impl ElementRoute for TestRoute {
+    fn reroute_element(&self, _args: Value) -> Result<element::Rerouted, String> {
+        Err("a title call has no element".to_string())
+    }
+}
+
 /// The hooks of a `title` call named `name`, admitted now: placed in `order` unless `held`.
 fn admitted(
     fake: &Arc<FakeHooks>,
@@ -360,7 +370,7 @@ async fn gate(
 }
 
 /// `entry`'s record as the run reads it.
-fn record(entry: &Arc<CallEntry>) -> CallRecord {
+pub(super) fn record(entry: &Arc<CallEntry>) -> CallRecord {
     let trace = Trace::default();
     trace.push(Arc::clone(entry));
     trace.take(RunEnd::Settled).0.remove(0)
@@ -381,13 +391,14 @@ fn after_record(after: AfterHookResult) -> CallHookRecord {
 }
 
 #[test]
-fn tests_that_only_wanted_actions_without_an_element_are_planned() {
+fn tests_that_only_wanted_actions_are_planned_and_only_those_without_an_element_gated() {
     let timeline = Timeline::default();
     let all: Arc<dyn ActionHooks> = Arc::new(FakeHooks::new(&timeline));
     let click = <FrameClickParams as SpecCommand>::METHOD;
+    let plan = HookPlan::new(&all, click).unwrap();
     assert!(
-        HookPlan::new(&all, click).is_none(),
-        "an element action is feature 4's"
+        !plan.gates(),
+        "an element action's beforeAction waits for its element (feature 4)"
     );
     let plan = HookPlan::new(&all, title()).unwrap();
     assert!(plan.gates());
@@ -925,19 +936,19 @@ async fn tests_that_after_action_races_the_run_but_not_an_abort() {
 }
 
 /// A run's dispatcher on the fake browser's tab, with `hooks` as its action hooks.
-struct Harness {
-    browser: FakeBrowser,
-    dispatcher: Dispatcher,
+pub(super) struct Harness {
+    pub(super) browser: FakeBrowser,
+    pub(super) dispatcher: Dispatcher,
     /// The run's hook realm's dispatcher (`Dispatcher::for_hooks`).
-    hook_realm: Dispatcher,
+    pub(super) hook_realm: Dispatcher,
 }
 
 impl Harness {
-    async fn start(hooks: Option<Arc<dyn ActionHooks>>, run_timeout: Duration) -> Self {
+    pub(super) async fn start(hooks: Option<Arc<dyn ActionHooks>>, run_timeout: Duration) -> Self {
         Self::start_with(&Replies::default(), hooks, run_timeout).await
     }
 
-    async fn start_with(
+    pub(super) async fn start_with(
         replies: &Replies,
         hooks: Option<Arc<dyn ActionHooks>>,
         run_timeout: Duration,
@@ -974,19 +985,19 @@ impl Harness {
 
     /// The reply to a message the hook realm sends: through the run's hook dispatcher, which
     /// has no action hooks.
-    async fn hook_call(&self, message: &Value) -> Result<Value, BridgeError> {
+    pub(super) async fn hook_call(&self, message: &Value) -> Result<Value, BridgeError> {
         let (text, _) = self.hook_realm.call(&message.to_string()).await?;
         Ok(serde_json::from_str(&text).unwrap())
     }
 
     /// The reply to a message the script sends straight to its bridge, as JSON.
-    async fn call(&self, message: &Value) -> Result<Value, BridgeError> {
+    pub(super) async fn call(&self, message: &Value) -> Result<Value, BridgeError> {
         let (text, _) = self.dispatcher.call(&message.to_string()).await?;
         Ok(serde_json::from_str(&text).unwrap())
     }
 
     /// Where each mouse event the page received happened.
-    fn mouse_events(&self) -> Vec<(Value, Value)> {
+    pub(super) fn mouse_events(&self) -> Vec<(Value, Value)> {
         self.browser
             .exchanges()
             .into_iter()
@@ -1016,27 +1027,27 @@ impl Harness {
             .collect()
     }
 
-    async fn records(&self, reason: RunEnd) -> Vec<CallRecord> {
+    pub(super) async fn records(&self, reason: RunEnd) -> Vec<CallRecord> {
         self.dispatcher.finish(reason).await.0
     }
 }
 
-fn frame_guid() -> String {
+pub(super) fn frame_guid() -> String {
     format!("frame@{PAGE}")
 }
 
-fn page_guid() -> String {
+pub(super) fn page_guid() -> String {
     format!("page@{PAGE}")
 }
 
-fn message(id: u64, guid: &str, method: &str, params: Value, metadata: Value) -> Value {
+pub(super) fn message(id: u64, guid: &str, method: &str, params: Value, metadata: Value) -> Value {
     let mut message = json!({ "id": id, "guid": guid, "method": method });
     message["params"] = params;
     message["metadata"] = metadata;
     message
 }
 
-fn mouse_click(id: u64, x: f64, y: f64) -> Value {
+pub(super) fn mouse_click(id: u64, x: f64, y: f64) -> Value {
     message(
         id,
         &page_guid(),
@@ -1046,7 +1057,7 @@ fn mouse_click(id: u64, x: f64, y: f64) -> Value {
     )
 }
 
-fn hooks_of(fake: &Arc<FakeHooks>) -> Arc<dyn ActionHooks> {
+pub(super) fn hooks_of(fake: &Arc<FakeHooks>) -> Arc<dyn ActionHooks> {
     Arc::<FakeHooks>::clone(fake)
 }
 
@@ -1492,35 +1503,8 @@ async fn tests_that_the_run_deadline_at_the_gate_ends_the_call() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_element_actions_unwanted_kinds_and_runs_without_hooks_are_not_hooked() {
+async fn tests_that_unwanted_kinds_and_runs_without_hooks_are_not_hooked() {
     let timeline = Timeline::default();
-    let fake = Arc::new(FakeHooks::new(&timeline));
-    let harness = Harness::start(Some(hooks_of(&fake)), Duration::from_secs(30)).await;
-    let click = message(
-        1,
-        &frame_guid(),
-        "click",
-        json!({ "selector": "#go", "strict": true }),
-        json!({}),
-    );
-    assert_eq!(harness.call(&click).await.unwrap(), json!({ "id": 1 }));
-    let fill = message(
-        2,
-        &frame_guid(),
-        "fill",
-        json!({ "selector": "#go", "strict": true, "value": "x" }),
-        json!({ "timeout": 100 }),
-    );
-    let _reply = harness.call(&fill).await.unwrap();
-    assert_eq!(
-        fake.asked.load(Ordering::SeqCst),
-        0,
-        "element actions are feature 4's"
-    );
-    assert_eq!(fake.invocations(), 0);
-    let records = harness.records(RunEnd::Settled).await;
-    assert!(records.iter().all(|record| record.hook.is_none()));
-
     let unwanted = Arc::new(FakeHooks::new(&timeline).wanting(|_, kind| kind != "title"));
     let harness = Harness::start(Some(hooks_of(&unwanted)), Duration::from_secs(30)).await;
     let title = message(1, &frame_guid(), "title", json!({}), json!({}));
