@@ -31,8 +31,12 @@ const cases = [
     // tests/library/chromium/oopif.spec.ts "OO-023 should emit filechooser event for iframe".
     name: 'an input in a cross-site frame opens a chooser on the page, its element in that frame',
     path: '/file-chooser-frames.html',
-    source: `const [chooser] = await Promise.all([
-      page.waitForEvent('filechooser'),
+    // Neo: arm interception before the replacement OOPIF attaches, so the click cannot
+    // overtake the frame session's subscription setup.
+    source: `const waiting = page.waitForEvent('filechooser')
+    await page.reload()
+    const [chooser] = await Promise.all([
+      waiting,
       page.frameLocator('#cross').locator('#cross-input').click(),
     ])
     return {
