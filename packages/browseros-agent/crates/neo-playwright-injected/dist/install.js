@@ -9028,14 +9028,29 @@ function activatesControl(injected, label, control, point) {
   if (injected.expectHitTarget(point, label) !== "done")
     return false;
   const root = label.getRootNode();
-  const hit = root.elementFromPoint(point.x, point.y);
-  if (!hit || !label.contains(hit))
-    return false;
-  const interactive = 'a[href], area[href], button, input:not([type="hidden"]), select, textarea, ' + "label, summary, details, iframe, embed, object, audio[controls], video[controls], " + 'img[usemap], [contenteditable]:not([contenteditable="false"]), [tabindex]';
-  for (let node = hit;node && node !== label; node = node.parentElement)
+  let hit = root.elementFromPoint(point.x, point.y);
+  while (hit?.shadowRoot) {
+    const inner = hit.shadowRoot.elementFromPoint(point.x, point.y);
+    if (!inner || inner === hit)
+      break;
+    hit = inner;
+  }
+  const interactive = 'a[href], area[href], button, input:not([type="hidden"]), select, textarea, ' + "label, summary, details, iframe, embed, object, audio[controls], video[controls], " + 'img[usemap], [contenteditable]:not([contenteditable="false"]), [tabindex], [onclick], ' + '[role~="button" i], [role~="link" i], [role~="checkbox" i], [role~="radio" i], ' + '[role~="switch" i], [role~="tab" i], [role~="menuitem" i], [role~="option" i]';
+  for (let node = hit;node; node = composedParent(node)) {
+    if (node === label)
+      return true;
     if (node.matches(interactive))
       return false;
-  return true;
+  }
+  return false;
+}
+function composedParent(node) {
+  if (node.assignedSlot)
+    return node.assignedSlot;
+  if (node.parentElement)
+    return node.parentElement;
+  const parent = node.parentNode;
+  return parent && parent.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? parent.host : null;
 }
 var glue = {
   title: () => ({ value: document.title }),

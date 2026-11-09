@@ -225,7 +225,11 @@ function labelHit(
 /** Whether a click at `point` lands on `label` where the browser forwards it to `control`: the
  * label's control is `control`, the point hits the label, and no interactive content sits
  * between the element hit and the label (HTML's label activation behavior does nothing for a
- * click on interactive content inside the label). */
+ * click on interactive content inside the label). The walk starts at the deepest element hit,
+ * through open shadow roots as `expectHitTarget` pierces them, and climbs the composed tree
+ * (slots, shadow hosts) to the label, so a link inside a web component in the label counts too.
+ * Script-driven controls count by their ARIA role or `onclick`; a listener a script added to a
+ * plain element is invisible here, and that element's click still reaches the label. */
 function activatesControl(
   injected: InjectedScript,
   label: HTMLLabelElement,
@@ -235,19 +239,34 @@ function activatesControl(
   if (label.control !== control) return false
   if (injected.expectHitTarget(point, label) !== 'done') return false
   const root = label.getRootNode() as Document | ShadowRoot
-  const hit = root.elementFromPoint(point.x, point.y)
-  if (!hit || !label.contains(hit)) return false
+  let hit = root.elementFromPoint(point.x, point.y)
+  while (hit?.shadowRoot) {
+    const inner = hit.shadowRoot.elementFromPoint(point.x, point.y)
+    if (!inner || inner === hit) break
+    hit = inner
+  }
   const interactive =
     'a[href], area[href], button, input:not([type="hidden"]), select, textarea, ' +
     'label, summary, details, iframe, embed, object, audio[controls], video[controls], ' +
-    'img[usemap], [contenteditable]:not([contenteditable="false"]), [tabindex]'
-  for (
-    let node: Element | null = hit;
-    node && node !== label;
-    node = node.parentElement
-  )
+    'img[usemap], [contenteditable]:not([contenteditable="false"]), [tabindex], [onclick], ' +
+    '[role~="button" i], [role~="link" i], [role~="checkbox" i], [role~="radio" i], ' +
+    '[role~="switch" i], [role~="tab" i], [role~="menuitem" i], [role~="option" i]'
+  for (let node: Element | null = hit; node; node = composedParent(node)) {
+    if (node === label) return true
     if (node.matches(interactive)) return false
-  return true
+  }
+  return false
+}
+
+/** An element's parent in the composed tree: its slot when slotted, else its parent, else its
+ * shadow root's host (Playwright's `parentElementOrShadowHost`, after `assignedSlot`). */
+function composedParent(node: Element): Element | null {
+  if (node.assignedSlot) return node.assignedSlot
+  if (node.parentElement) return node.parentElement
+  const parent = node.parentNode
+  return parent && parent.nodeType === Node.DOCUMENT_FRAGMENT_NODE
+    ? (parent as ShadowRoot).host
+    : null
 }
 
 export const glue = {
