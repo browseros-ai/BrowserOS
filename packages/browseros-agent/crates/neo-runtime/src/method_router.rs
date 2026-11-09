@@ -710,6 +710,19 @@ impl Dispatcher {
         self.side.origin
     }
 
+    /// The tab and frame the call's `guid` names. A handle's calls run on the frame it belongs to,
+    /// for the handles this realm may use (`Handles::for_hooks`).
+    fn target(&self, guid: &str) -> Option<(Arc<PageEntry>, FrameScope)> {
+        let inner = &self.inner;
+        inner.tabs.resolve(guid).or_else(|| {
+            inner
+                .run
+                .handles_for(self.side.origin)
+                .frame_guid(guid)
+                .and_then(|frame| inner.tabs.resolve(&frame))
+        })
+    }
+
     /// `__neo_runtime.call`: one Playwright message in, one Playwright reply out, as JSON text.
     /// Synchronous so the call starts before the realm polls anything. Every message with a
     /// readable envelope gets a reply, failures included, and a trace record.
@@ -728,14 +741,7 @@ impl Dispatcher {
                 return PendingReply::ready(Err(BridgeError::BadMessage(error.to_string())));
             }
         };
-        // A handle's calls run on the frame it belongs to.
-        let target = inner.tabs.resolve(&guid).or_else(|| {
-            inner
-                .run
-                .handles_for(origin)
-                .frame_guid(&guid)
-                .and_then(|frame| inner.tabs.resolve(&frame))
-        });
+        let target = self.target(&guid);
         let object = self
             .platform_object(&guid)
             .unwrap_or_else(|| object_kind(&guid, target.is_some()));
