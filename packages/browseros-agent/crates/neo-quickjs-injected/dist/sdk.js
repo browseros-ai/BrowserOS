@@ -697,6 +697,300 @@ function formEncode(text) {
   return encodeURIComponent(text).replace(/%20/g, "+").replace(/[!'()~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
+// src/structured-clone.ts
+var ERRORS = {
+  Error,
+  EvalError,
+  RangeError,
+  ReferenceError,
+  SyntaxError,
+  TypeError,
+  URIError
+};
+var TYPED_ARRAYS = [
+  Int8Array,
+  Uint8Array,
+  Uint8ClampedArray,
+  Int16Array,
+  Uint16Array,
+  Int32Array,
+  Uint32Array,
+  Float32Array,
+  Float64Array,
+  BigInt64Array,
+  BigUint64Array
+];
+function structuredClone(...args) {
+  if (args.length === 0)
+    throw new TypeError('The "value" argument must be specified');
+  const [value, options] = args;
+  if (options?.transfer !== undefined && [...options.transfer].length > 0)
+    throw cannotClone("Neo's structuredClone cannot transfer");
+  return clone(value, new Map);
+}
+function clone(value, memory) {
+  if (typeof value === "function" || typeof value === "symbol")
+    throw cannotClone(`${String(value)} could not be cloned.`);
+  if (typeof value !== "object" || value === null)
+    return value;
+  const seen = memory.get(value);
+  if (seen !== undefined)
+    return seen;
+  const remember = (copy2) => {
+    memory.set(value, copy2);
+    return copy2;
+  };
+  if (value instanceof Boolean)
+    return remember(Object(value.valueOf()));
+  if (value instanceof Number)
+    return remember(Object(value.valueOf()));
+  if (value instanceof String)
+    return remember(Object(value.valueOf()));
+  if (value instanceof BigInt)
+    return remember(Object(value.valueOf()));
+  if (value instanceof Date)
+    return remember(new Date(value.getTime()));
+  if (value instanceof RegExp)
+    return remember(new RegExp(value.source, value.flags));
+  if (value instanceof ArrayBuffer)
+    return remember(value.slice(0));
+  if (ArrayBuffer.isView(value)) {
+    const buffer = clone(value.buffer, memory);
+    if (value instanceof DataView)
+      return remember(new DataView(buffer, value.byteOffset, value.byteLength));
+    const kind = typedArrayKind(value);
+    const length = value.byteLength / kind.BYTES_PER_ELEMENT;
+    return remember(new kind(buffer, value.byteOffset, length));
+  }
+  if (value instanceof Map) {
+    const copy2 = remember(new Map);
+    for (const [key, entry] of value)
+      copy2.set(clone(key, memory), clone(entry, memory));
+    return copy2;
+  }
+  if (value instanceof Set) {
+    const copy2 = remember(new Set);
+    for (const entry of value)
+      copy2.add(clone(entry, memory));
+    return copy2;
+  }
+  if (value instanceof Error) {
+    const kind = ERRORS[value.name] ?? Error;
+    const copy2 = remember(new kind(value.message));
+    if (value.stack !== undefined)
+      Object.defineProperty(copy2, "stack", {
+        value: value.stack,
+        writable: true,
+        configurable: true
+      });
+    return copy2;
+  }
+  if (value instanceof Promise || value instanceof WeakMap || value instanceof WeakSet || value instanceof WeakRef || value instanceof URL || value instanceof URLSearchParams)
+    throw cannotClone(`${Object.prototype.toString.call(value)} could not be cloned.`);
+  const copy = remember(Array.isArray(value) ? new Array(value.length) : {});
+  for (const key of Object.keys(value))
+    Object.defineProperty(copy, key, {
+      value: clone(value[key], memory),
+      writable: true,
+      enumerable: true,
+      configurable: true
+    });
+  return copy;
+}
+function typedArrayKind(view) {
+  return TYPED_ARRAYS.find((kind) => view instanceof kind) ?? view.constructor;
+}
+function cannotClone(message) {
+  return new DOMException(message, "DataCloneError");
+}
+
+// src/text.ts
+var UTF8_LABELS = [
+  "unicode-1-1-utf-8",
+  "unicode11utf8",
+  "unicode20utf8",
+  "utf-8",
+  "utf8",
+  "x-unicode20utf8"
+];
+
+class TextEncoder {
+  get encoding() {
+    return "utf-8";
+  }
+  encode(input = "") {
+    return encodeUtf8(String(input));
+  }
+  encodeInto(source, destination) {
+    const text = String(source);
+    let read = 0;
+    let written = 0;
+    while (read < text.length) {
+      let code = text.codePointAt(read);
+      const units = code > 65535 ? 2 : 1;
+      if (code >= 55296 && code <= 57343)
+        code = 65533;
+      const size = code < 128 ? 1 : code < 2048 ? 2 : code < 65536 ? 3 : 4;
+      if (written + size > destination.length)
+        break;
+      if (size === 1)
+        destination[written] = code;
+      else {
+        const lead = [192, 224, 240][size - 2];
+        destination[written] = lead | code >> 6 * (size - 1);
+        for (let k = 1;k < size; k++)
+          destination[written + k] = 128 | code >> 6 * (size - 1 - k) & 63;
+      }
+      written += size;
+      read += units;
+    }
+    return { read, written };
+  }
+  get [Symbol.toStringTag]() {
+    return "TextEncoder";
+  }
+}
+
+class TextDecoder {
+  #fatal;
+  #ignoreBOM;
+  #held = new Uint8Array(0);
+  #started = false;
+  constructor(label = "utf-8", options = {}) {
+    if (!UTF8_LABELS.includes(String(label).trim().toLowerCase()))
+      throw new RangeError(`The "${label}" encoding is not supported`);
+    this.#fatal = Boolean(options?.fatal);
+    this.#ignoreBOM = Boolean(options?.ignoreBOM);
+  }
+  get encoding() {
+    return "utf-8";
+  }
+  get fatal() {
+    return this.#fatal;
+  }
+  get ignoreBOM() {
+    return this.#ignoreBOM;
+  }
+  decode(input, options) {
+    const fresh = bytesOf(input);
+    let bytes = fresh;
+    if (this.#held.length > 0) {
+      bytes = new Uint8Array(this.#held.length + fresh.length);
+      bytes.set(this.#held);
+      bytes.set(fresh, this.#held.length);
+    }
+    const stream = Boolean(options?.stream);
+    const cut = stream ? openTail(bytes) : 0;
+    const whole = bytes.subarray(0, bytes.length - cut);
+    this.#held = bytes.slice(bytes.length - cut);
+    if (this.#fatal && !isUtf8(whole)) {
+      this.#reset();
+      throw new TypeError("The encoded data was not valid for encoding utf-8");
+    }
+    let text = decodeUtf8(whole);
+    if (!this.#started && !this.#ignoreBOM && text.startsWith("\uFEFF"))
+      text = text.slice(1);
+    if (whole.length > 0)
+      this.#started = true;
+    if (!stream)
+      this.#reset();
+    return text;
+  }
+  get [Symbol.toStringTag]() {
+    return "TextDecoder";
+  }
+  #reset() {
+    this.#held = new Uint8Array(0);
+    this.#started = false;
+  }
+}
+function bytesOf(input) {
+  if (input === undefined)
+    return new Uint8Array(0);
+  if (input instanceof ArrayBuffer || input instanceof SharedArrayBuffer)
+    return new Uint8Array(input);
+  if (ArrayBuffer.isView(input))
+    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  throw new TypeError('The "input" argument must be an instance of ArrayBuffer or ArrayBufferView.');
+}
+function openTail(bytes) {
+  for (let back = 1;back <= Math.min(3, bytes.length); back++) {
+    const byte = bytes[bytes.length - back];
+    if (byte < 128)
+      return 0;
+    if (byte < 192)
+      continue;
+    const sequence = utf8Lead(byte);
+    if (!sequence || back > sequence.needed)
+      return 0;
+    const second = bytes[bytes.length - back + 1];
+    const fits = second === undefined || second >= sequence.lower && second <= sequence.upper;
+    return fits ? back : 0;
+  }
+  return 0;
+}
+function isUtf8(bytes) {
+  for (let i = 0;i < bytes.length; i++) {
+    const byte = bytes[i];
+    if (byte < 128)
+      continue;
+    const sequence = utf8Lead(byte);
+    if (!sequence)
+      return false;
+    for (let k = 1;k <= sequence.needed; k++) {
+      const next = bytes[i + k];
+      const [lower, upper] = k === 1 ? [sequence.lower, sequence.upper] : [128, 191];
+      if (next === undefined || next < lower || next > upper)
+        return false;
+    }
+    i += sequence.needed;
+  }
+  return true;
+}
+
+// src/web-crypto.ts
+var MAX_RANDOM_BYTES = 65536;
+var INTEGER_ARRAYS = [
+  Int8Array,
+  Uint8Array,
+  Uint8ClampedArray,
+  Int16Array,
+  Uint16Array,
+  Int32Array,
+  Uint32Array,
+  BigInt64Array,
+  BigUint64Array
+];
+function getRandomValues(array) {
+  if (!INTEGER_ARRAYS.some((kind) => array instanceof kind))
+    throw new DOMException("The data argument must be an integer-type TypedArray", "TypeMismatchError");
+  if (array.byteLength > MAX_RANDOM_BYTES)
+    throw new DOMException(`The ArrayBufferView's byte length (${array.byteLength}) exceeds the number of bytes of entropy available via this API (${MAX_RANDOM_BYTES})`, "QuotaExceededError");
+  new Uint8Array(array.buffer, array.byteOffset, array.byteLength).set(randomValues(array.byteLength));
+  return array;
+}
+function randomUUID() {
+  const bytes = randomValues(16);
+  bytes[6] = bytes[6] & 15 | 64;
+  bytes[8] = bytes[8] & 63 | 128;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+var crypto = { getRandomValues, randomUUID };
+
+// src/globals.ts
+function standardGlobals() {
+  return {
+    URL,
+    URLSearchParams,
+    Buffer,
+    TextEncoder,
+    TextDecoder,
+    structuredClone,
+    crypto
+  };
+}
+
 // src/vendor-shims.ts
 var DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 var Buffer2 = {
@@ -1147,9 +1441,9 @@ function innerSerializeValue(value, handleSerializer, visitorInfo, accessChain) 
     return { u: value.toJSON() };
   if (isRegExp2(value))
     return { r: { p: value.source, f: value.flags } };
-  const typedArrayKind = constructorToTypedArrayKind.get(value.constructor);
-  if (typedArrayKind)
-    return { ta: { b: Buffer2.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind } };
+  const typedArrayKind2 = constructorToTypedArrayKind.get(value.constructor);
+  if (typedArrayKind2)
+    return { ta: { b: Buffer2.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind2 } };
   const id = visitorInfo.visited.get(value);
   if (id)
     return { ref: id };
@@ -9257,300 +9551,6 @@ function headersObjectToArray3(headers) {
   return result;
 }
 
-// src/structured-clone.ts
-var ERRORS = {
-  Error,
-  EvalError,
-  RangeError,
-  ReferenceError,
-  SyntaxError,
-  TypeError,
-  URIError
-};
-var TYPED_ARRAYS = [
-  Int8Array,
-  Uint8Array,
-  Uint8ClampedArray,
-  Int16Array,
-  Uint16Array,
-  Int32Array,
-  Uint32Array,
-  Float32Array,
-  Float64Array,
-  BigInt64Array,
-  BigUint64Array
-];
-function structuredClone(...args) {
-  if (args.length === 0)
-    throw new TypeError('The "value" argument must be specified');
-  const [value, options] = args;
-  if (options?.transfer !== undefined && [...options.transfer].length > 0)
-    throw cannotClone("Neo's structuredClone cannot transfer");
-  return clone(value, new Map);
-}
-function clone(value, memory) {
-  if (typeof value === "function" || typeof value === "symbol")
-    throw cannotClone(`${String(value)} could not be cloned.`);
-  if (typeof value !== "object" || value === null)
-    return value;
-  const seen = memory.get(value);
-  if (seen !== undefined)
-    return seen;
-  const remember = (copy2) => {
-    memory.set(value, copy2);
-    return copy2;
-  };
-  if (value instanceof Boolean)
-    return remember(Object(value.valueOf()));
-  if (value instanceof Number)
-    return remember(Object(value.valueOf()));
-  if (value instanceof String)
-    return remember(Object(value.valueOf()));
-  if (value instanceof BigInt)
-    return remember(Object(value.valueOf()));
-  if (value instanceof Date)
-    return remember(new Date(value.getTime()));
-  if (value instanceof RegExp)
-    return remember(new RegExp(value.source, value.flags));
-  if (value instanceof ArrayBuffer)
-    return remember(value.slice(0));
-  if (ArrayBuffer.isView(value)) {
-    const buffer = clone(value.buffer, memory);
-    if (value instanceof DataView)
-      return remember(new DataView(buffer, value.byteOffset, value.byteLength));
-    const kind = typedArrayKind(value);
-    const length = value.byteLength / kind.BYTES_PER_ELEMENT;
-    return remember(new kind(buffer, value.byteOffset, length));
-  }
-  if (value instanceof Map) {
-    const copy2 = remember(new Map);
-    for (const [key, entry] of value)
-      copy2.set(clone(key, memory), clone(entry, memory));
-    return copy2;
-  }
-  if (value instanceof Set) {
-    const copy2 = remember(new Set);
-    for (const entry of value)
-      copy2.add(clone(entry, memory));
-    return copy2;
-  }
-  if (value instanceof Error) {
-    const kind = ERRORS[value.name] ?? Error;
-    const copy2 = remember(new kind(value.message));
-    if (value.stack !== undefined)
-      Object.defineProperty(copy2, "stack", {
-        value: value.stack,
-        writable: true,
-        configurable: true
-      });
-    return copy2;
-  }
-  if (value instanceof Promise || value instanceof WeakMap || value instanceof WeakSet || value instanceof WeakRef || value instanceof URL || value instanceof URLSearchParams)
-    throw cannotClone(`${Object.prototype.toString.call(value)} could not be cloned.`);
-  const copy = remember(Array.isArray(value) ? new Array(value.length) : {});
-  for (const key of Object.keys(value))
-    Object.defineProperty(copy, key, {
-      value: clone(value[key], memory),
-      writable: true,
-      enumerable: true,
-      configurable: true
-    });
-  return copy;
-}
-function typedArrayKind(view) {
-  return TYPED_ARRAYS.find((kind) => view instanceof kind) ?? view.constructor;
-}
-function cannotClone(message) {
-  return new DOMException(message, "DataCloneError");
-}
-
-// src/text.ts
-var UTF8_LABELS = [
-  "unicode-1-1-utf-8",
-  "unicode11utf8",
-  "unicode20utf8",
-  "utf-8",
-  "utf8",
-  "x-unicode20utf8"
-];
-
-class TextEncoder {
-  get encoding() {
-    return "utf-8";
-  }
-  encode(input = "") {
-    return encodeUtf8(String(input));
-  }
-  encodeInto(source, destination) {
-    const text2 = String(source);
-    let read = 0;
-    let written = 0;
-    while (read < text2.length) {
-      let code = text2.codePointAt(read);
-      const units = code > 65535 ? 2 : 1;
-      if (code >= 55296 && code <= 57343)
-        code = 65533;
-      const size = code < 128 ? 1 : code < 2048 ? 2 : code < 65536 ? 3 : 4;
-      if (written + size > destination.length)
-        break;
-      if (size === 1)
-        destination[written] = code;
-      else {
-        const lead = [192, 224, 240][size - 2];
-        destination[written] = lead | code >> 6 * (size - 1);
-        for (let k = 1;k < size; k++)
-          destination[written + k] = 128 | code >> 6 * (size - 1 - k) & 63;
-      }
-      written += size;
-      read += units;
-    }
-    return { read, written };
-  }
-  get [Symbol.toStringTag]() {
-    return "TextEncoder";
-  }
-}
-
-class TextDecoder {
-  #fatal;
-  #ignoreBOM;
-  #held = new Uint8Array(0);
-  #started = false;
-  constructor(label = "utf-8", options = {}) {
-    if (!UTF8_LABELS.includes(String(label).trim().toLowerCase()))
-      throw new RangeError(`The "${label}" encoding is not supported`);
-    this.#fatal = Boolean(options?.fatal);
-    this.#ignoreBOM = Boolean(options?.ignoreBOM);
-  }
-  get encoding() {
-    return "utf-8";
-  }
-  get fatal() {
-    return this.#fatal;
-  }
-  get ignoreBOM() {
-    return this.#ignoreBOM;
-  }
-  decode(input, options) {
-    const fresh = bytesOf(input);
-    let bytes = fresh;
-    if (this.#held.length > 0) {
-      bytes = new Uint8Array(this.#held.length + fresh.length);
-      bytes.set(this.#held);
-      bytes.set(fresh, this.#held.length);
-    }
-    const stream = Boolean(options?.stream);
-    const cut = stream ? openTail(bytes) : 0;
-    const whole = bytes.subarray(0, bytes.length - cut);
-    this.#held = bytes.slice(bytes.length - cut);
-    if (this.#fatal && !isUtf8(whole)) {
-      this.#reset();
-      throw new TypeError("The encoded data was not valid for encoding utf-8");
-    }
-    let text2 = decodeUtf8(whole);
-    if (!this.#started && !this.#ignoreBOM && text2.startsWith("\uFEFF"))
-      text2 = text2.slice(1);
-    if (whole.length > 0)
-      this.#started = true;
-    if (!stream)
-      this.#reset();
-    return text2;
-  }
-  get [Symbol.toStringTag]() {
-    return "TextDecoder";
-  }
-  #reset() {
-    this.#held = new Uint8Array(0);
-    this.#started = false;
-  }
-}
-function bytesOf(input) {
-  if (input === undefined)
-    return new Uint8Array(0);
-  if (input instanceof ArrayBuffer || input instanceof SharedArrayBuffer)
-    return new Uint8Array(input);
-  if (ArrayBuffer.isView(input))
-    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
-  throw new TypeError('The "input" argument must be an instance of ArrayBuffer or ArrayBufferView.');
-}
-function openTail(bytes) {
-  for (let back = 1;back <= Math.min(3, bytes.length); back++) {
-    const byte = bytes[bytes.length - back];
-    if (byte < 128)
-      return 0;
-    if (byte < 192)
-      continue;
-    const sequence = utf8Lead(byte);
-    if (!sequence || back > sequence.needed)
-      return 0;
-    const second = bytes[bytes.length - back + 1];
-    const fits = second === undefined || second >= sequence.lower && second <= sequence.upper;
-    return fits ? back : 0;
-  }
-  return 0;
-}
-function isUtf8(bytes) {
-  for (let i = 0;i < bytes.length; i++) {
-    const byte = bytes[i];
-    if (byte < 128)
-      continue;
-    const sequence = utf8Lead(byte);
-    if (!sequence)
-      return false;
-    for (let k = 1;k <= sequence.needed; k++) {
-      const next = bytes[i + k];
-      const [lower, upper] = k === 1 ? [sequence.lower, sequence.upper] : [128, 191];
-      if (next === undefined || next < lower || next > upper)
-        return false;
-    }
-    i += sequence.needed;
-  }
-  return true;
-}
-
-// src/web-crypto.ts
-var MAX_RANDOM_BYTES = 65536;
-var INTEGER_ARRAYS = [
-  Int8Array,
-  Uint8Array,
-  Uint8ClampedArray,
-  Int16Array,
-  Uint16Array,
-  Int32Array,
-  Uint32Array,
-  BigInt64Array,
-  BigUint64Array
-];
-function getRandomValues(array) {
-  if (!INTEGER_ARRAYS.some((kind) => array instanceof kind))
-    throw new DOMException("The data argument must be an integer-type TypedArray", "TypeMismatchError");
-  if (array.byteLength > MAX_RANDOM_BYTES)
-    throw new DOMException(`The ArrayBufferView's byte length (${array.byteLength}) exceeds the number of bytes of entropy available via this API (${MAX_RANDOM_BYTES})`, "QuotaExceededError");
-  new Uint8Array(array.buffer, array.byteOffset, array.byteLength).set(randomValues(array.byteLength));
-  return array;
-}
-function randomUUID() {
-  const bytes = randomValues(16);
-  bytes[6] = bytes[6] & 15 | 64;
-  bytes[8] = bytes[8] & 63 | 128;
-  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-var crypto = { getRandomValues, randomUUID };
-
-// src/globals.ts
-function standardGlobals() {
-  return {
-    URL,
-    URLSearchParams,
-    Buffer,
-    TextEncoder,
-    TextDecoder,
-    structuredClone,
-    crypto
-  };
-}
-
 // src/browser-type.ts
 var ATTACHED_REFUSAL = "Neo runs attached to BrowserOS; use the provided context / context.browser()";
 var CHROMIUM_ONLY_REFUSAL = "Neo drives BrowserOS (Chromium) only; firefox and webkit are not available";
@@ -9629,8 +9629,8 @@ class Playwright {
   }
 }
 
-// src/index.ts
-function createRun(init) {
+// src/run-objects.ts
+function connectRun(init) {
   setTestIdAttribute(init.testIdAttribute);
   const connection = new Connection(init.lineOffset);
   const pipe = new EventPipe;
@@ -9642,6 +9642,12 @@ function createRun(init) {
   browser._didCreateContext(context);
   playwright.selectors._attach(connection, init.context);
   const page = context._addRunPage(init.page, init.mainFrame, init.url);
+  return { connection, pipe, playwright, browser, context, page };
+}
+
+// src/index.ts
+function createRun(init) {
+  const { page, context, playwright, pipe } = connectRun(init);
   return {
     page,
     context,
