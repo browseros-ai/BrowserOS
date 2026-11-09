@@ -265,30 +265,63 @@ fn event(name: &str) -> ActionEvent {
     }
 }
 
-/// The hooks of a `title` call named `name`, admitted now: placed in `order` unless `held`.
-fn admitted(fake: &Arc<FakeHooks>, name: &str, order: &Arc<CallOrder>, held: bool) -> CallHooks {
-    let hooks: Arc<dyn ActionHooks> = Arc::<FakeHooks>::clone(fake);
-    let plan = HookPlan::new(&hooks, title()).unwrap();
-    plan.admitted(event(name), 1, false, order, held)
+/// The test's call path: a call is a string; a hook's args route as `rerouted <name>`, unless
+/// `refuse` says why not; an allowed call settles as `settled <call>` and sets `settled`.
+#[derive(Default)]
+struct TestRoute {
+    refuse: Option<String>,
+    settled: Arc<AtomicBool>,
 }
 
-/// The gate of a call made as `"script"`, which settles as `settled <route>` and routes a
-/// hook's arguments as `rerouted <name>`.
-async fn gate(hooks: &mut CallHooks, run: &RunScope, entry: &CallEntry) -> Gated<String> {
-    hooks
-        .before(
-            run,
-            entry,
-            "script".to_string(),
-            |args| {
-                Ok(format!(
-                    "rerouted {}",
-                    args["name"].as_str().unwrap_or_default()
-                ))
-            },
-            |route| format!("settled {route}"),
-        )
-        .await
+impl CallRoute for TestRoute {
+    type Call = String;
+
+    fn reroute(&self, args: Value) -> Result<String, String> {
+        match &self.refuse {
+            Some(why) => Err(format!("{why} {}", args["name"])),
+            None => Ok(format!(
+                "rerouted {}",
+                args["name"].as_str().unwrap_or_default()
+            )),
+        }
+    }
+
+    fn settle(&self, call: String) -> String {
+        self.settled.store(true, Ordering::SeqCst);
+        format!("settled {call}")
+    }
+}
+
+/// The hooks of a `title` call named `name`, admitted now: placed in `order` unless `held`.
+fn admitted(
+    fake: &Arc<FakeHooks>,
+    name: &str,
+    order: &Arc<CallOrder>,
+    held: bool,
+) -> CallHooks<TestRoute> {
+    routed(fake, name, order, held, TestRoute::default())
+}
+
+/// [`admitted`], with `route` as its call path.
+fn routed(
+    fake: &Arc<FakeHooks>,
+    name: &str,
+    order: &Arc<CallOrder>,
+    held: bool,
+    route: TestRoute,
+) -> CallHooks<TestRoute> {
+    let hooks: Arc<dyn ActionHooks> = Arc::<FakeHooks>::clone(fake);
+    let plan = HookPlan::new(&hooks, title()).unwrap();
+    plan.admitted(event(name), 1, false, order, held, || route)
+}
+
+/// The gate of a call made as `"script"`.
+async fn gate(
+    hooks: &mut CallHooks<TestRoute>,
+    run: &RunScope,
+    entry: &CallEntry,
+) -> Gated<String> {
+    hooks.before(run, entry, "script".to_string()).await
 }
 
 /// `entry`'s record as the run reads it.
@@ -595,8 +628,8 @@ async fn tests_that_each_before_decision_runs_blocks_or_reroutes_the_call() {
     );
     assert!(record(&entry_replaced).log.is_empty());
     // afterAction sees the arguments the call ran with.
-    let after = hooks.after(&run).unwrap();
-    after.apply(&entry_replaced, Ok(None)).await;
+    let after = hooks.ran(&run).unwrap();
+    after.finish(&entry_replaced, Ok(None)).await;
     let (seen, _) = replace.events(ActionHook::After).remove(0);
     assert_eq!(seen.args, json!({ "name": "swapped" }));
 }
@@ -610,20 +643,13 @@ async fn tests_that_replaced_arguments_the_call_refuses_block_it() {
             .before(|_, _| decided(Ok(ActionDecision::ReplaceArgs(json!({ "name": "s3cret" }))))),
     );
     let entry = entry();
-    let mut hooks = admitted(&fake, "refused", &Arc::default(), false);
-    let settled = AtomicBool::new(false);
-    let gated = hooks
-        .before(
-            &run,
-            &entry,
-            "script".to_string(),
-            |args| Err(format!("bad {}", args["name"])),
-            |route| {
-                settled.store(true, Ordering::SeqCst);
-                route
-            },
-        )
-        .await;
+    let settled = Arc::new(AtomicBool::new(false));
+    let route = TestRoute {
+        refuse: Some("bad".to_string()),
+        settled: Arc::clone(&settled),
+    };
+    let mut hooks = routed(&fake, "refused", &Arc::default(), false, route);
+    let gated = gate(&mut hooks, &run, &entry).await;
     let Gated::Refused(error) = gated else {
         panic!("refused arguments must block the call");
     };
@@ -691,9 +717,9 @@ async fn tests_that_after_action_keeps_or_replaces_the_result_and_takes_notes() 
     }));
     let entry_kept = entry();
     let after = admitted(&keep, "kept", &Arc::default(), false)
-        .after(&run)
+        .ran(&run)
         .unwrap();
-    let outcome = after.apply(&entry_kept, Ok(Some(actual.clone()))).await;
+    let outcome = after.finish(&entry_kept, Ok(Some(actual.clone()))).await;
     assert_eq!(outcome, Some(Ok(Some(actual.clone()))));
     assert_eq!(
         record(&entry_kept).hook,
@@ -708,9 +734,9 @@ async fn tests_that_after_action_keeps_or_replaces_the_result_and_takes_notes() 
     );
     let entry_replaced = entry();
     let after = admitted(&replace, "replaced", &Arc::default(), false)
-        .after(&run)
+        .ran(&run)
         .unwrap();
-    let outcome = after.apply(&entry_replaced, Ok(Some(actual))).await;
+    let outcome = after.finish(&entry_replaced, Ok(Some(actual))).await;
     assert_eq!(outcome, Some(Ok(Some(json!({ "value": "Hooked" })))));
     assert_eq!(
         record(&entry_replaced).hook,
@@ -720,10 +746,10 @@ async fn tests_that_after_action_keeps_or_replaces_the_result_and_takes_notes() 
     // A failed call's error reaches the hook, which may keep it.
     let entry_failed = entry();
     let after = admitted(&keep, "failed", &Arc::default(), false)
-        .after(&run)
+        .ran(&run)
         .unwrap();
     let error = PlaywrightError::timeout(5.0);
-    let outcome = after.apply(&entry_failed, Err(error.clone())).await;
+    let outcome = after.finish(&entry_failed, Err(error.clone())).await;
     assert_eq!(outcome, Some(Err(error.clone())));
     let (_, ended) = keep.events(ActionHook::After).remove(1);
     assert_eq!(
@@ -751,9 +777,9 @@ async fn tests_that_a_failed_after_hook_fails_the_call_and_tells_only_the_host()
             Arc::new(FakeHooks::new(&timeline).after(move |_, _| decided(Err(failed.clone()))));
         let entry = entry();
         let after = admitted(&fake, "failing", &Arc::default(), false)
-            .after(&run)
+            .ran(&run)
             .unwrap();
-        let Some(Err(error)) = after.apply(&entry, Ok(Some(actual.clone()))).await else {
+        let Some(Err(error)) = after.finish(&entry, Ok(Some(actual.clone()))).await else {
             panic!("{failure:?} must fail the call");
         };
         assert_eq!(error.name, ErrorName::Error, "{failure:?}");
@@ -805,9 +831,9 @@ async fn tests_that_a_replacement_without_the_commands_shape_fails_the_call() {
             Arc::new(FakeHooks::new(&timeline).after(move |_, _| decided(Ok(decision.clone()))));
         let entry = entry();
         let after = admitted(&fake, "shape", &Arc::default(), false)
-            .after(&run)
+            .ran(&run)
             .unwrap();
-        let Some(Err(error)) = after.apply(&entry, outcome).await else {
+        let Some(Err(error)) = after.finish(&entry, outcome).await else {
             panic!("{shown} must fail the call");
         };
         assert_eq!(error.name, ErrorName::Error, "{shown}");
@@ -830,9 +856,9 @@ async fn tests_that_after_action_races_the_run_but_not_an_abort() {
     let run = run_scope(Duration::from_secs(10));
     let entry_stopped = entry();
     let after = admitted(&stalls, "stopped", &Arc::default(), false)
-        .after(&run)
+        .ran(&run)
         .unwrap();
-    assert_eq!(after.apply(&entry_stopped, Ok(None)).await, None);
+    assert_eq!(after.finish(&entry_stopped, Ok(None)).await, None);
     assert!(
         dropped.load(Ordering::SeqCst),
         "the invocation is abandoned"
@@ -845,13 +871,13 @@ async fn tests_that_after_action_races_the_run_but_not_an_abort() {
     let run = run_scope(Duration::from_mins(1));
     let entry_aborted = entry();
     let after = admitted(&slow, "aborted", &Arc::default(), false)
-        .after(&run)
+        .ran(&run)
         .unwrap();
     let abort = async {
         time::sleep(Duration::from_secs(1)).await;
         entry_aborted.abort("too late".to_string());
     };
-    let (outcome, ()) = tokio::join!(after.apply(&entry_aborted, Ok(None)), abort);
+    let (outcome, ()) = tokio::join!(after.finish(&entry_aborted, Ok(None)), abort);
     assert_eq!(
         outcome,
         Some(Ok(None)),
@@ -1526,4 +1552,107 @@ async fn tests_that_a_set_content_held_at_its_gate_lets_the_hooks_own_write_go_f
         harness.writes(),
         [json!("<p>hook</p>"), json!("<p>agent</p>")]
     );
+}
+
+/// A hook that replaces every call's arguments with `args`, and wants no `afterAction`.
+fn replacing(timeline: &Timeline, args: &Value) -> Arc<FakeHooks> {
+    let args = args.clone();
+    Arc::new(
+        FakeHooks::new(timeline)
+            .wanting(|hook, _| hook == ActionHook::Before)
+            .before(move |_, _| decided(Ok(ActionDecision::ReplaceArgs(args.clone())))),
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_call_run_with_replaced_arguments_replies_none_of_its_error_text() {
+    let timeline = Timeline::default();
+    let fake = replacing(&timeline, &json!({ "name": "s3cret" }));
+    let failures = [
+        PlaywrightError::error("Unknown permission: s3cret"),
+        PlaywrightError::timeout(5.0),
+    ];
+    for failure in failures {
+        let run = run_scope(Duration::from_mins(1));
+        let entry = entry();
+        let mut hooks = admitted(&fake, "replaced", &Arc::default(), false);
+        assert_eq!(
+            gate(&mut hooks, &run, &entry).await,
+            Gated::Run("settled rerouted s3cret".to_string())
+        );
+        // No afterAction wants the call; its reply still has work to do.
+        let reply = hooks.ran(&run).unwrap();
+        let Some(Err(replied)) = reply.finish(&entry, Err(failure.clone())).await else {
+            panic!("{failure:?} must still fail the call");
+        };
+        assert_eq!(replied.name, failure.name, "the error keeps its name");
+        assert!(!replied.message.contains("s3cret"), "{replied:?}");
+        let trace = run.hook_ledger.take_trace();
+        assert!(
+            trace.iter().any(|line| line.contains(&failure.message)),
+            "the host still reads the real text: {trace:?}"
+        );
+    }
+    let run = run_scope(Duration::from_mins(1));
+    let entry = entry();
+    let mut hooks = admitted(&fake, "replaced", &Arc::default(), false);
+    gate(&mut hooks, &run, &entry).await;
+    let succeeded = Ok(Some(json!({ "value": "s3cret page" })));
+    let replied = hooks
+        .ran(&run)
+        .unwrap()
+        .finish(&entry, succeeded.clone())
+        .await;
+    assert_eq!(replied, Some(succeeded), "a result is the hook's to filter");
+}
+
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_replaced_or_withheld_result_keeps_no_call_log() {
+    let timeline = Timeline::default();
+    let decisions = [
+        (Ok(kept(Vec::new())), true),
+        (Ok(replaced(json!({ "value": "Hooked" }))), false),
+        (Ok(replaced(json!(42))), false),
+        (Err(HookFailure::Threw("redactor broke".to_string())), false),
+    ];
+    for (decision, keeps_log) in decisions {
+        let shown = format!("{decision:?}");
+        let fake = Arc::new(
+            FakeHooks::new(&timeline)
+                .wanting(|hook, _| hook == ActionHook::After)
+                .after(move |_, _| decided(decision.clone())),
+        );
+        let run = run_scope(Duration::from_mins(1));
+        let entry = entry();
+        let progress = Progress::new(
+            Arc::clone(&entry),
+            0.0,
+            run.clone(),
+            CancellationToken::new(),
+        );
+        progress.log("locator resolved to <span id=\"balance\">$12,345.67</span>");
+        let reply = admitted(&fake, "read", &Arc::default(), false)
+            .ran(&run)
+            .unwrap();
+        reply
+            .finish(&entry, Ok(Some(json!({ "value": "$12,345.67" }))))
+            .await;
+        assert_eq!(!progress.folded_log().is_empty(), keeps_log, "{shown}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_call_that_never_ran_gets_no_after_action() {
+    let timeline = Timeline::default();
+    let fake = Arc::new(FakeHooks::new(&timeline).wanting(|hook, _| hook == ActionHook::After));
+    let run = run_scope(Duration::from_mins(1));
+    let entry = entry();
+    let mut reply = admitted(&fake, "aborted", &Arc::default(), false)
+        .ran(&run)
+        .unwrap();
+    reply.never_ran();
+    let aborted = Err(PlaywrightError::aborted("stop"));
+    assert_eq!(reply.finish(&entry, aborted.clone()).await, Some(aborted));
+    assert!(fake.events(ActionHook::After).is_empty());
+    assert_eq!(record(&entry).hook, None);
 }

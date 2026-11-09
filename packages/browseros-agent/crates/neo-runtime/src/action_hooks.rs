@@ -15,8 +15,11 @@
 //!    │                       ordered turns; then the next call's turn. Races the run's
 //!    │                       deadline and end, the call's abort and the context's close,
 //!    │                       never the call's own timeout, which starts after (`Progress::new`)
-//!    ├─ serve_call
-//!    └─ finish_reply → AfterHook::apply   afterAction → keep · replace · note; races the run
+//!    ├─ serve_call           a call that stops before its handler starts never ran: no
+//!    │                       afterAction (`ReplyHooks::never_ran`)
+//!    └─ finish_reply → ReplyHooks::finish   afterAction → keep · replace · note (races the
+//!                            run); then no log for a replaced or withheld result, and no
+//!                            own error text for a call run with a hook's arguments
 //! ```
 //!
 //! Every failure fails closed (hooks design D8): a beforeAction that throws, times out or decides
@@ -58,6 +61,12 @@ const BEFORE_ACTION_FAILED: &str = "its beforeAction hook failed";
 /// Neo: the error of a call whose afterAction hook failed: the action ran (its delivery says
 /// what it sent), and its result is withheld rather than let through unfiltered.
 const AFTER_ACTION_FAILED: &str = "a hook failed after the action ran; its result is withheld";
+
+/// Neo: the error text of a call that ran with a hook's arguments and failed. Its own text may
+/// quote those arguments (`Unknown permission: <value>`, `… at <url>`), so the script and the
+/// call's record get this under the error's own name, and the host-only trace the real text.
+const REPLACED_ARGS_FAILED: &str =
+    "the action failed with arguments a hook replaced; its message is withheld";
 
 /// The run's action hooks, as the call path calls them. Dyn-compatible, so a run holds them as
 /// `Arc<dyn ActionHooks>` in [`RunScope::action_hooks`], set once they are ready.
@@ -336,6 +345,23 @@ impl Drop for Place {
     }
 }
 
+/// How the call path routes a call held at its gate once its hook decides: a hook's replacement
+/// arguments exactly as the script's own params would be (or why they are refused), and what an
+/// allowed call settles in call order (`Regate` in `method_router.rs`). It lives in the call's
+/// [`CallHooks`] beside its place, so a call that waits for `beforeAction` cannot run without it.
+pub(crate) trait CallRoute {
+    /// The call, routed.
+    type Call;
+
+    /// The hook's `args`, routed as the script's params were and admitted as they would be; or
+    /// why the call refuses them, for the host-only trace (it may quote them).
+    fn reroute(&self, args: Value) -> Result<Self::Call, String>;
+
+    /// What the allowed `call` settles in call order: its write or storage turn, a new test id
+    /// attribute.
+    fn settle(&self, call: Self::Call) -> Self::Call;
+}
+
 /// Which of a call's action hooks run, decided as it arrives.
 pub(crate) struct HookPlan {
     hooks: Arc<dyn ActionHooks>,
@@ -365,6 +391,11 @@ impl HookPlan {
         })
     }
 
+    /// The command the hooks see.
+    pub(crate) fn served(&self) -> ServedMethod {
+        self.served
+    }
+
     /// Whether `beforeAction` holds the call at its gate. Then whatever the call settles in call
     /// order (its write or storage turn, a new test id attribute) waits for the decision: it
     /// must not happen for a blocked call, and a turn held through the hook's wait would keep
@@ -374,25 +405,27 @@ impl HookPlan {
     }
 
     /// The call's hooks once it is admitted, with the event they see; a `frame_call`'s event
-    /// names the locator its args carry. A gated call takes its place in `order` now, or, when
-    /// the debugger `held` it, once it is released.
-    pub(crate) fn admitted(
+    /// names the locator its args carry. A gated call keeps `route` (asked for only then) for
+    /// its gate, and takes its place in `order` now, or, when the debugger `held` it, once it
+    /// is released.
+    pub(crate) fn admitted<G: CallRoute>(
         self,
         mut event: ActionEvent,
         call_id: u64,
         frame_call: bool,
         order: &Arc<CallOrder>,
         held: bool,
-    ) -> CallHooks {
+        route: impl FnOnce() -> G,
+    ) -> CallHooks<G> {
         if frame_call {
             event.locator = locator_of(&event.guid, &event.args);
         }
         let before = if !self.before {
             Before::Unwanted
         } else if held {
-            Before::Held(Arc::clone(order))
+            Before::Held(Arc::clone(order), route())
         } else {
-            Before::Placed(order.place())
+            Before::Placed(order.place(), route())
         };
         CallHooks {
             hooks: self.hooks,
@@ -402,18 +435,19 @@ impl HookPlan {
             frame_call,
             before,
             after: self.after,
+            args_replaced: false,
         }
     }
 }
 
-/// A call's `beforeAction`, from its arrival to its decision.
-enum Before {
+/// A call's `beforeAction`, from its arrival to its decision, with the call path's route for it.
+enum Before<G> {
     /// No `beforeAction` wants the call, or it has decided.
     Unwanted,
     /// Its place in the call order, taken as it arrived.
-    Placed(Place),
+    Placed(Place, G),
     /// The debugger held it as it arrived: it takes its place in this order once released.
-    Held(Arc<CallOrder>),
+    Held(Arc<CallOrder>, G),
 }
 
 /// What a gated call does next.
@@ -427,8 +461,8 @@ pub(crate) enum Gated<R> {
     Stopped,
 }
 
-/// One call's action hooks, from its admission to its reply.
-pub(crate) struct CallHooks {
+/// One call's action hooks, from its admission until it starts running ([`CallHooks::ran`]).
+pub(crate) struct CallHooks<G> {
     hooks: Arc<dyn ActionHooks>,
     served: ServedMethod,
     /// What the hooks see; its `args` become the hook's once it replaces them.
@@ -436,38 +470,32 @@ pub(crate) struct CallHooks {
     call_id: u64,
     /// Whether the call names a frame, whose args may carry a selector ([`locator_of`]).
     frame_call: bool,
-    before: Before,
+    before: Before<G>,
     after: bool,
+    /// Set once `beforeAction` replaced the call's arguments ([`ReplyHooks::finish`]).
+    args_replaced: bool,
 }
 
-impl CallHooks {
-    /// Whether the call waits at its gate for `beforeAction` ([`CallHooks::before`]).
-    pub(crate) fn gates(&self) -> bool {
-        !matches!(self.before, Before::Unwanted)
-    }
-
-    /// The call's gate: its turn in the call order, then `beforeAction`'s decision. `route` is
-    /// the call as the script made it; `reroute` routes a hook's replacement arguments exactly
-    /// as the script's own params would be, or says why they are refused; `settle` takes what
-    /// the call settles in call order, before the next call's turn.
+impl<G: CallRoute> CallHooks<G> {
+    /// The call's gate: its turn in the call order, then `beforeAction`'s decision, applied with
+    /// the call path's route. `call` is the call as the script made it; for a call no
+    /// `beforeAction` wants, it runs as it is, having settled as it arrived.
     ///
     /// The whole wait races the run's deadline and end (no reply), the call's abort
     /// (`AbortError`) and the context's close (`TargetClosedError`), as the debugger's hold
     /// does; the call's own timeout starts only after it. Nothing another call waits on is held
     /// meanwhile but the call's place: its ordered turns come after the decision, and the tab's
     /// input lock only inside the handler.
-    pub(crate) async fn before<R>(
+    pub(crate) async fn before(
         &mut self,
         run: &RunScope,
         entry: &CallEntry,
-        route: R,
-        reroute: impl FnOnce(Value) -> Result<R, String>,
-        settle: impl FnOnce(R) -> R,
-    ) -> Gated<R> {
-        let place = match mem::replace(&mut self.before, Before::Unwanted) {
-            Before::Unwanted => return Gated::Run(route),
-            Before::Placed(place) => place,
-            Before::Held(order) => order.place(),
+        call: G::Call,
+    ) -> Gated<G::Call> {
+        let (place, route) = match mem::replace(&mut self.before, Before::Unwanted) {
+            Before::Unwanted => return Gated::Run(call),
+            Before::Placed(place, route) => (place, route),
+            Before::Held(order, route) => (order.place(), route),
         };
         if let Err(halt) = gate_race(run, entry, place.turn()).await {
             return halt;
@@ -478,26 +506,25 @@ impl CallHooks {
             Ok(decided) => decided,
             Err(halt) => return halt,
         };
-        let gated = self.decided(run, entry, decided, route, reroute, settle);
+        let gated = self.decided(run, entry, decided, call, &route);
         // Only now may the next call's beforeAction start: this call's ordered turns are taken.
         drop(place);
         gated
     }
 
     /// What `decided` means for the call; records it on the entry.
-    fn decided<R>(
+    fn decided(
         &mut self,
         run: &RunScope,
         entry: &CallEntry,
         decided: Result<ActionDecision, HookFailure>,
-        route: R,
-        reroute: impl FnOnce(Value) -> Result<R, String>,
-        settle: impl FnOnce(R) -> R,
-    ) -> Gated<R> {
+        call: G::Call,
+        route: &G,
+    ) -> Gated<G::Call> {
         match decided {
             Ok(ActionDecision::Allow) => {
                 entry.hook_before(BeforeHookResult::Allowed);
-                Gated::Run(settle(route))
+                Gated::Run(route.settle(call))
             }
             Ok(ActionDecision::Block(reason)) => {
                 entry.hook_before(BeforeHookResult::Blocked);
@@ -508,14 +535,15 @@ impl CallHooks {
             Ok(ActionDecision::ReplaceArgs(args)) => {
                 // Before anything runs: no line naming the hook's arguments is ever written.
                 entry.hide_log();
-                match reroute(args.clone()) {
+                match route.reroute(args.clone()) {
                     Ok(rerouted) => {
                         entry.hook_before(BeforeHookResult::ArgsReplaced);
+                        self.args_replaced = true;
                         if self.frame_call {
                             self.event.locator = locator_of(&self.event.guid, &args);
                         }
                         self.event.args = args;
-                        Gated::Run(settle(rerouted))
+                        Gated::Run(route.settle(rerouted))
                     }
                     Err(detail) => {
                         entry.hook_before(BeforeHookResult::Failed);
@@ -536,17 +564,6 @@ impl CallHooks {
         }
     }
 
-    /// The call's `afterAction` once it runs; `None` when no `afterAction` wants it.
-    pub(crate) fn after(self, run: &RunScope) -> Option<AfterHook> {
-        self.after.then(|| AfterHook {
-            hooks: self.hooks,
-            served: self.served,
-            event: self.event,
-            call_id: self.call_id,
-            run: run.clone(),
-        })
-    }
-
     /// One host-only trace line about this call's `event` hook.
     fn trace(&self, run: &RunScope, event: &str, detail: &str) {
         run.hook_ledger
@@ -554,34 +571,133 @@ impl CallHooks {
     }
 }
 
-/// A call's `afterAction`, ready once the call ran.
-pub(crate) struct AfterHook {
-    hooks: Arc<dyn ActionHooks>,
-    served: ServedMethod,
-    event: ActionEvent,
-    call_id: u64,
-    run: RunScope,
-}
-
-impl AfterHook {
-    /// `afterAction` on the call's `outcome`, which it may keep or replace; records the decision
-    /// on the entry and the notes in the run's ledger. Races the run's deadline and end only:
-    /// the outcome is decided, so an abort no longer counts. `None` when the run stopped first:
-    /// the call then replies nothing, as any call the run ended. A failure fails the call
-    /// closed, its delivery left as the action recorded it.
-    pub(crate) async fn apply(
-        self,
-        entry: &CallEntry,
-        outcome: Result<Option<Value>, PlaywrightError>,
-    ) -> Option<Result<Option<Value>, PlaywrightError>> {
+impl<G> CallHooks<G> {
+    /// What the call's hooks do to its reply, once it passed its gate and runs: its
+    /// `afterAction` when one wants it, and the redaction of a call that runs with a hook's
+    /// arguments. `None` when neither applies.
+    pub(crate) fn ran(self, run: &RunScope) -> Option<ReplyHooks> {
         let Self {
             hooks,
             served,
             event,
             call_id,
+            after,
+            args_replaced,
+            ..
+        } = self;
+        if !after && !args_replaced {
+            return None;
+        }
+        let method = event.method.clone();
+        Some(ReplyHooks {
+            after: after.then(|| AfterHook {
+                hooks,
+                served,
+                event,
+            }),
+            args_replaced,
+            call_id,
+            method,
+            run: run.clone(),
+        })
+    }
+}
+
+/// What a call's hooks do to its reply ([`CallHooks::ran`]), in `finish_reply` before the call's
+/// entry ends.
+pub(crate) struct ReplyHooks {
+    after: Option<AfterHook>,
+    /// The call runs with a hook's arguments: an error it replies is redacted.
+    args_replaced: bool,
+    call_id: u64,
+    method: String,
+    run: RunScope,
+}
+
+impl ReplyHooks {
+    /// The call stopped before its handler started (aborted, its page or frame not ready, its
+    /// session gone): it never ran, so no `afterAction` sees it. Its error text is still
+    /// redacted if it was to run with a hook's arguments.
+    pub(crate) fn never_ran(&mut self) {
+        self.after = None;
+    }
+
+    /// The reply the call sends instead of `outcome`, and what its entry keeps. `afterAction`
+    /// first: keep, replace, or fail the call closed. A call whose result a hook replaced or
+    /// withheld keeps no call log, which quotes the page (a read logs `locator resolved to
+    /// <preview>`), in its reply or its record. A call that ran with a hook's arguments replies
+    /// none of its own error text, which may quote them (`Unknown permission: <value>`,
+    /// `… at <url>`): it keeps the error's name, and the text goes to the host-only trace. `None`
+    /// when the run stopped during `afterAction`: no reply, as for any call the run ended.
+    pub(crate) async fn finish(
+        self,
+        entry: &CallEntry,
+        outcome: Result<Option<Value>, PlaywrightError>,
+    ) -> Option<Result<Option<Value>, PlaywrightError>> {
+        let Self {
+            after,
+            args_replaced,
+            call_id,
+            method,
             run,
         } = self;
-        let method = event.method.clone();
+        let (outcome, decided) = match after {
+            Some(after) => {
+                let (outcome, decided) =
+                    after.apply(&run, entry, call_id, &method, outcome).await?;
+                (outcome, Some(decided))
+            }
+            None => (outcome, None),
+        };
+        if matches!(
+            decided,
+            Some(AfterHookResult::Replaced | AfterHookResult::Failed)
+        ) {
+            entry.hide_log();
+        }
+        match outcome {
+            // A failed afterAction's error is Neo's own already.
+            Err(error) if args_replaced && decided != Some(AfterHookResult::Failed) => {
+                run.hook_ledger.trace(format!(
+                    "neo: call {call_id} ({method}) failed with replaced arguments: {}: {}",
+                    error.name.as_str(),
+                    error.message
+                ));
+                Some(Err(PlaywrightError {
+                    name: error.name,
+                    message: REPLACED_ARGS_FAILED.to_string(),
+                }))
+            }
+            outcome => Some(outcome),
+        }
+    }
+}
+
+/// A call's `afterAction`, ready once the call ran.
+struct AfterHook {
+    hooks: Arc<dyn ActionHooks>,
+    served: ServedMethod,
+    event: ActionEvent,
+}
+
+impl AfterHook {
+    /// `afterAction` on the call's `outcome`, which it may keep or replace; records the decision
+    /// on the entry and the notes in the run's ledger. Races the run's deadline and end only:
+    /// the outcome is decided, so an abort no longer counts. `None` when the run stopped first.
+    /// A failure fails the call closed, its delivery left as the action recorded it.
+    async fn apply(
+        self,
+        run: &RunScope,
+        entry: &CallEntry,
+        call_id: u64,
+        method: &str,
+        outcome: Result<Option<Value>, PlaywrightError>,
+    ) -> Option<(Result<Option<Value>, PlaywrightError>, AfterHookResult)> {
+        let Self {
+            hooks,
+            served,
+            event,
+        } = self;
         let ended = match &outcome {
             Ok(result) => ActionEnd::Result(result.clone().unwrap_or(Value::Null)),
             Err(error) => {
@@ -607,18 +723,21 @@ impl AfterHook {
             Err(failure) => Err(failure.detail()),
         };
         match applied {
-            Ok((result, outcome, notes)) => {
-                entry.hook_after(result);
+            Ok((decided, outcome, notes)) => {
+                entry.hook_after(decided);
                 for note in notes {
                     run.hook_ledger.note(note);
                 }
-                Some(outcome)
+                Some((outcome, decided))
             }
             Err(detail) => {
                 entry.hook_after(AfterHookResult::Failed);
                 run.hook_ledger
-                    .trace(trace_line("afterAction", call_id, &method, &detail));
-                Some(Err(PlaywrightError::error(AFTER_ACTION_FAILED)))
+                    .trace(trace_line("afterAction", call_id, method, &detail));
+                Some((
+                    Err(PlaywrightError::error(AFTER_ACTION_FAILED)),
+                    AfterHookResult::Failed,
+                ))
             }
         }
     }

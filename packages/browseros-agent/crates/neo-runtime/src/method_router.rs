@@ -72,7 +72,9 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::debug;
 
 use crate::abort::{Aborts, Registration};
-use crate::action_hooks::{ActionEvent, ActionHooks, AfterHook, CallOrder, Gated, HookPlan};
+use crate::action_hooks::{
+    ActionEvent, ActionHooks, CallOrder, CallRoute, Gated, HookPlan, ReplyHooks,
+};
 use crate::actions::{ActionKind, NeoMethod, ServedMethod, SpecCommand};
 use crate::browser_representations::bindings::{self, Answering, BindingRoute, Outcome};
 use crate::browser_representations::clock::{self, ClockRoute};
@@ -361,34 +363,22 @@ impl Inner {
         route: &ObjectCall,
         target: Option<&(Arc<PageEntry>, FrameScope)>,
     ) -> Option<ReleaseClaim> {
-        if let Some(cursor) = ending_cursor(route) {
-            return self.cursors.begin_ending(cursor).map(ReleaseClaim::Ending);
-        }
-        match route {
-            ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => {
+        match claim_key(route)? {
+            ClaimKey::Ending(cursor) => self.cursors.begin_ending(cursor).map(ReleaseClaim::Ending),
+            ClaimKey::Resolving(uid) => {
                 let page = target?.0.attached_session()?;
-                locator_handlers::begin_resolving(&page, params.uid).map(ReleaseClaim::Resolving)
+                locator_handlers::begin_resolving(&page, uid).map(ReleaseClaim::Resolving)
             }
-            ObjectCall::Binding(
-                BindingRoute::Resolve { guid, .. } | BindingRoute::Reject { guid, .. },
-            ) => self
+            ClaimKey::Answering(guid) => self
                 .run
                 .bindings
-                .begin_answering(guid)
+                .begin_answering(&guid)
                 .map(ReleaseClaim::Answering),
-            // Playwright: `client/browserContext.ts` `BrowserContext._onRoute`: `await route._innerContinue(true /* isFallback */).catch(() => {});`
-            ObjectCall::Intercepted(
-                index,
-                routes::InterceptedCall::Answer(RouteCall::Continue(params)),
-            ) if params.is_fallback => {
+            ClaimKey::Continuing(index) => {
                 let page = target?.0.attached_session()?;
-                page.routes
-                    .begin_continuing(*index)
-                    .map(ReleaseClaim::Route)
+                page.routes.begin_continuing(index).map(ReleaseClaim::Route)
             }
-            // The context's close and the browser's: the run's disconnection (#3190).
-            route if disconnects(route) => Some(ReleaseClaim::Close),
-            _ => None,
+            ClaimKey::Close => Some(ReleaseClaim::Close),
         }
     }
 
@@ -415,6 +405,46 @@ fn take_turn(
         _ => {}
     }
     call
+}
+
+/// What a call that ends calls in flight would claim ([`ReleaseClaim`]), named without claiming
+/// it: [`Inner::release_claim`] claims it, and a hook's replacement arguments must name the
+/// same (`Regate::reroute`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClaimKey {
+    /// A URL-predicate wait's finish or release, by cursor.
+    Ending(u64),
+    /// A running locator handler's completion, by uid.
+    Resolving(i64),
+    /// A waiting binding call's answer, by guid.
+    Answering(String),
+    /// A paused route's own fallback continuation, by index.
+    Continuing(u64),
+    /// The context's close or the browser's.
+    Close,
+}
+
+/// The claim `route` would make among the calls in flight; `None` for a call that ends none.
+fn claim_key(route: &ObjectCall) -> Option<ClaimKey> {
+    if let Some(cursor) = ending_cursor(route) {
+        return Some(ClaimKey::Ending(cursor));
+    }
+    match route {
+        ObjectCall::Page(PageCall::ResolveLocatorHandlerNoReply(params)) => {
+            Some(ClaimKey::Resolving(params.uid))
+        }
+        ObjectCall::Binding(
+            BindingRoute::Resolve { guid, .. } | BindingRoute::Reject { guid, .. },
+        ) => Some(ClaimKey::Answering(guid.clone())),
+        // Playwright: `client/browserContext.ts` `BrowserContext._onRoute`: `await route._innerContinue(true /* isFallback */).catch(() => {});`
+        ObjectCall::Intercepted(
+            index,
+            routes::InterceptedCall::Answer(RouteCall::Continue(params)),
+        ) if params.is_fallback => Some(ClaimKey::Continuing(*index)),
+        // The context's close and the browser's: the run's disconnection (#3190).
+        route if disconnects(route) => Some(ClaimKey::Close),
+        _ => None,
+    }
 }
 
 /// Playwright's client message, `{id, guid, method, params, metadata}` (`connection.ts`).
@@ -688,8 +718,10 @@ impl Dispatcher {
             timeout: None,
         });
         let call_id = inner.next_call_id.fetch_add(1, Ordering::Relaxed);
-        let event = plan.as_ref().zip(meta).map(|(_, served)| {
-            call_event(
+        // What the hooks see, and how the call path routes the call at its gate.
+        let planned = plan.zip(object_kept).map(|(plan, object)| {
+            let served = plan.served();
+            let event = call_event(
                 served,
                 &guid,
                 &method,
@@ -697,19 +729,20 @@ impl Dispatcher {
                 call_location(&metadata),
                 target.as_ref(),
                 debugged.as_deref(),
-            )
-        });
-        let regate = meta
-            .zip(object_kept)
-            .filter(|_| gated)
-            .map(|(served, object)| Regate {
+            );
+            let regate = Regate {
                 object,
                 method: method.clone(),
                 served,
                 guid: guid.clone(),
+                claim: route.as_ref().ok().and_then(claim_key),
+                tabs: inner.tabs.clone(),
                 write_order: Arc::clone(&inner.write_order),
                 storage_order: Arc::clone(&inner.storage_order),
-            });
+                in_flight: Arc::clone(&inner.in_flight),
+            };
+            (plan, event, regate)
+        });
         let entry = Arc::new(CallEntry::new(CallStart {
             call_id,
             guid,
@@ -743,13 +776,14 @@ impl Dispatcher {
             &entry,
         );
         // Its place in the hooks' call order, now: a later call's hook must not decide first.
-        let hooks = plan.zip(event).map(|(plan, event)| {
+        let hooks = planned.map(|(plan, event, regate)| {
             plan.admitted(
                 event,
                 call_id,
                 frame_call,
                 &inner.hook_order,
                 held.is_some(),
+                move || regate,
             )
         });
         // The run's disconnection outlives the stop it gives every other call of the run.
@@ -769,7 +803,8 @@ impl Dispatcher {
             share: admission.share,
             release: admission.release,
             abortable,
-            after: None,
+            hooks: None,
+            charge: None,
         };
         let timeout = metadata.timeout.unwrap_or(0.0);
         let run = inner.run.clone();
@@ -787,23 +822,23 @@ impl Dispatcher {
             }
             let mut hooks = hooks;
             // After the debugger's hold, before the call's own timeout starts: beforeAction.
-            let route = match (hooks.as_mut(), regate.as_ref()) {
-                (Some(gate), Some(regate)) if gate.gates() => {
-                    let reroute = |args| regate.reroute(args);
-                    let settle = |call| regate.settle(&tabs, call);
-                    match gate.before(&run, &entry, route, reroute, settle).await {
-                        Gated::Run(route) => route,
-                        Gated::Refused(error) => {
-                            finish_reply(Err(error.into()), call_reply).await;
-                            return;
-                        }
-                        Gated::Stopped => return,
+            let route = match hooks.as_mut() {
+                Some(gate) => match gate.before(&run, &entry, GatedCall::new(route)).await {
+                    Gated::Run(GatedCall { call, charge }) => {
+                        call_reply.charge = charge;
+                        call
                     }
-                }
-                _ => route,
+                    Gated::Refused(error) => {
+                        finish_reply(Err(error.into()), call_reply).await;
+                        return;
+                    }
+                    Gated::Stopped => return,
+                },
+                None => route,
             };
-            // The call runs from here: its afterAction sees how it ends, whatever stops it.
-            call_reply.after = hooks.and_then(|hooks| hooks.after(&run)).map(Box::new);
+            // The call runs from here: what its hooks do to its reply ([`never_ran`] takes
+            // afterAction back from a call that stops before its handler starts).
+            call_reply.hooks = hooks.and_then(|hooks| hooks.ran(&run)).map(Box::new);
             let progress = Progress::new(entry, timeout, run, closed);
             let progress = if disconnecting {
                 progress.closing_the_context()
@@ -1758,13 +1793,21 @@ struct CallReply {
     release: Option<ReleaseClaim>,
     /// The call's place in the abort registry; `None` for an id that is not an integer.
     abortable: Option<Registration>,
-    /// The call's `afterAction`, set once the call passed its gate and runs (`action_hooks.rs`).
-    /// Boxed, as its future is below: only a hooked call pays for either.
-    after: Option<Box<AfterHook>>,
+    /// What the call's hooks do to its reply, set once it passed its gate and runs
+    /// (`action_hooks.rs`). Boxed, as its future is in [`finish_reply`]: only a hooked call pays
+    /// for either.
+    hooks: Option<Box<ReplyHooks>>,
+    /// The in-flight charge of a hook's replacement arguments (`Regate::reroute`), given back
+    /// with the call's own share.
+    charge: Option<Admitted>,
 }
 
 /// Attachment can block or be cancelled independently of a frame handler. Once attached,
 /// `serve` retains its original contract: the `PageSession` always belongs to this call's tab.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one dispatch over every route; a call stopped before its handler replies in its arm"
+)]
 async fn serve_call(
     tabs: Tabs,
     cursors: Arc<Cursors<FrameCursor>>,
@@ -1777,7 +1820,8 @@ async fn serve_call(
     // that would not race its progress first. A run that ended meanwhile outranks the abort
     // (`Progress::race`'s order): the handler starts and its first race reports the end.
     if let Err(error) = progress.pending_abort() {
-        finish_reply(Err(error), reply).await;
+        drop(route);
+        never_ran(error, reply).await;
         return;
     }
     // A page's call waits for what the run's subscriptions switched on there (console messages,
@@ -1799,7 +1843,8 @@ async fn serve_call(
         && reply.events.enabling(gate)
         && let Err(error) = progress.race(reply.events.ready(gate)).await
     {
-        finish_reply(Err(error), reply).await;
+        drop(route);
+        never_ran(error, reply).await;
         return;
     }
     let result = match (route, target) {
@@ -1846,13 +1891,18 @@ async fn serve_call(
                     if reply.events.enabling(page_id(&page))
                         && let Err(error) = progress.race(reply.events.ready(page_id(&page))).await
                     {
-                        finish_reply(Err(error), reply).await;
+                        drop(route);
+                        never_ran(error, reply).await;
                         return;
                     }
                     serve(FrameTab { page, scope }, &cursors, route, progress, reply).await;
                     return;
                 }
-                Err(error) => Err(error),
+                Err(error) => {
+                    drop(route);
+                    never_ran(error, reply).await;
+                    return;
+                }
             }
         }
         (ObjectCall::Device(call), Some((page, _))) => {
@@ -1864,31 +1914,63 @@ async fn serve_call(
                     };
                     devices::serve(&tab, &call, &progress).await.map(|()| None)
                 }
-                Err(error) => Err(error),
+                Err(error) => {
+                    drop(call);
+                    never_ran(error, reply).await;
+                    return;
+                }
             }
         }
         // A hop's objects exist only after a goto on this page's session, which stays attached
         // for the run.
-        (ObjectCall::Network(call), Some((page, _))) => match page.attached_session() {
-            Some(session) => responses::serve(&session, call, &progress).await,
-            None => Err(PlaywrightError::target_closed().into()),
-        },
+        (ObjectCall::Network(call), Some((page, _))) => {
+            let Some(session) = page.attached_session() else {
+                drop(call);
+                never_ran(PlaywrightError::target_closed().into(), reply).await;
+                return;
+            };
+            responses::serve(&session, call, &progress).await
+        }
         // A dialog exists only after its tab's watcher saw it open on this run's session.
-        (ObjectCall::Dialog(index, call), Some((page, _))) => match page.attached_session() {
-            Some(session) => dialogs::serve(&session, index, call, &progress).await,
-            None => Err(PlaywrightError::target_closed().into()),
-        },
+        (ObjectCall::Dialog(index, call), Some((page, _))) => {
+            let Some(session) = page.attached_session() else {
+                drop(call);
+                never_ran(PlaywrightError::target_closed().into(), reply).await;
+                return;
+            };
+            dialogs::serve(&session, index, call, &progress).await
+        }
         // A paused request exists only after its tab's watcher handed it to this run.
-        (ObjectCall::Intercepted(index, call), Some((page, _))) => match page.attached_session() {
-            Some(session) => routes::serve_intercepted(&session, index, call, &progress).await,
-            None => Err(PlaywrightError::target_closed().into()),
-        },
+        (ObjectCall::Intercepted(index, call), Some((page, _))) => {
+            let Some(session) = page.attached_session() else {
+                drop(call);
+                never_ran(PlaywrightError::target_closed().into(), reply).await;
+                return;
+            };
+            routes::serve_intercepted(&session, index, call, &progress).await
+        }
         (ObjectCall::Download(guid, call), _) => {
             downloads::serve(&tabs, &guid, call, &progress).await
         }
-        _ => Err(PlaywrightError::target_closed().into()),
+        // No handler serves this call on this target (its page is gone): it never ran.
+        (unserved, _) => {
+            drop(unserved);
+            never_ran(PlaywrightError::target_closed().into(), reply).await;
+            return;
+        }
     };
     finish_reply(result, reply).await;
+}
+
+/// Replies to a call that stopped before its handler started: aborted, its page or frame not
+/// ready, its session gone. It never ran, so no afterAction sees it (`ReplyHooks::never_ran`).
+/// The caller drops the call's route first, so a write or storage turn it holds goes before the
+/// reply waits on anything.
+async fn never_ran(error: CallError, mut reply: CallReply) {
+    if let Some(hooks) = reply.hooks.as_mut() {
+        hooks.never_ran();
+    }
+    finish_reply(Err(error), reply).await;
 }
 
 /// A clock command (`clock.rs`), raced against the call's progress; it answers `{}`.
@@ -1955,7 +2037,8 @@ async fn serve(
     // forms tests' fake does not implement, so they are answered here; every other route goes
     // through `serve_route`.
     if let Some(error) = unsupported_child_call(&page.scope, &route) {
-        finish_reply(Err(error.into()), reply).await;
+        drop(route);
+        never_ran(error.into(), reply).await;
         return;
     }
     let result = match route {
@@ -2244,7 +2327,8 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         share,
         release,
         abortable,
-        after,
+        hooks,
+        charge,
     } = target;
     // The outcome is decided: an abort from now on is ignored, as Playwright drops a call's
     // controller before it replies.
@@ -2254,10 +2338,11 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
         Ok(value) => Ok(value),
         Err(CallError::Playwright(error)) => Err(error),
     };
-    // afterAction sees the outcome first and may swap it or fail the call closed. A run that
-    // ends meanwhile gets no reply and leaves the entry open, as any call the run ended.
-    let answer = match after {
-        Some(after) => match Box::pin(after.apply(&entry, answer)).await {
+    // The hooks see the outcome first: afterAction may swap it or fail the call closed, and
+    // what no reply may carry goes. A run that ends meanwhile gets no reply and leaves the entry
+    // open, as any call the run ended.
+    let answer = match hooks {
+        Some(hooks) => match Box::pin(hooks.finish(&entry, answer)).await {
             Some(answer) => answer,
             None => return,
         },
@@ -2274,46 +2359,82 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     events.barrier().await;
     // Given back before the reply leaves, so a script that awaited this call can start another
     // at once. A call that never replies gives them back as its task ends.
-    drop((share, release));
+    drop((share, release, charge));
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send((text, events.seq()));
 }
 
-/// What a call gated by its hook needs once the hook decides (`CallHooks::before`): how to
-/// route the hook's arguments as the script's own, and where to take its ordered turns.
+/// How the call path routes a call gated by its hook once the hook decides
+/// (`CallHooks::before`): the hook's arguments as the script's own, and the call's ordered
+/// turns. It sits inside the call's hooks, so a gated call cannot run without it.
 struct Regate {
     object: ObjectKind,
     method: String,
     served: ServedMethod,
     guid: String,
+    /// What the script's call claims among the calls in flight; a replacement must claim the
+    /// same, or it would end something the script's call was not admitted for.
+    claim: Option<ClaimKey>,
+    tabs: Tabs,
     write_order: Arc<WriteOrder>,
     storage_order: Arc<WriteOrder>,
+    /// The run's in-flight caps, which a replacement's own bytes are charged against.
+    in_flight: Arc<InFlight>,
 }
 
-impl Regate {
-    /// A hook's replacement arguments routed exactly as the script's params were: the same
-    /// object and method. Arguments that do not decode, or that route to another command, are
-    /// refused, and the call fails closed; the reason, which may quote them, is for the
-    /// host-only trace.
-    fn reroute(&self, args: Value) -> Result<ObjectCall, String> {
+/// A gated call, with the in-flight charge of a hook's replacement arguments when it runs with
+/// them.
+struct GatedCall {
+    call: ObjectCall,
+    charge: Option<Admitted>,
+}
+
+impl GatedCall {
+    fn new(call: ObjectCall) -> Self {
+        Self { call, charge: None }
+    }
+}
+
+/// Neo: a hook's replacement arguments are re-checked like the script's own params (hooks
+/// design, Error handling): routed on the same object and method, the same command, the same
+/// claim, and admitted against the in-flight caps. Anything else fails the call closed; the
+/// reason, which may quote the arguments, is for the host-only trace.
+impl CallRoute for Regate {
+    type Call = GatedCall;
+
+    fn reroute(&self, args: Value) -> Result<GatedCall, String> {
+        let bytes = args.to_string().len();
         let Routed { meta, route } = route(self.object.clone(), &self.method, Some(args));
         let call = route.map_err(|error| format!("they do not decode: {}", error.message))?;
-        match meta {
-            Some(rerouted) if same_command(rerouted, self.served) => Ok(call),
-            _ => Err(format!(
+        if !meta.is_some_and(|rerouted| same_command(rerouted, self.served)) {
+            return Err(format!(
                 "they route to another command than {}.{}",
                 self.served.interface, self.served.method
-            )),
+            ));
         }
+        if claim_key(&call) != self.claim {
+            return Err("they change what the call ends among the calls in flight".to_string());
+        }
+        let charge = self
+            .in_flight
+            .charge(bytes)
+            .map_err(|error| format!("they do not fit: {}", error.message))?;
+        Ok(GatedCall {
+            call,
+            charge: Some(charge),
+        })
     }
 
-    /// What an allowed call settles in call order, before the next call's hook decides: its
-    /// write or storage turn, a new test id attribute.
-    fn settle(&self, tabs: &Tabs, call: ObjectCall) -> ObjectCall {
-        let call = take_turn(&self.write_order, &self.storage_order, &self.guid, call);
-        set_test_id(tabs, &call);
-        call
+    fn settle(&self, gated: GatedCall) -> GatedCall {
+        let call = take_turn(
+            &self.write_order,
+            &self.storage_order,
+            &self.guid,
+            gated.call,
+        );
+        set_test_id(&self.tabs, &call);
+        GatedCall { call, ..gated }
     }
 }
 
@@ -2550,6 +2671,8 @@ struct Load {
 /// it, or the runtime dropped it).
 struct Admitted {
     in_flight: Arc<InFlight>,
+    /// 1 for a call's share, 0 for a charge of bytes alone ([`InFlight::charge`]).
+    calls: usize,
     bytes: usize,
 }
 
@@ -2557,12 +2680,22 @@ impl InFlight {
     /// Takes a share for a call whose message is `bytes` long, or refuses it with the cap it
     /// would pass. Neo-only, so the message names Neo: Playwright's server has no such cap.
     fn admit(self: &Arc<Self>, bytes: usize) -> Result<Admitted, PlaywrightError> {
+        self.take(1, bytes)
+    }
+
+    /// Charges `bytes` more against the byte cap alone, for a call already admitted: a hook's
+    /// replacement arguments (`Regate::reroute`).
+    fn charge(self: &Arc<Self>, bytes: usize) -> Result<Admitted, PlaywrightError> {
+        self.take(0, bytes)
+    }
+
+    fn take(self: &Arc<Self>, calls: usize, bytes: usize) -> Result<Admitted, PlaywrightError> {
         let Ok(mut load) = self.0.lock() else {
             return Err(PlaywrightError::error(
                 "neo-runtime: the run's in-flight calls cannot be counted",
             ));
         };
-        if load.calls >= MAX_CALLS_IN_FLIGHT {
+        if calls > 0 && load.calls >= MAX_CALLS_IN_FLIGHT {
             return Err(PlaywrightError::error(format!(
                 "neo-runtime: a run may have at most {MAX_CALLS_IN_FLIGHT} browser calls in \
                  flight; await one before starting another"
@@ -2576,10 +2709,11 @@ impl InFlight {
                 load.bytes
             )));
         }
-        load.calls += 1;
+        load.calls += calls;
         load.bytes += bytes;
         Ok(Admitted {
             in_flight: Arc::clone(self),
+            calls,
             bytes,
         })
     }
@@ -2588,7 +2722,7 @@ impl InFlight {
 impl Drop for Admitted {
     fn drop(&mut self) {
         if let Ok(mut load) = self.in_flight.0.lock() {
-            load.calls -= 1;
+            load.calls -= self.calls;
             load.bytes -= self.bytes;
         }
     }
@@ -2715,7 +2849,8 @@ mod tests {
                 share: None,
                 release: None,
                 abortable: None,
-                after: None,
+                hooks: None,
+                charge: None,
             },
         );
         run.end(RunEnd::Settled);
@@ -3838,7 +3973,8 @@ mod tests {
                 share: Some(in_flight.admit(10).expect("under the caps")),
                 release: None,
                 abortable: None,
-                after: None,
+                hooks: None,
+                charge: None,
             },
         ));
         let _reply = receiver.await.expect("the call replied");
@@ -4180,7 +4316,8 @@ mod review_abort_priority {
                 share: None,
                 release: None,
                 abortable: None,
-                after: None,
+                hooks: None,
+                charge: None,
             },
         );
         // Neither stop can race scheduling: the handler future has never been polled.
