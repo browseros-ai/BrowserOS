@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { contextBootstrapPlan } from './browser.mjs'
+import { requestObservation } from './observation-fence.mjs'
 import { source } from './prepare.mjs'
 import { NativeProxy, ReferenceProxy } from './proxy.mjs'
 
@@ -58,6 +59,8 @@ async function engine() {
       browser: native.browser,
       browserType: native.browserType,
       async finish() {
+        const nativeOutcome = await native.finish()
+        await requestObservation(settings.outputDir)
         return {
           ...bookkeeping.evidence(),
           calls: native.calls,
@@ -67,7 +70,7 @@ async function engine() {
           missing: [...native.missing],
           transportErrors: native.transportErrors,
           capabilities: native.capabilities,
-          nativeOutcome: await native.finish(),
+          nativeOutcome,
         }
       },
     }
@@ -102,7 +105,13 @@ async function engine() {
     browser: proxy.wrap(browser),
     browserType: proxy.wrap(playwright.chromium),
     async finish() {
-      await browser.close()
+      // Disconnecting Playwright resets its CDP viewport override. Observe first: that
+      // host teardown is not an action performed by the original upstream test.
+      try {
+        await requestObservation(settings.outputDir)
+      } finally {
+        await browser.close()
+      }
       return {
         ...bookkeeping.evidence(),
         calls: proxy.calls,

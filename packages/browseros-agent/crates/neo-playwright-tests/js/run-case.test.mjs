@@ -426,7 +426,10 @@ test('observation and close remain inside cancellation ownership', async (t) => 
           },
         })
       },
-      runRunner: async ({ kind }) => outcome(kind),
+      runRunner: async ({ kind, observe }) => {
+        await observe()
+        return outcome(kind)
+      },
     })
     assert.equal(starts, 1)
     assert.equal(closes, 1)

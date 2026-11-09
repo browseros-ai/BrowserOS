@@ -8,6 +8,7 @@ import path from 'node:path'
 import { OwnedBrowser } from './browser.mjs'
 import { codecFactory } from './codec.mjs'
 import { nativeScript } from './native.mjs'
+import { observationFence } from './observation-fence.mjs'
 import { source } from './prepare.mjs'
 
 const evidenceCodec = codecFactory({
@@ -196,7 +197,7 @@ async function cleanupRunnerGroup(pid, errors, { groupGraceMs, killMs }) {
 }
 
 export async function runner(
-  { overlay, outputDir, entry, port, kind, engine, signal },
+  { overlay, outputDir, entry, port, kind, engine, signal, observe },
   {
     spawnChild = spawn,
     cli = path.join(source, 'packages/playwright/cli.js'),
@@ -295,6 +296,7 @@ export async function runner(
   signal?.addEventListener('abort', onAbort, { once: true })
   if (signal?.aborted) onAbort()
   let exit
+  const fence = observe ? observationFence(outputDir, observe, signal) : null
   try {
     exit = await Promise.race([exited, incompleteExit])
     await cleanupRunnerGroup(child.pid, errors, { groupGraceMs, killMs })
@@ -303,6 +305,7 @@ export async function runner(
     clearTimeout(killTimer)
     clearTimeout(reapTimer)
     signal?.removeEventListener('abort', onAbort)
+    await fence?.stop()
   }
   const read = (file) => {
     try {
@@ -334,12 +337,21 @@ export async function runner(
   const calls = fs.existsSync(journal) ? read(journal) : null
   if (!calls && !skipped)
     errors.push('Engine fixture did not produce a journal')
+  if (fence?.state.error) errors.push(fence.state.error)
+  if (fence && !fence.state.requested && !skipped)
+    errors.push('Engine fixture did not request final observation')
   return {
     kind,
     exit,
     runner: raw,
     journal: calls,
     infrastructureErrors: errors,
+    observation: fence?.state.observation
+      ? {
+          status: fence.state.observation.status,
+          data: evidenceCodec.encode(fence.state.observation),
+        }
+      : undefined,
   }
 }
 
@@ -429,13 +441,9 @@ export async function runCase(
           kind,
           engine,
           signal,
+          observe: () => cancellable(browser.snapshot(), signal),
         })
         check(signal)
-        const observation = await cancellable(browser.snapshot(), signal)
-        pair.phases[kind].observation = {
-          status: observation.status,
-          data: evidenceCodec.encode(observation),
-        }
         pair.phases[kind].pageId = browser.pageId
       } catch (error) {
         errors.push(String(error.stack || error))
