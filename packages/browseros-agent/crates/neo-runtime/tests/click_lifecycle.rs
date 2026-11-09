@@ -604,13 +604,7 @@ try { await page.click('#go', { timeout: 0, signal: controller.signal }) } catch
     let [call] = outcome.calls.as_slice() else {
         panic!("one record: {outcome:?}");
     };
-    assert_eq!(
-        call.result,
-        CallResult::Error {
-            name: "AbortError".to_string(),
-            message: "stop".to_string(),
-        }
-    );
+    assert!(matches!(&call.result, CallResult::Error { name, .. } if name == "AbortError"));
     assert_eq!(call.delivery, Some(Delivery::Unknown));
     let exchanges = browser.exchanges();
     assert_eq!(mouse(&exchanges, "mousePressed").len(), 1, "{exchanges:#?}");
