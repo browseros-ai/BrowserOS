@@ -91,6 +91,7 @@ pub(crate) static PAGE_EXPOSE_BINDING_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 /// Neo: `BrowserContext.exposeBinding`'s trace metadata
 /// (`neo-runtime-spec/spec/playwright/browserContext.yml`).
@@ -103,6 +104,7 @@ pub(crate) static CONTEXT_EXPOSE_BINDING_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 /// Neo: `BindingCall.resolve`'s trace metadata (`neo-runtime-spec/spec/playwright/playwright.yml`).
 pub(crate) static BINDING_CALL_RESOLVE_META: MethodMeta = MethodMeta {
@@ -114,6 +116,7 @@ pub(crate) static BINDING_CALL_RESOLVE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: true,
     flags: &[],
+    params: &[],
 };
 /// Neo: `BindingCall.reject`'s trace metadata (`neo-runtime-spec/spec/playwright/playwright.yml`).
 pub(crate) static BINDING_CALL_REJECT_META: MethodMeta = MethodMeta {
@@ -125,6 +128,7 @@ pub(crate) static BINDING_CALL_REJECT_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: true,
     flags: &[],
+    params: &[],
 };
 
 /// A binding command, routed by `method_router.rs`.

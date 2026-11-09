@@ -205,3 +205,21 @@ interfaces:
 # of every protocol call; it carries the call's timeout, which is never a command parameter.
 types:
   - Metadata
+
+# What a trace may keep of a served command's params (`MethodMeta.params`). The translator gives
+# every param a kind from its Playwright type: booleans, numbers and enums are kept, a `selector`
+# is a selector, a `url` or `referer` a URL, `binary` is bytes, and any other string is a secret,
+# of which a trace keeps only the length. List a param here, by its path in the params, only when
+# its string names what the call reads or picks rather than what it writes. Kinds: plain,
+# selector, url, key, secret, binary. A path the command does not have fails the translator.
+trace:
+  Frame:
+    press:
+      key: key
+    getAttribute:
+      name: plain
+    # An option's value or label picks an option the page offers; it is not a secret.
+    selectOption:
+      "options[].valueOrLabel": plain
+      "options[].value": plain
+      "options[].label": plain

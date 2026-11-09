@@ -59,6 +59,7 @@ pub(crate) static PAGE_ADD_INIT_SCRIPT_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 /// Neo: `BrowserContext.addInitScript`'s trace metadata
 /// (`neo-runtime-spec/spec/playwright/browserContext.yml`).
@@ -71,6 +72,7 @@ pub(crate) static CONTEXT_ADD_INIT_SCRIPT_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 /// Neo: `Disposable.dispose`'s trace metadata (`neo-runtime-spec/spec/playwright/core.yml`).
 pub(crate) static DISPOSABLE_DISPOSE_META: MethodMeta = MethodMeta {
@@ -82,6 +84,7 @@ pub(crate) static DISPOSABLE_DISPOSE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: true,
     flags: &[],
+    params: &[],
 };
 
 /// An init script command, routed by `method_router.rs`.

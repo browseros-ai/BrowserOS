@@ -9,9 +9,10 @@
 
 use crate::contract::{
     Body, Channel, Crossing, FieldType, HandleKindRef, InjectedModule, MemberKind, PageCall,
-    ServeModule, ServedInterface, Struct, TypeDef, Union, Variant,
+    ParamKind, ServeModule, ServedCommand, ServedInterface, Struct, TypeDef, Union, Variant,
+    field_ident,
 };
-use crate::dialect::{Flag, Group, Meta};
+use crate::dialect::{Flag, Group};
 use crate::output::{self, MAX_WIDTH};
 
 /// Renders `src/serve.rs`.
@@ -40,7 +41,14 @@ pub fn serve(module: &ServeModule, sha256: &str) -> String {
     if commands.clone().any(|command| command.meta.group.is_some()) {
         call_items.push("MethodGroup");
     }
-    call_items.extend(["MethodMeta", "Sealed"]);
+    call_items.push("MethodMeta");
+    if commands
+        .clone()
+        .any(|command| !command.param_shapes.is_empty())
+    {
+        call_items.extend(["ParamKind", "ParamShape"]);
+    }
+    call_items.push("Sealed");
     let mut imports = vec!["use serde::{Deserialize, Serialize};".to_owned()];
     if !module.interfaces.is_empty() || uses_json(&module.types) {
         imports.push("use serde_json::Value;".to_owned());
@@ -74,13 +82,17 @@ pub fn serve(module: &ServeModule, sha256: &str) -> String {
             out.push(String::new());
             out.push(format!("impl Command for {} {{", command.params));
             out.push(format!("    type Result = {};", command.result));
-            meta(&mut out, &interface.name, &command.method, &command.meta);
+            meta(&mut out, &interface.name, command);
             out.push(format!(
                 "    const VOID_RESULT: bool = {};",
                 command.void_result
             ));
             out.push("}".to_owned());
         }
+    }
+    if !module.interfaces.is_empty() {
+        out.push(String::new());
+        param_shape_tests(&mut out, module);
     }
     lines(&out)
 }
@@ -474,7 +486,9 @@ fn call_enum(out: &mut Vec<String>, interface: &ServedInterface) {
 }
 
 /// `const META` of a served command.
-fn meta(out: &mut Vec<String>, interface: &str, method: &str, meta: &Meta) {
+fn meta(out: &mut Vec<String>, interface: &str, command: &ServedCommand) {
+    let method = &command.method;
+    let meta = &command.meta;
     let text = |text: &Option<String>| {
         text.as_ref()
             .map_or_else(|| "None".to_owned(), |text| format!("Some({text:?})"))
@@ -520,9 +534,170 @@ fn meta(out: &mut Vec<String>, interface: &str, method: &str, meta: &Meta) {
         format!("        render_params: &[{}],", render_params.join(", ")),
         format!("        internal: {},", meta.internal),
         format!("        flags: &[{}],", flags.join(", ")),
-        "    };".to_owned(),
     ] {
         out.push(line);
+    }
+    if command.param_shapes.is_empty() {
+        out.push("        params: &[],".to_owned());
+    } else {
+        out.push("        params: &[".to_owned());
+        for shape in &command.param_shapes {
+            out.push(format!(
+                "            ParamShape {{ path: {:?}, kind: ParamKind::{} }},",
+                shape.path,
+                kind_variant(shape.kind)
+            ));
+        }
+        out.push("        ],".to_owned());
+    }
+    out.push("    };".to_owned());
+}
+
+fn kind_variant(kind: ParamKind) -> &'static str {
+    match kind {
+        ParamKind::Plain => "Plain",
+        ParamKind::Selector => "Selector",
+        ParamKind::Url => "Url",
+        ParamKind::Key => "Key",
+        ParamKind::Secret => "Secret",
+        ParamKind::Binary => "Binary",
+    }
+}
+
+/// One test per served command, checking its `params` against its params type: a value of the
+/// type holding every field it can decodes and encodes back unchanged, so the value names only
+/// the type's fields, and every leaf of it has a kind. A field the shapes miss, from a
+/// translator bug or a hand edit, fails `cargo test`.
+fn param_shape_tests(out: &mut Vec<String>, module: &ServeModule) {
+    let commands: Vec<&ServedCommand> = module
+        .interfaces
+        .iter()
+        .flat_map(|interface| &interface.commands)
+        .collect();
+    let mut params: Vec<&str> = commands
+        .iter()
+        .map(|command| command.params.as_str())
+        .collect();
+    params.sort_unstable();
+    for line in [
+        "#[cfg(test)]".to_owned(),
+        "mod tests {".to_owned(),
+        "    use serde_json::Value;".to_owned(),
+        String::new(),
+    ] {
+        out.push(line);
+    }
+    let mut imports = Vec::new();
+    use_list(&mut imports, "super", &params);
+    out.extend(imports.into_iter().map(|line| format!("    {line}")));
+    for line in [
+        "    use crate::call::Command;",
+        "",
+        "    /// `C`'s `MethodMeta.params` against `sample`, a value of `C` with every field `C` can hold.",
+        "    fn covers<C: Command>(sample: &str) {",
+        "        let sample: Value = serde_json::from_str(sample).expect(\"the sample is JSON\");",
+        "        let params: C = serde_json::from_value(sample.clone()).expect(\"the sample decodes\");",
+        "        let encoded = serde_json::to_value(&params).expect(\"the params encode\");",
+        "        assert_eq!(encoded, sample, \"the sample holds only fields of the params type\");",
+        "        let mut paths = Vec::new();",
+        "        leaves(&sample, \"\", &mut paths);",
+        "        for path in paths {",
+        "            let covered = C::META.params.iter().any(|shape| {",
+        "                path.strip_prefix(shape.path).is_some_and(|rest| {",
+        "                    rest.is_empty() || rest.starts_with('.') || rest.starts_with(\"[]\")",
+        "                })",
+        "            });",
+        "            assert!(covered, \"{}.{} has no kind for {path}\", C::META.interface, C::META.method);",
+        "        }",
+        "    }",
+        "",
+        "    /// The path of every scalar in `value`, as `ParamShape::path` writes paths.",
+        "    fn leaves(value: &Value, path: &str, paths: &mut Vec<String>) {",
+        "        match value {",
+        "            Value::Object(fields) => {",
+        "                for (key, field) in fields {",
+        "                    let path = if path.is_empty() { key.clone() } else { format!(\"{path}.{key}\") };",
+        "                    leaves(field, &path, paths);",
+        "                }",
+        "            }",
+        "            Value::Array(items) => {",
+        "                for item in items {",
+        "                    leaves(item, &format!(\"{path}[]\"), paths);",
+        "                }",
+        "            }",
+        "            _ => paths.push(path.to_owned()),",
+        "        }",
+        "    }",
+    ] {
+        out.push(line.to_owned());
+    }
+    for command in commands {
+        let name = field_ident(&command.params).unwrap_or_else(|| command.params.to_lowercase());
+        let sample = sample(
+            &FieldType::Ref(command.params.clone()),
+            &module.types,
+            &mut Vec::new(),
+        )
+        .unwrap_or_else(|| "{}".to_owned());
+        // A raw string only when the sample needs one, so clippy finds no needless raw string.
+        let literal = if sample.contains('"') {
+            format!("r#\"{sample}\"#")
+        } else {
+            format!("\"{sample}\"")
+        };
+        out.push(String::new());
+        out.push("    #[test]".to_owned());
+        out.push(format!("    fn {name}_cover_every_field() {{"));
+        out.push(format!("        covers::<{}>({literal});", command.params));
+        out.push("    }".to_owned());
+    }
+    out.push("}".to_owned());
+}
+
+/// A value of `ty` holding every field it can, as JSON text; `None` when no value of it can
+/// exist, such as a reference to an interface Neo does not implement. A struct inside itself
+/// (`SerializedValue`) is sampled once: inside, its own type is absent, so its optional fields
+/// and arrays of it come out empty.
+fn sample(ty: &FieldType, types: &[TypeDef], open: &mut Vec<String>) -> Option<String> {
+    match ty {
+        FieldType::String | FieldType::Json => Some("\"s\"".to_owned()),
+        FieldType::Base64 => Some("\"AAAA\"".to_owned()),
+        FieldType::Bool => Some("true".to_owned()),
+        FieldType::Int => Some("1".to_owned()),
+        FieldType::Float => Some("1.5".to_owned()),
+        FieldType::Array(items) => Some(format!(
+            "[{}]",
+            sample(items, types, open).unwrap_or_default()
+        )),
+        FieldType::Handle(_) => None,
+        FieldType::Ref(name) | FieldType::Boxed(name) => {
+            let ty = types.iter().find(|ty| ty.name == *name)?;
+            match &ty.body {
+                Body::Struct(fields) if !open.contains(name) => {
+                    open.push(name.clone());
+                    let mut entries = Vec::new();
+                    for field in &fields.fields {
+                        match sample(&field.ty, types, open) {
+                            Some(value) => entries.push(format!("{:?}:{value}", field.wire)),
+                            None if field.optional => {}
+                            None => {
+                                open.pop();
+                                return None;
+                            }
+                        }
+                    }
+                    open.pop();
+                    Some(format!("{{{}}}", entries.join(",")))
+                }
+                Body::Enum(variants) => variants
+                    .first()
+                    .map(|variant| format!("{:?}", variant.literal)),
+                Body::Channel(channel) => {
+                    channel.implemented.then(|| "{\"guid\":\"g\"}".to_owned())
+                }
+                Body::Struct(_) | Body::Union(_) | Body::Handle => None,
+            }
+        }
     }
 }
 

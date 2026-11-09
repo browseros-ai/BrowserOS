@@ -51,6 +51,7 @@ pub(crate) static NEO_SCREENSHOT_META: MethodMeta = MethodMeta {
     render_params: &["type"],
     internal: false,
     flags: &[],
+    params: &[],
 };
 
 /// Neo: `ElementHandle.screenshot`'s trace metadata, as `neo-runtime-spec/spec/playwright/handles.yml`
@@ -65,6 +66,7 @@ pub(crate) static ELEMENT_HANDLE_SCREENSHOT_META: MethodMeta = MethodMeta {
     render_params: &["type"],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 
 /// The calls this module serves, routed by `method_router::route`.

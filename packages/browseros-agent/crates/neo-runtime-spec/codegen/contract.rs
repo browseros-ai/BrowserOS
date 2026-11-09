@@ -19,6 +19,11 @@
 //! - Inline types are hoisted as `{Owner}{Prop}`, with `Item` for array items. Every type name,
 //!   field and variant identifier is checked unique, and a recursive reference that no array
 //!   breaks is boxed.
+//! - Every served command lists its params with what a trace may keep of each
+//!   ([`ParamKind`]), derived from the Playwright type: booleans, numbers and enums are kept, a
+//!   `selector` is a selector, a `url` or `referer` a URL, `binary` is bytes, and any other
+//!   string is a secret. `serve.yml`'s `trace:` section overrides a param by its path, and an
+//!   override naming a param the command lacks is refused.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -68,6 +73,70 @@ pub struct ServedCommand {
     /// and its client resolves `undefined`, not `{}`.
     pub void_result: bool,
     pub meta: Meta,
+    /// Every param path in the params type, in field order, with its kind.
+    pub param_shapes: Vec<ParamShape>,
+}
+
+/// One param path of a served command and what a trace may keep of its value
+/// (`MethodMeta.params`).
+pub struct ParamShape {
+    /// JSON keys joined by `.`, with `[]` for an array's items, such as `options[].value`.
+    pub path: String,
+    pub kind: ParamKind,
+}
+
+/// The library's `ParamKind`, which the translator cannot import: it builds the library empty.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ParamKind {
+    Plain,
+    Selector,
+    Url,
+    Key,
+    Secret,
+    Binary,
+}
+
+impl ParamKind {
+    const ALL: [ParamKind; 6] = [
+        ParamKind::Plain,
+        ParamKind::Selector,
+        ParamKind::Url,
+        ParamKind::Key,
+        ParamKind::Secret,
+        ParamKind::Binary,
+    ];
+
+    /// Its name in `serve.yml`, which is also its variant name in lowercase.
+    pub fn name(self) -> &'static str {
+        match self {
+            ParamKind::Plain => "plain",
+            ParamKind::Selector => "selector",
+            ParamKind::Url => "url",
+            ParamKind::Key => "key",
+            ParamKind::Secret => "secret",
+            ParamKind::Binary => "binary",
+        }
+    }
+
+    /// The kind of a string param, by its name alone: Playwright types a selector, a URL and a
+    /// typed value all as `string`, so the name is what tells them apart. A string it cannot
+    /// name is a secret, so a param that Playwright adds later is never kept by mistake.
+    fn of_string(name: &str) -> ParamKind {
+        match name {
+            "selector" => ParamKind::Selector,
+            "url" | "referer" => ParamKind::Url,
+            _ => ParamKind::Secret,
+        }
+    }
+}
+
+/// One entry of `serve.yml`'s `trace:` section.
+struct KindOverride {
+    interface: String,
+    command: String,
+    path: String,
+    kind: ParamKind,
+    at: At,
 }
 
 /// `src/injected.rs` and `ts/injected.ts`: the page calls `neo-runtime` makes.
@@ -233,6 +302,7 @@ impl Contract {
 struct Selection<'protocol> {
     interfaces: Vec<Implemented<'protocol>>,
     types: Vec<(DefId, At)>,
+    overrides: Vec<KindOverride>,
 }
 
 /// An interface Neo implements, and the commands it serves on it.
@@ -249,15 +319,20 @@ fn read_selection<'p>(protocol: &'p Protocol, serve: &Node) -> Result<Selection<
     };
     if let Some((key, _)) = entries
         .iter()
-        .find(|(key, _)| key != "interfaces" && key != "types")
+        .find(|(key, _)| !matches!(key.as_str(), "interfaces" | "types" | "trace"))
     {
         return Err(at
             .key(key)
-            .error("is not a serve.yml key; expected interfaces or types".to_owned()));
+            .error("is not a serve.yml key; expected interfaces, types or trace".to_owned()));
     }
+    let overrides = match entries.iter().find(|(key, _)| key == "trace") {
+        Some((_, node)) => read_overrides(node, &at.key("trace"))?,
+        None => Vec::new(),
+    };
     let mut selection = Selection {
         interfaces: Vec::new(),
         types: Vec::new(),
+        overrides,
     };
     let Value::Map(interfaces) = &entry(entries, "interfaces", &at)?.value else {
         return Err(at
@@ -357,6 +432,80 @@ fn read_interface<'p>(
     Ok(Implemented { id, at, commands })
 }
 
+/// `trace:`: interface, then command, then param path, then the kind it records as. Whether each
+/// names a served command's param is checked once the commands are built ([`apply_overrides`]).
+fn read_overrides(node: &Node, at: &At) -> Result<Vec<KindOverride>, SpecError> {
+    fn map<'n>(node: &'n Node, at: &At, what: &str) -> Result<&'n [(String, Node)], SpecError> {
+        match &node.value {
+            Value::Map(entries) => Ok(entries),
+            _ => Err(at.error(format!("must map {what}"))),
+        }
+    }
+    let mut overrides = Vec::new();
+    for (interface, node) in map(node, at, "interfaces to their commands")? {
+        let at = at.key(interface);
+        for (command, node) in map(node, &at, "commands to their params")? {
+            let at = at.key(command);
+            for (path, node) in map(node, &at, "param paths to kinds")? {
+                let at = at.key(path);
+                let names = ParamKind::ALL.map(ParamKind::name).join(", ");
+                let Value::Str(name) = &node.value else {
+                    return Err(at.error(format!("must be a param kind: one of {names}")));
+                };
+                let Some(kind) = ParamKind::ALL.into_iter().find(|kind| kind.name() == name) else {
+                    return Err(at.error(format!(
+                        "is not a param kind (\"{name}\"); expected one of {names}"
+                    )));
+                };
+                overrides.push(KindOverride {
+                    interface: interface.clone(),
+                    command: command.clone(),
+                    path: path.clone(),
+                    kind,
+                    at,
+                });
+            }
+        }
+    }
+    Ok(overrides)
+}
+
+/// Applies `trace:` to the served commands, refusing an entry that names a command Neo does not
+/// serve or a param its command does not have: a misspelt path would otherwise leave the param
+/// at its derived kind without a word.
+fn apply_overrides(
+    interfaces: &mut [ServedInterface],
+    overrides: &[KindOverride],
+) -> Result<(), SpecError> {
+    for entry in overrides {
+        let command = interfaces
+            .iter_mut()
+            .filter(|interface| interface.name == entry.interface)
+            .flat_map(|interface| interface.commands.iter_mut())
+            .find(|command| command.method == entry.command);
+        let Some(command) = command else {
+            return Err(entry.at.error(format!(
+                "names {}.{}, which serve.yml does not serve",
+                entry.interface, entry.command
+            )));
+        };
+        let paths = command.param_shapes.iter().map(|shape| shape.path.as_str());
+        let suggestion = did_you_mean(&entry.path, paths);
+        let Some(shape) = command
+            .param_shapes
+            .iter_mut()
+            .find(|shape| shape.path == entry.path)
+        else {
+            return Err(entry.at.error(format!(
+                "names no param of {}.{}{suggestion}",
+                entry.interface, entry.command
+            )));
+        };
+        shape.kind = entry.kind;
+    }
+    Ok(())
+}
+
 /// The definition `name` in Playwright's files, if `accept` takes it.
 fn playwright_def(protocol: &Protocol, name: &str, accept: impl Fn(&Def) -> bool) -> Option<DefId> {
     protocol.get(name).filter(|id| {
@@ -445,6 +594,7 @@ fn build_serve(protocol: &Protocol, selection: &Selection<'_>) -> Result<ServeMo
         builder.add_named(*id)?;
     }
     let types = builder.finish();
+    apply_overrides(&mut interfaces, &selection.overrides)?;
 
     check_inhabited(protocol, selection, &types)?;
     for interface in &mut interfaces {
@@ -749,6 +899,13 @@ impl<'protocol> Builder<'protocol> {
             exported: true,
         };
         self.add_struct(head, returns, &at.key("returns"), Place::Plain)?;
+        let mut param_shapes = Vec::new();
+        self.shape_props(
+            command.params.as_deref().unwrap_or_default(),
+            "",
+            &mut Vec::new(),
+            &mut param_shapes,
+        );
         Ok(ServedCommand {
             method: command.name.clone(),
             variant: title_case(&command.name),
@@ -756,7 +913,78 @@ impl<'protocol> Builder<'protocol> {
             result,
             void_result: matches!(command.returns, Returns::Nothing),
             meta: command.meta.clone(),
+            param_shapes,
         })
+    }
+
+    /// The shapes of `props` under `prefix`. `named` holds the named objects on the current
+    /// path, so a type that contains itself (`SerializedValue`) ends in one shape at the first
+    /// repeat instead of recursing forever.
+    fn shape_props(
+        &self,
+        props: &[Prop],
+        prefix: &str,
+        named: &mut Vec<DefId>,
+        shapes: &mut Vec<ParamShape>,
+    ) {
+        for prop in props {
+            let path = if prefix.is_empty() {
+                prop.name.clone()
+            } else {
+                format!("{prefix}.{}", prop.name)
+            };
+            self.shape_type(&prop.ty, &prop.name, path, named, shapes);
+        }
+    }
+
+    /// The shapes of a value of type `ty` at `path`, for the property `name`.
+    fn shape_type(
+        &self,
+        ty: &Type,
+        name: &str,
+        path: String,
+        named: &mut Vec<DefId>,
+        shapes: &mut Vec<ParamShape>,
+    ) {
+        let kind = match ty {
+            Type::String => ParamKind::of_string(name),
+            Type::Boolean | Type::Int | Type::Float | Type::Enum(_) | Type::Undefined => {
+                ParamKind::Plain
+            }
+            Type::Binary => ParamKind::Binary,
+            // A channel crosses as `{guid}`, an object id the runtime itself minted.
+            Type::Channel(_) | Type::AnyChannel => {
+                shapes.push(ParamShape {
+                    path: format!("{path}.guid"),
+                    kind: ParamKind::Plain,
+                });
+                return;
+            }
+            Type::Array(items) => {
+                self.shape_type(items, name, format!("{path}[]"), named, shapes);
+                return;
+            }
+            Type::Object(props) => {
+                self.shape_props(props, &path, named, shapes);
+                return;
+            }
+            Type::Named(id) => match &self.protocol.def(*id).kind {
+                DefKind::Enum(_) => ParamKind::Plain,
+                DefKind::Object(_) if named.contains(id) => ParamKind::Secret,
+                DefKind::Object(props) => {
+                    named.push(*id);
+                    self.shape_props(props, &path, named, shapes);
+                    named.pop();
+                    return;
+                }
+                DefKind::Union(_) | DefKind::Mixin | DefKind::Interface(_) | DefKind::Handle => {
+                    ParamKind::Secret
+                }
+            },
+            // Any JSON, or what only page calls carry: nothing says what its strings hold.
+            Type::Json | Type::Union(_) | Type::Element | Type::Handle(_) => ParamKind::Secret,
+        };
+        shapes.push(ParamShape { path, kind });
     }
 
     fn page_call(&mut self, def: &Def, command: &Command) -> Result<PageCall, SpecError> {

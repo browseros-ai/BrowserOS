@@ -52,6 +52,7 @@ macro_rules! clock_meta {
             render_params: $params,
             internal: false,
             flags: &[],
+            params: &[],
         };
     };
 }

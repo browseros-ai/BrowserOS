@@ -846,3 +846,80 @@ fn a_void_command_replies_without_a_result() {
     assert!(void("PagePingParams"), "ping declares no returns");
     assert!(!void("PageTitleParams"), "title returns its value");
 }
+
+/// The small spec's `Page` with a command whose params hold one of each kind of value.
+fn with_fill() -> String {
+    PLAYWRIGHT.replace(
+        "    reload:\n",
+        "    fill:
+      title: Fill
+      subtitle: '{selector}'
+      parameters:
+        selector: string
+        value: string
+        url: string?
+        force: boolean?
+        mode: Mode?
+        data: binary?
+        options:
+          type: array?
+          items:
+            type: object
+            properties:
+              label: string
+    reload:\n",
+    )
+}
+
+fn generate_fill(serve: &str) -> Result<Vec<Rendered>, String> {
+    generate_from(&[
+        ("playwright/a.yml", &with_fill()),
+        ("serve.yml", serve),
+        ("injected.yml", INJECTED),
+    ])
+}
+
+#[test]
+fn param_kinds_come_from_types_and_trace_overrides() {
+    let serve = "interfaces:\n  Page: [title, fill]\ntypes: []\ntrace:\n  Page:\n    fill:\n      \"options[].label\": plain\n";
+    let outputs = generate_fill(serve).unwrap_or_else(|error| panic!("{error}"));
+    let rust = rendered(&outputs, "src/serve.rs");
+    for (path, kind) in [
+        ("selector", "Selector"),
+        ("value", "Secret"),
+        ("url", "Url"),
+        ("force", "Plain"),
+        ("mode", "Plain"),
+        ("data", "Binary"),
+        ("options[].label", "Plain"),
+    ] {
+        let shape = format!("ParamShape {{ path: {path:?}, kind: ParamKind::{kind} }},");
+        assert!(rust.contains(&shape), "{path} is {kind}: {rust}");
+    }
+}
+
+#[test]
+fn a_trace_override_must_name_a_served_param_and_a_kind() {
+    let serve =
+        |trace: &str| format!("interfaces:\n  Page: [title, fill]\ntypes: []\ntrace:\n{trace}");
+    let missing = generate_fill(&serve("  Page:\n    fill:\n      valeu: plain\n"))
+        .err()
+        .expect("a param fill does not have");
+    assert!(
+        missing.contains(
+            "trace.Page.fill.valeu: names no param of Page.fill (did you mean \"value\"?)"
+        ),
+        "{missing}"
+    );
+    let unserved = generate_fill(&serve("  Page:\n    reload:\n      response: plain\n"))
+        .err()
+        .expect("a command serve.yml does not serve");
+    assert!(
+        unserved.contains("names Page.reload, which serve.yml does not serve"),
+        "{unserved}"
+    );
+    let kind = generate_fill(&serve("  Page:\n    fill:\n      value: hidden\n"))
+        .err()
+        .expect("a kind that does not exist");
+    assert!(kind.contains("is not a param kind (\"hidden\")"), "{kind}");
+}

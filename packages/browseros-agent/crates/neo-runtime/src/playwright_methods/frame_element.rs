@@ -37,6 +37,7 @@ pub(crate) static FRAME_ELEMENT_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 
 /// Serves `Frame.frameElement`: the frame's owner element, adopted into its parent's main world.

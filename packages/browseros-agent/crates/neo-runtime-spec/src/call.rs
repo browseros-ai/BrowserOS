@@ -48,6 +48,7 @@ pub(crate) use sealed::Sealed;
 ///         render_params: &[],
 ///         internal: false,
 ///         flags: &[],
+///         params: &[],
 ///     };
 ///     const VOID_RESULT: bool = true;
 /// }
@@ -422,6 +423,10 @@ pub struct MethodMeta {
     pub internal: bool,
     /// Tracing and debugging flags, in Playwright's order.
     pub flags: &'static [MethodFlag],
+    /// Every param, by JSON path, with what a trace may keep of its value. Generated from
+    /// Playwright's types for a served command (`spec/serve.yml`'s `trace:` overrides it), and
+    /// written by hand on a Neo-only command's metadata.
+    pub params: &'static [ParamShape],
 }
 
 impl MethodMeta {
@@ -430,6 +435,51 @@ impl MethodMeta {
     pub fn has(&self, flag: MethodFlag) -> bool {
         self.flags.contains(&flag)
     }
+
+    /// The kind of the param at `path`, written as [`ParamShape::path`] is; `None` for a path
+    /// the command does not have.
+    #[must_use]
+    pub fn param_kind(&self, path: &str) -> Option<ParamKind> {
+        self.params
+            .iter()
+            .find(|shape| shape.path == path)
+            .map(|shape| shape.kind)
+    }
+}
+
+/// One param of a command, as a trace records it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParamShape {
+    /// JSON keys from the params object, joined by `.`, with `[]` for an array's items:
+    /// `selector`, `position.x`, `options[].value`. Mostly leaves; a path may also name an
+    /// object whose type contains itself, such as `arg.value.a[]` (`SerializedValue`), which
+    /// stands for everything under it.
+    pub path: &'static str,
+    pub kind: ParamKind,
+}
+
+/// What a trace may keep of a param's value. Traces leave the runtime, and a call's params can
+/// hold what the agent typed into a page, so the default is to keep nothing: the translator
+/// derives each kind from the param's Playwright type, and any string it cannot classify is a
+/// [`ParamKind::Secret`]. A string the params hold at a path their command does not list is
+/// read as a secret too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ParamKind {
+    /// Kept as sent: booleans, numbers, enums, and strings that name what a call reads, not
+    /// what it writes.
+    Plain,
+    /// A Playwright selector, kept: it says which element the call meant.
+    Selector,
+    /// A URL: its scheme, host, path and query keys are kept; query values, userinfo and the
+    /// fragment are not.
+    Url,
+    /// A key for `press`: named keys (`Enter`, `Control+A`) are kept, a character it would
+    /// type is not.
+    Key,
+    /// Any other string: only its length is kept.
+    Secret,
+    /// Base64 bytes: only their size is kept.
+    Binary,
 }
 
 /// Playwright's command `group`.

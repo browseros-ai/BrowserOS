@@ -52,6 +52,10 @@
 //!    closest one.
 //! 2. Regenerate. `FrameCall` gains a variant, so `neo-runtime`'s exhaustive `match` fails to
 //!    compile until the command has a handler.
+//! 3. Read the command's `MethodMeta::params` in `src/serve.rs`: what a trace keeps of each
+//!    param, derived from its type. A string param is a [`ParamKind::Secret`] unless it is a
+//!    `selector`, `url` or `referer`; one that names what the call reads rather than what it
+//!    writes (an attribute name, say) is overridden under `trace:` in `spec/serve.yml`.
 //!
 //! # Add a page call
 //!
@@ -103,7 +107,7 @@ mod spec_hash;
 pub use binary::Binary;
 pub use call::{
     CallDecodeError, Command, Element, Handle, HandleId, HandleKind, InjectedCall, MethodFlag,
-    MethodGroup, MethodMeta, PageResult, Properties, ResultDecodeError,
+    MethodGroup, MethodMeta, PageResult, ParamKind, ParamShape, Properties, ResultDecodeError,
 };
 pub use spec_hash::SPEC_SHA256;
 

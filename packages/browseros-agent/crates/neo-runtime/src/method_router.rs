@@ -171,6 +171,7 @@ static WAIT_FOR_URL_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
     interface: "Frame",
@@ -181,6 +182,7 @@ static WAIT_FOR_LOAD_STATE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 // Playwright's client `waitForNavigation` (`@apiCall({ title: 'Wait for navigation' })`). A
 // glob or RegExp `url` is one call; a predicate is a cursor the realm steps through
@@ -194,6 +196,7 @@ static WAIT_FOR_NAVIGATION_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 static NEXT_NAVIGATION_META: MethodMeta = MethodMeta {
     interface: "Frame",
@@ -204,6 +207,7 @@ static NEXT_NAVIGATION_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 static FINISH_NAVIGATION_META: MethodMeta = MethodMeta {
     interface: "Frame",
@@ -214,6 +218,7 @@ static FINISH_NAVIGATION_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 static RELEASE_NAVIGATION_META: MethodMeta = MethodMeta {
     interface: "Frame",
@@ -224,6 +229,7 @@ static RELEASE_NAVIGATION_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 // `serve` replies to a pointer action with `{id}` and no `result`, which is right only while
 // Playwright's spec declares no `returns` for `Frame.click`, `dblclick`, `hover` and `tap`. A

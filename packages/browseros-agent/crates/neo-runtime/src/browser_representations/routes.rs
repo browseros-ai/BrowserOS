@@ -108,6 +108,7 @@ pub(crate) static FETCH_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 
 /// `route.fetch`'s overrides and redirect bound, as the SDK sends them.

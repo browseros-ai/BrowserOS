@@ -68,6 +68,7 @@ pub(crate) static SCROLL_INTO_VIEW_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot],
+    params: &[],
 };
 
 /// Neo: the trace record of `neo:selectText`, titled as Playwright's `ElementHandle.selectText`.
@@ -80,6 +81,7 @@ pub(crate) static SELECT_TEXT_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot],
+    params: &[],
 };
 
 /// Neo: the trace record of `neo:boundingBox`, titled as Playwright's `ElementHandle.boundingBox`.
@@ -92,6 +94,7 @@ pub(crate) static BOUNDING_BOX_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 
 /// Neo: the params of `neo:scrollIntoViewIfNeeded` and `neo:boundingBox`, kept in step with

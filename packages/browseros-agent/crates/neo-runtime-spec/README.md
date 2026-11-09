@@ -39,7 +39,7 @@ against `ts/injected.ts`.
 | Path | Contents |
 | --- | --- |
 | `spec/playwright/` | Playwright's spec at the commit in `UPSTREAM`, with its `LICENSE` and `NOTICE` (Apache-2.0). Never edit. |
-| `spec/serve.yml`, `spec/injected.yml` | Neo's selection and page calls. |
+| `spec/serve.yml`, `spec/injected.yml` | Neo's selection and page calls; `serve.yml`'s `trace:` overrides what traces keep of a param. |
 | `codegen/` | The translator, the crate's `codegen` example. `main.rs` maps its stages. |
 | `src/lib.rs`, `src/call.rs` | Hand-written: the crate docs, the sealed call traits, and the freshness check. |
 | `src/serve.rs`, `src/injected.rs`, `src/spec_hash.rs`, `ts/` | Generated and committed. Never edit. |

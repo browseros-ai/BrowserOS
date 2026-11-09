@@ -114,6 +114,7 @@ pub(crate) static FRAME_EVALUATE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 /// Neo: `Frame.evaluateExpressionHandle`'s trace metadata, as
 /// `neo-runtime-spec/spec/playwright/frame.yml` declares it.
@@ -126,6 +127,7 @@ pub(crate) static FRAME_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 /// Neo: `JSHandle.evaluateExpression`'s trace metadata (also an `ElementHandle`'s), as
 /// `neo-runtime-spec/spec/playwright/handles.yml` declares it.
@@ -138,6 +140,7 @@ pub(crate) static HANDLE_EVALUATE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 /// Neo: `JSHandle.evaluateExpressionHandle`'s trace metadata, as
 /// `neo-runtime-spec/spec/playwright/handles.yml` declares it.
@@ -150,6 +153,7 @@ pub(crate) static HANDLE_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 /// Neo: `JSHandle.jsonValue`'s trace metadata, as `neo-runtime-spec/spec/playwright/handles.yml`
 /// declares it.
@@ -162,6 +166,7 @@ pub(crate) static HANDLE_JSON_VALUE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 /// Neo: `JSHandle.dispose`'s trace metadata, an internal command in
 /// `neo-runtime-spec/spec/playwright/handles.yml`.
@@ -174,6 +179,7 @@ pub(crate) static HANDLE_DISPOSE_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: true,
     flags: &[],
+    params: &[],
 };
 
 /// Playwright's `SerializedArgument` after neo-quickjs-injected ran Playwright's client and server
@@ -324,6 +330,7 @@ pub(crate) static FRAME_ADD_SCRIPT_TAG_META: MethodMeta = MethodMeta {
     render_params: &["url"],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 /// Neo: `Frame.addStyleTag`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
 pub(crate) static FRAME_ADD_STYLE_TAG_META: MethodMeta = MethodMeta {
@@ -335,6 +342,7 @@ pub(crate) static FRAME_ADD_STYLE_TAG_META: MethodMeta = MethodMeta {
     render_params: &["url"],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 
 /// Neo: `ElementHandle.dispatchEvent`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
@@ -347,6 +355,7 @@ pub(crate) static HANDLE_DISPATCH_EVENT_META: MethodMeta = MethodMeta {
     render_params: &["type"],
     internal: false,
     flags: &[MethodFlag::SlowMo, MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 
 /// Neo: `Frame.querySelector`'s trace metadata, as `neo-runtime-spec/spec/playwright/frame.yml`
@@ -360,6 +369,7 @@ pub(crate) static FRAME_QUERY_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot],
+    params: &[],
 };
 /// Neo: `Frame.querySelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
 pub(crate) static FRAME_QUERY_ALL_META: MethodMeta = MethodMeta {
@@ -371,6 +381,7 @@ pub(crate) static FRAME_QUERY_ALL_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot],
+    params: &[],
 };
 /// Neo: `Frame.evalOnSelector`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
 pub(crate) static FRAME_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
@@ -382,6 +393,7 @@ pub(crate) static FRAME_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 /// Neo: `Frame.evalOnSelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
 pub(crate) static FRAME_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
@@ -393,6 +405,7 @@ pub(crate) static FRAME_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 /// Neo: `Frame.waitForFunction`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
 pub(crate) static FRAME_WAIT_FOR_FUNCTION_META: MethodMeta = MethodMeta {
@@ -404,6 +417,7 @@ pub(crate) static FRAME_WAIT_FOR_FUNCTION_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 /// Neo: `ElementHandle.querySelector`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
 pub(crate) static ELEMENT_QUERY_META: MethodMeta = MethodMeta {
@@ -415,6 +429,7 @@ pub(crate) static ELEMENT_QUERY_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot],
+    params: &[],
 };
 /// Neo: `ElementHandle.querySelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
 pub(crate) static ELEMENT_QUERY_ALL_META: MethodMeta = MethodMeta {
@@ -426,6 +441,7 @@ pub(crate) static ELEMENT_QUERY_ALL_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot],
+    params: &[],
 };
 /// Neo: `ElementHandle.evalOnSelector`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
 pub(crate) static ELEMENT_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
@@ -437,6 +453,7 @@ pub(crate) static ELEMENT_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 /// Neo: `ElementHandle.evalOnSelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
 pub(crate) static ELEMENT_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
@@ -448,6 +465,7 @@ pub(crate) static ELEMENT_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
+    params: &[],
 };
 /// Neo: `JSHandle.getProperty`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
 pub(crate) static HANDLE_GET_PROPERTY_META: MethodMeta = MethodMeta {
@@ -459,6 +477,7 @@ pub(crate) static HANDLE_GET_PROPERTY_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 /// Neo: `JSHandle.getPropertyList`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
 pub(crate) static HANDLE_GET_PROPERTY_LIST_META: MethodMeta = MethodMeta {
@@ -470,6 +489,7 @@ pub(crate) static HANDLE_GET_PROPERTY_LIST_META: MethodMeta = MethodMeta {
     render_params: &[],
     internal: false,
     flags: &[],
+    params: &[],
 };
 
 /// A routed evaluation command.
