@@ -287,18 +287,38 @@ fn json_container_or_set(object: &CstObject, shape: StdioShape) -> CstObject {
 /// OpenCode before it nested servers under `mcp.servers`). Once the harness nests entries
 /// under `servers_key`, a leftover sibling at `top_level_key.<name>` is a stale duplicate
 /// that some agents reject, so drop it. Never touches the servers container itself.
-fn strip_legacy_entry(object: &CstObject, shape: StdioShape, name: &str) {
+fn heal_legacy_entry(object: &CstObject, container: &CstObject, shape: StdioShape, name: &str) {
     let Some(servers_key) = shape.servers_key else {
         return;
     };
     if name == servers_key {
         return;
     }
-    if let Some(section) = object.object_value(shape.top_level_key)
-        && let Some(legacy) = section.get(name)
+    let Some(section) = object.object_value(shape.top_level_key) else {
+        return;
+    };
+    let Some(legacy) = section.get(name) else {
+        return;
+    };
+    // Carry over a disable the user set on the old entry so moving it never silently
+    // re-enables a server. OpenCode's pre-servers schema used `enabled`, the nested schema
+    // uses `disabled`, so an `enabled: false` (or explicit `disabled: true`) on the old
+    // entry becomes `disabled: true` on the new one.
+    let was_disabled = legacy
+        .value()
+        .and_then(|value| value.to_serde_value())
+        .map(|value| {
+            value.get("disabled").and_then(serde_json::Value::as_bool) == Some(true)
+                || value.get("enabled").and_then(serde_json::Value::as_bool) == Some(false)
+        })
+        .unwrap_or(false);
+    if was_disabled
+        && let Some(entry) = container.object_value(name)
+        && entry.get("disabled").is_none()
     {
-        legacy.remove();
+        entry.append("disabled", CstInputValue::Bool(true));
     }
+    legacy.remove();
 }
 
 fn json_read(raw: &str, shape: StdioShape) -> Vec<String> {
@@ -396,7 +416,7 @@ fn json_add(
             container.append(name, value);
         }
     }
-    strip_legacy_entry(&object, shape, name);
+    heal_legacy_entry(&object, &container, shape, name);
     Ok(with_bom(root.to_string(), had_bom))
 }
 
@@ -673,6 +693,23 @@ mod tests {
         assert_eq!(value["mcp"]["servers"]["gh"]["type"], "local");
         assert!(value["mcp"]["servers"]["gh"].get("enabled").is_none());
         // The stale top-level entry is gone.
+        assert!(value["mcp"].get("gh").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn opencode_heal_preserves_a_disabled_legacy_entry() -> Result<(), Error> {
+        // A user who disabled the old entry (`enabled: false`) must not be silently
+        // re-enabled: the move carries the disable across as `disabled: true`.
+        let emitter = emitter(AgentId::OpenCode)?;
+        let raw = "{\n  \"mcp\": {\n    \"gh\": { \"type\": \"local\", \"command\": [\"old\"], \"enabled\": false }\n  }\n}\n";
+        let added = emitter.add(raw, "gh", &stdio())?;
+        let value: JsonValue = serde_json::from_str(&added).map_err(|error| Error::Config {
+            format: "test JSON",
+            message: error.to_string(),
+        })?;
+        assert_eq!(value["mcp"]["servers"]["gh"]["disabled"], true);
+        assert!(value["mcp"]["servers"]["gh"].get("enabled").is_none());
         assert!(value["mcp"].get("gh").is_none());
         Ok(())
     }
