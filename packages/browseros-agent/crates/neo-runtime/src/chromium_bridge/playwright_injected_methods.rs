@@ -44,7 +44,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::chromium_bridge::cdp::{self, dom, page, runtime};
+use crate::chromium_bridge::cdp::{self, Command, dom, page, runtime};
 use crate::playwright_methods::click::PageError;
 
 /// Neo's isolated world. Distinct from BrowserOS core's `browseros` and Playwright's
@@ -271,10 +271,13 @@ impl World {
         }
         let object = reply.object;
         let id = object.object_id.ok_or_else(|| {
-            PageError::Contract("DOM.resolveNode returned no objectId".to_string())
+            PageError::Contract(format!("{} returned no objectId", dom::ResolveNode::METHOD))
         })?;
         Handle::new(HandleId::new(id), object.subtype.as_deref()).ok_or_else(|| {
-            PageError::Contract("DOM.resolveNode returned a non-element owner".to_string())
+            PageError::Contract(format!(
+                "{} returned a non-element owner",
+                dom::ResolveNode::METHOD
+            ))
         })
     }
 
@@ -522,7 +525,8 @@ pub(crate) fn argument(value: Value) -> runtime::CallArgument {
 fn evaluated(reply: Value, call: &str) -> Result<RemoteObject, PageError> {
     let answer: CallFunctionOnResult = serde_json::from_value(reply).map_err(|error| {
         PageError::Contract(format!(
-            "Runtime.callFunctionOn for {call} answered: {error}"
+            "{} for {call} answered: {error}",
+            runtime::CallFunctionOn::METHOD
         ))
     })?;
     if let Some(details) = answer.exception_details {

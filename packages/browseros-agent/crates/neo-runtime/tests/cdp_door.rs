@@ -8,8 +8,10 @@
 //! a protocol method: a domain of browseros-cdp's pinned `protocol/protocol.json`, a dot and a
 //! lowercase method name (`"Protocol error (Page.navigate): …"`).
 //!
-//! A file's test code, from its first `#[cfg(test)]` on, may quote methods: its fixtures stand
-//! for what the wire carries. So may comments.
+//! A file's test module, from the `#[cfg(test)]` that opens it on, may quote methods: its
+//! fixtures stand for what the wire carries. So may comments. A test-only item above the test
+//! module (`#[cfg(test)] fn glue_key`) does not end the scan, so the production code after it is
+//! still checked.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -65,11 +67,18 @@ fn tokens() -> Regex {
     .unwrap_or_else(|error| panic!("the token pattern: {error}"))
 }
 
-/// `source` up to its first `#[cfg(test)]` line: the rest is the file's test code.
+/// `source` up to the `#[cfg(test)]` that opens a test module (the attribute, then a `mod`
+/// line): the rest is the file's test code. A `#[cfg(test)]` on any other item is skipped.
 fn non_test_code(source: &str) -> &str {
     let mut offset = 0;
-    for line in source.split_inclusive('\n') {
-        if line.trim_start().starts_with("#[cfg(test)]") {
+    let mut lines = source.split_inclusive('\n').peekable();
+    while let Some(line) = lines.next() {
+        let opens_test_module = line.trim_start().starts_with("#[cfg(test)]")
+            && lines.peek().is_some_and(|next| {
+                let next = next.trim_start();
+                next.starts_with("mod ") || next.starts_with("pub(crate) mod ")
+            });
+        if opens_test_module {
             return &source[..offset];
         }
         offset += line.len();
@@ -159,6 +168,9 @@ fn error(message: &str) -> String { format!("Protocol error (Page.navigate): {me
 const RAW: &str = r#"{"method": "DOM.describeNode"}"#;
 const WORD: &str = "Pages.list and Page.Navigate are no methods";
 #[cfg(test)]
+fn test_only() -> &'static str { "Page.reload" }
+const AFTER: &str = "DOM.focus";
+#[cfg(test)]
 mod tests {
     const FIXTURE: &str = "Page.frameNavigated";
 }
@@ -169,7 +181,7 @@ mod tests {
         .collect();
     assert_eq!(
         found,
-        [5, 7],
-        "a method in a string or raw string counts; comments, char literals, other words and test code do not"
+        [5, 7, 10, 11],
+        "a method in a string or raw string counts, test-only items above the test module included; comments, char literals, other words and the test module do not"
     );
 }
