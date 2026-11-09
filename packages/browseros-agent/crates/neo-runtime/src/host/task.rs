@@ -24,7 +24,7 @@ use crate::host::link::HostLink;
 use crate::host::presence::Presences;
 use crate::host::privacy::Taint;
 use crate::host::sessions::{Completion, Job, JobKind, Ledger, Phase};
-use crate::host::store::CallArtifacts;
+use crate::host::store::{CallArtifacts, StoreError};
 use crate::host::view::FollowView;
 use crate::host::{
     EpochMs, Host, HostError, HostOptions, RunPass, SessionKey, SessionView, TabRef,
@@ -517,17 +517,21 @@ impl Task {
         match command {
             Command::Admit { label, reply } => {
                 self.ledger.expire(Instant::now());
+                // An unchecked caller label may already be complete in the store: ending is
+                // final, so a lookup failure must force a successor rather than reopen it.
                 let known =
                     if let Some(label) = label.as_ref().filter(|key| !self.ledger.knows(key)) {
-                        self.store_knows(label).await
+                        self.store_knows(label).await.unwrap_or(true)
                     } else {
                         false
                     };
                 // Candidates are checked before insertion. Remapping a session after admission
                 // would leave successor pointers and pass accounting under a colliding key.
+                // If the store is unavailable, accept the random key (the lookup logs it):
+                // retrying cannot prove a successor or any other fresh key unique either.
                 let candidate = loop {
                     let key = SessionKey::mint();
-                    if !self.ledger.knows(&key) && !self.store_knows(&key).await {
+                    if !self.ledger.knows(&key) && !self.store_knows(&key).await.unwrap_or(false) {
                         break key;
                     }
                 };
@@ -569,17 +573,12 @@ impl Task {
         }
     }
 
-    async fn store_knows(&self, key: &SessionKey) -> bool {
-        self.host
-            .0
-            .options
-            .store
-            .knows(key)
-            .await
-            .unwrap_or_else(|error| {
-                warn!(%error, session = %key, "host admission could not check store");
-                false
-            })
+    async fn store_knows(&self, key: &SessionKey) -> Result<bool, StoreError> {
+        let result = self.host.0.options.store.knows(key).await;
+        if let Err(error) = &result {
+            warn!(%error, session = %key, "host admission could not check store");
+        }
+        result
     }
 
     fn persist(&mut self, artifacts: Artifacts) {
@@ -935,6 +934,7 @@ mod tests {
         release: Notify,
         checks: Mutex<Vec<SessionKey>>,
         collide: AtomicBool,
+        lookup_failed: AtomicBool,
         admission_blocked: AtomicBool,
         admission_waiting: Notify,
         admission_release: Notify,
@@ -951,6 +951,9 @@ mod tests {
         fn knows<'a>(&'a self, key: &'a SessionKey) -> BoxFuture<'a, Result<bool, StoreError>> {
             Box::pin(async move {
                 self.checks.lock().await.push(key.clone());
+                if self.lookup_failed.load(Ordering::SeqCst) {
+                    return Err(StoreError("lookup unavailable".to_string()));
+                }
                 if (key.as_str() == "hold-admission" || key.as_str().len() == 8)
                     && self.admission_blocked.load(Ordering::SeqCst)
                 {
@@ -1336,6 +1339,29 @@ mod tests {
         drop(first);
         drop(second);
         assert!(until(&h.host, &key, |view| view.complete).await.complete);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn store_lookup_failures_use_successors_without_retrying_random_keys_forever() {
+        let h = Harness::new(Duration::from_mins(1)).await;
+        let old = SessionKey::new("stored-before-restart");
+        h.store.memory.record_run(&old, &RunId::mint(), &[]).await;
+        h.store.lookup_failed.store(true, Ordering::SeqCst);
+        let successor = time::timeout(Duration::from_secs(5), h.host.admit_run(Some(&old)))
+            .await
+            .expect("an unavailable uniqueness check must not block admission");
+        assert_ne!(
+            successor.session(),
+            &old,
+            "a failed lookup cannot reopen a persisted label"
+        );
+        assert_eq!(successor.successor_of(), Some(&old));
+        let fresh = time::timeout(Duration::from_secs(5), h.host.admit_run(None))
+            .await
+            .expect("a random fresh key must be accepted when lookup is unavailable");
+        assert_ne!(fresh.session(), &old);
+        assert_ne!(fresh.session(), successor.session());
+        assert_eq!(fresh.successor_of(), None);
     }
 
     #[tokio::test(start_paused = true)]
