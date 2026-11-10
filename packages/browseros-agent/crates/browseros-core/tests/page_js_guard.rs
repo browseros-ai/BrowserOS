@@ -3,7 +3,7 @@
 //! in. A raw send anywhere else would run in the page's own world whatever the caller intended.
 //!
 //! Neo is the one other runtime with its own path. Its crates never depend on browseros-core
-//! (`crates/NEO_STYLE.md`), and two Neo files call into the page, with `Runtime.callFunctionOn`
+//! (`crates/neo-sdk/NEO_STYLE.md`), and two Neo files call into the page, with `Runtime.callFunctionOn`
 //! only: `neo-runtime/src/chromium_bridge/playwright_injected_methods.rs`, on an object of Neo's own isolated world or on the context
 //! `Page.createIsolatedWorld` returned for it, and `neo-runtime/src/chromium_bridge/main_world.rs`, the one door to
 //! the page's own world that Playwright's evaluations need (`page.evaluate`, `JSHandle.evaluate`),
@@ -36,15 +36,15 @@ const METHODS: &[&str] = &[EVALUATE, CALL_FUNCTION_ON];
 const ALLOWED: &[(&str, &[&str])] = &[
     ("crates/browseros-core/src/page_js.rs", METHODS),
     (
-        "crates/neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
+        "crates/neo-sdk/neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
         &[CALL_FUNCTION_ON],
     ),
     (
-        "crates/neo-runtime/src/chromium_bridge/main_world.rs",
+        "crates/neo-sdk/neo-runtime/src/chromium_bridge/main_world.rs",
         &[CALL_FUNCTION_ON],
     ),
     (
-        "crates/neo-runtime/src/chromium_bridge/cdp/runtime.rs",
+        "crates/neo-sdk/neo-runtime/src/chromium_bridge/cdp/runtime.rs",
         &[CALL_FUNCTION_ON],
     ),
 ];
@@ -102,8 +102,9 @@ fn tests_that_page_javascript_is_only_sent_through_page_js() -> std::io::Result<
 
 #[test]
 fn tests_that_neo_world_may_call_functions_but_never_evaluate() {
-    let world =
-        allowed_methods("crates/neo-runtime/src/chromium_bridge/playwright_injected_methods.rs");
+    let world = allowed_methods(
+        "crates/neo-sdk/neo-runtime/src/chromium_bridge/playwright_injected_methods.rs",
+    );
     assert!(
         !sends_page_script(r#"self.send("Runtime.callFunctionOn", request)"#, world),
         "world.rs calls into Neo's isolated world"
@@ -115,7 +116,7 @@ fn tests_that_neo_world_may_call_functions_but_never_evaluate() {
     assert!(
         sends_page_script(
             r#"self.send("Runtime.callFunctionOn", request)"#,
-            allowed_methods("crates/neo-runtime/src/browser_representations/page.rs"),
+            allowed_methods("crates/neo-sdk/neo-runtime/src/browser_representations/page.rs"),
         ),
         "every other Neo file is held to the one path"
     );
@@ -130,7 +131,8 @@ fn tests_that_neo_world_may_call_functions_but_never_evaluate() {
 
 #[test]
 fn tests_that_neo_main_world_may_call_functions_but_never_evaluate() {
-    let main_world = allowed_methods("crates/neo-runtime/src/chromium_bridge/main_world.rs");
+    let main_world =
+        allowed_methods("crates/neo-sdk/neo-runtime/src/chromium_bridge/main_world.rs");
     assert!(
         !sends_page_script(
             r#"frame.host.send("Runtime.callFunctionOn", request)"#,
@@ -145,7 +147,7 @@ fn tests_that_neo_main_world_may_call_functions_but_never_evaluate() {
         ),
         "main_world.rs may not evaluate"
     );
-    let policy = allowed_methods("crates/neo-runtime/src/playwright_methods/evaluate.rs");
+    let policy = allowed_methods("crates/neo-sdk/neo-runtime/src/playwright_methods/evaluate.rs");
     for line in [
         r#"frame.host.send("Runtime.callFunctionOn", request)"#,
         r#"frame.host.send("Runtime.evaluate", request)"#,
@@ -159,7 +161,8 @@ fn tests_that_neo_main_world_may_call_functions_but_never_evaluate() {
 
 #[test]
 fn tests_that_the_neo_typed_declaration_does_not_allow_evaluate() {
-    let declaration = allowed_methods("crates/neo-runtime/src/chromium_bridge/cdp/runtime.rs");
+    let declaration =
+        allowed_methods("crates/neo-sdk/neo-runtime/src/chromium_bridge/cdp/runtime.rs");
     assert!(
         !sends_page_script(
             r#"command! { CallFunctionOn => "Runtime.callFunctionOn", OnSession, Value; }"#,

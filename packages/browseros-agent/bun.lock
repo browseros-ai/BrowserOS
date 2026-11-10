@@ -315,14 +315,14 @@
       "name": "@browseros/hosted-api-rust",
       "version": "0.0.0",
     },
-    "crates/neo-playwright-injected": {
+    "crates/neo-sdk/neo-playwright-injected": {
       "name": "@browseros/neo-playwright-injected",
       "version": "0.0.0",
       "dependencies": {
         "@browseros/neo-runtime-spec": "workspace:*",
       },
     },
-    "crates/neo-quickjs-injected": {
+    "crates/neo-sdk/neo-quickjs-injected": {
       "name": "@browseros/neo-quickjs-injected",
       "version": "0.0.0",
       "dependencies": {
@@ -332,11 +332,11 @@
         "playwright-core": "1.64.1",
       },
     },
-    "crates/neo-runtime": {
+    "crates/neo-sdk/neo-runtime": {
       "name": "@browseros/neo-runtime-rust",
       "version": "0.0.0",
     },
-    "crates/neo-runtime-spec": {
+    "crates/neo-sdk/neo-runtime-spec": {
       "name": "@browseros/neo-runtime-spec",
       "version": "0.0.0",
     },
@@ -689,13 +689,13 @@
 
     "@browseros/hosted-api-rust": ["@browseros/hosted-api-rust@workspace:crates/hosted-api"],
 
-    "@browseros/neo-playwright-injected": ["@browseros/neo-playwright-injected@workspace:crates/neo-playwright-injected"],
+    "@browseros/neo-playwright-injected": ["@browseros/neo-playwright-injected@workspace:crates/neo-sdk/neo-playwright-injected"],
 
-    "@browseros/neo-quickjs-injected": ["@browseros/neo-quickjs-injected@workspace:crates/neo-quickjs-injected"],
+    "@browseros/neo-quickjs-injected": ["@browseros/neo-quickjs-injected@workspace:crates/neo-sdk/neo-quickjs-injected"],
 
-    "@browseros/neo-runtime-rust": ["@browseros/neo-runtime-rust@workspace:crates/neo-runtime"],
+    "@browseros/neo-runtime-rust": ["@browseros/neo-runtime-rust@workspace:crates/neo-sdk/neo-runtime"],
 
-    "@browseros/neo-runtime-spec": ["@browseros/neo-runtime-spec@workspace:crates/neo-runtime-spec"],
+    "@browseros/neo-runtime-spec": ["@browseros/neo-runtime-spec@workspace:crates/neo-sdk/neo-runtime-spec"],
 
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 

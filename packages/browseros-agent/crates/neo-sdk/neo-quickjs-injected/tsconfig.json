@@ -1,0 +1,15 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "lib": ["ES2023"],
+    "types": ["bun"],
+    // Playwright's vendored utilityScriptSerializers.ts ends a function without a return, as
+    // neo-playwright-injected's tsconfig also allows for the same vendored code.
+    "noImplicitReturns": false,
+    "paths": {
+      "@protocol/*": ["./vendor/playwright/protocol/src/*"]
+    }
+  },
+  "include": ["src/**/*", "vendor/**/*", "build.ts", "tests/unit/**/*"]
+}

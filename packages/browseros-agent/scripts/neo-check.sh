@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The gate for the neo crates (crates/NEO_STYLE.md): every Rust neo crate carries the same
+# The gate for the neo crates (crates/neo-sdk/NEO_STYLE.md): every Rust neo crate carries the same
 # [lints] tables and passes fmt, clippy and its tests; every neo TypeScript package typechecks,
 # passes its `test` script, and its committed dist/ matches a fresh build. Covers whichever neo
 # crates and packages exist on this branch, found by their manifests.
@@ -14,7 +14,7 @@ lint_tables() {
   ' "$1"
 }
 
-manifests=(crates/neo-*/Cargo.toml)
+manifests=(crates/neo-sdk/neo-*/Cargo.toml)
 reference=${manifests[0]}
 for manifest in "${manifests[@]}"; do
   if ! diff -u --label "$reference" --label "$manifest" \
@@ -39,7 +39,7 @@ has_script() {
 # Browser tests (`test:browser`, `test:parity`) stay out: they need NEO_E2E_BROWSER. A package
 # with a `build` script commits its dist/, which Rust embeds with include_str!, so dist/ must be
 # tracked and equal to a fresh build.
-for package in crates/neo-*/package.json; do
+for package in crates/neo-sdk/neo-*/package.json; do
   dir=$(dirname "$package")
   echo "neo-check: $(basename "$dir") (TypeScript)"
   for script in typecheck test; do
