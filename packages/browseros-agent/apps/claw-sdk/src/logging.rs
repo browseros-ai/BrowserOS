@@ -7,6 +7,7 @@ use std::{panic, process};
 use tracing::warn;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -14,7 +15,8 @@ use tracing_subscriber::{EnvFilter, fmt};
 use crate::config::{AppConfig, Defaults};
 
 /// The process's logging, installed once by `main` and held until `main` returns: a daily file
-/// under `$BROWSERCLAW_DIR/logs` plus stderr, both filtered by `CLAW_LOG`, and a panic hook.
+/// under `$BROWSERCLAW_DIR/logs` plus stderr, both filtered by `CLAW_LOG` with `SeaORM` capped at
+/// `DEBUG`, and a panic hook.
 ///
 /// The file writer is non-blocking: lines are buffered on a worker thread, and dropping this
 /// value flushes them. That is why `main` returns an exit code instead of calling
@@ -45,6 +47,14 @@ impl Logging {
         };
         tracing_subscriber::registry()
             .with(filter)
+            // SeaORM's TRACE spans record statements with bound values. This global cap is
+            // separate from CLAW_LOG so neither sink can inherit those fields, even when the
+            // host enables trace logging. Filtering only events would still leak span fields.
+            .with(
+                Targets::new()
+                    .with_default(LevelFilter::TRACE)
+                    .with_target("sea_orm", LevelFilter::DEBUG),
+            )
             .with(
                 fmt::layer()
                     .with_writer(io::stderr)
