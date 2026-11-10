@@ -26,10 +26,10 @@ use crate::events::EventHub;
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::browser_methods;
 use crate::quickjs_bridge::{Getters, Logs};
+use crate::run::RunId;
 use crate::run::{RunBinary, RunError, RunOutcome};
 #[cfg(feature = "test-host")]
 use crate::test_host::TestHost;
-use crate::trace::RunId;
 use crate::{abort, quickjs_bridge};
 
 const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;

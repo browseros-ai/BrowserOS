@@ -26,15 +26,16 @@ pub(crate) use tap::{RunTap, micros};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Serialize, Serializer};
 use serde_json::Value;
-use ulid::{Generator, Ulid};
 
 use crate::quickjs_bridge::GetterField;
-use crate::run::{CallLocation, CallRecord, Delivery, PageId, RunError, RunRequest, RunStatus};
+use crate::run::{
+    CallLocation, CallRecord, Delivery, PageId, RunError, RunId, RunRequest, RunStatus,
+};
 
 /// The version of this module's event vocabulary, for sinks that persist or forward events: a
 /// change that a reader of earlier events must know about bumps it.
@@ -54,16 +55,6 @@ const MAX_RUN_IDS: usize = 16;
 /// The longest [`IdKey`].
 /// Neo: bounds keys in Neo host correlation metadata.
 const MAX_ID_KEY_BYTES: usize = 64;
-
-/// The last millisecond a ULID's 48-bit clock holds, in the year 10889.
-/// Platform: ULID timestamps have 48 bits (`ulid::Ulid::TIME_BITS`).
-const MAX_ULID_MS: u64 = (1 << Ulid::TIME_BITS) - 1;
-
-/// The process's one source of run ids. Monotonic: an id minted in the same millisecond as the
-/// one before it, or after the clock stepped back, is that id plus one, so mint order is sort
-/// order across every `Runtime` in the process.
-/// Neo: one process-wide generator keeps run mint order equal to trace listing order.
-static RUN_IDS: Mutex<Generator> = Mutex::new(Generator::new());
 
 /// A listener on every run of a [`Runtime`](crate::Runtime), installed with
 /// [`Runtime::with_sinks`](crate::Runtime::with_sinks). Playwright's `InstrumentationListener`,
@@ -89,66 +80,6 @@ pub trait TraceSink: Send + Sync + 'static {
 pub trait RunSink: Send + Sync + 'static {
     fn emit(&self, event: &RunEvent);
 }
-
-/// A run's id: a ULID minted first thing in `Runtime::run`, before anything can fail, so every
-/// outcome and every event of the run carries it, early failures included. Ids come from one
-/// process-wide monotonic generator, so they sort by when their runs started, within one
-/// millisecond too, and so does their text: a store can use the id as its run order, its cursor
-/// and its retention cut ([`RunId::floor`]). Its text, also when serialized, is the ULID's 26
-/// characters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RunId(Ulid);
-
-impl RunId {
-    /// A fresh id. Should the generator fail (2^80 ids in one millisecond, or a panic while it
-    /// was locked), the id is still unique, only no longer ordered within its millisecond.
-    #[expect(
-        clippy::unwrap_or_default,
-        reason = "Ulid's default is the nil id; `Ulid::new` mints a fresh one"
-    )]
-    pub(crate) fn mint() -> Self {
-        let next = RUN_IDS.lock().ok().and_then(|mut ids| ids.generate().ok());
-        Self(next.unwrap_or_else(Ulid::new))
-    }
-
-    /// The smallest id of the millisecond `unix_ms`: runs minted at or after it sort at or
-    /// after this id, earlier ones before it, so "started before T" is `id < RunId::floor(T)`.
-    /// A millisecond past the ULID clock's end (year 10889) reads as that end.
-    #[must_use]
-    pub fn floor(unix_ms: u64) -> Self {
-        Self(Ulid::from_parts(unix_ms.min(MAX_ULID_MS), 0))
-    }
-}
-
-impl fmt::Display for RunId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl FromStr for RunId {
-    type Err = InvalidRunId;
-
-    /// Reads an id's 26 characters. A first character past `7` is refused: 26 characters hold
-    /// 130 bits, and decoding would silently drop the top two, naming some other run.
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        match Ulid::from_string(text) {
-            Ok(id) if text.starts_with(|first: char| first <= '7') => Ok(Self(id)),
-            _ => Err(InvalidRunId),
-        }
-    }
-}
-
-impl Serialize for RunId {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-/// Text that is not a [`RunId`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("a run id is 26 Crockford base32 characters, the first one 0 to 7")]
-pub struct InvalidRunId;
 
 /// A run's session, as the host labels it from its own request metadata: the runs a store shows
 /// as one timeline. Never a CDP session id. At most 256 bytes: a longer label is cut on a
@@ -483,61 +414,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-
-    #[test]
-    fn run_ids_minted_back_to_back_increase_and_read_back_from_their_text() {
-        let ids: Vec<RunId> = (0..10_000).map(|_| RunId::mint()).collect();
-        for pair in ids.windows(2) {
-            let (first, next) = (pair[0], pair[1]);
-            assert!(first < next, "minted in order: {first} then {next}");
-            assert!(
-                first.to_string() < next.to_string(),
-                "their text sorts as they do: {first} then {next}"
-            );
-        }
-        for id in &ids {
-            let text = id.to_string();
-            assert_eq!(text.len(), 26, "a ULID's 26 characters: {text}");
-            assert_eq!(text.parse(), Ok(*id), "{text} reads back");
-            assert_eq!(
-                serde_json::to_value(id).unwrap(),
-                json!(text),
-                "serialized as its text"
-            );
-        }
-        for bad in [
-            "",
-            "01JC8Z3K",
-            "80000000000000000000000000",
-            "0000000000000000000000000U",
-        ] {
-            assert_eq!(
-                bad.parse::<RunId>(),
-                Err(InvalidRunId),
-                "{bad:?} names no run"
-            );
-        }
-    }
-
-    #[test]
-    fn floor_splits_runs_at_its_millisecond() {
-        let before = unix_ms(SystemTime::now());
-        let id = RunId::mint();
-        let after = unix_ms(SystemTime::now());
-        assert!(
-            RunId::floor(before) <= id,
-            "{id} was minted at or after {before}"
-        );
-        assert!(
-            id < RunId::floor(after + 1),
-            "{id} was minted before {}",
-            after + 1
-        );
-        assert!(
-            id < RunId::floor(1 << 48),
-            "a millisecond past the ULID clock's end sorts after every run"
-        );
-    }
 
     #[test]
     fn call_ids_read_back_from_their_text() {

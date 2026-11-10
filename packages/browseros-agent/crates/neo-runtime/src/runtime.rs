@@ -31,11 +31,12 @@ use crate::playwright_methods::screenshot::TabScreenshots;
 use crate::progress::{ErrorName, RunScope, Trace};
 use crate::quickjs::Script;
 use crate::quickjs_bridge::{Getters, Logs};
+use crate::run::RunId;
 use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
 #[cfg(feature = "test-host")]
 use crate::test_host::TestHost;
 use crate::trace::{
-    ConsoleLine, EndCause, RunEvent, RunId, RunSink, RunStarted, RunTap, TraceSink, redact,
+    ConsoleLine, EndCause, RunEvent, RunSink, RunStarted, RunTap, TraceSink, redact,
 };
 use crate::{quickjs, quickjs_bridge};
 
