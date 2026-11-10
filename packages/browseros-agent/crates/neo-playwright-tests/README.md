@@ -47,6 +47,8 @@ The two engines run sequentially on fresh processes and profiles, using the same
 
 Both engines use `--disable-browseros-extensions` so bundled BrowserOS UI does not inject shadow DOM into upstream test pages. Neo's handling of its own bar is covered separately by `neo-quickjs-injected/tests/parity/browseros-ui.mjs`.
 
+Playwright's under-test UtilityScript exposes `window.builtins` for upstream helpers such as `rafraf`. The harness installs that same test-only global on Neo pages through its infrastructure session, in the main world of current and future documents, including same-process frames. It captures bound native timer functions and native objects, or reuses `__pwClock.builtins` when present. The reference keeps Playwright's own setup; no browser API implementation is supplied to test bodies.
+
 Final effects are captured at the fixture boundary, before disconnecting the reference client resets its CDP viewport. The native fixture reaches that boundary after its single run and cleanup drain. A bounded file handshake keeps the independent observer in charge; a missing acknowledgement or lost snapshot stays an infrastructure error, with no later snapshot substituted.
 
 Both initial blank pages also receive Playwright's default focus emulation before either engine attaches, so reference setup cannot contribute an unmatched focus event. Events from the original bodies and native cleanup remain measured without filtering.
