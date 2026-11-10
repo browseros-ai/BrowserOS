@@ -1,5 +1,5 @@
 /** Neo: Lossless values for the private host/QuickJS transport. Strings never pass through UTF-8. */
-export function codecFactory({ identify, resolve }) {
+export function codecFactory({ identify, resolve, allowFunctions = true }) {
   class CodecError extends Error {
     name = 'HarnessCodecError'
   }
@@ -21,6 +21,11 @@ export function codecFactory({ identify, resolve }) {
     if (value === null) return { tag: 'null' }
     if (typeof value === 'boolean') return { tag: 'boolean', value }
     if (typeof value === 'string') return { tag: 'string', units: units(value) }
+    if (typeof value === 'function' && allowFunctions)
+      return {
+        tag: 'function',
+        sourceUnits: units(Function.prototype.toString.call(value)),
+      }
     if (typeof value === 'bigint')
       return { tag: 'bigint', decimal: String(value) }
     if (typeof value === 'number') {
@@ -98,6 +103,18 @@ export function codecFactory({ identify, resolve }) {
         return -Infinity
       case 'string':
         return string(value.units)
+      case 'function': {
+        const source = string(value.sourceUnits)
+        // The SDK stringifies this value and normalizes method shorthand itself.
+        // Never evaluate the source here: its globals belong to the page realm.
+        function sourceOnly() {
+          throw new CodecError(
+            'bridge limit: untransportable function source cannot execute in the harness realm',
+          )
+        }
+        Object.defineProperty(sourceOnly, 'toString', { value: () => source })
+        return sourceOnly
+      }
       case 'bigint':
         return BigInt(value.decimal)
       case 'object':
