@@ -16,7 +16,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use clap::error::ErrorKind;
-use neo_sdk::{App, AppConfig, Logging, StartError};
+use neo_server::{App, AppConfig, Logging, StartError};
 use tracing::error;
 
 /// The exit code Chromium reads as "port in use, relaunch on the next one". Nothing else may

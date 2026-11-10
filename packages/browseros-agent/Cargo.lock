@@ -1909,7 +1909,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "neo-sdk"
+name = "neo-sdk-api"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_with",
+]
+
+[[package]]
+name = "neo-server"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -1919,7 +1928,7 @@ dependencies = [
  "futures-util",
  "neo-captcha",
  "neo-playwright",
- "neo-sdk",
+ "neo-server",
  "neo-service",
  "neo-takeover",
  "neo-trace",
@@ -1941,15 +1950,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "zeroize",
-]
-
-[[package]]
-name = "neo-sdk-api"
-version = "1.0.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_with",
 ]
 
 [[package]]

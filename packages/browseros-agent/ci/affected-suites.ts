@@ -190,7 +190,7 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
-  '@browseros/neo-sdk': ['claw-sdk-quality'],
+  '@browseros/neo-server': ['claw-sdk-quality'],
 }
 
 /**

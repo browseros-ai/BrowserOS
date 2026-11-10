@@ -198,7 +198,7 @@ jobs:
           # The input is the server kind (docker_image.ServerKind), mapped to its Cargo package.
           case "$SERVER" in
             claw-server) pkg=claw-server bin=browseros-claw-server-rs ;;
-            claw-sdk) pkg=neo-sdk bin=browseros-claw-sdk ;;
+            claw-sdk) pkg=neo-server bin=browseros-claw-sdk ;;
             *) echo "Unknown server '$SERVER'" >&2; exit 1 ;;
           esac
           # claw-sdk ships without PostHog (sdk-skeleton D1), so only claw-server

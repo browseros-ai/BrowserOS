@@ -8,7 +8,7 @@ the lint or formatting rules of sibling crates.
 ```text
 host / MCP run
       |
-   neo-sdk --------> neo-playwright <--- neo-playwright-js (builds its assets)
+   neo-server -----> neo-playwright <--- neo-playwright-js (builds its assets)
       |                    |
       +----> neo-service --+----> neo-trace
       |          |                    ^
@@ -20,7 +20,7 @@ host / MCP run
 
 | Package | Responsibility |
 |---|---|
-| `neo-sdk` | Stateless MCP `run`, JavaScript runtime, dispatch and application wiring. Builds `browseros-claw-sdk`. |
+| `neo-server` | Stateless MCP `run`, JavaScript runtime, dispatch and application wiring. Builds `browseros-claw-sdk`. |
 | `neo-playwright` | Browser operations, locators, snapshots and the sealed-world engine boundary. |
 | `neo-playwright-js` | JavaScript probe and agent prelude; builds the engine's committed assets and fixtures. |
 | `neo-service` | Authenticated host API, traces, live views and takeover routes. |
@@ -40,8 +40,8 @@ From `packages/browseros-agent`, run the existing SDK gate with private build st
 CARGO_BUILD_BUILD_DIR="$PWD/target/build-private" crates/neo-sdk/check.sh
 ```
 
-The gate covers `neo-sdk` and `neo-playwright`. Follow [STYLE.md](STYLE.md) and the workspace's
-contributor rules. Build the server with `cargo build -p neo-sdk --bin browseros-claw-sdk`.
+The gate covers `neo-server` and `neo-playwright`. Follow [STYLE.md](STYLE.md) and the workspace's
+contributor rules. Build the server with `cargo build -p neo-server --bin browseros-claw-sdk`.
 Use Bun 1.4.2 in `neo-playwright-js` for `bun run build`, `bun run build:check` and its tests.
 Regenerate the host contract from the agent root with `bun run codegen:neo-sdk-api`; never
 edit `neo-sdk-api/src/generated` by hand.
@@ -50,3 +50,6 @@ Release and protocol identities remain `claw-sdk`, `browseros-claw-sdk`, the exi
 marker, MCP name and `CLAW_*` environment variables. The package rename changes tracing
 targets to `neo_captcha::…` and `neo_capture::…`, including in desktop logs. Custom `CLAW_LOG`
 directives naming either crate must use its new target; the default filter is unchanged.
+
+The server crate now uses `neo_server::…` tracing targets. Custom `CLAW_LOG` directives
+for its former crate target should use `neo_server`; the variable and default filter stay the same.

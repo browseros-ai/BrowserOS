@@ -6,7 +6,7 @@
 # [lints] table and clippy.toml need nothing here, because Cargo and clippy read them on every
 # build, including CI's `cargo clippy --workspace`.
 #
-# It covers every crate on the claw-sdk lint set: crates/neo-sdk/neo-sdk, and crates/neo-sdk/neo-playwright
+# It covers every crate on the claw-sdk lint set: crates/neo-sdk/neo-server, and crates/neo-sdk/neo-playwright
 # once that crate exists.
 #
 # In a Grove worktree, run it with a private build dir, or it waits behind other workers:
@@ -32,7 +32,7 @@ if ! cargo "+${TOOLCHAIN}" clippy --version >/dev/null 2>&1; then
 fi
 cargo_pinned() { cargo "+${TOOLCHAIN}" "$@"; }
 
-PACKAGES=(neo-sdk)
+PACKAGES=(neo-server)
 if [[ -f crates/neo-sdk/neo-playwright/Cargo.toml ]]; then
   PACKAGES+=(neo-playwright)
 fi

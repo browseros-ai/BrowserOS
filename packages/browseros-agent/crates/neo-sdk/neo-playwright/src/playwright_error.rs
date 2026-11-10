@@ -193,7 +193,7 @@ impl ErrorCode {
     }
 }
 
-/// An operation failed. claw-sdk's adapter (`crates/neo-sdk/neo-sdk/src/builtins/playwright_ops.rs`)
+/// An operation failed. claw-sdk's adapter (`crates/neo-sdk/neo-server/src/builtins/playwright_ops.rs`)
 /// reads it through the accessors and builds the dispatcher's `LeafError` from them.
 #[derive(Clone, Debug)]
 pub struct PlaywrightError {

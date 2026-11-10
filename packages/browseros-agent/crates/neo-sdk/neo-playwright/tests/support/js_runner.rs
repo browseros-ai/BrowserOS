@@ -1,5 +1,5 @@
 //! Runner N: the real prelude (`neo_playwright::PRELUDE_JS`) running a Playwright script
-//! in QuickJS behind claw-sdk's real run bootstrap (`crates/neo-sdk/neo-sdk/src/runtime/js/bootstrap.js`,
+//! in QuickJS behind claw-sdk's real run bootstrap (`crates/neo-sdk/neo-server/src/runtime/js/bootstrap.js`,
 //! included as it is), evaluated the way claw-sdk's `run_script.rs` evaluates a run, with
 //! every op going through an [`OpHost`] (`Playwright::invoke` on a live browser, in the live
 //! tests). A prelude that drifts from the skeleton's bootstrap fails here.
@@ -48,7 +48,7 @@ use tokio::time;
 use crate::live_run::{LiveRun, TestPage};
 
 /// claw-sdk's run bootstrap, read-only: Runner N runs the very file each run starts with.
-const BOOTSTRAP: &str = include_str!("../../../neo-sdk/src/runtime/js/bootstrap.js");
+const BOOTSTRAP: &str = include_str!("../../../neo-server/src/runtime/js/bootstrap.js");
 
 /// The file name claw-sdk compiles the agent's function under, which the bootstrap's call
 /// sites look for in stacks.

@@ -4,7 +4,7 @@
 members = [
     "crates/*",
     "apps/claw-server",
-    "crates/neo-sdk/neo-sdk",
+    "crates/neo-sdk/neo-server",
     "crates/neo-sdk/neo-captcha",
     "crates/neo-sdk/neo-capture",
     "crates/neo-sdk/neo-playwright",

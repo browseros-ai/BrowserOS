@@ -1,6 +1,6 @@
 /**
  * The prelude's only contact with claw-sdk's run bootstrap
- * (crates/neo-sdk/neo-sdk/src/runtime/js/bootstrap.js). claw-sdk evaluates the prelude in each run's
+ * (crates/neo-sdk/neo-server/src/runtime/js/bootstrap.js). claw-sdk evaluates the prelude in each run's
  * fresh QuickJS realm after its bootstrap, so the prelude's state lives exactly as long as one
  * run. What it uses, one function each:
  *

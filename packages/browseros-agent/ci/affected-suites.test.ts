@@ -110,7 +110,7 @@ describe('computeAffectedSuites', () => {
 
   it('runs the Rust suites and its own check script for a claw-sdk change', () => {
     expect(
-      suiteNames([pkg('@browseros/neo-sdk', 'crates/neo-sdk/neo-sdk')]),
+      suiteNames([pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server')]),
     ).toEqual([
       'claw-server',
       'claw-server-quality',
@@ -232,7 +232,7 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
       pkg('@browseros/claw-server', 'apps/claw-server'),
-      pkg('@browseros/neo-sdk', 'crates/neo-sdk/neo-sdk'),
+      pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
       pkg('@browseros/neo-playwright-js', 'crates/neo-sdk/neo-playwright-js'),
     ]

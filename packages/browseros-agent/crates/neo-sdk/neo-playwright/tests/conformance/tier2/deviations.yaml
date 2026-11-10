@@ -269,9 +269,9 @@
 - case: selectors-css.should-work-with-is
   path: /returned/L389
   kind: finding
-  route: sdk-skeleton (crates/neo-sdk/neo-sdk bootstrap.js plain)
+  route: sdk-skeleton (crates/neo-sdk/neo-server bootstrap.js plain)
   reason: "claw-sdk's run bootstrap encodes an op's input with a recursive plain() on the
-    run's 512 KiB QuickJS stack (crates/neo-sdk/neo-sdk/src/runtime/js/bootstrap.js), the depth limit
+    run's 512 KiB QuickJS stack (crates/neo-sdk/neo-server/src/runtime/js/bootstrap.js), the depth limit
     m1-handoff's sdk-skeleton line 4 names for revive. The locator brand carries the parsed
     selector, and a :scope nested in :has() parses deep enough to overflow it in Runner N's
     debug build (measured: the op received {$neo: invalid, reason: 'the input could not be
@@ -286,9 +286,9 @@
 - case: selectors-css.should-work-with-scope
   path: /returned/L431
   kind: finding
-  route: sdk-skeleton (crates/neo-sdk/neo-sdk bootstrap.js plain)
+  route: sdk-skeleton (crates/neo-sdk/neo-server bootstrap.js plain)
   reason: "claw-sdk's run bootstrap encodes an op's input with a recursive plain() on the
-    run's 512 KiB QuickJS stack (crates/neo-sdk/neo-sdk/src/runtime/js/bootstrap.js), the depth limit
+    run's 512 KiB QuickJS stack (crates/neo-sdk/neo-server/src/runtime/js/bootstrap.js), the depth limit
     m1-handoff's sdk-skeleton line 4 names for revive. The locator brand carries the parsed
     selector, and a :scope nested in :has() parses deep enough to overflow it in Runner N's
     debug build (measured: the op received {$neo: invalid, reason: 'the input could not be

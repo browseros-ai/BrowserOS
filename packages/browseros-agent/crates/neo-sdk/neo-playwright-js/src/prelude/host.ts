@@ -1,6 +1,6 @@
 /**
  * claw-sdk's run bootstrap as the prelude reaches it: the frozen `globalThis.__neo`
- * (crates/neo-sdk/neo-sdk/src/runtime/js/bootstrap.js). bridge.ts runs ops and gives the agent's
+ * (crates/neo-sdk/neo-server/src/runtime/js/bootstrap.js). bridge.ts runs ops and gives the agent's
  * function its parameters through it, and errors.ts records the prelude's refusals through it,
  * so it sits in a module of its own: errors.ts cannot import bridge.ts, which imports errors.ts.
  */

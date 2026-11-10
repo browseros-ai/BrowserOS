@@ -88,7 +88,7 @@ SERVER_FILE = "neo-server"
 
 class ServerKind(StrEnum):
     """A Neo server kind, used for its compiled version marker and image label.
-    The claw-sdk kind builds the neo-sdk Cargo package."""
+    The claw-sdk kind builds the neo-server Cargo package."""
 
     CLAW_SERVER = "claw-server"
     CLAW_SDK = "claw-sdk"

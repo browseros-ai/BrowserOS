@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use neo_sdk::test_support::CLOSED_XVNC;
+use neo_server::test_support::CLOSED_XVNC;
 use rmcp::ServiceExt;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientInfo, MetaObject, ProtocolVersion,

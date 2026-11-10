@@ -1,5 +1,5 @@
 // Runs the built prelude asset the way claw-sdk does: a fresh realm per run, claw-sdk's own
-// bootstrap first (crates/neo-sdk/neo-sdk/src/runtime/js/bootstrap.js, read as it is, so a drift
+// bootstrap first (crates/neo-sdk/neo-server/src/runtime/js/bootstrap.js, read as it is, so a drift
 // between the two fails here), then the prelude, then the run. The realm gets the bootstrap's
 // three natives: `__neo_invoke` answers each op from the test's `answer` as one reply
 // envelope, `__neo_log` drops console lines, and `__neo_sleep` is Node's timer.
@@ -43,7 +43,7 @@ const committedPrelude = (): string =>
 
 const bootstrap = (): string =>
   readFileSync(
-    new URL('crates/neo-sdk/neo-sdk/src/runtime/js/bootstrap.js', agentRoot),
+    new URL('crates/neo-sdk/neo-server/src/runtime/js/bootstrap.js', agentRoot),
     'utf8',
   )
 

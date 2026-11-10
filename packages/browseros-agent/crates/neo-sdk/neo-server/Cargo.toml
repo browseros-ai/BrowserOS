@@ -1,5 +1,5 @@
 [package]
-name = "neo-sdk"
+name = "neo-server"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Hosted BrowserOS Neo's sidecar: one MCP tool, run, with every SDK operation behind one dispatcher"
 
-# Neo SDK's lint table is mirrored by neo-playwright; style_boundaries checks their parity.
+# Neo server's lint table is mirrored by neo-playwright; style_boundaries checks their parity.
 #
 # Cargo forbids `[lints] workspace = true` plus extra lints in one crate, so the workspace's
 # lints are restated first. `tests/style_boundaries.rs` fails if a workspace lint is missing here
@@ -79,7 +79,7 @@ name = "browseros-claw-sdk"
 path = "src/main.rs"
 
 [features]
-# `neo_sdk::test_support`: the fake browser behind core's CDP seam. The dev-dependency on this
+# `neo_server::test_support`: the fake browser behind core's CDP seam. The dev-dependency on this
 # crate below turns it on for every test build, unit and integration; release builds never have
 # it.
 test-support = []
@@ -119,7 +119,7 @@ tracing-subscriber.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-neo-sdk = { path = ".", features = ["test-support"] }
+neo-server = { path = ".", features = ["test-support"] }
 # A real trace store in a temp dir, read back by the dispatcher's tests.
 tempfile.workspace = true
 # Breaks the trace store under a run service, to test that an unreadable store refuses a

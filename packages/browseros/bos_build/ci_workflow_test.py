@@ -4252,7 +4252,7 @@ class DockerImageWorkflowTest(unittest.TestCase):
             (ServerKind.CLAW_SERVER, "claw-server", "browseros-claw-server-rs", "phc_neo",
              "browseros-claw-server-version=1.2.3; phc_neo"),
             # claw-sdk ships without PostHog (sdk-skeleton D1): no key, none compiled in.
-            (ServerKind.CLAW_SDK, "neo-sdk", "browseros-claw-sdk", "", "browseros-claw-sdk-version=0.1.0;"),
+            (ServerKind.CLAW_SDK, "neo-server", "browseros-claw-sdk", "", "browseros-claw-sdk-version=0.1.0;"),
         ):
             with self.subTest(server=server.value):
                 run = self.build(server, posthog_key=posthog_key, compiled=compiled)

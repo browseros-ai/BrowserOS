@@ -6,7 +6,7 @@ The SDK's source packages now live together under `crates/neo-sdk/`, relative to
 `packages/browseros-agent`. This changes source paths and package names, with no wire-format
 or browser behavior change:
 
-- `neo-sdk`: renamed from `claw-sdk` at `apps/claw-sdk`; the binary stays `browseros-claw-sdk`.
+- `neo-server`: renamed from the inner `neo-sdk` crate (previously `claw-sdk` at `apps/claw-sdk`); the binary stays `browseros-claw-sdk`.
 - `neo-playwright`: renamed from `browseros-playwright` at `crates/browseros-playwright`.
 - `neo-playwright-js`: renamed from `@browseros/browseros-playwright-js` at `packages/browseros-playwright-js`.
 - `neo-service`: renamed from `browseros-service` at `crates/browseros-service`.
@@ -16,7 +16,7 @@ or browser behavior change:
 - `neo-captcha`: renamed from `browseros-captcha` at `crates/browseros-captcha`; desktop uses the same solver.
 - `neo-capture`: renamed from `browseros-capture` at `crates/browseros-capture`; desktop uses the same capture hub.
 
-Build the server with Cargo package `neo-sdk`. Release server kind `claw-sdk`, binary and
+Build the server with Cargo package `neo-server`. Release server kind `claw-sdk`, binary and
 version marker `browseros-claw-sdk`, MCP server name and `CLAW_*` variables are unchanged.
 Desktop's behavior and dependency graph are unchanged apart from the two shared crate names.
 Tracing targets use `neo_captcha::…` and `neo_capture::…`; update custom `CLAW_LOG` directives

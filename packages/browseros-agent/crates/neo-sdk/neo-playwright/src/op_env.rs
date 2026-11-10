@@ -1,7 +1,7 @@
 //! The host's side of one operation.
 //!
 //! claw-sdk implements [`OpEnv`] over its dispatcher's `OpCtx`
-//! (`crates/neo-sdk/neo-sdk/src/builtins/playwright_ops.rs`), and tests over a plain struct. The crate borrows it for one `Playwright::invoke` and never
+//! (`crates/neo-sdk/neo-server/src/builtins/playwright_ops.rs`), and tests over a plain struct. The crate borrows it for one `Playwright::invoke` and never
 //! stores it.
 //!
 //! Deliberately absent: a cancel token and the run's deadline. The dispatcher races every

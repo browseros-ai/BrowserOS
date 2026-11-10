@@ -331,12 +331,12 @@
         "linkedom": "^0.18.13",
       },
     },
-    "crates/neo-sdk/neo-sdk": {
-      "name": "@browseros/neo-sdk",
-      "version": "0.0.0",
-    },
     "crates/neo-sdk/neo-sdk-api": {
       "name": "@browseros/neo-sdk-api-rust",
+      "version": "0.0.0",
+    },
+    "crates/neo-sdk/neo-server": {
+      "name": "@browseros/neo-server",
       "version": "0.0.0",
     },
     "crates/neo-sdk/neo-service": {
@@ -706,9 +706,9 @@
 
     "@browseros/neo-playwright-rust": ["@browseros/neo-playwright-rust@workspace:crates/neo-sdk/neo-playwright"],
 
-    "@browseros/neo-sdk": ["@browseros/neo-sdk@workspace:crates/neo-sdk/neo-sdk"],
-
     "@browseros/neo-sdk-api-rust": ["@browseros/neo-sdk-api-rust@workspace:crates/neo-sdk/neo-sdk-api"],
+
+    "@browseros/neo-server": ["@browseros/neo-server@workspace:crates/neo-sdk/neo-server"],
 
     "@browseros/neo-service-rust": ["@browseros/neo-service-rust@workspace:crates/neo-sdk/neo-service"],
 

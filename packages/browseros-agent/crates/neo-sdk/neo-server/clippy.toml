@@ -1,4 +1,4 @@
-# claw-sdk's clippy configuration: copy to crates/neo-sdk/neo-sdk/clippy.toml.
+# claw-sdk's clippy configuration: copy to crates/neo-sdk/neo-server/clippy.toml.
 #
 # Clippy reads clippy.toml from the crate's manifest directory first, so this file applies to
 # claw-sdk alone, also under the workspace-wide `cargo clippy --workspace` in CI.

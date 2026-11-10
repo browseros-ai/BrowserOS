@@ -2000,7 +2000,7 @@ mod tests {
     /// of the one matcher build behind it (`SecretSet::with_values`) past the cap and past what a
     /// secret set keeps by default, and of what a promotion pays for each value it hands a full
     /// process's set. Run it in debug and release:
-    /// `cargo test -p neo-sdk --lib [--release] held_set_build_cost -- --ignored --nocapture`.
+    /// `cargo test -p neo-server --lib [--release] held_set_build_cost -- --ignored --nocapture`.
     #[tokio::test(start_paused = true)]
     #[ignore = "a measurement, not a check: it prints build times"]
     #[expect(clippy::print_stdout, reason = "the measurement is what it prints")]

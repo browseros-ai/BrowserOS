@@ -38,7 +38,7 @@ rquickjs.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
-# claw-sdk's lint table: paste below `[package]` in crates/neo-sdk/neo-sdk/Cargo.toml.
+# claw-sdk's lint table: paste below `[package]` in crates/neo-sdk/neo-server/Cargo.toml.
 #
 # Cargo forbids `[lints] workspace = true` plus extra lints in one crate, so the workspace's
 # lints are restated first. `tests/style_boundaries.rs` fails if a workspace lint is missing here

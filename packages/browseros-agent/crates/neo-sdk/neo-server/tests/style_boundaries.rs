@@ -1,6 +1,6 @@
 //! STYLE.md rules that no compiler lint checks, enforced as a test over claw-sdk's own source.
 //!
-//! Copy to `crates/neo-sdk/neo-sdk/tests/style_boundaries.rs`. Dev-dependencies: `syn` (features `full`,
+//! Copy to `crates/neo-sdk/neo-server/tests/style_boundaries.rs`. Dev-dependencies: `syn` (features `full`,
 //! `visit`) and `toml`.
 //!
 //! The checks parse `src/` with `syn`, without type information, so every rule is phrased in what

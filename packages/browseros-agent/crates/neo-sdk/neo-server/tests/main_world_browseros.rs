@@ -1283,7 +1283,7 @@ fn holds(stored: &[u8], value: &str) -> bool {
 
 /// claw-sdk's log filter for the long wait: the default, and a line for each value `TypedValues`
 /// hands the secret set.
-const REGISTRATIONS: &str = "info,rmcp=warn,neo_sdk::builtins::typed_values=debug";
+const REGISTRATIONS: &str = "info,rmcp=warn,neo_server::builtins::typed_values=debug";
 /// The line `TypedValues` writes for each value it hands the secret set.
 const REGISTERED: &str = "a field value went to the secret set";
 /// The value the long wait's page writes into its password field, from parts.

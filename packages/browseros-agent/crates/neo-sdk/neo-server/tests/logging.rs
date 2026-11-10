@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 use std::{env, fs};
 
-use neo_sdk::{AppConfig, Logging};
+use neo_server::{AppConfig, Logging};
 
 const SECRET: &str = "neo-seaorm-bound-value-should-stay-private";
 
@@ -137,11 +137,11 @@ fn logging_probe() -> Result<(), Box<dyn Error>> {
     let config = AppConfig::load(&launch)?;
     let logging = Logging::install(&config)?;
 
-    tracing::trace!(target: "neo_sdk", "app-trace");
-    tracing::debug!(target: "neo_sdk", "app-debug");
-    tracing::info!(target: "neo_sdk", "app-info");
-    tracing::warn!(target: "neo_sdk", "app-warn");
-    tracing::error!(target: "neo_sdk", "app-error");
+    tracing::trace!(target: "neo_server", "app-trace");
+    tracing::debug!(target: "neo_server", "app-debug");
+    tracing::info!(target: "neo_server", "app-info");
+    tracing::warn!(target: "neo_server", "app-warn");
+    tracing::error!(target: "neo_server", "app-error");
     tracing::trace!(target: "sqlx::query", "sqlx-trace");
     tracing::trace!(target: "sea_orm", value = SECRET, "sea-orm-trace-event");
     tracing::trace!(target: "sea_orm::driver::sqlx_sqlite", value = SECRET, "sea-orm-nested-trace-event");

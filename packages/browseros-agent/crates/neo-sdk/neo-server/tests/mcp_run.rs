@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use browseros_core::TabId;
 use futures_util::future;
-use neo_sdk::App;
-use neo_sdk::test_support::{FakeCdp, test_config};
+use neo_server::App;
+use neo_server::test_support::{FakeCdp, test_config};
 use neo_trace::{
     Delivery, Effect, ErrorOwner, Outcome, RunQuery, RunStatus, RunSummary, TaskId, TraceStore,
 };

@@ -121,7 +121,7 @@ need() { command -v "$1" >/dev/null || die "needs $1; see Setup in this script's
 server_crate() {
   case $1 in
     claw-server) SERVER_PACKAGE=claw-server SERVER_BIN=browseros-claw-server-rs ;;
-    claw-sdk) SERVER_PACKAGE=neo-sdk SERVER_BIN=browseros-claw-sdk ;;
+    claw-sdk) SERVER_PACKAGE=neo-server SERVER_BIN=browseros-claw-sdk ;;
     *) die "--server takes claw-server or claw-sdk, not '$1'" ;;
   esac
 }
