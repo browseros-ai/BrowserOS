@@ -241,6 +241,29 @@ pub struct RunPage {
     pub closed: bool,
 }
 
+/// A kept browser call at the dispatcher's admission boundary, before its result is known.
+/// `call_id` pairs it with exactly one [`CallEvent::Finished`] in the same run.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallStarted {
+    pub call_id: u64,
+    pub guid: String,
+    pub method: String,
+    pub title: Option<String>,
+    pub params: Value,
+    pub location: Option<CallLocation>,
+    pub started_at_ms: u64,
+}
+
+/// Live observations of calls kept by the runtime's record budget. Finished records may
+/// later be evicted from the outcome, and input delivery may settle before the run ends.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "event", rename_all = "camelCase")]
+pub enum CallEvent {
+    Started(CallStarted),
+    Finished(CallRecord),
+}
+
 /// One browser call (`__neo_runtime.call`), as the dispatcher saw it. Derived when the run ends
 /// from state kept outside the realm, so a call cut off by the run's deadline or by the script
 /// returning still has its record, its call log and its true delivery.

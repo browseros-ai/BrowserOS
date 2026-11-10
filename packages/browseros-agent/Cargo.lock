@@ -548,6 +548,7 @@ dependencies = [
  "image",
  "imagesize",
  "neo-runtime",
+ "neo-trace",
  "os_info",
  "posthog-rs",
  "pulldown-cmark",
@@ -1961,6 +1962,23 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "neo-trace"
+version = "0.1.0"
+dependencies = [
+ "browseros-cdp",
+ "futures-util",
+ "neo-runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
 ]
 
 [[package]]

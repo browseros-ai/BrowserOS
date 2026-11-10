@@ -20,6 +20,7 @@ use std::sync::Arc;
 )]
 use browseros_cdp::{CdpClient, CdpError};
 use tokio::runtime::{Handle, RuntimeFlavor};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::task::TaskTracker;
 
 use crate::artifacts::{AbsolutePaths, Artifacts};
@@ -38,7 +39,7 @@ use crate::quickjs;
 use crate::quickjs::Script;
 use crate::quickjs_bridge;
 use crate::quickjs_bridge::Getters;
-use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
+use crate::run::{CallEvent, RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
 #[cfg(feature = "test-host")]
 use crate::test_host::TestHost;
 
@@ -170,6 +171,26 @@ impl Runtime {
     pub async fn run(&self, request: RunRequest) -> RunOutcome {
         self.run_inner(
             request,
+            None,
+            #[cfg(feature = "test-host")]
+            None,
+        )
+        .await
+    }
+
+    /// Runs the same lifecycle as [`Self::run`], sending live observations of kept calls.
+    /// Each Started has exactly one Finished, sent before this returns. Logged pairs include
+    /// every outcome call, plus calls evicted when their logs exceed the record budget.
+    /// Delivery can settle after Finished; the outcome's delivery is authoritative.
+    /// Sends never block or fail the run, including when the receiver is closed.
+    pub async fn run_observed(
+        &self,
+        request: RunRequest,
+        calls: UnboundedSender<CallEvent>,
+    ) -> RunOutcome {
+        self.run_inner(
+            request,
+            Some(calls),
             #[cfg(feature = "test-host")]
             None,
         )
@@ -186,12 +207,13 @@ impl Runtime {
         request: RunRequest,
         host: Box<dyn TestHost>,
     ) -> RunOutcome {
-        self.run_inner(request, Some(host)).await
+        self.run_inner(request, None, Some(host)).await
     }
 
     async fn run_inner(
         &self,
         request: RunRequest,
+        calls: Option<UnboundedSender<CallEvent>>,
         #[cfg(feature = "test-host")] test_host: Option<Box<dyn TestHost>>,
     ) -> RunOutcome {
         let RunRequest {
@@ -253,7 +275,7 @@ impl Runtime {
             tokio,
             Arc::clone(&run.handles),
         );
-        let dispatcher = Dispatcher::new(tabs.clone(), run);
+        let dispatcher = Dispatcher::new(tabs.clone(), run, calls);
         let events = tabs.events().clone();
         // A run whose future is dropped lets go of its permission grants on the cleanup tracker.
         let grants = Grants {

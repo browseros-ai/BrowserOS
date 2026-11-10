@@ -46,6 +46,9 @@
 //! The default-off `test-host` feature adds an opaque transport owned by one explicitly
 //! hosted run. `quickjs_bridge.rs` installs its receive/reply callbacks; page operations still
 //! use the same SDK and dispatcher. Ordinary runs never receive that additional global.
+//!
+//! `run_observed` publishes kept call starts and ends from Trace's existing mutex.
+//! The optional neo-trace crate consumes them; the runtime never owns run ids or log formatting.
 
 #[cfg(test)]
 extern crate self as neo_runtime;
@@ -79,8 +82,8 @@ mod url_match;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{
-    CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunBinary, RunEnd,
-    RunError, RunOutcome, RunPage, RunRequest, RunStatus,
+    CallEvent, CallLocation, CallRecord, CallResult, CallStarted, Delivery, DroppedCalls, PageId,
+    RunBinary, RunEnd, RunError, RunOutcome, RunPage, RunRequest, RunStatus,
 };
 pub use runtime::{Runtime, RuntimeError};
 #[cfg(feature = "test-host")]

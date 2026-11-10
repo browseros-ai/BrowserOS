@@ -29,11 +29,12 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::time;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::info;
+use tracing::debug;
 
 use crate::abort::CallAbort;
 use crate::artifacts::Artifacts;
@@ -42,7 +43,9 @@ use crate::browser_representations::clock::Clock;
 use crate::browser_representations::init_scripts::InitScripts;
 use crate::deadline::{Deadline, Stop};
 use crate::playwright_methods::evaluate::Handles;
-use crate::run::{CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd};
+use crate::run::{
+    CallEvent, CallLocation, CallRecord, CallResult, CallStarted, Delivery, DroppedCalls, RunEnd,
+};
 
 /// How a call ends early: a Playwright error the script sees, or the run ending under it.
 /// Every handler returns this; `?` on [`Progress::race`] is how a handler gives up.
@@ -733,13 +736,38 @@ impl CallEntry {
                 self.folded_log(),
             ),
         };
+        let CallStarted {
+            call_id,
+            guid,
+            method,
+            title,
+            params,
+            location,
+            started_at_ms,
+        } = self.started();
+        CallRecord {
+            call_id,
+            guid,
+            method,
+            title,
+            params,
+            location,
+            started_at_ms,
+            duration,
+            result,
+            delivery: self.delivery.as_ref().map(|cell| cell.delivery()),
+            log,
+        }
+    }
+
+    fn started(&self) -> CallStarted {
         let started_at_ms = self
             .started_at
             .duration_since(UNIX_EPOCH)
             .map_or(0, |since| {
                 u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
             });
-        CallRecord {
+        CallStarted {
             call_id: self.call_id,
             guid: self.guid.clone(),
             method: self.method.clone(),
@@ -747,10 +775,6 @@ impl CallEntry {
             params: self.params.clone(),
             location: self.location,
             started_at_ms,
-            duration,
-            result,
-            delivery: self.delivery.as_ref().map(|cell| cell.delivery()),
-            log,
         }
     }
 
@@ -798,6 +822,9 @@ pub(crate) struct Trace(Arc<Mutex<TraceInner>>);
 
 #[derive(Default)]
 struct TraceInner {
+    /// Only the trace owns the sender. Finish removes it even when call tasks retain Trace
+    /// clones, so a late completion can neither publish after run end nor hold this channel open.
+    observer: Option<UnboundedSender<CallEvent>>,
     /// In arrival order, each with whether its log was charged (its params always are).
     kept: Vec<(Arc<CallEntry>, bool)>,
     kept_bytes: usize,
@@ -814,6 +841,13 @@ struct TraceInner {
 }
 
 impl Trace {
+    pub(crate) fn observed(observer: Option<UnboundedSender<CallEvent>>) -> Self {
+        Self(Arc::new(Mutex::new(TraceInner {
+            observer,
+            ..TraceInner::default()
+        })))
+    }
+
     /// Registers a call that just arrived: kept, its params charged, while the caps allow;
     /// otherwise counted.
     pub(crate) fn push(&self, entry: Arc<CallEntry>) {
@@ -826,6 +860,9 @@ impl Trace {
             trace.full |= !fits;
             trace.drop_entry(&entry);
         } else {
+            if let Some(observer) = &trace.observer {
+                let _sent = observer.send(CallEvent::Started(entry.started()));
+            }
             trace.kept_bytes += entry.params_bytes;
             trace.kept.push((entry, false));
         }
@@ -839,8 +876,13 @@ impl Trace {
         if let Some(index) = trace
             .kept
             .iter()
-            .position(|(kept, _)| Arc::ptr_eq(kept, entry))
+            .position(|(kept, charged)| !charged && Arc::ptr_eq(kept, entry))
         {
+            // Emit before charging: a log can evict this record, but its Started still
+            // requires a Finished. The same mutex makes this exclusive with take().
+            if let Some(observer) = &trace.observer {
+                let _sent = observer.send(CallEvent::Finished(entry.record(RunEnd::Settled)));
+            }
             trace.charge(index);
         }
     }
@@ -852,19 +894,25 @@ impl Trace {
         let Ok(mut trace) = self.0.lock() else {
             return (Vec::new(), None);
         };
+        let observer = trace.observer.take();
+        let mut records = Vec::with_capacity(trace.kept.len());
         let mut index = 0;
         while index < trace.kept.len() {
-            if trace.kept[index].1 || trace.charge(index) {
+            let (entry, charged) = &trace.kept[index];
+            // Sample an unfinished duration and mutable delivery once. The observation
+            // and outcome must agree even if a call task completes during this drain.
+            let record = entry.record(reason);
+            if !charged && let Some(observer) = &observer {
+                let _sent = observer.send(CallEvent::Finished(record.clone()));
+            }
+            if *charged || trace.charge(index) {
+                records.push(record);
                 index += 1;
             }
         }
-        let records: Vec<CallRecord> = trace
-            .kept
-            .drain(..)
-            .map(|(entry, _)| entry.record(reason))
-            .collect();
+        trace.kept.clear();
         for record in &records {
-            info!(
+            debug!(
                 call_id = record.call_id,
                 method = %record.method,
                 result = ?record.result,
@@ -1014,6 +1062,9 @@ pub(crate) fn js_number(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc;
+    use tokio::sync::mpsc::error::TryRecvError;
+
     use super::*;
 
     #[tokio::test]
@@ -1056,6 +1107,51 @@ mod tests {
 
     fn entry(call_id: u64, input: bool) -> Arc<CallEntry> {
         entry_with_params(call_id, input, serde_json::json!({ "selector": "#go" }))
+    }
+
+    #[test]
+    fn observed_finish_is_once_even_after_take_and_a_late_completion() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let trace = Trace::observed(Some(tx));
+        let call = entry(1, false);
+        trace.push(Arc::clone(&call));
+        let (records, _) = trace.take(RunEnd::Settled);
+        call.finish(CallResult::Ok);
+        trace.finished(&call);
+        assert!(
+            matches!(rx.try_recv(), Ok(CallEvent::Started(_))),
+            "start is first"
+        );
+        assert_eq!(rx.try_recv(), Ok(CallEvent::Finished(records[0].clone())));
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Disconnected));
+    }
+
+    #[test]
+    fn observed_eviction_pairs_at_finish_and_at_take() {
+        for finish_first in [false, true] {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let trace = Trace::observed(Some(tx));
+            let call = entry(1, false);
+            trace.push(Arc::clone(&call));
+            call.update_log(|log| log.push("x".repeat(MAX_TRACE_BYTES)));
+            if finish_first {
+                call.finish(CallResult::Ok);
+                trace.finished(&call);
+                trace.finished(&call);
+            }
+            let (records, dropped) = trace.take(RunEnd::Settled);
+            assert!(records.is_empty(), "the log exceeds the byte budget");
+            assert_eq!(dropped.map(|dropped| dropped.count), Some(1));
+            assert!(
+                matches!(rx.try_recv(), Ok(CallEvent::Started(_))),
+                "start is first"
+            );
+            assert!(
+                matches!(rx.try_recv(), Ok(CallEvent::Finished(_))),
+                "eviction still pairs"
+            );
+            assert_eq!(rx.try_recv(), Err(TryRecvError::Disconnected));
+        }
     }
 
     fn entry_with_params(call_id: u64, input: bool, params: Value) -> Arc<CallEntry> {

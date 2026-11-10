@@ -11,6 +11,7 @@ use std::{
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use neo_runtime::{AbsolutePaths, PageId, RunOutcome, RunPage, RunRequest, RunStatus, Runtime};
+use neo_trace::RunId;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
@@ -72,6 +73,8 @@ pub struct PlaywrightService {
 struct Reply {
     report: Value,
     images: Vec<binary::Image>,
+    /// Present only once a runtime run began; connection and tab-creation errors have no trace.
+    run_id: Option<RunId>,
 }
 
 impl From<Value> for Reply {
@@ -79,6 +82,7 @@ impl From<Value> for Reply {
         Self {
             report,
             images: Vec::new(),
+            run_id: None,
         }
     }
 }
@@ -273,16 +277,17 @@ impl PlaywrightService {
                 Err(result) => return result.into(),
             },
         };
-        let mut outcome = browser
-            .runtime
-            .run(RunRequest {
+        let (run_id, mut outcome) = neo_trace::run(
+            &browser.runtime,
+            RunRequest {
                 code: args.code,
                 page: PageId::new(page.clone()),
                 timeout: deadline.saturating_duration_since(Instant::now()),
                 cancel,
                 artifacts: Some(self.artifact_dir()),
-            })
-            .await;
+            },
+        )
+        .await;
         if !outcome.artifacts.is_empty() || !outcome.binaries.is_empty() {
             self.prune_artifacts();
         }
@@ -312,16 +317,27 @@ impl PlaywrightService {
         let dir = self.artifact_dir();
         artifacts::locate(&mut report, &dir);
         if binaries.is_empty() {
-            return report.into();
+            return Reply {
+                report,
+                images: Vec::new(),
+                run_id: Some(run_id),
+            };
         }
         // Writing, decoding and scaling block; the shutdown drain (`runs`) waits for them.
-        self.runs
+        let mut reply = self
+            .runs
             .spawn_blocking(move || {
                 let images = binary::present(&mut report, binaries, &dir);
-                Reply { report, images }
+                Reply {
+                    report,
+                    images,
+                    run_id: None,
+                }
             })
             .await
-            .unwrap_or_else(|error| failure("Error", &error.to_string()).into())
+            .unwrap_or_else(|error| failure("Error", &error.to_string()).into());
+        reply.run_id = Some(run_id);
+        reply
     }
 }
 
@@ -567,8 +583,12 @@ impl ServerHandler for PlaywrightService {
         let cancel = context.ct.child_token();
         let _cancel_on_drop = cancel.clone().drop_guard();
         // A transport dropping its handler cancels the request, while this owned task
-        // keeps Runtime::run alive until it has drained calls and detached its sessions.
-        let Reply { report, images } = self
+        // keeps the traced runtime run alive through its final call and run.end events.
+        let Reply {
+            report,
+            images,
+            run_id,
+        } = self
             .runs
             .spawn(async move {
                 let execution = service.execute(args, cancel.clone());
@@ -599,6 +619,11 @@ impl ServerHandler for PlaywrightService {
         } else {
             CallToolResult::structured_error(result)
         };
+        if let Some(run_id) = run_id {
+            let mut meta = Map::new();
+            meta.insert("com.browseros.neo/run".to_string(), json!(run_id));
+            result.meta = Some(meta.into());
+        }
         // After the text block, which stays the JSON of `structuredContent`.
         result.content.extend(
             images

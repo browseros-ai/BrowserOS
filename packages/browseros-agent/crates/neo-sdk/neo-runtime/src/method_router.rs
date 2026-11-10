@@ -63,6 +63,7 @@ use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use tokio::time;
 use tokio::time::Instant;
@@ -129,7 +130,7 @@ use crate::playwright_methods::waits::{
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
-use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::run::{CallEvent, CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 
 /// The shared budget for creation settlement, call draining and closing-state reads after
 /// the realm ends. Tasks still running keep their state and records read `Unfinished`.
@@ -568,12 +569,16 @@ enum Route {
 }
 
 impl Dispatcher {
-    pub(crate) fn new(tabs: Tabs, run: RunScope) -> Self {
+    pub(crate) fn new(
+        tabs: Tabs,
+        run: RunScope,
+        calls: Option<UnboundedSender<CallEvent>>,
+    ) -> Self {
         Self(Arc::new(Inner {
             tabs,
             _ending: run.ended.clone().drop_guard(),
             run,
-            trace: Trace::default(),
+            trace: Trace::observed(calls),
             in_flight: Arc::default(),
             cursors: Arc::default(),
             aborts: Arc::default(),
@@ -2507,7 +2512,7 @@ mod tests {
                 .request_close();
         }
         browser.page.lock().unwrap().tab_info_delay = Some(Duration::from_secs(3));
-        let dispatcher = Dispatcher::new(tabs, run);
+        let dispatcher = Dispatcher::new(tabs, run, None);
         let started = Instant::now();
         dispatcher.finish(RunEnd::Settled).await;
         assert!(
