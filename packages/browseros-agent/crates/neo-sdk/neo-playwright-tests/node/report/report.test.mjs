@@ -55,6 +55,38 @@ function inputs() {
   return { neo, reference, bridge }
 }
 
+test('tests that reports separate expectLoop passes and group skips by reason', () => {
+  const input = inputs()
+  const cases = flattenResults(input.neo.results)
+  const passed = cases.find((row) => row.test.status === 'expected')
+  passed.test.annotations = [{ type: 'expectLoop', description: 'toHaveText' }]
+  for (const row of cases.filter((row) => row !== passed)) {
+    row.test.status = 'skipped'
+    row.test.annotations = [
+      {
+        type: 'skip',
+        description: 'expectLoop: toMatchAriaSnapshot is not covered',
+      },
+    ]
+  }
+  const report = renderReport(input)
+  assert.equal(report.counts.pass, 0)
+  assert.equal(report.counts['pass via expectLoop'], 1)
+  assert.equal(report.counts.skip, 4)
+  assert.match(report.markdown, /\| pass via expectLoop \| 1 \|/)
+  assert.match(
+    report.markdown,
+    /\| expectLoop: toMatchAriaSnapshot is not covered \| 4 \|/,
+  )
+  assert.equal(
+    report.markdown
+      .split('## Failure evidence')[1]
+      .split('## Runner errors')[0]
+      .includes('pass via expectLoop'),
+    false,
+  )
+})
+
 test('report exposes commands, actual counts, transitions, gaps and _expect limits', () => {
   const report = renderReport(inputs())
   assert.match(report.markdown, /node node\/run.mjs page-goto.spec.ts/)
@@ -64,7 +96,7 @@ test('report exposes commands, actual counts, transitions, gaps and _expect limi
   )
   assert.match(
     report.markdown,
-    /\| tests\/page\/page-goto.spec.ts \| 1 \| 1 \| 0 \| 3 \| 0 \| 0 \| 0 \|/,
+    /\| tests\/page\/page-goto.spec.ts \| 1 \| 0 \| 1 \| 0 \| 3 \| 0 \| 0 \| 0 \|/,
   )
   assert.match(
     report.markdown,

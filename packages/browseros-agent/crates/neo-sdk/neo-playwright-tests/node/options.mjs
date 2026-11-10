@@ -5,6 +5,8 @@ export function runnerOptions(argv) {
     reference: false,
     skipBuild: false,
     debugBuild: false,
+    expectLoop: true,
+    curation: true,
     workers: 4,
     args: [],
   }
@@ -17,8 +19,10 @@ export function runnerOptions(argv) {
       break
     }
     if (arg === '--reference') options.reference = true
+    else if (arg === '--no-curation') options.curation = false
     else if (arg === '--skip-build') options.skipBuild = true
     else if (arg === '--debug-build') options.debugBuild = true
+    else if (arg === '--no-expect-loop') options.expectLoop = false
     else if (arg === '--release') options.debugBuild = false
     else if (/^--workers(=|$)|^-j/.test(arg)) {
       const attached = arg.startsWith('-j')
@@ -52,5 +56,6 @@ export function runnerOptions(argv) {
     inversions.map((value) => `(?:${value})`).join('|'),
   )
   if (files.length) options.args.push('--', ...files)
+  if (options.reference) options.expectLoop = false
   return options
 }

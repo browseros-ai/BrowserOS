@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { agent, source } from '../js/prepare.mjs'
 import { cleanupWorkers } from './browser.mjs'
 import { materialize } from './overlay.mjs'
+import { classifyRuns } from './report/classify.mjs'
 
 test('upstream fixtures retain real objects and expose unsupported internals explicitly', {
   skip: !process.env.NEO_E2E_BROWSER,
@@ -27,8 +28,38 @@ test('upstream fixtures retain real objects and expose unsupported internals exp
     workers: 2,
   })
   const { default: config } = await import(pathToFileURL(configPath).href)
-  config.testMatch = ['contract', 'trace', 'video'].map((name) =>
+  config.testMatch = ['contract', 'trace', 'video', 'expect'].map((name) =>
     path.join(overlay, `tests/fixture-${name}.spec.ts`),
+  )
+  fs.writeFileSync(
+    path.join(overlay, 'tests/fixture-expect.spec.ts'),
+    `
+import { test, expect, rafraf } from './page/pageTest';
+import { expect as browserExpect } from './config/browserTest';
+test('expect import seams preserve plain assertions', async ({ page }) => {
+  await page.setContent('<h1>hello</h1>');
+  await expect(page.locator('h1')).toHaveText('hello');
+  await expect(page).toHaveTitle('');
+  await browserExpect(page.locator('h1')).toBeVisible();
+  await browserExpect(page).toHaveURL('about:blank');
+  expect('a: 1\\nb: 2').toContainYaml('  a: 1');
+  expect(typeof rafraf).toBe('function');
+  await expect.poll(() => 'ready').toBe('ready');
+  expect.soft(1).toBe(1);
+  expect.configure({ timeout: 50 })('still real').toContain('real');
+  expect.extend({ toBeCustom: value => ({ pass: value === 42, message: () => 'custom' }) })(42).toBeCustom();
+});
+test('uncovered matcher skips immediately', async ({ page }) => {
+  await expect(page.locator('body')).toMatchAriaSnapshot('- generic');
+});
+test('caught uncovered matcher still skips', async ({ page }) => {
+  const error = await expect(page.locator('body')).toMatchAriaSnapshot('- generic').catch(e => e);
+  expect(error.message).toBe('upstream matcher error text');
+});
+test('loop assertion failures retain their prefix', async ({ page }) => {
+  await expect(page.locator('missing')).toHaveCount(1, { timeout: 10 });
+});
+`,
   )
   fs.writeFileSync(configPath, `export default ${JSON.stringify(config)};\n`)
   fs.writeFileSync(
@@ -140,6 +171,31 @@ test('${option} option', async ({ context }) => {});
     for (const child of suite.suites || []) collect(child)
   }
   collect(report)
+  const rows = classifyRuns(report, { suites: [] })
+  assert.equal(
+    rows.find(
+      (row) => row.title === 'expect import seams preserve plain assertions',
+    )?.verdict,
+    'pass via expectLoop',
+  )
+  const skipped = rows.find(
+    (row) => row.title === 'uncovered matcher skips immediately',
+  )
+  assert.equal(skipped?.verdict, 'skip')
+  assert.equal(
+    skipped?.reason,
+    'expectLoop: toMatchAriaSnapshot is not covered',
+  )
+  assert.equal(
+    rows.find((row) => row.title === 'caught uncovered matcher still skips')
+      ?.verdict,
+    'skip',
+  )
+  const failed = rows.find(
+    (row) => row.title === 'loop assertion failures retain their prefix',
+  )
+  assert.equal(failed?.verdict, 'neo-differs')
+  assert.match(failed.evidence[0].message, /expectLoop: toHaveCount/)
   assert.equal(
     results.get('crashed browser fails its worker')?.status,
     'unexpected',
