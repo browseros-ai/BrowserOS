@@ -998,6 +998,9 @@ pub fn classify(pair: &Pair) -> ResultRecord {
         result.comparable = result.evidence_incomplete.is_empty() && result.reference_complete;
     } else if let Some(gap) = result.evidence_incomplete.first() {
         result.reason.clone_from(gap);
+    } else if !result.cleanup_blur_notes.is_empty() {
+        result.verdict = Verdict::CleanupBlur;
+        result.reason = "only difference: trailing Neo window blur after the run ended".into();
     } else {
         result.verdict = Verdict::Pass;
         result.reason =
@@ -1093,6 +1096,7 @@ impl Default for Totals {
                 Verdict::Fail,
                 Verdict::Unsupported,
                 Verdict::BridgeLimit,
+                Verdict::CleanupBlur,
                 Verdict::Skip,
                 Verdict::NotApplicable,
                 Verdict::ReferenceFailure,
