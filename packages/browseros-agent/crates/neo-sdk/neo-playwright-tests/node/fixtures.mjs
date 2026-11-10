@@ -10,6 +10,8 @@ import {
   createClawContextFactory,
 } from './claw-context-options.mjs'
 import {
+  closeHarness,
+  holdHarness,
   installFixtureBuiltins,
   openHarness,
   pageTargets,
@@ -351,7 +353,7 @@ const clawTest = sdkTest.extend({
       try {
         await use(cdp)
       } finally {
-        await cdp.close()
+        await closeHarness(cdp)
       }
     },
     { scope: 'worker' },
@@ -385,15 +387,20 @@ const clawTest = sdkTest.extend({
       const initialPages = new Set(context.pages())
       context.setDefaultTimeout(actionTimeout || 0)
       context.setDefaultNavigationTimeout(navigationTimeout || 0)
+      const releaseHarness = holdHarness(__clawHarness)
       try {
         await use()
       } finally {
-        await resetClawTest({
-          context,
-          initialPages,
-          cdp: __clawHarness,
-          origins: serverOrigins(__neoWorker.serverPort, loopback),
-        })
+        try {
+          await resetClawTest({
+            context,
+            initialPages,
+            cdp: __clawHarness,
+            origins: serverOrigins(__neoWorker.serverPort, loopback),
+          })
+        } finally {
+          releaseHarness()
+        }
       }
     },
     { auto: true },

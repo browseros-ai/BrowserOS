@@ -2,6 +2,25 @@
 import { Cdp } from '../js/browser.mjs'
 import { installTestBuiltins } from '../js/test-builtins.mjs'
 
+const activeTests = new WeakMap()
+
+export function holdHarness(cdp) {
+  const tests = activeTests.get(cdp) || new Set()
+  activeTests.set(cdp, tests)
+  const { promise, resolve } = Promise.withResolvers()
+  tests.add(promise)
+  return () => {
+    tests.delete(promise)
+    resolve()
+  }
+}
+
+export async function closeHarness(cdp) {
+  // An unhandled SDK rejection can overlap Playwright's test and worker teardown.
+  await Promise.all(activeTests.get(cdp) || [])
+  await cdp.close()
+}
+
 export async function openHarness(port) {
   const response = await fetch(`http://127.0.0.1:${port}/json/version`)
   if (!response.ok)

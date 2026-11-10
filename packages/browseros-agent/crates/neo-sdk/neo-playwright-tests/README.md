@@ -59,6 +59,7 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
 - Per-test timeouts are reapplied. Teardown closes the test's pages, removes
   context listeners, clears cookies and server-origin storage, IndexedDB,
   HTTP cache, Cache Storage and service workers over a private CDP connection.
+  Worker shutdown keeps that connection open until test teardown finishes.
   Closing tabs destroys their sessionStorage; retained server-origin tabs have
   sessionStorage cleared through DOMStorage. This substitutes for fresh-context isolation;
   it adds no SDK methods.

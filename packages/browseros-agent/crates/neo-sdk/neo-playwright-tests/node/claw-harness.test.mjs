@@ -1,10 +1,28 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  closeHarness,
+  holdHarness,
   installFixtureBuiltins,
   resetClawTest,
   serverOrigins,
 } from './claw-harness.mjs'
+
+test('tests that worker shutdown keeps CDP open until test cleanup finishes', async () => {
+  let closed = false
+  const cdp = {
+    close: async () => {
+      closed = true
+    },
+  }
+  const release = holdHarness(cdp)
+  const closing = closeHarness(cdp)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(closed, false)
+  release()
+  await closing
+  assert.equal(closed, true)
+})
 
 // These commands are infrastructure, so an in-memory CDP peer can prove exactly what is exposed.
 test('tests that only the newly opened fixture target receives builtins', async () => {
