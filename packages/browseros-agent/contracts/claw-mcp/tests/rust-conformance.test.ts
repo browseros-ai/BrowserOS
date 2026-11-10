@@ -219,9 +219,11 @@ async function teardownRun(): Promise<void> {
 }
 
 gate('Rust /mcp conformance', () => {
+  // Two owned servers can each use their six-second shutdown grace before the
+  // browser/profile cleanup. Bun's default five-second hook limit cuts that off.
   afterAll(async () => {
     await teardownRun()
-  })
+  }, 30_000)
 
   for (const contractCase of activeCases) {
     test(

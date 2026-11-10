@@ -8,6 +8,7 @@ use rmcp::model::ToolAnnotations;
 pub mod act;
 pub mod browser_profiles;
 pub mod browser_target;
+mod click_feedback;
 pub mod credentials;
 pub mod diff;
 pub mod download;

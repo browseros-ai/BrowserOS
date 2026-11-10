@@ -1,9 +1,10 @@
-use crate::{PageId, SessionId, connection::CdpConnection};
+use crate::{CoreError, PageId, ProtocolSession, SessionId, connection::CdpConnection};
 use browseros_cdp::CdpEvent;
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, MutexGuard},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{broadcast, watch};
 use tracing::{debug, warn};
@@ -11,6 +12,20 @@ use tracing::{debug, warn};
 const CONSOLE_RING_CAPACITY: usize = 50;
 const ALERT_NOTE_CAPACITY: usize = 10;
 const SUMMARY_TEXT_MAX_CHARS: usize = 240;
+/// Slack between this process's clock and the browser's console timestamps when a
+/// [`ConsoleMark`] decides whether an entry was logged after the mark.
+const CONSOLE_MARK_SKEW_US: u64 = 50_000;
+
+/// Where an action started in a page's console history: entries pushed after `sequence` and,
+/// when the browser stamped them, logged after `logged_after_us` (microseconds since epoch).
+///
+/// The timestamp matters because a harvest pushes the page's whole stored history, including
+/// entries logged long before the action that are only now being seen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ConsoleMark {
+    pub sequence: u64,
+    pub logged_after_us: u64,
+}
 
 /// A position in a page's document events, taken before an action so a settle can tell the
 /// navigations that action caused from earlier ones.
@@ -104,6 +119,8 @@ pub struct ConsoleEntry {
     pub source: Option<String>,
     pub line: Option<u64>,
     pub column: Option<u64>,
+    /// When the page logged it, in microseconds since epoch, as stamped by the browser.
+    pub timestamp_us: Option<u64>,
 }
 
 impl ConsoleEntry {
@@ -141,6 +158,10 @@ struct PageSignalState {
     alert_notes: VecDeque<String>,
     console_entries: VecDeque<ConsoleEntry>,
     next_console_sequence: u64,
+    /// The newest browser timestamp recorded, and the texts recorded at exactly that time.
+    /// Every harvest replays the page's whole stored history; anything at or before the
+    /// watermark was already recorded by an earlier one.
+    console_watermark: Option<(u64, Vec<String>)>,
     /// Frames that live on the page's own session, keyed by frame id. Out-of-process frames
     /// report on sessions of their own and never land here; same-process ones leave on
     /// `Page.frameDetached`.
@@ -257,15 +278,78 @@ impl PageSignals {
     }
 
     #[must_use]
-    pub fn console_mark(&self, page_id: &PageId) -> u64 {
+    pub fn console_mark(&self, page_id: &PageId) -> ConsoleMark {
+        let logged_after_us = now_us().saturating_sub(CONSOLE_MARK_SKEW_US);
         if !self.allowed(page_id) {
-            return 0;
+            return ConsoleMark {
+                sequence: 0,
+                logged_after_us,
+            };
         }
-        self.state()
+        let sequence = self
+            .state()
             .pages
             .get(page_id)
             .map(|page| page.next_console_sequence)
-            .unwrap_or(0)
+            .unwrap_or(0);
+        ConsoleMark {
+            sequence,
+            logged_after_us,
+        }
+    }
+
+    /// Pulls the page's console warnings, errors and uncaught exceptions into the ring.
+    ///
+    /// Sessions do not keep `Runtime` enabled: while it is, the page's own console calls
+    /// serialize their arguments for the inspector, which pages time to detect DevTools and
+    /// then blank or close themselves. Enabling it makes the browser replay the stored
+    /// history before it answers; the disable follows the enable immediately on the same
+    /// session, in order, so reporting is on only for the brief span between the pair.
+    pub async fn harvest_console(
+        &self,
+        page_id: &PageId,
+        session: &ProtocolSession,
+    ) -> Result<(), CoreError> {
+        let Some(session_id) = session.session_id().cloned() else {
+            return Ok(());
+        };
+        if !self.allowed(page_id) {
+            return Ok(());
+        }
+        let mut events = self.cdp.events();
+        // Enable, then disable, as an ordered pair on the same session. send_value re-runs
+        // page admission before each call, so issuing the two concurrently let their
+        // admissions finish out of order and could put Runtime.disable on the wire before
+        // Runtime.enable, leaving reporting on (the live test uses an unguarded session and
+        // misses this). CDP keeps a session's messages in order, so an ordered pair always
+        // applies enable before disable.
+        session.send_value("Runtime.enable", json!({})).await?;
+        session.send_value("Runtime.disable", json!({})).await?;
+        loop {
+            let event = match events.try_recv() {
+                Ok(event) => event,
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    warn!("console harvest lagged by {skipped} CDP event(s)");
+                    continue;
+                }
+                Err(_) => break,
+            };
+            if event.session_id.as_ref() != Some(&session_id) {
+                continue;
+            }
+            match event.method.as_str() {
+                "Runtime.consoleAPICalled" => {
+                    if let Some(entry) = console_entry_from_params(&event.params) {
+                        self.push_console_entry(page_id, entry);
+                    }
+                }
+                "Runtime.exceptionThrown" => {
+                    self.push_console_entry(page_id, exception_entry_from_params(&event.params));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -281,7 +365,7 @@ impl PageSignals {
     }
 
     #[must_use]
-    pub fn console_entries_since(&self, page_id: &PageId, sequence: u64) -> Vec<ConsoleEntry> {
+    pub fn console_entries_since(&self, page_id: &PageId, mark: ConsoleMark) -> Vec<ConsoleEntry> {
         if !self.allowed(page_id) {
             return Vec::new();
         }
@@ -291,7 +375,12 @@ impl PageSignals {
             .map(|page| {
                 page.console_entries
                     .iter()
-                    .filter(|entry| entry.sequence >= sequence)
+                    .filter(|entry| {
+                        entry.sequence >= mark.sequence
+                            && entry
+                                .timestamp_us
+                                .is_none_or(|logged| logged >= mark.logged_after_us)
+                    })
                     .cloned()
                     .collect()
             })
@@ -553,6 +642,28 @@ impl PageSignals {
     fn push_console_entry(&self, page_id: &PageId, mut entry: ConsoleEntry) {
         let mut state = self.state();
         let page = state.pages.entry(page_id.clone()).or_default();
+        if let Some(logged) = entry.timestamp_us {
+            // Dedupe replayed history by (level, location, text), not text alone: two
+            // entries can share a microsecond timestamp yet differ in level or source (for
+            // example a warn and an error with the same message), and keying on text alone
+            // would drop the second and lose a distinct error.
+            let key = format!(
+                "{}\u{1f}{}\u{1f}{}",
+                entry.level.as_str(),
+                entry.location().unwrap_or_default(),
+                entry.text
+            );
+            match &mut page.console_watermark {
+                Some((newest, _)) if logged < *newest => return,
+                Some((newest, keys)) if logged == *newest => {
+                    if keys.contains(&key) {
+                        return;
+                    }
+                    keys.push(key);
+                }
+                watermark => *watermark = Some((logged, vec![key])),
+            }
+        }
         entry.sequence = page.next_console_sequence;
         page.next_console_sequence = page.next_console_sequence.saturating_add(1);
         if page.console_entries.len() == CONSOLE_RING_CAPACITY {
@@ -636,7 +747,24 @@ fn console_entry_from_params(params: &Value) -> Option<ConsoleEntry> {
         source,
         line,
         column,
+        timestamp_us: browser_timestamp_us(params),
     })
+}
+
+/// `Runtime.Timestamp`: milliseconds since epoch, with a fraction.
+fn browser_timestamp_us(params: &Value) -> Option<u64> {
+    params
+        .get("timestamp")
+        .and_then(Value::as_f64)
+        .filter(|ms| ms.is_finite() && *ms >= 0.0)
+        .map(|ms| (ms * 1000.0) as u64)
+}
+
+fn now_us() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 fn exception_entry_from_params(params: &Value) -> ConsoleEntry {
@@ -670,6 +798,7 @@ fn exception_entry_from_params(params: &Value) -> ConsoleEntry {
         }),
         line: stack_line.or_else(|| one_based(details.get("lineNumber"))),
         column: stack_column.or_else(|| one_based(details.get("columnNumber"))),
+        timestamp_us: browser_timestamp_us(params),
     }
 }
 
@@ -735,7 +864,7 @@ fn clamp_chars(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{DocumentSince, PageSignals};
-    use crate::{CdpConnection, PageId, SessionId};
+    use crate::{CdpConnection, PageId, ProtocolSession, SessionId};
     use browseros_cdp::{CdpError, CdpEvent};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
@@ -755,6 +884,8 @@ mod tests {
     struct TestConnection {
         sender: broadcast::Sender<CdpEvent>,
         sent: Mutex<Vec<SentCall>>,
+        /// What the browser replays from its console storage when `Runtime.enable` arrives.
+        stored_console: Mutex<Vec<(String, Value)>>,
     }
 
     impl TestConnection {
@@ -763,7 +894,15 @@ mod tests {
             Arc::new(Self {
                 sender,
                 sent: Mutex::new(Vec::new()),
+                stored_console: Mutex::new(Vec::new()),
             })
+        }
+
+        fn store_console(&self, method: &str, params: Value) {
+            self.stored_console
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((method.to_string(), params));
         }
 
         fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
@@ -798,6 +937,16 @@ mod tests {
                         params,
                         session: session.cloned(),
                     });
+                if method == "Runtime.enable" {
+                    let stored = self
+                        .stored_console
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    for (event, params) in stored {
+                        self.emit(&event, params, session.map(SessionId::as_str));
+                    }
+                }
                 Ok(json!({}))
             })
         }
@@ -1135,5 +1284,150 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    fn console_error(text: &str, timestamp_ms: f64) -> Value {
+        json!({
+            "type": "error",
+            "args": [{ "type": "string", "value": text }],
+            "timestamp": timestamp_ms
+        })
+    }
+
+    fn uncaught(text: &str, timestamp_ms: f64) -> Value {
+        json!({
+            "timestamp": timestamp_ms,
+            "exceptionDetails": { "text": "Uncaught", "exception": { "description": text } }
+        })
+    }
+
+    fn texts(entries: &[super::ConsoleEntry]) -> Vec<String> {
+        entries.iter().map(|entry| entry.text.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn harvest_turns_console_reporting_on_only_for_the_replay()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (signals, connection, page_id) = harness();
+        connection.store_console(
+            "Runtime.consoleAPICalled",
+            console_error("save failed", 1.0),
+        );
+        connection.store_console("Runtime.exceptionThrown", uncaught("TypeError: x", 2.0));
+        let session =
+            ProtocolSession::for_session(connection.clone(), SessionId::from("session-7"));
+
+        signals.harvest_console(&page_id, &session).await?;
+
+        let runtime: Vec<_> = connection
+            .sent_calls()
+            .into_iter()
+            .filter(|call| call.method.starts_with("Runtime."))
+            .map(|call| (call.method, call.session))
+            .collect();
+        let on_page = Some(SessionId::from("session-7"));
+        assert_eq!(
+            runtime,
+            vec![
+                ("Runtime.enable".to_string(), on_page.clone()),
+                ("Runtime.disable".to_string(), on_page),
+            ]
+        );
+        // Recorded by the time the harvest returns, without waiting on the listener.
+        assert_eq!(
+            texts(&signals.console_entries(&page_id)),
+            vec!["save failed", "TypeError: x"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repeated_harvests_record_each_replayed_entry_once()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (signals, connection, page_id) = harness();
+        let session =
+            ProtocolSession::for_session(connection.clone(), SessionId::from("session-7"));
+        connection.store_console("Runtime.consoleAPICalled", console_error("first", 1.0));
+        connection.store_console(
+            "Runtime.consoleAPICalled",
+            console_error("same instant", 1.0),
+        );
+        signals.harvest_console(&page_id, &session).await?;
+
+        connection.store_console("Runtime.consoleAPICalled", console_error("second", 3.0));
+        signals.harvest_console(&page_id, &session).await?;
+        signals.harvest_console(&page_id, &session).await?;
+        // The background listener sees the same replays; give it the chance to double up.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(
+            texts(&signals.console_entries(&page_id)),
+            vec!["first", "same instant", "second"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn distinct_levels_sharing_a_timestamp_are_both_kept()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (signals, connection, page_id) = harness();
+        let session =
+            ProtocolSession::for_session(connection.clone(), SessionId::from("session-7"));
+        // Same text and microsecond, different level: the warning must not mask the error.
+        connection.store_console(
+            "Runtime.consoleAPICalled",
+            json!({
+                "type": "warning",
+                "args": [{ "type": "string", "value": "failed" }],
+                "timestamp": 1.0
+            }),
+        );
+        connection.store_console("Runtime.consoleAPICalled", console_error("failed", 1.0));
+        signals.harvest_console(&page_id, &session).await?;
+
+        let levels: Vec<_> = signals
+            .console_entries(&page_id)
+            .iter()
+            .map(|entry| (entry.level, entry.text.clone()))
+            .collect();
+        assert_eq!(
+            levels,
+            vec![
+                (super::ConsoleLevel::Warning, "failed".to_string()),
+                (super::ConsoleLevel::Error, "failed".to_string()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_actions_summary_leaves_out_history_logged_before_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (signals, connection, page_id) = harness();
+        let session =
+            ProtocolSession::for_session(connection.clone(), SessionId::from("session-7"));
+        let before_mark_ms = (super::now_us() / 1000) as f64 - 60_000.0;
+        connection.store_console(
+            "Runtime.consoleAPICalled",
+            console_error("old", before_mark_ms),
+        );
+
+        let mark = signals.console_mark(&page_id);
+        let after_mark_ms = (super::now_us() / 1000) as f64 + 1.0;
+        connection.store_console(
+            "Runtime.consoleAPICalled",
+            console_error("validation failed", after_mark_ms),
+        );
+        signals.harvest_console(&page_id, &session).await?;
+
+        assert_eq!(
+            texts(&signals.console_entries_since(&page_id, mark)),
+            vec!["validation failed"]
+        );
+        assert_eq!(
+            texts(&signals.console_entries(&page_id)),
+            vec!["old", "validation failed"]
+        );
+        Ok(())
     }
 }

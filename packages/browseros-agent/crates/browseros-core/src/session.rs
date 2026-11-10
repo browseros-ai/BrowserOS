@@ -1,5 +1,5 @@
 use crate::{
-    CoreError, NativeCapabilities, PageId, TargetId,
+    CoreError, NativeCapabilities, PageId, SessionId, TargetId,
     connection::CdpConnection,
     frames::FrameRegistry,
     input::Input,
@@ -12,9 +12,13 @@ use crate::{
     },
     windows::WindowManager,
 };
-use browseros_cdp::CdpEvent;
+use browseros_cdp::{CdpError, CdpEvent};
+use futures_util::future::BoxFuture;
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 #[derive(Clone, Default)]
@@ -52,6 +56,27 @@ impl BrowserSession {
         hooks: BrowserSessionHooks,
         native: NativeCapabilities,
     ) -> Arc<Self> {
+        let session = Arc::new_cyclic(|session| {
+            Self::assemble(
+                Arc::new(EvictingConnection {
+                    inner: connection,
+                    session: session.clone(),
+                }),
+                hooks,
+                native,
+            )
+        });
+        Self::spawn_detach_listener(session.clone());
+        session
+    }
+
+    /// Builds the registries over the evicting `connection`. Every registry must get this one,
+    /// because a registry handed the host's connection would keep routing to dead ids.
+    fn assemble(
+        connection: Arc<dyn CdpConnection>,
+        hooks: BrowserSessionHooks,
+        native: NativeCapabilities,
+    ) -> Self {
         let file_transfers = crate::file_transfers::TransferState::new(connection.clone());
         let frames = FrameRegistry::new(connection.clone());
         let page_signals = PageSignals::new(connection.clone());
@@ -99,8 +124,8 @@ impl BrowserSession {
                 .with_file_transfers(file_transfers.clone()),
         );
         let windows = Arc::new(WindowManager::new(connection.clone()));
-        let session = Arc::new(Self {
-            connection: connection.clone(),
+        Self {
+            connection,
             native,
             file_transfers,
             pages,
@@ -108,9 +133,7 @@ impl BrowserSession {
             windows,
             frames,
             observers: Mutex::new(HashMap::new()),
-        });
-        Self::spawn_detach_listener(session.clone());
-        session
+        }
     }
 
     #[must_use]
@@ -274,6 +297,19 @@ impl BrowserSession {
 
     pub async fn dispose(&self) {}
 
+    /// Drops `session_id` from every cache that routes commands by session. The detach listener
+    /// and the connection's refusal path both use it. Removal is by value, so a late refusal
+    /// for a dead session never evicts the session that replaced it. It sends nothing, so the
+    /// connection can run it from inside a send without recursing. It takes the page, frame,
+    /// signal and file-transfer registry locks, so no code may hold one of those locks across a
+    /// send on this session's connection.
+    pub(crate) async fn forget_session(&self, session_id: &SessionId) {
+        self.page_signals.detach_session(session_id);
+        self.file_transfers.forget_session(session_id);
+        self.pages.detach_session(session_id).await;
+        self.frames.forget_session(session_id).await;
+    }
+
     fn spawn_detach_listener(session: Arc<Self>) {
         let mut events = session.connection.events();
         tokio::spawn(async move {
@@ -299,9 +335,135 @@ async fn handle_detached_event(session: &BrowserSession, event: CdpEvent) {
         .params
         .get("sessionId")
         .and_then(Value::as_str)
-        .map(crate::SessionId::from);
+        .map(SessionId::from);
     if let Some(session_id) = session_id {
-        session.page_signals.detach_session(&session_id);
-        session.pages.detach_session(&session_id).await;
+        session.forget_session(&session_id).await;
+    }
+}
+
+/// The host's connection as this session's registries see it. A detach event is not the only
+/// notice that a session died. The event can be lost to a lagged listener, or land before the
+/// attach that caches the id, and the registries would then route every later command on the
+/// tab to the dead id. Chromium still refuses each such command with "no session with given
+/// id", so a refusal forgets the session it was sent on before the caller sees it, and the
+/// caller's next attempt attaches anew. Hosts pass their own connection and never see this.
+struct EvictingConnection {
+    inner: Arc<dyn CdpConnection>,
+    /// Weak because the session owns this connection through its registries.
+    session: Weak<BrowserSession>,
+}
+
+impl EvictingConnection {
+    /// Awaits one send, forgetting the session it went to when Chromium refused it as gone.
+    async fn evicting<T>(
+        &self,
+        session: Option<&SessionId>,
+        names_other: impl FnOnce() -> bool,
+        reply: BoxFuture<'_, Result<T, CdpError>>,
+    ) -> Result<T, CdpError> {
+        let reply = reply.await;
+        if matches!(reply, Err(CdpError::SessionGone))
+            && let Some(session_id) = session
+            && !names_other()
+            && let Some(owner) = self.session.upgrade()
+        {
+            owner.forget_session(session_id).await;
+        }
+        reply
+    }
+}
+
+/// Whether `params` name a session other than the one the command went to, as
+/// `Target.detachFromTarget` sent on a parent does. Chromium's refusal is then about the named
+/// session, so the one the command was sent on stays.
+fn names_other_session(params: &Value, session: Option<&SessionId>) -> bool {
+    params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .is_some_and(|named| session.is_none_or(|session| session.as_str() != named))
+}
+
+fn raw_names_other_session(params_json: &str, session: Option<&SessionId>) -> bool {
+    serde_json::from_str::<Value>(params_json)
+        .is_ok_and(|params| names_other_session(&params, session))
+}
+
+impl CdpConnection for EvictingConnection {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        let names_other = names_other_session(&params, session);
+        Box::pin(self.evicting(
+            session,
+            move || names_other,
+            self.inner.send(method, params, session),
+        ))
+    }
+
+    fn send_raw_json<'a>(
+        &'a self,
+        method: &'a str,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        Box::pin(self.evicting(
+            session,
+            move || raw_names_other_session(params_json, session),
+            self.inner.send_raw_json(method, params_json, session),
+        ))
+    }
+
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        let names_other = names_other_session(&params, session);
+        Box::pin(
+            self.evicting(
+                session,
+                move || names_other,
+                self.inner
+                    .send_at_epoch(expected_epoch, method, params, session),
+            ),
+        )
+    }
+
+    fn send_raw_json_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        Box::pin(
+            self.evicting(
+                session,
+                move || raw_names_other_session(params_json, session),
+                self.inner
+                    .send_raw_json_at_epoch(expected_epoch, method, params_json, session),
+            ),
+        )
+    }
+
+    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.inner.events()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.inner.events_targeted(method)
+    }
+
+    fn is_connected(&self) -> bool {
+        self.inner.is_connected()
+    }
+
+    fn connection_epoch(&self) -> u64 {
+        self.inner.connection_epoch()
     }
 }

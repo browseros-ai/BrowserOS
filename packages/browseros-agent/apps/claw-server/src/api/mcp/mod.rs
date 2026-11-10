@@ -22,7 +22,7 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
     tower::{StreamableHttpServerConfig, StreamableHttpService},
 };
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 pub use service::ClawMcpService;
 // Re-exported so the route tests assert against the real text instead of keeping a
@@ -70,9 +70,30 @@ pub fn browser_mcp_service(state: AppState) -> ClawMcpService {
 pub fn streamable_http_service(
     state: AppState,
 ) -> StreamableHttpService<ClawMcpService, LocalSessionManager> {
+    let transport_sessions = transport_session_manager(state.config.session_idle);
     StreamableHttpService::new(
         move || Ok(browser_mcp_service(state.clone())),
-        Arc::new(LocalSessionManager::default()),
+        Arc::new(transport_sessions),
         StreamableHttpServerConfig::default(),
     )
+}
+
+// rmcp drops a transport session after its own 5-minute keep-alive, which 404s a
+// legacy client long before our session idle sweep would retire it.
+fn transport_session_manager(session_idle: Duration) -> LocalSessionManager {
+    let mut sessions = LocalSessionManager::default();
+    sessions.session_config.keep_alive = Some(session_idle);
+    sessions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transport_keep_alive_follows_configured_session_idle() {
+        let idle = Duration::from_secs(1017);
+        let sessions = transport_session_manager(idle);
+        assert_eq!(sessions.session_config.keep_alive, Some(idle));
+    }
 }

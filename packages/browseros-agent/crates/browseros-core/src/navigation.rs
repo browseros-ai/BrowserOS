@@ -5,7 +5,8 @@ use crate::{
     target::page_access::PageAccess,
     timeouts,
 };
-use serde::Deserialize;
+use browseros_cdp::CdpError;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::time::{sleep, timeout};
@@ -77,6 +78,28 @@ impl Navigation {
         }
     }
 
+    /// Sends a navigation command, returning the session it ran on, the document mark taken
+    /// just before it and its reply. Chromium refuses a command on a dead session before it
+    /// runs, and that refusal already evicted the session, so the command goes once more on a
+    /// fresh attachment. A command that ran is never sent again.
+    async fn send_navigation<R: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<(PageSession, DocumentMark, R), CoreError> {
+        let page = self.page_session().await?;
+        let mark = self.page_signals.document_mark(&self.page_id);
+        match page.session.send(method, params.clone()).await {
+            Err(CoreError::Cdp(CdpError::SessionGone)) => {
+                let page = self.page_session().await?;
+                let mark = self.page_signals.document_mark(&self.page_id);
+                let reply = page.session.send(method, params).await?;
+                Ok((page, mark, reply))
+            }
+            reply => Ok((page, mark, reply?)),
+        }
+    }
+
     /// Navigates and waits for the page to arrive. A URL the browser could not load (an
     /// unknown host, a refused connection) is an error rather than an arrival at Chrome's
     /// error page, and a URL that turns out to be a file reports the download instead of
@@ -86,11 +109,8 @@ impl Navigation {
             access.fresh().await?;
         }
         self.throw_if_dialog_open()?;
-        let page = self.page_session().await?;
-        let mark = self.page_signals.document_mark(&self.page_id);
-        let reply: NavigateReply = page
-            .session
-            .send("Page.navigate", json!({ "url": url }))
+        let (page, mark, reply) = self
+            .send_navigation::<NavigateReply>("Page.navigate", json!({ "url": url }))
             .await?;
         // A download is answered with errorText net::ERR_ABORTED too, so it goes first.
         if reply.is_download {
@@ -136,9 +156,9 @@ impl Navigation {
             access.fresh().await?;
         }
         self.throw_if_dialog_open()?;
-        let page = self.page_session().await?;
-        let mark = self.page_signals.document_mark(&self.page_id);
-        let _: Value = page.session.send("Page.reload", json!({})).await?;
+        let (page, mark, _) = self
+            .send_navigation::<Value>("Page.reload", json!({}))
+            .await?;
         wait_for_load(
             &page,
             &self.page_signals,

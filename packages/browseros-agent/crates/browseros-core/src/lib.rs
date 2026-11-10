@@ -30,7 +30,7 @@ pub use connection::{CdpConnection, ProtocolSession};
 pub use error::{CoreError, CoveredElementTarget, TargetError};
 pub use page_js::PageJs;
 pub use page_signals::{
-    ConsoleEntry, ConsoleLevel, DocumentMark, DocumentSince, PageDialog, PageSignals,
+    ConsoleEntry, ConsoleLevel, ConsoleMark, DocumentMark, DocumentSince, PageDialog, PageSignals,
 };
 pub use profiles::{
     BrowserProfileInfo, DEFAULT_PROFILE_DIRECTORY, LoadProfileOutcome, ProfileCandidate,

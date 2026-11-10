@@ -4,6 +4,10 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from bos_build.core.context import Context
+from bos_build.lib.testing import MockBrowserOSRoot
 
 from bos_build.lib import versions
 
@@ -78,6 +82,109 @@ class VersionsTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             versions.update_feed_version(())
+
+
+class ReleaseChromiumFloorTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.package = MockBrowserOSRoot(
+            Path(tmp.name) / "main", chromium_version="155.0.8059.26"
+        )
+        self.floor = (
+            self.package.root
+            / "bos_build/config/BROWSEROS_RELEASE_MIN_CHROMIUM_VERSION"
+        )
+        self.floor.write_text("158.0.8127.18\n")
+
+    def test_release_old_pin_rejected_without_a_source_checkout(self):
+        with self.assertRaisesRegex(
+            ValueError, "Release builds require Chromium >= 158.0.8127.18"
+        ):
+            Context(
+                root_dir=self.package.root,
+                chromium_src=self.package.root / "absent",
+                build_type="release",
+            )
+
+    def test_release_external_pin_meets_main_owned_floor(self):
+        external = MockBrowserOSRoot(
+            self.package.root.parent / "external", chromium_version="158.0.8127.18"
+        ).with_patch_store()
+        ctx = Context(
+            root_dir=self.package.root, patch_root=external.root, build_type="release"
+        )
+        self.assertEqual(ctx.chromium_version, "158.0.8127.18")
+
+    def test_release_synced_internal_pin_meets_floor(self):
+        (self.package.root / "CHROMIUM_VERSION").write_text(
+            "MAJOR=158\nMINOR=0\nBUILD=8127\nPATCH=18\n"
+        )
+        self.assertEqual(
+            Context(root_dir=self.package.root, build_type="release").chromium_version,
+            "158.0.8127.18",
+        )
+
+    def test_debug_old_pin_remains_supported(self):
+        self.assertEqual(
+            Context(root_dir=self.package.root, build_type="debug").chromium_version,
+            "155.0.8059.26",
+        )
+
+    def test_malformed_release_floor_is_rejected(self):
+        for invalid in ("", "158", "158.0.8127.bad", "158.0.8127.18.1"):
+            with self.subTest(invalid=invalid):
+                self.floor.write_text(invalid)
+                with self.assertRaisesRegex(
+                    ValueError, "Invalid release Chromium floor"
+                ):
+                    Context(root_dir=self.package.root, build_type="release")
+
+    def test_older_layout_without_policy_remains_supported(self):
+        self.floor.unlink()
+        self.assertEqual(
+            Context(root_dir=self.package.root, build_type="release").chromium_version,
+            "155.0.8059.26",
+        )
+
+    def test_artifact_factories_preserve_their_pin_without_build_validation(self):
+        from bos_build.cli import release, ota, ext, release_feeds
+
+        with (
+            mock.patch.object(
+                release, "get_package_root", return_value=self.package.root
+            ),
+            mock.patch.object(ext, "get_package_root", return_value=self.package.root),
+            mock.patch.object(
+                release_feeds, "get_package_root", return_value=self.package.root
+            ),
+            mock.patch.object(
+                ota,
+                "Context",
+                side_effect=lambda **kwargs: Context(
+                    root_dir=self.package.root, **kwargs
+                ),
+            ),
+        ):
+            contexts = (
+                release.create_release_context("0.52.2"),
+                ota.create_ota_context(),
+                ext._create_context("0.52.2"),
+                release_feeds._create_context("0.52.2"),
+            )
+        for ctx in contexts:
+            self.assertTrue(ctx.artifact_only)
+            self.assertEqual(ctx.build_type, "release")
+            self.assertEqual(ctx.chromium_version, "155.0.8059.26")
+
+    def test_full_version_comparison_is_numeric(self):
+        versions.validate_release_chromium_version(
+            self.package.root, "158.0.9000.0", "release"
+        )
+        with self.assertRaisesRegex(ValueError, "Release builds require"):
+            versions.validate_release_chromium_version(
+                self.package.root, "158.0.8127.17", "release"
+            )
 
 
 if __name__ == "__main__":

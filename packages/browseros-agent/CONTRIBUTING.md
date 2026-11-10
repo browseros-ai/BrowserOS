@@ -63,12 +63,21 @@ There are two variants and the difference matters more than the name suggests.
 
 | | `bun run dev:claw:watch` | `bun run dev:claw:watch:new` |
 |---|---|---|
-| Ports | Fixed: CDP 9000, server 9100, extension 9300 | Random, in the 9000 to 9999 range |
-| Profile | A persistent dev profile that keeps its state | A fresh temporary directory each run |
+| Ports | Preferred: CDP 9000, server 9200, extension 9300 | Random, in the 9000 to 9999 range |
+| Browser profile | A persistent dev profile per checkout | A fresh temporary directory each run |
+| Claw state | `~/.browserclaw-dev`, shared across worktrees | A fresh `browserclaw-dev-*` directory in the system temp directory |
 | On start | **Kills anything holding those ports, and any browser already using that profile** | Only its own server port, cleared just before launch |
 | Reach for it when | You want your logins and settings to survive a restart | Running more than one at once, testing first-run behaviour, or not wanting to disturb a running instance |
 
-`:new` is the safer default while you are getting oriented, though it is not entirely hands-off: the server process clears its own port immediately before launching, so a process that grabs that port in the gap after it was picked will still be killed. Both variants take a lock on the profile, so two watch runs can never supervise the same one.
+`:new` is the safer default while you are getting oriented, though it is not entirely hands-off: the server process clears its own port immediately before launching, so a process that grabs that port in the gap after it was picked will still be killed. Both variants lock the browser profile and the Claw state directory. Starting another watch with the same Claw state directory waits for its previous watcher to stop its children, even across worktrees. A shutdown timeout returns an error rather than reopening the same database during cleanup.
+
+Plain watch reuses Claw settings and session history across worktrees. To select another Claw state directory, set `BROWSERCLAW_DIR`; it takes precedence for both commands:
+
+```bash
+BROWSERCLAW_DIR=~/.browserclaw-copy-prod bun run dev:claw:watch
+```
+
+The supervisor logs the selected browser profile and Claw state directory at startup. `dev:cleanup` removes temporary directories, including those created by `:new`, and preserves `~/.browserclaw-dev` and other state outside the temp directories. `--only-temps` also stops watch owners before deleting their directories; it skips explicit port cleanup. Existing state nested inside an older browser profile is left in place; point `BROWSERCLAW_DIR` at it to resume it.
 
 ## Before you open a PR
 

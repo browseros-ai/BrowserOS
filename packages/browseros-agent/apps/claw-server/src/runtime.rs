@@ -181,12 +181,10 @@ impl AppRuntime {
                 }),
             },
         ];
-        // Reads the cohort from PostHog remote configuration using the analytics
-        // credentials this build already embeds, so shipping it needs nothing else
-        // configured. A build with no PostHog key reaches no source, the cohort stays
-        // empty and nobody is invited, which is the same silent outcome as an unreachable
-        // one, so there is nothing to report.
+        // The cohort module resolves deployment policy and source precedence together; no source
+        // means this process must not start a refresh task, even with embedded analytics keys.
         if let Some(source) = crate::services::feedback_cohort::configured_source(
+            state.config.mode,
             state.analytics.remote_config_credentials(),
         ) {
             tasks.push(BackgroundTask {

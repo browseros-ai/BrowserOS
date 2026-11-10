@@ -93,6 +93,8 @@ pub struct PageManager {
     cdp: Arc<dyn CdpConnection>,
     hooks: PageManagerHooks,
     file_transfers: Option<Arc<crate::file_transfers::TransferState>>,
+    /// Never held across a send on `cdp`, because a send refused as gone takes this lock to
+    /// forget its session (see `BrowserSession::forget_session`).
     state: Mutex<PageState>,
 }
 
@@ -715,7 +717,10 @@ impl PageManager {
             .with_epoch_guard(guard.clone());
         let _: Value = session.send("Page.enable", json!({})).await?;
         let _: Value = session.send("DOM.enable", json!({})).await?;
-        let _: Value = session.send("Runtime.enable", json!({})).await?;
+        // No `Runtime.enable`: with it on, every console call the page makes serializes its
+        // arguments for the inspector, and sites time that to detect DevTools and blank or
+        // close themselves. Runtime commands work without it; `PageSignals::harvest_console`
+        // turns it on only for the instant it takes to collect the console history.
         let _: Value = session.send("Accessibility.enable", json!({})).await?;
         let _ = session
             .send::<_, Value>("Runtime.runIfWaitingForDebugger", json!({}))
@@ -955,7 +960,6 @@ mod tests {
             ("Target.attachToTarget", json!({ "sessionId": "session-7" })),
             ("Page.enable", json!({})),
             ("DOM.enable", json!({})),
-            ("Runtime.enable", json!({})),
             ("Accessibility.enable", json!({})),
             ("Runtime.runIfWaitingForDebugger", json!({})),
         ]
@@ -1004,6 +1008,10 @@ mod tests {
             focus.map(|call| &call.params),
             Some(&json!({ "enabled": true }))
         );
+        assert!(
+            !calls.iter().any(|call| call.method == "Runtime.enable"),
+            "attaching must not leave console reporting on"
+        );
         Ok(())
     }
 
@@ -1027,6 +1035,10 @@ mod tests {
                 .iter()
                 .any(|call| call.method == "Emulation.setFocusEmulationEnabled"),
             "adopted tab must not get focus emulation"
+        );
+        assert!(
+            !calls.iter().any(|call| call.method == "Runtime.enable"),
+            "attaching must not leave console reporting on"
         );
         Ok(())
     }
