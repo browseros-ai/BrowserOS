@@ -12,7 +12,7 @@ const bundle = fs.readFileSync(
 )
 const codec = codecFactory({ identify: () => undefined, resolve: (ref) => ref })
 
-async function native(t) {
+async function native(t, respond = () => ({})) {
   const replies = []
   const waiters = []
   let receive
@@ -27,7 +27,7 @@ async function native(t) {
         const message = JSON.parse(text)
         sent.push(message)
         return {
-          reply: JSON.stringify({ id: message.id, result: {} }),
+          reply: JSON.stringify({ id: message.id, result: respond(message) }),
           events: 0,
         }
       },
@@ -96,6 +96,33 @@ async function native(t) {
   }
   return { sdk, run, ready, sent, get, invoke, command }
 }
+
+test('tests that evaluation source and returned SDK handles share one native run', async (t) => {
+  const { ready, sent, invoke } = await native(t, (message) =>
+    message.method === 'evaluateExpressionHandle'
+      ? {
+          handle: {
+            type: 'JSHandle',
+            guid: 'handle@evaluation',
+            initializer: { preview: 'object' },
+          },
+        }
+      : { value: 42 },
+  )
+  const create = () => ({ answer: 42 })
+  const read = (object) => object.answer
+  const created = await invoke(ready.roots.page.ref, 'evaluateHandle', [create])
+  assert.equal(created.ok, true, JSON.stringify(created))
+  assert.equal(created.value.ref.family, 'JSHandle')
+  const evaluated = await invoke(created.value.ref, 'evaluate', [read])
+  assert.equal(evaluated.ok, true, JSON.stringify(evaluated))
+  assert.equal(codec.decode(evaluated.value), 42)
+  assert.deepEqual(
+    sent.map((message) => message.params.expression),
+    [String(create), String(read)],
+  )
+  assert.ok(sent.every((message) => message.params.isFunction))
+})
 
 test('tests that SDK return identities survive round trips and choose the nearest public class', async (t) => {
   const { sdk, run, ready, get, invoke } = await native(t)
