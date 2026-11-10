@@ -11,11 +11,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{mem, slice};
 
 use neo_runtime::{RunEvent, RunId};
-use sea_orm::{DatabaseConnection, DbErr, TransactionTrait};
+use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, TransactionTrait};
 use tokio::sync::mpsc;
 use tokio::time::{self, Instant};
 use tracing::warn;
 
+use crate::db::entities::trace_runs;
+use crate::db::unsigned;
 use crate::ingest::{self, Command, Entry, State};
 use crate::live::Heads;
 use crate::{Retention, StoreError, apply, db, retention};
@@ -35,6 +37,9 @@ pub(crate) struct Writer {
     pub(crate) state: Arc<State>,
     pub(crate) heads: Arc<Heads>,
     pub(crate) retention: Retention,
+    /// Erasure must outlive events already owned by runtime tasks. Only this writer consults
+    /// tombstones; emit stays lock-free. Settlement or its sweep deadline bounds their life.
+    pub(crate) forgotten: HashMap<RunId, u64>,
 }
 
 impl Writer {
@@ -67,7 +72,9 @@ impl Writer {
             // Check deadlines between batches as well as on an idle tick. A permanently busy
             // FIFO must not starve settlement or hourly retention.
             if Instant::now() >= next_settle {
-                match apply::sweep(&self.db, now()).await {
+                let now = now();
+                self.forgotten.retain(|_, deadline| *deadline >= now);
+                match apply::sweep(&self.db, now).await {
                     Ok(keys) => self.publish(keys.into_iter().collect()).await,
                     Err(error) => self.failed(&error),
                 }
@@ -139,6 +146,7 @@ impl Writer {
                     ..
                 } => {
                     losses.remove(&run);
+                    self.forgotten.remove(&run);
                 }
                 _ => {}
             }
@@ -165,6 +173,11 @@ impl Writer {
         let txn = self.db.begin().await?;
         let mut dirty = BTreeSet::new();
         for entry in batch {
+            // Unlike a shed start, an explicitly erased run must never get a placeholder.
+            // Do not retire on RunSettled until commit: a retry must filter it again.
+            if ingest::run_id(&entry.command).is_some_and(|run| self.forgotten.contains_key(&run)) {
+                continue;
+            }
             match &entry.command {
                 Command::Withhold(key) => {
                     apply::withhold(&txn, key.as_str()).await?;
@@ -234,7 +247,13 @@ impl Writer {
         }
     }
 
-    async fn forget(&self, key: &str) -> Result<u64, StoreError> {
+    async fn forget(&mut self, key: &str) -> Result<u64, StoreError> {
+        let unsettled = trace_runs::Entity::find()
+            .filter(trace_runs::Column::SessionKey.eq(key))
+            .filter(trace_runs::Column::SettledAtMs.is_null())
+            .all(&self.db)
+            .await
+            .map_err(StoreError::db)?;
         let mut count = 0;
         loop {
             let txn = self.db.begin().await.map_err(StoreError::db)?;
@@ -246,6 +265,22 @@ impl Writer {
             if !more {
                 break;
             }
+        }
+        // Install only after erasure commits. This actor applies no queued events during
+        // chunked erasure, so there is no gap between deletion and protecting late facts.
+        for run in unsettled {
+            let id = run
+                .run_id
+                .parse()
+                .map_err(|error| StoreError::Row(format!("run id: {error}")))?;
+            let end = run.ended_at_ms.or_else(|| {
+                run.timeout_ms
+                    .map(|timeout| run.started_at_ms.saturating_add(timeout))
+            });
+            let deadline = end
+                .map_or_else(now, unsigned)
+                .saturating_add(apply::SETTLE_GRACE_MS);
+            self.forgotten.insert(id, deadline);
         }
         self.publish(BTreeSet::from([key.to_string()])).await;
         Ok(count)

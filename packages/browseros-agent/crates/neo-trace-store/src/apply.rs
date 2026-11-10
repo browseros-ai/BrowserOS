@@ -19,7 +19,7 @@ mod calls;
 mod lifecycle;
 
 pub(crate) use artifacts::{forget_chunk, withhold};
-pub(crate) use lifecycle::{reconcile, sweep};
+pub(crate) use lifecycle::{SETTLE_GRACE_MS, reconcile, sweep};
 
 /// Neo: bounds rows per run; overflow remains visible in run counts and worst delivery.
 pub(crate) const CALL_CAP: u64 = 50_000;
@@ -38,8 +38,8 @@ pub(crate) async fn command(
     let Some(id) = ingest::run_id(command) else {
         return Ok(None);
     };
-    // A late feed capture cannot resurrect a forgotten run. Runtime facts may still create
-    // placeholders when their start was shed; artifacts only decorate a run already recorded.
+    // The writer filters forgotten unsettled runs before projection. Once settlement clears
+    // that tombstone, late artifacts still only decorate a run that already exists.
     if matches!(command, Command::Artifact(..))
         && trace_runs::Entity::find_by_id(id.to_string())
             .one(txn)

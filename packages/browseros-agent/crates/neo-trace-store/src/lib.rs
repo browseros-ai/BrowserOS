@@ -13,6 +13,7 @@
 //! Hosts stop runs, await [`Runtime::drain`](neo_runtime::Runtime::drain), then call
 //! [`TraceStore::close`]. An outcome alone does not end the runtime's remaining writes.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -223,6 +224,7 @@ impl TraceStore {
                     state: Arc::clone(&queue.state),
                     heads: Arc::clone(&heads),
                     retention: config.retention,
+                    forgotten: HashMap::default(),
                 }
                 .run(),
             )

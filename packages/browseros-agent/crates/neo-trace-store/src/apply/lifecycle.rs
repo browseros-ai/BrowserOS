@@ -14,6 +14,9 @@ use crate::db::entities::{trace_calls, trace_logs, trace_pages, trace_runs};
 use crate::db::kinds::{CallState, RunStatus, SettledBy, UnfinishedReason};
 use crate::db::signed;
 
+/// Neo: lost runtime settlement is synthesized after the run's end or budget plus this grace.
+pub(crate) const SETTLE_GRACE_MS: u64 = 120_000;
+
 pub(super) async fn end(
     txn: &DatabaseTransaction,
     run: &mut trace_runs::Model,
@@ -206,7 +209,7 @@ pub(crate) async fn sweep(db: &DatabaseConnection, now: u64) -> Result<Vec<Strin
 async fn synthetic(db: &DatabaseConnection, now: u64, restart: bool) -> Result<Vec<String>, DbErr> {
     let mut select = trace_runs::Entity::find().filter(trace_runs::Column::SettledAtMs.is_null());
     if !restart {
-        let deadline = signed(now.saturating_sub(120_000));
+        let deadline = signed(now.saturating_sub(SETTLE_GRACE_MS));
         // If both lifecycle events were shed, there is no ended_at_ms. A known runtime budget
         // still bounds the run: allow the same 120 s settlement grace after that budget. Do not
         // guess a deadline for a placeholder whose RunStarted (and timeout) never arrived.

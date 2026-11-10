@@ -464,6 +464,94 @@ async fn reserve_stubs_preserve_call_and_getter_outcomes_and_settlement_losses()
 }
 
 #[tokio::test]
+async fn late_runtime_events_cannot_resurrect_a_forgotten_active_run() {
+    use super::support::{count, inspect};
+    use neo_runtime::{Delivery, PageId, PageRef};
+
+    let (_dir, path) = scratch();
+    let store = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
+    let start = started("forgotten-active");
+    let run = start.run.id;
+    let capture = store.sink().run(&start).unwrap();
+    capture.emit(&before(run, 1));
+    store.flushed().await;
+    assert_eq!(
+        store
+            .forget_session(start.run.session.as_ref().unwrap())
+            .await
+            .unwrap(),
+        1
+    );
+
+    for event in [
+        before(run, 2),
+        after(run, 1),
+        getter(run, 1),
+        RunEvent::InputSent {
+            run,
+            call: 1,
+            offset_us: 2,
+        },
+        RunEvent::DeliverySettled {
+            run,
+            call: 1,
+            delivery: Delivery::Done,
+        },
+        RunEvent::PageOpened {
+            run,
+            page: PageRef {
+                target: PageId::new("late".into()),
+                tab_id: Some(8),
+            },
+            created: true,
+            by_call: Some(2),
+            offset_us: 3,
+        },
+        RunEvent::PageClosed {
+            run,
+            page: PageId::new("late".into()),
+            offset_us: 4,
+        },
+        ended(run, 2),
+        RunEvent::RunSettled { run },
+    ] {
+        capture.emit(&event);
+    }
+    store.attach_after_call(
+        CallId { run, no: 1 },
+        AfterCall {
+            tab_id: Some(8),
+            url: None,
+            title: None,
+            jpeg: Some(vec![1]),
+            captured_at_ms: 1,
+        },
+    );
+    store.flushed().await;
+    assert!(
+        store.run(&run).await.unwrap().is_none(),
+        "late runtime events resurrected a forgotten run"
+    );
+    let db = inspect(&path).await;
+    for table in [
+        "trace_runs",
+        "trace_sessions",
+        "trace_calls",
+        "trace_getters",
+        "trace_pages",
+        "trace_logs",
+        "trace_run_ids",
+        "trace_call_artifacts",
+    ] {
+        assert_eq!(
+            count(&db, &format!("SELECT COUNT(*) FROM {table}")).await,
+            0,
+            "{table} resurrected"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_late_artifact_cannot_recreate_an_erased_run() {
     let (_dir, path) = scratch();
     let store = TraceStore::open(StoreConfig::new(path)).await.unwrap();
