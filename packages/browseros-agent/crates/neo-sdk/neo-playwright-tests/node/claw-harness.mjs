@@ -27,9 +27,16 @@ export async function installFixtureBuiltins(cdp, before) {
     flatten: true,
   })
   try {
+    await cdp.send('Page.enable', {}, sessionId)
     await installTestBuiltins(cdp, sessionId)
-  } finally {
+    // Chromium removes this session's new-document scripts when it detaches.
+    return async () => {
+      if ((await pageTargets(cdp)).includes(added[0]))
+        await cdp.send('Target.detachFromTarget', { sessionId })
+    }
+  } catch (error) {
     await cdp.send('Target.detachFromTarget', { sessionId })
+    throw error
   }
 }
 
@@ -60,12 +67,7 @@ export async function resetClawTest({ context, initialPages, cdp, origins }) {
     errors.push(error)
   }
   try {
-    await cdp.send('Storage.clearCookies')
-    for (const origin of origins)
-      await cdp.send('Storage.clearDataForOrigin', {
-        origin,
-        storageTypes: 'all',
-      })
+    await clearProfileData(cdp, origins)
   } catch (error) {
     errors.push(error)
   }
@@ -74,4 +76,49 @@ export async function resetClawTest({ context, initialPages, cdp, origins }) {
       errors,
       `harness-error: Claw test reset failed: ${errors.map((error) => error.message).join('; ')}`,
     )
+}
+
+async function clearProfileData(cdp, origins) {
+  let [targetId] = await pageTargets(cdp)
+  const temporary = !targetId
+  if (temporary) {
+    const { tab } = await cdp.send('Browser.createTab', {
+      url: 'about:blank',
+      background: true,
+    })
+    targetId = tab.targetId
+  }
+  let sessionId
+  try {
+    // Storage.clearDataForOrigin needs a target's storage partition even on a browser socket.
+    ;({ sessionId } = await cdp.send('Target.attachToTarget', {
+      targetId,
+      flatten: true,
+    }))
+    await cdp.send('Storage.clearCookies')
+    await cdp.send('Network.clearBrowserCache', {}, sessionId)
+    for (const origin of origins)
+      await cdp.send(
+        'Storage.clearDataForOrigin',
+        { origin, storageTypes: 'all' },
+        sessionId,
+      )
+    const { result } = await cdp.send(
+      'Runtime.evaluate',
+      { expression: 'location.origin', returnByValue: true },
+      sessionId,
+    )
+    if (origins.includes(result.value))
+      await cdp.send(
+        'DOMStorage.clear',
+        { storageId: { securityOrigin: result.value, isLocalStorage: false } },
+        sessionId,
+      )
+  } finally {
+    try {
+      if (sessionId) await cdp.send('Target.detachFromTarget', { sessionId })
+    } finally {
+      if (temporary) await cdp.send('Target.closeTarget', { targetId })
+    }
+  }
 }
