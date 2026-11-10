@@ -72,6 +72,8 @@ mod chromium_bridge;
 mod deadline;
 mod debugger;
 mod events;
+#[cfg(feature = "hosted-run")]
+mod hosted_run;
 mod method_router;
 mod mime;
 mod playwright_methods;
@@ -85,6 +87,8 @@ mod test_host;
 mod url_match;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
+#[cfg(feature = "hosted-run")]
+pub use hosted_run::HostedRun;
 pub use run::{
     CallEvent, CallLocation, CallRecord, CallResult, CallStarted, Delivery, DroppedCalls, PageId,
     RunBinary, RunEnd, RunError, RunOutcome, RunPage, RunRequest, RunStatus, StartPage,

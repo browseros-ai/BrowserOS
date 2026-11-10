@@ -12,7 +12,11 @@
 //! so sessions detach once the realm, dispatcher and their writers are gone, also when a
 //! caller drops the run's future. Browser tabs themselves survive the run.
 
+#[cfg(feature = "hosted-run")]
+use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(feature = "hosted-run")]
+use std::time::Duration;
 
 #[expect(
     clippy::disallowed_types,
@@ -21,6 +25,10 @@ use std::sync::Arc;
 use browseros_cdp::{CdpClient, CdpError};
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio::sync::mpsc::UnboundedSender;
+#[cfg(feature = "hosted-run")]
+use tokio::sync::{oneshot, watch};
+#[cfg(feature = "hosted-run")]
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::artifacts::{AbsolutePaths, Artifacts};
@@ -31,6 +39,10 @@ use crate::chromium_bridge::browser_connection_settings::Switches;
 use crate::chromium_bridge::cdp::browser::{GetTabInfo, TabExists};
 use crate::chromium_bridge::cdp::{Browser, Command};
 use crate::deadline::Deadline;
+#[cfg(feature = "hosted-run")]
+use crate::hosted_run;
+#[cfg(feature = "hosted-run")]
+use crate::hosted_run::{Host, HostedRun};
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
 use crate::playwright_methods::screenshot::TabScreenshots;
@@ -39,6 +51,8 @@ use crate::quickjs;
 use crate::quickjs::Script;
 use crate::quickjs_bridge;
 use crate::quickjs_bridge::Getters;
+#[cfg(feature = "hosted-run")]
+use crate::run::StartPage;
 use crate::run::{CallEvent, RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
 #[cfg(feature = "test-host")]
 use crate::test_host::TestHost;
@@ -174,6 +188,8 @@ impl Runtime {
             None,
             #[cfg(feature = "test-host")]
             None,
+            #[cfg(feature = "hosted-run")]
+            None,
         )
         .await
     }
@@ -193,6 +209,8 @@ impl Runtime {
             Some(calls),
             #[cfg(feature = "test-host")]
             None,
+            #[cfg(feature = "hosted-run")]
+            None,
         )
         .await
     }
@@ -207,7 +225,72 @@ impl Runtime {
         request: RunRequest,
         host: Box<dyn TestHost>,
     ) -> RunOutcome {
-        self.run_inner(request, None, Some(host)).await
+        self.run_inner(
+            request,
+            None,
+            Some(host),
+            #[cfg(feature = "hosted-run")]
+            None,
+        )
+        .await
+    }
+
+    /// Neo: Opens a new tab and lends the SDK door to another JavaScript engine. The host
+    /// must call [`HostedRun::finish`] when its script ends. Deadline and drop still end the
+    /// native lifecycle without the host's cooperation.
+    ///
+    /// # Errors
+    /// Returns the startup error if a multi-threaded Tokio runtime or the new tab is unavailable.
+    #[cfg(feature = "hosted-run")]
+    pub async fn open_hosted_run(
+        &self,
+        timeout: Duration,
+        artifacts: Option<PathBuf>,
+    ) -> Result<HostedRun, RunError> {
+        let tokio = Handle::try_current()
+            .ok()
+            .filter(|handle| handle.runtime_flavor() == RuntimeFlavor::MultiThread)
+            .ok_or_else(|| {
+                RunError::new(
+                    "Error",
+                    "neo-runtime runs need tokio's multi-threaded runtime".to_string(),
+                )
+            })?;
+        let (ready, opened) = oneshot::channel();
+        let (completed, outcome) = watch::channel(None);
+        let host = Host {
+            ready,
+            outcome: outcome.clone(),
+            done: CancellationToken::new(),
+        };
+        let request = RunRequest {
+            code: String::new(),
+            page: StartPage::NewTab,
+            timeout,
+            cancel: CancellationToken::new(),
+            artifacts,
+        };
+        let runtime = self.clone();
+        tokio.spawn(async move {
+            let result = runtime
+                .run_inner(
+                    request,
+                    None,
+                    #[cfg(feature = "test-host")]
+                    None,
+                    Some(host),
+                )
+                .await;
+            let _ = completed.send(Some(result));
+        });
+        if let Ok(run) = opened.await {
+            Ok(run)
+        } else {
+            let result = hosted_run::outcome(outcome).await?;
+            Err(result.error.unwrap_or_else(|| {
+                RunError::new("Error", "hosted run stopped before opening".to_string())
+            }))
+        }
     }
 
     async fn run_inner(
@@ -215,6 +298,7 @@ impl Runtime {
         request: RunRequest,
         calls: Option<UnboundedSender<CallEvent>>,
         #[cfg(feature = "test-host")] test_host: Option<Box<dyn TestHost>>,
+        #[cfg(feature = "hosted-run")] host: Option<Host>,
     ) -> RunOutcome {
         let RunRequest {
             code,
@@ -286,6 +370,14 @@ impl Runtime {
             run: tabs.run_id(),
             released: false,
         };
+        #[cfg(feature = "hosted-run")]
+        let outcome = if let Some(host) = host {
+            host.run(script, getters, dispatcher.clone(), deadline, tabs)
+                .await
+        } else {
+            quickjs::run(script, getters, dispatcher.clone(), deadline, events).await
+        };
+        #[cfg(not(feature = "hosted-run"))]
         let outcome = quickjs::run(script, getters, dispatcher.clone(), deadline, events).await;
         let (calls, dropped, pages) = dispatcher.finish(run_end_of(&outcome)).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
