@@ -104,7 +104,8 @@ function runDetails(label, run) {
 
 export function renderReport({ neo, reference, bridge, corpus = [] }) {
   const engine = neo.metadata.engine || neo.metadata.mode || 'neo'
-  const label = engine === 'claw' ? 'v1' : 'Neo'
+  const label =
+    engine === 'claw' ? 'v1' : engine === 'reference' ? 'Vanilla' : 'Neo'
   const refusalList = engine === 'claw' ? clawRefusals : refusals
   const rows = classifyRuns(neo.results, reference.results, corpus, { engine })
   const counts = countVerdicts(rows)
@@ -288,11 +289,13 @@ function readRun(directory, mode) {
         metadata.argv.every((arg) => typeof arg === 'string')
   const engine = metadata.engine || metadata.mode
   if (
-    !(mode === 'neo' ? ['neo', 'claw'].includes(engine) : engine === mode) ||
+    !(mode === 'neo'
+      ? ['neo', 'claw', 'reference'].includes(engine)
+      : engine === mode) ||
     !argvValid
   )
     throw new Error(
-      `${directory}/run.json must record mode=${mode} and its argv`,
+      `${directory}/run.json must record a supported engine and its argv for --${mode}`,
     )
   const results = readJson(path.join(directory, 'results.json'))
   return { directory: path.resolve(directory), metadata, results }

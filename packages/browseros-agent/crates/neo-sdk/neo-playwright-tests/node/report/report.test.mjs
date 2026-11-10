@@ -191,6 +191,12 @@ test('CLI writes markdown and parseable one-verdict-per-case JSONL; invalid inpu
     3,
   )
   assert.match(fs.readFileSync(output, 'utf8'), /## Per suite/)
+  const selfArgs = [...args]
+  selfArgs[2] = path.join(root, 'reference')
+  const self = spawnSync(process.execPath, selfArgs, { encoding: 'utf8' })
+  assert.equal(self.status, 0, self.stderr)
+  assert.equal(JSON.parse(self.stdout).counts.pass, 5)
+  assert.match(fs.readFileSync(output, 'utf8'), /^# Vanilla in Node/)
   fs.rmSync(path.join(root, 'neo', 'run.json'))
   fs.rmSync(output)
   const failure = spawnSync(process.execPath, args, { encoding: 'utf8' })
