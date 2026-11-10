@@ -13,6 +13,7 @@ members = [
 exclude = [
     "crates/neo-sdk/neo-quickjs-injected",
     "crates/neo-sdk/neo-playwright-injected",
+    "crates/neo-sdk/neo-playwright-tests/node/addon",
 ]
 resolver = "3"
 

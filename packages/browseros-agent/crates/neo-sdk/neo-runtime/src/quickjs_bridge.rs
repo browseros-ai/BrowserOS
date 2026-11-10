@@ -238,7 +238,7 @@ fn install_test_host<'js>(
 /// on or off. On, it switches on what the event's producer needs in each page it covers, and
 /// that page's next call waits for it (`EventHub::ready`); off, a page whose console nobody
 /// listens to any more frees the objects its console events hold.
-fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
+pub(crate) fn subscribe(tabs: &Tabs, request: &str) -> Result<(), String> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Subscription {
@@ -616,10 +616,15 @@ impl Getters {
     }
 
     fn get(&self, ctx: &Ctx<'_>, request: &str) -> rquickjs::Result<String> {
-        match self.answer(request) {
-            Ok(value) => Ok(value.to_string()),
-            Err(error) => Err(self.throw(ctx, error)),
-        }
+        self.get_text(request)
+            .map_err(|error| throw_named(ctx, &error.name, &error.message))
+    }
+
+    /// Neo: The engine-independent synchronous door; QuickJS and hosted engines share errors.
+    pub(crate) fn get_text(&self, request: &str) -> Result<String, RunError> {
+        self.answer(request)
+            .map(|value| value.to_string())
+            .map_err(|error| self.run_error(error))
     }
 
     fn answer(&self, request: &str) -> Result<Value, GetError> {
@@ -855,16 +860,15 @@ impl Getters {
         })
     }
 
-    fn throw(&self, ctx: &Ctx<'_>, error: GetError) -> rquickjs::Error {
-        let error = match error {
+    fn run_error(&self, error: GetError) -> RunError {
+        match error {
             GetError::BadRequest(message) => RunError::new("Error", message),
             GetError::Page(error) => RunError::new(error.name.as_str(), error.message),
             GetError::Stopped(Stop::Timeout) => RunError::timeout(self.deadline.timeout()),
             GetError::Stopped(Stop::Cancelled) => {
                 RunError::new("Error", "Run cancelled".to_string())
             }
-        };
-        throw_named(ctx, &error.name, &error.message)
+        }
     }
 }
 

@@ -51,6 +51,17 @@
 //! hosted run. `quickjs_bridge.rs` installs its receive/reply callbacks; page operations still
 //! use the same SDK and dispatcher. Ordinary runs never receive that additional global.
 //!
+//! The default-off `hosted-run` feature lends that SDK door to another JavaScript engine through
+//! `Runtime::open_hosted_run`. The host supplies its deadline and calls `HostedRun::finish`;
+//! drop, browser loss and the deadline also end the run. `Runtime::shutdown_hosted_runs` stops
+//! admission, cancels active runs and drains cleanup before the host disconnects CDP. The hosted
+//! starting tab is private and closes at run end. Ordinary QuickJS runs are unchanged.
+//! Hosted runs keep the existing call/log budgets in [`RunOutcome`], an event queue bounded to
+//! 10,000 events / 16 MiB, and at most 10,000 undisposed JS handles and 10,000 live handle groups.
+//! Disposing handles frees their slots; groups belonging to closed pages are reclaimed on reuse.
+//! Page/context identities remain in first-seen order for the outcome, so workers should close
+//! each test's context and release its SDK objects. The Node add-on defaults to a 24-hour run.
+//!
 //! `run_observed` publishes kept call starts and ends from Trace's existing mutex.
 //! The optional neo-trace crate consumes them; the runtime never owns run ids or log formatting.
 
@@ -72,6 +83,8 @@ mod chromium_bridge;
 mod deadline;
 mod debugger;
 mod events;
+#[cfg(feature = "hosted-run")]
+mod hosted_run;
 mod method_router;
 mod mime;
 mod playwright_methods;
@@ -85,6 +98,8 @@ mod test_host;
 mod url_match;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
+#[cfg(feature = "hosted-run")]
+pub use hosted_run::HostedRun;
 pub use run::{
     CallEvent, CallLocation, CallRecord, CallResult, CallStarted, Delivery, DroppedCalls, PageId,
     RunBinary, RunEnd, RunError, RunOutcome, RunPage, RunRequest, RunStatus, StartPage,

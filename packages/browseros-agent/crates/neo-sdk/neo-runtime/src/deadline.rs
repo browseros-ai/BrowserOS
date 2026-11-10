@@ -26,6 +26,16 @@ pub(crate) struct Deadline {
 }
 
 impl Deadline {
+    /// Neo: A hosted getter shares the run's clock but wakes independently at ordinary finish,
+    /// so waking a blocked read cannot change call records from Settled or Timeout to Cancelled.
+    #[cfg(feature = "hosted-run")]
+    pub(crate) fn with_cancellation(&self, cancel: CancellationToken) -> Self {
+        Self {
+            cancel,
+            ..self.clone()
+        }
+    }
+
     pub(crate) fn new(timeout: Duration, cancel: CancellationToken) -> Self {
         let now = Instant::now();
         Self {

@@ -2511,6 +2511,12 @@ pub(crate) struct GroupGuard {
 }
 
 impl GroupGuard {
+    /// Neo: Hosted handle tables can forget groups Chromium destroyed with their page or child session.
+    #[cfg(feature = "hosted-run")]
+    pub(crate) fn is_closed(&self) -> bool {
+        self.page.closed.is_cancelled() || self.frame.host.gone().is_cancelled()
+    }
+
     pub(crate) fn group(&self) -> &ObjectGroup {
         &self.group
     }

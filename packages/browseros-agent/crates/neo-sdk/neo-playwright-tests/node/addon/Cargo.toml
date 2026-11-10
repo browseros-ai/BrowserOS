@@ -1,0 +1,22 @@
+[package]
+name = "neo-node"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately separate: N-API registration uses unsafe code, forbidden in product crates.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2.16", default-features = false, features = ["napi5"] }
+napi-derive = "2.16"
+neo-runtime = { path = "../../../neo-runtime", features = ["hosted-run"] }
+browseros-cdp = { path = "../../../../browseros-cdp" }
+serde_json = "1"
+tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "time", "net"] }
+
+[build-dependencies]
+napi-build = "2"

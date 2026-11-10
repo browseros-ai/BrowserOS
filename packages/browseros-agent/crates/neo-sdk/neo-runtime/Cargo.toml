@@ -11,6 +11,8 @@ description = "Runs an agent's Playwright-style script in a QuickJS realm agains
 default = []
 # A per-run opaque transport for the upstream test runner. Ordinary runs never install it.
 test-host = []
+# A host can own the SDK's JavaScript engine while retaining the native run lifecycle.
+hosted-run = []
 
 # browseros-cdp and neo-runtime-spec are the only first-party dependencies; see
 # crates/neo-sdk/NEO_STYLE.md. futures-util's `join_all` writes a click's pipelined mouse events in order.

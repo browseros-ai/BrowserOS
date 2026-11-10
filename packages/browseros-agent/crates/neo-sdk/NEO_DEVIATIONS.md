@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/neo-sdk/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (135)
+## Deviations (136)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -130,6 +130,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/playwright_methods/drop_on.rs | `FrameTab::drop_on` | `server/dom.ts` `ElementHandle._drop` | Playwright builds the DataTransfer and dispatches the events in the page's main world, because Firefox strips the files of one that crosses from the utility world. Neo runs Playwright's same page function in its utility world, where Chromium hands the page's listeners the same DataTransfer and files; only a page that replaced DataTransfer, File, DragEvent or dispatchEvent sees the difference. |
 | neo-runtime/src/playwright_methods/drop_on.rs | `MAX_DROP_FILE_BYTES` | `server/dom.ts` `ElementHandle._drop` | Playwright reads local files of any size into the page call. Neo holds them in memory and hands them to the page in one CDP message, so it caps their total at 50 MiB, Playwright's own cap for a browser that does not share its files (`fileUploadUtils.ts`), and refuses more with an Error naming the size. |
 | neo-runtime/src/playwright_methods/element_ops.rs | `dispatch_on_aria_ref` | `server/frames.ts` `Frame.dispatchEvent` | Playwright resolves the selector in the page's own world, whose injected script holds no `ai` snapshot, so a selector with an `aria-ref` matches nothing there and the call waits out its timeout. Neo resolves such a selector in the utility world, as Playwright's `click` and `locator.evaluate` resolve it, adopts the match into its frame's main world and dispatches there as `ElementHandle.dispatchEvent` does, so the event reaches the element the ref names, in a hidden frame too. |
+| neo-runtime/src/playwright_methods/evaluate.rs | `MAX_HOSTED_HANDLES` | `server/dispatchers/dispatcher.ts` `DispatcherConnection.maybeDisposeStaleDispatchers` | Hosted runs refuse handles past this cap instead of silently evicting objects a Node worker may still hold; ordinary QuickJS runs are unchanged. |
 | neo-runtime/src/playwright_methods/evaluate.rs | `adopt_element` | `server/dom.ts` `FrameExecutionContext.adoptIfNeeded` | A handle of another session (an out-of-process frame's, another tab's) fails Playwright's adoption, which `_retryWithProgressIfNotConnected` retries until the call times out (TimeoutError); Neo refuses it at once with Playwright's adoption Error, since a script gains nothing from waiting its whole timeout to learn the handle is unusable. Neither selects anything. |
 | neo-runtime/src/playwright_methods/evaluate.rs | `created_handle` | `server/dom.ts` `ElementHandle._initializePreview` | Playwright starts at `JSHandle@node` and updates the preview by event; Neo has no events, so the handle starts with the final preview. |
 | neo-runtime/src/playwright_methods/evaluate.rs | `utility_root` | `server/frameSelectors.ts` `FrameSelectors._resolveChainedSelector` | Playwright resolves frame hops from a scope too; Neo serves a scoped query within the element's own document only. |
