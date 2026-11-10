@@ -501,14 +501,15 @@
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-068",
       "title": "EX-068 toBeOK fail with invalid argument",
-      "action": "patch",
-      "reason": "error wording: keep that it fails",
+      "action": "skip",
+      "reason": "expectLoop: toBeOK is not covered",
       "patches": [
         {
           "find": "expect(error.message).toContain('toBeOK can be only used with APIResponse object');",
           "replace": "expect(error).toBeInstanceOf(Error);"
         }
-      ]
+      ],
+      "patchReason": "error wording: keep that it fails"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
@@ -725,8 +726,8 @@
       "file": "tests/page/expect-matcher-result.spec.ts",
       "id": "EX-180",
       "title": "EX-180 toHaveScreenshot should populate matcherResult",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toHaveScreenshot is not covered",
       "patches": [
         {
           "find": "expect.soft(e.matcherResult).toEqual({\n    attachments: [expect.any(Object), expect.any(Object), expect.any(Object)],\n    actual: expect.stringContaining('screenshot-sanity-actual'),\n    expected: expect.stringContaining('screenshot-sanity-'),\n    diff: expect.stringContaining('screenshot-sanity-diff'),\n    message: expect.stringContaining(`expect(page).toHaveScreenshot(expected)`),\n    name: 'toHaveScreenshot',\n    pass: false,\n    log: expect.any(Array),\n  });",
@@ -736,7 +737,8 @@
           "find": "expect.soft(stripAnsi(e.toString())).toContain(`Error: expect(page).toHaveScreenshot(expected) failed\n\n  23362 pixels (ratio 0.10 of all image pixels) are different.\n`);",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
@@ -812,14 +814,22 @@
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-207",
       "title": "toContainClass › EX-207 pass",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toContainClass is not covered",
       "patches": [
         {
           "find": "expect(() => expect(locator).toContainClass(/foo|bar/ as any)).toThrow(/\"expected\\\" argument in toContainClass cannot be a RegExp value/);",
           "replace": "expect(() => expect(locator).toContainClass(/foo|bar/ as any)).toThrow();"
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "id": "EX-208",
+      "title": "toContainClass › EX-208 pass with SVGs",
+      "action": "skip",
+      "reason": "expectLoop: toContainClass is not covered"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
@@ -832,14 +842,15 @@
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-210",
       "title": "toContainClass › EX-210 pass with array",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toContainClass is not covered",
       "patches": [
         {
           "find": "expect(() => expect(locator).toContainClass(['foo', 'hello', /baz/] as any)).toThrow(/\"expected\" argument in toContainClass cannot contain RegExp values/);",
           "replace": "expect(() => expect(locator).toContainClass(['foo', 'hello', /baz/] as any)).toThrow();"
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
@@ -925,10 +936,31 @@
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
+      "id": "EX-233",
+      "title": "toBeInViewport › EX-233 should work",
+      "action": "skip",
+      "reason": "expectLoop: toBeInViewport is not covered"
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "id": "EX-234",
+      "title": "toBeInViewport › EX-234 should respect ratio option",
+      "action": "skip",
+      "reason": "expectLoop: toBeInViewport is not covered"
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-235",
       "title": "toBeInViewport › EX-235 should have good stack",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "id": "EX-236",
+      "title": "toBeInViewport › EX-236 should report intersection even if fully covered by other element",
+      "action": "skip",
+      "reason": "expectLoop: toBeInViewport is not covered"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
@@ -1071,14 +1103,15 @@
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-256",
       "title": "EX-256 should fail like a timeout when toMatchAriaSnapshot is aborted mid-assertion",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(error.message)).toContain(`expect(locator).toMatchAriaSnapshot(expected) failed`);",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
@@ -1112,16 +1145,115 @@
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-259",
+      "title": "EX-259 toHaveAccessibleName",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleName is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-260",
+      "title": "EX-260 toHaveAccessibleDescription",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleDescription is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-261",
+      "title": "EX-261 toHaveAccessibleErrorMessage",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-262",
+      "title": "EX-262 toHaveAccessibleErrorMessage should handle multiple aria-errormessage references",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-263",
+      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in false › EX-263 no aria-invalid attribute",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-264",
+      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in false › EX-264 aria-invalid=\"false\"",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-265",
+      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in false › EX-265 aria-invalid=\"\" (empty string)",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-266",
+      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in true › EX-266 aria-invalid=\"true\"",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-267",
+      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in true › EX-267 aria-invalid=\"foo\" (unrecognized value)",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-268",
+      "title": "EX-268 should show error message when validity is false and aria-invalid is true",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-269",
+      "title": "EX-269 should show error message when validity is true and aria-invalid is true",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-270",
+      "title": "EX-270 should show error message when validity is false and aria-invalid is false",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-271",
+      "title": "EX-271 should not show error message when validity is true and aria-invalid is false",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
+      "id": "EX-272",
+      "title": "EX-272 should show error message for all roles",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
+    },
+    {
+      "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-273",
       "title": "EX-273 toHaveRole",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toHaveRole is not covered",
       "patches": [
         {
           "find": "expect(error.message).toBe(`\"role\" argument in toHaveRole must be a string`);",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
@@ -1275,6 +1407,20 @@
       ]
     },
     {
+      "file": "tests/page/expect-with-snapshot.spec.ts",
+      "id": "EX-317",
+      "title": "property matchers print only the element line › EX-317 toHaveRole failure prints just the element line",
+      "action": "skip",
+      "reason": "expectLoop: toHaveRole is not covered"
+    },
+    {
+      "file": "tests/page/expect-with-snapshot.spec.ts",
+      "id": "EX-326",
+      "title": "matchers that should not include an aria snapshot › EX-326 toMatchAriaSnapshot failure has no extra aria snapshot",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
       "file": "tests/page/firefox-network-response.spec.ts",
       "id": "FF-005",
       "title": "FF-005 should preserve original response header fields for 200 responses",
@@ -1308,6 +1454,20 @@
       "title": "FF-008 should report a standalone 304 response without waiting for a cache merge",
       "action": "delete",
       "reason": "upstream-skipped: excluded by the pinned Chromium run"
+    },
+    {
+      "file": "tests/page/frame-evaluate.spec.ts",
+      "id": "FR-003",
+      "title": "FR-003 should dispose context on navigation",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl"
+    },
+    {
+      "file": "tests/page/frame-evaluate.spec.ts",
+      "id": "FR-004",
+      "title": "FR-004 should dispose context on cross-origin navigation",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl"
     },
     {
       "file": "tests/page/frame-evaluate.spec.ts",
@@ -1939,6 +2099,13 @@
     },
     {
       "file": "tests/page/locator-query.spec.ts",
+      "id": "LO-167",
+      "title": "LO-167 should filter by regex with a single quote",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/locator-query.spec.ts",
       "id": "LO-178",
       "title": "LO-178 should allow some, but not all nested frameLocators",
       "action": "patch",
@@ -2051,6 +2218,13 @@
     },
     {
       "file": "tests/page/page-add-locator-handler.spec.ts",
+      "id": "LH-001",
+      "title": "LH-001 should work",
+      "action": "skip",
+      "reason": "expectLoop: toBe is not covered"
+    },
+    {
+      "file": "tests/page/page-add-locator-handler.spec.ts",
       "id": "LH-005",
       "title": "LH-005 should throw when handler times out",
       "action": "patch",
@@ -2065,6 +2239,13 @@
           "replace": ""
         }
       ]
+    },
+    {
+      "file": "tests/page/page-add-locator-handler.spec.ts",
+      "id": "LH-008",
+      "title": "LH-008 should work with toHaveScreenshot",
+      "action": "skip",
+      "reason": "expectLoop: toHaveScreenshot is not covered"
     },
     {
       "file": "tests/page/page-add-locator-handler.spec.ts",
@@ -2173,6 +2354,258 @@
           "replace": ""
         }
       ]
+    },
+    {
+      "file": "tests/page/page-aria-snapshot-ai.spec.ts",
+      "id": "AR-071",
+      "title": "AR-071 should not distill snapshots outside of ai mode",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-001",
+      "title": "AR-001 should snapshot",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-002",
+      "title": "AR-002 should snapshot list",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-003",
+      "title": "AR-003 should snapshot list with accessible name",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-004",
+      "title": "AR-004 should quote names that look like regexes",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-005",
+      "title": "AR-005 should snapshot complex",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-006",
+      "title": "AR-006 should allow text nodes",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-007",
+      "title": "AR-007 should snapshot details visibility",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-008",
+      "title": "AR-008 should not snapshot text directly inside closed details",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-009",
+      "title": "AR-009 should not snapshot text that is not assigned to a slot",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-010",
+      "title": "AR-010 should snapshot integration",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-011",
+      "title": "AR-011 should support multiline text",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-012",
+      "title": "AR-012 should concatenate span text",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-013",
+      "title": "AR-013 should concatenate span text 2",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-014",
+      "title": "AR-014 should concatenate div text with spaces",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-015",
+      "title": "AR-015 should include pseudo in text",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-016",
+      "title": "AR-016 should not include hidden pseudo in text",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-017",
+      "title": "AR-017 should include new line for block pseudo",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-018",
+      "title": "AR-018 should work with slots",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-019",
+      "title": "AR-019 should snapshot inner text",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-020",
+      "title": "AR-020 should include pseudo codepoints",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-021",
+      "title": "AR-021 check aria-hidden text",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-022",
+      "title": "AR-022 should ignore presentation and none roles",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-023",
+      "title": "AR-023 should treat input value as text in templates, but not for checkbox/radio/file",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-024",
+      "title": "AR-024 should not use on as checkbox value",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-025",
+      "title": "AR-025 should respect aria-owns",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-026",
+      "title": "AR-026 should be ok with circular ownership",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-027",
+      "title": "AR-027 should escape yaml text in text nodes",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-028",
+      "title": "AR-028 should normalize whitespace",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-029",
+      "title": "AR-029 should handle long strings",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-030",
+      "title": "AR-030 should escape special yaml characters",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-031",
+      "title": "AR-031 should escape special yaml values",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-032",
+      "title": "AR-032 should not report textarea textContent",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-036",
+      "title": "AR-036 match values both against regex and string",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-041",
+      "title": "AR-041 should snapshot a locator inside a frameset frame",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/page-aria-snapshot.spec.ts",
+      "id": "AR-171",
+      "title": "AR-171 should include inert elements and elements outside of a modal dialog",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-autowaiting-basic.spec.ts",
@@ -2751,29 +3184,38 @@
     },
     {
       "file": "tests/page/page-evaluate-no-stall.spec.ts",
+      "id": "EV-135",
+      "title": "EV-135 should work",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl"
+    },
+    {
+      "file": "tests/page/page-evaluate-no-stall.spec.ts",
       "id": "EV-136",
       "title": "EV-136 should throw while pending navigation",
-      "action": "patch",
-      "reason": "error wording: keep that it fails",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl",
       "patches": [
         {
           "find": "expect(error.message).toContain('Frame is currently attempting a navigation');",
           "replace": "expect(error).toBeInstanceOf(Error);"
         }
-      ]
+      ],
+      "patchReason": "error wording: keep that it fails"
     },
     {
       "file": "tests/page/page-evaluate-no-stall.spec.ts",
       "id": "EV-137",
       "title": "EV-137 should throw when no main execution context",
-      "action": "patch",
-      "reason": "error wording: keep that it fails",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl",
       "patches": [
         {
           "find": "expect([\n    'Frame does not yet have a main execution context',\n    'Frame is currently attempting a navigation',\n    'Navigation interrupted the evaluation',\n  ]).toContain(error.message);",
           "replace": "expect(error).toBeInstanceOf(Error);"
         }
-      ]
+      ],
+      "patchReason": "error wording: keep that it fails"
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
@@ -3638,6 +4080,34 @@
       "reason": "upstream-skipped: excluded by the pinned Chromium run"
     },
     {
+      "file": "tests/page/page-leaks.spec.ts",
+      "id": "LE-001",
+      "title": "LE-001 click should not leak",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl"
+    },
+    {
+      "file": "tests/page/page-leaks.spec.ts",
+      "id": "LE-002",
+      "title": "LE-002 fill should not leak",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl"
+    },
+    {
+      "file": "tests/page/page-leaks.spec.ts",
+      "id": "LE-003",
+      "title": "LE-003 expect should not leak",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl"
+    },
+    {
+      "file": "tests/page/page-leaks.spec.ts",
+      "id": "LE-004",
+      "title": "LE-004 waitFor should not leak",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl"
+    },
+    {
       "file": "tests/page/page-listeners.spec.ts",
       "id": "EE-003",
       "title": "EE-003 wait should throw",
@@ -4058,6 +4528,20 @@
       ]
     },
     {
+      "file": "tests/page/page-screenshot.spec.ts",
+      "id": "SS-066",
+      "title": "SS-066 page screenshot should capture css transform",
+      "action": "skip",
+      "reason": "expectLoop: toHaveScreenshot is not covered"
+    },
+    {
+      "file": "tests/page/page-screenshot.spec.ts",
+      "id": "SS-067",
+      "title": "SS-067 should capture css box-shadow",
+      "action": "skip",
+      "reason": "expectLoop: toHaveScreenshot is not covered"
+    },
+    {
       "file": "tests/page/page-select-option.spec.ts",
       "id": "SO-009",
       "title": "SO-009 should not select single option when some attributes do not match",
@@ -4194,27 +4678,29 @@
       "file": "tests/page/page-set-content.spec.ts",
       "id": "PA-036",
       "title": "PA-036 should handle timeout properly",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl",
       "patches": [
         {
           "find": "expect(error.message).toContain('page.setContent: Timeout 1000ms exceeded');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/page-set-content.spec.ts",
       "id": "PA-037",
       "title": "PA-037 should handle timeout properly 2",
-      "action": "patch",
-      "reason": "error wording: keep that it fails",
+      "action": "skip",
+      "reason": "needs Playwright internals: toImpl",
       "patches": [
         {
           "find": "expect(error.message).toContain('page.setContent: Timeout 1000ms exceeded');",
           "replace": "expect(error.name).toBe('TimeoutError');"
         }
-      ]
+      ],
+      "patchReason": "error wording: keep that it fails"
     },
     {
       "file": "tests/page/page-set-extra-http-headers.spec.ts",
@@ -5047,6 +5533,13 @@
       ]
     },
     {
+      "file": "tests/page/selectors-get-by.spec.ts",
+      "id": "SE-090",
+      "title": "SE-090 getBy escaping",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
       "file": "tests/page/selectors-misc.spec.ts",
       "id": "SE-135",
       "title": "SE-135 should work with :visible",
@@ -5140,6 +5633,27 @@
     },
     {
       "file": "tests/page/selectors-role.spec.ts",
+      "id": "SE-052",
+      "title": "SE-052 should support checked",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/selectors-role.spec.ts",
+      "id": "SE-057",
+      "title": "SE-057 should support disabled fieldset",
+      "action": "skip",
+      "reason": "needs Playwright internals: Locator._expect"
+    },
+    {
+      "file": "tests/page/selectors-role.spec.ts",
+      "id": "SE-060",
+      "title": "SE-060 should support name",
+      "action": "skip",
+      "reason": "expectLoop: toHaveAccessibleName is not covered"
+    },
+    {
+      "file": "tests/page/selectors-role.spec.ts",
       "id": "SE-062",
       "title": "SE-062 errors",
       "action": "patch",
@@ -5226,6 +5740,27 @@
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-107",
+      "title": "AR-107 should match page",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-108",
+      "title": "AR-108 should match page complex",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-109",
+      "title": "AR-109 should match page with not",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-110",
       "title": "AR-110 should fail page with timeout",
       "action": "delete",
@@ -5233,10 +5768,66 @@
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-111",
+      "title": "AR-111 should match",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-112",
+      "title": "AR-112 should match in list",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-113",
+      "title": "AR-113 should match list with accessible name",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-114",
+      "title": "AR-114 should match deep item",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-115",
+      "title": "AR-115 should match complex",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-116",
+      "title": "AR-116 should match regex",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-117",
+      "title": "AR-117 should allow text nodes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-118",
+      "title": "AR-118 details visibility",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-119",
       "title": "AR-119 checked attribute",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "      - checkbox [checked=false]\n    `, { timeout: 1000 }).catch(e => e);\n    expect(stripAnsi(e.message)).toContain('expect(page).toMatchAriaSnapshot(expected) failed');\n    expect(stripAnsi(e.message)).toContain('Timeout:  1000ms');",
@@ -5250,14 +5841,15 @@
           "find": "expect(stripAnsi(e.message)).toContain(' attribute must be a boolean or \"mixed\"');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-120",
       "title": "AR-120 disabled attribute",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(e.message)).toContain('expect(page).toMatchAriaSnapshot(expected) failed');",
@@ -5271,14 +5863,15 @@
           "find": "expect(stripAnsi(e.message)).toContain(' attribute must be a boolean');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-121",
       "title": "AR-121 expanded attribute",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(e.message)).toContain('expect(page).toMatchAriaSnapshot(expected) failed');",
@@ -5292,14 +5885,15 @@
           "find": "expect(stripAnsi(e.message)).toContain(' attribute must be a boolean');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-122",
       "title": "AR-122 level attribute",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(e.message)).toContain('expect(page).toMatchAriaSnapshot(expected) failed');",
@@ -5313,14 +5907,15 @@
           "find": "expect(stripAnsi(e.message)).toContain(' attribute must be a number');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-123",
       "title": "AR-123 pressed attribute",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "      - button [pressed=false]\n    `, { timeout: 1000 }).catch(e => e);\n    expect(stripAnsi(e.message)).toContain('expect(page).toMatchAriaSnapshot(expected) failed');\n    expect(stripAnsi(e.message)).toContain('Timeout:  1000ms');",
@@ -5334,14 +5929,15 @@
           "find": "expect(stripAnsi(e.message)).toContain(' attribute must be a boolean or \"mixed\"');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-124",
       "title": "AR-124 selected attribute",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(e.message)).toContain(`expect(page).toMatchAriaSnapshot(expected) failed\n\nTimeout: 1000ms\n- Expected  - 2\n+ Received  + 6\n\n- - row [selected=false]\n- - row [selected=false]\n+ - table:\n+   - rowgroup:\n+     - row \"Row\" [selected]:\n+       - cell \"Row\"\n+     - row \\\"Row 2\\\":\n+       - cell \\\"Row 2\\\"\n\nCall log:\n`);",
@@ -5351,7 +5947,22 @@
           "find": "expect(stripAnsi(e.message)).toContain(' attribute must be a boolean');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-125",
+      "title": "AR-125 integration test",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-126",
+      "title": "AR-126 integration test 2",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
@@ -5359,6 +5970,13 @@
       "title": "AR-127 expected formatter",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-128",
+      "title": "AR-128 should unpack escaped names",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
@@ -5383,6 +6001,13 @@
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-132",
+      "title": "AR-132 should parse attributes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-133",
       "title": "AR-133 should not unshift actual template text",
       "action": "delete",
@@ -5392,21 +6017,29 @@
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-134",
       "title": "AR-134 should not match what is not matched",
-      "action": "patch",
-      "reason": "error wording: keep that it fails",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(error.message)).toContain(`\n- - paragraph:\n-   - button \"bogus\"\n+ - paragraph: Text`);",
           "replace": "expect(error).toBeInstanceOf(Error);"
         }
-      ]
+      ],
+      "patchReason": "error wording: keep that it fails"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-135",
+      "title": "AR-135 should match url",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-136",
       "title": "AR-136 should detect unexpected children: equal",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(e.message)).toContain('expect(page).toMatchAriaSnapshot(expected) failed');",
@@ -5416,14 +6049,15 @@
           "find": "expect(stripAnsi(e.message)).toContain('+   - listitem: Two');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-137",
       "title": "AR-137 should detect unexpected children: deep-equal",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(e.message)).toContain('expect(page).toMatchAriaSnapshot(expected) failed');",
@@ -5433,14 +6067,15 @@
           "find": "expect(stripAnsi(e.message)).toContain('+       - listitem: \\\"1.2\\\"');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-138",
       "title": "AR-138 should allow restoring contain mode inside deep-equal",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(e.message)).toContain('expect(page).toMatchAriaSnapshot(expected) failed');",
@@ -5450,27 +6085,36 @@
           "find": "expect(stripAnsi(e.message)).toContain('+       - listitem: \\\"1.2\\\"');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-139",
       "title": "AR-139 top-level deep-equal",
-      "action": "patch",
-      "reason": "error wording: keep that it fails",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(error.message)).toContain(`\n- - /children: deep-equal\n- - list\n+ - list:\n+   - listitem:\n+     - list:\n+       - listitem: \"1.1\"\n+       - listitem: \"1.2\"\n  `.trim());",
           "replace": "expect(error).toBeInstanceOf(Error);"
         }
-      ]
+      ],
+      "patchReason": "error wording: keep that it fails"
+    },
+    {
+      "file": "tests/page/to-match-aria-snapshot.spec.ts",
+      "id": "AR-140",
+      "title": "AR-140 generated snapshot includes text children when name is longer than text",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-141",
       "title": "AR-141 treat bad regex as a string",
-      "action": "patch",
-      "reason": "error wording: keep that it fails",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(error.message)).toContain('expect(page).toMatchAriaSnapshot(expected) failed');",
@@ -5484,20 +6128,22 @@
           "find": "expect(stripAnsi(error.message)).toContain('+   - /url: /foo');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error wording: keep that it fails"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-142",
       "title": "AR-142 invalid attribute",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
+      "action": "skip",
+      "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
         {
           "find": "expect(stripAnsi(error.message)).toContain('[invalid=grammar]');",
           "replace": ""
         }
-      ]
+      ],
+      "patchReason": "error diagnostics: remove wording and call logs; retain behavior and error classes"
     },
     {
       "file": "tests/page/workers.spec.ts",
