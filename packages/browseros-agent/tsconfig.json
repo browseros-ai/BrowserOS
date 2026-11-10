@@ -26,14 +26,7 @@
     "declarationMap": true,
     "types": ["node", "bun"]
   },
-  "references": [
-    { "path": "./packages/acpx-ai-provider" },
-    { "path": "./packages/agent-mcp-manager" },
-    { "path": "./packages/browser-core" },
-    { "path": "./packages/browser-mcp" },
-    { "path": "./packages/build-server-tools" },
-    { "path": "./apps/server" }
-  ],
+  "references": [{ "path": "./packages/build-server-tools" }],
   "include": [],
   "exclude": ["node_modules", "dist", "build", "*.config.js"]
 }

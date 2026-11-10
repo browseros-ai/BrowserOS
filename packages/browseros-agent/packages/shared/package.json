@@ -10,10 +10,6 @@
     "zod": "^4.5.2"
   },
   "exports": {
-    "./constants/exit-codes": {
-      "types": "./src/constants/exit-codes.ts",
-      "default": "./src/constants/exit-codes.ts"
-    },
     "./constants/ports": {
       "types": "./src/constants/ports.ts",
       "default": "./src/constants/ports.ts"
@@ -50,45 +46,13 @@
       "types": "./src/types/logger.ts",
       "default": "./src/types/logger.ts"
     },
-    "./types/server-config": {
-      "types": "./src/types/server-config.ts",
-      "default": "./src/types/server-config.ts"
-    },
-    "./schemas/llm": {
-      "types": "./src/schemas/llm.ts",
-      "default": "./src/schemas/llm.ts"
-    },
-    "./schemas/agent": {
-      "types": "./src/schemas/agent.ts",
-      "default": "./src/schemas/agent.ts"
-    },
     "./schemas/ui-stream": {
       "types": "./src/schemas/ui-stream.ts",
       "default": "./src/schemas/ui-stream.ts"
     },
-    "./schemas/chat-error": {
-      "types": "./src/schemas/chat-error.ts",
-      "default": "./src/schemas/chat-error.ts"
-    },
-    "./schemas/browser-context": {
-      "types": "./src/schemas/browser-context.ts",
-      "default": "./src/schemas/browser-context.ts"
-    },
-    "./schemas/conversation-panels": {
-      "types": "./src/schemas/conversation-panels.ts",
-      "default": "./src/schemas/conversation-panels.ts"
-    },
     "./mcp/claude-code-transport-tag": {
       "types": "./src/mcp/claude-code-transport-tag.ts",
       "default": "./src/mcp/claude-code-transport-tag.ts"
-    },
-    "./schemas/sidecar-config": {
-      "types": "./src/schemas/sidecar-config.ts",
-      "default": "./src/schemas/sidecar-config.ts"
-    },
-    "./sentry/sanitize": {
-      "types": "./src/sentry/sanitize.ts",
-      "default": "./src/sentry/sanitize.ts"
     }
   }
 }

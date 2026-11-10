@@ -14,39 +14,16 @@ import (
 	"browseros-dev/proc"
 )
 
-func TestWatchModeRejectsManualClawCombination(t *testing.T) {
-	oldManual, oldClaw := watchManual, watchClaw
-	watchManual = true
-	watchClaw = true
-	t.Cleanup(func() {
-		watchManual = oldManual
-		watchClaw = oldClaw
-	})
-
-	_, err := watchMode()
-	if err == nil {
-		t.Fatal("expected incompatible watch flags to return an error")
+func TestWatchKeepsClawFlagAsHiddenDeprecatedNoOp(t *testing.T) {
+	flag := watchCmd.Flags().Lookup("claw")
+	if flag == nil {
+		t.Fatal("expected watch to keep accepting --claw")
 	}
-	if !strings.Contains(err.Error(), "--manual cannot be combined with --claw") {
-		t.Fatalf("unexpected error: %v", err)
+	if !flag.Hidden || flag.Deprecated == "" {
+		t.Fatalf("expected --claw to be hidden and deprecated, got hidden=%v deprecated=%q", flag.Hidden, flag.Deprecated)
 	}
-}
-
-func TestWatchModeSelectsBrowserClaw(t *testing.T) {
-	oldManual, oldClaw := watchManual, watchClaw
-	watchManual = false
-	watchClaw = true
-	t.Cleanup(func() {
-		watchManual = oldManual
-		watchClaw = oldClaw
-	})
-
-	mode, err := watchMode()
-	if err != nil {
-		t.Fatalf("watchMode returned error: %v", err)
-	}
-	if mode != "BrowserOS neo" {
-		t.Fatalf("expected BrowserOS neo mode, got %q", mode)
+	if watchCmd.Flags().Lookup("manual") != nil {
+		t.Fatal("--manual should be gone with the old BrowserOS watch mode")
 	}
 }
 
@@ -56,24 +33,10 @@ func TestWatchRunLockModeIsSharedAcrossWatchVariants(t *testing.T) {
 	}
 }
 
-func TestResolveWatchDefaultPortsKeepsBrowserOSServerPort(t *testing.T) {
-	root := writeWatchEnvExample(t, "BROWSEROS_CDP_PORT=9001\nBROWSEROS_SERVER_PORT=9101\nBROWSEROS_EXTENSION_PORT=9301\n")
-
-	ports, err := resolveWatchDefaultPorts(root, false)
-	if err != nil {
-		t.Fatalf("resolveWatchDefaultPorts returned error: %v", err)
-	}
-
-	want := proc.Ports{CDP: 9001, Server: 9101, Extension: 9301}
-	if ports != want {
-		t.Fatalf("expected BrowserOS watch ports %+v, got %+v", want, ports)
-	}
-}
-
 func TestResolveWatchDefaultPortsUsesStandaloneClawServerPort(t *testing.T) {
 	root := writeWatchEnvExample(t, "BROWSEROS_CDP_PORT=9001\nBROWSEROS_SERVER_PORT=9101\nBROWSEROS_EXTENSION_PORT=9301\n")
 
-	ports, err := resolveWatchDefaultPorts(root, true)
+	ports, err := resolveWatchDefaultPorts(root)
 	if err != nil {
 		t.Fatalf("resolveWatchDefaultPorts returned error: %v", err)
 	}
@@ -81,30 +44,6 @@ func TestResolveWatchDefaultPortsUsesStandaloneClawServerPort(t *testing.T) {
 	want := proc.Ports{CDP: 9001, Server: defaultClawWatchServerPort, Extension: 9301}
 	if ports != want {
 		t.Fatalf("expected Claw watch ports %+v, got %+v", want, ports)
-	}
-}
-
-func TestBuildWatchEnvSelectsBrowserOSProduct(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("BROWSEROS_DIR", "")
-	env, err := buildWatchEnv(proc.Ports{
-		CDP:       9012,
-		Server:    9123,
-		Extension: 9321,
-	}, "/tmp/browseros-dev", false, false)
-	if err != nil {
-		t.Fatalf("buildWatchEnv returned error: %v", err)
-	}
-
-	for _, want := range []string{
-		"BROWSEROS_PRODUCT=browseros",
-		"BROWSEROS_USER_DATA_DIR=/tmp/browseros-dev",
-		"BROWSEROS_DIR=" + filepath.Join(home, ".browseros-dev"),
-	} {
-		if !hasEnvEntry(env, want) {
-			t.Fatalf("expected env to contain %q, got %#v", want, env)
-		}
 	}
 }
 
@@ -116,10 +55,8 @@ func TestBuildWatchEnvSelectsBrowserClawProduct(t *testing.T) {
 		CDP:       9012,
 		Server:    9123,
 		Extension: 9321,
-	}, "/tmp/browseros-dev", true, false, browser.BinaryResolution{
-		Product:       browser.ProductBrowserClaw,
-		Path:          browser.BrowserClawBinaryPath,
-		PreferredPath: browser.BrowserClawBinaryPath,
+	}, "/tmp/browseros-dev", false, browser.BinaryResolution{
+		Path: browser.BrowserClawBinaryPath,
 	})
 	if err != nil {
 		t.Fatalf("buildWatchEnvWithBinaryResolution returned error: %v", err)
@@ -127,6 +64,7 @@ func TestBuildWatchEnvSelectsBrowserClawProduct(t *testing.T) {
 
 	for _, want := range []string{
 		"BROWSEROS_PRODUCT=browserclaw",
+		"BROWSEROS_USER_DATA_DIR=/tmp/browseros-dev",
 		"BROWSEROS_BINARY=/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo",
 		"BROWSEROS_CLAW_CDP_PORT=9012",
 		"VITE_BROWSEROS_CLAW_API_URL=http://127.0.0.1:9123",
@@ -163,11 +101,9 @@ func TestBuildWatchEnvUsesFallbackBrowserBinaryForClaw(t *testing.T) {
 	env, err := buildWatchEnvWithBinaryResolution(proc.Ports{
 		CDP:    9012,
 		Server: 9123,
-	}, "/tmp/browseros-dev", true, false, browser.BinaryResolution{
-		Product:       browser.ProductBrowserClaw,
-		Path:          browser.BrowserOSBinaryPath,
-		PreferredPath: browser.BrowserClawBinaryPath,
-		Fallback:      true,
+	}, "/tmp/browseros-dev", false, browser.BinaryResolution{
+		Path:     browser.BrowserOSBinaryPath,
+		Fallback: true,
 	})
 	if err != nil {
 		t.Fatalf("buildWatchEnvWithBinaryResolution returned error: %v", err)
@@ -178,23 +114,12 @@ func TestBuildWatchEnvUsesFallbackBrowserBinaryForClaw(t *testing.T) {
 	}
 }
 
-func TestBuildWatchEnvHonorsAndNormalizesProductStateOverrides(t *testing.T) {
-	browserosRoot := filepath.Join(t.TempDir(), "browseros-state")
-	t.Setenv("BROWSEROS_DIR", browserosRoot)
-	browserosEnv, err := buildWatchEnv(proc.Ports{CDP: 9012, Server: 9123}, "/tmp/profile", false, false)
-	if err != nil {
-		t.Fatalf("buildWatchEnv returned error: %v", err)
-	}
-	if !hasEnvEntry(browserosEnv, "BROWSEROS_DIR="+browserosRoot) {
-		t.Fatalf("expected BrowserOS override in %#v", browserosEnv)
-	}
-
+func TestBuildWatchEnvHonorsStateOverride(t *testing.T) {
 	clawRoot := filepath.Join(t.TempDir(), "claw-state")
 	t.Setenv("BROWSERCLAW_DIR", clawRoot)
 	clawEnv, err := buildWatchEnvWithBinaryResolution(
 		proc.Ports{CDP: 9012, Server: 9123},
 		"/tmp/profile",
-		true,
 		false,
 		browser.BinaryResolution{Path: browser.BrowserClawBinaryPath},
 	)
@@ -203,20 +128,6 @@ func TestBuildWatchEnvHonorsAndNormalizesProductStateOverrides(t *testing.T) {
 	}
 	if !hasEnvEntry(clawEnv, "BROWSERCLAW_DIR="+clawRoot) {
 		t.Fatalf("expected BrowserClaw override in %#v", clawEnv)
-	}
-}
-
-func TestBrowserOSManualProcKeepsProductStateEnvironment(t *testing.T) {
-	env := []string{"PATH=/bin", "BROWSEROS_DIR=/tmp/browseros-state"}
-	cfg := browserOSManualProcConfig(
-		t.TempDir(),
-		env,
-		proc.Ports{CDP: 9012, Server: 9123},
-		"/tmp/profile",
-	)
-
-	if !reflect.DeepEqual(cfg.Env, env) {
-		t.Fatalf("expected manual Chromium env %#v, got %#v", env, cfg.Env)
 	}
 }
 
@@ -229,7 +140,7 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 		Server:    9123,
 		Extension: 9321,
 	}
-	env, err := buildWatchEnv(ports, userDataDir, true, false)
+	env, err := buildWatchEnv(ports, userDataDir, false)
 	if err != nil {
 		t.Fatalf("buildWatchEnv returned error: %v", err)
 	}
@@ -423,7 +334,7 @@ func TestEnsureCargoPresentMissingMessage(t *testing.T) {
 	}
 
 	msg := err.Error()
-	if !strings.Contains(msg, "Cargo is required for --claw") {
+	if !strings.Contains(msg, "Cargo is required for dev watch") {
 		t.Fatalf("expected missing Cargo message, got %q", msg)
 	}
 	if !strings.Contains(msg, "rustup.rs") {

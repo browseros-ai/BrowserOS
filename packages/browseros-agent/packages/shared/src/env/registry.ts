@@ -110,14 +110,6 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     modes: { development: { value: '' } },
   },
   {
-    key: 'VITE_ALPHA_FEATURES',
-    section: 'app',
-    description: 'Alpha feature flag for the browser bundle.',
-    secret: false,
-    schema: stringSchema,
-    modes: { development: { value: 'true' } },
-  },
-  {
     key: 'SENTRY_AUTH_TOKEN',
     section: 'app',
     description: 'Sentry auth token for source-map uploads.',
@@ -245,14 +237,6 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     },
   },
   {
-    key: 'BROWSEROS_TRUSTED_ORIGINS',
-    section: 'server',
-    description: 'Trusted origins for local server development.',
-    secret: false,
-    schema: stringSchema,
-    modes: { development: { value: '' } },
-  },
-  {
     key: 'POSTHOG_API_KEY',
     section: 'server',
     description: 'Server telemetry key; CLI release builds read the same key.',
@@ -289,15 +273,6 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     secret: false,
     schema: stringSchema,
     modes: { development: { value: 'info' }, production: { value: 'info' } },
-  },
-  {
-    key: 'BROWSEROS_AI_SDK_DEVTOOLS',
-    section: 'server',
-    description:
-      'Optional AI SDK DevTools capture toggle for local server runs.',
-    secret: false,
-    schema: stringSchema,
-    modes: { development: { value: 'true', commented: true } },
   },
   {
     key: 'BROWSEROS_TEST_HEADLESS',

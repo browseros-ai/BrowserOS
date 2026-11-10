@@ -392,31 +392,6 @@ class BuildManifestTest(unittest.TestCase):
         self.assertIn("uploaded_by", manifest)
 
 
-class ServerResourceManifestContractTest(unittest.TestCase):
-    def test_server_resource_manifest_does_not_package_codex(self) -> None:
-        # packages/browseros/tools/vendor_uploads/vendor_uploads/ -> packages/
-        manifest_path = (
-            Path(__file__).resolve().parents[4]
-            / "browseros-agent"
-            / "scripts"
-            / "build"
-            / "config"
-            / "server-prod-resources.json"
-        )
-        manifest = json.loads(manifest_path.read_text())
-        codex_resources = [
-            resource
-            for resource in manifest["resources"]
-            if resource["destination"].startswith("resources/bin/third_party/codex")
-            or (
-                resource["source"]["type"] == "r2"
-                and resource["source"]["key"].startswith("third_party/codex/")
-            )
-        ]
-
-        self.assertEqual(codex_resources, [])
-
-
 class ProcessArchTest(unittest.TestCase):
     """Covers download + sha verify + extract + upload in one pass."""
 

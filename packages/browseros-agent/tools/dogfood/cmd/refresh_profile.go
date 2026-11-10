@@ -19,18 +19,18 @@ func init() {
 
 var refreshProfileCmd = &cobra.Command{
 	Use:     "refresh-profile",
-	Short:   "Copy the configured BrowserOS profile into the selected dogfood profile",
+	Short:   "Copy the configured BrowserOS profile into the dogfood profile",
 	GroupID: groupRun,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		target, cfg, err := loadSelectedTargetConfig()
+		cfg, err := loadConfig()
 		if err != nil {
 			return err
 		}
-		paths, err := defaultTargetRunPaths(target)
+		paths, err := defaultRunPaths()
 		if err != nil {
 			return err
 		}
-		lock, err := acquireRefreshProfileLock(paths, target)
+		lock, err := acquireRefreshProfileLock(paths)
 		if err != nil {
 			return err
 		}
@@ -49,12 +49,12 @@ var refreshProfileCmd = &cobra.Command{
 		}); err != nil {
 			return err
 		}
-		fmt.Printf("%s %s\n", successStyle.Sprintf("%s profile refreshed:", targetLabel(target)), pathStyle.Sprint(cfg.DevUserDataDir))
+		fmt.Printf("%s %s\n", successStyle.Sprintf("%s profile refreshed:", productLabel), pathStyle.Sprint(cfg.DevUserDataDir))
 		return nil
 	},
 }
 
-func acquireRefreshProfileLock(paths runPaths, target config.Target) (*dogfoodruntime.Lock, error) {
+func acquireRefreshProfileLock(paths runPaths) (*dogfoodruntime.Lock, error) {
 	lock, err := dogfoodruntime.AcquireLock(paths.Lock)
 	if err == nil {
 		if cleanupErr := dogfoodruntime.CleanupStaleRunFiles(paths.State); cleanupErr != nil {
@@ -64,21 +64,20 @@ func acquireRefreshProfileLock(paths runPaths, target config.Target) (*dogfoodru
 		return lock, nil
 	}
 	if errors.Is(err, dogfoodruntime.ErrAlreadyRunning) {
-		return nil, refreshProfileRunningError(paths, target)
+		return nil, refreshProfileRunningError(paths)
 	}
 	return nil, err
 }
 
-func refreshProfileRunningError(paths runPaths, target config.Target) error {
-	targetFlag := targetFlagOrDefault(target)
+func refreshProfileRunningError(paths runPaths) error {
 	state, err := dogfoodruntime.ReadRunState(paths.State)
 	if err == nil {
 		if state.Mode == "background" {
-			return fmt.Errorf("cannot refresh profile while browseros-dogfood background daemon is running (pid %d); run `browseros-dogfood %s stop` first", state.PID, targetFlag)
+			return fmt.Errorf("cannot refresh profile while browseros-dogfood background daemon is running (pid %d); run `browseros-dogfood stop` first", state.PID)
 		}
 		return fmt.Errorf("cannot refresh profile while browseros-dogfood is running in foreground mode (pid %d); stop it first", state.PID)
 	}
-	return fmt.Errorf("cannot refresh profile while browseros-dogfood is running; run `browseros-dogfood %s stop` first", targetFlag)
+	return fmt.Errorf("cannot refresh profile while browseros-dogfood is running; run `browseros-dogfood stop` first")
 }
 
 func ensureDevProfileNotInUse(cfg config.Config) error {
@@ -87,8 +86,7 @@ func ensureDevProfileNotInUse(cfg config.Config) error {
 		return err
 	}
 	if inUse {
-		targetFlag := targetFlagOrDefault(cfg.Target)
-		return fmt.Errorf("cannot refresh profile because the dogfood dev profile is in use at %s; run `browseros-dogfood %s stop` first", cfg.DevUserDataDir, targetFlag)
+		return fmt.Errorf("cannot refresh profile because the dogfood dev profile is in use at %s; run `browseros-dogfood stop` first", cfg.DevUserDataDir)
 	}
 	return nil
 }

@@ -21,6 +21,31 @@ var configCmd = &cobra.Command{
 	GroupID: groupSetup,
 }
 
+const productLabel = "BrowserOS neo"
+
+func loadConfig() (config.Config, error) {
+	cfg, err := loadConfigWithoutValidation()
+	if err != nil {
+		return config.Config{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return config.Config{}, err
+	}
+	return cfg, nil
+}
+
+func loadConfigWithoutValidation() (config.Config, error) {
+	path, err := config.Path()
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return config.Config{}, fmt.Errorf("missing config at %s; run browseros-dogfood init: %w", path, err)
+	}
+	return cfg, nil
+}
+
 var configEditCmd = &cobra.Command{
 	Use:   "edit",
 	Short: "Open browseros-dogfood config in $EDITOR",

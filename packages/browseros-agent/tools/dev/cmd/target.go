@@ -51,14 +51,21 @@ type dogfoodRuntimeTarget struct {
 }
 
 type dogfoodConfigFile struct {
+	Targets struct {
+		Claw dogfoodRuntimeConfig `yaml:"claw"`
+	} `yaml:"targets"`
+}
+
+type dogfoodRuntimeConfig struct {
 	BrowserOSDir   string `yaml:"browseros_dir"`
 	DevUserDataDir string `yaml:"dev_user_data_dir"`
 	Ports          struct {
-		CDP       int `yaml:"cdp"`
-		Server    int `yaml:"server"`
-		Extension int `yaml:"extension"`
+		CDP    int `yaml:"cdp"`
+		Server int `yaml:"server"`
 	} `yaml:"ports"`
 }
+
+const dogfoodRuntimeDirName = "claw"
 
 func resolveResetTarget(root string, opts resetTargetOptions) (resetTarget, error) {
 	target := strings.TrimSpace(opts.Target)
@@ -82,7 +89,10 @@ func resolveDevTarget(root string, opts resetTargetOptions) (resetTarget, error)
 	if err != nil {
 		return resetTarget{}, err
 	}
-	ports, err := resolveTargetPorts(root, opts.Ports)
+	ports, err := resolveWatchDefaultPorts(root)
+	if strings.TrimSpace(opts.Ports) != "" {
+		ports, err = parsePorts(opts.Ports)
+	}
 	if err != nil {
 		return resetTarget{}, err
 	}
@@ -102,8 +112,8 @@ func resolveDevTarget(root string, opts resetTargetOptions) (resetTarget, error)
 		BrowserOSDir:        browserosDir,
 		LimaHome:            filepath.Join(browserosDir, "lima"),
 		Ports:               &ports,
-		BrowserUserDataDirs: []string{"/tmp/browseros-dev", devProfile},
-		TempPrefixes:        []string{"browseros-test-", "browseros-dev-", clawWatchTempStatePrefix},
+		BrowserUserDataDirs: []string{devProfile},
+		TempPrefixes:        []string{"browseros-dev-", clawWatchTempStatePrefix},
 		WatchRunStateDir:    watchRunStateDir,
 		DeleteRootLabel:     "Delete dev profile?",
 		DeleteRootBody:      "It removes BrowserOS dev data plus VM state.",
@@ -115,11 +125,13 @@ func resolveDogfoodTarget(opts resetTargetOptions) (resetTarget, error) {
 	if err != nil {
 		return resetTarget{}, err
 	}
-	cfg, err := loadDogfoodConfig(filepath.Join(cfgDir, "config.yaml"))
+	file, err := loadDogfoodConfig(filepath.Join(cfgDir, "config.yaml"))
 	if err != nil {
 		return resetTarget{}, err
 	}
-	applyDogfoodDefaults(&cfg, cfgDir)
+	cfg := file.Targets.Claw
+	runtimeDir := filepath.Join(cfgDir, dogfoodRuntimeDirName)
+	applyDogfoodDefaults(&cfg, runtimeDir)
 	browserosDir := firstNonEmpty(opts.BrowserOSDir, cfg.BrowserOSDir)
 	if browserosDir == "" {
 		return resetTarget{}, fmt.Errorf("dogfood browseros_dir is empty")
@@ -128,13 +140,12 @@ func resolveDogfoodTarget(opts resetTargetOptions) (resetTarget, error) {
 	if err != nil {
 		return resetTarget{}, err
 	}
-	ports, err := parsePorts(firstNonEmpty(opts.Ports, formatPorts(proc.Ports{
-		CDP:       cfg.Ports.CDP,
-		Server:    cfg.Ports.Server,
-		Extension: cfg.Ports.Extension,
-	})))
-	if err != nil {
-		return resetTarget{}, err
+	ports := proc.Ports{CDP: cfg.Ports.CDP, Server: cfg.Ports.Server}
+	if strings.TrimSpace(opts.Ports) != "" {
+		ports, err = parsePorts(opts.Ports)
+		if err != nil {
+			return resetTarget{}, err
+		}
 	}
 	browserUserDataDir := firstNonEmpty(opts.BrowserUserDataDir, cfg.DevUserDataDir)
 	if browserUserDataDir == "" {
@@ -151,34 +162,32 @@ func resolveDogfoodTarget(opts resetTargetOptions) (resetTarget, error) {
 		LimaHome:            filepath.Join(browserosDir, "lima"),
 		Ports:               &ports,
 		BrowserUserDataDirs: []string{browserUserDataDir},
-		DeleteRootLabel:     "Delete dogfood BrowserOS state?",
-		DeleteRootBody:      "It removes dogfood-local BrowserOS server data plus VM state. It does not touch your source BrowserOS browser profile.",
+		DeleteRootLabel:     "Delete dogfood BrowserOS neo state?",
+		DeleteRootBody:      "It removes dogfood-local BrowserOS neo state. It does not touch your source BrowserOS browser profile.",
 		Dogfood: &dogfoodRuntimeTarget{
 			ConfigDir:  cfgDir,
-			LockPath:   filepath.Join(cfgDir, "run.lock"),
-			StatePath:  filepath.Join(cfgDir, "state.json"),
-			SocketPath: filepath.Join(cfgDir, "daemon.sock"),
+			LockPath:   filepath.Join(runtimeDir, "run.lock"),
+			StatePath:  filepath.Join(runtimeDir, "state.json"),
+			SocketPath: filepath.Join(runtimeDir, "daemon.sock"),
 		},
 	}, nil
 }
 
-func applyDogfoodDefaults(cfg *dogfoodConfigFile, cfgDir string) {
+// applyDogfoodDefaults mirrors the BrowserOS neo runtime defaults in browseros-dogfood's config package.
+func applyDogfoodDefaults(cfg *dogfoodRuntimeConfig, runtimeDir string) {
 	if cfg.BrowserOSDir == "" {
 		if home, err := os.UserHomeDir(); err == nil {
-			cfg.BrowserOSDir = filepath.Join(home, ".browseros-dogfood")
+			cfg.BrowserOSDir = filepath.Join(home, ".browseros-claw-dogfood")
 		}
 	}
 	if cfg.DevUserDataDir == "" {
-		cfg.DevUserDataDir = filepath.Join(cfgDir, "profile")
+		cfg.DevUserDataDir = filepath.Join(runtimeDir, "profile")
 	}
 	if cfg.Ports.CDP == 0 {
-		cfg.Ports.CDP = 9015
+		cfg.Ports.CDP = 49337
 	}
 	if cfg.Ports.Server == 0 {
-		cfg.Ports.Server = 9115
-	}
-	if cfg.Ports.Extension == 0 {
-		cfg.Ports.Extension = 9315
+		cfg.Ports.Server = defaultClawWatchServerPort
 	}
 }
 
@@ -213,10 +222,7 @@ func resolveBrowserOSDir(override string, dirName string) (string, error) {
 	return filepath.Join(home, dirName), nil
 }
 
-func resolveTargetPorts(root string, explicit string) (proc.Ports, error) {
-	if strings.TrimSpace(explicit) != "" {
-		return parsePorts(explicit)
-	}
+func readDevEnvPorts(root string) (proc.Ports, error) {
 	for _, path := range []string{
 		filepath.Join(root, ".env.development"),
 		filepath.Join(root, ".env.development.example"),
@@ -322,10 +328,6 @@ func parsePorts(value string) (proc.Ports, error) {
 		parsed[i] = port
 	}
 	return proc.Ports{CDP: parsed[0], Server: parsed[1], Extension: parsed[2]}, nil
-}
-
-func formatPorts(ports proc.Ports) string {
-	return fmt.Sprintf("%d,%d,%d", ports.CDP, ports.Server, ports.Extension)
 }
 
 func dogfoodConfigDir() (string, error) {
