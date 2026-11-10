@@ -12,6 +12,9 @@
 //! else, so a `Runtime.evaluate` still fails here, in Neo as everywhere. Neo's own guard
 //! (`neo-runtime/tests/page_js_guard.rs`) is stricter: it also refuses the other script-running
 //! methods and requires every Neo `functionDeclaration` to be a built artifact.
+//! Neo's typed CDP declaration table also names `Runtime.callFunctionOn`, but does not execute
+//! scripts. Its own guard checks uses of the declared command type, so allowing that table here
+//! does not allow another Neo module to invoke page JavaScript directly.
 //!
 //! A send is recognised by the method literal in argument position (followed by a comma), which
 //! leaves the CDP policy tables and error labels that merely name the methods alone. Literals are
@@ -38,6 +41,10 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ),
     (
         "crates/neo-runtime/src/chromium_bridge/main_world.rs",
+        &[CALL_FUNCTION_ON],
+    ),
+    (
+        "crates/neo-runtime/src/chromium_bridge/cdp/runtime.rs",
         &[CALL_FUNCTION_ON],
     ),
 ];
@@ -148,6 +155,25 @@ fn tests_that_neo_main_world_may_call_functions_but_never_evaluate() {
             "evaluate.rs is policy and reaches the page only through main_world.rs: {line}"
         );
     }
+}
+
+#[test]
+fn tests_that_the_neo_typed_declaration_does_not_allow_evaluate() {
+    let declaration = allowed_methods("crates/neo-runtime/src/chromium_bridge/cdp/runtime.rs");
+    assert!(
+        !sends_page_script(
+            r#"command! { CallFunctionOn => "Runtime.callFunctionOn", OnSession, Value; }"#,
+            declaration,
+        ),
+        "the typed command table names callFunctionOn without executing page code"
+    );
+    assert!(
+        sends_page_script(
+            r#"command! { Evaluate => "Runtime.evaluate", OnSession, Value; }"#,
+            declaration,
+        ),
+        "the declaration exception must not permit Runtime.evaluate"
+    );
 }
 
 #[test]

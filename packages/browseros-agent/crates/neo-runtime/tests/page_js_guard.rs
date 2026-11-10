@@ -36,7 +36,8 @@
 //! all, nor a fragment that composes one (`"Runtime.{}"`, `".evaluate"`, `"evaluate"`), nor build
 //! a `functionDeclaration`. Comments and `#[cfg(test)] mod` blocks are not code; test directories
 //! (`tests/`, `integration-tests/`) drive pages through their own raw CDP clients and are not
-//! scanned. browseros-core's `tests/page_js_guard.rs` holds the same two files to its rule too.
+//! scanned. browseros-core's `tests/page_js_guard.rs` allows the same two execution files and
+//! the typed declaration table; this guard also restricts every use of those command types.
 //!
 //! A later slice that needs another method (init scripts: `Page.addScriptToEvaluateOnNewDocument`;
 //! bindings: `Runtime.addBinding`) adds exactly one [`ALLOWED`] row and a self-test for it.
