@@ -187,6 +187,7 @@ struct Inner {
     worker: Mutex<Option<JoinHandle<()>>>,
     shutdown_db: Option<DatabaseConnection>,
     close_gate: AsyncMutex<()>,
+    shutdown: watch::Sender<bool>,
 }
 
 impl TraceStore {
@@ -243,6 +244,7 @@ impl TraceStore {
                 worker: Mutex::new(worker),
                 shutdown_db,
                 close_gate: AsyncMutex::new(()),
+                shutdown: watch::channel(false).0,
             }),
         })
     }
@@ -387,71 +389,37 @@ impl TraceStore {
     /// Hosts must stop runs, await `runtime.drain()`, then call `close`: late runtime writes
     /// still emit delivery and settlement events, which a closed ingest cannot accept.
     ///
-    /// Seals producer admission, then drains within budget. On timeout the task is cancelled;
-    /// pool cleanup retains the OS lock until SQLite has finished any in-flight operation.
+    /// Seals producer admission and starts one owned shutdown task. Dropping this future
+    /// leaves shutdown running; every caller waits for the same pool/lock cleanup within its
+    /// own budget. The first caller's budget bounds the writer drain before it is aborted.
     pub async fn close(&self, budget: Duration) -> StoreHealth {
         let deadline = Instant::now() + budget;
-        let Ok(_close) = time::timeout_at(deadline, self.inner.close_gate.lock()).await else {
+        let Ok(close) = time::timeout_at(deadline, self.inner.close_gate.lock()).await else {
             return self.health();
         };
-        if self.inner.closed.swap(true, Ordering::AcqRel) {
-            return self.health();
+        if !self.inner.closed.swap(true, Ordering::AcqRel) {
+            self.inner
+                .queue
+                .state
+                .stopped
+                .store(true, Ordering::Release);
+            // No await between sealing admission and transferring all cleanup ownership.
+            // A cancelled caller must never strand the worker, its pools, or the file lock.
+            task::spawn(Arc::clone(&self.inner).shutdown(deadline));
         }
-        self.inner
-            .queue
-            .state
-            .stopped
-            .store(true, Ordering::Release);
-        let mut worker = self
-            .inner
-            .worker
-            .lock()
-            .ok()
-            .and_then(|mut worker| worker.take());
-        let drained = time::timeout_at(deadline, async {
-            while self.inner.queue.state.producers.load(Ordering::Acquire) != 0 {
-                task::yield_now().await;
-            }
-            self.inner.queue.send(ingest::Command::Stop, None);
-            if let Some(worker) = &mut worker {
-                let _ = worker.await;
-            }
-        })
-        .await
-        .is_ok();
-        if !drained {
-            self.inner.queue.state.unflushed_events.store(
-                self.inner.queue.state.queued.load(Ordering::Acquire),
-                Ordering::Release,
-            );
-            self.inner.queue.state.unflushed_bytes.store(
-                self.inner.queue.state.bytes.load(Ordering::Acquire),
-                Ordering::Release,
-            );
-            if let Some(worker) = &worker {
-                worker.abort();
-            }
+        drop(close);
+        let mut done = self.inner.shutdown.subscribe();
+        let completed = time::timeout_at(deadline, done.wait_for(|done| *done))
+            .await
+            .is_ok();
+        let mut health = self.health();
+        if !completed {
+            // The caller's deadline can fire before the shutdown task observes its own.
+            // Report this waiter's undrained snapshot; shutdown retains its final loss counts.
+            health.unflushed_events = health.unflushed_events.max(health.queued_events);
+            health.unflushed_bytes = health.unflushed_bytes.max(health.queued_bytes);
         }
-        let lock = self.inner.lock.lock().ok().and_then(|mut lock| lock.take());
-        let writer = self.inner.shutdown_db.clone();
-        let readers = self.inner.readers.clone();
-        // Cleanup can outlive a timed-out close; it owns the lock until both pools close.
-        let mut cleanup = task::spawn(async move {
-            if !drained && let Some(worker) = worker {
-                let _ = worker.await;
-            }
-            if let Some(writer) = writer
-                && let Err(error) = writer.close().await
-            {
-                warn!(%error, "closing trace write pool");
-            }
-            if let Err(error) = readers.close().await {
-                warn!(%error, "closing trace read pool");
-            }
-            drop(lock);
-        });
-        let _ = time::timeout_at(deadline, &mut cleanup).await;
-        self.health()
+        health
     }
 
     fn readers(&self) -> Result<&DatabaseConnection, StoreError> {
@@ -462,10 +430,62 @@ impl TraceStore {
     }
 }
 
+impl Inner {
+    /// The shutdown task owns the store until SQLite releases both pools. The shared watch
+    /// changes only after the lock drops, so a successful waiter may immediately reopen it.
+    async fn shutdown(self: Arc<Self>, deadline: Instant) {
+        let mut worker = self.worker.lock().ok().and_then(|mut worker| worker.take());
+        let drained = time::timeout_at(deadline, async {
+            while self.queue.state.producers.load(Ordering::Acquire) != 0 {
+                task::yield_now().await;
+            }
+            self.queue.send(ingest::Command::Stop, None);
+            if let Some(worker) = &mut worker {
+                let _ = worker.await;
+            }
+        })
+        .await
+        .is_ok();
+        if !drained {
+            self.queue.state.unflushed_events.store(
+                self.queue.state.queued.load(Ordering::Acquire),
+                Ordering::Release,
+            );
+            self.queue.state.unflushed_bytes.store(
+                self.queue.state.bytes.load(Ordering::Acquire),
+                Ordering::Release,
+            );
+            if let Some(worker) = &worker {
+                worker.abort();
+            }
+            if let Some(worker) = worker {
+                let _ = worker.await;
+            }
+        }
+        // SQLx may still own a blocking SQLite operation after the async worker is aborted.
+        // Pool closure is deliberately outside the drain deadline and retains the OS lock.
+        if let Some(writer) = self.shutdown_db.clone()
+            && let Err(error) = writer.close().await
+        {
+            warn!(%error, "closing trace write pool");
+        }
+        if let Err(error) = self.readers.clone().close().await {
+            warn!(%error, "closing trace read pool");
+        }
+        let lock = self.lock.lock().ok().and_then(|mut lock| lock.take());
+        drop(lock);
+        self.shutdown.send_replace(true);
+    }
+}
+
 // A host that drops its last store without close must not leave an immortal retrying writer.
 // Sinks may still exist, so seal admission before cancelling the task.
 impl Drop for Inner {
     fn drop(&mut self) {
+        // An explicit shutdown owns an Arc until its cleanup has completed.
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
         self.queue.state.stopped.store(true, Ordering::Release);
         let worker = self.worker.get_mut().ok().and_then(Option::take);
         if let Some(worker) = &worker {

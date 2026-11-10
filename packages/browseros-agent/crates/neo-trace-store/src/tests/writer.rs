@@ -254,6 +254,46 @@ async fn close_drains_and_reopen_interrupts_unfinished_runs_and_calls() {
 }
 
 #[tokio::test]
+async fn cancelled_close_is_shared_by_later_and_concurrent_closers() {
+    let (_dir, path) = scratch();
+    let store = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
+    let resume = pause(&store).await;
+    let start = started("cancelled-close");
+    store
+        .sink()
+        .run(&start)
+        .unwrap()
+        .emit(&after(start.run.id, 1));
+    // Drop the caller while the writer is deterministically blocked mid-drain.
+    assert!(
+        time::timeout(
+            Duration::from_millis(20),
+            store.close(Duration::from_secs(5))
+        )
+        .await
+        .is_err()
+    );
+    resume.send(()).unwrap();
+    let (first, second) = tokio::join!(
+        store.close(Duration::from_secs(5)),
+        store.close(Duration::from_secs(5)),
+    );
+    let reopened = time::timeout(
+        Duration::from_secs(5),
+        TraceStore::open(StoreConfig::new(&path)),
+    )
+    .await
+    .unwrap();
+    assert!(
+        reopened.is_ok(),
+        "cancelled close stranded the file lock: {:?}",
+        reopened.err()
+    );
+    assert_eq!(first.queued_events, 0);
+    assert_eq!(second.queued_events, 0);
+}
+
+#[tokio::test]
 async fn close_budget_cancels_a_stuck_writer_and_closes_admission() {
     let (_dir, path) = scratch();
     let store = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
