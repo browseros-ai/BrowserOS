@@ -6,7 +6,7 @@ mod browser;
 use std::time::{Duration, Instant};
 
 use browser::{Fixture, Tab};
-use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio::time;
@@ -25,7 +25,7 @@ async fn wait(tab: &Tab, expression: &str) {
 
 fn request(tab: &Tab, code: &str) -> RunRequest {
     RunRequest {
-        page: PageId::new(tab.target_id.clone()),
+        page: StartPage::Page(PageId::new(tab.target_id.clone())),
         code: code.to_string(),
         timeout: Duration::from_secs(30),
         cancel: CancellationToken::new(),

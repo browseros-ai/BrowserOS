@@ -50,22 +50,7 @@ pub(crate) async fn context(
         BrowserContextCall::NewPage(_) => {
             let created = progress.race(tabs.create()).await??;
             let entry = &created.entry;
-            // Playwright 26137face server/browserContext.ts:575-595 waits for initialization
-            // before returning a page. Its committed history ensures a main frame here.
-            let mut backoff = Duration::from_millis(1);
-            loop {
-                let url = progress
-                    .race(tabs.url(entry))
-                    .await??
-                    .ok_or_else(PlaywrightError::target_closed)?;
-                if !url.is_empty() {
-                    break;
-                }
-                // BrowserOS can briefly report an empty history URL while creating the
-                // initial document. Returning now would seed the SDK with that empty URL.
-                progress.wait(backoff).await?;
-                backoff = (backoff * 2).min(Duration::from_millis(16));
-            }
+            progress.race(tabs.first_url(entry)).await??;
             // The run's init scripts reach the page's first document before the page is handed
             // out, as a new page's `FrameSession` runs them in Playwright.
             let scripts = progress.init_scripts();

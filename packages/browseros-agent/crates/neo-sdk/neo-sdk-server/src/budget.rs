@@ -1,4 +1,4 @@
-//! The `run` reply budget: how many tokens one reply's JSON may cost, estimated from its
+//! Neo: The `run` reply budget: how many tokens one reply's JSON may cost, estimated from its
 //! UTF-8 bytes, and the per-call `maxResponseTokens` override. `output.rs` spends it.
 
 use serde_json::Value;
@@ -123,10 +123,6 @@ pub(super) fn scaled(cap: usize, bytes: usize) -> usize {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "Assertions fail the test on malformed results"
-)]
 mod tests {
     use serde_json::{Value, json};
 

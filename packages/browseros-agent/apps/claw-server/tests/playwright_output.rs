@@ -386,6 +386,61 @@ fn js_hash(text: &str) -> u32 {
 
 const HASH_JS: &str = "let hash=0; for(let i=0;i<snap.length;i++) hash=(Math.imul(hash,31)+snap.charCodeAt(i))>>>0; console.log('hash:'+hash);";
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tests_that_page_metadata_fits_the_budget_and_the_runtime_keeps_the_full_title()
+-> anyhow::Result<()> {
+    let Some(harness) = Harness::start().await? else {
+        return Ok(());
+    };
+    let title = "\"\\🦀".repeat(2_048);
+    let initial = harness
+        .run(
+            1,
+            json!({"maxResponseTokens":200000, "code":format!(
+                "await page.goto({}); await page.evaluate(title => document.title = title, {}); return await page.title();",
+                serde_json::to_string(&harness.url)?,
+                serde_json::to_string(&title)?,
+            )}),
+        )
+        .await?;
+    let original = bounded_by(&initial, 800_000);
+    assert_eq!(original["status"], "ok", "{original}");
+    let page = original["pages"][0]["id"].as_str().expect("page ID");
+    let original_title = original["pages"][0]["title"]
+        .as_str()
+        .expect("browser title");
+    let reply = harness
+        .run(
+            2,
+            json!({"page":page, "maxResponseTokens":1000, "code":"return 1"}),
+        )
+        .await?;
+    let report = bounded_by(&reply, 4_000);
+    assert_eq!(report["status"], "ok", "{report}");
+    assert_eq!(report["value"], 1);
+    assert!(report["truncated"].get("metadataOverBudget").is_none());
+    assert_eq!(report["pages"][0]["id"], page);
+    assert_eq!(report["pages"][0]["created"], false);
+    assert_eq!(report["pages"][0]["closed"], false);
+    let shown = report["pages"][0]["title"].as_str().expect("title prefix");
+    assert!(original_title.starts_with(shown));
+
+    // Presentation shortened the reply, not the browser or Runtime's underlying page data.
+    let full = harness
+        .run(
+            3,
+            json!({"page":page, "code":"return await page.title()", "maxResponseTokens":200000}),
+        )
+        .await?;
+    let full = bounded_by(&full, 800_000);
+    assert_eq!(full["value"], original["value"]);
+    assert_eq!(full["pages"][0]["title"], original["pages"][0]["title"]);
+    assert_eq!(full["pages"][0]["id"], page);
+    assert_eq!(full["pages"][0]["created"], false);
+    assert_eq!(full["pages"][0]["closed"], false);
+    harness.stop().await
+}
+
 #[expect(clippy::print_stderr, reason = "Report verification measurements")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tests_that_scoped_snapshots_and_bounded_results_work_through_mcp() -> anyhow::Result<()> {

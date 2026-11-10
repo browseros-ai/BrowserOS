@@ -8,7 +8,7 @@ use std::os::unix::fs as unix_fs;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
-use neo_runtime::{PageId, RunRequest, Runtime};
+use neo_runtime::{PageId, RunRequest, Runtime, StartPage};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -40,7 +40,7 @@ async fn directory_upload_never_reads_through_an_outside_symlink() {
     let runtime = Runtime::connect(tab.cdp.clone()).await.expect("runtime");
     let outcome = runtime.run(RunRequest {
         code: "const upload=await page.locator('#folder').setInputFiles('tree').then(()=> 'resolved',e=>e.name); return {upload,files:await page.evaluate(async()=>Promise.all([...document.querySelector('input').files].map(async f=>({name:f.name,text:await f.text()}))))};".into(),
-        page: PageId::new(tab.target_id.clone()),
+        page: StartPage::Page(PageId::new(tab.target_id.clone())),
         timeout: Duration::from_secs(15),
         cancel: CancellationToken::new(),
         artifacts: Some(artifacts),

@@ -464,6 +464,10 @@ async fn tests_that_returned_screenshots_become_image_blocks_and_files() -> anyh
         )}),
     )
     .await?;
+    assert!(
+        full["_meta"]["com.browseros.neo/run"].is_string(),
+        "binary presentation must retain the traced run id: {full}"
+    );
     let report = self::report(&full);
     assert_eq!(report["status"], "ok", "{report}");
     // The descriptor, not a number array, fits the default 100 000-token budget whole.

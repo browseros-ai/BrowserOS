@@ -1,6 +1,7 @@
 //! Minimal boot path inside the shipped sidecar binary. The flag is checked before
 //! AppState/AppRuntime exist, so legacy sessions, effects, recorders, cleanup jobs and
-//! analytics cannot observe or change the prototype's tabs. Only skill installation is reused.
+//! analytics cannot observe or change the prototype's tabs. The reusable Neo server owns
+//! the MCP route, runtime and result lifecycle; this host adds system endpoints and skill installation.
 
 use std::{future::Future, net::SocketAddr, sync::Arc};
 
@@ -9,13 +10,13 @@ use axum::{
     Json, Router,
     extract::State,
     http::StatusCode,
-    middleware,
     routing::{get, post},
 };
 use claw_api::models::{
     AgentSettings, BrowserLink, HealthResponse, ShutdownResponse, SystemInfo,
     UpdateAgentSettingsRequest,
 };
+use neo_sdk_server::{Config as NeoConfig, NeoSdkServer};
 use rmcp::{serve_server, transport::stdio};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -24,7 +25,6 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     VERSION,
     analytics::NoopAnalyticsSink,
-    api::{http::mcp_request_hygiene, mcp::playwright::PlaywrightService},
     config::Config,
     services::{harness::HarnessService, harness_skills::load_playwright_skill, runtime_file},
 };
@@ -41,7 +41,7 @@ pub fn enabled() -> bool {
 #[derive(Clone)]
 struct StateData {
     config: Arc<Config>,
-    service: PlaywrightService,
+    service: NeoSdkServer,
     shutdown: CancellationToken,
 }
 
@@ -53,10 +53,9 @@ pub async fn serve(
     signal: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let shutdown = CancellationToken::new();
-    let service = PlaywrightService::new(
-        config.cdp_port,
+    let service = NeoSdkServer::new(
+        NeoConfig::new(config.cdp_port, config.browserclaw_dir.clone()),
         shutdown.clone(),
-        config.browserclaw_dir.clone(),
     );
     if stdio_mode {
         let running = serve_server(service.clone(), stdio()).await?;
@@ -66,7 +65,7 @@ pub async fn serve(
             () = signal => { cancellation.cancel(); }
         }
         shutdown.cancel();
-        service.disconnect().await;
+        service.shutdown().await;
         return Ok(());
     }
 
@@ -88,13 +87,8 @@ pub async fn serve(
         // Docker's entrypoint disables human help after checking readiness. Keep that
         // handshake honest: effects stay disabled and enabling one is refused.
         .route("/api/v1/settings/agent", get(settings).put(update_settings))
-        .nest_service(
-            "/mcp",
-            Router::new()
-                .fallback_service(service.http_service())
-                .layer(middleware::from_fn(mcp_request_hygiene)),
-        )
-        .with_state(state);
+        .with_state(state)
+        .merge(service.router());
     let runtime_url = config.proxy_port.map_or_else(
         || format!("http://{bound}"),
         |port| format!("http://127.0.0.1:{port}"),
@@ -120,7 +114,7 @@ pub async fn serve(
         })
         .await;
     shutdown.cancel();
-    service.disconnect().await;
+    service.shutdown().await;
     skill_task
         .await
         .context("prototype skill installer task failed")?;

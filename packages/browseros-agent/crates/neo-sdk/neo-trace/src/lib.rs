@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use neo_runtime::{
     CallEvent, CallRecord, CallResult, Delivery, RunOutcome, RunRequest, RunStatus, Runtime,
+    StartPage,
 };
 use serde::{Serialize, Serializer};
 use tokio::runtime::Handle;
@@ -45,8 +46,14 @@ impl Serialize for RunId {
 pub async fn run(runtime: &Runtime, request: RunRequest) -> (RunId, RunOutcome) {
     let id = RunId(Ulid::new());
     let started = Instant::now();
+    // The runtime may create the first tab inside its deadline. Until it does, there is
+    // no target id to log; subsequent call guids and the outcome provide that identity.
+    let page = match &request.page {
+        StartPage::Page(id) => Some(id.as_str()),
+        StartPage::NewTab => None,
+    };
     info!(
-        target: "neo_trace", run = %id, page = ?request.page.as_str(),
+        target: "neo_trace", run = %id, page = page.map(field::debug),
         code = ?clip(&request.code, CODE_BYTES), "run.start"
     );
     let (sender, receiver) = mpsc::unbounded_channel();

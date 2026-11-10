@@ -184,7 +184,7 @@ async fn tests_that_a_listed_page_forced_click_waits_for_another_runs_trial() {
                  return 'clicked';",
                 fake_browser::PAGE
             ),
-            page: neo_runtime::PageId::new("other".to_string()),
+            page: neo_runtime::StartPage::Page(neo_runtime::PageId::new("other".to_string())),
             timeout: Duration::from_secs(10),
             cancel: CancellationToken::new(),
             artifacts: None,
@@ -294,25 +294,123 @@ async fn tests_that_cancellation_during_creation_records_and_closes_the_tab() {
     })
     .await;
     let cancel = CancellationToken::new();
-    let trigger = cancel.clone();
-    let canceller = tokio::spawn(async move {
-        time::sleep(Duration::from_millis(100)).await;
-        trigger.cancel();
-    });
-    let outcome = browser
-        .runtime()
-        .await
-        .run(fake_browser::run_request(
-            &format!("{WIRE} await call('context@default','newPage');"),
-            Duration::from_secs(5),
-            cancel,
-        ))
-        .await;
-    canceller.await.unwrap();
+    let runtime = browser.runtime().await;
+    let request = fake_browser::run_request(
+        &format!("{WIRE} await call('context@default','newPage');"),
+        Duration::from_secs(5),
+        cancel.clone(),
+    );
+    let run = tokio::spawn(async move { runtime.run(request).await });
+    // Cancellation must happen after the browser accepted the creation. A fixed delay can
+    // cancel startup instead on a loaded host and never exercise late creation cleanup.
+    let until = Instant::now() + Duration::from_secs(5);
+    while !browser
+        .exchanges()
+        .iter()
+        .any(|e| e.method() == "Browser.createTab")
+    {
+        assert!(
+            Instant::now() < until,
+            "the browser never received the creation"
+        );
+        time::sleep(Duration::from_millis(5)).await;
+    }
+    cancel.cancel();
+    let outcome = run.await.unwrap();
     assert_eq!(outcome.status, RunStatus::Cancelled, "{outcome:?}");
     assert!(
         outcome.pages.iter().any(|page| page.created && page.closed),
         "{outcome:?}"
+    );
+}
+
+/// A run cancelled while the browser is still answering the `createTab` of its `NewTab` start
+/// never starts, and the tab that answer names is closed once it arrives.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_new_tab_start_answered_after_a_cancel_is_closed() {
+    let browser = FakeBrowser::start(Replies {
+        create_tab_delay: Some(Duration::from_millis(600)),
+        ..Replies::default()
+    })
+    .await;
+    let runtime = browser.runtime().await;
+    let cancel = CancellationToken::new();
+    let run = tokio::spawn({
+        let cancel = cancel.clone();
+        async move {
+            runtime
+                .run(neo_runtime::RunRequest {
+                    code: "return 1".to_string(),
+                    page: neo_runtime::StartPage::NewTab,
+                    timeout: Duration::from_secs(10),
+                    cancel,
+                    artifacts: None,
+                })
+                .await
+        }
+    });
+    // The fake adds the tab as soon as createTab arrives and holds back its answer.
+    let until = Instant::now() + Duration::from_secs(5);
+    while !tab_ids(&browser).contains(&"new-page-1".to_string()) {
+        assert!(Instant::now() < until, "createTab never arrived");
+        time::sleep(Duration::from_millis(5)).await;
+    }
+    cancel.cancel();
+    let outcome = run.await.unwrap();
+    assert_eq!(outcome.status, RunStatus::Cancelled, "{outcome:?}");
+    let until = Instant::now() + Duration::from_secs(5);
+    while tab_ids(&browser).contains(&"new-page-1".to_string()) {
+        assert!(Instant::now() < until, "the late tab was never closed");
+        time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        browser
+            .exchanges()
+            .iter()
+            .any(|exchange| exchange.method() == "Target.closeTarget"
+                && exchange.command["params"]["targetId"] == "new-page-1"),
+        "the creation task closed the tab it was never asked to keep"
+    );
+}
+
+/// A tab-strip read that never answers costs the pages their URLs and titles, not the run its
+/// bound: finish gives up on the read with the rest of its shared drain. Unbounded, the run
+/// would wait for the CDP request's own 60 s timeout.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_an_unanswered_tab_strip_read_leaves_pages_without_url_or_title() {
+    let browser = FakeBrowser::start(Replies {
+        get_tabs: fake_browser::Reply {
+            answers: 0,
+            ..fake_browser::Reply::default()
+        },
+        ..Replies::default()
+    })
+    .await;
+    let runtime = browser.runtime().await;
+    let started = Instant::now();
+    let outcome = runtime
+        .run(fake_browser::run_request(
+            "return 1",
+            Duration::from_secs(5),
+            CancellationToken::new(),
+        ))
+        .await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "finish waited {:?} for a read that never answers",
+        started.elapsed()
+    );
+    assert!(
+        browser
+            .exchanges()
+            .iter()
+            .any(|exchange| exchange.method() == "Browser.getTabs" && exchange.reply.is_none()),
+        "precondition: finish asked for the tab strip and was never answered"
+    );
+    assert_eq!(
+        serde_json::to_value(&outcome.pages).unwrap(),
+        json!([{"id":fake_browser::PAGE,"created":false,"closed":false}])
     );
 }
 

@@ -27,7 +27,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
-use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::json;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -61,7 +61,7 @@ async fn run(runtime: &Runtime, page: &PageId, code: &str, timeout: Duration) ->
     runtime
         .run(RunRequest {
             code: code.to_string(),
-            page: page.clone(),
+            page: StartPage::Page(page.clone()),
             timeout,
             cancel: CancellationToken::new(),
             artifacts: None,

@@ -1,5 +1,6 @@
-//! Bounds model-visible run reports; retained originals are shared across MCP sessions.
+//! Neo: Bounds model-visible run reports; retained originals are shared across MCP sessions.
 //! Each truncated field of a retained original is also saved as a file the LRU deletes.
+//! Optional page URL/title hints are shortened only in the displayed copy, never in the LRU.
 
 use std::collections::VecDeque;
 use std::io;
@@ -7,39 +8,51 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures_util::future;
+use tokio::fs;
+use tokio::fs::{DirBuilder, OpenOptions};
 use tokio::io::AsyncWriteExt;
+use tokio::time::{self, Instant};
 
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value, json};
 
 use super::budget::{self, Budget};
 
-/// Directory under the host's state dir that holds saved originals.
+/// Neo: directory under the host's state dir that holds saved originals.
 pub(super) const RESULTS_DIR: &str = "run-results";
-/// A slow disk may drop a reply's `file` links, never delay the reply past this.
+/// Neo: a slow disk may drop a reply's `file` links, never delay the reply past this.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Saved files older than this are swept, whichever process wrote them. Eviction deletes a
+/// Neo: saved files older than this are swept, whichever process wrote them. Eviction deletes a
 /// process's own files; the sweep catches files of crashed processes and writes that
 /// finished after their entry was evicted, without touching another live process's
 /// recent results (stdio servers can share one state dir).
-const STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
+const STALE_AFTER: Duration = Duration::from_hours(24);
 // Excerpt caps in bytes beside a truncated value, and the ancestor context of a retrieval
 // window. `budget::scaled` shrinks them for budgets under 24 000 bytes.
+/// Neo: Bounded log context leaves space for the returned value and continuation links.
 const LOG_BUDGET: usize = 2_000;
+/// Neo: Call context retains delivery evidence beside a truncated value.
 const CALL_BUDGET: usize = 4_000;
+/// Neo: Error excerpts preserve failure context without consuming the entire reply.
 const ERROR_BUDGET: usize = 4_000;
+/// Neo: page URLs and titles are display hints; the retained original keeps their full text.
+const PAGE_TEXT_CHARS: usize = 300;
+/// Neo: Retrieval windows keep a bounded excerpt of their ancestor object.
 const CONTEXT_BUDGET: usize = 2_000;
+/// Neo: The process LRU limits how many originals survive across stateless requests.
 const MAX_RESULTS: usize = 16;
+/// Neo: Serialized originals and saved-field text share one memory and disk bound.
 const STORE_BUDGET: usize = 64 * 1024 * 1024;
-/// A big array element or object entry kept beside cut siblings shows at least this many
+/// Neo: a big array element or object entry kept beside cut siblings shows at least this many
 /// encoded bytes, or a `MIN_SHARE_PARTS`th of a smaller container's budget, so a nested
 /// record still splits its share among its fields.
 const MIN_SHARE: usize = 2_000;
+/// Neo: Small containers divide their remaining budget among nested records.
 const MIN_SHARE_PARTS: usize = 8;
-/// Listed cuts cost about 150 bytes each, so the list stays near 3 KB of a 24 000-byte budget
+/// Neo: listed cuts cost about 150 bytes each, so the list stays near 3 KB of a 24 000-byte budget
 /// (`budget::scaled` lists fewer under a smaller one).
 const MAX_CUTS: usize = 20;
-/// Metadata grows with the cuts it lists; each attempt shrinks the value by the overshoot.
+/// Neo: metadata grows with the cuts it lists; each attempt shrinks the value by the overshoot.
 const FIT_ATTEMPTS: usize = 8;
 
 struct Retained {
@@ -73,10 +86,10 @@ impl Disk {
     /// `file` link and logs a warning; it never fails the reply. A write still running at the
     /// deadline may finish after its entry's eviction; the stale sweep removes that file.
     pub(super) async fn apply(self, mut result: Value) -> Value {
-        let deadline = tokio::time::Instant::now() + WRITE_TIMEOUT;
+        let deadline = Instant::now() + WRITE_TIMEOUT;
         let cleanup = async {
             for path in &self.removes {
-                if let Err(error) = tokio::fs::remove_file(path).await
+                if let Err(error) = fs::remove_file(path).await
                     && error.kind() != io::ErrorKind::NotFound
                 {
                     tracing::warn!(path = %path.display(), %error, "could not delete an evicted run result");
@@ -86,17 +99,17 @@ impl Disk {
                 sweep(dir).await;
             }
         };
-        let saves = future::join_all(self.writes.into_iter().map(
+        let writing = future::join_all(self.writes.into_iter().map(
             |(field, path, text)| async move {
-                let saved = tokio::time::timeout_at(deadline, save(&path, text)).await;
+                let saved = time::timeout_at(deadline, save(&path, text)).await;
                 (field, path, saved)
             },
         ));
-        let (cleaned, saved) = tokio::join!(tokio::time::timeout_at(deadline, cleanup), saves);
+        let (cleaned, results) = tokio::join!(time::timeout_at(deadline, cleanup), writing);
         if cleaned.is_err() {
             tracing::warn!("run result cleanup timed out after {WRITE_TIMEOUT:?}");
         }
-        for (field, path, saved) in saved {
+        for (field, path, saved) in results {
             let error = match saved {
                 Ok(Ok(())) => continue,
                 Ok(Err(error)) => error.to_string(),
@@ -114,26 +127,26 @@ impl Disk {
 /// Writes `text` readable only by this user: results can hold logged-in pages.
 async fn save(path: &Path, text: String) -> io::Result<()> {
     if let Some(dir) = path.parent() {
-        let mut builder = tokio::fs::DirBuilder::new();
+        let mut builder = DirBuilder::new();
         builder.recursive(true);
         #[cfg(unix)]
         builder.mode(0o700);
         builder.create(dir).await?;
     }
-    let mut options = tokio::fs::OpenOptions::new();
+    let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     options.mode(0o600);
     let mut file = options.open(path).await?;
     file.write_all(text.as_bytes()).await?;
-    // Platform: tokio::fs::File finishes writes in the background unless flushed before drop.
+    // Platform: fs::File finishes writes in the background unless flushed before drop.
     file.flush().await
 }
 
 /// Deletes saved files older than `STALE_AFTER`. Only files it judged stale, never the folder,
 /// so a sweep that outlives its deadline cannot remove a fresh write.
 async fn sweep(dir: &Path) {
-    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
+    let Ok(mut entries) = fs::read_dir(dir).await else {
         return;
     };
     while let Ok(Some(entry)) = entries.next_entry().await {
@@ -146,7 +159,7 @@ async fn sweep(dir: &Path) {
                     .is_some_and(|age| age > STALE_AFTER)
         });
         if stale
-            && let Err(error) = tokio::fs::remove_file(entry.path()).await
+            && let Err(error) = fs::remove_file(entry.path()).await
             && error.kind() != io::ErrorKind::NotFound
         {
             tracing::warn!(path = %entry.path().display(), %error, "could not sweep a stale run result");
@@ -444,6 +457,9 @@ fn bound(original: &Value, link: &Link, retained: bool, budget: usize) -> Value 
     if original.get("value").is_some() {
         out["value"] = json!("");
     }
+    // Display hints must not crowd out the value or its recovery links. Only this cloned
+    // report is shortened; Store retains the complete runtime report for the same result ID.
+    bound_pages(&mut out, budget);
     // Recovery identities and errors take priority over optional log/trace excerpts.
     if out.to_string().len() > budget {
         out["logs"] = json!([]);
@@ -474,12 +490,58 @@ fn bound(original: &Value, link: &Link, retained: bool, budget: usize) -> Value 
             }
         }
     }
+    // Value recovery links can consume room the page hints initially used.
+    bound_pages(&mut out, budget);
     // All page identities and error names are recovery data. If those alone exceed the
     // budget, say so instead of silently losing a tab or replacing the original failure.
     if out.to_string().len() > budget {
         out["truncated"]["metadataOverBudget"] = json!(true);
     }
     out
+}
+
+/// Caps optional page display text, then gives back encoded bytes needed by the envelope.
+/// IDs, lifecycle flags and order are never changed. Empty optional fields can be omitted
+/// before calling metadata irreducible; full strings remain in the retained original.
+fn bound_pages(out: &mut Value, budget: usize) {
+    if let Some(pages) = out["pages"].as_array_mut() {
+        for page in pages {
+            for field in ["url", "title"] {
+                if let Some(Value::String(text)) = page.get_mut(field) {
+                    let end = text
+                        .char_indices()
+                        .nth(PAGE_TEXT_CHARS)
+                        .map_or(text.len(), |(index, _)| index);
+                    text.truncate(end);
+                }
+            }
+        }
+    }
+    let mut excess = encoded_len(out).saturating_sub(budget);
+    let Some(pages) = out["pages"].as_array_mut() else {
+        return;
+    };
+    for page in pages {
+        for field in ["url", "title"] {
+            if excess == 0 {
+                return;
+            }
+            let before = encoded_len(page);
+            let remove = if let Some(Value::String(text)) = page.get_mut(field) {
+                // leaf_end counts JSON escapes and UTF-8 bytes and keeps a valid prefix.
+                let room = quoted_len(text).saturating_sub(2).saturating_sub(excess);
+                let end = leaf_end(text, room);
+                text.truncate(end);
+                end == 0
+            } else {
+                false
+            };
+            if remove && let Some(fields) = page.as_object_mut() {
+                fields.remove(field);
+            }
+            excess = excess.saturating_sub(before.saturating_sub(encoded_len(page)));
+        }
+    }
 }
 
 fn mark_changed(out: &mut Value, original: &Value, link: &Link, field: &str) {
@@ -780,7 +842,7 @@ fn quoted_len(text: &str) -> usize {
     2 + text.chars().map(escaped_len).sum::<usize>()
 }
 
-/// Bytes `ch` takes inside a JSON string as serde_json writes it.
+/// Bytes `ch` takes inside a JSON string as `serde_json` writes it.
 fn escaped_len(ch: char) -> usize {
     match ch {
         '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
@@ -924,11 +986,8 @@ fn ancestors(text: &str, offset: usize, budget: usize) -> (String, bool) {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "Assertions fail the test on malformed results"
-)]
 mod tests {
+    use std::fmt::Write as _;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
@@ -951,21 +1010,26 @@ mod tests {
     }
 
     fn report(value: Value) -> Value {
-        json!({"status":"ok", "value":value, "logs":[], "calls":[],
-            "pages":[{"id":"p1", "created":true, "closed":false,"url":"https://example.com"}]})
+        let mut report = json!({"status":"ok", "logs":[], "calls":[],
+            "pages":[{"id":"p1", "created":true, "closed":false,"url":"https://example.com"}]});
+        report["value"] = value;
+        report
     }
 
     /// Follows `next` verbatim, checking each window against the budget and limit it names.
     fn remainder(store: &mut Store, mut next: Value, mut text: String) -> String {
         while next.is_object() {
             let budget = Budget::parse(next.get("maxResponseTokens")).expect("valid budget");
-            let limit = next["limit"].as_u64().map(|limit| limit as usize);
+            let limit = next["limit"]
+                .as_u64()
+                .map(|limit| usize::try_from(limit).expect("test window fits usize"));
             let window = store
                 .retrieve(
                     next["result"].as_str().expect("expected test value"),
                     next["field"].as_str().expect("expected test value"),
                     next["path"].as_str(),
-                    next["offset"].as_u64().expect("expected test value") as usize,
+                    usize::try_from(next["offset"].as_u64().expect("expected test value"))
+                        .expect("test offset fits usize"),
                     budget,
                     limit,
                 )
@@ -999,12 +1063,97 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_page_display_metadata_cannot_bypass_a_small_budget() {
+        let budget = tokens(1_000);
+        for (title, url) in [
+            ("t".repeat(8_192), "https://example.com".to_string()),
+            ("short title".to_string(), "u".repeat(8_192)),
+            ("\0\"\\\n🦀漢".repeat(2_048), "\0\"\\\n🦀漢".repeat(2_048)),
+        ] {
+            let mut original = report(json!(1));
+            original["pages"][0]["title"] = json!(title);
+            original["pages"][0]["url"] = json!(url);
+            // The old limiter kept this whole array, so it exceeded the cap by itself.
+            assert!(original["pages"].to_string().len() > budget.bytes());
+            let mut store = Store::default();
+            let bounded = store.limit(original.clone(), None, budget).0;
+            assert!(
+                bounded.to_string().len() <= budget.bytes(),
+                "escaped JSON must fit 4000 bytes: {bounded}"
+            );
+            assert_eq!(bounded["value"], 1, "tiny values need no truncation");
+            assert!(bounded["truncated"].get("metadataOverBudget").is_none());
+            assert_eq!(bounded["pages"].as_array().expect("pages").len(), 1);
+            for field in ["id", "created", "closed"] {
+                assert_eq!(bounded["pages"][0][field], original["pages"][0][field]);
+            }
+            for field in ["url", "title"] {
+                let shown = bounded["pages"][0][field].as_str().expect("display prefix");
+                assert!(shown.chars().count() <= super::PAGE_TEXT_CHARS);
+                assert!(
+                    original["pages"][0][field]
+                        .as_str()
+                        .expect("full text")
+                        .starts_with(shown)
+                );
+            }
+            let id = bounded["truncated"]["result"].as_str().expect("result ID");
+            let retained = store.entries.back().expect("full original retained");
+            assert_eq!(retained.id, id);
+            assert_eq!(
+                retained.original, original,
+                "metadata clipping never mutates the original"
+            );
+            let retrieved = store
+                .retrieve(id, "value", None, 0, budget, None)
+                .expect("existing retrieval contract");
+            assert_eq!(retrieved["value"], "1");
+        }
+    }
+
+    #[test]
+    fn tests_that_page_display_hints_yield_to_identity_and_recovery_metadata() {
+        let budget = tokens(1_000);
+        let mut original = report(json!(1));
+        original["pages"] = json!(
+            (0..4)
+                .map(|index| json!({
+                    "id":format!("p{index}"), "created":index % 2 == 0, "closed":index == 3,
+                    "url":"\0".repeat(8_192), "title":"\0".repeat(8_192)
+                }))
+                .collect::<Vec<_>>()
+        );
+        let mut store = Store::default();
+        let bounded = store.limit(original.clone(), None, budget).0;
+        assert!(bounded.to_string().len() <= budget.bytes(), "{bounded}");
+        assert!(bounded["truncated"].get("metadataOverBudget").is_none());
+        assert_eq!(bounded["pages"].as_array().expect("pages").len(), 4);
+        for index in 0..4 {
+            for field in ["id", "created", "closed"] {
+                assert_eq!(
+                    bounded["pages"][index][field],
+                    original["pages"][index][field]
+                );
+            }
+        }
+        assert_eq!(store.entries.back().expect("retained").original, original);
+
+        // A real identity overflow keeps the existing explicit over-budget behavior.
+        original["pages"][0]["id"] = json!("p".repeat(8_192));
+        let bounded = store.limit(original.clone(), None, budget).0;
+        assert_eq!(bounded["truncated"]["metadataOverBudget"], true);
+        assert_eq!(bounded["pages"][0]["id"], original["pages"][0]["id"]);
+        assert_eq!(store.entries.back().expect("retained").original, original);
+    }
+
+    #[test]
     fn tests_that_large_values_are_bounded_and_retrieved_without_losing_text_or_context() {
         let text = format!(
             "- main [ref=e1]:\n  - list [ref=e2]:\n{}",
-            (0..2500)
-                .map(|i| format!("    - button \"商品 {i} 🦀\" [ref=e{}]\n", i + 3))
-                .collect::<String>()
+            (0..2500).fold(String::new(), |mut text, i| {
+                writeln!(text, "    - button \"商品 {i} 🦀\" [ref=e{}]", i + 3).unwrap();
+                text
+            })
         );
         let mut store = Store::default();
         let bounded = store.limit(report(json!(text)), None, budget()).0;
@@ -1201,9 +1350,10 @@ mod tests {
     fn aria(items: usize) -> String {
         format!(
             "- main [ref=e1]:\n  - list [ref=e2]:\n{}",
-            (0..items)
-                .map(|i| format!("    - button \"商品 {i} 🦀\" [ref=e{}]\n", i + 3))
-                .collect::<String>()
+            (0..items).fold(String::new(), |mut text, i| {
+                writeln!(text, "    - button \"商品 {i} 🦀\" [ref=e{}]", i + 3).unwrap();
+                text
+            })
         )
     }
 
@@ -1713,9 +1863,7 @@ mod tests {
         fs::File::options()
             .write(true)
             .open(&stale)
-            .and_then(|file| {
-                file.set_modified(SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60))
-            })
+            .and_then(|file| file.set_modified(SystemTime::now() - Duration::from_hours(48)))
             .expect("expected test value");
         // Another live server sharing the state dir keeps its recent file.
         let foreign = dir.join("r111111111111-value.txt");

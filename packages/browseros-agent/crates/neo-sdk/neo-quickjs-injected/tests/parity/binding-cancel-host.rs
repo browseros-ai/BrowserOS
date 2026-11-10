@@ -1,6 +1,6 @@
 //! Cancels real binding setup, then drains; the outer driver reads existing and future globals.
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunRequest, RunStatus, Runtime, StartPage};
 use std::env;
 use std::fs;
 use std::time::Duration;
@@ -43,7 +43,7 @@ async fn cancel_during_setup() {
                 .run(RunRequest {
                     code: "await page.exposeFunction('oldRunBinding',()=>17);await new Promise(()=>{})"
                         .into(),
-                    page: PageId::new(target),
+                    page: StartPage::Page(PageId::new(target)),
                     timeout: Duration::from_secs(30),
                     cancel,
                     artifacts: None,

@@ -12,7 +12,7 @@ mod browser;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
-use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::{Value, json};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -67,7 +67,7 @@ async fn check_cleanup(cancel_run: bool) {
                await page.evaluate(() => {window.clockReady = true});
                await new Promise(() => {})"
             .into(),
-        page: PageId::new(tab.target_id.clone()),
+        page: StartPage::Page(PageId::new(tab.target_id.clone())),
         timeout: Duration::from_secs(if cancel_run { 30 } else { 5 }),
         cancel: cancel.clone(),
         artifacts: None,

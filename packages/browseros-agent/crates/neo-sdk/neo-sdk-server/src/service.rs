@@ -1,79 +1,95 @@
-//! Prototype MCP adapter for the new runtime. It owns no Claw sessions or effects: the
+//! Neo: The reusable MCP adapter for the runtime. It owns no Claw sessions or effects: the
 //! runtime owns browser calls and cleanup, while page ids alone provide continuity. One
 //! shared runtime preserves its per-tab input ordering across MCP transport connections.
 
-use std::{
-    borrow::Cow,
-    path::PathBuf,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::borrow::Cow;
+use std::mem;
+use std::path::{self, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, SystemTime};
 
+use axum::extract::Request;
+use axum::http::{Method, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::{Json, Router};
+#[expect(
+    clippy::disallowed_types,
+    reason = "the server owns connection lifecycle and passes browser operations to Runtime"
+)]
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use neo_runtime::{AbsolutePaths, PageId, RunOutcome, RunPage, RunRequest, RunStatus, Runtime};
+use neo_runtime::{AbsolutePaths, PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage};
 use neo_trace::RunId;
-use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler,
-    model::{
-        CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
-        Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
-        ServerCapabilities, SubscriptionFilter, Tool, ToolAnnotations,
-    },
-    service::RequestContext,
-    transport::streamable_http_server::{
-        session::local::LocalSessionManager,
-        tower::{StreamableHttpServerConfig, StreamableHttpService},
-    },
+use rmcp::model::{
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+    Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
+    ServerCapabilities, SubscriptionFilter, Tool, ToolAnnotations,
 };
+use rmcp::service::RequestContext;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::streamable_http_server::tower::{
+    StreamableHttpServerConfig, StreamableHttpService,
+};
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use tokio::{
-    sync::{Mutex, OnceCell},
-    time::Instant,
-};
+use tokio::runtime::Handle;
+use tokio::sync::{Mutex, OnceCell, Semaphore};
+use tokio::time::{self, Instant};
+
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::{
-    artifacts, binary,
-    budget::{Budget, DEFAULT_TOKENS, LIMIT_MAX, LIMIT_MIN, MAX_TOKENS, MIN_TOKENS},
-    output::{RESULTS_DIR, Store},
-};
+use crate::Config;
 
+use super::budget::{Budget, DEFAULT_TOKENS, LIMIT_MAX, LIMIT_MIN, MAX_TOKENS, MIN_TOKENS};
+use super::output::{RESULTS_DIR, Store};
+use super::{artifacts, binary};
+
+/// Neo: the default wall budget includes admission, connection, tab creation and the script.
 const DEFAULT_TIMEOUT: u64 = 30_000;
+/// Neo: the public run ceiling stays inside the CDP request budget, with cleanup margin.
 const MAX_TIMEOUT: u64 = 120_000;
+/// Neo: transport and output policies supplement the runtime-owned API description.
 const INSTRUCTIONS: &str = concat!(
-    "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async function body without imports or a wrapper. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).",
+    "Write Playwright JavaScript. `page` and `context` are provided; await browser calls and return a value. Send an async (page, context, playwright) => { ... } function, a lone expression, or an async function body. Imports are unavailable. Omit `page` to open a background tab; pass a returned `pages[].id` to continue in that tab. `timeout` is milliseconds (default 30000, maximum 120000).",
     " Scope large reads with locator.ariaSnapshot({mode:'ai'}). A response's JSON is held to maxResponseTokens (default 100000, 1000-200000; tokens = UTF-8 bytes / 4, rounded up), settable on any call; image blocks are outside it. If your client caps tool output lower, pass maxResponseTokens. Truncated fields include next arguments for run({result,field,path,offset,limit,maxResponseTokens}) to read the stored original without changing refs; next repeats the maxResponseTokens you set. limit (4000-100000 bytes, at most maxResponseTokens x 4) narrows a window, and truncated.<field>.file names a local file holding the field's full text. A large object or array keeps its type: small keys stay whole, and truncated.value.cut lists each shortened part by JSON Pointer path with its own next.",
     " A `path` option (screenshot, pdf, storageState, download.saveAs) writes into one artifact directory shared by all runs: relative paths resolve there, and an absolute path outside it is written there under its file name; the result's artifacts[] gives each file's absolute `file` path (and `requested` when redirected). setInputFiles reads from the same directory.",
     " A returned Buffer (return await page.screenshot()), alone or nested, is saved there in full and described in value as {type, mimeType, bytes, width, height, file}; a PNG or JPEG is also returned as an image content block, scaled to at most 1568 px and 1.15 megapixels."
 );
 /// Neo: how often, at most, a run that wrote files prunes the artifact directory again.
-const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
+const PRUNE_INTERVAL: Duration = Duration::from_mins(1);
 
 struct Browser {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "retain the connection only for readiness and disconnect after runtime cleanup"
+    )]
     cdp: CdpClient,
     runtime: Runtime,
 }
 
 /// A cheap transport-local clone of the process's browser/runtime and shutdown owner.
 #[derive(Clone)]
-pub struct PlaywrightService {
+pub struct NeoSdkServer {
     cdp_port: u16,
+    // A spinning realm holds its Tokio worker until it notices cancellation. Leave workers
+    // available to receive cancellation and tools/list while other runs are executing.
+    permits: Arc<Semaphore>,
     browser: Arc<OnceCell<Arc<Browser>>>,
     shutdown: CancellationToken,
     runs: TaskTracker,
     output: Arc<Mutex<Store>>,
     state_dir: PathBuf,
     /// When the artifact directory was last pruned; `None` before the first prune.
-    pruned: Arc<std::sync::Mutex<Option<Instant>>>,
+    pruned: Arc<StdMutex<Option<Instant>>>,
 }
 
 /// A run's report and the image blocks of the binaries it returned (`binary.rs`).
 struct Reply {
     report: Value,
     images: Vec<binary::Image>,
-    /// Present only once a runtime run began; connection and tab-creation errors have no trace.
+    /// Present once a traced runtime run began; admission and connection errors have no trace.
     run_id: Option<RunId>,
 }
 
@@ -111,17 +127,21 @@ struct RequestArguments {
     max_response_tokens: Option<Value>,
 }
 
-impl PlaywrightService {
+impl NeoSdkServer {
     #[must_use]
-    pub fn new(cdp_port: u16, shutdown: CancellationToken, state_dir: PathBuf) -> Self {
+    pub fn new(config: Config, shutdown: CancellationToken) -> Self {
         let service = Self {
-            cdp_port,
+            cdp_port: config.cdp_port,
+            permits: Arc::new(Semaphore::new(
+                Handle::try_current()
+                    .map_or(1, |handle| (handle.metrics().num_workers() / 2).max(1)),
+            )),
             browser: Arc::new(OnceCell::new()),
             shutdown,
             runs: TaskTracker::new(),
             output: Arc::new(Mutex::new(Store::default())),
-            state_dir,
-            pruned: Arc::new(std::sync::Mutex::new(None)),
+            state_dir: config.state_dir,
+            pruned: Arc::new(StdMutex::new(None)),
         };
         service.prune_artifacts();
         service
@@ -136,7 +156,7 @@ impl PlaywrightService {
     /// at most once per [`PRUNE_INTERVAL`]. Outside a tokio runtime (no task to own the walk)
     /// it waits for the next run that writes a file.
     fn prune_artifacts(&self) {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        let Ok(handle) = Handle::try_current() else {
             return;
         };
         {
@@ -166,12 +186,23 @@ impl PlaywrightService {
         );
     }
 
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the connection initializer hands the client to Runtime and owns its final disconnect"
+    )]
     async fn browser(&self) -> Result<Arc<Browser>, String> {
-        if let Some(browser) = self.browser.get() {
-            return Ok(browser.clone());
+        // Take ownership before checking shutdown. If shutdown races the handoff to the
+        // initializer task, its drain still sees this token until that task owns the work.
+        let _connecting = self.runs.token();
+        if self.shutdown.is_cancelled() {
+            return Err("Neo server is shutting down".to_string());
         }
-        let browsers = self.browser.clone();
+        if let Some(browser) = self.browser.get() {
+            return Ok(Arc::clone(browser));
+        }
+        let browsers = Arc::clone(&self.browser);
         let port = self.cdp_port;
+        let shutdown = self.shutdown.clone();
         // Connecting starts CDP reader/supervisor tasks. A request timing out must not
         // drop their initializer halfway through; finish it under the process owner so
         // shutdown can disconnect the resulting link even if the caller has gone.
@@ -196,10 +227,16 @@ impl PlaywrightService {
                         match Runtime::connect(cdp.clone()).await {
                             // Agents name paths on their own machine; Neo writes them only
                             // inside the artifact directory (`artifacts.rs`).
-                            Ok(runtime) => Ok(Arc::new(Browser {
-                                cdp,
-                                runtime: runtime.with_absolute_paths(AbsolutePaths::Redirect),
-                            })),
+                            Ok(runtime) => {
+                                if shutdown.is_cancelled() {
+                                    cdp.disconnect().await;
+                                    return Err("Neo server is shutting down".to_string());
+                                }
+                                Ok(Arc::new(Browser {
+                                    cdp,
+                                    runtime: runtime.with_absolute_paths(AbsolutePaths::Redirect),
+                                }))
+                            }
                             Err(error) => {
                                 cdp.disconnect().await;
                                 Err(error.to_string())
@@ -213,9 +250,12 @@ impl PlaywrightService {
             .map_err(|error| error.to_string())?
     }
 
-    /// Readiness tests the runtime's BrowserOS capability too, instead of claiming ready
+    /// Readiness tests the runtime's `BrowserOS` capability too, instead of claiming ready
     /// merely because something is listening on the CDP port.
     pub async fn ready(&self) -> bool {
+        if self.shutdown.is_cancelled() {
+            return false;
+        }
         self.browser()
             .await
             .is_ok_and(|browser| browser.cdp.is_connected())
@@ -228,7 +268,11 @@ impl PlaywrightService {
             .is_some_and(|browser| browser.cdp.is_connected())
     }
 
-    pub async fn disconnect(&self) {
+    /// Refuses new runs, cancels active requests and awaits owned cleanup before disconnecting.
+    /// Cleanup can outlive a script deadline while CDP delivery settles. Disconnecting sooner
+    /// would lose late tab-creation acknowledgements and the cleanup that closes those tabs.
+    pub async fn shutdown(&self) {
+        self.permits.close();
         self.shutdown.cancel();
         self.runs.close();
         self.runs.wait().await;
@@ -238,8 +282,19 @@ impl PlaywrightService {
         }
     }
 
+    /// The complete MCP route and its request hygiene. The host keeps its listener and
+    /// system endpoints; every mounted copy shares this server's runtime and retained store.
+    pub fn router(&self) -> Router {
+        Router::new().nest_service(
+            "/mcp",
+            Router::new()
+                .fallback_service(self.http_service())
+                .layer(middleware::from_fn(request_hygiene)),
+        )
+    }
+
     #[must_use]
-    pub fn http_service(&self) -> StreamableHttpService<Self, LocalSessionManager> {
+    fn http_service(&self) -> StreamableHttpService<Self, LocalSessionManager> {
         let service = self.clone();
         let mut config = StreamableHttpServerConfig::default();
         config.cancellation_token = self.shutdown.child_token();
@@ -253,60 +308,47 @@ impl PlaywrightService {
     async fn execute(&self, args: Arguments, cancel: CancellationToken) -> Reply {
         let timeout_ms = args.timeout.unwrap_or(DEFAULT_TIMEOUT);
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        // Admission uses the same deadline as connection and execution. A queued request
+        // never opens a tab or outlives the budget the model supplied.
+        let permit = tokio::select! {
+            result = Arc::clone(&self.permits).acquire_owned() => match result {
+                Ok(permit) => permit,
+                Err(_) => return failure("Error", "Neo server is shutting down").into(),
+            },
+            () = cancel.cancelled() => return stopped("cancelled", timeout_ms).into(),
+            () = time::sleep_until(deadline) => return stopped("timeout", timeout_ms).into(),
+        };
         let browser = tokio::select! {
             () = cancel.cancelled() => return stopped("cancelled", timeout_ms).into(),
-            result = tokio::time::timeout_at(deadline, self.browser()) => match result {
+            result = time::timeout_at(deadline, self.browser()) => match result {
                 Ok(Ok(browser)) => browser,
                 Ok(Err(error)) => return failure("Error", &error).into(),
                 Err(_) => return stopped("timeout", timeout_ms).into(),
             },
         };
-        let created = args.page.is_none();
-        let page = match args.page {
-            Some(page) => page,
-            None => match create_page(
-                &self.runs,
-                browser.cdp.clone(),
-                deadline,
-                timeout_ms,
-                cancel.clone(),
-            )
-            .await
-            {
-                Ok(page) => page,
-                Err(result) => return result.into(),
-            },
-        };
+        // The runtime owns both first-tab creation and context.newPage(), including late
+        // acknowledgements after cancellation. The adapter only selects the starting policy.
+        let page = args
+            .page
+            .map_or(StartPage::NewTab, |id| StartPage::Page(PageId::new(id)));
         let (run_id, mut outcome) = neo_trace::run(
             &browser.runtime,
             RunRequest {
                 code: args.code,
-                page: PageId::new(page.clone()),
+                page,
                 timeout: deadline.saturating_duration_since(Instant::now()),
                 cancel,
                 artifacts: Some(self.artifact_dir()),
             },
         )
         .await;
+        // Presentation and disk IO cannot hold a realm slot after the runtime has ended.
+        drop(permit);
         if !outcome.artifacts.is_empty() || !outcome.binaries.is_empty() {
             self.prune_artifacts();
         }
-        let binaries = std::mem::take(&mut outcome.binaries);
-        if created {
-            if let Some(entry) = outcome.pages.iter_mut().find(|entry| entry.id == page) {
-                entry.created = true;
-            } else {
-                outcome.pages.insert(
-                    0,
-                    RunPage {
-                        id: page,
-                        created: true,
-                        closed: false,
-                    },
-                );
-            }
-        }
-        // The runtime receives the remaining budget after connect/create. Keep the public
+        let binaries = mem::take(&mut outcome.binaries);
+        // The runtime receives the remaining budget after connect. Keep the public
         // timeout message in terms of the whole request's budget.
         if outcome.status == RunStatus::Timeout
             && let Some(error) = &mut outcome.error
@@ -341,64 +383,38 @@ impl PlaywrightService {
     }
 }
 
-/// The current runtime requires a starting page. Bootstrap it here without replaying an
-/// uncertain creation. If cancellation wins before the acknowledgement, the owned task
-/// waits for that acknowledgement and closes the late tab instead of leaking it.
-async fn create_page(
-    tasks: &TaskTracker,
-    cdp: CdpClient,
-    deadline: Instant,
-    timeout_ms: u64,
-    cancel: CancellationToken,
-) -> Result<String, Value> {
-    let create_cdp = cdp.clone();
-    let mut creation = tasks.spawn(async move {
-        create_cdp
-            .send(
-                "Browser.createTab",
-                json!({ "url": "about:blank", "background": true }),
-                None,
-            )
-            .await
-    });
-    let result = tokio::select! {
-        result = &mut creation => result,
-        () = cancel.cancelled() => {
-            close_late_page(tasks, cdp, creation);
-            return Err(stopped("cancelled", 0));
-        }
-        () = tokio::time::sleep_until(deadline) => {
-            close_late_page(tasks, cdp, creation);
-            return Err(stopped("timeout", timeout_ms));
-        }
-    };
-    match result {
-        Ok(Ok(reply)) => page_id(&reply)
-            .map(str::to_string)
-            .ok_or_else(|| failure("Error", "Browser.createTab returned no target id")),
-        Ok(Err(error)) => Err(failure("Error", &error.to_string())),
-        Err(error) => Err(failure("Error", &error.to_string())),
+/// Reject browser-origin requests before they reach the local privileged tool. This policy
+/// travels with the reusable route so another host cannot accidentally omit the boundary.
+async fn request_hygiene(request: Request, next: Next) -> Response {
+    if request.method() == Method::OPTIONS {
+        return StatusCode::NO_CONTENT.into_response();
     }
-}
-
-fn close_late_page(
-    tasks: &TaskTracker,
-    cdp: CdpClient,
-    creation: tokio::task::JoinHandle<Result<Value, browseros_cdp::CdpError>>,
-) {
-    tasks.spawn(async move {
-        if let Ok(Ok(reply)) = creation.await
-            && let Some(id) = page_id(&reply)
-        {
-            let _ = cdp
-                .send("Target.closeTarget", json!({"targetId":id}), None)
-                .await;
-        }
-    });
-}
-
-fn page_id(reply: &Value) -> Option<&str> {
-    reply.get("tab")?.get("targetId")?.as_str()
+    let headers = request.headers();
+    if headers.contains_key(header::ORIGIN) || headers.contains_key("sec-fetch-site") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"unsupported request"})),
+        )
+            .into_response();
+    }
+    let needs_json = match *request.method() {
+        Method::POST | Method::PUT | Method::PATCH => true,
+        Method::DELETE => headers.contains_key(header::CONTENT_TYPE),
+        _ => false,
+    };
+    if needs_json
+        && !headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"))
+    {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(json!({"error":"unsupported content type"})),
+        )
+            .into_response();
+    }
+    next.run(request).await
 }
 
 fn report(outcome: RunOutcome) -> Value {
@@ -420,8 +436,14 @@ fn stopped(status: &str, timeout: u64) -> Value {
     result
 }
 
+/// The same realm facts appear in initialize and tools/list so either client entry path
+/// teaches the current API. The runtime supplies its own globals and lifecycle differences.
+fn instructions() -> String {
+    format!("{INSTRUCTIONS}\n\n{}", neo_runtime::api_description())
+}
+
 fn tool() -> Tool {
-    Tool::new("run", INSTRUCTIONS, Arc::new(Map::from_iter([
+    Tool::new("run", instructions(), Arc::new(Map::from_iter([
         ("type".into(), json!("object")),
         ("additionalProperties".into(), json!(false)),
         ("oneOf".into(), json!([
@@ -429,7 +451,7 @@ fn tool() -> Tool {
             {"required":["result"],"not":{"anyOf":[{"required":["code"]},{"required":["page"]},{"required":["timeout"]}]}}
         ])),
         ("properties".into(), json!({
-            "code":{"type":"string","description":"Playwright async function body; page and context are provided. Return a value."},
+            "code":{"type":"string","description":"Playwright code: an async function of page, context and playwright, an async function body, or a lone expression. Return a value."},
             "page":{"type":"string","minLength":1,"description":"A pages[].id from an earlier result. Omit to open a background tab."},
             "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT,"default":DEFAULT_TIMEOUT,"description":"Whole-run timeout in milliseconds."},
             "result":{"type":"string","minLength":1,"description":"Stored truncated result ID. Use instead of code, without page or timeout; retrieval never touches the browser. Process-local LRU: 16 results, 64 MiB; cleared on restart."},
@@ -444,11 +466,14 @@ fn tool() -> Tool {
     .with_annotations(ToolAnnotations::new().read_only(false).destructive(true).open_world(true))
 }
 
-impl ServerHandler for PlaywrightService {
+impl ServerHandler for NeoSdkServer {
     fn get_info(&self) -> InitializeResult {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("browseros-neo", crate::VERSION))
-            .with_instructions(INSTRUCTIONS)
+            .with_server_info(Implementation::new(
+                "browseros-neo",
+                env!("CARGO_PKG_VERSION"),
+            ))
+            .with_instructions(instructions())
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -487,11 +512,25 @@ impl ServerHandler for PlaywrightService {
         Some(requested.supported_by(&self.get_info().capabilities))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the existing run and retained-result modes share one protocol validation and budget boundary"
+    )]
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
+        // The token covers parsing, result retrieval and the execution-task handoff. Closing
+        // admission alone does not prevent a cloned handler from arriving during shutdown.
+        let _exchange = self.runs.token();
+        if self.shutdown.is_cancelled() {
+            return Ok(CallToolResult::structured_error(failure(
+                "Error",
+                "Neo server is shutting down",
+            ))
+            .into());
+        }
         if request.name != "run" {
             return Ok(CallToolResult::structured_error(failure(
                 "Error",
@@ -605,7 +644,7 @@ impl ServerHandler for PlaywrightService {
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
         let files = self.state_dir.join(RESULTS_DIR);
         // Links in the reply must stay valid if the client resolves them from another cwd.
-        let files = std::path::absolute(&files).unwrap_or(files);
+        let files = path::absolute(&files).unwrap_or(files);
         let (result, disk) = self.output.lock().await.limit(report, Some(&files), budget);
         // An owned task, so a dropped request still deletes evicted files and finishes writes;
         // the reply waits for it to learn which file links survived.
@@ -639,7 +678,7 @@ mod tests {
     use super::{DEFAULT_TOKENS, INSTRUCTIONS, LIMIT_MAX, LIMIT_MIN, MAX_TOKENS, MIN_TOKENS};
 
     /// The agent-facing skill, as `services/harness_skills.rs` embeds it.
-    const SKILL: &str = include_str!("../../../../../resources/skills/browserclaw/PLAYWRIGHT.md");
+    const SKILL: &str = include_str!("../../../../resources/skills/browserclaw/PLAYWRIGHT.md");
 
     #[test]
     fn tests_that_agent_docs_state_the_token_budget_and_its_override() {

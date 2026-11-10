@@ -1,10 +1,10 @@
-//! Neo: Runs an agent's Playwright-style script from a starting BrowserOS tab. Each handed-out
-//! Page keeps its target identity; live getters read CDP. Browser calls run on owned tasks,
-//! with progress and delivery records that outlive the script's realm.
+//! Neo: Runs an agent's Playwright-style script from an existing or new background tab. Each
+//! handed-out Page keeps its target identity; live getters read CDP. Browser calls run on owned
+//! tasks, with progress and delivery records that outlive the script's realm.
 //!
 //! ```text
 //! Runtime::run                           runtime.rs: starting tab, run lifetime, outcome
-//!   ├─ Tabs::open                        tabs.rs: context scope, ordered page registry
+//!   ├─ Tabs::open                        tabs.rs: start page, context scope, ordered registry
 //!   └─ quickjs::run                        quickjs.rs: fresh QuickJS and embedded neo-quickjs-injected
 //!        └─ __neo_runtime                quickjs_bridge.rs: JS/Rust boundary
 //!             ├─ get → Tabs              live pages, URL, initializer, opener and closed state
@@ -36,9 +36,10 @@
 //!
 //! The registry and session writers share each `PageSession`. Its last owner detaches the
 //! session; ordinary browser tabs survive the run. Finish shares one bounded wait across
-//! creation replies, task draining and closing-state reads. Late unkept creations close
-//! after the outcome, even when their IDs were not yet known. Input turns (`page.rs`
-//! `TabInputs`) are shared by every call and run of a `Runtime` on the same target.
+//! creation replies, task draining, closing-state reads and the tab-strip read that gives pages
+//! their URLs and titles. Late unkept creations close after the outcome, even when their IDs
+//! were not yet known. Input turns (`page.rs` `TabInputs`) are shared by every call and run of a
+//! `Runtime` on the same target.
 //!
 //! Locator construction does no I/O. The SDK uses Playwright's selector code, with the test
 //! id attribute shared with the page through `playwright_injected_methods.rs`.
@@ -83,8 +84,26 @@ mod url_match;
 pub use artifacts::{AbsolutePaths, RunArtifact};
 pub use run::{
     CallEvent, CallLocation, CallRecord, CallResult, CallStarted, Delivery, DroppedCalls, PageId,
-    RunBinary, RunEnd, RunError, RunOutcome, RunPage, RunRequest, RunStatus,
+    RunBinary, RunEnd, RunError, RunOutcome, RunPage, RunRequest, RunStatus, StartPage,
 };
 pub use runtime::{Runtime, RuntimeError};
 #[cfg(feature = "test-host")]
 pub use test_host::{TestHost, TestHostError};
+
+/// Describes the script realm and material Playwright differences for model-facing hosts.
+/// The runtime owns these facts because it installs the globals and owns run-scoped cleanup.
+/// Hosts add their transport, output-budget and artifact policies without listing SDK methods.
+#[must_use]
+pub fn api_description() -> &'static str {
+    concat!(
+        "Use the Playwright API on page, context, and playwright. Code runs in a fresh QuickJS realm for each run. ",
+        "An async function receives (page, context, playwright); an async function body or a lone expression also works. Return the result you need. ",
+        "The realm provides console, setTimeout, clearTimeout, setInterval, clearInterval, URL, URLSearchParams, Buffer, TextEncoder, TextDecoder, structuredClone, crypto, AbortController, and AbortSignal. ",
+        "fetch, Intl, require, process, and imports are unavailable. Use page.evaluate for code that needs the page's DOM and globals. ",
+        "Neo uses the attached BrowserOS browser. BrowserType launch/connect methods, Firefox, WebKit, and playwright.request.newContext are unavailable. ",
+        "Ordinary tabs survive runs. JavaScript variables, JS handles, event listeners, routes, init scripts, permission grants, clock changes, and session overrides belong to one run. ",
+        "Contexts created with browser.newContext and their pages are disposed when the run ends. Viewport and media emulation also end with the run. ",
+        "context.newPage opens a background tab. A route can fetch its paused request once; route.fetch sends that browser request rather than an independent Node request, and route.fulfill cannot reuse its response body. ",
+        "The API has explicit unsupported operations and options; their errors describe the limitation. Browser call logs and delivery records distinguish completed, unfinished, and uncertain input."
+    )
+}

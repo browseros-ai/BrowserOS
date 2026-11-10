@@ -548,7 +548,7 @@ dependencies = [
  "image",
  "imagesize",
  "neo-runtime",
- "neo-trace",
+ "neo-sdk-server",
  "os_info",
  "posthog-rs",
  "pulldown-cmark",
@@ -1962,6 +1962,32 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "neo-sdk-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "browseros-cdp",
+ "clap",
+ "futures-util",
+ "image",
+ "imagesize",
+ "neo-runtime",
+ "neo-trace",
+ "rand 0.9.4",
+ "reqwest 0.12.28",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

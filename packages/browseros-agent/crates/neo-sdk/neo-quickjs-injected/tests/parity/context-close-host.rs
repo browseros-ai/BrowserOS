@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{env, fs, io, thread};
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use neo_runtime::{PageId, RunRequest, Runtime};
+use neo_runtime::{PageId, RunRequest, Runtime, StartPage};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -30,7 +30,7 @@ async fn main() {
     let outcome = runtime
         .run(RunRequest {
             code: fs::read_to_string(&args[3]).expect("script"),
-            page: PageId::new(args[2].clone()),
+            page: StartPage::Page(PageId::new(args[2].clone())),
             timeout: Duration::from_secs(30),
             cancel,
             artifacts: None,

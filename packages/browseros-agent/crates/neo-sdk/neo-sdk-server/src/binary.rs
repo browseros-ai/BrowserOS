@@ -1,4 +1,4 @@
-//! Binaries a `run` script returned (`RunOutcome::binaries`): `return await page.screenshot()`,
+//! Neo: Binaries a `run` script returned (`RunOutcome::binaries`): `return await page.screenshot()`,
 //! a nested `{shot, title}`, a PDF. Each is saved in full under `<artifacts>/returned/`, its
 //! place in `value` gets a small descriptor, and a PNG or JPEG also becomes an MCP `image` block
 //! the model can see, scaled down to what vision models read.
@@ -12,37 +12,32 @@
 //!
 //! Blocking (file writes, decoding, scaling): call it off the async workers.
 
-use std::{
-    fs,
-    io::{self, Cursor},
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::fs;
+use std::io::{self, Cursor};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::{Engine, engine::general_purpose::STANDARD};
-use image::{
-    DynamicImage, ImageFormat, ImageReader, Limits, codecs::jpeg::JpegEncoder, imageops::FilterType,
-};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
+use image::{DynamicImage, ImageFormat, ImageReader, Limits};
 use neo_runtime::RunBinary;
 use serde_json::{Value, json};
 
-/// The folder under the artifact directory for returned binaries.
+/// Neo: returned binaries share this artifact subdirectory across requests.
 const RETURNED_DIR: &str = "returned";
-/// Longest edge of an image block. Anthropic's vision models scale a longer image down to this
-/// before reading it, so more pixels cost bytes and show the model nothing; the API's hard limit
-/// is 8000 px.
+/// Neo: longest image-block edge; the full-resolution image remains in its artifact file.
 pub(super) const MAX_EDGE: u32 = 1568;
-/// Pixels in an image block: the ~1.15 megapixels those models read at most.
+/// Neo: pixel budget per model-visible image block, independent of the JSON response budget.
 pub(super) const MAX_PIXELS: u64 = 1_150_000;
-/// Encoded bytes of an image block: a fifth of the API's 5 MB per-image limit, so a few blocks
-/// still fit a client's tool-result budget.
+/// Neo: encoded-byte cap keeps a few screenshots within the tool transport's output budget.
 pub(super) const MAX_IMAGE_BYTES: usize = 1024 * 1024;
-/// Image blocks per reply; later images are saved and described only.
+/// Neo: later images retain files and descriptors without growing the reply's image list.
 pub(super) const MAX_IMAGES: usize = 8;
-/// Largest image decoded for scaling (256 MiB as RGBA). Chromium captures at most 16384 px per
-/// side, so DPR-2 full pages fit; a larger image is saved and described only.
+/// Neo: decoding at most 256 MiB of RGBA bounds blocking-worker memory. Larger files stay saved.
 const MAX_DECODE_PIXELS: u64 = 64 * 1024 * 1024;
-/// JPEG quality of a scaled block: text stays legible at a third of PNG's size.
+/// Neo: scaled blocks use this JPEG quality; saved original bytes retain their full quality.
 const JPEG_QUALITY: u8 = 80;
 
 /// An MCP image block's content.
@@ -263,6 +258,10 @@ fn show(bytes: &[u8], kind: Kind, width: u32, height: u32) -> Option<Shown> {
 
 /// `width`×`height` scaled down, aspect kept, until the long edge is at most [`MAX_EDGE`] and
 /// the area at most [`MAX_PIXELS`]; never up, never below one pixel.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "the 1.15 megapixel cap is exactly representable and this ratio only determines image scaling"
+)]
 fn fit(width: u32, height: u32) -> (u32, u32) {
     let (w, h) = (f64::from(width), f64::from(height));
     let scale = (f64::from(MAX_EDGE) / w.max(h))
@@ -300,13 +299,17 @@ fn flatten(image: &DynamicImage) -> DynamicImage {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "test fixtures")]
 mod tests {
     use super::*;
 
     fn png(width: u32, height: u32) -> Vec<u8> {
         let image = image::RgbaImage::from_fn(width, height, |x, y| {
-            image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
+            image::Rgba([
+                u8::try_from(x % 256).unwrap(),
+                u8::try_from(y % 256).unwrap(),
+                128,
+                255,
+            ])
         });
         let mut bytes = Vec::new();
         DynamicImage::ImageRgba8(image)

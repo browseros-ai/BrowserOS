@@ -1,6 +1,6 @@
 //! Review-only persistent-runtime cancellation probe; launched by the recording browser driver.
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::json;
 use std::env;
 use std::fs;
@@ -34,7 +34,7 @@ async fn cancel_and_reuse_runtime() {
             runtime
                 .run(RunRequest {
                     code,
-                    page: PageId::new(target),
+                    page: StartPage::Page(PageId::new(target)),
                     timeout: Duration::from_secs(30),
                     cancel,
                     artifacts: None,
@@ -58,7 +58,7 @@ async fn cancel_and_reuse_runtime() {
         let outcome = task.await.expect("run task");
         assert_eq!(outcome.status, RunStatus::Cancelled, "{outcome:#?}");
     }
-    let later=runtime.run(RunRequest{code:"const b=await page.screenshot({clip:{x:0,y:0,width:10,height:10}});return {alpha:b[25]===6||b[25]===4}".into(),page:PageId::new(target),timeout:Duration::from_secs(10),cancel:CancellationToken::new(),artifacts:None}).await;
+    let later=runtime.run(RunRequest{code:"const b=await page.screenshot({clip:{x:0,y:0,width:10,height:10}});return {alpha:b[25]===6||b[25]===4}".into(),page:StartPage::Page(PageId::new(target)),timeout:Duration::from_secs(10),cancel:CancellationToken::new(),artifacts:None}).await;
     assert_eq!(later.status, RunStatus::Ok, "{later:#?}");
     time::timeout(Duration::from_secs(10), runtime.drain())
         .await

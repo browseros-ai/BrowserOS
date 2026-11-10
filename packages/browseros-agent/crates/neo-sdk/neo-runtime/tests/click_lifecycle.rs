@@ -853,6 +853,7 @@ async fn a_run_cancelled_while_arming_leaves_no_interceptor_behind() {
 
 /// A script that only reads `page.url()` sends no `Page.enable`, no focus emulation and no page
 /// call: the domains stay lazy, so a getter-only run keeps its single live CDP call per getter.
+/// Finish adds one tab-strip read, for the pages' URLs and titles.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_getter_only_run_enables_nothing() {
     let browser = FakeBrowser::start(Replies::default()).await;
@@ -881,10 +882,11 @@ async fn a_getter_only_run_enables_nothing() {
             "Target.attachToTarget",
             "Page.getNavigationHistory",
             "Page.getNavigationHistory",
+            "Browser.getTabs",
             "Target.detachFromTarget",
         ],
         "the connect probe, the run's tab check, attach, its URL read, the script's getter, \
-         the detach"
+         finish's tab-strip read, the detach"
     );
 }
 

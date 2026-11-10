@@ -568,7 +568,7 @@ mod tests {
     use crate::fake_browser::{FakeBrowser, FrameReplies, PAGE, PAGE_URL, Replies};
     use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::ErrorName;
-    use crate::run::PageId;
+    use crate::run::{PageId, StartPage};
     use crate::url_match::SerializedUrlMatch;
 
     fn tree() -> Vec<FrameInfo> {
@@ -617,7 +617,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|error| panic!("fixture state: {error}"))
             .frames = Some(fixture_tree("before", true));
-        let (tabs, _) = Tabs::open(
+        let (tabs, _, _) = Tabs::open(
             cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
@@ -625,7 +625,7 @@ mod tests {
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),
-            &PageId::new(PAGE.to_string()),
+            &StartPage::Page(PageId::new(PAGE.to_string())),
         )
         .await
         .unwrap_or_else(|error| panic!("open fixture: {error:?}"));
@@ -807,7 +807,7 @@ mod tests {
             ..FrameReplies::default()
         });
         let cdp = cdp::Browser::new(browser.cdp().await);
-        let (tabs, _) = Tabs::open(
+        let (tabs, _, _) = Tabs::open(
             cdp.clone(),
             Handle::current(),
             TabInputs::default(),
@@ -815,7 +815,7 @@ mod tests {
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),
-            &PageId::new(PAGE.to_string()),
+            &StartPage::Page(PageId::new(PAGE.to_string())),
         )
         .await
         .unwrap();

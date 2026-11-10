@@ -1,6 +1,3 @@
-mod artifacts;
-mod binary;
-mod budget;
 pub mod captcha;
 pub mod dispatch;
 pub mod distill;
@@ -10,8 +7,6 @@ pub mod helper_runtime;
 pub mod hosted;
 pub mod naming;
 pub mod observers;
-mod output;
-pub mod playwright;
 mod prompt;
 pub mod script_hook;
 mod service;

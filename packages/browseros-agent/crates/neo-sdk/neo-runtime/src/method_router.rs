@@ -21,8 +21,8 @@
 //!  run end: Dispatcher::finish(reason)
 //!    record the reason → cancel `ended` → mark the run's input ended on every tab
 //!    → close the events, answer dialogs left open → start each tab's input release (a task)
-//!    → wait for the run's tasks, releases included (≤ RECORDS_WAIT)
-//!    → hide the run's highlights (≤ HIGHLIGHTS_WAIT) → records
+//!    → wait for the run's tasks, releases included, then read the tab strip (≤ RECORDS_WAIT)
+//!    → hide the run's highlights (≤ HIGHLIGHTS_WAIT) → records, and pages with URLs and titles
 //! ```
 //!
 //! Why a task per call and not the realm's scheduler, where `setTimeout` runs: rquickjs polls
@@ -85,7 +85,7 @@ use crate::browser_representations::network::{HopId, ObjectKind as NetworkObject
 use crate::browser_representations::page::{DialogAnswer, FrameTab, PageSession};
 use crate::browser_representations::responses::{self, NetworkCall};
 use crate::browser_representations::routes;
-use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::browser_representations::tabs::{self, PageEntry, Tabs};
 use crate::chromium_bridge::cdp::page;
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::keyboard_input::KeyboardTab;
@@ -130,11 +130,12 @@ use crate::playwright_methods::waits::{
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
-use crate::run::{CallEvent, CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::run::{CallEvent, CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd, RunPage};
 
-/// The shared budget for creation settlement, call draining and closing-state reads after
-/// the realm ends. Tasks still running keep their state and records read `Unfinished`.
-/// Unkept creations close their tabs when their late acknowledgements arrive.
+/// The shared budget for creation settlement, call draining, closing-state reads and the
+/// tab-strip read that gives the outcome's pages their URLs and titles, after the realm ends.
+/// Tasks still running keep their state and records read `Unfinished`. Unkept creations close
+/// their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
 /// Neo: how long run end may take removing the run's init scripts, ending its bindings and
@@ -763,10 +764,13 @@ impl Dispatcher {
     /// Ends the run's calls after the realm is gone: records why the run ended (the first
     /// reason wins) and that its input is over, starts releasing the input it left held,
     /// shares [`RECORDS_WAIT`] across disposing the contexts it created, creation settlement,
-    /// task draining (the releases
-    /// included) and closing-state reads, then gives the run's highlights
-    /// [`HIGHLIGHTS_WAIT`] of their own before returning the records and dropped-calls summary.
-    pub(crate) async fn finish(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
+    /// task draining (the releases included), closing-state reads and one tab-strip read, then
+    /// gives the run's highlights [`HIGHLIGHTS_WAIT`] of their own before returning the
+    /// records, the dropped-calls summary and the run's pages.
+    pub(crate) async fn finish(
+        &self,
+        reason: RunEnd,
+    ) -> (Vec<CallRecord>, Option<DroppedCalls>, Vec<RunPage>) {
         let deadline = Instant::now() + RECORDS_WAIT;
         let run = &self.0.run;
         run.end(reason);
@@ -810,6 +814,13 @@ impl Dispatcher {
         // detach; a run whose future is dropped releases them as `RunScope` drops.
         run.handles.close();
         let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
+        // Last in the shared drain, so each page's URL and title are as the run left its tab.
+        // The read waits only for what is left of `deadline`: one that misses it costs the
+        // pages their URLs and titles, never finish a wait of its own.
+        let strip = time::timeout_at(deadline, tabs::tab_strip(self.0.tabs.cdp()))
+            .await
+            .ok()
+            .and_then(Result::ok);
         // The run's highlights show over the user's tab; none may outlive the run that made it.
         // They go last, on their own budget: a document that does not answer (a busy
         // out-of-process frame) delays the outcome, never a release.
@@ -820,7 +831,9 @@ impl Dispatcher {
             }
         })
         .await;
-        self.0.trace.take(reason)
+        let pages = self.0.tabs.outcome(strip.as_deref());
+        let (calls, dropped) = self.0.trace.take(reason);
+        (calls, dropped, pages)
     }
 }
 
@@ -2400,7 +2413,7 @@ mod tests {
     use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
-    use crate::run::PageId;
+    use crate::run::{PageId, StartPage};
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -2410,7 +2423,7 @@ mod tests {
         let tasks = TaskTracker::new();
         let deadline = Deadline::new(Duration::from_secs(5), CancellationToken::new());
         let run = RunScope::new(deadline, tasks.clone());
-        let (tabs, _) = Tabs::open(
+        let (tabs, _, _) = Tabs::open(
             cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
@@ -2418,7 +2431,7 @@ mod tests {
             Switches::default(),
             Permissions::default(),
             tasks,
-            &PageId::new(PAGE.to_string()),
+            &StartPage::Page(PageId::new(PAGE.to_string())),
         )
         .await
         .unwrap();
@@ -2492,7 +2505,7 @@ mod tests {
             Deadline::new(Duration::from_secs(10), CancellationToken::new()),
             tasks.clone(),
         );
-        let (tabs, _) = Tabs::open(
+        let (tabs, _, _) = Tabs::open(
             cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
@@ -2500,7 +2513,7 @@ mod tests {
             Switches::default(),
             Permissions::default(),
             tasks,
-            &PageId::new(PAGE.to_string()),
+            &StartPage::Page(PageId::new(PAGE.to_string())),
         )
         .await
         .unwrap();
@@ -3859,7 +3872,7 @@ mod review_abort_priority {
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::playwright_methods::screenshot::TabScreenshots;
-    use crate::run::PageId;
+    use crate::run::{PageId, StartPage};
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
 
@@ -3871,7 +3884,7 @@ mod review_abort_priority {
             Deadline::new(Duration::from_secs(30), CancellationToken::new()),
             tasks.clone(),
         );
-        let (tabs, _) = Tabs::open(
+        let (tabs, _, _) = Tabs::open(
             cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
@@ -3879,7 +3892,7 @@ mod review_abort_priority {
             Switches::default(),
             Permissions::default(),
             tasks,
-            &PageId::new(PAGE.to_string()),
+            &StartPage::Page(PageId::new(PAGE.to_string())),
         )
         .await
         .unwrap_or_else(|error| panic!("opening the fake tab: {error:?}"));

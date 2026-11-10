@@ -55,11 +55,13 @@ fn goldens() -> Result<Vec<Golden>, Box<dyn Error>> {
     Ok(goldens)
 }
 
-/// The CDP methods a run sends for its own setup and teardown, whatever its script does.
-const RUN_SETUP: [&str; 4] = [
+/// The CDP methods a run sends for its own setup and teardown, whatever its script does. Finish
+/// reads the tab strip once for its pages' URLs and titles.
+const RUN_SETUP: [&str; 5] = [
     "Browser.getTabInfo",
     "Target.attachToTarget",
     "Page.getNavigationHistory",
+    "Browser.getTabs",
     "Target.detachFromTarget",
 ];
 

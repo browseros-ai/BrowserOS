@@ -12,6 +12,7 @@ The `crates/neo-sdk/` directory owns the runtime, its injected JavaScript packag
 | `neo-runtime-spec` | Rust, generated TS | Neo's cross-language contracts, translated from Playwright's protocol |
 | `neo-trace` | Rust | Correlates live code and call logs; depends on neo-runtime, never the reverse |
 | `neo-runtime` | Rust | Runs an agent's Playwright-style script in a QuickJS realm against one BrowserOS tab |
+| `neo-sdk-server` | Rust | Reusable MCP host, output budgets, retained results, artifacts and image blocks |
 | `neo-quickjs-injected` | TypeScript | The Playwright-shaped objects a script sees; `neo-runtime` embeds its `dist/sdk.js` |
 | `neo-playwright-injected` | TypeScript (page) | Playwright's injected script, vendored unchanged, behind Neo's typed glue table; `neo-runtime` embeds its `dist/*.js` and calls them over CDP in an isolated world |
 

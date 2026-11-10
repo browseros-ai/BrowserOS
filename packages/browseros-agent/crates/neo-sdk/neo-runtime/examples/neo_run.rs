@@ -9,6 +9,8 @@
 //!   --artifacts /tmp/run-artifacts --redirect-absolute-paths script.js   # as the MCP host runs
 //! ```
 //!
+//! Without `--page`, the run opens a background tab of its own and starts there.
+//!
 //! Once connected it writes `connected` on stderr, so a harness driving the tab knows the run
 //! is about to start.
 
@@ -24,7 +26,7 @@ use std::{fs, io};
 )]
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use clap::Parser;
-use neo_runtime::{AbsolutePaths, PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{AbsolutePaths, PageId, RunRequest, RunStatus, Runtime, StartPage};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -37,9 +39,10 @@ struct Args {
     /// The browser's remote debugging port.
     #[arg(long)]
     cdp_port: u16,
-    /// The CDP target id of the tab to run against.
+    /// The CDP target id of the tab to run against. Omitted, the run opens a new background
+    /// tab.
     #[arg(long)]
-    page: String,
+    page: Option<String>,
     #[arg(long, default_value_t = 30_000)]
     timeout_ms: u64,
     /// The run's artifact directory: where `path` options (`page.screenshot({ path })`,
@@ -50,7 +53,8 @@ struct Args {
     /// artifact directory as that file, outside it at `<artifacts>/<file name>`.
     #[arg(long)]
     redirect_absolute_paths: bool,
-    /// A file holding the body of an async function of `(page, context, playwright)`.
+    /// A file of Playwright code: a function of `(page, context, playwright)`, one expression, or
+    /// the body of an async function of `(page, context, playwright)`.
     script: PathBuf,
 }
 
@@ -96,7 +100,9 @@ async fn run(args: Args) -> Result<RunStatus, String> {
     let outcome = runtime
         .run(RunRequest {
             code,
-            page: PageId::new(args.page),
+            page: args
+                .page
+                .map_or(StartPage::NewTab, |page| StartPage::Page(PageId::new(page))),
             timeout: Duration::from_millis(args.timeout_ms),
             cancel: CancellationToken::new(),
             artifacts: args.artifacts,

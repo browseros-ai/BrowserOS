@@ -1,4 +1,4 @@
-//! The `run` tool's artifact directory, `<state_dir>/artifacts/`: one folder shared by every
+//! Neo: The `run` tool's artifact directory, `<state_dir>/artifacts/`: one folder shared by every
 //! run, so a later run can upload (`setInputFiles`) what an earlier one wrote. neo-runtime
 //! writes into it for `path` options (relative, or absolute under `AbsolutePaths::Redirect`);
 //! this module names it, bounds it on disk, and tells the agent where each file landed.
@@ -10,25 +10,25 @@
 //!  startup, then at most once a minute after a run that wrote files: prune()
 //! ```
 
-use std::{
-    fs, io,
-    path::{self, Path, PathBuf},
-    time::{Duration, SystemTime},
-};
+use std::cmp::Reverse;
+use std::fs;
+use std::io;
+use std::path::{self, Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 
-/// The folder under the server's state directory.
+/// Neo: all runs of this server share this folder under its state directory.
 pub(super) const DIR_NAME: &str = "artifacts";
 /// Neo: what [`prune`] keeps.
 pub(super) const BOUNDS: Bounds = Bounds {
     // A task's screenshots stay through the working day that made them; old sessions' files do
     // not pile up.
-    max_age: Duration::from_secs(24 * 60 * 60),
+    max_age: Duration::from_hours(24),
     // A DPR-2 full-page PNG is about 5-10 MB, so this keeps roughly 50-100 of them.
     max_bytes: 512 * 1024 * 1024,
     // A run's own output is still there when the agent reads the reply that names it.
-    min_age: Duration::from_secs(10 * 60),
+    min_age: Duration::from_mins(10),
 };
 /// Neo: folder depth the pruner walks; deeper files are left alone rather than recursing forever.
 const MAX_DEPTH: usize = 16;
@@ -122,7 +122,7 @@ pub(super) fn prune(dir: &Path, now: SystemTime, bounds: Bounds) -> io::Result<P
     }
     // Deepest first, so a parent emptied by its children goes too. `remove_dir` refuses a
     // folder that still holds anything, which is the check.
-    folders.sort_by_key(|folder| std::cmp::Reverse(folder.components().count()));
+    folders.sort_by_key(|folder| Reverse(folder.components().count()));
     for folder in folders {
         let _ = fs::remove_dir(folder);
     }
@@ -155,7 +155,6 @@ fn collect(
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "test fixtures")]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -178,7 +177,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join(DIR_NAME);
         let now = SystemTime::now();
-        let hour = Duration::from_secs(3600);
+        let hour = Duration::from_hours(1);
         let bounds = Bounds {
             max_bytes: 100,
             ..BOUNDS
@@ -186,7 +185,7 @@ mod tests {
         let stale = file(&dir, "old/stale.png", 10, BOUNDS.max_age + hour, now);
         let oldest = file(&dir, "a.png", 50, 3 * hour, now);
         let middle = file(&dir, "b.png", 50, 2 * hour, now);
-        let young = file(&dir, "c.png", 50, Duration::from_secs(60), now);
+        let young = file(&dir, "c.png", 50, Duration::from_mins(1), now);
         let pruned = prune(&dir, now, bounds).unwrap();
         assert_eq!(
             pruned,

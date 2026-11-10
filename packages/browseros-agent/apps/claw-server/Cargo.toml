@@ -22,7 +22,7 @@ browseros-mcp.workspace = true
 claw-api.workspace = true
 hosted-api.workspace = true
 neo-runtime = { path = "../../crates/neo-sdk/neo-runtime" }
-neo-trace.workspace = true
+neo-sdk-server = { path = "../../crates/neo-sdk/neo-sdk-server" }
 
 anyhow.workspace = true
 axum = { workspace = true, features = ["ws"] }

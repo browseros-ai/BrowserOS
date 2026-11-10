@@ -7,6 +7,10 @@
 //! The realm boundary is also where limits apply: a memory cap, an interrupt handler that
 //! stops running JS at the deadline or on cancellation, and a `select!` that ends the run when
 //! the script is parked on a timer or a promise instead of running.
+//!
+//! The realm also decides how the agent's `code` runs (`Agent::compile`): as one expression,
+//! whose value is called with `(page, context, playwright)` when it is a function, as Playwright's
+//! MCP calls its code with `page`, or else as the body of an async function of those three.
 
 use std::hash::{BuildHasher, RandomState};
 use std::mem;
@@ -162,6 +166,24 @@ const RACE_UNCAUGHT: &str =
 /// changes the wrapper fails that test, not every recorded location.
 const AGENT_LINE_OFFSET: u32 = 2;
 
+/// Neo: the expression form wraps the agent's code as `return (\n<code>\n)`, one more line
+/// before the agent's line 1 than the body form. Columns are unchanged: the code starts its own
+/// line.
+const EXPRESSION_LINE_OFFSET: u32 = AGENT_LINE_OFFSET + 1;
+
+/// Deviation: `playwright-core/src/tools/backend/runCode.ts` `runCode.handle`: `context.__fn__ = vm.runInContext('(' + code + ')', context);`
+/// Playwright's MCP compiles `code` as one expression and calls its value with `page`. Neo calls
+/// a function value with all three of the script's parameters, so a function sees what a body
+/// sees, and returns any other value, awaited, as the result, so a lone `page.title()` works
+/// where Playwright's call throws. Code that is not one expression runs as a body, as Neo
+/// always ran it (`Agent::compile`).
+///
+/// Evaluated by the realm, so its frames are `eval_script` and never an agent call site.
+const CALL_EXPRESSION: &str = "async (expression, page, context, playwright) => {
+  const value = await expression(page, context, playwright)
+  return typeof value === 'function' ? value(page, context, playwright) : value
+}";
+
 /// Inputs owned by one realm, including its starting page identities and optional test host.
 pub(crate) struct Script {
     /// The optional opaque host belongs to this realm alone, never to the runtime.
@@ -280,6 +302,10 @@ fn start<'js>(
     let install_abort_globals: Function<'js> = ctx.eval(abort::REALM_GLOBALS)?;
     let abort_uncaught: rquickjs::Value<'js> = install_abort_globals.call(())?;
 
+    // Compiled before neo-quickjs-injected's objects exist, since the form decides the line
+    // offset they subtract from every call location. Compiling runs nothing, and the code reads
+    // its globals only when it runs, after they are installed below.
+    let agent = Agent::compile(ctx, &script.code)?;
     let sdk: Object<'js> = ctx.eval(SDK_BUNDLE)?;
     let create_run: Function<'js> = sdk.get("createRun")?;
     let init = Object::new(ctx.clone())?;
@@ -292,9 +318,9 @@ fn start<'js>(
         "testIdAttribute",
         playwright_injected_methods::TEST_ID_ATTRIBUTE,
     )?;
-    init.set("lineOffset", AGENT_LINE_OFFSET)?;
+    init.set("lineOffset", agent.line_offset())?;
     let objects: Object<'js> = create_run.call((init,))?;
-    // Before the agent's function is built, so its code sees them as Node globals.
+    // Before the agent's code runs, so it sees them as Node globals.
     let install_sdk_globals: Function<'js> = ctx.eval(INSTALL_SDK_GLOBALS)?;
     install_sdk_globals.call::<_, ()>((objects.get::<_, Object<'js>>("globals")?,))?;
     let page: rquickjs::Value<'js> = objects.get("page")?;
@@ -305,18 +331,71 @@ fn start<'js>(
     let uncaught: rquickjs::Value<'js> = objects.get("uncaught")?;
     let export: Function<'js> = objects.get("exportValue")?;
 
-    // The AsyncFunction constructor, as Playwright users write `new AsyncFunction(...)`: the
-    // code is a function body that cannot close the wrapper early, and a syntax error in it
-    // throws a SyntaxError here.
-    let async_function: Constructor<'js> = ctx.eval("(async () => {}).constructor")?;
-    let agent_function: Function<'js> =
-        async_function.construct(("page", "context", "playwright", script.code))?;
-    let script: Promise<'js> = agent_function.call((page, context, playwright))?;
+    let script: Promise<'js> = agent.start(ctx, page, context, playwright)?;
     let race: Function<'js> = ctx.eval(RACE_UNCAUGHT)?;
     Ok((
         race.call((script, uncaught, abort_uncaught, timer_uncaught))?,
         export,
     ))
+}
+
+/// The agent's code, compiled into the one form it runs in. Both are built by the
+/// `AsyncFunction` constructor, as Playwright users write `new AsyncFunction(...)`: the code
+/// cannot close that function early, and its frames are named `<input>`.
+enum Agent<'js> {
+    /// `code` is one expression: `return (\n<code>\n)` compiled as the body.
+    Expression(Function<'js>),
+    /// `code` is the body of an async function of `(page, context, playwright)`.
+    Body(Function<'js>),
+}
+
+impl<'js> Agent<'js> {
+    /// Decided by the compiler, so the code runs exactly once: the expression form when `code`,
+    /// without one trailing `;`, compiles as one expression, and the body form otherwise.
+    /// Compiling runs nothing. A syntax error in the body form throws here.
+    fn compile(ctx: &Ctx<'js>, code: &str) -> rquickjs::Result<Self> {
+        let async_function: Constructor<'js> = ctx.eval("(async () => {}).constructor")?;
+        let expression = code.trim_end().strip_suffix(';').unwrap_or(code);
+        let wrapped = format!("return (\n{expression}\n)");
+        // `catch` takes the SyntaxError a body-form script raises here, so it cannot leak into
+        // the fallback below.
+        if let Ok(function) = async_function
+            .construct(("page", "context", "playwright", wrapped))
+            .catch(ctx)
+        {
+            return Ok(Self::Expression(function));
+        }
+        async_function
+            .construct(("page", "context", "playwright", code))
+            .map(Self::Body)
+    }
+
+    /// Lines the agent's function puts before the agent's line 1, which neo-quickjs-injected
+    /// subtracts from each call location.
+    fn line_offset(&self) -> u32 {
+        match self {
+            Self::Expression(_) => EXPRESSION_LINE_OFFSET,
+            Self::Body(_) => AGENT_LINE_OFFSET,
+        }
+    }
+
+    /// Starts the code with the run's `page`, `context` and `playwright`, returning the promise
+    /// of its result.
+    fn start(
+        self,
+        ctx: &Ctx<'js>,
+        page: rquickjs::Value<'js>,
+        context: rquickjs::Value<'js>,
+        playwright: rquickjs::Value<'js>,
+    ) -> rquickjs::Result<Promise<'js>> {
+        match self {
+            Self::Expression(function) => {
+                let call_expression: Function<'js> = ctx.eval(CALL_EXPRESSION)?;
+                call_expression.call((function, page, context, playwright))
+            }
+            Self::Body(function) => function.call((page, context, playwright)),
+        }
+    }
 }
 
 /// `setTimeout` delays in JS milliseconds. A delay too large for a `Duration` is due after

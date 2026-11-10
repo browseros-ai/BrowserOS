@@ -22,7 +22,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use browser::{Fixture, Tab};
-use neo_runtime::{CallResult, Delivery, PageId, RunOutcome, RunRequest, RunStatus, Runtime};
+use neo_runtime::{
+    CallResult, Delivery, PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage,
+};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio::time;
@@ -69,7 +71,7 @@ async fn runtime(tab: &Tab) -> Runtime {
 fn request(tab: &Tab, code: &str, timeout: Duration, cancel: CancellationToken) -> RunRequest {
     RunRequest {
         code: code.to_string(),
-        page: PageId::new(tab.target_id.clone()),
+        page: StartPage::Page(PageId::new(tab.target_id.clone())),
         timeout,
         cancel,
         artifacts: None,

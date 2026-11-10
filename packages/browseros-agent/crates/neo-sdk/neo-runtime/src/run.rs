@@ -29,16 +29,33 @@ impl PageId {
     }
 }
 
+/// Where a run starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartPage {
+    /// An open tab, such as one an earlier outcome's `pages` named.
+    Page(PageId),
+    /// A new background tab in the browser's most recently activated window, for a host that
+    /// has no page yet. The run opens it the way `context.newPage()` opens a page, inside the
+    /// run's deadline, and reports it first in [`RunOutcome::pages`] with `created: true`. A
+    /// tab whose creation is answered after the run stopped is closed, so a run stopped before
+    /// it started leaves no tab behind.
+    NewTab,
+}
+
 /// One script to start from a tab; its context may hand it additional pages.
 #[derive(Debug, Clone)]
 pub struct RunRequest {
-    /// The body of an async function that receives `page` and `context`, as in a Playwright
-    /// script: it may `await` and `return`.
+    /// Playwright code, run once. One expression is the result: a function, such as Playwright
+    /// MCP's `async (page) => { … }`, is called with `(page, context, playwright)`, and any other
+    /// value is returned. Anything else is the body of an async function that receives `page`,
+    /// `context` and `playwright`, as in a Playwright script: it may `await` and `return`. The
+    /// compiler decides which (`quickjs.rs`).
     pub code: String,
-    pub page: PageId,
-    /// Wall-clock budget from the tab check to the script's return. Finish adds one bounded
-    /// drain, and one more bounded wait to remove the run's highlights; cleanup tasks still
-    /// pending then continue in the background, the run's input releases among them.
+    pub page: StartPage,
+    /// Wall-clock budget from the start (the tab check, or opening the new tab) to the
+    /// script's return. Finish adds one bounded drain, and one more bounded wait to remove the
+    /// run's highlights; cleanup tasks still pending then continue in the background, the
+    /// run's input releases among them.
     pub timeout: Duration,
     /// Cancelling ends the run with [`RunStatus::Cancelled`] at the script's next instruction,
     /// timer or getter.
@@ -120,8 +137,9 @@ pub struct RunOutcome {
     pub error: Option<RunError>,
     pub calls: Vec<CallRecord>,
     /// Pages handed out or acknowledged before finish's bounded drain ends, in first-seen
-    /// order with the run page first. Creations acknowledged later are closed in the
-    /// background. IDs can be passed to a later `RunRequest`; successful tabs outlive runs.
+    /// order with the run page first (`created` when the run opened it for
+    /// [`StartPage::NewTab`]). Creations acknowledged later are closed in the background. IDs
+    /// can be passed to a later `RunRequest`; successful tabs outlive runs.
     pub pages: Vec<RunPage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls_dropped: Option<DroppedCalls>,
@@ -239,6 +257,14 @@ pub struct RunPage {
     pub id: String,
     pub created: bool,
     pub closed: bool,
+    /// The tab's URL and title as the run left it, so a host can tell apart the tabs
+    /// `context.pages()` handed out. Both come from one read of the browser's tab strip inside
+    /// finish's bounded drain, and are `None` when the tab is gone or that read did not answer
+    /// in time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// A kept browser call at the dispatcher's admission boundary, before its result is known.

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use futures_util::future::BoxFuture;
-use neo_runtime::{PageId, RunRequest, Runtime, TestHost, TestHostError};
+use neo_runtime::{PageId, RunRequest, Runtime, StartPage, TestHost, TestHostError};
 use serde_json::json;
 use tokio::io::{self, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, mpsc};
@@ -113,7 +113,7 @@ async fn run() -> Result<(), String> {
         .run_with_test_host(
             RunRequest {
                 code,
-                page: PageId::new(page.clone()),
+                page: StartPage::Page(PageId::new(page.clone())),
                 timeout: Duration::from_mins(10),
                 cancel: cancel.clone(),
                 artifacts: None,

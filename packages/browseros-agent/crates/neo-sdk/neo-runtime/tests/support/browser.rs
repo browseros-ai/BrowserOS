@@ -51,7 +51,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy, SessionId};
-use neo_runtime::{PageId, RunOutcome, RunRequest, Runtime};
+use neo_runtime::{PageId, RunOutcome, RunRequest, Runtime, StartPage};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -243,7 +243,7 @@ impl Tab {
         cancel: CancellationToken,
     ) -> JoinHandle<RunOutcome> {
         let runtime = self.runtime().await;
-        let page = PageId::new(self.target_id.clone());
+        let page = StartPage::Page(PageId::new(self.target_id.clone()));
         tokio::spawn(async move {
             runtime
                 .run(RunRequest {

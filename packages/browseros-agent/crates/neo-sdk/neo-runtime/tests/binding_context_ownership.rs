@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use browser::{Fixture, Tab};
 use browseros_cdp::{CdpClient, SessionId};
-use neo_runtime::{PageId, RunRequest, Runtime};
+use neo_runtime::{PageId, RunRequest, Runtime, StartPage};
 use serde_json::{Value, json};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -85,7 +85,7 @@ async fn tests_that_a_binding_in_another_browser_context_does_not_keep_an_ended_
         tokio::spawn(async move {
             runtime.run(RunRequest {
                 code: format!("await context.exposeFunction('shared', () => '{label}'); await page.evaluate(() => window.ready = true); await new Promise(() => {{}})"),
-                page,
+                page: StartPage::Page(page),
                 timeout: Duration::from_mins(1),
                 cancel,
                 artifacts: None,

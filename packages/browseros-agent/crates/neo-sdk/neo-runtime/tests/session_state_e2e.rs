@@ -18,7 +18,7 @@ mod browser;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
-use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 use tokio::time;
@@ -50,7 +50,7 @@ fn request(tab: &Tab, code: &str) -> RunRequest {
 fn cancellable(tab: &Tab, code: &str, cancel: &CancellationToken) -> RunRequest {
     RunRequest {
         code: code.to_string(),
-        page: PageId::new(tab.target_id.clone()),
+        page: StartPage::Page(PageId::new(tab.target_id.clone())),
         timeout: Duration::from_secs(30),
         cancel: cancel.clone(),
         artifacts: None,

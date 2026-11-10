@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 use browser::{Fixture, Tab};
 use browseros_cdp::{CdpEvent, SessionId};
 use neo_runtime::{
-    CallRecord, CallResult, PageId, RunEnd, RunOutcome, RunRequest, RunStatus, Runtime,
+    CallRecord, CallResult, PageId, RunEnd, RunOutcome, RunRequest, RunStatus, Runtime, StartPage,
 };
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
@@ -129,7 +129,7 @@ fn request(
 ) -> RunRequest {
     RunRequest {
         code: code.to_string(),
-        page: PageId::new(target_id.to_string()),
+        page: StartPage::Page(PageId::new(target_id.to_string())),
         timeout,
         cancel,
         artifacts: None,

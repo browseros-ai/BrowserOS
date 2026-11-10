@@ -371,6 +371,12 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
         .ok_or_else(|| anyhow::anyhow!("missing tools: {tools}"))?;
     assert_eq!(listed.len(), 1, "{tools}");
     assert_eq!(listed[0]["name"], "run");
+    let description = listed[0]["description"].as_str().unwrap_or_default();
+    assert!(description.contains(neo_runtime::api_description()));
+    assert!(
+        description.len() < 7500,
+        "the run description stays compact"
+    );
     assert!(
         listed[0]["inputSchema"]["properties"]
             .get("session")
@@ -398,11 +404,30 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
     let fixture_url = format!("http://{}/", fixture_listener.local_addr()?);
     let fixture = tokio::spawn(async move {
         axum::serve(fixture_listener, Router::new()
-            .route("/", get(|| async { axum::response::Html("<button onclick=\"const p=document.querySelector('p');p.textContent='clicked';p.setAttribute('data-clicks',String(Number(p.getAttribute('data-clicks')||0)+1))\">Continue</button><p>ready</p>") }))
+            .route("/", get(|| async { axum::response::Html("<title>Runtime fixture</title><button onclick=\"const p=document.querySelector('p');p.textContent='clicked';p.setAttribute('data-clicks',String(Number(p.getAttribute('data-clicks')||0)+1))\">Continue</button><p>ready</p>") }))
             .route("/slow", get(|| async { tokio::time::sleep(Duration::from_secs(6)).await; axum::response::Html("<p>slow page</p>") }))
         ).await
     });
-    let first = run(&client, &base, 4, json!({"code":format!("await page.goto({}); await page.getByRole('button', {{name:'Continue'}}).click(); console.log('clicked once'); return await page.locator('p').textContent();", serde_json::to_string(&fixture_url)?)})).await?;
+    let first = run(&client, &base, 4, json!({"code":format!("async (page) => {{ await page.goto({}); await page.getByRole('button', {{name:'Continue'}}).click(); console.log('clicked once'); return await page.locator('p').textContent(); }}", serde_json::to_string(&fixture_url)?)})).await?;
+    // The response echoes the adapter's trace id, including across runtime-owned tab
+    // creation. Match it to actual process logs so metadata cannot drift from execution.
+    let trace_id = first["_meta"]["com.browseros.neo/run"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing run correlation: {first}"))?;
+    assert_eq!(trace_id.len(), 26);
+    let trace_log = fs::read_to_string(&prototype.log)?;
+    for event in ["run.start", "call.start", "call.end", "run.end"] {
+        assert!(
+            trace_log
+                .lines()
+                .any(|line| line.contains(trace_id) && line.contains(event)),
+            "missing {event} for MCP run {trace_id}: {trace_log}"
+        );
+    }
+    writeln!(
+        io::stderr(),
+        "PASS MCP metadata correlates with real runtime and call logs: {trace_id}"
+    )?;
     let report = &first["structuredContent"];
     assert_eq!(report["status"], "ok", "{first}");
     assert_eq!(report["value"], "clicked", "{first}");
@@ -416,12 +441,14 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("no page id: {first}"))?;
     assert_eq!(report["pages"][0]["created"], true);
+    assert_eq!(report["pages"][0]["url"], fixture_url);
+    assert_eq!(report["pages"][0]["title"], "Runtime fixture");
     writeln!(
         io::stderr(),
         "PASS real BrowserOS MCP: goto, click, textContent -> clicked; page {page}"
     )?;
 
-    let second = run(&client, &base, 5, json!({"page":page,"code":"return {text: await page.locator('p').textContent(), url: page.url()};"})).await?;
+    let second = run(&client, &base, 5, json!({"page":page,"code":"async (page, context, playwright) => ({text: await page.locator('p').textContent(), url: page.url(), sameContext: context === page.context(), timeoutName: playwright.errors.TimeoutError.name})"})).await?;
     assert_eq!(
         second["structuredContent"]["value"]["text"], "clicked",
         "{second}"
@@ -429,6 +456,11 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
     assert_eq!(second["structuredContent"]["value"]["url"], fixture_url);
     assert_eq!(second["structuredContent"]["pages"][0]["id"], page);
     assert_eq!(second["structuredContent"]["pages"][0]["created"], false);
+    assert_eq!(second["structuredContent"]["value"]["sameContext"], true);
+    assert_eq!(
+        second["structuredContent"]["value"]["timeoutName"],
+        "TimeoutError"
+    );
     writeln!(
         io::stderr(),
         "PASS second independent MCP request continues on the same page id"
@@ -446,6 +478,10 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
         "{timeout}"
     );
     assert_eq!(timeout["isError"], true);
+    assert!(
+        timeout["_meta"]["com.browseros.neo/run"].is_string(),
+        "{timeout}"
+    );
     check_cancellation(&client, &base, page).await?;
     writeln!(
         io::stderr(),
@@ -465,6 +501,10 @@ async fn flag_selects_playwright_and_skills_without_legacy_effects() -> anyhow::
             .contains("before error")
     );
     assert_eq!(error["isError"], true);
+    assert!(
+        error["_meta"]["com.browseros.neo/run"].is_string(),
+        "{error}"
+    );
     assert!(
         client
             .get(format!("{base}/system/health"))

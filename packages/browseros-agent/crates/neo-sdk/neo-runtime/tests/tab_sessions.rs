@@ -7,7 +7,7 @@ mod fake_browser;
 use std::time::{Duration, Instant};
 
 use fake_browser::{FakeBrowser, Replies, Reply};
-use neo_runtime::{RunOutcome, RunStatus};
+use neo_runtime::{RunOutcome, RunRequest, RunStatus, StartPage};
 use serde_json::{Value, json};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -192,11 +192,13 @@ async fn tests_that_pages_are_scoped_lazy_and_outcomes_keep_first_seen_order_and
     assert_eq!(
         value["pages"],
         json!([
-            {"id":"fake-page","created":false,"closed":false},
+            {"id":"fake-page","created":false,"closed":false,
+             "url":fake_browser::PAGE_URL,"title":fake_browser::PAGE_TITLE},
             {"id":"new-page-1","created":true,"closed":true},
-            {"id":"new-page-2","created":true,"closed":false},
-            {"id":"other-window","created":false,"closed":false},
-        ])
+            {"id":"new-page-2","created":true,"closed":false,"url":"about:blank","title":"about:blank"},
+            {"id":"other-window","created":false,"closed":false,"url":fake_browser::PAGE_URL,"title":""},
+        ]),
+        "a closed tab has no URL or title, and an empty browser title stays empty"
     );
     detached(&browser, 3).await;
 }
@@ -254,7 +256,12 @@ async fn tests_that_new_page_accepts_a_committed_navigation() {
 async fn tests_that_a_beforeunload_ack_does_not_claim_the_tab_closed() {
     // The fake acknowledges Page.close but keeps the tab open.
     let browser = FakeBrowser::start(Replies::default()).await;
-    let outcome = run(&browser, "const created = await context.newPage(); await created.close({runBeforeUnload:true}); return created.isClosed();").await;
+    let runtime = browser.runtime().await;
+    let outcome = runtime.run(fake_browser::run_request(
+        "const created = await context.newPage(); await created.close({runBeforeUnload:true}); return created.isClosed();",
+        Duration::from_secs(5),
+        CancellationToken::new(),
+    )).await;
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
     assert_eq!(
         outcome.value,
@@ -270,6 +277,11 @@ async fn tests_that_a_beforeunload_ack_does_not_claim_the_tab_closed() {
             .closed,
         "an acknowledgement is not a closure: {outcome:?}"
     );
+    // The watcher stays alive through the bounded beforeunload cleanup. Wait for that
+    // lifecycle explicitly instead of racing its five-second bound with detached()'s bound.
+    time::timeout(Duration::from_secs(10), runtime.drain())
+        .await
+        .expect("the runtime drains the beforeunload watcher");
     detached(&browser, 2).await;
 }
 
@@ -355,6 +367,144 @@ async fn tests_that_a_known_tab_closed_elsewhere_can_be_closed_again() {
             .closed
     );
     detached(&browser, 1).await;
+}
+
+/// A run with no page opens its own background tab in the most recently activated window,
+/// starts there, reports it first as created, and leaves it open. The fake lists the newest
+/// window first and then the rest by id, so a start that scoped itself to any other listed tab
+/// (window 3, another profile) or chose any other tab of its profile (window 1) would land
+/// elsewhere.
+#[tokio::test(flavor = "multi_thread")]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the independent fixture selects the window before the runtime chooses its starting tab"
+)]
+async fn tests_that_a_new_tab_start_runs_in_a_background_tab_of_the_newest_window() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    add_tab(&browser, "newest-window", 2, Some("profile"));
+    add_tab(&browser, "other-profile", 3, Some("another-profile"));
+    browser
+        .cdp()
+        .await
+        .send(
+            "Browser.activateTab",
+            json!({"targetId":"newest-window"}),
+            None,
+        )
+        .await
+        .unwrap();
+    let outcome = browser
+        .runtime()
+        .await
+        .run(RunRequest {
+            code: "return page.url()".to_string(),
+            page: StartPage::NewTab,
+            timeout: Duration::from_secs(5),
+            cancel: CancellationToken::new(),
+            artifacts: None,
+        })
+        .await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    let create_calls: Vec<_> = browser
+        .exchanges()
+        .into_iter()
+        .filter(|e| e.method() == "Browser.createTab")
+        .collect();
+    assert_eq!(create_calls.len(), 1, "{create_calls:?}");
+    assert_eq!(create_calls[0].command["params"]["background"], true);
+    assert_eq!(
+        create_calls[0].command["params"]["windowId"], 2,
+        "the tab opens in the most recently activated window"
+    );
+    let new_tab = create_calls[0].reply.as_ref().unwrap()["result"]["tab"]["targetId"].clone();
+    assert_eq!(
+        outcome.value,
+        Some(json!("about:blank")),
+        "the script ran on the new tab"
+    );
+    assert_eq!(
+        serde_json::to_value(&outcome).unwrap()["pages"],
+        json!([{"id":new_tab,"created":true,"closed":false,"url":"about:blank","title":"about:blank"}])
+    );
+    detached(&browser, 1).await;
+    assert!(
+        browser
+            .page
+            .lock()
+            .unwrap()
+            .tabs
+            .iter()
+            .any(|tab| tab["targetId"] == new_tab),
+        "the run's tab outlives the run"
+    );
+}
+
+/// A page's URL and title are the tab strip's as the run left the tab: the test moves the tab
+/// after the run has read its start URL, and the script returns only once it sees the move.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_pages_report_the_tab_strip_url_and_title_as_the_run_left_them() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let runtime = browser.runtime().await;
+    let request = fake_browser::run_request(
+        "while (page.url() !== 'https://example.test/moved') await new Promise(r => setTimeout(r, 10))",
+        Duration::from_secs(5),
+        CancellationToken::new(),
+    );
+    let run = tokio::spawn(async move { runtime.run(request).await });
+    let until = Instant::now() + Duration::from_secs(5);
+    while !browser
+        .exchanges()
+        .iter()
+        .any(|e| e.method() == "Page.getNavigationHistory" && e.reply.is_some())
+    {
+        assert!(Instant::now() < until, "the run never read its start URL");
+        time::sleep(Duration::from_millis(5)).await;
+    }
+    if let Some(tab) = browser
+        .page
+        .lock()
+        .unwrap()
+        .tabs
+        .iter_mut()
+        .find(|tab| tab["targetId"] == fake_browser::PAGE)
+    {
+        tab["url"] = json!("https://example.test/moved");
+        tab["title"] = json!("Moved");
+    }
+    let outcome = run.await.unwrap();
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        serde_json::to_value(&outcome.pages).unwrap(),
+        json!([{"id":fake_browser::PAGE,"created":false,"closed":false,
+                "url":"https://example.test/moved","title":"Moved"}])
+    );
+}
+
+/// With no tab open anywhere there is no window to start in: the run fails before it creates
+/// anything.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_new_tab_start_without_any_window_fails_and_creates_nothing() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let runtime = browser.runtime().await;
+    remove_tab(&browser, fake_browser::PAGE);
+    let outcome = runtime
+        .run(RunRequest {
+            code: "return 1".to_string(),
+            page: StartPage::NewTab,
+            timeout: Duration::from_secs(5),
+            cancel: CancellationToken::new(),
+            artifacts: None,
+        })
+        .await;
+    assert_eq!(outcome.status, RunStatus::Error, "{outcome:?}");
+    assert_eq!(outcome.error.unwrap().name, "Error");
+    assert!(
+        !browser
+            .exchanges()
+            .iter()
+            .any(|e| e.method() == "Browser.createTab"),
+        "nothing was created"
+    );
 }
 
 fn add_tab(browser: &FakeBrowser, id: &str, window: i64, context: Option<&str>) {

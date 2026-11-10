@@ -1,10 +1,10 @@
-//! Neo: The entry point: owns the browser connection and runs each script from its requested tab.
+//! Neo: Owns the browser connection and runs each script from its requested tab or a new background tab.
 //!
-//! A run's order, after the tab check and the attach:
+//! A run's order, after starting or checking its tab and attaching:
 //!
 //! ```text
 //!  Tabs ─▶ PageEntry ─▶ Arc<PageSession> ─┬─▶ quickjs::run(…, dispatcher)   the deadline decides, as before
-//!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s (highlights ≤ 1 s more), records
+//!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s (highlights ≤ 1 s more), records, pages
 //!                                             └─▶ last Arc drops ─▶ Session::drop ─▶ detach in background
 //! ```
 //!
@@ -158,7 +158,7 @@ impl Runtime {
         self.cleanup.wait().await;
     }
 
-    /// Runs `request.code` against `request.page` and reports how it ended. Every failure,
+    /// Runs `request.code` from `request.page` and reports how it ended. Every failure,
     /// including a tab that is already closed, is a [`RunOutcome`] rather than an `Err`. The
     /// outcome carries one record per browser call the script made. The CDP session the run
     /// attaches to the tab is detached in the background once the run and every task its calls
@@ -218,7 +218,7 @@ impl Runtime {
     ) -> RunOutcome {
         let RunRequest {
             code,
-            page,
+            page: start,
             timeout,
             cancel,
             artifacts,
@@ -238,13 +238,15 @@ impl Runtime {
         // Run outcomes have a bounded drain so callers get a timely report. Keep a
         // separate lifetime for hosts shutting down the shared browser connection.
         self.cleanup.spawn(async move { remaining.wait().await });
+        // Dropping the start at cancellation or its deadline leaves a new tab unkept; the
+        // owned creation transaction closes it when BrowserOS eventually answers.
         let opened = tokio::select! {
             stop = deadline.reached() => {
                 return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
             }
-            opened = Tabs::open(self.browser.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &page) => opened,
+            opened = Tabs::open(self.browser.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &start) => opened,
         };
-        let (tabs, url) = match opened {
+        let (tabs, page, url) = match opened {
             Ok(opened) => opened,
             Err(error) => {
                 let error = if error.name == ErrorName::TargetClosedError {
@@ -285,12 +287,12 @@ impl Runtime {
             released: false,
         };
         let outcome = quickjs::run(script, getters, dispatcher.clone(), deadline, events).await;
-        let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
+        let (calls, dropped, pages) = dispatcher.finish(run_end_of(&outcome)).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
         grants.disarm();
         outcome
             .with_calls(calls, dropped)
-            .with_pages(tabs.outcome())
+            .with_pages(pages)
             .with_artifacts(artifacts.written(), artifacts.notes())
     }
 }

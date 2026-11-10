@@ -11,7 +11,7 @@ mod fake_browser;
 
 use std::time::{Duration, Instant};
 
-use fake_browser::{BUTTON, FakeBrowser, PAGE, PAGE_URL, Replies, Reply};
+use fake_browser::{BUTTON, FakeBrowser, PAGE, PAGE_TITLE, PAGE_URL, Replies, Reply};
 use neo_runtime::{
     CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd, RunOutcome, RunStatus,
 };
@@ -495,5 +495,107 @@ return Error.stackTraceLimit";
         [at(2, 12), at(1, 27), at(5, 26)],
         "the click on line 2, the click inside `helper` on line 1, and the click made with \
          a stack trace limit of 0 on line 5"
+    );
+}
+
+/// Every form `code` may take gives what the agent meant and runs its side effects once:
+/// Playwright MCP's function forms, which the realm calls with the script's `page`, `context` and
+/// `playwright`, with or without one trailing `;`; a lone expression, whose value (a promise
+/// awaited) is the result; and Neo's function body.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_code_form_runs_once_and_returns_what_it_meant() {
+    let cases = [
+        (
+            "async (page) => { console.log('ran'); return page.url() }",
+            json!(PAGE_URL),
+        ),
+        (
+            "async page => { console.log('ran'); return page.url() }",
+            json!(PAGE_URL),
+        ),
+        (
+            "async (page, context) => { console.log('ran'); return context === page.context() }",
+            json!(true),
+        ),
+        (
+            "async (page, context, playwright) => { console.log('ran'); return playwright.errors.TimeoutError.name }",
+            json!("TimeoutError"),
+        ),
+        (
+            "async function (page) { console.log('ran'); return page.url() }",
+            json!(PAGE_URL),
+        ),
+        (
+            "async (page) => { console.log('ran'); return page.url() };\n  ",
+            json!(PAGE_URL),
+        ),
+        ("(console.log('ran'), page.title())", json!(PAGE_TITLE)),
+        ("console.log('ran') ?? page.url();", json!(PAGE_URL)),
+        ("console.log('ran')\nreturn page.url()", json!(PAGE_URL)),
+    ];
+    for (code, expected) in cases {
+        let outcome = run(code, Duration::from_secs(5)).await;
+        assert_eq!(outcome.status, RunStatus::Ok, "{code}: {outcome:?}");
+        assert_eq!(outcome.value, Some(expected), "{code}");
+        assert_eq!(outcome.logs, ["ran"], "{code} ran its side effect once");
+    }
+}
+
+/// The expression form puts one more line before the agent's line 1 than the body form, and
+/// the realm tells neo-quickjs-injected so: calls still record the agent's own lines and
+/// columns, in a function the realm calls and in a lone expression.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_in_the_expression_form_records_the_agents_line_and_column() {
+    let function = "async (page) => {
+  await page.click('#a', { timeout: 1 }).catch(() => {})
+  const helper = () => page.click('#b', { timeout: 1 })
+  await helper().catch(() => {})
+}";
+    let lone = "page.click('#c', { timeout: 1 }).catch(() => 'missed')";
+    let at = |line, column| {
+        Some(CallLocation {
+            line,
+            column: Some(column),
+        })
+    };
+    for (code, expected) in [
+        (function, vec![at(2, 14), at(3, 29)]),
+        (lone, vec![at(1, 6)]),
+    ] {
+        let outcome = run(code, Duration::from_secs(5)).await;
+        assert_eq!(outcome.status, RunStatus::Ok, "{code}: {outcome:?}");
+        let locations: Vec<Option<CallLocation>> =
+            outcome.calls.iter().map(|call| call.location).collect();
+        assert_eq!(locations, expected, "{code}");
+    }
+}
+
+/// The compact host description names globals a script can actually use and excludes Node
+/// facilities that the realm does not install. Check the runtime, not just the prose.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_compact_description_matches_the_realms_globals() {
+    let outcome = run(
+        r"return {
+        available: [typeof console, typeof setTimeout, typeof clearTimeout, typeof setInterval,
+          typeof clearInterval, typeof URL, typeof URLSearchParams, typeof Buffer,
+          typeof TextEncoder, typeof TextDecoder, typeof structuredClone, typeof crypto,
+          typeof AbortController, typeof AbortSignal],
+        unavailable: [typeof fetch, typeof Intl, typeof require, typeof process]
+    }",
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        outcome.value,
+        Some(json!({
+            "available": ["object", "function", "function", "function", "function", "function",
+              "function", "function", "function", "function", "function", "object", "function", "function"],
+            "unavailable": ["undefined", "undefined", "undefined", "undefined"]
+        }))
+    );
+    assert!(
+        neo_runtime::api_description().len() < 2500,
+        "the compact description must not grow into a method catalogue"
     );
 }

@@ -503,7 +503,7 @@ mod tests {
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::playwright_methods::screenshot::TabScreenshots;
     use crate::progress::{CallEntry, CallStart, RunScope};
-    use crate::run::PageId;
+    use crate::run::{PageId, StartPage};
 
     fn progress(guid: &str, state: &str, file_path: Option<&str>) -> DownloadProgress {
         DownloadProgress {
@@ -684,7 +684,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn tests_that_save_as_copies_a_finished_download_into_the_artifact_directory() {
         let browser = FakeBrowser::start(Replies::default()).await;
-        let (tabs, _) = Tabs::open(
+        let (tabs, _, _) = Tabs::open(
             cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
@@ -692,7 +692,7 @@ mod tests {
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),
-            &PageId::new(PAGE.to_string()),
+            &StartPage::Page(PageId::new(PAGE.to_string())),
         )
         .await
         .unwrap_or_else(|error| panic!("open: {error:?}"));

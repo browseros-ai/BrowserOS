@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use browser::{Fixture, Tab};
 use browseros_cdp::CdpEvent;
-use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio::time::{self, Instant};
@@ -57,7 +57,7 @@ async fn open() -> Option<Tab> {
 fn request(target: &str, code: &str) -> RunRequest {
     RunRequest {
         code: code.to_string(),
-        page: PageId::new(target.to_string()),
+        page: StartPage::Page(PageId::new(target.to_string())),
         timeout: Duration::from_secs(30),
         cancel: CancellationToken::new(),
         artifacts: None,

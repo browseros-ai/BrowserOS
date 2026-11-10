@@ -1,6 +1,6 @@
 //! Real Runtime cancellation during init-script setup; the outer browser driver probes the next document.
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunRequest, RunStatus, Runtime, StartPage};
 use std::env;
 use std::fs;
 use std::time::Duration;
@@ -41,7 +41,7 @@ async fn cancel_during_setup() {
         async move {
             runtime.run(RunRequest {
             code: "await page.context().addInitScript(()=>{window.oldRunInit=17});await page.evaluate(()=>0);await new Promise(()=>{})".into(),
-            page: PageId::new(target), timeout: Duration::from_secs(30), cancel, artifacts: None,
+            page: StartPage::Page(PageId::new(target)), timeout: Duration::from_secs(30), cancel, artifacts: None,
         }).await
         }
     });

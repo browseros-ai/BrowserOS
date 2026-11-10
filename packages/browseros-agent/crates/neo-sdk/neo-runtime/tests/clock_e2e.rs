@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use browser::{Fixture, Tab};
 use browseros_cdp::SessionId;
-use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 use tokio::time;
@@ -310,7 +310,7 @@ fn start(tab: &Tab, runtime: &Runtime, code: &str) -> (CancellationToken, JoinHa
     let cancel = CancellationToken::new();
     let request = RunRequest {
         code: code.to_string(),
-        page: PageId::new(tab.target_id.clone()),
+        page: StartPage::Page(PageId::new(tab.target_id.clone())),
         timeout: Duration::from_secs(30),
         cancel: cancel.clone(),
         artifacts: None,

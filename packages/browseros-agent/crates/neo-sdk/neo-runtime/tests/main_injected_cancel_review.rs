@@ -11,7 +11,7 @@ mod browser;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
-use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::json;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -46,7 +46,7 @@ async fn tests_that_selector_polling_stops_when_its_run_is_cancelled() {
     let cancel = CancellationToken::new();
     let request = RunRequest {
         code: SOURCE.to_string(),
-        page: PageId::new(tab.target_id.clone()),
+        page: StartPage::Page(PageId::new(tab.target_id.clone())),
         timeout: Duration::from_mins(1),
         cancel: cancel.clone(),
         artifacts: None,

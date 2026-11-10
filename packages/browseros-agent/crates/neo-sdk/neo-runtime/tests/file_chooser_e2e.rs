@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use browser::{Fixture, Tab};
 use browseros_cdp::CdpEvent;
-use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio::time::{self, Instant};
@@ -89,7 +89,7 @@ async fn tests_that_file_chooser_interception_ends_with_the_run() {
             code: r"const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#single')])
 return [chooser.isMultiple(), await chooser.element().evaluate((input) => input.id)]"
                 .to_string(),
-            page: PageId::new(tab.target_id.clone()),
+            page: StartPage::Page(PageId::new(tab.target_id.clone())),
             timeout: Duration::from_secs(30),
             cancel: CancellationToken::new(),
             artifacts: None,

@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use browser::{Fixture, Tab};
 use browseros_cdp::SessionId;
-use neo_runtime::{CallResult, PageId, RunOutcome, RunRequest, RunStatus, Runtime};
+use neo_runtime::{CallResult, PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::{Value, json};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -37,7 +37,7 @@ async fn run(tab: &Tab, target: &str, code: &str) -> RunOutcome {
         .await
         .run(RunRequest {
             code: format!("{WIRE}\n{code}"),
-            page: PageId::new(target.to_string()),
+            page: StartPage::Page(PageId::new(target.to_string())),
             timeout: Duration::from_secs(15),
             cancel: CancellationToken::new(),
             artifacts: None,
@@ -204,7 +204,7 @@ async fn tests_that_sdk_created_pages_keep_their_targets_across_runs() {
                   secondListed:context.pages().includes(second), firstListed:context.pages().includes(first),
                   secondUrl:second.url()};
         ".to_string(),
-        page: PageId::new(tab.target_id.clone()),
+        page: StartPage::Page(PageId::new(tab.target_id.clone())),
         timeout: Duration::from_secs(15),
         cancel: CancellationToken::new(),
         artifacts: None,
@@ -253,7 +253,7 @@ async fn tests_that_sdk_created_pages_keep_their_targets_across_runs() {
 
     let next=runtime.run(RunRequest {
         code:"await page.locator('html').click(); return {url:page.url(),closed:page.isClosed()};".to_string(),
-        page:PageId::new(second.id.clone()), timeout:Duration::from_secs(10), cancel:CancellationToken::new(), artifacts:None,
+        page:StartPage::Page(PageId::new(second.id.clone())), timeout:Duration::from_secs(10), cancel:CancellationToken::new(), artifacts:None,
     }).await;
     assert_eq!(next.status, RunStatus::Ok, "{next:?}");
     assert_eq!(
@@ -307,6 +307,71 @@ async fn tests_that_activation_close_and_a_later_run_keep_the_correct_tab() {
     let gone = run(&tab, &ids[1], "return 1").await;
     assert_eq!(gone.status, RunStatus::Error, "{gone:?}");
     assert_eq!(gone.error.unwrap().name, "TargetClosedError");
+    tab.close().await;
+}
+
+/// A run with no page starts in a background tab of the active window, and a later run given
+/// that tab's id continues where the first left it.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_new_tab_start_runs_in_the_background_and_a_later_run_continues_there() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let tab = Tab::open(binary, Fixture::default(), "/start").await;
+    tab.cdp
+        .send(
+            "Browser.activateTab",
+            json!({"targetId":tab.target_id}),
+            None,
+        )
+        .await
+        .unwrap();
+    let runtime = Runtime::connect(tab.cdp.clone()).await.unwrap();
+    let request = |code: String, page: StartPage| RunRequest {
+        code,
+        page,
+        timeout: Duration::from_secs(15),
+        cancel: CancellationToken::new(),
+        artifacts: None,
+    };
+    let url = format!("{}/continued", tab.origin);
+    let first = runtime
+        .run(request(
+            format!("await page.goto({}); return page.url();", json!(url)),
+            StartPage::NewTab,
+        ))
+        .await;
+    assert_eq!(first.status, RunStatus::Ok, "{first:?}");
+    assert_eq!(first.value, Some(json!(url)));
+    let started = &first.pages[0];
+    assert!(started.created && !started.closed, "{first:?}");
+    assert_eq!(
+        (started.url.as_deref(), started.title.as_deref()),
+        (Some(url.as_str()), Some("/continued")),
+        "the page reports where the run left it"
+    );
+    let created = info(&tab, &started.id).await;
+    let original = info(&tab, &tab.target_id).await;
+    assert_eq!(
+        created["isActive"], false,
+        "the run's tab opened in the background"
+    );
+    assert_eq!(original["isActive"], true, "the user's tab stayed selected");
+    assert_eq!(
+        created["windowId"], original["windowId"],
+        "the run's tab opened in the active window"
+    );
+
+    let next = runtime
+        .run(request(
+            "return page.url()".to_string(),
+            StartPage::Page(PageId::new(started.id.clone())),
+        ))
+        .await;
+    assert_eq!(next.status, RunStatus::Ok, "{next:?}");
+    assert_eq!(next.value, Some(json!(url)));
+    assert_eq!(next.pages[0].id, started.id);
+    assert!(!next.pages[0].created, "{next:?}");
     tab.close().await;
 }
 

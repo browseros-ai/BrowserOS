@@ -14,7 +14,7 @@ mod browser;
 use std::time::Duration;
 
 use browser::{Fixture, Tab, e2e_browser};
-use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
@@ -57,7 +57,7 @@ await other.goto(page.url().replace('/start', '/created'));
 await page.goto(page.url().replace('/start', '/armed'));
 await new Promise(() => {});"
             .to_string(),
-        page: PageId::new(tab.target_id.clone()),
+        page: StartPage::Page(PageId::new(tab.target_id.clone())),
         timeout: Duration::from_secs(30),
         cancel: cancel.clone(),
         artifacts: None,

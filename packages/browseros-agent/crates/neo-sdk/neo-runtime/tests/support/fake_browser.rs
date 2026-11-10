@@ -35,7 +35,7 @@ use browseros_cdp::page::{
 )]
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use futures_util::{SinkExt, StreamExt};
-use neo_runtime::{PageId, RunRequest, Runtime};
+use neo_runtime::{PageId, RunRequest, Runtime, StartPage};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -49,6 +49,8 @@ use tokio_util::sync::CancellationToken;
 /// The fake's one open tab.
 pub const PAGE: &str = "fake-page";
 pub const PAGE_URL: &str = "https://example.test/start";
+/// The title the tab strip reports for [`PAGE`].
+pub const PAGE_TITLE: &str = "Fake page";
 /// The one button on the fake's page, which only the selector `#go` matches. It is always
 /// visible, enabled, stable and the hit target, so a click on it succeeds.
 pub const BUTTON: &str = "<button id=\"go\">Go</button>";
@@ -141,6 +143,9 @@ pub struct Replies {
     /// that element.
     pub press_lands_elsewhere: bool,
     pub title: Reply,
+    /// `Browser.getTabs`, which backs `context.pages()` and the page URLs and titles a finished
+    /// run reports.
+    pub get_tabs: Reply,
     pub world: Reply,
     /// A commit after the named operation starts, before its delayed answer is delivered.
     pub commit_during: Option<CommitDuring>,
@@ -230,7 +235,11 @@ impl Default for Page {
     fn default() -> Self {
         Self {
             drag_listeners: false,
-            tabs: vec![tab_record(PAGE, PAGE_URL, 1, Some("profile"), true)],
+            tabs: vec![{
+                let mut tab = tab_record(PAGE, PAGE_URL, 1, Some("profile"), true);
+                tab["title"] = json!(PAGE_TITLE);
+                tab
+            }],
             frames: None,
             tab_info_delay: None,
             next_tab: 0,
@@ -247,13 +256,14 @@ impl Default for Page {
 impl Page {
     fn add_tab(&mut self, window: i64, url: &str) -> Value {
         self.next_tab += 1;
-        let tab = tab_record(
+        let mut tab = tab_record(
             &format!("new-page-{}", self.next_tab),
             url,
             window,
             Some("profile"),
             false,
         );
+        tab["title"] = json!(url);
         self.tabs.push(tab.clone());
         tab
     }
@@ -324,6 +334,11 @@ impl FakeBrowser {
         }
     }
 
+    /// The loopback CDP discovery port for hosts exercising their own connection lifecycle.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
     #[expect(
         clippy::disallowed_types,
         reason = "the fixture connects a client for tests to hand into Runtime's typed CDP door"
@@ -332,7 +347,7 @@ impl FakeBrowser {
         CdpClient::connect(ConnectOptions {
             host: Some("127.0.0.1".to_string()),
             reconnect_policy: ReconnectPolicy::KeepTrying,
-            ..ConnectOptions::new(self.port)
+            ..ConnectOptions::new(self.port())
         })
         .await
         .unwrap_or_else(|error| panic!("connect to the fake browser: {error}"))
@@ -451,7 +466,7 @@ fn protocol_violations(command: &Value) -> Vec<String> {
 pub fn run_request(code: &str, timeout: Duration, cancel: CancellationToken) -> RunRequest {
     RunRequest {
         code: code.to_string(),
-        page: PageId::new(PAGE.to_string()),
+        page: StartPage::Page(PageId::new(PAGE.to_string())),
         timeout,
         cancel,
         artifacts: None,
@@ -489,6 +504,7 @@ struct Calls {
     mouse: usize,
     arm: usize,
     title: usize,
+    get_tabs: usize,
     world: usize,
     committed: bool,
     /// Which document the current utility world belongs to, for stale-read behavior tests.
@@ -818,7 +834,7 @@ fn answer(
     page: &Mutex<Page>,
 ) -> (Value, Option<Duration>) {
     let now = Some(Duration::ZERO);
-    if let Some(answer) = tab_command(command, replies, page)
+    if let Some(answer) = tab_command(command, replies, calls, page)
         .or_else(|| frame_command(command, calls, page).map(|reply| (reply, now)))
         .or_else(|| init_script_command(command, calls).map(|reply| (reply, now)))
         .or_else(|| input_command(command, replies, calls))
@@ -1066,6 +1082,7 @@ fn navigation_history(
 fn tab_command(
     command: &Value,
     replies: &Replies,
+    calls: &mut Calls,
     page: &Mutex<Page>,
 ) -> Option<(Value, Option<Duration>)> {
     let now = Some(Duration::ZERO);
@@ -1107,7 +1124,12 @@ fn tab_command(
                 let window = tab["windowId"].as_i64().unwrap_or_default();
                 (window != page.active_window, window)
             });
-            (json!({ "result": { "tabs": tabs } }), now)
+            let call = calls.get_tabs;
+            calls.get_tabs += 1;
+            (
+                json!({ "result": { "tabs": tabs } }),
+                replies.get_tabs.when(call),
+            )
         }
         "Browser.createTab" => {
             let mut page = lock(page);
@@ -1185,7 +1207,7 @@ fn call_function_on(
             lock(page).drag_listeners = false;
             json!({"started":false})
         }
-        "title" => json!({"value":if calls.world_document { "After commit" } else { "Fake page" }}),
+        "title" => json!({"value":if calls.world_document { "After commit" } else { PAGE_TITLE }}),
         "describeSelector" => json!({ "locator": glue_params["selector"] }),
         "checkElementStates" | "scrollIntoView" => json!({}),
         "viewportSize" => json!({ "width": 800, "height": 600 }),

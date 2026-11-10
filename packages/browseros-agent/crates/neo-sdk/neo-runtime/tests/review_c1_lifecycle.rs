@@ -6,13 +6,13 @@ mod browser;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
-use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 fn request(tab: &Tab, code: &str) -> RunRequest {
     RunRequest {
-        page: PageId::new(tab.target_id.clone()),
+        page: StartPage::Page(PageId::new(tab.target_id.clone())),
         code: code.to_string(),
         timeout: Duration::from_secs(8),
         cancel: CancellationToken::new(),

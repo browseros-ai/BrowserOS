@@ -133,8 +133,11 @@ pub(crate) async fn run(tabs: Tabs, discovery: Switch<Discovery>) {
         }
     };
     let mut targets = Targets::default();
-    // The run's own page is never new to the run, whatever its document.
-    targets.known.insert(tabs.run_page().as_str().to_string());
+    // The run's own page is never new to the run, whatever its document. Discovery starts from
+    // the script's listeners, after the run's start registered that page.
+    if let Some(page) = tabs.run_page() {
+        targets.known.insert(page.as_str().to_string());
+    }
     for info in baseline.target_infos {
         if info.kind == "page" {
             targets.baseline(info);

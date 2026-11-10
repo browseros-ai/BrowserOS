@@ -1,5 +1,10 @@
 //! A run's ordered page registry and lazy CDP sessions. Handing out a page registers its
 //! identity; attaching it owns a session until the run and its last writer have let go.
+//!
+//! The registry's first page is the run's own. A `StartPage::NewTab` run starts with an empty
+//! registry and creates that page through the same owned transaction as `context.newPage()`
+//! (`Tabs::create`), so both kinds of new tab pick their window and close when unkept by one
+//! rule.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -46,7 +51,7 @@ use crate::playwright_methods::getters;
 use crate::playwright_methods::screenshot::TabScreenshots;
 use crate::progress::{PlaywrightError, RunScope};
 use crate::quickjs_bridge;
-use crate::run::{PageId, RunPage};
+use crate::run::{PageId, RunPage, StartPage};
 
 /// Neo: how long `ConsoleMessage.args()` waits for its arguments' handles. A page a dialog holds
 /// answers no call until the dialog is answered, which the script may be about to do.
@@ -65,7 +70,8 @@ struct Inner {
     tasks: TaskTracker,
     creations: TaskTracker,
     scope: Scope,
-    run_page: PageId,
+    /// First-seen order. The run's own page is registered before the script can list or open
+    /// others, so it is always first ([`Tabs::run_page`]), and new pages open in its window.
     pages: Mutex<Vec<Arc<PageEntry>>>,
     /// The run's event queue and subscriptions, shared with every page session it attaches.
     events: EventHub,
@@ -156,6 +162,12 @@ struct CreatedFrame {
 }
 
 impl Tabs {
+    /// The run's registry, with its run page registered and attached: the page `start` names,
+    /// or a background tab opened for it. Returns the run page and its URL at the start.
+    ///
+    /// For [`StartPage::NewTab`], a caller that drops this future before it returns (the run's
+    /// deadline or cancel) leaves the creation unkept, and its tab closes once the browser
+    /// answers.
     #[expect(
         clippy::too_many_arguments,
         reason = "each per-tab share the Runtime keeps (inputs, screenshots, switches, permissions) is one argument"
@@ -168,11 +180,19 @@ impl Tabs {
         switches: Switches,
         permissions: Permissions,
         tasks: TaskTracker,
-        page: &PageId,
-    ) -> Result<(Self, String), PlaywrightError> {
-        let info = tab_info(&cdp, page)
-            .await?
-            .ok_or_else(PlaywrightError::target_closed)?;
+        start: &StartPage,
+    ) -> Result<(Self, PageId, String), PlaywrightError> {
+        // The tab whose profile, or window when BrowserOS gives it no routable profile, scopes
+        // the run: the start page itself, or for a new tab the first tab BrowserOS lists, which
+        // is in the most recently activated window (`tab_strip`).
+        let info = match start {
+            StartPage::Page(page) => tab_info(&cdp, page)
+                .await?
+                .ok_or_else(PlaywrightError::target_closed)?,
+            StartPage::NewTab => tab_strip(&cdp).await?.into_iter().next().ok_or_else(|| {
+                PlaywrightError::error("no browser window is open to start the run's tab in")
+            })?,
+        };
         let tabs = Self(Arc::new(Inner {
             created: CreatedContexts::new(cdp.clone(), tokio.clone()),
             debuggers: Debuggers::default(),
@@ -187,7 +207,6 @@ impl Tabs {
                 context: info.live_browser_context_id,
                 window: info.window_id,
             },
-            run_page: page.clone(),
             pages: Mutex::new(Vec::new()),
             events: EventHub::default(),
             switches,
@@ -201,27 +220,43 @@ impl Tabs {
             permissions,
             run_id: cookies_and_storage::next_run(),
         }));
-        let entry = tabs.register(page.clone(), false)?;
-        // The scope read above already checked this tab. Avoid a second startup read so
-        // a getter-only run keeps its original connect/check/attach/history call path.
-        entry
-            .session
-            .get_or_try_init(|| tabs.attach(&entry))
-            .await?;
-        let url = tabs
-            .url(&entry)
-            .await?
-            .ok_or_else(PlaywrightError::target_closed)?;
-        Ok((tabs, url))
+        match start {
+            StartPage::Page(page) => {
+                let entry = tabs.register(page.clone(), false)?;
+                // The scope read above already checked this tab. Avoid a second startup read so
+                // a getter-only run keeps its original connect/check/attach/history call path.
+                entry
+                    .session
+                    .get_or_try_init(|| tabs.attach(&entry))
+                    .await?;
+                let url = tabs
+                    .url(&entry)
+                    .await?
+                    .ok_or_else(PlaywrightError::target_closed)?;
+                Ok((tabs, page.clone(), url))
+            }
+            StartPage::NewTab => {
+                // `context.newPage()`'s transaction on the still empty registry: the tab opens in
+                // the scope's most recently activated window, registers first, and closes unless
+                // kept.
+                let created = tabs.create().await?;
+                let url = tabs.first_url(&created.entry).await?;
+                let page = created.entry.id.clone();
+                created.keep();
+                Ok((tabs, page, url))
+            }
+        }
     }
 
     pub(crate) fn cdp(&self) -> &cdp::Browser {
         &self.0.cdp
     }
 
-    /// The page the run started from.
-    pub(crate) fn run_page(&self) -> &PageId {
-        &self.0.run_page
+    /// The run's own page: the registry's first entry, the page the run started from. `None`
+    /// only while a [`StartPage::NewTab`] start is still creating it.
+    pub(crate) fn run_page(&self) -> Option<PageId> {
+        let pages = self.0.pages.lock().ok()?;
+        pages.first().map(|entry| entry.id.clone())
     }
 
     pub(crate) fn events(&self) -> &EventHub {
@@ -563,6 +598,28 @@ impl Tabs {
         Ok(url)
     }
 
+    /// Playwright: `server/browserContext.ts` `BrowserContext.newPage`: `const pageOrError = await progress.race(page.waitForInitializedOrError());`
+    ///
+    /// The URL of a tab this run created, once its first document has committed: a new page is
+    /// handed out only initialized. BrowserOS can briefly report an empty history URL while it
+    /// creates that document, and handing the page out then would seed the SDK with the empty
+    /// URL; its committed history also ensures the page has a main frame. Unbounded: callers
+    /// race it against their deadline.
+    pub(crate) async fn first_url(&self, entry: &PageEntry) -> Result<String, PlaywrightError> {
+        let mut backoff = Duration::from_millis(1);
+        loop {
+            let url = self
+                .url(entry)
+                .await?
+                .ok_or_else(PlaywrightError::target_closed)?;
+            if !url.is_empty() {
+                return Ok(url);
+            }
+            time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_millis(16));
+        }
+    }
+
     pub(crate) async fn is_closed(&self, entry: &PageEntry) -> Result<bool, PlaywrightError> {
         let closed = getters::is_closed(&self.0.cdp, &entry.id)
             .await
@@ -656,7 +713,10 @@ impl Tabs {
     }
 
     async fn create_registered(&self) -> Result<Arc<PageEntry>, PlaywrightError> {
-        let run_tab = tab_info(&self.0.cdp, &self.0.run_page).await?;
+        let run_tab = match self.run_page() {
+            Some(page) => tab_info(&self.0.cdp, &page).await?,
+            None => None,
+        };
         let window = match run_tab {
             Some(info) => info.window_id,
             None => self.infos().await?.first().and_then(|info| info.window_id),
@@ -1317,16 +1377,28 @@ impl Tabs {
         Ok(record)
     }
 
-    pub(crate) fn outcome(&self) -> Vec<RunPage> {
+    /// The run's pages for its outcome, with each tab's URL and title from `strip`, a read of
+    /// [`tab_strip`]. A page the read does not list, or every page when there was no read, has
+    /// neither.
+    pub(crate) fn outcome(&self, strip: Option<&[TabInfo]>) -> Vec<RunPage> {
         self.0.pages.lock().map_or_else(
             |_| Vec::new(),
             |pages| {
                 pages
                     .iter()
-                    .map(|entry| RunPage {
-                        id: entry.id.as_str().to_string(),
-                        created: entry.created.load(Ordering::Acquire),
-                        closed: entry.closed_by_run.load(Ordering::Acquire),
+                    .map(|entry| {
+                        let listed = strip.and_then(|strip| {
+                            strip
+                                .iter()
+                                .find(|info| info.target_id == entry.id.as_str())
+                        });
+                        RunPage {
+                            id: entry.id.as_str().to_string(),
+                            created: entry.created.load(Ordering::Acquire),
+                            closed: entry.closed_by_run.load(Ordering::Acquire),
+                            url: listed.map(|info| info.url.clone()),
+                            title: listed.map(|info| info.title.clone()),
+                        }
                     })
                     .collect()
             },
@@ -1389,6 +1461,16 @@ pub(crate) async fn tab_info(
         }
         Err(error) => Err(cdp_error(&error)),
     }
+}
+
+/// Every tab of every window, as BrowserOS lists them: whole windows, most recently activated
+/// first.
+pub(crate) async fn tab_strip(cdp: &cdp::Browser) -> Result<Vec<TabInfo>, PlaywrightError> {
+    let reply = cdp
+        .send(cdp::browser::GetTabs::default())
+        .await
+        .map_err(|error| cdp_error(&error))?;
+    Ok(reply.tabs)
 }
 
 /// Why a console message's argument, or a file chooser's input, could not become a handle.
@@ -1455,7 +1537,7 @@ mod tests {
     #[tokio::test]
     async fn guids_resolve_the_registered_tab_and_starting_frame_scope() {
         let browser = FakeBrowser::start(Replies::default()).await;
-        let (tabs, _) = Tabs::open(
+        let (tabs, _, _) = Tabs::open(
             cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
@@ -1463,7 +1545,7 @@ mod tests {
             Switches::default(),
             Permissions::default(),
             TaskTracker::new(),
-            &PageId::new(PAGE.to_string()),
+            &StartPage::Page(PageId::new(PAGE.to_string())),
         )
         .await
         .unwrap();

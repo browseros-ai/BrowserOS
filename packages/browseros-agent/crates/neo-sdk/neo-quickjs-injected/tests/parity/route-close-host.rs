@@ -2,7 +2,7 @@
 //! cancels it when a line arrives on stdin; then drains. The outer test reads the tab while the
 //! run is still live (routeCloseSlowReply.test.mjs).
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use neo_runtime::{PageId, RunRequest, Runtime};
+use neo_runtime::{PageId, RunRequest, Runtime, StartPage};
 use std::env;
 use std::fs;
 use std::time::Duration;
@@ -29,7 +29,7 @@ async fn main() {
     let outcome = runtime
         .run(RunRequest {
             code: fs::read_to_string(&args[3]).expect("script"),
-            page: PageId::new(args[2].clone()),
+            page: StartPage::Page(PageId::new(args[2].clone())),
             timeout: Duration::from_secs(30),
             cancel,
             artifacts: None,

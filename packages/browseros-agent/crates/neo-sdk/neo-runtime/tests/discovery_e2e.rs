@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use browser::{Fixture, Tab};
 use browseros_cdp::CdpEvent;
-use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio::time::{self, Instant};
@@ -60,7 +60,7 @@ async fn run(runtime: &Runtime, page: &str, code: &str) -> RunOutcome {
     runtime
         .run(RunRequest {
             code: code.to_string(),
-            page: PageId::new(page.to_string()),
+            page: StartPage::Page(PageId::new(page.to_string())),
             timeout: Duration::from_secs(30),
             cancel: CancellationToken::new(),
             artifacts: None,

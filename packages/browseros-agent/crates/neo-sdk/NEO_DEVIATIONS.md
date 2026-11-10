@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/neo-sdk/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (132)
+## Deviations (133)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -138,6 +138,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/playwright_methods/history.rs | `response_of` | `server/frames.ts` `Frame.waitForNavigation` | Playwright records every request; Neo starts recording a session's requests with its first navigation wait or goto, so a document whose request started before that answers `null`. |
 | neo-runtime/src/playwright_methods/network_idle.rs | (file) | `server/frames.ts` `FrameManager.requestStarted` | Playwright's server sees every request of a page from its first moment; Neo sees a tab's requests only after the run's `Network.enable`, so [`NetworkIdle::restart`] starts every frame's quiet period at that moment, and a frame whose document moved to another process (`Page.frameDetached` with reason `swap`) leaves the tree with its requests, since that process reports its requests on a session the run may never attach. |
 | neo-runtime/src/playwright_methods/screenshot.rs | `screenshot_locator` | `server/frames.ts` `Frame.waitForSelector` | is the element Playwright's wait returns; Neo resolves it again with click's `resolve`, which also marks it as a target (`markTargets: 'all'`), and waits again if it detached in between. |
+| neo-runtime/src/quickjs.rs | `CALL_EXPRESSION` | `playwright-core/src/tools/backend/runCode.ts` `runCode.handle` | Playwright's MCP compiles `code` as one expression and calls its value with `page`. Neo calls a function value with all three of the script's parameters, so a function sees what a body sees, and returns any other value, awaited, as the result, so a lone `page.title()` works where Playwright's call throws. Code that is not one expression runs as a body, as Neo always ran it (`Agent::compile`). |
 | neo-runtime/src/quickjs.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-quickjs-injected reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. The realm's own `abort` listeners and timer callbacks report theirs the same way (`abort::REALM_GLOBALS`, `HOST_GLOBALS`). |
 
 ## Unexplained: owner questions (0)
