@@ -21,6 +21,7 @@ from .products import (
     default_product_descriptor,
     get_product_descriptor,
 )
+from .patch_source import load_external_patch_version
 from ..lib.utils import (
     get_platform,
     get_platform_arch,
@@ -62,6 +63,9 @@ class Context:
     """Resolved build state shared across build steps."""
 
     root_dir: Path = field(default_factory=get_package_root)
+    # A separate patch package supplies one coherent upstream pin and patch
+    # stack. Resources, product identity, and build recipes stay in root_dir.
+    patch_root: Optional[Path] = None
     chromium_src: Path = Path()
     out_dir: str = "out/Default"
     architecture: str = ""  # Defaults to host arch in __post_init__
@@ -100,6 +104,7 @@ class Context:
     env: EnvConfig = field(init=False)
 
     def __post_init__(self):
+        self.patch_root = (self.patch_root or self.root_dir).expanduser().resolve()
         if not isinstance(self.product, ProductDescriptor):
             self.product = get_product_descriptor(self.product)
 
@@ -117,9 +122,14 @@ class Context:
         self.out_dir = f"out{sep}Default_{self.product.id}_{self.architecture}"
 
         version_dict: Dict[str, str] = {}
-        if not self.chromium_version:
+        if self.uses_external_patches:
+            version, version_dict = load_external_patch_version(self.get_patch_root())
+            if self.chromium_version and self.chromium_version != version:
+                raise ValueError("chromium_version disagrees with the selected patch root")
+            self.chromium_version = version
+        elif not self.chromium_version:
             self.chromium_version, version_dict = versions_mod.load_chromium_version(
-                self.root_dir
+                self.get_patch_root()
             )
 
         if not self.browseros_build_offset:
@@ -298,9 +308,20 @@ class Context:
         return join_paths(self.root_dir, "releases", self.semantic_version)
 
     # Dev CLI specific methods
+    def get_patch_root(self) -> Path:
+        """Return the selected package containing the upstream pin and patches."""
+        return self.patch_root or self.root_dir
+
+    @property
+    def uses_external_patches(self) -> bool:
+        return self.get_patch_root().resolve() != self.root_dir.resolve()
+
+    def get_base_commit_path(self) -> Path:
+        return self.get_patch_root() / "BASE_COMMIT"
+
     def get_patches_dir(self) -> Path:
         """Get individual patches directory"""
-        return join_paths(self.root_dir, "chromium_patches")
+        return join_paths(self.get_patch_root(), "chromium_patches")
 
     def get_chromium_replace_files_dir(self) -> Path:
         """Get chromium files replacement directory"""
@@ -337,7 +358,7 @@ class Context:
 
     def get_features_yaml_path(self) -> Path:
         """Get the canonical feature registry path."""
-        return get_feature_registry_path(self.root_dir)
+        return get_feature_registry_path(self.get_patch_root())
 
     def get_patch_path_for_file(self, file_path: str) -> Path:
         """Convert a chromium file path to patch file path"""
@@ -345,4 +366,4 @@ class Context:
 
     def get_series_patches_dir(self) -> Path:
         """Get series patches directory (GNU Quilt format)"""
-        return join_paths(self.root_dir, "series_patches")
+        return join_paths(self.get_patch_root(), "series_patches")

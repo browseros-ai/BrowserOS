@@ -11,10 +11,11 @@ from typing import Callable, List, Optional, Tuple
 import typer
 
 from ..core.context import Context
+from ..core.patch_source import load_external_patch_version
 from ..core.checkout_lock import CheckoutLockError, ChromiumCheckoutLock
 from ..core.products import get_product_descriptor
 from ..lib.paths import get_package_root
-from ..lib.versions import load_semantic_version
+from ..lib.versions import load_chromium_version, load_semantic_version
 from ..core.pipeline import validate_pipeline, show_available_modules
 from ..core.planner import (
     Profile,
@@ -196,6 +197,12 @@ def main(
         "-S",
         help="Path to Chromium source directory",
     ),
+    patch_root: Optional[Path] = typer.Option(
+        None,
+        "--patch-root",
+        help="BrowserOS package containing the Chromium pin, patches, and series. "
+        "Build recipes and product resources stay in this repository.",
+    ),
     lock_wait: bool = typer.Option(
         False,
         "--lock-wait",
@@ -300,6 +307,15 @@ def main(
     if lane_manifest is not None and not has_preset:
         log_error("--lane-manifest requires preset/profile mode")
         raise typer.Exit(1)
+    if (
+        lane_manifest is not None
+        and patch_root is not None
+        and patch_root.expanduser().resolve() != get_package_root().resolve()
+    ):
+        # Release-lane evidence currently identifies one source repository.
+        # Mixed-source local builds must not emit that single-source claim.
+        log_error("--lane-manifest does not support an external --patch-root")
+        raise typer.Exit(1)
     if toolchain and lane_manifest is None:
         log_error("--toolchain-id requires --lane-manifest")
         raise typer.Exit(1)
@@ -324,6 +340,7 @@ def main(
             skip=skip,
             from_=from_,
             chromium_src=chromium_src,
+            patch_root=patch_root,
             extra_gn_args=extra_gn_args,
         )
         if show_plan:
@@ -332,6 +349,7 @@ def main(
     else:
         cli_args = {
             "chromium_src": chromium_src,
+            "patch_root": patch_root,
             "arch": arch,
             "build_type": build_type,
             "product": product,
@@ -345,6 +363,7 @@ def main(
             "extra_gn_args": extra_gn_args,
         }
         try:
+            patch_header = _patch_source_header(patch_root)
             pipeline = resolve_pipeline(
                 cli_args, execution_order=EXECUTION_ORDER, quiet=show_plan
             )
@@ -362,7 +381,7 @@ def main(
                     f"Valid: {', '.join(VALID_ARCHITECTURES)}"
                 )
                 raise typer.Exit(1)
-            header = ["Direct pipeline (--modules/phase flags)"]
+            header = ["Direct pipeline (--modules/phase flags)", *patch_header]
             if extra_gn_args:
                 header.append(f"GN arg overrides: {', '.join(extra_gn_args)}")
             _print_plan(
@@ -547,6 +566,18 @@ class _PlanProjection:
     build_runs: Callable[[], List[Tuple[Context, List[str]]]] = _display_only_runs
 
 
+def _patch_source_header(patch_root: Optional[Path]) -> List[str]:
+    """Validate selected patch inputs without requiring a Chromium checkout."""
+    if patch_root is None:
+        return []
+    root = patch_root.expanduser().resolve()
+    if root != get_package_root().resolve():
+        version, _ = load_external_patch_version(root)
+    else:
+        version, _ = load_chromium_version(root)
+    return [f"Chromium patch root: {root}", f"Chromium version: {version}"]
+
+
 def _resolve_preset(
     *,
     preset: Optional[str],
@@ -564,6 +595,7 @@ def _resolve_preset(
     skip: Optional[str],
     from_: Optional[str],
     chromium_src: Optional[Path],
+    patch_root: Optional[Path] = None,
     source_sha: Optional[str] = None,
     extra_gn_args: Tuple[str, ...] = (),
 ) -> _PlanProjection:
@@ -574,6 +606,7 @@ def _resolve_preset(
     profile carrying modules: routes to the DIRECT-mode machinery.
     """
     try:
+        patch_header = _patch_source_header(patch_root)
         prof = (
             load_profile(_resolve_profile_path(profile))
             if profile
@@ -582,7 +615,7 @@ def _resolve_preset(
         if prof.modules is not None:
             if source_sha is not None:
                 raise ValueError("--source-sha does not combine with a modules profile")
-            return _resolve_modules_profile(
+            projection = _resolve_modules_profile(
                 prof,
                 preset=preset,
                 product=product,
@@ -598,8 +631,10 @@ def _resolve_preset(
                 skip=skip,
                 from_=from_,
                 chromium_src=chromium_src,
+                patch_root=patch_root,
                 extra_gn_args=extra_gn_args,
             )
+            return replace(projection, header=[*projection.header, *patch_header])
         if build_type is not None:
             raise ValueError(
                 "--build-type is owned by the preset (release/debug); drop it"
@@ -650,6 +685,7 @@ def _resolve_preset(
             f"download={switches.download} sign={switches.sign} "
             f"upload={switches.upload} "
             f"resource_mode={switches.resource_mode}",
+            *patch_header,
         ]
         if prepared_resources is not None:
             header.append(f"Prepared resources: {prepared_resources.resolve()}")
@@ -713,6 +749,7 @@ def _resolve_preset(
                 runs = [
                     (
                         Context(
+                            patch_root=patch_root,
                             chromium_src=src,
                             architecture=run_arch,
                             plan_architectures=tuple(switches.architectures),
@@ -762,6 +799,7 @@ def _resolve_modules_profile(
     skip: Optional[str],
     from_: Optional[str],
     chromium_src: Optional[Path],
+    patch_root: Optional[Path] = None,
     extra_gn_args: Tuple[str, ...] = (),
 ) -> _PlanProjection:
     """Project a modules: profile through the DIRECT-mode machinery.
@@ -823,6 +861,7 @@ def _resolve_modules_profile(
             arch_ctxs = resolve_config(
                 {
                     "chromium_src": chromium_src,
+                    "patch_root": patch_root,
                     "arch": eff_arch,
                     "build_type": eff_build_type,
                     "product": eff_product,

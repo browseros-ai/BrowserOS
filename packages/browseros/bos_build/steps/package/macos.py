@@ -500,6 +500,7 @@ def package_universal(contexts: List[Context]) -> bool:
     product = contexts[0].product
     universal_ctx = Context(
         root_dir=contexts[0].root_dir,
+        patch_root=contexts[0].patch_root,
         chromium_src=contexts[0].chromium_src,
         architecture="universal",
         build_type=contexts[0].build_type,
