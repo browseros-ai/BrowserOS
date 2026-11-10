@@ -68,7 +68,9 @@ jobs:
           uv run browseros build --list > /dev/null
           # Runner has no chromium checkout — this smoke IS the
           # no-checkout regression test for --show-plan.
-          uv run browseros build --preset release --show-plan
+          # The public package retains its older pin for local debug builds.
+          # Release-floor acceptance/rejection is covered by build_test.py.
+          uv run browseros build --preset debug --show-plan
           uv run browseros product doctor
 
       - name: Run vendor_uploads tests
