@@ -481,3 +481,34 @@ test('CU-002 deleted', () => { expect(true).toBe(true); });
     )
   },
 )
+
+test('skip refresh adds uncovered expectLoop checks, keeps applied skips, and restores a patch reason', () => {
+  const patched = { ...entry, reason: 'error wording: keep that it fails' }
+  const input = manifest([patched])
+  const uncovered = {
+    ...row,
+    verdict: 'skip',
+    reason: 'expectLoop: toHaveRole is not covered',
+  }
+  const refreshed = refreshSkips(input, [uncovered])
+  const skip = refreshed.entries[0]
+  assert.equal(skip.action, 'skip')
+  assert.equal(skip.reason, 'expectLoop: toHaveRole is not covered')
+  assert.equal(skip.patchReason, 'error wording: keep that it fails')
+  // A later run with this manifest applied reports the skip with the manifest's reason.
+  assert.deepEqual(refreshSkips(refreshed, [uncovered]), refreshed)
+  const internals = {
+    ...row,
+    verdict: 'skip',
+    reason: 'needs Playwright internals: toImpl',
+  }
+  const internal = refreshSkips(input, [
+    { ...row, verdict: 'needs-internals', gapKey: 'toImpl' },
+  ])
+  assert.deepEqual(refreshSkips(internal, [internals]), internal)
+  // Once the check passes, the patch returns with its own reason.
+  assert.deepEqual(
+    refreshSkips(refreshed, [{ ...row, verdict: 'pass' }]).entries[0],
+    patched,
+  )
+})

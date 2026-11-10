@@ -362,6 +362,29 @@ export function skipReason(entries, file, titles) {
   )?.reason
 }
 
+/** expectLoop's runtime skip for a check its table does not cover (`expect-loop.mjs`). */
+const uncoveredCheck = /^expectLoop: \w+ is not covered$/
+
+const isGeneratedSkip = (reason) =>
+  reason.startsWith(skipPrefix) || uncoveredCheck.test(reason)
+
+/** The skip the owner's order 2 adds for a case, or `null`: needs-internals, or an uncovered expectLoop check. */
+function generatedSkipReason(row, key) {
+  if (row.verdict === 'needs-internals') {
+    if (typeof row.gapKey !== 'string' || !row.gapKey.trim())
+      throw new Error(`Missing internals gap: ${key}`)
+    return `${skipPrefix}${row.gapKey}`
+  }
+  if (row.verdict === 'skip')
+    return (
+      String(row.reason || '')
+        .split('; ')
+        // Also a skip this manifest already applied, so a curated run refreshes idempotently.
+        .find((part) => isGeneratedSkip(part)) || null
+    )
+  return null
+}
+
 export function refreshSkips(manifest, verdictRows) {
   const rows = new Map()
   for (const row of verdictRows) {
@@ -377,22 +400,32 @@ export function refreshSkips(manifest, verdictRows) {
   for (const [key, row] of rows) {
     const prior = entries.get(key)
     if (prior?.action === 'delete') continue
-    if (row.verdict === 'needs-internals') {
-      if (typeof row.gapKey !== 'string' || !row.gapKey.trim())
-        throw new Error(`Missing internals gap: ${key}`)
+    const reason = generatedSkipReason(row, key)
+    // A generated skip keeps the patch it replaced, and that patch's own reason, so clearing
+    // the skip later restores the entry exactly.
+    const patched = prior?.patches
+      ? {
+          patches: prior.patches,
+          patchReason:
+            prior.action === 'patch' ? prior.reason : prior.patchReason,
+        }
+      : {}
+    if (reason) {
       entries.set(key, {
         ...caseEntry(row),
         action: 'skip',
-        reason: `${skipPrefix}${row.gapKey}`,
-        ...(prior?.patches ? { patches: prior.patches } : {}),
+        reason,
+        ...patched,
       })
-    } else if (
-      prior?.action === 'skip' &&
-      prior.reason.startsWith(skipPrefix)
-    ) {
-      if (prior.patches)
-        entries.set(key, { ...prior, action: 'patch', reason: patchReason })
-      else entries.delete(key)
+    } else if (prior?.action === 'skip' && isGeneratedSkip(prior.reason)) {
+      if (prior.patches) {
+        const { patchReason: restored, ...rest } = prior
+        entries.set(key, {
+          ...rest,
+          action: 'patch',
+          reason: restored ?? patchReason,
+        })
+      } else entries.delete(key)
     }
   }
   return {
