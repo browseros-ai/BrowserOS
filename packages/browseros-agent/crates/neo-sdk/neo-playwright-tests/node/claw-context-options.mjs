@@ -30,3 +30,32 @@ export function clawContextOptions(combined, requested, implicit) {
   }
   return options
 }
+
+/** Lend the real context once; every unsupported request calls the real Browser. */
+export function createClawContextFactory({
+  browser,
+  context,
+  combined,
+  implicit,
+  video,
+  testInfo,
+}) {
+  let calls = 0
+  return async (requested) => {
+    const explicit = clawContextOptions(combined, requested, implicit)
+    if ((typeof video === 'string' ? video : video.mode) !== 'off')
+      explicit.recordVideo = { dir: testInfo.outputPath('video') }
+    calls++
+    const forced = Object.keys(explicit).length
+      ? `explicit options: ${JSON.stringify(explicit)}`
+      : calls > 1
+        ? 'second context in one test'
+        : null
+    if (forced) {
+      testInfo.annotations.push({ type: 'claw-context', description: forced })
+      const created = await browser.newContext(explicit)
+      return { context: created, close: () => created.close() }
+    }
+    return { context, close: async () => {} }
+  }
+}

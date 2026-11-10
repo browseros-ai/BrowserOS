@@ -5,7 +5,10 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { source } from '../js/prepare.mjs'
 import { browserVersion, launchBrowser } from './browser.mjs'
-import { clawContextOptions, clawDefaults } from './claw-context-options.mjs'
+import {
+  clawDefaults,
+  createClawContextFactory,
+} from './claw-context-options.mjs'
 import {
   installFixtureBuiltins,
   openHarness,
@@ -384,28 +387,16 @@ const clawTest = sdkTest.extend({
     testInfo,
   ) => {
     if (process.env.PW_CLOCK) unsupported('clock fixture: context._wrapApiCall')
-    let calls = 0
-    await use(async (requested) => {
-      const explicit = clawContextOptions(
-        _combinedContextOptions,
-        requested,
-        implicitOptions.get(testInfo),
-      )
-      if ((typeof video === 'string' ? video : video.mode) !== 'off')
-        explicit.recordVideo = { dir: testInfo.outputPath('video') }
-      calls++
-      const forced = Object.keys(explicit).length
-        ? `explicit options: ${JSON.stringify(explicit)}`
-        : calls > 1
-          ? 'second context in one test'
-          : null
-      if (forced) {
-        testInfo.annotations.push({ type: 'claw-context', description: forced })
-        const context = await __claw.browser.newContext(explicit)
-        return { context, close: () => context.close() }
-      }
-      return { context: __claw.context, close: async () => {} }
-    })
+    await use(
+      createClawContextFactory({
+        browser: __claw.browser,
+        context: __claw.context,
+        combined: _combinedContextOptions,
+        implicit: implicitOptions.get(testInfo),
+        video,
+        testInfo,
+      }),
+    )
   },
   __clawPageTargets: async ({ context, __clawHarness }, use) => {
     // The dependency resolves before upstream's page fixture calls context.newPage().
