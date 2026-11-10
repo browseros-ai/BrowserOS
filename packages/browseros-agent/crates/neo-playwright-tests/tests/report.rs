@@ -719,7 +719,7 @@ fn fixture_limitations_are_separate_from_native_missing_methods() {
     let result = classify(value).expect("valid boundary fixture");
     assert_eq!(
         result.verdict,
-        Verdict::HarnessError,
+        Verdict::BridgeLimit,
         "different setup conditions cannot establish a native API gap"
     );
     assert!(
@@ -737,8 +737,8 @@ fn fixture_limitations_are_separate_from_native_missing_methods() {
     let result = classify(value).expect("valid fixture");
     assert_eq!(
         result.verdict,
-        Verdict::Unsupported,
-        "a valid reference's actual missing API keeps primary status"
+        Verdict::BridgeLimit,
+        "fixture limitations take precedence over missing API evidence"
     );
     assert!(
         !result.harness_limitations.is_empty(),
@@ -1293,13 +1293,13 @@ fn tests_that_ansi_normalization_preserves_object_origins_and_lone_surrogates() 
 }
 
 #[test]
-fn tests_that_other_harness_gaps_follow_the_same_verdict_precedence() {
+fn tests_that_fixture_limits_precede_reference_failures_and_native_verdicts() {
     for engine in ["reference", "neo"] {
         for (scenario, expected) in [
-            ("gap", Verdict::HarnessError),
-            ("reference-failure", Verdict::ReferenceFailure),
-            ("unsupported", Verdict::Unsupported),
-            ("difference", Verdict::Fail),
+            ("gap", Verdict::BridgeLimit),
+            ("reference-failure", Verdict::BridgeLimit),
+            ("unsupported", Verdict::BridgeLimit),
+            ("difference", Verdict::BridgeLimit),
         ] {
             let mut value = fixture();
             value["phases"][engine]["journal"]["harnessLimitations"] =
@@ -1321,5 +1321,48 @@ fn tests_that_other_harness_gaps_follow_the_same_verdict_precedence() {
                 "retain the limitation independently"
             );
         }
+    }
+}
+
+#[test]
+fn tests_that_both_engines_failing_on_fixture_setup_are_bridge_limited() {
+    for limitation in [
+        "Initial-page bootstrap does not support context option timezoneId",
+        "Owned single-browser fixture does not support browserType.launch",
+    ] {
+        let mut value = fixture();
+        for engine in ["reference", "neo"] {
+            outcome(&mut value, engine, "failed", "passed");
+            value["phases"][engine]["journal"]["harnessLimitations"] =
+                json!(["bridge limit: unrelated transport", limitation]);
+            value["phases"][engine]["journal"]["calls"] = json!([]);
+            value["phases"][engine]["journal"]["nativeOutcome"] = Value::Null;
+            value["phases"][engine]["observation"] = Value::Null;
+        }
+        let result = classify(value.clone()).expect("fixture");
+        assert_eq!(
+            result.verdict,
+            Verdict::BridgeLimit,
+            "setup refusal is not a Playwright failure"
+        );
+        assert_eq!(
+            result.reason,
+            format!("bridge limit: fixture: {limitation}"),
+            "retain the actual fixture limitation"
+        );
+        assert!(
+            !result.reference_valid && !result.comparable,
+            "fixture refusal establishes no reference validity or compatibility"
+        );
+        assert!(
+            !result.evidence_incomplete.is_empty(),
+            "retain missing observations and witness"
+        );
+        value["phases"]["neo"]["infrastructureErrors"] = json!(["worker died"]);
+        assert_eq!(
+            classify(value).expect("fixture").verdict,
+            Verdict::HarnessError,
+            "real infrastructure failures still take precedence"
+        );
     }
 }

@@ -853,6 +853,18 @@ pub fn classify(pair: &Pair) -> ResultRecord {
     let (Some(reference_test), Some(neo_test)) = (reference_test, neo_test) else {
         return result;
     };
+    // Fixture refusals can fail both raw tests before their bodies execute.
+    // They describe harness coverage, not a failing Playwright reference.
+    if let Some(limitation) = [reference, neo]
+        .into_iter()
+        .filter_map(|phase| phase.journal.as_ref())
+        .flat_map(|journal| &journal.harness_limitations)
+        .find(|limitation| !limitation.starts_with("bridge limit: "))
+    {
+        result.verdict = Verdict::BridgeLimit;
+        result.reason = format!("bridge limit: fixture: {limitation}");
+        return result;
+    }
     if !passed(reference_test) {
         result.verdict = Verdict::ReferenceFailure;
         result.reason = format!(
