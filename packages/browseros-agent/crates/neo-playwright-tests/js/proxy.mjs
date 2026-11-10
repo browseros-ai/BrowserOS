@@ -233,6 +233,8 @@ export class NativeProxy extends CallJournal {
       this.page = this.decode(frame.roots.page)
       this.context = this.decode(frame.roots.context)
       this.mainFrame = this.decode(frame.roots.mainFrame)
+      if (frame.roots.playwright)
+        this.playwright = this.decode(frame.roots.playwright)
       this.onReady()
     } else if (frame.event === 'settled') {
       const pending = this.pending.get(frame.id)
@@ -369,11 +371,17 @@ export class NativeProxy extends CallJournal {
       ref.epoch !== this.epoch ||
       !Number.isSafeInteger(ref.id) ||
       ref.id < 1 ||
+      typeof ref.family !== 'string' ||
       !Object.hasOwn(this.capabilities, ref.family)
     )
       throw this.transport('Invalid or foreign native object reference')
-    const key = `${ref.epoch}/${ref.id}/${ref.family}`
-    if (this.proxies.has(key)) return this.proxies.get(key)
+    const key = ref.id
+    if (this.proxies.has(key)) {
+      const proxy = this.proxies.get(key)
+      if (this.refs.get(proxy).family !== ref.family)
+        throw this.transport('Native object reference changed family')
+      return proxy
+    }
     const methods = new Map()
     const proxy = new Proxy(
       {},
@@ -427,6 +435,8 @@ export class NativeProxy extends CallJournal {
           // This is Playwright matcher's receiver label, not a browser operation. Missing
           // _expect still fails through actual native reflection and ranks as Frame.expect.
           if (member === '_apiName') return ref.family
+          if (ref.family === 'Playwright' && member === 'errors')
+            return this.errorTypes
           if (methods.has(member)) return methods.get(member)
           const found = this.request({
             op: 'get',
@@ -436,7 +446,20 @@ export class NativeProxy extends CallJournal {
           if (found.kind === 'missing')
             throw this.unsupported(ref.family, member)
           if (found.kind === 'throw') throw this.thrown(found)
-          if (found.kind === 'value') return this.decode(found.value)
+          if (found.kind === 'value') {
+            const value = this.decode(found.value)
+            // A namespace has no method-return origin. Journal the read so Rust can
+            // pair later Keyboard/Clock/etc. calls with the reference's same property.
+            if (found.value.tag === 'object')
+              Object.assign(
+                this.record(ref, capabilityName(ref.family, member)),
+                {
+                  state: 'returned',
+                  value: found.value,
+                },
+              )
+            return value
+          }
           if (found.kind !== 'callable')
             throw this.transport(`Invalid reflection reply ${found.kind}`)
           if (
@@ -681,6 +704,7 @@ export class ReferenceProxy extends CallJournal {
       page: this.codec.encode(page),
       context: this.codec.encode(context),
       mainFrame: this.codec.encode(page.mainFrame()),
+      ...(playwright && { playwright: this.codec.encode(playwright) }),
     }
     this.playwright = playwright && this.wrap(playwright)
   }
@@ -778,7 +802,17 @@ export class ReferenceProxy extends CallJournal {
         if (typeof member !== 'string' || ignored.has(member)) return result
         // Error constructors are shared pure bookkeeping with the native membrane.
         if (ref.family === 'Playwright' && member === 'errors') return result
-        if (typeof result !== 'function') return this.wrap(result)
+        if (typeof result !== 'function') {
+          if (this.identify(result)) {
+            const method = capabilityName(ref.family, member)
+            this.requirements.add(method)
+            Object.assign(this.record(ref, method), {
+              state: 'returned',
+              value: this.codec.encode(result),
+            })
+          }
+          return this.wrap(result)
+        }
         if (member === 'constructor') {
           this.gap(
             `Uninstrumented reference constructor access for ${ref.family}`,
@@ -875,12 +909,21 @@ export class ReferenceProxy extends CallJournal {
 
   returnedOrigin(value, family, member, args) {
     if (member === 'waitForEvent') this.eventOrigin(value, family, args[0])
-    if (family === 'Page' && member === 'video') this.seed(value, 'Video')
     if (
-      family === 'APIRequestContext' &&
-      ['fetch', 'get', 'post', 'put', 'patch', 'head', 'delete'].includes(
-        member,
-      )
+      family === 'Page' &&
+      member === 'consoleMessages' &&
+      Array.isArray(value)
+    )
+      for (const message of value) this.seed(message, 'ConsoleMessage')
+    if (family === 'Page' && member === 'video') this.seed(value, 'Video')
+    if (family === 'Locator' && member === 'highlight')
+      this.seed(value, 'DisposableStub')
+    if (
+      (family === 'Route' && member === 'fetch') ||
+      (family === 'APIRequestContext' &&
+        ['fetch', 'get', 'post', 'put', 'patch', 'head', 'delete'].includes(
+          member,
+        ))
     )
       this.seed(value, 'APIResponse')
   }

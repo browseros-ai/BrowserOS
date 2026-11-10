@@ -4,12 +4,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { materialize } from './overlay.mjs'
 import { agent, corpus, crate, sha256, source } from './prepare.mjs'
+import { sdkCapabilities } from './sdk-families.mjs'
 
 const root = path.resolve(process.argv[2])
 const overlay = path.join(root, 'overlay')
 const harness = path.join(root, 'harness')
 fs.mkdirSync(harness)
 fs.cpSync(path.join(crate, 'js'), path.join(harness, 'js'), { recursive: true })
+fs.writeFileSync(
+  path.join(harness, 'js/sdk-capabilities.json'),
+  JSON.stringify(sdkCapabilities()),
+)
 fs.copyFileSync(
   path.join(crate, 'corpus.json'),
   path.join(harness, 'corpus.json'),

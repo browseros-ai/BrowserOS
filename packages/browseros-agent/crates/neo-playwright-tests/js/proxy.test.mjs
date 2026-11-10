@@ -87,15 +87,16 @@ function reference(t) {
   const second = page()
   const proxy = new ReferenceProxy({ connection, page: first, playwright })
   t.after(() => connection.close())
-  return { proxy, first, second, context }
+  return { proxy, first, second, context, make }
 }
 
 /** A deterministic protocol peer exercises host ownership without implementing any browser API. */
 class WireWorker extends EventEmitter {
-  constructor() {
+  constructor(capabilities = {}) {
     super()
     this.invocations = []
     this.methods = new Map()
+    this.properties = new Map()
     const ref = (id, family) => ({
       tag: 'object',
       ref: { epoch: 'native-unit', id, family },
@@ -108,7 +109,12 @@ class WireWorker extends EventEmitter {
           context: ref(2, 'BrowserContext'),
           mainFrame: ref(3, 'Frame'),
         },
-        capabilities: { Page: [], BrowserContext: [], Frame: [] },
+        capabilities: {
+          Page: [],
+          BrowserContext: [],
+          Frame: [],
+          ...capabilities,
+        },
       }),
     )
   }
@@ -138,6 +144,8 @@ class WireWorker extends EventEmitter {
           length: 0,
         },
       }
+      if (this.properties.has(name))
+        response = { kind: 'value', value: this.properties.get(name) }
     } else if (frame.op === 'invoke') {
       this.invocations.push(frame)
       response = this.result || {
@@ -163,8 +171,8 @@ class WireWorker extends EventEmitter {
   }
 }
 
-async function native(t, errorTypes, harnessLimitations = []) {
-  const worker = new WireWorker()
+async function native(t, errorTypes, capabilities, harnessLimitations = []) {
+  const worker = new WireWorker(capabilities)
   const proxy = new NativeProxy(
     {},
     {
@@ -177,6 +185,174 @@ async function native(t, errorTypes, harnessLimitations = []) {
   t.after(() => proxy.abort())
   return { proxy, worker }
 }
+
+test('tests that every advertised family receives an interned native stand-in', async (t) => {
+  const families = [
+    'Response',
+    'Keyboard',
+    'Mouse',
+    'Touchscreen',
+    'Clock',
+    'APIRequestContext',
+    'ElementHandle',
+    'JSHandle',
+    'Request',
+  ]
+  const { proxy } = await native(
+    t,
+    {},
+    Object.fromEntries(families.map((family) => [family, []])),
+  )
+  for (const [index, family] of families.entries()) {
+    const ref = { epoch: proxy.epoch, id: index + 10, family }
+    const value = proxy.decode({ tag: 'object', ref })
+    assert.equal(proxy.object(ref), value)
+    assert.deepEqual(proxy.codec.encode(value), { tag: 'object', ref })
+  }
+  assert.throws(
+    () =>
+      proxy.object({ epoch: proxy.epoch, id: 100, family: 'UnknownInternal' }),
+    /Invalid or foreign/,
+  )
+})
+
+test('tests that one native identity cannot change family', async (t) => {
+  const { proxy } = await native(t, {}, { Response: [] })
+  assert.throws(
+    () => proxy.object({ ...proxy.roots.page.ref, family: 'Response' }),
+    /family/,
+  )
+})
+
+test('tests that native namespace reads record a correlatable object origin', async (t) => {
+  const { proxy, worker } = await native(t, {}, { Keyboard: ['press'] })
+  const value = {
+    tag: 'object',
+    ref: { epoch: proxy.epoch, id: 10, family: 'Keyboard' },
+  }
+  worker.properties.set('keyboard', value)
+  const keyboard = original(t, 'return page.keyboard')(proxy.page)
+  assert.equal(keyboard, proxy.object(value.ref))
+  assert.equal(proxy.calls[0]?.method, 'Page.keyboard')
+  assert.deepEqual(proxy.calls[0]?.receiver, proxy.roots.page.ref)
+  assert.deepEqual(proxy.calls[0]?.value, value)
+  assert.equal(proxy.calls[0]?.state, 'returned')
+  assert.equal(proxy.calls[0]?.site.file, 'tests/page/proxy.spec.ts')
+})
+
+test(
+  'tests that reference namespace reads record the same object origin without repeating getters',
+  pinned,
+  (t) => {
+    const { proxy, first } = reference(t)
+    const keyboard = first.keyboard
+    let reads = 0
+    Object.defineProperty(first, 'keyboard', {
+      get: () => {
+        reads++
+        return keyboard
+      },
+    })
+    const wrapped = original(t, 'return page.keyboard')(proxy.wrap(first))
+    assert.equal(reads, 1)
+    assert.equal(proxy.identify(wrapped).family, 'Keyboard')
+    assert.equal(proxy.calls[0]?.method, 'Page.keyboard')
+    assert.deepEqual(proxy.calls[0]?.receiver, proxy.roots.page.ref)
+    assert.deepEqual(proxy.calls[0]?.value.ref, proxy.identify(keyboard))
+    assert.equal(proxy.calls[0]?.site.file, 'tests/page/proxy.spec.ts')
+    assert.equal(proxy.roots.playwright?.ref.family, 'Playwright')
+  },
+)
+
+test('tests that the advertised Playwright root replaces absent namespace stand-ins', async (t) => {
+  const { proxy } = await native(t, { TimeoutError: Error }, { Playwright: [] })
+  proxy.event({
+    event: 'ready',
+    capabilities: proxy.capabilities,
+    roots: {
+      ...proxy.roots,
+      playwright: {
+        tag: 'object',
+        ref: { epoch: proxy.epoch, id: 4, family: 'Playwright' },
+      },
+    },
+  })
+  assert.equal(proxy.playwright, proxy.object(proxy.roots.playwright.ref))
+  assert.equal(proxy.playwright.errors.TimeoutError, Error)
+})
+
+test(
+  'tests that reference highlight disposables use the SDK family',
+  pinned,
+  async (t) => {
+    const { proxy, first } = reference(t)
+    first.mainFrame()._highlight = async () => {}
+    const disposable = await proxy.wrap(first.locator('div')).highlight()
+    assert.equal(proxy.identify(disposable)?.family, 'DisposableStub')
+    assert.deepEqual(proxy.censusGaps, [])
+  },
+)
+
+test(
+  'tests that reference route fetch responses use the SDK family',
+  pinned,
+  async (t) => {
+    const { proxy, first, context, make } = reference(t)
+    const request = make('Request', {
+      frame: { guid: first.mainFrame()._guid },
+      url: 'http://example.test/',
+      method: 'GET',
+      headers: [],
+      resourceType: 'document',
+      isNavigationRequest: true,
+    })
+    const route = make('Route', { request: { guid: request._guid } })
+    route._context = context
+    context.request._channel = {
+      fetch: async () => ({
+        response: {
+          fetchUid: 'unit',
+          url: 'http://example.test/',
+          status: 200,
+          statusText: 'OK',
+          headers: [],
+        },
+      }),
+    }
+    const response = await proxy.wrap(route).fetch()
+    assert.equal(proxy.identify(response)?.family, 'APIResponse')
+    assert.equal(response.status(), 200)
+    assert.deepEqual(proxy.censusGaps, [])
+  },
+)
+
+test(
+  'tests that stored reference console messages have identities without prior console events',
+  pinned,
+  async (t) => {
+    const { proxy, first } = reference(t)
+    first._channel = {
+      consoleMessages: async () => ({
+        messages: [
+          {
+            type: 'log',
+            text: 'stored message',
+            args: [],
+            location: { url: 'upstream', lineNumber: 1, columnNumber: 2 },
+            timestamp: 1,
+          },
+        ],
+      }),
+    }
+    const messages = await proxy.wrap(first).consoleMessages()
+    assert.equal(proxy.identify(messages[0])?.family, 'ConsoleMessage')
+    assert.equal(messages[0].text(), 'stored message')
+    assert.equal(messages[0].page(), proxy.wrap(first))
+    assert.ok(proxy.requirements.has('ConsoleMessage.text'))
+    assert.equal(proxy.calls[0].state, 'returned')
+    assert.deepEqual(proxy.censusGaps, [])
+  },
+)
 
 test(
   'native errors retain pinned public classes, builtins and exact native stacks',
@@ -316,7 +492,12 @@ test('only evaluation source slots carry functions to the native run', async (t)
 
 test('host callbacks are journaled bridge limits before invoking Neo', async (t) => {
   const harnessLimitations = []
-  const { proxy, worker } = await native(t, undefined, harnessLimitations)
+  const { proxy, worker } = await native(
+    t,
+    undefined,
+    undefined,
+    harnessLimitations,
+  )
   const fn = () => {
     throw new Error('must not execute')
   }
