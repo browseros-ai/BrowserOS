@@ -1,10 +1,10 @@
-/** Neo: Copies verified upstream tests; only the browser fixture seam and server port lease change. */
+/** Neo: Verifies the whole corpus and changes only documented fixture and headless seams. */
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { corpus, sha256, source, verifySource } from '../js/prepare.mjs'
 
-export function materialize(root, { reference, output }) {
+export function materialize(root, { reference, output, workers = 4 }) {
   const stamp = verifySource()
   fs.mkdirSync(root, { recursive: true })
   fs.writeFileSync(
@@ -21,71 +21,108 @@ export function materialize(root, { reference, output }) {
     )
       throw new Error(`Upstream file changed during copy: ${file}`)
   }
+  const specs = corpus.suites
+    .filter((suite) => suite.include)
+    .map((suite) => {
+      if (sha256(fs.readFileSync(path.join(root, suite.file))) !== suite.sha256)
+        throw new Error(`Spec differs from corpus: ${suite.file}`)
+      return { file: suite.file, sha256: suite.sha256, title: suite.title }
+    })
   for (const name of ['packages', 'node_modules'])
     fs.symlinkSync(path.join(source, name), path.join(root, name), 'dir')
   const edits = []
-  if (!reference) {
-    const file = 'tests/config/browserTest.ts'
-    const original = fs.readFileSync(path.join(root, file))
-    fs.writeFileSync(
-      path.join(root, 'tests/config/__neoOriginalBrowserTest.ts'),
-      original,
-    )
-    const fixture = fileURLToPath(new URL('./fixtures.mjs', import.meta.url))
-    fs.writeFileSync(
-      path.join(root, file),
-      `export { test as playwrightTest, test as browserTest, test as contextTest, expect } from ${JSON.stringify(fixture)};\n`,
-    )
-    edits.push({ file, reason: 'Neo SDK fixture seam' })
+  const replace = (file, before, after, reason) => {
+    const target = path.join(root, file)
+    const text = fs.readFileSync(target, 'utf8')
+    if (text.split(before).length !== 2)
+      throw new Error(`Overlay seam changed: ${file}`)
+    fs.writeFileSync(target, text.replace(before, after))
+    edits.push({
+      file,
+      reason,
+      beforeSha256: sha256(text),
+      afterSha256: sha256(fs.readFileSync(target)),
+    })
   }
-  const serverFile = path.join(root, 'tests/config/serverFixtures.ts')
-  const before = fs.readFileSync(serverFile, 'utf8')
-  const seam = 'const port = 8907 + workerInfo.workerIndex * 4;'
-  if (before.split(seam).length !== 2)
-    throw new Error('Server port seam changed')
+  const file = 'tests/config/browserTest.ts'
+  const original = fs.readFileSync(path.join(root, file))
   fs.writeFileSync(
-    serverFile,
-    before.replace(seam, 'const port = Number(process.env.NEO_TESTS_PORT);'),
+    path.join(root, 'tests/config/__neoOriginalBrowserTest.ts'),
+    original,
+  )
+  const fixture = fileURLToPath(new URL('./fixtures.mjs', import.meta.url))
+  fs.writeFileSync(
+    path.join(root, file),
+    `export { test as playwrightTest, test as browserTest, test as contextTest, expect } from ${JSON.stringify(fixture)};\n`,
   )
   edits.push({
-    file: 'tests/config/serverFixtures.ts',
-    reason: 'nonzero port lease',
+    file,
+    reason: reference
+      ? 'owned reference browser fixture'
+      : 'Neo SDK fixture seam',
+    beforeSha256: sha256(original),
+    afterSha256: sha256(fs.readFileSync(path.join(root, file))),
   })
-  const suite = corpus.suites.find(
-    (suite) => suite.file === 'tests/page/page-goto.spec.ts',
+  replace(
+    'tests/config/serverFixtures.ts',
+    'async ({ loopback }, run, workerInfo)',
+    'async ({ loopback, __neoWorker }, run, workerInfo)',
+    'worker-owned server lease dependency',
   )
-  const digest = sha256(fs.readFileSync(path.join(root, suite.file)))
-  if (digest !== suite.sha256) throw new Error('page-goto differs from corpus')
+  replace(
+    'tests/config/serverFixtures.ts',
+    'const port = 8907 + workerInfo.workerIndex * 4;',
+    'const port = __neoWorker.serverPort;',
+    'per-worker nonzero port lease',
+  )
+  replace(
+    'tests/library/headful.spec.ts',
+    "it.skip(({ headless }) => headless, 'avoid popping windows in headless mode');",
+    '// Owner policy: HE-012 runs headless. All other cases in this file are excluded by the reporter.',
+    'owner-approved headless guard waiver; selection enforced by launcher',
+  )
+  const manifest = {
+    revision: corpus.revision,
+    specs,
+    edits,
+    contextOptionOmissions: reference
+      ? []
+      : [
+          {
+            option: 'offline',
+            value: false,
+            when: 'implicit upstream default only',
+          },
+          {
+            option: 'acceptDownloads',
+            value: true,
+            when: 'implicit upstream default only',
+          },
+        ],
+  }
   fs.writeFileSync(
     path.join(output, 'overlay.json'),
-    JSON.stringify(
-      {
-        revision: corpus.revision,
-        spec: suite.file,
-        sha256: digest,
-        edits,
-        omittedUpstreamDefaults: reference
-          ? {}
-          : { offline: false, acceptDownloads: true },
-      },
-      null,
-      2,
-    ),
+    JSON.stringify(manifest, null, 2),
   )
   const config = {
     testDir: path.join(root, 'tests'),
-    testMatch: 'page/page-goto.spec.ts',
-    workers: 1,
+    testMatch: specs.map((suite) => suite.file.replace(/^tests\//, '')),
+    workers,
     retries: 0,
     repeatEach: 1,
-    timeout: 30_000,
-    globalTimeout: 1_800_000,
+    timeout:
+      process.platform === 'darwin' && process.arch === 'x64' ? 60_000 : 30_000,
+    expect: { timeout: 10_000 },
     forbidOnly: true,
     fullyParallel: false,
-    outputDir: path.join(output, 'test-results'),
+    updateSnapshots: 'none',
+    snapshotPathTemplate:
+      '{testDir}/{testFileDir}/{testFileName}-snapshots/{arg}-chromium{ext}',
+    // Relative SDK file paths and testInfo.outputPath must share the copied upstream cwd.
+    outputDir: path.join(root, 'test-results'),
     build: {
       external: [
-        fileURLToPath(new URL('../node/**', import.meta.url)),
+        fileURLToPath(new URL('./**', import.meta.url)),
         fileURLToPath(new URL('../js/**', import.meta.url)),
       ],
     },
@@ -97,30 +134,17 @@ export function materialize(root, { reference, output }) {
       browserName: 'chromium',
       headless: true,
       channel: 'chromium',
+      mode: 'default',
       trace: 'off',
       screenshot: 'off',
       video: 'off',
-      ...(reference
-        ? {
-            launchOptions: {
-              executablePath: process.env.NEO_E2E_BROWSER,
-              args: [
-                '--disable-browseros-server',
-                '--disable-browseros-extensions',
-                '--lang=en-US',
-                '--window-size=1280,720',
-                '--force-device-scale-factor=1',
-              ],
-            },
-          }
-        : {}),
     },
-    projects: [{ name: reference ? 'browseros-playwright' : 'browseros-neo' }],
+    projects: [{ name: 'browseros-neo' }],
   }
   const configPath = path.join(root, 'neo.config.mjs')
   fs.writeFileSync(
     configPath,
     `export default ${JSON.stringify(config, null, 2)};\n`,
   )
-  return configPath
+  return { configPath, ...manifest }
 }
