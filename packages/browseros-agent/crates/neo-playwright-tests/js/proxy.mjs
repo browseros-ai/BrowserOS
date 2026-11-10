@@ -32,6 +32,17 @@ const errorFrom = (value, stack, errorTypes) => {
 }
 const ignored = new Set(['then', 'toJSON', 'inspect'])
 const nativeReferences = new WeakMap()
+// Neo: Only these public argument slots contain page-realm source; other functions
+// require a host callback channel, which this conformance bridge does not provide.
+const evaluationSources = new Map([
+  ['evaluate', 0],
+  ['evaluateHandle', 0],
+  ['evaluateAll', 0],
+  ['$eval', 1],
+  ['$$eval', 1],
+  ['waitForFunction', 0],
+  ['addInitScript', 0],
+])
 
 // Only data descriptors are traversed. Reading option getters here would run user
 // code before Playwright itself consumes it and could change validation behavior.
@@ -139,12 +150,16 @@ class CallJournal {
 /** Owns blocking IPC to one native run and correlates asynchronous promise settlements.
  * Interned proxies preserve the actual QuickJS objects without implementing their APIs here. */
 export class NativeProxy extends CallJournal {
-  constructor(options, { errorTypes = {}, workerFactory } = {}) {
+  constructor(
+    options,
+    { errorTypes = {}, workerFactory, harnessLimitations = [] } = {},
+  ) {
     super()
     // Constructors stay in the runner realm. WorkerData is a data-only protocol.
     this.errorTypes = errorTypes
     this.missing = new Set()
     this.transportErrors = []
+    this.harnessLimitations = harnessLimitations
     this.pending = new Map()
     this.proxies = new Map()
     this.functions = new Map()
@@ -234,7 +249,14 @@ export class NativeProxy extends CallJournal {
     else if (frame.event === 'stopped') {
       this.transportErrors.push(...frame.infrastructureErrors)
       this.onStopped(frame)
-    } else if (frame.event === 'transportError') this.fail(frame.message)
+    } else if (frame.event === 'transportError') {
+      const pending = this.pending.get(frame.id)
+      if (pending && frame.message.startsWith('bridge limit: ')) {
+        this.pending.delete(frame.id)
+        this.untransportable(pending.record, frame.message)
+        pending.reject(this.transport(frame.message))
+      } else this.fail(frame.message)
+    }
   }
 
   request(frame) {
@@ -258,6 +280,10 @@ export class NativeProxy extends CallJournal {
   }
 
   transport(message) {
+    if (message.startsWith('bridge limit: ')) {
+      this.harnessLimitations.push(message)
+      return Object.assign(new Error(message), { name: 'HarnessLimitation' })
+    }
     this.transportErrors.push(message)
     return Object.assign(new Error(message), { name: 'HarnessTransportError' })
   }
@@ -462,18 +488,42 @@ export class NativeProxy extends CallJournal {
             )
             let encoded
             try {
-              membrane.checkOperands(args)
+              const sourceIndex = evaluationSources.get(member)
+              const callbackLimit =
+                sourceIndex === undefined
+                  ? `bridge limit: host callback ${record.method}`
+                  : `bridge limit: untransportable function argument to ${record.method}`
+              args.forEach((value, index) => {
+                membrane.checkOperands(
+                  value,
+                  callbackLimit,
+                  index === sourceIndex,
+                )
+              })
               encoded = membrane.codec.encode(args)
             } catch (error) {
-              throw membrane.transport(`${record.method}: ${error.message}`)
+              const limitation =
+                error.name === 'HarnessLimitation'
+                  ? error
+                  : membrane.transport(
+                      `bridge limit: untransportable argument ${error.message.replace(/^Untransportable /, '')} to ${record.method}`,
+                    )
+              membrane.untransportable(record, limitation.message)
+              throw limitation
             }
-            const result = membrane.request({
-              op: 'invoke',
-              object: receiver.ref,
-              function: found.function.id,
-              member: membrane.codec.units(member),
-              args: encoded,
-            })
+            let result
+            try {
+              result = membrane.request({
+                op: 'invoke',
+                object: receiver.ref,
+                function: found.function.id,
+                member: membrane.codec.units(member),
+                args: encoded,
+              })
+            } catch (error) {
+              membrane.untransportable(record, error.message)
+              throw error
+            }
             if (result.kind === 'promise')
               return new Promise((resolve, reject) =>
                 membrane.pending.set(result.id, { resolve, reject, record }),
@@ -514,7 +564,16 @@ export class NativeProxy extends CallJournal {
     if (!result.ok && result.errorStack) record.errorStack = result.errorStack
   }
 
-  checkOperands(value, seen = new Set()) {
+  untransportable(record, message) {
+    record.state = 'untransportable'
+    record.transportError = message
+  }
+
+  checkOperands(value, callbackLimit, allowFunction = false, seen = new Set()) {
+    if (typeof value === 'function') {
+      if (!allowFunction) throw this.transport(callbackLimit)
+      return
+    }
     if (
       !value ||
       typeof value !== 'object' ||
@@ -527,8 +586,8 @@ export class NativeProxy extends CallJournal {
       Object.getOwnPropertyDescriptors(value),
     )) {
       if (!Object.hasOwn(descriptor, 'value'))
-        throw this.transport('Native accessor operands are not transported')
-      this.checkOperands(descriptor.value, seen)
+        throw new Error('Native accessor operands are not transported')
+      this.checkOperands(descriptor.value, callbackLimit, false, seen)
     }
   }
 
@@ -636,6 +695,7 @@ export class ReferenceProxy extends CallJournal {
       )
     this.codec = codecFactory({
       identify: (value) => this.identify(value),
+      allowFunctions: false,
       resolve: () => {
         throw new Error('Reference decode is unused')
       },

@@ -62,7 +62,18 @@ export function nativeLoop(codecFactory, epoch, capabilities = {}) {
       throw new ProtocolError('Foreign or expired native object')
     return value
   }
-  const codec = codecFactory({ identify, resolve })
+  const codec = codecFactory({ identify, resolve, allowFunctions: false })
+  const returned = (value, command) => {
+    try {
+      return codec.encode(value)
+    } catch (thrown) {
+      // Encoding can also fail in a returned getter or object identification. Those
+      // errors belong to the bridge, even when they are not our codec's own class.
+      throw new ProtocolError(
+        `bridge limit: untransportable return ${String(thrown?.message ?? thrown).replace(/^Untransportable /, '')} from ${command.object.family}.${codec.string(command.member)}`,
+      )
+    }
+  }
   const reply = (frame) => __neo_test_host.reply(JSON.stringify(frame))
   const error = (thrown) => ({
     error: codec.encode({
@@ -141,7 +152,11 @@ export function nativeLoop(codecFactory, epoch, capabilities = {}) {
                     length: value.length,
                   },
                 }
-              : { id: command.id, kind: 'value', value: codec.encode(value) },
+              : {
+                  id: command.id,
+                  kind: 'value',
+                  value: returned(value, command),
+                },
           )
           continue
         }
@@ -162,7 +177,7 @@ export function nativeLoop(codecFactory, epoch, capabilities = {}) {
                   event: 'settled',
                   id: command.id,
                   ok: true,
-                  value: codec.encode(value),
+                  value: returned(value, command),
                 }),
               (thrown) =>
                 reply({
@@ -176,17 +191,24 @@ export function nativeLoop(codecFactory, epoch, capabilities = {}) {
               reply({
                 event: 'transportError',
                 id: command.id,
-                message: String(thrown),
+                message:
+                  codec.isError(thrown) || thrown instanceof ProtocolError
+                    ? thrown.message
+                    : String(thrown),
               }),
             )
         } else
-          reply({ id: command.id, kind: 'value', value: codec.encode(value) })
+          reply({
+            id: command.id,
+            kind: 'value',
+            value: returned(value, command),
+          })
       } catch (thrown) {
         if (codec.isError(thrown) || thrown instanceof ProtocolError)
           reply({
             id: command.id,
             kind: 'transportError',
-            message: String(thrown),
+            message: thrown.message,
           })
         else reply({ id: command.id, kind: 'throw', ...error(thrown) })
       }
