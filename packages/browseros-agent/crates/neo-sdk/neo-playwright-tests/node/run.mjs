@@ -24,6 +24,7 @@ const run = {
   mode: options.reference ? 'reference' : 'neo',
   argv,
   workers: options.workers,
+  runnerExpect: !options.reference && options.runnerExpect,
   startedAt: new Date().toISOString(),
   endedAt: null,
   commit: execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -149,6 +150,7 @@ try {
         NEO_NODE_OVERLAY: overlay,
         NEO_NODE_OUTPUT: output,
         NEO_NODE_MODE: run.mode,
+        NEO_NODE_RUNNER_EXPECT: String(run.runnerExpect),
         NEO_NODE_LAUNCHER_PID: String(process.pid),
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
         PWTEST_UNDER_TEST: '1',

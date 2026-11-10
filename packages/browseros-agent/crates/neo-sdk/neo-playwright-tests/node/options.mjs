@@ -5,6 +5,7 @@ export function runnerOptions(argv) {
     reference: false,
     skipBuild: false,
     debugBuild: false,
+    runnerExpect: true,
     workers: 4,
     args: [],
   }
@@ -18,6 +19,7 @@ export function runnerOptions(argv) {
     }
     if (arg === '--reference') options.reference = true
     else if (arg === '--skip-build') options.skipBuild = true
+    else if (arg === '--no-runner-expect') options.runnerExpect = false
     else if (arg === '--debug-build') options.debugBuild = true
     else if (arg === '--release') options.debugBuild = false
     else if (/^--workers(=|$)|^-j/.test(arg)) {

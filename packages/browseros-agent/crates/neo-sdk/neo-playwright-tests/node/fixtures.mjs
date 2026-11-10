@@ -7,6 +7,7 @@ import { source } from '../js/prepare.mjs'
 import { launchBrowser } from './browser.mjs'
 import { contextOptions } from './context-options.mjs'
 import { openSdk } from './loader.mjs'
+import { installRunnerExpect } from './runner-expect.mjs'
 
 const require = createRequire(path.join(source, 'package.json'))
 export const { expect } = require('@playwright/test')
@@ -90,6 +91,13 @@ const neoTest = ownedTest.extend({
         artifactsDir: fs.realpathSync(process.env.NEO_NODE_OVERLAY),
       })
       try {
+        if (process.env.NEO_NODE_RUNNER_EXPECT !== 'false')
+          installRunnerExpect(__neoPage(sdk), (expression) => {
+            browserTest.info().annotations.push({
+              type: 'neo-runner-expect',
+              description: expression,
+            })
+          })
         await use(sdk)
       } finally {
         fs.writeFileSync(
@@ -206,6 +214,10 @@ const neoTest = ownedTest.extend({
     await use(() => unsupported('startRemoteServer'))
   },
 })
+
+function __neoPage(sdk) {
+  return sdk.page
+}
 
 export const test =
   process.env.NEO_NODE_MODE === 'reference' ? referenceTest : neoTest
