@@ -30,6 +30,9 @@ mod run_script;
 #[cfg(test)]
 mod tests;
 
+#[cfg(not(feature = "hosted-run"))]
 use bridge::Bridge;
+#[cfg(feature = "hosted-run")]
+pub(crate) use bridge::Bridge;
 pub(crate) use run_logs::{LogLevel, LogLine, RunLogs};
 pub(crate) use run_script::{Script, ScriptEnd, ScriptOutcome, run_script};
