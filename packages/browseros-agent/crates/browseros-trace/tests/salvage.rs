@@ -13,8 +13,9 @@ use browseros_trace::{
     Salvage, SecretSet, SecretSetConfig, TargetSensitivity, TaskId, TraceError, TraceSink,
     TraceStore, WriterConfig,
 };
+use sea_orm::sqlx;
+use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use serde_json::{Value, json};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::{self, OpenOptions};
@@ -166,7 +167,7 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
 /// tab 11 private and starts `call-3`: those two commits are only in the log's first frames, and
 /// frames left from before the restart follow them.
 async fn restart_the_log(old: &Old) -> TestResult {
-    use sqlx::Connection;
+    use sea_orm::sqlx::Connection;
 
     let log = beside(&old.path, "-wal");
     let mut conn =
@@ -210,7 +211,7 @@ fn crash_copy(old: &Path, aside: &Path) -> TestResult {
 /// A crash copy at `aside` with its log folded into the file, so the file alone holds every
 /// commit and damage to the file is damage to the data.
 async fn folded_copy(old: &Path, aside: &Path) -> TestResult {
-    use sqlx::Connection;
+    use sea_orm::sqlx::Connection;
 
     crash_copy(old, aside)?;
     let mut conn =
@@ -238,7 +239,7 @@ struct Layout {
 
 impl Layout {
     async fn of(path: &Path) -> TestResult<Self> {
-        use sqlx::Connection;
+        use sea_orm::sqlx::Connection;
 
         let options = SqliteConnectOptions::new()
             .filename(path)
@@ -301,7 +302,7 @@ async fn fresh(dir: &Path) -> TestResult<TraceStore> {
 #[tokio::test]
 async fn a_trace_whose_schema_does_not_parse_fails_to_open_with_every_connection_closed()
 -> TestResult {
-    use sqlx::Connection;
+    use sea_orm::sqlx::Connection;
 
     let dir = tempfile::tempdir()?;
     let old = old_trace(dir.path()).await?;
@@ -427,7 +428,7 @@ async fn a_readable_trace_carries_its_flags_and_request_history_into_the_fresh_s
 
 #[tokio::test]
 async fn a_trace_moved_without_its_write_ahead_log_loses_both_parts() -> TestResult {
-    use sqlx::Connection;
+    use sea_orm::sqlx::Connection;
 
     let dir = tempfile::tempdir()?;
     fs::create_dir_all(dir.path().join("old"))?;
@@ -714,7 +715,7 @@ async fn a_damaged_runs_table_loses_the_request_history_and_keeps_the_flags() ->
 
 #[tokio::test]
 async fn a_run_whose_id_does_not_parse_is_counted_and_the_rest_come_across() -> TestResult {
-    use sqlx::Connection;
+    use sea_orm::sqlx::Connection;
 
     let dir = tempfile::tempdir()?;
     let old = old_trace(dir.path()).await?;
@@ -744,7 +745,7 @@ async fn a_run_whose_id_does_not_parse_is_counted_and_the_rest_come_across() -> 
 
 #[tokio::test]
 async fn an_older_schema_without_optional_columns_still_carries_over() -> TestResult {
-    use sqlx::Connection;
+    use sea_orm::sqlx::Connection;
 
     let dir = tempfile::tempdir()?;
     let aside = dir.path().join("old/trace.db.broken");

@@ -473,3 +473,120 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
         ),
     }
 }
+
+#[cfg(test)]
+mod storage_tests {
+    use std::error::Error;
+    use std::fs;
+    use std::path::Path;
+
+    use browseros_trace::{RequestId, RunId, RunQuery, TraceStore};
+    use sqlx::Connection;
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
+
+    use super::open_trace;
+    use crate::host::FlagRecovery;
+
+    /// Compare logical contents: the setup connection's WAL checkpoint can change file bytes
+    /// even when an unknown schema is refused without changing a row.
+    async fn logical_snapshot(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+        let mut conn =
+            SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(path)).await?;
+        let mut snapshot: Vec<String> = sqlx::query_scalar("SELECT type || '|' || name || '|' || tbl_name || '|' || quote(sql) FROM sqlite_master ORDER BY name")
+            .fetch_all(&mut conn).await?;
+        for table in [
+            "runs",
+            "operations",
+            "run_tabs",
+            "private_tabs",
+            "seaql_migrations",
+        ] {
+            let columns: Vec<String> =
+                sqlx::query_scalar("SELECT name FROM pragma_table_info(?) ORDER BY cid")
+                    .bind(table)
+                    .fetch_all(&mut conn)
+                    .await?;
+            let fields = columns
+                .iter()
+                .map(|name| format!("quote(\"{name}\")"))
+                .collect::<Vec<_>>()
+                .join(" || '|' || ");
+            let mut rows: Vec<String> =
+                sqlx::query_scalar(&format!("SELECT {fields} FROM {table}"))
+                    .fetch_all(&mut conn)
+                    .await?;
+            rows.sort();
+            snapshot.push(table.to_owned());
+            snapshot.extend(rows);
+        }
+        let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(&mut conn)
+            .await?;
+        snapshot.push(version.to_string());
+        conn.close().await?;
+        Ok(snapshot)
+    }
+
+    #[tokio::test]
+    async fn a_newer_migration_replaces_the_store_with_flag_recovery_pending()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("trace.db");
+        drop(TraceStore::open(&path).await?);
+        let mut conn =
+            SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path)).await?;
+        sqlx::raw_sql("ALTER TABLE operations ADD COLUMN later_field TEXT; INSERT INTO seaql_migrations VALUES ('m9999_later', 1); INSERT INTO private_tabs VALUES (42, 1, 'host')")
+            .execute(&mut conn).await?;
+        sqlx::query("INSERT INTO runs (id, started_at, ended_at, status, request_id, complete) VALUES (?, 1, 2, 'ok', 'before-rollback', 1)")
+            .bind(RunId::new().to_string()).execute(&mut conn).await?;
+        conn.close().await?;
+        let before = logical_snapshot(&path).await?;
+
+        // Exercise the real startup boundary: classify/refuse, await close, mark flags lost,
+        // preserve the refused file, then start successfully on a fresh store.
+        let opened = open_trace(directory.path()).await?;
+        assert!(
+            opened.recovery.is_pending(),
+            "capture remains blocked until every open tab is private"
+        );
+        assert!(directory.path().join("trace.db.flags-lost").is_file());
+        assert!(
+            FlagRecovery::after_opening(&path).await.is_pending(),
+            "a stop before recovery keeps the debt"
+        );
+        let aside = fs::read_dir(directory.path())?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("trace.db.broken-")
+            })
+            .ok_or("missing refused store")?
+            .path();
+        assert_eq!(
+            logical_snapshot(&aside).await?,
+            before,
+            "startup keeps the refused schema and all rows for a human"
+        );
+        assert!(
+            opened
+                .store
+                .runs(RunQuery::default())
+                .await?
+                .items
+                .is_empty()
+        );
+        assert!(opened.store.private_tabs().await?.is_empty());
+        assert!(
+            opened
+                .store
+                .run_by_request(&RequestId::parse("before-rollback")?, None)
+                .await?
+                .is_none(),
+            "the owner accepted lost request history across a newer-migration rollback"
+        );
+        Ok(())
+    }
+}

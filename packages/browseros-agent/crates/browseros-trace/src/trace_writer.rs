@@ -56,10 +56,10 @@
 //! pending" before the run-end jobs existed.
 
 use crate::screenshot_rule::{self, TouchedTabs};
-use crate::trace_store::{
-    self, OperationEndRow, OperationStartRow, RetentionPolicy, RunCode, RunEndRow, RunStartRow,
-    Swept,
+use crate::storage::{
+    OperationEndRow, OperationStartRow, RunCode, RunEndRow, RunStartRow, TraceBatch,
 };
+use crate::trace_store::{RetentionPolicy, Swept};
 use crate::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationReached, OperationStarted,
     Outcome, PrivacyRecord, PrivacyStore, PrivateReason, RedactionPolicy, Redactor, RunEffects,
@@ -614,12 +614,12 @@ impl Writer {
         let mut published = Vec::new();
         let mut swept = Vec::new();
         let result = async {
-            let mut tx = self.store.pool().begin().await?;
+            let tx = TraceBatch::begin(self.store.db()).await?;
             for item in work {
                 match item {
-                    Work::Event(event) => self.apply(&mut tx, *event, &mut published).await?,
+                    Work::Event(event) => self.apply(&tx, *event, &mut published).await?,
                     Work::Private { tab, record } => {
-                        trace_store::persist_private(&mut tx, tab, record).await?;
+                        tx.persist_private(tab, record).await?;
                         published.push(TraceRecordEvent::TabPrivate {
                             tab,
                             reason: record.reason,
@@ -627,22 +627,20 @@ impl Writer {
                         });
                     }
                     Work::Forget { tab } => {
-                        trace_store::forget_private(&mut tx, tab).await?;
+                        tx.forget_private(tab).await?;
                     }
                     Work::Sweep { policy, now } => {
                         let files = self.store.files().clone();
-                        swept.push(trace_store::sweep(&mut tx, &files, policy, now).await?);
+                        swept.push(tx.sweep(&files, policy, now).await?);
                     }
                     Work::Screenshot { op, shot } => {
-                        trace_store::store_screenshot(&mut tx, op, shot).await?;
+                        tx.store_screenshot(op, shot).await?;
                         // Only run-end shots read this, so it need not wait for the commit: an
                         // answer that a rollback hands on is taken off again, which is a no-op.
                         if let Some(run) = self.runs.get_mut(&op.run) {
                             run.tabs.answered(op.seq);
                         }
-                        if self.answered(op.run)
-                            && trace_store::complete_run(&mut tx, op.run).await?
-                        {
+                        if self.answered(op.run) && tx.complete_run(op.run).await? {
                             published.push(TraceRecordEvent::RunComplete { run: op.run });
                         }
                     }
@@ -707,7 +705,7 @@ impl Writer {
 
     async fn apply(
         &mut self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        tx: &TraceBatch,
         event: Event,
         published: &mut Vec<TraceRecordEvent>,
     ) -> Result<(), TraceError> {
@@ -717,15 +715,12 @@ impl Writer {
                 self.redactor
                     .also_masking(&event.also_mask)
                     .spans(&event.code, &mut code_spans);
-                trace_store::insert_run(
-                    tx,
-                    RunStartRow {
-                        id: event.id,
-                        task: event.task_id.as_ref(),
-                        at: event.at,
-                        request_id: event.request_id.as_ref(),
-                    },
-                )
+                tx.insert_run(RunStartRow {
+                    id: event.id,
+                    task: event.task_id.as_ref(),
+                    at: event.at,
+                    request_id: event.request_id.as_ref(),
+                })
                 .await?;
                 self.runs.insert(
                     event.id,
@@ -763,20 +758,17 @@ impl Writer {
 
     async fn operation_started(
         &mut self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        tx: &TraceBatch,
         event: OperationStarted,
     ) -> Result<Option<TraceRecordEvent>, TraceError> {
         if !self.runs.contains_key(&event.id.run) {
             // Its run's start was never seen (a failed batch): keep the operation reachable.
-            trace_store::insert_run(
-                tx,
-                RunStartRow {
-                    id: event.id.run,
-                    task: None,
-                    at: event.at,
-                    request_id: None,
-                },
-            )
+            tx.insert_run(RunStartRow {
+                id: event.id.run,
+                task: None,
+                at: event.at,
+                request_id: None,
+            })
             .await?;
         }
         // A script can call any name, so an unknown method's name may hold a secret. A running
@@ -788,18 +780,15 @@ impl Writer {
             .redactor
             .also_masking(&event.also_mask)
             .text(&event.name);
-        trace_store::insert_operation(
-            tx,
-            OperationStartRow {
-                id: event.id,
-                parent: event.parent,
-                name: &name,
-                kind: event.kind,
-                effect: event.effect,
-                tab: event.tab,
-                at: event.at,
-            },
-        )
+        tx.insert_operation(OperationStartRow {
+            id: event.id,
+            parent: event.parent,
+            name: &name,
+            kind: event.kind,
+            effect: event.effect,
+            tab: event.tab,
+            at: event.at,
+        })
         .await?;
         let run = self
             .runs
@@ -830,7 +819,7 @@ impl Writer {
 
     async fn operation_ended(
         &mut self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        tx: &TraceBatch,
         event: OperationEnded,
     ) -> Result<Option<TraceRecordEvent>, TraceError> {
         let mut open = self.runs.get_mut(&event.id.run).and_then(|run| {
@@ -862,9 +851,8 @@ impl Writer {
             page.title = page.title.map(|title| redactor.text(&title));
             page
         });
-        let matched = trace_store::end_operation(
-            tx,
-            OperationEndRow {
+        let matched = tx
+            .end_operation(OperationEndRow {
                 id: event.id,
                 at: event.at,
                 outcome: event.outcome,
@@ -879,9 +867,8 @@ impl Writer {
                 error: error.as_ref(),
                 notes: &notes,
                 page: page.as_ref(),
-            },
-        )
-        .await?;
+            })
+            .await?;
         if !matched {
             if let Some(run) = self.runs.get_mut(&event.id.run) {
                 run.gaps += 1;
@@ -918,7 +905,7 @@ impl Writer {
 
     async fn run_ended(
         &mut self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        tx: &TraceBatch,
         event: RunEnded,
         published: &mut Vec<TraceRecordEvent>,
     ) -> Result<(), TraceError> {
@@ -971,9 +958,8 @@ impl Writer {
         };
         let replay_window =
             i64::try_from(self.config.replay_window.as_millis()).unwrap_or(i64::MAX);
-        let effects = trace_store::end_run(
-            tx,
-            RunEndRow {
+        let effects = tx
+            .end_run(RunEndRow {
                 id: event.id,
                 at: event.at,
                 status: event.status,
@@ -991,9 +977,8 @@ impl Writer {
                     .map(|_| event.at.plus_millis(replay_window)),
                 gaps,
                 complete,
-            },
-        )
-        .await?;
+            })
+            .await?;
         if pending > 0 {
             self.finishing.insert(event.id, pending);
         }
@@ -1001,13 +986,7 @@ impl Writer {
         // all publishes nothing.
         let task = match open {
             Some(run) => Some(run.task),
-            None => {
-                sqlx::query_scalar::<_, Option<String>>("SELECT task_id FROM runs WHERE id = ?")
-                    .bind(event.id.to_string())
-                    .fetch_optional(&mut **tx)
-                    .await?
-                    .map(|task| task.and_then(|text| TaskId::parse(&text).ok()))
-            }
+            None => tx.run_task(event.id).await?,
         };
         if let Some(task) = task {
             published.push(TraceRecordEvent::RunEnded {
@@ -1116,9 +1095,7 @@ mod tests {
             })
         );
         // Break the next batch: the flag's insert fails and the transaction rolls back.
-        let dropped = sqlx::query("DROP TABLE private_tabs")
-            .execute(store.pool())
-            .await;
+        let dropped = crate::storage::test_faults::break_table(store.db(), "private_tabs").await;
         assert!(dropped.is_ok());
         assert!(sink.persist_private(TabId(4), record).await.is_err());
         let _ = sink.flush().await;
@@ -1176,24 +1153,11 @@ mod tests {
             )
             .await;
         assert_eq!(swept.ok().map(|swept| swept.runs), Some(1));
-        let links = |sql: &'static str| {
-            let pool = store.pool().clone();
-            async move {
-                sqlx::query_scalar::<_, i64>(sql)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap_or(-1)
-            }
-        };
-        assert_eq!(
-            links("SELECT COUNT(*) FROM run_tabs WHERE run_id NOT IN (SELECT id FROM runs)").await,
-            0
-        );
-        assert_eq!(
-            links("SELECT COUNT(*) FROM run_tabs").await,
-            1,
-            "the running run keeps its link"
-        );
+        let (orphans, links) = crate::storage::test_faults::tab_link_counts(store.db())
+            .await
+            .unwrap_or_else(|error| panic!("tab links: {error}"));
+        assert_eq!(orphans, 0);
+        assert_eq!(links, 1, "the running run keeps its link");
     }
 
     /// Jobs leave only once their batch commits; a rolled-back batch's jobs answer `Dropped`,
@@ -1227,9 +1191,7 @@ mod tests {
         });
         assert!(sink.flush().await.is_ok());
         // Break the next batch: the click's tab link fails and the transaction rolls back.
-        let dropped = sqlx::query("DROP TABLE run_tabs")
-            .execute(store.pool())
-            .await;
+        let dropped = crate::storage::test_faults::break_table(store.db(), "run_tabs").await;
         assert!(dropped.is_ok());
         let click = OperationId::new(run, 1);
         sink.op_started(OperationStarted {
@@ -1367,9 +1329,7 @@ mod tests {
         };
         // Break the batch the first answer lands in: the private flag sent beside it fails, and
         // the transaction rolls back.
-        let dropped = sqlx::query("DROP TABLE private_tabs")
-            .execute(store.pool())
-            .await;
+        let dropped = crate::storage::test_faults::break_table(store.db(), "private_tabs").await;
         assert!(dropped.is_ok());
         first_job.answer.send(Shot::Withheld);
         let record = PrivacyRecord {
@@ -1410,7 +1370,7 @@ mod tests {
     async fn flush_reports_a_batch_that_was_rolled_back() {
         let (_dir, store, sink) = writer().await;
         // Break the next batch: its run insert fails and the transaction rolls back.
-        let dropped = sqlx::query("DROP TABLE runs").execute(store.pool()).await;
+        let dropped = crate::storage::test_faults::break_table(store.db(), "runs").await;
         assert!(dropped.is_ok());
         sink.run_started(RunStarted {
             id: RunId::new(),

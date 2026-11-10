@@ -1,11 +1,13 @@
 //! The trace file: one SQLite database in WAL mode, `$BROWSERCLAW_DIR/claw-sdk/trace.db`.
 //!
 //! Reads run on a small pool beside the writer, which WAL allows. Every write goes through the
-//! one writer task ([`spawn_writer`](crate::spawn_writer)), which calls the `pub(crate)`
-//! statements here inside its batch transactions. That keeps writes in order, and keeps
-//! privacy commits ordered with the records around them. The one exception is
-//! [`TraceStore::salvage`] (`salvage.rs`), which runs before the writer starts and copies a
-//! broken file's flags and request ids into a fresh store.
+//! one writer task ([`spawn_writer`](crate::spawn_writer)), through storage's `TraceBatch`.
+//! That keeps privacy commits ordered with the records around them. Startup recovery and
+//! [`TraceStore::salvage`] use that same write interface before the writer starts.
+//!
+//! Opening first runs the migrator's WAL switch, atomic baseline adoption and version fence,
+//! then crash recovery. The setup connection is awaited closed on every outcome before a caller
+//! can move an unusable file aside. Only after that boundary is the lazy reader/writer pool made.
 //!
 //! `synchronous = NORMAL`: a committed batch survives a process crash, which is the failure
 //! that matters (a VM power loss loses the browser's state too). Opening the file recovers what
@@ -21,128 +23,29 @@
 //! is gone (it reads as expired, and the next sweep converges), but a file never outlives its
 //! run's rows.
 
-use crate::screenshot_files::ShotFiles;
-use crate::{
-    Delivery, Effect, EpochMillis, ErrorRecord, IdError, OperationId, OperationKind, OperationRow,
-    Outcome, Page, PageState, PrivacyRecord, PrivateReason, RequestId, RunDetail, RunEffects,
-    RunId, RunQuery, RunStatus, RunSummary, Shot, ShotRead, ShotState, TailQuery, TaskAct, TaskId,
-    TraceError, TraceTail, salvage,
-};
-use browseros_core::TabId;
-use serde_json::Value;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow, SqliteSynchronous};
-use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool, Transaction};
 use std::collections::HashMap;
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
-/// The schema this build writes. A file with a newer one is refused, never rewritten.
-const SCHEMA_VERSION: i64 = 1;
+use browseros_core::TabId;
+use sea_orm::sea_query::{Expr, Func, Query, SelectStatement, SimpleExpr};
+use sea_orm::sqlx::ConnectOptions;
+use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous};
+use sea_orm::{
+    ColumnTrait, Condition, DatabaseConnection, DeriveIden, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Select, SqlxSqliteConnector,
+};
+use serde_json::Value;
 
-const SCHEMA: &str = r"
-CREATE TABLE IF NOT EXISTS runs (
-  id TEXT PRIMARY KEY,
-  task_id TEXT,
-  started_at INTEGER NOT NULL,
-  ended_at INTEGER,
-  status TEXT NOT NULL,
-  effects TEXT,
-  error TEXT,
-  request_id TEXT,
-  host_data TEXT,
-  code TEXT,
-  code_truncated INTEGER NOT NULL DEFAULT 0,
-  code_withheld TEXT,
-  result TEXT,
-  result_truncated INTEGER NOT NULL DEFAULT 0,
-  replay TEXT,
-  replay_until INTEGER,
-  operation_count INTEGER NOT NULL DEFAULT 0,
-  trace_gaps INTEGER NOT NULL DEFAULT 0,
-  -- Ended, and every screenshot job it made answered. Only the writer sets it, in the batch
-  -- that stores the last answer (or the end, when nothing is pending).
-  complete INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS runs_by_start ON runs(started_at, id);
--- Not unique on purpose: admission keeps a request id from running twice (per task when the run
--- has one, else across Neo), and a unique index here would fail a whole writer batch (and lose
--- its records) if two runs ever raced past it.
-CREATE INDEX IF NOT EXISTS runs_by_request ON runs(request_id, task_id)
-  WHERE request_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS runs_by_task ON runs(task_id, started_at)
-  WHERE task_id IS NOT NULL;
-CREATE TABLE IF NOT EXISTS operations (
-  run_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,
-  parent_id TEXT,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  attempt INTEGER,
-  effect TEXT NOT NULL,
-  -- The tab the operation targeted. page_id, tab_id, url and title are the page after it
-  -- (`page_after`), as the browser reported it.
-  target_tab_id INTEGER,
-  page_id INTEGER,
-  tab_id INTEGER,
-  url TEXT,
-  title TEXT,
-  started_at INTEGER NOT NULL,
-  sent_at INTEGER,
-  ended_at INTEGER,
-  outcome TEXT,
-  delivery TEXT,
-  args TEXT,
-  args_truncated INTEGER NOT NULL DEFAULT 0,
-  result TEXT,
-  result_truncated INTEGER NOT NULL DEFAULT 0,
-  error TEXT,
-  -- Its call-log lines, a JSON array of strings, masked and bounded. Written with its end, so
-  -- NULL while it runs, and when it noted nothing.
-  notes TEXT,
-  -- The screenshot after it: NULL (none, or its job was dropped), 'stored' (a JPEG on disk,
-  -- screenshot_bytes long), 'withheld' (its tab was private) or 'expired' (the disk cap
-  -- deleted it).
-  screenshot TEXT,
-  screenshot_bytes INTEGER,
-  PRIMARY KEY (run_id, seq)
-) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS operations_by_start ON operations(started_at, run_id, seq);
-CREATE INDEX IF NOT EXISTS operations_by_tab ON operations(target_tab_id, started_at, run_id, seq)
-  WHERE target_tab_id IS NOT NULL;
--- The operations still open on a tab, which a lock's settle polls (`open_writes`). Partial, so it
--- holds only open operations and stays small however long the tab's history grows.
-CREATE INDEX IF NOT EXISTS operations_open_by_tab ON operations(target_tab_id)
-  WHERE outcome IS NULL AND target_tab_id IS NOT NULL;
--- The screenshots on disk, by run. The disk cap sums their sizes from this index alone.
-CREATE INDEX IF NOT EXISTS operations_stored_shots ON operations(run_id, screenshot_bytes)
-  WHERE screenshot = 'stored';
--- Which runs acted on which tab: a row per run and target tab, written with the operation. The
--- primary key answers runs on this tab; the second index reads a run's tabs and sweeps them.
-CREATE TABLE IF NOT EXISTS run_tabs (
-  tab_id INTEGER NOT NULL,
-  run_id TEXT NOT NULL,
-  PRIMARY KEY (tab_id, run_id)
-) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS run_tabs_by_run ON run_tabs(run_id);
--- Sticky pixel privacy, one row per private tab. Privacy deletes a row when its tab closes;
--- the retention sweep never does, because a private tab can outlive any run on it.
-CREATE TABLE IF NOT EXISTS private_tabs (
-  tab_id INTEGER PRIMARY KEY,
-  since INTEGER NOT NULL,
-  reason TEXT NOT NULL
-);
-";
-
-/// A run summary's columns. Every query that selects them reads `FROM runs` without an alias,
-/// because the `tabs` subquery names the table.
-const RUN_SUMMARY_COLUMNS: &str = "id, task_id, status, effects, error, request_id, \
-    started_at, ended_at, operation_count, trace_gaps, complete, \
-    (SELECT group_concat(tab_id) FROM run_tabs WHERE run_tabs.run_id = runs.id) AS tabs";
-
-const OPERATION_COLUMNS: &str = "run_id, seq, parent_id, name, kind, attempt, effect, \
-    target_tab_id, page_id, tab_id, url, title, started_at, sent_at, ended_at, outcome, \
-    delivery, args, args_truncated, result, result_truncated, error, notes, screenshot";
+use crate::screenshot_files::ShotFiles;
+use crate::storage::entities::{operations, private_tabs, run_tabs, runs};
+use crate::storage::record_rows::{self, RunDetailRow, RunSummaryRow};
+use crate::storage::{TraceBatch, trace_migrator};
+use crate::{
+    EpochMillis, OperationId, OperationRow, Page, PrivacyRecord, PrivateReason, RequestId,
+    RunDetail, RunId, RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId,
+    TraceError, TraceTail, salvage,
+};
 
 /// The most screenshot bytes kept on disk (D5): about 7,000 JPEGs of 150 KB.
 const SCREENSHOT_CAP_BYTES: u64 = 1 << 30;
@@ -183,7 +86,7 @@ pub struct Swept {
 /// Reads the trace file and the screenshots beside it. Cheap to clone.
 #[derive(Clone)]
 pub struct TraceStore {
-    pool: SqlitePool,
+    db: DatabaseConnection,
     files: ShotFiles,
 }
 
@@ -204,8 +107,6 @@ impl TraceStore {
     /// When the file cannot be opened, its log is damaged ([`TraceError::DamagedLog`]), or it
     /// holds a newer schema than this build knows.
     pub async fn open(path: &Path) -> Result<Self, TraceError> {
-        use sqlx::Connection;
-
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -216,89 +117,43 @@ impl TraceStore {
         }
         let options = SqliteConnectOptions::new()
             .filename(path)
-            .busy_timeout(Duration::from_secs(5));
-        // One connection reads and sets up the file, and is closed, and waited for, whether or
-        // not that works. sqlx drops a connection that fails while it connects instead of
-        // closing it, and its worker thread closes it after `open` has returned. The last
-        // connection to close checkpoints the log and deletes `<path>-wal` by name, which by
-        // then may be the log of the fresh store that replaced this one. So this connect runs no
-        // pragma that reads the file: sqlx's one default, `foreign_keys`, reads nothing, while
-        // `synchronous` reads the schema. Closing last, this connection also folds the log,
-        // and what `prepare` wrote, into the file.
-        let mut setup =
-            SqliteConnection::connect_with(&options.clone().create_if_missing(true)).await?;
-        let prepared = Self::prepare(&mut setup).await;
+            .busy_timeout(Duration::from_secs(5))
+            .disable_statement_logging();
+        // Connect lazily without a file-reading PRAGMA: a failed connect is dropped onto SQLx's
+        // worker, whose last close could delete the replacement file's WAL after we return.
+        // Explicitly closing this one-connection setup pool awaits every rollback and close,
+        // whether migration/recovery succeeds or fails, before the caller can replace the file.
+        let setup = SqlxSqliteConnector::from_sqlx_sqlite_pool(
+            SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_lazy_with(options.clone().create_if_missing(true)),
+        );
+        let prepared = async {
+            trace_migrator::prepare(&setup).await?;
+            let batch = TraceBatch::begin(&setup).await?;
+            batch.recover_crash().await?;
+            batch.commit().await
+        }
+        .await;
         if let Err(error) = setup.close().await {
             tracing::warn!(%error, path = %path.display(), "the trace file's setup connection did not close cleanly");
         }
         prepared?;
-        // Lazy: the pool connects, and sets `synchronous`, on first use. The setup connection
-        // has read the file whole, and nothing past this point can fail `open`.
-        let pool = SqlitePoolOptions::new()
-            .max_connections(4)
-            .connect_lazy_with(options.synchronous(SqliteSynchronous::Normal));
+        // The setup read the file whole. The reader/writer pool can now set synchronous on
+        // first use, after the failure/replacement boundary has been passed.
+        let db = SqlxSqliteConnector::from_sqlx_sqlite_pool(
+            SqlitePoolOptions::new()
+                .max_connections(4)
+                .connect_lazy_with(options.synchronous(SqliteSynchronous::Normal)),
+        );
         Ok(Self {
-            pool,
+            db,
             files: ShotFiles::beside(path),
         })
     }
 
-    async fn prepare(conn: &mut SqliteConnection) -> Result<(), TraceError> {
-        // WAL mode is a property of the file: set on this connection, it holds for the pool's.
-        sqlx::raw_sql("PRAGMA journal_mode = WAL")
-            .execute(&mut *conn)
-            .await?;
-        Self::migrate(conn).await?;
-        Self::recover(conn).await
-    }
-
-    async fn migrate(conn: &mut SqliteConnection) -> Result<(), TraceError> {
-        use sqlx::Connection;
-
-        let version: i64 = sqlx::query_scalar("PRAGMA user_version")
-            .fetch_one(&mut *conn)
-            .await?;
-        if version > SCHEMA_VERSION {
-            return Err(TraceError::Corrupt(format!(
-                "trace schema {version} is newer than this build's {SCHEMA_VERSION}"
-            )));
-        }
-        let mut tx = conn.begin().await?;
-        sqlx::raw_sql(SCHEMA).execute(&mut *tx).await?;
-        sqlx::raw_sql(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    async fn recover(conn: &mut SqliteConnection) -> Result<(), TraceError> {
-        use sqlx::Connection;
-
-        let mut tx = conn.begin().await?;
-        sqlx::query(
-            "UPDATE operations SET outcome = 'cancelled', \
-             delivery = CASE WHEN effect = 'write' THEN 'unknown' ELSE 'not_sent' END \
-             WHERE outcome IS NULL",
-        )
-        .execute(&mut *tx)
-        .await?;
-        // Code reaches disk only at a run's end, so an interrupted run has none to show.
-        sqlx::query(
-            "UPDATE runs SET status = 'interrupted', effects = 'unknown', \
-             code_withheld = COALESCE(code_withheld, 'unavailable') WHERE ended_at IS NULL",
-        )
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query("UPDATE runs SET complete = 1 WHERE complete = 0")
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub(crate) fn pool(&self) -> &SqlitePool {
-        &self.pool
+    pub(crate) fn db(&self) -> &DatabaseConnection {
+        &self.db
     }
 
     pub(crate) fn files(&self) -> &ShotFiles {
@@ -310,22 +165,20 @@ impl TraceStore {
     /// # Errors
     /// When the file cannot be read.
     pub async fn private_tabs(&self) -> Result<HashMap<TabId, PrivacyRecord>, TraceError> {
-        let rows = sqlx::query("SELECT tab_id, since, reason FROM private_tabs")
-            .fetch_all(&self.pool)
-            .await?;
-        let mut out = HashMap::with_capacity(rows.len());
-        for row in rows {
-            let reason: String = row.try_get("reason")?;
-            out.insert(
-                TabId(row.try_get("tab_id")?),
-                PrivacyRecord {
-                    since: EpochMillis::from_millis(row.try_get("since")?),
-                    // An unknown stored reason still keeps the tab private.
-                    reason: PrivateReason::parse(&reason).unwrap_or(PrivateReason::Host),
-                },
-            );
-        }
-        Ok(out)
+        let rows = private_tabs::Entity::find().all(&self.db).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (
+                    TabId(row.tab_id),
+                    PrivacyRecord {
+                        since: EpochMillis::from_millis(row.since),
+                        // Unknown stored reasons remain private rather than failing the startup load.
+                        reason: PrivateReason::parse(&row.reason).unwrap_or(PrivateReason::Host),
+                    },
+                )
+            })
+            .collect())
     }
 
     /// One run with its operations, or `None` when no run has this id.
@@ -333,35 +186,32 @@ impl TraceStore {
     /// # Errors
     /// When the file cannot be read or a row is corrupt.
     pub async fn run(&self, id: RunId) -> Result<Option<RunDetail>, TraceError> {
-        let Some(row) = sqlx::query(&format!(
-            "SELECT {RUN_SUMMARY_COLUMNS}, host_data, code, code_truncated, code_withheld, result, \
-             result_truncated FROM runs WHERE id = ?"
-        ))
-        .bind(id.to_string())
-        .fetch_optional(&self.pool)
-        .await?
+        let Some(row) = summary_select()
+            .columns([
+                runs::Column::HostData,
+                runs::Column::Code,
+                runs::Column::CodeTruncated,
+                runs::Column::CodeWithheld,
+                runs::Column::Result,
+                runs::Column::ResultTruncated,
+            ])
+            .filter(runs::Column::Id.eq(id.to_string()))
+            .into_model::<RunDetailRow>()
+            .one(&self.db)
+            .await?
         else {
             return Ok(None);
         };
-        let operations = sqlx::query(&format!(
-            "SELECT {OPERATION_COLUMNS} FROM operations WHERE run_id = ? ORDER BY seq"
-        ))
-        .bind(id.to_string())
-        .fetch_all(&self.pool)
-        .await?
-        .iter()
-        .map(operation_row)
-        .collect::<Result<Vec<_>, _>>()?;
-        Ok(Some(RunDetail {
-            summary: run_summary(&row)?,
-            host_data: json_column(&row, "host_data")?,
-            code: row.try_get("code")?,
-            code_truncated: row.try_get::<i64, _>("code_truncated")? != 0,
-            code_withheld: row.try_get("code_withheld")?,
-            result: json_column(&row, "result")?,
-            result_truncated: row.try_get::<i64, _>("result_truncated")? != 0,
-            operations,
-        }))
+        let operations = operations::Entity::find()
+            .filter(operations::Column::RunId.eq(id.to_string()))
+            .order_by_asc(operations::Column::Seq)
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(record_rows::operation_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        // Preserve the existing two independent reads; no new read transaction is introduced.
+        record_rows::run_detail(row, operations).map(Some)
     }
 
     /// One operation, or `None`.
@@ -369,16 +219,11 @@ impl TraceStore {
     /// # Errors
     /// When the file cannot be read or the row is corrupt.
     pub async fn operation(&self, id: OperationId) -> Result<Option<OperationRow>, TraceError> {
-        sqlx::query(&format!(
-            "SELECT {OPERATION_COLUMNS} FROM operations WHERE run_id = ? AND seq = ?"
-        ))
-        .bind(id.run.to_string())
-        .bind(i64::from(id.seq))
-        .fetch_optional(&self.pool)
-        .await?
-        .as_ref()
-        .map(operation_row)
-        .transpose()
+        operations::Entity::find_by_id((id.run.to_string(), i64::from(id.seq)))
+            .one(&self.db)
+            .await?
+            .map(record_rows::operation_row)
+            .transpose()
     }
 
     /// The screenshot taken after `op`. A stored file that is gone reads as expired: the
@@ -388,16 +233,17 @@ impl TraceStore {
     /// # Errors
     /// When the file cannot be read for another reason, or the row is corrupt.
     pub async fn screenshot(&self, op: OperationId) -> Result<ShotRead, TraceError> {
-        let state: Option<Option<String>> =
-            sqlx::query_scalar("SELECT screenshot FROM operations WHERE run_id = ? AND seq = ?")
-                .bind(op.run.to_string())
-                .bind(i64::from(op.seq))
-                .fetch_optional(&self.pool)
-                .await?;
-        let Some(state) = state.flatten() else {
+        let state = operations::Entity::find_by_id((op.run.to_string(), i64::from(op.seq)))
+            .select_only()
+            .column(operations::Column::Screenshot)
+            .into_tuple::<Option<String>>()
+            .one(&self.db)
+            .await?
+            .flatten();
+        let Some(state) = state else {
             return Ok(ShotRead::None);
         };
-        match ShotState::parse(&state).ok_or_else(|| corrupt("screenshot", &state))? {
+        match ShotState::parse(&state).ok_or_else(|| record_rows::corrupt("screenshot", &state))? {
             ShotState::Withheld => Ok(ShotRead::Withheld),
             ShotState::Expired => Ok(ShotRead::Expired),
             ShotState::Stored => match tokio::fs::read(self.files.path(op)).await {
@@ -414,15 +260,13 @@ impl TraceStore {
     /// # Errors
     /// When the file cannot be read or the row is corrupt.
     pub async fn run_summary(&self, id: RunId) -> Result<Option<RunSummary>, TraceError> {
-        sqlx::query(&format!(
-            "SELECT {RUN_SUMMARY_COLUMNS} FROM runs WHERE id = ?"
-        ))
-        .bind(id.to_string())
-        .fetch_optional(&self.pool)
-        .await?
-        .as_ref()
-        .map(run_summary)
-        .transpose()
+        summary_select()
+            .filter(runs::Column::Id.eq(id.to_string()))
+            .into_model::<RunSummaryRow>()
+            .one(&self.db)
+            .await?
+            .map(record_rows::run_summary)
+            .transpose()
     }
 
     /// The writes in flight on `tab`: operations that target it, are writes, have not ended,
@@ -437,14 +281,11 @@ impl TraceStore {
     /// # Errors
     /// When the file cannot be read.
     pub async fn open_writes(&self, tab: TabId) -> Result<u64, TraceError> {
-        let open: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM operations JOIN runs ON runs.id = operations.run_id \
-             WHERE operations.target_tab_id = ? AND operations.outcome IS NULL \
-               AND operations.effect = 'write' AND runs.status = 'running'",
-        )
-        .bind(tab.0)
-        .fetch_one(&self.pool)
-        .await?;
+        let open = open_writes_select(tab)
+            .into_tuple::<i64>()
+            .one(&self.db)
+            .await?
+            .unwrap_or(0);
         Ok(u64::try_from(open).unwrap_or(0))
     }
 
@@ -455,44 +296,51 @@ impl TraceStore {
     pub async fn runs(&self, query: RunQuery) -> Result<Page<RunSummary>, TraceError> {
         let limit = page_limit(query.limit);
         let cursor = query.cursor.as_deref().map(parse_cursor).transpose()?;
-        let mut sql = format!("SELECT {RUN_SUMMARY_COLUMNS} FROM runs WHERE 1 = 1");
-        let mut binds: Vec<Bind> = Vec::new();
-        if let Some(request_id) = &query.request_id {
-            sql.push_str(" AND request_id = ?");
-            binds.push(Bind::Text(request_id.to_string()));
+        let mut select = summary_select();
+        if let Some(request) = query.request_id {
+            select = select.filter(runs::Column::RequestId.eq(request.to_string()));
         }
-        if let Some(task) = &query.task_id {
-            sql.push_str(" AND task_id = ?");
-            binds.push(Bind::Text(task.to_string()));
+        if let Some(task) = query.task_id {
+            select = select.filter(runs::Column::TaskId.eq(task.to_string()));
         }
         if let Some(tab) = query.tab {
-            sql.push_str(" AND id IN (SELECT run_id FROM run_tabs WHERE tab_id = ?)");
-            binds.push(Bind::Int(tab.0));
+            select = select.filter(
+                runs::Column::Id.in_subquery(
+                    Query::select()
+                        .column(run_tabs::Column::RunId)
+                        .from(run_tabs::Entity)
+                        .and_where(Expr::col(run_tabs::Column::TabId).eq(tab.0))
+                        .to_owned(),
+                ),
+            );
         }
         if let Some(status) = query.status {
-            sql.push_str(" AND status = ?");
-            binds.push(Bind::Text(status.as_str().to_string()));
+            select = select.filter(runs::Column::Status.eq(status.as_str()));
         }
         if let Some(since) = query.since {
-            sql.push_str(" AND started_at >= ?");
-            binds.push(Bind::Int(since.millis()));
+            select = select.filter(runs::Column::StartedAt.gte(since.millis()));
         }
         if let Some(until) = query.until {
-            sql.push_str(" AND started_at <= ?");
-            binds.push(Bind::Int(until.millis()));
+            select = select.filter(runs::Column::StartedAt.lte(until.millis()));
         }
         if let Some((at, id)) = cursor {
-            sql.push_str(" AND (started_at < ? OR (started_at = ? AND id < ?))");
-            binds.extend([Bind::Int(at), Bind::Int(at), Bind::Text(id)]);
+            select = select.filter(
+                Condition::any().add(runs::Column::StartedAt.lt(at)).add(
+                    Condition::all()
+                        .add(runs::Column::StartedAt.eq(at))
+                        .add(runs::Column::Id.lt(id)),
+                ),
+            );
         }
-        sql.push_str(" ORDER BY started_at DESC, id DESC LIMIT ?");
-        binds.push(Bind::Int(i64::from(limit) + 1));
-        let rows = bind_all(sqlx::query(&sql), binds)
-            .fetch_all(&self.pool)
-            .await?;
-        let mut items = rows
-            .iter()
-            .map(run_summary)
+        let mut items = select
+            .order_by_desc(runs::Column::StartedAt)
+            .order_by_desc(runs::Column::Id)
+            .limit(u64::from(limit) + 1)
+            .into_model::<RunSummaryRow>()
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(record_rows::run_summary)
             .collect::<Result<Vec<_>, _>>()?;
         let next_cursor = next_page(&mut items, limit, |run| {
             cursor_text(run.started_at.millis(), &run.id.to_string())
@@ -512,18 +360,18 @@ impl TraceStore {
         request: &RequestId,
         task: Option<&TaskId>,
     ) -> Result<Option<RunSummary>, TraceError> {
-        let mut sql = format!("SELECT {RUN_SUMMARY_COLUMNS} FROM runs WHERE request_id = ?");
-        let mut binds = vec![Bind::Text(request.to_string())];
+        let mut select = summary_select().filter(runs::Column::RequestId.eq(request.as_str()));
         if let Some(task) = task {
-            sql.push_str(" AND task_id = ?");
-            binds.push(Bind::Text(task.to_string()));
+            select = select.filter(runs::Column::TaskId.eq(task.as_str()));
         }
-        sql.push_str(" ORDER BY started_at, id LIMIT 1");
-        bind_all(sqlx::query(&sql), binds)
-            .fetch_optional(&self.pool)
+        select
+            .order_by_asc(runs::Column::StartedAt)
+            .order_by_asc(runs::Column::Id)
+            .limit(1)
+            .into_model::<RunSummaryRow>()
+            .one(&self.db)
             .await?
-            .as_ref()
-            .map(run_summary)
+            .map(record_rows::run_summary)
             .transpose()
     }
 
@@ -532,17 +380,16 @@ impl TraceStore {
     /// # Errors
     /// When the file cannot be read or the stored value is corrupt.
     pub async fn replay(&self, id: RunId, now: EpochMillis) -> Result<Option<Value>, TraceError> {
-        let row = sqlx::query(
-            "SELECT replay FROM runs WHERE id = ? AND replay IS NOT NULL AND replay_until > ?",
-        )
-        .bind(id.to_string())
-        .bind(now.millis())
-        .fetch_optional(&self.pool)
-        .await?;
-        row.as_ref()
-            .map(|row| json_column(row, "replay"))
-            .transpose()
-            .map(Option::flatten)
+        let replay = runs::Entity::find_by_id(id.to_string())
+            .select_only()
+            .column(runs::Column::Replay)
+            .filter(runs::Column::Replay.is_not_null())
+            .filter(runs::Column::ReplayUntil.gt(now.millis()))
+            .into_tuple::<Option<String>>()
+            .one(&self.db)
+            .await?
+            .flatten();
+        record_rows::json_column(replay.as_deref())
     }
 
     /// The latest operations that match `query`, oldest first, with the summaries of their
@@ -555,24 +402,22 @@ impl TraceStore {
             0 => 100,
             tail => tail.min(1000),
         };
-        let mut sql = format!("SELECT {OPERATION_COLUMNS} FROM operations WHERE 1 = 1");
-        let mut binds = Vec::new();
-        if let Some(task) = &query.task_id {
-            sql.push_str(" AND run_id IN (SELECT id FROM runs WHERE task_id = ?)");
-            binds.push(Bind::Text(task.to_string()));
+        let mut select = operations::Entity::find();
+        if let Some(task) = query.task_id {
+            select = select.filter(operations::Column::RunId.in_subquery(task_runs(&task)));
         }
         if let Some(tab) = query.tab {
-            sql.push_str(" AND target_tab_id = ?");
-            binds.push(Bind::Int(tab.0));
+            select = select.filter(operations::Column::TargetTabId.eq(tab.0));
         }
-        // One row past the tail says whether older matches were cut, without a count.
-        sql.push_str(" ORDER BY started_at DESC, run_id DESC, seq DESC LIMIT ?");
-        binds.push(Bind::Int(i64::from(tail) + 1));
-        let mut operations = bind_all(sqlx::query(&sql), binds)
-            .fetch_all(&self.pool)
+        let mut operations = select
+            .order_by_desc(operations::Column::StartedAt)
+            .order_by_desc(operations::Column::RunId)
+            .order_by_desc(operations::Column::Seq)
+            .limit(u64::from(tail) + 1)
+            .all(&self.db)
             .await?
-            .iter()
-            .map(operation_row)
+            .into_iter()
+            .map(record_rows::operation_row)
             .collect::<Result<Vec<_>, _>>()?;
         let tail = usize::try_from(tail).unwrap_or(usize::MAX);
         let truncated = operations.len() > tail;
@@ -598,21 +443,40 @@ impl TraceStore {
     /// # Errors
     /// When the file cannot be read or the row is corrupt.
     pub async fn task_last_act(&self, task: &TaskId) -> Result<Option<TaskAct>, TraceError> {
-        let row = sqlx::query(
-            "SELECT COALESCE(target_tab_id, tab_id) AS tab, \
-               CASE WHEN target_tab_id IS NULL THEN ended_at ELSE started_at END AS acted_at \
-             FROM operations \
-             WHERE run_id IN (SELECT id FROM runs WHERE task_id = ?) \
-               AND COALESCE(target_tab_id, tab_id) IS NOT NULL \
-             ORDER BY started_at DESC, run_id DESC, seq DESC LIMIT 1",
-        )
-        .bind(task.as_str())
-        .fetch_optional(&self.pool)
-        .await?;
-        row.map(|row| {
+        let row = operations::Entity::find()
+            .select_only()
+            .columns([
+                operations::Column::TargetTabId,
+                operations::Column::TabId,
+                operations::Column::StartedAt,
+                operations::Column::EndedAt,
+            ])
+            .filter(operations::Column::RunId.in_subquery(task_runs(task)))
+            .filter(
+                Condition::any()
+                    .add(operations::Column::TargetTabId.is_not_null())
+                    .add(operations::Column::TabId.is_not_null()),
+            )
+            .order_by_desc(operations::Column::StartedAt)
+            .order_by_desc(operations::Column::RunId)
+            .order_by_desc(operations::Column::Seq)
+            .limit(1)
+            .into_tuple::<(Option<i64>, Option<i64>, i64, Option<i64>)>()
+            .one(&self.db)
+            .await?;
+        row.map(|(target, page_tab, started, ended)| {
+            let (tab, at) = if let Some(tab) = target {
+                (tab, started)
+            } else {
+                (
+                    page_tab
+                        .ok_or_else(|| TraceError::Corrupt("task operation has no tab".into()))?,
+                    ended.ok_or_else(|| TraceError::Corrupt("task operation has no end".into()))?,
+                )
+            };
             Ok(TaskAct {
-                tab: TabId(row.try_get("tab")?),
-                at: EpochMillis::from_millis(row.try_get("acted_at")?),
+                tab: TabId(tab),
+                at: EpochMillis::from_millis(at),
             })
         })
         .transpose()
@@ -632,477 +496,69 @@ impl TraceStore {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = vec!["?"; ids.len()].join(", ");
-        let sql = format!(
-            "SELECT {RUN_SUMMARY_COLUMNS} FROM runs WHERE id IN ({placeholders}) \
-             ORDER BY started_at, id"
-        );
-        let binds = ids.iter().map(|id| Bind::Text(id.to_string())).collect();
-        bind_all(sqlx::query(&sql), binds)
-            .fetch_all(&self.pool)
+        summary_select()
+            .filter(runs::Column::Id.is_in(ids.iter().map(ToString::to_string)))
+            .order_by_asc(runs::Column::StartedAt)
+            .order_by_asc(runs::Column::Id)
+            .into_model::<RunSummaryRow>()
+            .all(&self.db)
             .await?
-            .iter()
-            .map(run_summary)
+            .into_iter()
+            .map(record_rows::run_summary)
             .collect()
     }
 }
 
-// ---- Writes. Only the writer task calls these, inside its batch transaction. ----
-
-pub(crate) async fn persist_private(
-    tx: &mut Transaction<'_, Sqlite>,
-    tab: TabId,
-    record: PrivacyRecord,
-) -> Result<(), TraceError> {
-    // A tab that is already private keeps its first record.
-    sqlx::query(
-        "INSERT INTO private_tabs (tab_id, since, reason) VALUES (?, ?, ?) \
-         ON CONFLICT(tab_id) DO NOTHING",
-    )
-    .bind(tab.0)
-    .bind(record.since.millis())
-    .bind(record.reason.as_str())
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-pub(crate) async fn forget_private(
-    tx: &mut Transaction<'_, Sqlite>,
-    tab: TabId,
-) -> Result<(), TraceError> {
-    sqlx::query("DELETE FROM private_tabs WHERE tab_id = ?")
-        .bind(tab.0)
-        .execute(&mut **tx)
-        .await?;
-    Ok(())
-}
-
-/// A run's start row, as the writer stores it. Its host data is not here: the run's end stores
-/// it, masked with what the end's own set knows ([`RunEndRow::host_data`]).
-pub(crate) struct RunStartRow<'a> {
-    pub(crate) id: RunId,
-    pub(crate) task: Option<&'a TaskId>,
-    pub(crate) at: EpochMillis,
-    pub(crate) request_id: Option<&'a RequestId>,
-}
-
-pub(crate) async fn insert_run(
-    tx: &mut Transaction<'_, Sqlite>,
-    run: RunStartRow<'_>,
-) -> Result<(), TraceError> {
-    sqlx::query(
-        "INSERT INTO runs (id, task_id, started_at, status, request_id) \
-         VALUES (?, ?, ?, 'running', ?) ON CONFLICT(id) DO NOTHING",
-    )
-    .bind(run.id.to_string())
-    .bind(run.task.map(TaskId::as_str))
-    .bind(run.at.millis())
-    .bind(run.request_id.map(RequestId::as_str))
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-/// What a run's end stores of its code.
-pub(crate) enum RunCode<'a> {
-    /// The masked, bounded code.
-    Stored { text: &'a str, truncated: bool },
-    /// No code, and why: `sensitive_input`, or `unavailable` when the writer never saw it.
-    Withheld(&'static str),
-}
-
-/// A run's end row, as the writer stores it.
-pub(crate) struct RunEndRow<'a> {
-    pub(crate) id: RunId,
-    pub(crate) at: EpochMillis,
-    pub(crate) status: RunStatus,
-    pub(crate) error: Option<&'a ErrorRecord>,
-    pub(crate) result: Option<&'a Value>,
-    pub(crate) result_truncated: bool,
-    pub(crate) code: RunCode<'a>,
-    /// The run's host data, masked and bounded; `None` keeps what the row has (nothing, for a
-    /// run whose start the writer never saw).
-    pub(crate) host_data: Option<&'a Value>,
-    pub(crate) replay: Option<&'a Value>,
-    pub(crate) replay_until: Option<EpochMillis>,
-    pub(crate) gaps: u64,
-    /// No screenshot job of the run is unanswered, so the end completes it.
-    pub(crate) complete: bool,
-}
-
-/// Closes a run: open operations get their verdict, then the run its effects.
-pub(crate) async fn end_run(
-    tx: &mut Transaction<'_, Sqlite>,
-    run: RunEndRow<'_>,
-) -> Result<RunEffects, TraceError> {
-    let id = run.id.to_string();
-    sqlx::query(
-        "UPDATE operations SET outcome = 'cancelled', ended_at = ?, \
-         delivery = CASE WHEN effect = 'write' THEN 'unknown' ELSE 'not_sent' END \
-         WHERE run_id = ? AND outcome IS NULL",
-    )
-    .bind(run.at.millis())
-    .bind(&id)
-    .execute(&mut **tx)
-    .await?;
-    let counts = sqlx::query(
-        "SELECT \
-           COALESCE(SUM(delivery = 'unknown'), 0) AS unknown, \
-           COALESCE(SUM(delivery IN ('done', 'unknown')), 0) AS attempted \
-         FROM operations WHERE run_id = ? AND effect = 'write'",
-    )
-    .bind(&id)
-    .fetch_one(&mut **tx)
-    .await?;
-    let unknown: i64 = counts.try_get("unknown")?;
-    let attempted: i64 = counts.try_get("attempted")?;
-    let gaps: i64 = sqlx::query_scalar("SELECT trace_gaps FROM runs WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(&mut **tx)
-        .await?
-        .unwrap_or(0);
-    let gaps = gaps.saturating_add(i64::try_from(run.gaps).unwrap_or(i64::MAX));
-    // A dropped event may have been a write: gaps make the run's effects unknown.
-    let effects = if unknown > 0 || gaps > 0 {
-        RunEffects::Unknown
-    } else if attempted > 0 {
-        RunEffects::Done
-    } else {
-        RunEffects::None
-    };
-    let (code, code_truncated, code_withheld) = match run.code {
-        RunCode::Stored { text, truncated } => (Some(text), truncated, None),
-        RunCode::Withheld(reason) => (None, false, Some(reason)),
-    };
-    let error = run
-        .error
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(json_error)?;
-    sqlx::query(
-        "UPDATE runs SET ended_at = ?, status = ?, effects = ?, error = ?, result = ?, \
-         result_truncated = ?, trace_gaps = ?, replay = ?, replay_until = ?, \
-         code = ?, code_truncated = ?, code_withheld = ?, complete = ?, \
-         host_data = COALESCE(?, host_data) \
-         WHERE id = ?",
-    )
-    .bind(run.at.millis())
-    .bind(run.status.as_str())
-    .bind(effects.as_str())
-    .bind(error)
-    .bind(run.result.map(Value::to_string))
-    .bind(i64::from(run.result_truncated))
-    .bind(gaps)
-    .bind(run.replay.map(Value::to_string))
-    .bind(run.replay_until.map(EpochMillis::millis))
-    .bind(code)
-    .bind(i64::from(code_truncated))
-    .bind(code_withheld)
-    .bind(i64::from(run.complete))
-    .bind(run.host_data.map(Value::to_string))
-    .bind(&id)
-    .execute(&mut **tx)
-    .await?;
-    Ok(effects)
-}
-
-/// Stores a screenshot answer as its operation's state. `Dropped` leaves no state.
-pub(crate) async fn store_screenshot(
-    tx: &mut Transaction<'_, Sqlite>,
-    op: OperationId,
-    shot: Shot,
-) -> Result<(), TraceError> {
-    let (state, bytes) = match shot {
-        Shot::Taken { bytes_len } => (
-            ShotState::Stored,
-            Some(i64::try_from(bytes_len).unwrap_or(i64::MAX)),
-        ),
-        Shot::Withheld => (ShotState::Withheld, None),
-        Shot::Dropped => return Ok(()),
-    };
-    sqlx::query(
-        "UPDATE operations SET screenshot = ?, screenshot_bytes = ? WHERE run_id = ? AND seq = ?",
-    )
-    .bind(state.as_str())
-    .bind(bytes)
-    .bind(op.run.to_string())
-    .bind(i64::from(op.seq))
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-/// Marks an ended run complete. False when there is no such ended run, such as one whose end
-/// was in a batch that rolled back: a run the file still shows running never reads complete.
-pub(crate) async fn complete_run(
-    tx: &mut Transaction<'_, Sqlite>,
-    run: RunId,
-) -> Result<bool, TraceError> {
-    let updated = sqlx::query(
-        "UPDATE runs SET complete = 1 WHERE id = ? AND complete = 0 AND status != 'running'",
-    )
-    .bind(run.to_string())
-    .execute(&mut **tx)
-    .await?;
-    Ok(updated.rows_affected() > 0)
-}
-
-/// An operation's start row, as the writer stores it. It has no input: the operation's end
-/// stores that, masked with what the end's own set knows. An operation with a target tab also
-/// lists its run under that tab.
-pub(crate) struct OperationStartRow<'a> {
-    pub(crate) id: OperationId,
-    pub(crate) parent: Option<OperationId>,
-    pub(crate) name: &'a str,
-    pub(crate) kind: OperationKind,
-    pub(crate) effect: Effect,
-    pub(crate) tab: Option<TabId>,
-    pub(crate) at: EpochMillis,
-}
-
-pub(crate) async fn insert_operation(
-    tx: &mut Transaction<'_, Sqlite>,
-    op: OperationStartRow<'_>,
-) -> Result<(), TraceError> {
-    let inserted = sqlx::query(
-        "INSERT INTO operations (run_id, seq, parent_id, name, kind, attempt, effect, \
-         target_tab_id, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         ON CONFLICT(run_id, seq) DO NOTHING",
-    )
-    .bind(op.id.run.to_string())
-    .bind(i64::from(op.id.seq))
-    .bind(op.parent.map(|parent| parent.to_string()))
-    .bind(op.name)
-    .bind(op.kind.as_str())
-    .bind(op.kind.attempt().map(i64::from))
-    .bind(op.effect.as_str())
-    .bind(op.tab.map(|tab| tab.0))
-    .bind(op.at.millis())
-    .execute(&mut **tx)
-    .await?;
-    if inserted.rows_affected() > 0 {
-        sqlx::query("UPDATE runs SET operation_count = operation_count + 1 WHERE id = ?")
-            .bind(op.id.run.to_string())
-            .execute(&mut **tx)
-            .await?;
-    }
-    if let Some(tab) = op.tab {
-        sqlx::query("INSERT OR IGNORE INTO run_tabs (tab_id, run_id) VALUES (?, ?)")
-            .bind(tab.0)
-            .bind(op.id.run.to_string())
-            .execute(&mut **tx)
-            .await?;
-    }
-    Ok(())
-}
-
-/// An operation's end row, as the writer stores it (everything already masked and bounded).
-pub(crate) struct OperationEndRow<'a> {
-    pub(crate) id: OperationId,
-    pub(crate) at: EpochMillis,
-    pub(crate) outcome: Outcome,
-    pub(crate) delivery: Delivery,
-    pub(crate) sent_at: Option<EpochMillis>,
-    pub(crate) args: Option<(&'a Value, bool)>,
-    pub(crate) result: Option<(&'a Value, bool)>,
-    pub(crate) error: Option<&'a ErrorRecord>,
-    pub(crate) notes: &'a [String],
-    pub(crate) page: Option<&'a PageState>,
-}
-
-/// Ends an operation. Returns false when no open row matched (its start event was dropped).
-pub(crate) async fn end_operation(
-    tx: &mut Transaction<'_, Sqlite>,
-    op: OperationEndRow<'_>,
-) -> Result<bool, TraceError> {
-    let error = op
-        .error
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(json_error)?;
-    let notes = (!op.notes.is_empty())
-        .then(|| serde_json::to_string(op.notes))
-        .transpose()
-        .map_err(json_error)?;
-    let page = op.page.cloned().unwrap_or_default();
-    let updated = sqlx::query(
-        "UPDATE operations SET ended_at = ?, outcome = ?, delivery = ?, sent_at = ?, \
-         args = COALESCE(?, args), args_truncated = COALESCE(?, args_truncated), \
-         result = ?, result_truncated = ?, error = ?, notes = ?, \
-         page_id = ?, tab_id = ?, url = ?, title = ? \
-         WHERE run_id = ? AND seq = ? AND outcome IS NULL",
-    )
-    .bind(op.at.millis())
-    .bind(op.outcome.as_str())
-    .bind(op.delivery.as_str())
-    .bind(op.sent_at.map(EpochMillis::millis))
-    .bind(op.args.map(|(args, _)| args.to_string()))
-    .bind(op.args.map(|(_, cut)| i64::from(cut)))
-    .bind(op.result.map(|(result, _)| result.to_string()))
-    .bind(i64::from(op.result.is_some_and(|(_, cut)| cut)))
-    .bind(error)
-    .bind(notes)
-    .bind(page.page_id.map(i64::from))
-    .bind(page.tab_id.map(|tab| tab.0))
-    .bind(page.url)
-    .bind(page.title)
-    .bind(op.id.run.to_string())
-    .bind(i64::from(op.id.seq))
-    .execute(&mut **tx)
-    .await?;
-    Ok(updated.rows_affected() > 0)
-}
-
-/// Deletes runs past `policy`'s age with their screenshots, then the oldest runs' screenshots
-/// until the rest fit under the cap.
-///
-/// A run's files go first, and only a run whose files are gone loses its rows or has its
-/// screenshots marked expired. A run whose files stay keeps its rows, and keeps counting toward
-/// the cap, so the next sweep finds it again: without its rows, nothing would ever name those
-/// files again, and the cap's byte total would leave them out. The files also go before the
-/// transaction commits, so a rollback or a crash leaves rows naming missing files (read as
-/// expired), which the next sweep finishes.
-pub(crate) async fn sweep(
-    tx: &mut Transaction<'_, Sqlite>,
-    files: &ShotFiles,
-    policy: RetentionPolicy,
-    now: EpochMillis,
-) -> Result<Swept, TraceError> {
-    let max_age = i64::try_from(policy.max_age.as_millis()).unwrap_or(i64::MAX);
-    // Interrupted runs have no end time but are finished: only a running run is kept, and an
-    // ended run still waiting for screenshot answers, so the camera never writes into a
-    // directory this deletes.
-    let aged = sqlx::query_scalar::<_, String>(
-        "SELECT id FROM runs WHERE started_at < ? AND status != 'running' AND complete = 1",
-    )
-    .bind(now.plus_millis(-max_age).millis())
-    .fetch_all(&mut **tx)
-    .await?;
-    let mut swept = Swept::default();
-    for id in aged {
-        // An id that does not parse names no directory: every screenshot path comes from a
-        // typed id.
-        if let Ok(run) = id.parse::<RunId>()
-            && !remove_run_files(files, run).await
-        {
-            continue;
-        }
-        let screenshots: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM operations WHERE run_id = ? AND screenshot = 'stored'",
+/// One correlated statement supplies tabs to every summary, including detail and tail reads.
+/// The outer table must remain `runs` without an alias, which the typed correlation names.
+fn summary_select() -> Select<runs::Entity> {
+    #[derive(DeriveIden)]
+    struct GroupConcat;
+    let tabs = Query::select()
+        .expr(Func::cust(GroupConcat).arg(Expr::col((run_tabs::Entity, run_tabs::Column::TabId))))
+        .from(run_tabs::Entity)
+        .and_where(
+            Expr::col((run_tabs::Entity, run_tabs::Column::RunId))
+                .equals((runs::Entity, runs::Column::Id)),
         )
-        .bind(&id)
-        .fetch_one(&mut **tx)
-        .await?;
-        swept.screenshots += u64::try_from(screenshots).unwrap_or(0);
-        sqlx::query("DELETE FROM run_tabs WHERE run_id = ?")
-            .bind(&id)
-            .execute(&mut **tx)
-            .await?;
-        swept.operations += sqlx::query("DELETE FROM operations WHERE run_id = ?")
-            .bind(&id)
-            .execute(&mut **tx)
-            .await?
-            .rows_affected();
-        swept.runs += sqlx::query("DELETE FROM runs WHERE id = ?")
-            .bind(&id)
-            .execute(&mut **tx)
-            .await?
-            .rows_affected();
-    }
-    swept.screenshots += cap_screenshots(tx, files, policy.screenshot_cap).await?;
-    swept.replays = sqlx::query(
-        "UPDATE runs SET replay = NULL, replay_until = NULL \
-         WHERE replay_until IS NOT NULL AND replay_until <= ?",
-    )
-    .bind(now.millis())
-    .execute(&mut **tx)
-    .await?
-    .rows_affected();
-    Ok(swept)
+        .to_owned()
+        .into_sub_query_statement();
+    runs::Entity::find()
+        .select_only()
+        .columns([
+            runs::Column::Id,
+            runs::Column::TaskId,
+            runs::Column::Status,
+            runs::Column::Effects,
+            runs::Column::Error,
+            runs::Column::RequestId,
+            runs::Column::StartedAt,
+            runs::Column::EndedAt,
+            runs::Column::OperationCount,
+            runs::Column::TraceGaps,
+            runs::Column::Complete,
+        ])
+        .column_as(SimpleExpr::SubQuery(None, Box::new(tabs)), "tabs")
 }
 
-/// Deletes `run`'s screenshot directory. True when none of its files is left, which includes a
-/// run that never had any; false, with a warning, when its files stay on disk.
-async fn remove_run_files(files: &ShotFiles, run: RunId) -> bool {
-    match tokio::fs::remove_dir_all(files.run_dir(run)).await {
-        Ok(()) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-        Err(error) => {
-            tracing::warn!(%error, %run, "a run's screenshots stay on disk until the next sweep");
-            false
-        }
-    }
+fn open_writes_select(tab: TabId) -> Select<operations::Entity> {
+    operations::Entity::find()
+        .select_only()
+        .column_as(operations::Column::Seq.count(), "n")
+        .inner_join(runs::Entity)
+        .filter(operations::Column::TargetTabId.eq(tab.0))
+        .filter(operations::Column::Outcome.is_null())
+        .filter(operations::Column::Effect.eq("write"))
+        .filter(runs::Column::Status.eq("running"))
 }
 
-/// Expires the oldest complete runs' stored screenshots until the rest fit under `cap`, and
-/// returns how many expired. A run is the unit: its files share a directory, and a host reads a
-/// run's pictures together. A run whose files could not be deleted keeps them stored, and
-/// counted, so the next oldest run's go instead.
-async fn cap_screenshots(
-    tx: &mut Transaction<'_, Sqlite>,
-    files: &ShotFiles,
-    cap: u64,
-) -> Result<u64, TraceError> {
-    let stored: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(screenshot_bytes), 0) FROM operations WHERE screenshot = 'stored'",
-    )
-    .fetch_one(&mut **tx)
-    .await?;
-    let mut over = stored.saturating_sub(i64::try_from(cap).unwrap_or(i64::MAX));
-    if over <= 0 {
-        return Ok(0);
-    }
-    let oldest_first = sqlx::query(
-        "SELECT operations.run_id AS run_id, SUM(operations.screenshot_bytes) AS bytes \
-         FROM operations JOIN runs ON runs.id = operations.run_id \
-         WHERE operations.screenshot = 'stored' AND runs.complete = 1 \
-         GROUP BY operations.run_id ORDER BY runs.started_at, operations.run_id",
-    )
-    .fetch_all(&mut **tx)
-    .await?;
-    let mut expired = 0;
-    for row in oldest_first {
-        if over <= 0 {
-            break;
-        }
-        let run: RunId = parse_id(&row.try_get::<String, _>("run_id")?)?;
-        if !remove_run_files(files, run).await {
-            continue;
-        }
-        over = over.saturating_sub(row.try_get::<i64, _>("bytes")?);
-        expired += sqlx::query(
-            "UPDATE operations SET screenshot = 'expired' \
-             WHERE run_id = ? AND screenshot = 'stored'",
-        )
-        .bind(run.to_string())
-        .execute(&mut **tx)
-        .await?
-        .rows_affected();
-    }
-    Ok(expired)
+fn task_runs(task: &TaskId) -> SelectStatement {
+    Query::select()
+        .column(runs::Column::Id)
+        .from(runs::Entity)
+        .and_where(Expr::col(runs::Column::TaskId).eq(task.as_str()))
+        .to_owned()
 }
-
-// ---- Row mapping. ----
-
-enum Bind {
-    Int(i64),
-    Text(String),
-}
-
-fn bind_all<'q>(
-    mut query: sqlx::query::Query<'q, Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
-    binds: Vec<Bind>,
-) -> sqlx::query::Query<'q, Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
-    for bind in binds {
-        query = match bind {
-            Bind::Int(value) => query.bind(value),
-            Bind::Text(value) => query.bind(value),
-        };
-    }
-    query
-}
-
 fn page_limit(limit: u32) -> u32 {
     match limit {
         0 => 25,
@@ -1130,172 +586,51 @@ fn parse_cursor(cursor: &str) -> Result<(i64, String), TraceError> {
     Ok((at.parse().map_err(|_| invalid())?, id.to_string()))
 }
 
-fn parse_id<T: FromStr>(text: &str) -> Result<T, TraceError> {
-    text.parse()
-        .map_err(|_| TraceError::Corrupt(format!("invalid id {text:?}")))
-}
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
 
-/// A stored host id, read back through the same check it passed on the way in.
-fn host_id_column<T>(
-    row: &SqliteRow,
-    column: &str,
-    parse: fn(&str) -> Result<T, IdError>,
-) -> Result<Option<T>, TraceError> {
-    row.try_get::<Option<String>, _>(column)?
-        .map(|text| parse(&text).map_err(|_| corrupt(column, &text)))
-        .transpose()
-}
+    use browseros_core::TabId;
+    use sea_orm::{DbBackend, QueryTrait};
 
-/// A run's tabs, from the `group_concat` in [`RUN_SUMMARY_COLUMNS`], whose order SQLite leaves
-/// open.
-fn tabs_column(row: &SqliteRow) -> Result<Vec<TabId>, TraceError> {
-    let Some(text) = row.try_get::<Option<String>, _>("tabs")? else {
-        return Ok(Vec::new());
-    };
-    let mut tabs = text
-        .split(',')
-        .map(|tab| tab.parse().map(TabId).map_err(|_| corrupt("tabs", &text)))
-        .collect::<Result<Vec<_>, _>>()?;
-    tabs.sort_unstable();
-    Ok(tabs)
-}
+    use super::{TraceStore, open_writes_select, summary_select};
+    use crate::storage::test_faults;
 
-fn json_error(error: serde_json::Error) -> TraceError {
-    TraceError::Corrupt(error.to_string())
-}
+    #[test]
+    fn a_summary_keeps_its_tabs_in_one_statement() {
+        let sql = summary_select().build(DbBackend::Sqlite).to_string();
+        assert!(
+            sql.contains("(SELECT group_concat("),
+            "tabs stay a correlated aggregate: {sql}"
+        );
+        assert_eq!(
+            sql.matches("FROM \"runs\"").count(),
+            1,
+            "one outer run read: {sql}"
+        );
+        assert!(
+            sql.contains("\"run_tabs\".\"run_id\" = \"runs\".\"id\""),
+            "tabs belong to the selected run: {sql}"
+        );
+        assert!(
+            !sql.contains("\"code\"") && !sql.contains("\"replay\""),
+            "list reads exclude payloads: {sql}"
+        );
+    }
 
-fn json_column(row: &SqliteRow, column: &str) -> Result<Option<Value>, TraceError> {
-    row.try_get::<Option<String>, _>(column)?
-        .map(|text| serde_json::from_str(&text).map_err(json_error))
-        .transpose()
-}
-
-fn error_column(row: &SqliteRow, column: &str) -> Result<Option<ErrorRecord>, TraceError> {
-    row.try_get::<Option<String>, _>(column)?
-        .map(|text| serde_json::from_str(&text).map_err(json_error))
-        .transpose()
-}
-
-fn time_column(row: &SqliteRow, column: &str) -> Result<Option<EpochMillis>, TraceError> {
-    Ok(row
-        .try_get::<Option<i64>, _>(column)?
-        .map(EpochMillis::from_millis))
-}
-
-fn count_column(row: &SqliteRow, column: &str) -> Result<u64, TraceError> {
-    Ok(u64::try_from(row.try_get::<i64, _>(column)?).unwrap_or(0))
-}
-
-fn corrupt(column: &str, value: &str) -> TraceError {
-    TraceError::Corrupt(format!("{column} {value:?}"))
-}
-
-fn run_summary(row: &SqliteRow) -> Result<RunSummary, TraceError> {
-    let status: String = row.try_get("status")?;
-    let effects: Option<String> = row.try_get("effects")?;
-    Ok(RunSummary {
-        id: parse_id(&row.try_get::<String, _>("id")?)?,
-        task_id: host_id_column(row, "task_id", TaskId::parse)?,
-        tabs: tabs_column(row)?,
-        status: RunStatus::parse(&status).ok_or_else(|| corrupt("status", &status))?,
-        effects: effects
-            .as_deref()
-            .map(|text| RunEffects::parse(text).ok_or_else(|| corrupt("effects", text)))
-            .transpose()?,
-        error: error_column(row, "error")?,
-        request_id: host_id_column(row, "request_id", RequestId::parse)?,
-        started_at: EpochMillis::from_millis(row.try_get("started_at")?),
-        ended_at: time_column(row, "ended_at")?,
-        operation_count: count_column(row, "operation_count")?,
-        trace_gaps: count_column(row, "trace_gaps")?,
-        complete: row.try_get::<i64, _>("complete")? != 0,
-    })
-}
-
-fn operation_row(row: &SqliteRow) -> Result<OperationRow, TraceError> {
-    let run: RunId = parse_id(&row.try_get::<String, _>("run_id")?)?;
-    let seq = u32::try_from(row.try_get::<i64, _>("seq")?)
-        .map_err(|_| TraceError::Corrupt("operation seq".into()))?;
-    let kind: String = row.try_get("kind")?;
-    let attempt = row
-        .try_get::<Option<i64>, _>("attempt")?
-        .and_then(|attempt| u32::try_from(attempt).ok());
-    let effect: String = row.try_get("effect")?;
-    let outcome: Option<String> = row.try_get("outcome")?;
-    let delivery: Option<String> = row.try_get("delivery")?;
-    let screenshot: Option<String> = row.try_get("screenshot")?;
-    Ok(OperationRow {
-        id: OperationId::new(run, seq),
-        parent: row
-            .try_get::<Option<String>, _>("parent_id")?
-            .as_deref()
-            .map(parse_id)
-            .transpose()?,
-        tab: row.try_get::<Option<i64>, _>("target_tab_id")?.map(TabId),
-        name: row.try_get("name")?,
-        kind: operation_kind(&kind, attempt).ok_or_else(|| corrupt("kind", &kind))?,
-        effect: match effect.as_str() {
-            "read" => Effect::Read,
-            "write" => Effect::Write,
-            other => return Err(corrupt("effect", other)),
-        },
-        page: PageState {
-            page_id: row
-                .try_get::<Option<i64>, _>("page_id")?
-                .and_then(|page| u32::try_from(page).ok()),
-            tab_id: row.try_get::<Option<i64>, _>("tab_id")?.map(TabId),
-            url: row.try_get("url")?,
-            title: row.try_get("title")?,
-        },
-        args: json_column(row, "args")?,
-        args_truncated: row.try_get::<i64, _>("args_truncated")? != 0,
-        result: json_column(row, "result")?,
-        result_truncated: row.try_get::<i64, _>("result_truncated")? != 0,
-        outcome: outcome
-            .as_deref()
-            .map(|text| outcome_named(text).ok_or_else(|| corrupt("outcome", text)))
-            .transpose()?,
-        delivery: delivery
-            .as_deref()
-            .map(|text| delivery_named(text).ok_or_else(|| corrupt("delivery", text)))
-            .transpose()?,
-        error: error_column(row, "error")?,
-        notes: row
-            .try_get::<Option<String>, _>("notes")?
-            .map(|text| serde_json::from_str(&text).map_err(json_error))
-            .transpose()?
-            .unwrap_or_default(),
-        started_at: EpochMillis::from_millis(row.try_get("started_at")?),
-        sent_at: time_column(row, "sent_at")?,
-        ended_at: time_column(row, "ended_at")?,
-        screenshot: screenshot
-            .as_deref()
-            .map(|text| ShotState::parse(text).ok_or_else(|| corrupt("screenshot", text)))
-            .transpose()?,
-    })
-}
-
-fn outcome_named(text: &str) -> Option<Outcome> {
-    [Outcome::Ok, Outcome::Error, Outcome::Cancelled]
-        .into_iter()
-        .find(|outcome| outcome.as_str() == text)
-}
-
-fn delivery_named(text: &str) -> Option<Delivery> {
-    [Delivery::NotSent, Delivery::Done, Delivery::Unknown]
-        .into_iter()
-        .find(|delivery| delivery.as_str() == text)
-}
-
-fn operation_kind(text: &str, attempt: Option<u32>) -> Option<OperationKind> {
-    match text {
-        "builtin" => Some(OperationKind::Builtin),
-        "defined" => Some(OperationKind::Defined),
-        "next" => Some(OperationKind::Next {
-            attempt: attempt.unwrap_or(1),
-        }),
-        "host_call" => Some(OperationKind::HostCall),
-        "protected" => Some(OperationKind::Protected),
-        _ => None,
+    #[tokio::test]
+    async fn open_writes_uses_operations_open_by_tab() -> Result<(), Box<dyn Error>> {
+        let dir = tempfile::tempdir()?;
+        let store = TraceStore::open(&dir.path().join("trace.db")).await?;
+        let plan = test_faults::query_plan(
+            store.db(),
+            open_writes_select(TabId(3)).build(DbBackend::Sqlite),
+        )
+        .await?;
+        assert!(
+            plan.contains("operations_open_by_tab"),
+            "lock settling must not scan tab history: {plan}"
+        );
+        Ok(())
     }
 }

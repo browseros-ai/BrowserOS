@@ -39,7 +39,7 @@ Neo binds two listeners:
 
 State lives under `$BROWSERCLAW_DIR`:
 
-- `claw-sdk/trace.db` is the SQLite trace store. If it does not open, Neo moves it aside to `trace.db.broken-<millis>` and starts a fresh one.
+- `claw-sdk/trace.db` is the SQLite trace store. Supported older files are upgraded in place. If it does not open (including an unknown newer migration or the earliest session-era schema), Neo moves it aside to `trace.db.broken-<millis>` and starts a fresh one. Rolling back across a newer migration loses the live trace and request-id history; open tabs are made private again before capture resumes.
 - `logs/claw-sdk.log.<date>` is the daily log. The same lines go to stderr. `logs/claw-sdk-panics.log` gets each panic, written synchronously.
 - `host.sock` is the host socket, unless `CLAW_HOST_SOCKET` moves it.
 

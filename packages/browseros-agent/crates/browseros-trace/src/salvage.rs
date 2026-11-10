@@ -46,14 +46,15 @@
 //! - A scan that reaches its end counts only once SQLite's `quick_check` passes the table and its
 //!   indexes: a page cut short reads as zeros, which SQLite can return as rows without an error.
 
+use crate::storage::{SalvagedRun, TraceBatch};
 use crate::{
     EpochMillis, PrivacyRecord, PrivateReason, RequestId, RunEffects, RunId, RunStatus, TaskId,
-    TraceError, TraceStore, trace_store,
+    TraceError, TraceStore,
 };
 use browseros_core::TabId;
+use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
+use sea_orm::sqlx::{self, Row, SqliteConnection};
 use serde_json::Value;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
-use sqlx::{Row, Sqlite, SqliteConnection, Transaction};
 use std::collections::BTreeMap;
 use std::io;
 use std::num::NonZeroU64;
@@ -172,12 +173,12 @@ impl TraceStore {
         }
         let flags = carry(scans.flags, |row| flag(row, now));
         let requests = carry(scans.requests, request_run);
-        let mut tx = self.pool().begin().await?;
+        let tx = TraceBatch::begin(self.db()).await?;
         for (tab, record) in &flags.rows {
-            trace_store::persist_private(&mut tx, *tab, *record).await?;
+            tx.persist_private(*tab, *record).await?;
         }
         for (id, run) in &requests.rows {
-            insert_request_run(&mut tx, *id, run).await?;
+            tx.insert_salvaged_run(*id, run).await?;
         }
         tx.commit().await?;
         Ok(Salvage {
@@ -437,7 +438,7 @@ fn checksum(order: WordOrder, words: &[[u8; 4]], [mut s0, mut s1]: [u32; 2]) -> 
 
 /// Reads both parts of `old` through `view`. A file that does not open reads as nothing.
 async fn scan_view(old: &Path, view: View, log: Log) -> Scans {
-    use sqlx::Connection;
+    use sea_orm::sqlx::Connection;
 
     let options = SqliteConnectOptions::new()
         .filename(old)
@@ -613,22 +614,9 @@ fn flag(row: &SqliteRow, now: EpochMillis) -> Option<(TabId, PrivacyRecord)> {
     Some((tab, PrivacyRecord { since, reason }))
 }
 
-/// What admission and a host's lookup read of a run that carried a `requestId`.
-struct RequestRun {
-    request: RequestId,
-    task: Option<TaskId>,
-    started_at: EpochMillis,
-    ended_at: Option<EpochMillis>,
-    status: RunStatus,
-    effects: RunEffects,
-    /// The reply its client got, as stored, while it still parses as JSON.
-    replay: Option<String>,
-    replay_until: Option<EpochMillis>,
-}
-
 /// A run row, or `None` when a field that places it does not read: its id, its request or task
 /// id, or its start. Those are what match a repeat to it.
-fn request_run(row: &SqliteRow) -> Option<(RunId, RequestRun)> {
+fn request_run(row: &SqliteRow) -> Option<(RunId, SalvagedRun)> {
     let id: RunId = row.try_get::<String, _>("id").ok()?.parse().ok()?;
     let request = RequestId::parse(&row.try_get::<String, _>("request_id").ok()?).ok()?;
     let task = match row.try_get::<Option<String>, _>("task_id").ok()? {
@@ -659,7 +647,7 @@ fn request_run(row: &SqliteRow) -> Option<(RunId, RequestRun)> {
     // Admission fails a repeat whose stored reply does not parse; without one, it refuses the
     // repeat as a duplicate instead.
     let replay = text("replay").filter(|reply| serde_json::from_str::<Value>(reply).is_ok());
-    let run = RequestRun {
+    let run = SalvagedRun {
         request,
         task,
         started_at,
@@ -670,30 +658,4 @@ fn request_run(row: &SqliteRow) -> Option<(RunId, RequestRun)> {
         replay_until: time("replay_until"),
     };
     Some((id, run))
-}
-
-async fn insert_request_run(
-    tx: &mut Transaction<'_, Sqlite>,
-    id: RunId,
-    run: &RequestRun,
-) -> Result<(), TraceError> {
-    // Its code never came across, so it is `unavailable`, as for a run whose end the writer
-    // never saw. It is complete: no screenshot job of it exists in this store.
-    sqlx::query(
-        "INSERT INTO runs (id, task_id, started_at, ended_at, status, effects, request_id, \
-         code_withheld, replay, replay_until, complete) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'unavailable', ?, ?, 1) ON CONFLICT(id) DO NOTHING",
-    )
-    .bind(id.to_string())
-    .bind(run.task.as_ref().map(TaskId::as_str))
-    .bind(run.started_at.millis())
-    .bind(run.ended_at.map(EpochMillis::millis))
-    .bind(run.status.as_str())
-    .bind(run.effects.as_str())
-    .bind(run.request.as_str())
-    .bind(run.replay.as_deref())
-    .bind(run.replay_until.map(EpochMillis::millis))
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
 }

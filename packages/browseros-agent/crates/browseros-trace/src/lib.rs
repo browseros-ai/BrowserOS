@@ -50,6 +50,7 @@ mod screenshot_files;
 mod screenshot_queue;
 mod screenshot_rule;
 mod secret_set;
+mod storage;
 mod trace_error;
 mod trace_store;
 mod trace_writer;

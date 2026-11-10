@@ -5,7 +5,7 @@
 pub enum TraceError {
     /// SQLite refused the statement or the file.
     #[error("trace store: {0}")]
-    Store(#[from] sqlx::Error),
+    Store(#[from] sea_orm::DbErr),
     /// The store's directory could not be created.
     #[error("trace store directory: {0}")]
     Directory(#[source] std::io::Error),
