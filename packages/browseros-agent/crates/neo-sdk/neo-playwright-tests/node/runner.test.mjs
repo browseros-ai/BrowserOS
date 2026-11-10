@@ -4,6 +4,15 @@ import test from 'node:test'
 import { contextOptions } from './context-options.mjs'
 import { runnerOptions } from './options.mjs'
 
+test('tests that expectLoop defaults on and its opt-out is not passed to Playwright', () => {
+  assert.equal(runnerOptions([]).expectLoop, true)
+  const disabled = runnerOptions(['--no-expect-loop', 'expect-boolean.spec.ts'])
+  assert.equal(disabled.expectLoop, false)
+  assert.ok(!disabled.args.includes('--no-expect-loop'))
+  assert.ok(disabled.args.includes('expect-boolean.spec.ts'))
+  assert.equal(runnerOptions(['--reference']).expectLoop, false)
+})
+
 test('full corpus defaults and all worker spellings keep the browser cap', () => {
   assert.equal(runnerOptions([]).workers, 4)
   for (const args of [
