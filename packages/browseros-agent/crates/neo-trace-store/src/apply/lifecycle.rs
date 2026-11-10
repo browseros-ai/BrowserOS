@@ -31,6 +31,7 @@ pub(super) async fn end(
         value_truncated,
         logs,
         script,
+        script_truncated,
         calls_made,
         unreadable_calls,
         duration_us,
@@ -62,7 +63,7 @@ pub(super) async fn end(
     run.value_json = value.filter(|_| full);
     run.value_truncated = *value_truncated || !full;
     run.script = script.as_ref().filter(|_| full).map(ToString::to_string);
-    run.script_truncated = !full;
+    run.script_truncated = *script_truncated || !full;
     run.calls_made = signed(*calls_made);
     run.calls_over_cap = run
         .calls_over_cap

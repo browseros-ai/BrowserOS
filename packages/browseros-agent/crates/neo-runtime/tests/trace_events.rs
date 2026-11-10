@@ -1189,6 +1189,7 @@ async fn run_end_caps_its_copies_and_keeps_script_output_whole() {
         value_truncated,
         logs,
         script,
+        script_truncated,
         ..
     } = run_ended(&events)
     else {
@@ -1198,6 +1199,7 @@ async fn run_end_caps_its_copies_and_keeps_script_output_whole() {
     assert!(value_truncated);
     assert_eq!(logs[0].text.len(), 8 * 1024);
     assert_eq!(script.as_deref().unwrap().len(), 64 * 1024);
+    assert!(script_truncated);
 
     let (outcome, events) = case(
         "throw new Error('x'.repeat(70*1024))",

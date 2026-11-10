@@ -502,11 +502,21 @@ impl Scrubber {
     /// as a match starting before the cut can span, so a huge text costs no more than a short
     /// one.
     pub(crate) fn scrub_cut(&self, text: &str, max: usize) -> String {
+        self.scrub_cut_with_truncation(text, max).0
+    }
+
+    /// The same bounded scrub, plus whether its search window or output byte cap omitted
+    /// text. Capture carries this fact separately: a sink cannot infer it from output length
+    /// when scrubbing shrinks or expands a string, or the cut lands inside a Unicode scalar.
+    pub(crate) fn scrub_cut_with_truncation(&self, text: &str, max: usize) -> (String, bool) {
         if self.0.saturated {
-            return redacted(text);
+            return (redacted(text), false);
         }
         let window = cut(text, max.saturating_add(MAX_PATTERN_BYTES));
-        cut(&self.scrub(window), max).to_owned()
+        let scrubbed = self.scrub(window);
+        let kept = cut(&scrubbed, max);
+        let truncated = window.len() < text.len() || kept.len() < scrubbed.len();
+        (kept.to_owned(), truncated)
     }
 
     /// A JSON value for a record: every string and key scrubbed.
@@ -1285,6 +1295,23 @@ mod tests {
         let kept = scrubber.scrub_cut(&text, 12);
         assert_eq!(kept.len(), 12, "{kept}");
         assert!(!kept.contains("hu"), "{kept}");
+    }
+
+    #[test]
+    fn bounded_scrub_reports_output_and_search_window_truncation() {
+        let scrubber = scrubber(&["abcd"]);
+        for (text, max, expected, truncated) in [
+            ("abc", 3, "abc", false),
+            ("🦀", 3, "", true),
+            ("abcd", 8, "[redacte", true),
+            ("abcd", 10, "[redacted]", false),
+        ] {
+            assert_eq!(
+                scrubber.scrub_cut_with_truncation(text, max),
+                (expected.into(), truncated)
+            );
+        }
+        assert!(scrubber.scrub_cut_with_truncation(&"x".repeat(10_000), 8).1);
     }
 
     #[test]

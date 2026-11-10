@@ -397,6 +397,7 @@ pub(crate) fn stub(event: &RunEvent) -> RunEvent {
             value_truncated: true,
             logs: Arc::from([]),
             script: None,
+            script_truncated: true,
             calls_made: *calls_made,
             unreadable_calls: *unreadable_calls,
             duration_us: *duration_us,

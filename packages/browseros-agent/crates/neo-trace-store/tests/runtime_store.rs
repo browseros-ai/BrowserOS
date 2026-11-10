@@ -199,6 +199,39 @@ async fn check(end: End) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn runtime_script_cut_is_reported_in_persisted_run() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("traces.sqlite");
+    let traces = TraceStore::open(StoreConfig::new(&path)).await.unwrap();
+    let runtime = browser.runtime().await.with_sinks([traces.sink()]);
+    let mut outcomes = Vec::new();
+    for bytes in [64 * 1024, 64 * 1024 + 1] {
+        let code = format!("/*{}*/return 1;", "x".repeat(bytes - "/**/return 1;".len()));
+        assert_eq!(code.len(), bytes);
+        let outcome = runtime
+            .run(fake_browser::run_request(
+                &code,
+                Duration::from_secs(5),
+                CancellationToken::new(),
+            ))
+            .await;
+        assert_eq!(outcome.status, RunStatus::Ok);
+        outcomes.push((outcome.run_id, bytes > 64 * 1024));
+    }
+    let reopened = support::reopen(&runtime, traces, &path).await;
+    for (id, truncated) in outcomes {
+        let run = reopened.run(&id).await.unwrap().unwrap();
+        assert_eq!(run.script.as_ref().unwrap().len(), 64 * 1024);
+        assert_eq!(
+            run.script_truncated, truncated,
+            "runtime script truncation was lost"
+        );
+    }
+    support::assert_clean(&reopened.close(support::BUDGET).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn ok_is_persisted() {
     check(End::Ok).await;
 }

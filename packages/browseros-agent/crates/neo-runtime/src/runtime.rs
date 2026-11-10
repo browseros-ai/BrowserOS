@@ -445,6 +445,11 @@ impl RunGuard {
                 }
             }
         };
+        let (script, script_truncated) = self.script.as_deref().map_or((None, false), |script| {
+            let (script, truncated) =
+                scrubber.scrub_cut_with_truncation(script, redact::MAX_SCRIPT_BYTES);
+            (Some(Arc::from(script)), truncated)
+        });
         RunEvent::RunEnded {
             run: self.tap.run(),
             status,
@@ -462,10 +467,8 @@ impl RunGuard {
                     text: scrubber.scrub_cut(&line.text, redact::MAX_LINE_BYTES),
                 })
                 .collect(),
-            script: self
-                .script
-                .as_deref()
-                .map(|script| Arc::from(scrubber.scrub_cut(script, redact::MAX_SCRIPT_BYTES))),
+            script,
+            script_truncated,
             calls_made: self.trace.calls_made(),
             unreadable_calls: self.trace.unreadable_calls(),
             duration_us: self.tap.offset_us(),

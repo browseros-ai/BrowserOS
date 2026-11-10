@@ -345,6 +345,8 @@ pub enum RunEvent {
         value_truncated: bool,
         logs: Arc<[ConsoleLine]>,
         script: Option<Arc<str>>,
+        /// Runtime capture omitted script text to fit its byte budget. Storage may also omit it.
+        script_truncated: bool,
         calls_made: u64,
         /// Messages the door could not read as a call, so they have no call number.
         unreadable_calls: u64,

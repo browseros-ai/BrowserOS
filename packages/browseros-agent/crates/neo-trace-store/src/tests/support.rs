@@ -167,6 +167,7 @@ pub(crate) fn ended(run: neo_runtime::RunId, calls_made: u64) -> neo_runtime::Ru
         value_truncated: false,
         logs: Arc::from([]),
         script: Some(Arc::from("return 1")),
+        script_truncated: false,
         calls_made,
         unreadable_calls: 0,
         duration_us: 1000,
