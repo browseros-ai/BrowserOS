@@ -206,3 +206,41 @@ test('runner argv without a command renders the runner, and empty argv is the fu
   assert.equal(runnerCommand(['--reference']), `${runner} --reference`)
   assert.equal(runnerCommand(['node', 'x.mjs']), 'node x.mjs')
 })
+
+test('tests that run metadata selects the v1 classifier and report labels', () => {
+  const input = inputs()
+  input.neo.metadata = {
+    ...metadata('claw'),
+    engine: 'claw',
+    browserosVersion: '0.52.1.1',
+    sdkSources: { 'bootstrap.js': 'digest' },
+  }
+  const [row] = flattenResults(input.neo.results)
+  row.test.status = 'unexpected'
+  row.test.results = [
+    {
+      status: 'failed',
+      errors: [
+        {
+          message:
+            'Error: browser.newContext: Neo has one browser profile; open a tab with context.newPage()',
+        },
+      ],
+    },
+  ]
+  const reference = flattenResults(input.reference.results).find(
+    (other) => other.key === row.key,
+  )
+  reference.test.status = 'expected'
+  reference.test.results = [{ status: 'passed' }]
+  const report = renderReport(input)
+  assert.equal(
+    report.rows.find((other) => other.key === row.key).verdict,
+    'neo-lacks',
+  )
+  assert.match(report.markdown, /^# v1 in Node/)
+  assert.match(report.markdown, /## Top v1 gaps/)
+  assert.match(report.markdown, /## Recognized v1 refusals/)
+  assert.match(report.markdown, /BrowserOS: 0\.52\.1\.1/)
+  assert.match(report.markdown, /bootstrap\.js/)
+})

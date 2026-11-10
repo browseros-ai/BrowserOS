@@ -46,8 +46,9 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
 - Reference uses vanilla `chromium.connectOverCDP` and upstream contexts.
 - `__claw` opens one real v1 run per worker with a 24-hour deadline. Playwright
   owns test deadlines. `finish()` writes `worker-*/outcome.json`.
-- `browser` and `context` are v1's real objects. `playwright` is `{}` because v1
-  has no namespace; missing namespace members count as lacks.
+- `browser` and `context` are v1's real objects. `playwright.errors.TimeoutError`
+  is v1's real agent parameter class, placed where upstream checks expect it.
+  No other Playwright namespace members are supplied; those count as lacks.
 - `_contextFactory` lends the worker's one context on its first call without
   explicit options. Only verified implicit Playwright defaults are omitted.
   Explicit options—even default-valued ones—and second calls reach the real
@@ -57,13 +58,16 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
   on its target. Pages opened by test code receive no builtins shim.
 - Per-test timeouts are reapplied. Teardown closes the test's pages, removes
   context listeners, clears cookies and server-origin storage, IndexedDB,
-  Cache Storage and service workers over a private CDP connection. Closing tabs
-  destroys their sessionStorage. This substitutes for fresh-context isolation;
+  HTTP cache, Cache Storage and service workers over a private CDP connection.
+  Closing tabs destroys their sessionStorage; retained server-origin tabs have
+  sessionStorage cleared through DOMStorage. This substitutes for fresh-context isolation;
   it adds no SDK methods.
 - `expectLoop` wraps real v1 Page/Locator assertions through the same public-read
   polling table as v2. Other assertions retain Playwright's expect. Unsupported
   checks skip; passing loop checks are counted separately. `--no-expect-loop`
   and `--no-curation` reproduce the unadapted selection.
+- The implicit `data-testid` selector attribute already matches v1. Explicit
+  overrides reach its absent `playwright.selectors` namespace.
 - Curation, `_setupArtifacts`, `_browserOptions`, `toImplInWorkerScope` and
   `startRemoteServer` retain v2's seams and explicit internals refusals.
 

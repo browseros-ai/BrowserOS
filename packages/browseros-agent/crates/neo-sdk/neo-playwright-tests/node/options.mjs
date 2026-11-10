@@ -27,6 +27,8 @@ export function runnerOptions(argv) {
     const arg = argv[index]
     if (arg === '--') {
       files = argv.slice(index + 1)
+      if (files.some((file) => file.startsWith('-')))
+        throw new Error('Test filters after -- cannot start with a dash')
       break
     }
     if (arg === '--reference') selectEngine('reference')
@@ -69,7 +71,8 @@ export function runnerOptions(argv) {
     '--grep-invert',
     inversions.map((value) => `(?:${value})`).join('|'),
   )
-  if (files.length) options.args.push('--', ...files)
+  // The pinned Playwright treats its own -- tail as user data, not test filters.
+  options.args.push(...files)
   options.reference = options.engine === 'reference'
   if (options.reference) options.expectLoop = false
   return options

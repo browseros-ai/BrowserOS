@@ -107,10 +107,18 @@ test('tests that teardown closes real v1 pages and removes real listeners before
     initialPages,
     origins,
     cdp: {
-      async send(method, params) {
+      async send(method, params, session) {
         assert.equal(first.isClosed(), true)
         assert.equal(second.isClosed(), true)
         assert.equal(context.listenerCount('claw-local'), 0)
+        if (method === 'Target.getTargets')
+          return { targetInfos: [{ type: 'page', targetId: 'launch' }] }
+        if (method === 'Target.attachToTarget')
+          return { sessionId: 'maintenance' }
+        if (method === 'Runtime.evaluate') return { result: { value: 'null' } }
+        if (method === 'Target.detachFromTarget') return {}
+        if (method === 'Storage.clearDataForOrigin')
+          assert.equal(session, 'maintenance')
         cleared.push({ method, params })
       },
     },
@@ -119,7 +127,9 @@ test('tests that teardown closes real v1 pages and removes real listeners before
   assert.ok([...initialPages].every((page) => !page.isClosed()))
   assert.equal(cleared[0].method, 'Storage.clearCookies')
   assert.deepEqual(
-    cleared.slice(1).map((call) => call.params.origin),
+    cleared
+      .filter((call) => call.method === 'Storage.clearDataForOrigin')
+      .map((call) => call.params.origin),
     origins,
   )
 })

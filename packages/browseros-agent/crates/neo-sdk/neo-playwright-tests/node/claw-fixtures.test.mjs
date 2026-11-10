@@ -39,13 +39,16 @@ test('tests that real claw fixtures preserve objects, options, builtins and stor
     `
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { test, expect } from ${JSON.stringify(fileURLToPath(new URL('./fixtures.mjs', import.meta.url)))};
-test('real identities and default options', async ({ page, context, browser, playwright, server, httpsServer, __neoWorker }) => {
+test('real identities and default options', async ({ page, context, browser, playwright, server, httpsServer, __neoWorker, __claw }) => {
   expect(page.context()).toBe(context);
   expect(context.browser()).toBe(browser);
   expect(browser.contexts()).toEqual([context]);
-  expect(Object.keys(playwright)).toEqual([]);
+  expect(Object.keys(playwright)).toEqual(['errors']);
+  expect(playwright.errors).toEqual({ TimeoutError: __claw.params.TimeoutError });
   await page.goto(server.EMPTY_PAGE);
+  await expect(page.locator('missing-timeout-probe').click({ timeout: 1 })).rejects.toBeInstanceOf(playwright.errors.TimeoutError);
   const defaults = await page.evaluate(() => ({ viewport: { width: innerWidth, height: innerHeight }, deviceScaleFactor: devicePixelRatio, locale: navigator.language, offline: !navigator.onLine, hasTouch: navigator.maxTouchPoints > 0, isMobile: /Mobile/.test(navigator.userAgent), javaScriptEnabled: true, colorScheme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light', contrast: matchMedia('(prefers-contrast: no-preference)').matches ? 'no-preference' : 'other', forcedColors: matchMedia('(forced-colors: active)').matches ? 'active' : 'none', reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'reduce' : 'no-preference' }));
   expect(defaults).toEqual({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1, locale: 'en-US', offline: false, hasTouch: false, isMobile: false, javaScriptEnabled: true, colorScheme: 'light', contrast: 'no-preference', forcedColors: 'none', reducedMotion: 'no-preference' });
   server.setRoute('/claw-csp', (_, res) => { res.setHeader('Content-Security-Policy', "script-src 'none'"); res.end('<script>window.inlineRan = true</script>'); });
@@ -55,6 +58,30 @@ test('real identities and default options', async ({ page, context, browser, pla
   await expect(page.goto(httpsServer.EMPTY_PAGE)).rejects.toThrow();
   defaults.ignoreHTTPSErrors = false;
   fs.writeFileSync(path.join(__neoWorker.output, 'defaults.json'), JSON.stringify(defaults, null, 2));
+});
+test('implicit acceptDownloads completes a real download', async ({ page, server, __clawHarness }) => {
+  const name = 'claw-fixture-' + randomUUID() + '.txt';
+  server.setRoute('/claw-download', (_, res) => { res.setHeader('Content-Disposition', 'attachment; filename="' + name + '"'); res.end(name); });
+  const events = [];
+  const unsubscribe = __clawHarness.subscribe(event => { if (event.method.startsWith('Browser.download')) events.push(event); });
+  try {
+    await __clawHarness.send('Browser.setDownloadBehavior', { behavior: 'default', eventsEnabled: true });
+    await page.goto(server.EMPTY_PAGE);
+    await page.setContent('<a href="' + server.PREFIX + '/claw-download">download</a>');
+    await page.click('a');
+    await expect.poll(() => events.find(event => event.method === 'Browser.downloadProgress' && event.params.state === 'completed'), { timeout: 10000 }).toBeTruthy();
+    const started = events.find(event => event.method === 'Browser.downloadWillBegin');
+    const finished = events.find(event => event.method === 'Browser.downloadProgress' && event.params.state === 'completed');
+    expect(started.params.suggestedFilename).toBe(name);
+    expect(finished.params.guid).toBe(started.params.guid);
+    expect(fs.readFileSync(finished.params.filePath, 'utf8')).toBe(name);
+  } finally {
+    unsubscribe();
+    for (const event of events) {
+      const file = event.params.filePath;
+      if (file && path.basename(file) === name && fs.existsSync(file) && fs.readFileSync(file, 'utf8') === name) fs.unlinkSync(file);
+    }
+  }
 });
 test('seed storage and fixture builtins', async ({ page, context, server }) => {
   server.setRoute('/claw-sw.js', (_, res) => { res.setHeader('Content-Type', 'text/javascript'); res.end('self.addEventListener("install", () => self.skipWaiting());'); });

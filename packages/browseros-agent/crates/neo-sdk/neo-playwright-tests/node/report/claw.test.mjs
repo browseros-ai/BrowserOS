@@ -93,6 +93,7 @@ test('tests that absent v1 namespaces are lacks while unrelated undefined values
     ['launch', 'await browserType.launch()'],
     ['newContext', 'await playwright.request.newContext()'],
     ['connect', 'await playwright.chromium.connect()'],
+    ['Desktop Chrome', "playwright.devices['Desktop Chrome']"],
   ]) {
     const message = `TypeError: Cannot read properties of undefined (reading '${property}')`
     assert.equal(classify(message, 'claw', { snippet }).verdict, 'neo-lacks')

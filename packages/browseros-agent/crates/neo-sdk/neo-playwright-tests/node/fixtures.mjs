@@ -303,6 +303,23 @@ const clawOptionFixtures = Object.fromEntries(
 
 const clawTest = sdkTest.extend({
   ...clawOptionFixtures,
+  testIdAttribute: [
+    async ({}, use, testInfo) => {
+      markImplicit(testInfo, 'testIdAttribute')
+      await use('data-testid')
+    },
+    { option: true },
+  ],
+  _setupContextOptions: [
+    async ({ playwright, testIdAttribute }, use, testInfo) => {
+      // v1 already uses data-testid. Only an explicit override asks for its absent namespace.
+      if (!implicitOptions.get(testInfo)?.has('testIdAttribute'))
+        playwright.selectors.setTestIdAttribute(testIdAttribute)
+      testInfo.snapshotSuffix = process.platform
+      await use()
+    },
+    { auto: 'all-hooks-included' },
+  ],
   __claw: [
     async ({ __neoWorker }, use) => {
       const { openClaw } = await import('./claw-loader.mjs')
@@ -340,9 +357,9 @@ const clawTest = sdkTest.extend({
     { scope: 'worker' },
   ],
   playwright: [
-    async ({}, use) => {
-      // v1 has no Playwright namespace. Missing members remain undefined.
-      await use({})
+    async ({ __claw }, use) => {
+      // v1 gives agents this real class; only its namespace location is adapted.
+      await use({ errors: { TimeoutError: __claw.params.TimeoutError } })
     },
     { scope: 'worker' },
   ],
@@ -404,10 +421,17 @@ const clawTest = sdkTest.extend({
     await use(await pageTargets(__clawHarness))
   },
   page: async ({ __clawPageTargets, page, __clawHarness }, use) => {
-    await installFixtureBuiltins(__clawHarness, __clawPageTargets)
+    const uninstall = await installFixtureBuiltins(
+      __clawHarness,
+      __clawPageTargets,
+    )
     neoPage = page.constructor
     neoLocator = page.locator(':root').constructor
-    await use(page)
+    try {
+      await use(page)
+    } finally {
+      await uninstall()
+    }
   },
 })
 
