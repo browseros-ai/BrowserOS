@@ -210,6 +210,14 @@ function internalGap(error) {
         ) || 'Locator._expect',
       expectOnly: true,
     }
+  // Playwright's `expectTypes` refuses a receiver without `_apiName` (`Page`/`Locator`) before
+  // the matcher runs; Phase 2's `_apiName` + `_expect` is the same seam.
+  if (/can be only used with (?:Page or Locator|Locator) objects/.test(line))
+    return { key: 'Page/Locator._apiName', expectOnly: true }
+  // Tests that assert on a failed matcher's message fail on that assertion, whose received
+  // text is the missing seam's TypeError. Only the received side counts, never the expected.
+  if (/^Received[^\n]*\._expect is not a function/m.test(error.message || ''))
+    return { key: 'Locator._expect', expectOnly: true }
   if (
     /\btoImpl\b|Neo Node harness does not provide Playwright internal fixture/.test(
       line,

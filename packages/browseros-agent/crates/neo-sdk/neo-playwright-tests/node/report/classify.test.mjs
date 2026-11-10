@@ -403,3 +403,19 @@ test('bridge transitions count selected pass/fail only, without promoting skips 
   assert.equal(comparison.matrix.BridgeLimit['needs-internals'], 1)
   assert.equal(comparison.matrix['No bridge match']['neo-lacks'], 1)
 })
+
+test('a received _expect TypeError and the _apiName refusal are internals; an expected one is not', () => {
+  const rows = classify([
+    'Error: expect(received).toContain(expected) // indexOf\n\nExpected substring: "waiting for locator(\'option\')"\nReceived string:    "locator._expect is not a function"',
+    'Error: toMatchAriaSnapshot can be only used with Page or Locator objects, was called with Page Page {',
+    'Error: expect(received).toContain(expected) // indexOf\n\nExpected substring: "locator._expect is not a function"\nReceived string:    "other"',
+  ])
+  assert.deepEqual(
+    rows.map((row) => [row.verdict, row.gapKey, row.wouldPassWithExpect]),
+    [
+      ['needs-internals', 'Locator._expect', true],
+      ['needs-internals', 'Page/Locator._apiName', true],
+      ['neo-differs', rows[2].gapKey, false],
+    ],
+  )
+})
