@@ -3,7 +3,7 @@
 
 Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file and item (`crates/NEO_STYLE.md`, Provenance). Regenerate it on a rebase conflict; never merge it by hand.
 
-## Deviations (150)
+## Deviations (151)
 
 | File | Item | Playwright | Why |
 | --- | --- | --- | --- |
@@ -142,6 +142,7 @@ Every `Deviation:` and `Unexplained:` line in the neo crates' sources, by file a
 | neo-runtime/src/playwright_methods/screenshot.rs | `screenshot_locator` | `server/frames.ts` `Frame.waitForSelector` | is the element Playwright's wait returns; Neo resolves it again with click's `resolve`, which also marks it as a target (`markTargets: 'all'`), and waits again if it detached in between. |
 | neo-runtime/src/progress.rs | `MAX_CALL_LOG_LINES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo bounds the per-call in-memory log to protect host memory during unbounded retries. |
 | neo-runtime/src/progress.rs | `MAX_CALL_RECORDS` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo bounds `RunOutcome` calls; trace sinks still receive every call. |
+| neo-runtime/src/progress.rs | `MAX_RECORD_LOG_BYTES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo caps recorded folded logs at 16 KiB plus one omission note; the Playwright reply remains whole. |
 | neo-runtime/src/progress.rs | `MAX_RECORD_LOG_LINES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo caps only the recorded folded log; the Playwright reply remains whole. |
 | neo-runtime/src/progress.rs | `MAX_TRACE_BYTES` | `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` | Neo bounds `RunOutcome` record memory; the separate store applies its own detail budget. |
 | neo-runtime/src/quickjs.rs | `RACE_UNCAUGHT` | `client/eventEmitter.ts` `EventEmitter._handleListenerError` | A listener's throw, or its rejection with no `error` listener, is an uncaught exception in Node, which exits. QuickJS has no such exit, so neo-quickjs-injected reports the first one on its `uncaught` promise, and the run ends with that error at once instead of running on. The realm's own `abort` listeners and timer callbacks report theirs the same way (`abort::REALM_GLOBALS`, `HOST_GLOBALS`). |

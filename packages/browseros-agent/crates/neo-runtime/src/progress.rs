@@ -619,6 +619,9 @@ const MAX_CALL_LOG_LINES: usize = 1000;
 /// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo caps only the recorded folded log; the Playwright reply remains whole.
 const MAX_RECORD_LOG_LINES: usize = 200;
 
+/// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo caps recorded folded logs at 16 KiB plus one omission note; the Playwright reply remains whole.
+const MAX_RECORD_LOG_BYTES: usize = 16 * 1024;
+
 /// The most call records a run keeps: the first calls to arrive.
 /// Deviation: `/packages/protocol/spec/tracing.yml` `Tracing.commands.tracingStopChunk` Neo bounds `RunOutcome` calls; trace sinks still receive every call.
 const MAX_CALL_RECORDS: usize = 1000;
@@ -863,11 +866,7 @@ impl CallEntry {
             duration,
             result: scrubbed_result(result, &scrubber),
             delivery: self.delivery.as_ref().map(|cell| cell.delivery()),
-            log: log
-                .iter()
-                .take(MAX_RECORD_LOG_LINES)
-                .map(|line| scrubber.scrub_cut(line, redact::MAX_LINE_BYTES))
-                .collect(),
+            log: recorded_log(&log, &scrubber),
         };
         (record, summary.truncated)
     }
@@ -990,6 +989,29 @@ impl CallStart {
             input,
         }
     }
+}
+
+/// The record/outcome snapshot owns this bounded, scrubbed copy. Charge after scrubbing
+/// because replacement markers can change the byte count; leave the reply's folded log whole.
+fn recorded_log(log: &[String], scrubber: &Scrubber) -> Vec<String> {
+    let mut kept = Vec::new();
+    let mut bytes = 0;
+    for line in log.iter().take(MAX_RECORD_LOG_LINES) {
+        let line = scrubber.scrub_cut(line, redact::MAX_LINE_BYTES);
+        let next = bytes + line.len() + usize::from(!kept.is_empty());
+        if next > MAX_RECORD_LOG_BYTES {
+            break;
+        }
+        bytes = next;
+        kept.push(line);
+    }
+    let dropped = log.len() - kept.len();
+    if dropped > 0 {
+        kept.push(format!(
+            "neo-runtime dropped the last {dropped} call log lines: a record keeps at most {MAX_RECORD_LOG_LINES} lines / {MAX_RECORD_LOG_BYTES} bytes"
+        ));
+    }
+    kept
 }
 
 /// `result` with its error message scrubbed of the run's secrets.
@@ -2058,6 +2080,50 @@ mod tests {
                 delivery: Some(Delivery::Unknown),
             })
         );
+    }
+
+    #[test]
+    fn recorded_call_logs_obey_line_and_byte_caps_with_one_omission_note() {
+        for (count, width) in [(250, 8), (40, 1024)] {
+            let (tap, recording) = testing::tap();
+            tap.secrets().register("hunter22");
+            let trace = Trace::new(tap);
+            let entry = entry(&trace, false);
+            entry.update_log(|log| {
+                for no in 0..count {
+                    log.push(format!("{no} hunter22 {}", "🦀".repeat(width)));
+                }
+            });
+            let reply = entry.finish(CallResult::Ok);
+            assert_eq!(reply.len(), count, "the Playwright-visible log stays whole");
+            assert!(reply[0].contains("hunter22"));
+            entry.publish();
+            let (records, _) = trace.take(RunEnd::Settled);
+            let (note, kept) = records[0].log.split_last().unwrap();
+            assert!(
+                note.contains("neo-runtime dropped the last"),
+                "missing omission note"
+            );
+            assert!(kept.len() <= 200);
+            assert!(
+                kept.join("\n").len() <= 16 * 1024,
+                "record log exceeds 16 KiB"
+            );
+            assert!(!records[0].log.join("\n").contains("hunter22"));
+            assert!(note.contains(&(count - kept.len()).to_string()));
+            let events = recording.events.lock().unwrap().clone();
+            let recorded = events
+                .iter()
+                .find_map(|event| match event {
+                    RunEvent::AfterCall { record, .. } => Some(record),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                recorded.log, records[0].log,
+                "outcome and trace share the bounded record"
+            );
+        }
     }
 
     #[test]
