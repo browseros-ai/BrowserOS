@@ -86,6 +86,26 @@ pub enum StartError {
 }
 
 impl App {
+    /// The hosted stack shares trace recovery with the sidecar, without binding its listeners.
+    #[cfg(feature = "hosted-run")]
+    pub(crate) async fn hosted_trace(
+        directory: &Path,
+    ) -> Result<(TraceStore, Arc<FlagRecovery>), StartError> {
+        let OpenedTrace { store, recovery } = open_trace(directory).await?;
+        Ok((store, recovery))
+    }
+
+    /// The same janitor, secret expiration and retention schedule, owned by the hosted runtime.
+    #[cfg(feature = "hosted-run")]
+    pub(crate) async fn hosted_housekeeping(
+        janitor: TabJanitor,
+        secrets: Arc<SecretSet>,
+        trace: TraceSink,
+        shutdown: CancellationToken,
+    ) {
+        housekeeping(janitor, secrets, trace, shutdown).await;
+    }
+
     /// The tokio runtime Neo runs on: multi-thread, with `Defaults::WORKER_STACK_BYTES` worker
     /// stacks, because a run nests QuickJS and the SDK call chain on one worker.
     pub fn runtime() -> io::Result<Runtime> {
