@@ -186,9 +186,22 @@ function ownerOf(expression) {
   return null
 }
 
+/** Playwright: `client/elementHandle.ts` `ElementHandle`'s public methods, minus `JSHandle`'s. */
+const ELEMENT_HANDLE_METHODS = new Set(
+  '$ $$ boundingBox check click contentFrame dblclick dispatchEvent fill focus getAttribute hover innerHTML innerText inputValue isChecked isDisabled isEditable isEnabled isHidden isVisible ownerFrame press screenshot scrollIntoViewIfNeeded selectOption selectText setChecked setInputFiles tap textContent type uncheck waitForElementState waitForSelector'.split(
+    ' ',
+  ),
+)
+
 function apiKey(expression) {
   const method = expression.match(/\.([\w$]+)(?:\(.*\))?$/)?.[1]
-  const owner = ownerOf(expression)
+  // Neo's Page, Frame and Locator serve these names, so a test's own handle variable
+  // (`div`, `button`, from `page.$`) missing one is an ElementHandle.
+  const owner =
+    ownerOf(expression) ||
+    (/^[a-z]\w*\.[\w$]+$/.test(expression) && ELEMENT_HANDLE_METHODS.has(method)
+      ? 'ElementHandle'
+      : null)
   return owner && method ? `${owner}.${method}` : null
 }
 
@@ -261,6 +274,20 @@ function internalGap(error) {
 
 function observedGap(error, row) {
   const line = error.firstLine
+  // `page.request` (APIRequestContext) is absent on Neo's objects, so its methods read undefined.
+  const read = line.match(
+    /Cannot read properties of undefined \(reading '([\w$]+)'\)/,
+  )
+  const owner =
+    read &&
+    `${error.snippet || ''}\n${error.message || ''}`.match(
+      new RegExp(`\\b(page|context)\\d*\\.request\\.${read[1]}\\b`),
+    )
+  if (owner)
+    return {
+      key: `${owner[1] === 'page' ? 'Page' : 'BrowserContext'}.request`,
+      missing: true,
+    }
   const missing = line.match(/^(?:TypeError: )?(.+) is not a function\.?$/)
   const expression = missing?.[1]
   let key = expression ? apiKey(expression) : null

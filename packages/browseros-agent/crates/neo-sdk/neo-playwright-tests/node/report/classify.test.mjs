@@ -498,3 +498,31 @@ test("the Node door's hosted handle cap is a harness error, not a Neo verdict", 
   ])
   assert.equal(rows[0].verdict, 'harness-error')
 })
+
+test("a test's own handle variable missing an ElementHandle method, and page.request, are neo-lacks", () => {
+  const rows = classify([
+    'TypeError: div.scrollIntoViewIfNeeded is not a function',
+    {
+      results: [
+        {
+          status: 'failed',
+          errors: [
+            {
+              message:
+                "TypeError: Cannot read properties of undefined (reading 'fetch')",
+              snippet:
+                '> 12 |   const response = await page.request.fetch(server.EMPTY_PAGE);',
+            },
+          ],
+        },
+      ],
+    },
+  ])
+  assert.deepEqual(
+    rows.map((row) => [row.verdict, row.gapKey]),
+    [
+      ['neo-lacks', 'ElementHandle.scrollIntoViewIfNeeded'],
+      ['neo-lacks', 'Page.request'],
+    ],
+  )
+})
