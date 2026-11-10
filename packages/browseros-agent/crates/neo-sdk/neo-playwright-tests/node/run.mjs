@@ -22,6 +22,7 @@ const output = fs.realpathSync(
 console.log(`Results: ${output}`)
 const run = {
   mode: options.reference ? 'reference' : 'neo',
+  expectLoop: options.expectLoop,
   argv,
   workers: options.workers,
   startedAt: new Date().toISOString(),
@@ -149,6 +150,7 @@ try {
         NEO_NODE_OVERLAY: overlay,
         NEO_NODE_OUTPUT: output,
         NEO_NODE_MODE: run.mode,
+        NEO_NODE_EXPECT_LOOP: options.expectLoop ? '1' : '0',
         NEO_NODE_LAUNCHER_PID: String(process.pid),
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
         PWTEST_UNDER_TEST: '1',

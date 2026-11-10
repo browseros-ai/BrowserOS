@@ -4,7 +4,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { corpus, sha256, source, verifySource } from '../js/prepare.mjs'
 
-export function materialize(root, { reference, output, workers = 4 }) {
+export function materialize(
+  root,
+  { reference, output, workers = 4, expectLoop = true },
+) {
   const stamp = verifySource()
   fs.mkdirSync(root, { recursive: true })
   fs.writeFileSync(
@@ -63,6 +66,31 @@ export function materialize(root, { reference, output, workers = 4 }) {
     beforeSha256: sha256(original),
     afterSha256: sha256(fs.readFileSync(path.join(root, file))),
   })
+  if (!reference && expectLoop) {
+    const pageFile = 'tests/page/pageTest.ts'
+    const pageOriginal = fs.readFileSync(path.join(root, pageFile))
+    fs.writeFileSync(
+      path.join(root, 'tests/page/__neoOriginalPageTest.ts'),
+      pageOriginal,
+    )
+    fs.writeFileSync(
+      path.join(root, pageFile),
+      [
+        "export * from './__neoOriginalPageTest';",
+        "import { expect as originalExpect } from './__neoOriginalPageTest';",
+        `import { wrapExpect } from ${JSON.stringify(fixture)};`,
+        'export const expect = wrapExpect(originalExpect);',
+        '',
+      ].join('\n'),
+    )
+    edits.push({
+      file: pageFile,
+      reason:
+        'test-only expectLoop import seam; preserve extended expect and all other exports',
+      beforeSha256: sha256(pageOriginal),
+      afterSha256: sha256(fs.readFileSync(path.join(root, pageFile))),
+    })
+  }
   replace(
     'tests/config/serverFixtures.ts',
     'async ({ loopback }, run, workerInfo)',

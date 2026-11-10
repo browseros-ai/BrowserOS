@@ -6,10 +6,30 @@ import path from 'node:path'
 import { source } from '../js/prepare.mjs'
 import { launchBrowser } from './browser.mjs'
 import { contextOptions } from './context-options.mjs'
+import { createExpect } from './expect-loop.mjs'
 import { openSdk } from './loader.mjs'
 
 const require = createRequire(path.join(source, 'package.json'))
-export const { expect } = require('@playwright/test')
+const { expect: realExpect } = require('@playwright/test')
+let neoPage
+let neoLocator
+
+export function wrapExpect(original) {
+  if (
+    process.env.NEO_NODE_MODE !== 'neo' ||
+    process.env.NEO_NODE_EXPECT_LOOP === '0'
+  )
+    return original
+  return createExpect(original, {
+    isNeo: (value) =>
+      Boolean(
+        neoPage && (value instanceof neoPage || value instanceof neoLocator),
+      ),
+    info: () => test.info(),
+  })
+}
+
+export const expect = wrapExpect(realExpect)
 const upstreamRequire = createRequire(
   path.join(process.env.NEO_NODE_OVERLAY, 'tests/config/browserTest.ts'),
 )
@@ -81,6 +101,24 @@ const referenceTest = ownedTest.extend({
 })
 
 const neoTest = ownedTest.extend({
+  __neoExpectLoopSkip: [
+    async ({}, use, testInfo) => {
+      await use()
+      // Upstream error-message tests can catch skip's exception and assert on it.
+      // Preserve that requested skip, including its reason and any subsequent errors.
+      if (
+        testInfo.annotations.some(
+          (annotation) =>
+            annotation.type === 'skip' &&
+            /^expectLoop: \w+ is not covered$/.test(
+              annotation.description || '',
+            ),
+        )
+      )
+        testInfo.status = 'skipped'
+    },
+    { auto: true },
+  ],
   __neo: [
     async ({ __neoWorker }, use) => {
       const sdk = await openSdk(__neoWorker.port, {
@@ -89,6 +127,8 @@ const neoTest = ownedTest.extend({
         // Keep the real SDK's file sandbox aligned with upstream's cwd and test output paths.
         artifactsDir: fs.realpathSync(process.env.NEO_NODE_OVERLAY),
       })
+      neoPage = sdk.page.constructor
+      neoLocator = sdk.page.locator(':root').constructor
       try {
         await use(sdk)
       } finally {
