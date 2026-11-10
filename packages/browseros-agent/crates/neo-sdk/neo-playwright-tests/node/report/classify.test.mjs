@@ -419,3 +419,10 @@ test('a received _expect TypeError and the _apiName refusal are internals; an ex
     ],
   )
 })
+
+test("the Node door's hosted handle cap is a harness error, not a Neo verdict", () => {
+  const rows = classify([
+    'Error: page.$$eval: neo-runtime: Neo hosted runs keep at most 10000 JS handles; dispose unused handles',
+  ])
+  assert.equal(rows[0].verdict, 'harness-error')
+})

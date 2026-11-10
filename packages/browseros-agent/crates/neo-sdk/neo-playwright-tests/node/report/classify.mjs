@@ -127,8 +127,9 @@ function errorsOf(test, location) {
 }
 
 /** Neo: Only explicit infrastructure signals; ordinary test timeouts/closed-page errors are outcomes. */
+// `Neo hosted runs keep at most`: the Node door's own handle caps (hosted-run only), not product behavior.
 function isHarnessError(line) {
-  return /(?:worker process|test worker).*exited unexpectedly|Browser (?:did not (?:start|publish|own)|exited at startup)|Owned browser process group survived cleanup|Cannot revalidate browser group|(?:^|: )harness-error:|ERR_DLOPEN_FAILED|Cannot find module .*neo_node|(?:browser|Browser) (?:process )?(?:crashed|disconnected unexpectedly)|browserType\.launch: (?:Executable doesn't exist|Failed to launch|Target .*closed|spawn )|connect ECONNREFUSED|EADDRINUSE|Timeout.*(?:setting up|tearing down).*"__neo"/i.test(
+  return /(?:worker process|test worker).*exited unexpectedly|Browser (?:did not (?:start|publish|own)|exited at startup)|Owned browser process group survived cleanup|Cannot revalidate browser group|(?:^|: )harness-error:|ERR_DLOPEN_FAILED|Cannot find module .*neo_node|(?:browser|Browser) (?:process )?(?:crashed|disconnected unexpectedly)|browserType\.launch: (?:Executable doesn't exist|Failed to launch|Target .*closed|spawn )|connect ECONNREFUSED|EADDRINUSE|Timeout.*(?:setting up|tearing down).*"__neo"|Neo hosted runs keep at most/i.test(
     line,
   )
 }
