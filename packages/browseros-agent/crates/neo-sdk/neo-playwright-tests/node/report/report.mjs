@@ -65,13 +65,22 @@ function groupGaps(rows) {
   )
 }
 
+/** Neo: The runner's `run.json.argv` holds only the arguments after `run.mjs`; empty is the full corpus. */
+const RUNNER =
+  'packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/run.mjs'
+
+export function runnerCommand(argv) {
+  if (typeof argv === 'string' || argv[0] === 'node') return commandLine(argv)
+  return commandLine(['node', RUNNER, ...argv])
+}
+
 function runDetails(label, run) {
   const meta = run.metadata
   return [
     `### ${label}`,
     '',
     '```sh',
-    commandLine(meta.argv),
+    runnerCommand(meta.argv),
     '```',
     '',
     `Directory: ${cell(run.directory)}. Commit: ${cell(meta.commit)}. Workers: ${cell(meta.workers)}.`,
@@ -239,11 +248,10 @@ function readRun(directory, mode) {
     typeof metadata.argv === 'string'
       ? metadata.argv.length > 0
       : Array.isArray(metadata.argv) &&
-        metadata.argv.length > 0 &&
         metadata.argv.every((arg) => typeof arg === 'string')
   if (metadata.mode !== mode || !argvValid)
     throw new Error(
-      `${directory}/run.json must record mode=${mode} and a nonempty argv`,
+      `${directory}/run.json must record mode=${mode} and its argv`,
     )
   const results = readJson(path.join(directory, 'results.json'))
   return { directory: path.resolve(directory), metadata, results }

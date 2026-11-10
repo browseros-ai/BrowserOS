@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { flattenResults } from './classify.mjs'
-import { commandLine, renderReport } from './report.mjs'
+import { commandLine, renderReport, runnerCommand } from './report.mjs'
 
 function fixture(name) {
   return JSON.parse(
@@ -165,4 +165,12 @@ test('CLI writes markdown and parseable one-verdict-per-case JSONL; invalid inpu
   assert.equal(failure.status, 1)
   assert.match(failure.stderr, /Cannot read .*run.json/)
   assert.ok(!fs.existsSync(output))
+})
+
+test('runner argv without a command renders the runner, and empty argv is the full corpus', () => {
+  const runner =
+    'node packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/run.mjs'
+  assert.equal(runnerCommand([]), runner)
+  assert.equal(runnerCommand(['--reference']), `${runner} --reference`)
+  assert.equal(runnerCommand(['node', 'x.mjs']), 'node x.mjs')
 })
