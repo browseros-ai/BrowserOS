@@ -15,7 +15,7 @@ test('real SDK in Node keeps getters synchronous, delivers events and finishes p
   assert.ok(process.env.NEO_E2E_BROWSER, 'Set NEO_E2E_BROWSER')
   const root =
     process.env.NEO_NODE_OUTPUT_DIR ||
-    path.resolve(agent, '../../.llm/neo-node-spike')
+    path.resolve(agent, '../../.llm/neo-node-results')
   await fs.mkdir(root, { recursive: true })
   const output = await fs.mkdtemp(path.join(root, 'smoke-'))
   const server = http.createServer((_, response) => {
