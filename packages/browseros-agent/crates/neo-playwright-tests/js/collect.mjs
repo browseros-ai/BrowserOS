@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { materialize } from './overlay.mjs'
-import { agent, crate, sha256, source } from './prepare.mjs'
+import { agent, corpus, crate, sha256, source } from './prepare.mjs'
 
 const root = path.resolve(process.argv[2])
 const overlay = path.join(root, 'overlay')
@@ -56,6 +56,10 @@ if (result.error || result.status !== 0)
   )
 const entries = JSON.parse(fs.readFileSync(catalog, 'utf8'))
 if (!entries.length) throw new Error('Pinned upstream collection is empty')
+const collectedFiles = new Set(entries.map((entry) => entry.file))
+for (const suite of corpus.suites.filter((suite) => suite.include))
+  if (!collectedFiles.has(suite.file))
+    throw new Error(`Included suite has no collected cases: ${suite.file}`)
 const harnessFiles = Object.fromEntries(
   fs
     .readdirSync(path.join(harness, 'js'))
@@ -110,6 +114,7 @@ fs.writeFileSync(
       platform: process.platform,
       arch: process.arch,
       count: entries.length,
+      suiteCount: collectedFiles.size,
       neoRevision: revision.stdout?.trim(),
       nativeWorkerSha256: sha256(fs.readFileSync(worker)),
       harnessFiles,

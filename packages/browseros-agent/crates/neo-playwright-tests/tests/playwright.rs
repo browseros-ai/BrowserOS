@@ -146,11 +146,12 @@ fn run() -> Result<(), String> {
                 let cli_reason = record.reason.lines().next().unwrap_or(&record.reason);
                 let completion = match record.verdict {
                     Verdict::Pass => Ok(Completion::Completed),
-                    Verdict::Unsupported | Verdict::Skip | Verdict::NotApplicable => {
-                        Ok(Completion::Ignored {
-                            reason: Some(format!("{:?}: {cli_reason}", record.verdict)),
-                        })
-                    }
+                    Verdict::Unsupported
+                    | Verdict::BridgeLimit
+                    | Verdict::Skip
+                    | Verdict::NotApplicable => Ok(Completion::Ignored {
+                        reason: Some(format!("{:?}: {cli_reason}", record.verdict)),
+                    }),
                     _ => Err(format!("{:?}: {cli_reason}", record.verdict).into()),
                 };
                 results
@@ -216,7 +217,7 @@ fn publish(
     write_json(
         &root.join("scoreboard.json"),
         &json!({
-            "schemaVersion": 2, "catalogCount": catalog_count, "selectedCount": selected,
+            "schemaVersion": 3, "catalogCount": catalog_count, "selectedCount": selected,
             "completedCount": results.len(), "fullCorpus": complete,
             "scope": scope, "status": status,
             "filter": arguments.filter, "skip": arguments.skip,
@@ -273,14 +274,19 @@ fn print_totals(label: &str, totals: &report::Totals) {
         totals.coverage.denominator
     );
     println!(
-        "    Pass {}, Fail {}; excluded: Unsupported {}, Skip {}, NotApplicable {}, ReferenceFailure {}, HarnessError {}",
+        "    Pass {}, Fail {}; excluded: Unsupported {}, BridgeLimit {}, ReferenceFailure {}, HarnessError {}, Skip {}, NotApplicable {}",
         totals.counts[&Verdict::Pass],
         totals.counts[&Verdict::Fail],
         totals.counts[&Verdict::Unsupported],
-        totals.counts[&Verdict::Skip],
-        totals.counts[&Verdict::NotApplicable],
+        totals.counts[&Verdict::BridgeLimit],
         totals.counts[&Verdict::ReferenceFailure],
-        totals.counts[&Verdict::HarnessError]
+        totals.counts[&Verdict::HarnessError],
+        totals.counts[&Verdict::Skip],
+        totals.counts[&Verdict::NotApplicable]
+    );
+    println!(
+        "    wording differences {}, bridge-limited with an earlier real difference {}",
+        totals.wording_count, totals.bridge_limit_with_earlier_difference_count
     );
     println!(
         "    partial evidence {}, partial Fail {} (included in pass+fail), partial reference census {}, harness limitations {}",

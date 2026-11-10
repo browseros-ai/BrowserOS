@@ -179,7 +179,6 @@ fn unreadable_or_incomplete_evidence_never_passes() {
         "activation",
         "target",
         "pending",
-        "transport",
         "census",
         "correlation",
         "site",
@@ -206,10 +205,6 @@ fn unreadable_or_incomplete_evidence_never_passes() {
             }
             "target" => value["phases"]["neo"]["journal"]["nativeOutcome"]["pages"] = json!([]),
             "pending" => value["phases"]["neo"]["journal"]["calls"][0]["state"] = json!("pending"),
-            "transport" => {
-                value["phases"]["neo"]["journal"]["transportErrors"] =
-                    json!(["caught unsupported callback transport"]);
-            }
             "census" => {
                 value["phases"]["neo"]["journal"]["censusGaps"] =
                     json!(["namespace not instrumented"]);
@@ -618,7 +613,7 @@ fn legitimate_assertion_failure_and_upstream_skip_keep_their_categories() {
 }
 
 #[test]
-fn exact_error_name_message_and_lone_surrogates_remain_real_differences() {
+fn error_classes_and_unnamed_throws_remain_real_differences() {
     for (expected, actual) in [
         (
             json!({"tag":"string","units":[0xd800]}),
@@ -645,7 +640,7 @@ fn exact_error_name_message_and_lone_surrogates_remain_real_differences() {
         assert_eq!(
             classify(value).expect("valid boundary fixture").verdict,
             Verdict::Fail,
-            "public names, wording and UTF-16 cannot be normalized away"
+            "different classes and unnamed throws cannot be normalized away"
         );
     }
 }
@@ -664,8 +659,12 @@ fn measured_differences_survive_incomplete_effects_and_target_witness() {
         let result = classify(value).expect("valid boundary fixture");
         assert_eq!(
             result.verdict,
-            Verdict::Fail,
+            Verdict::HarnessError,
             "an independent measured gap survives {defect} loss"
+        );
+        assert!(
+            !result.differences.is_empty(),
+            "infrastructure does not erase measured gaps"
         );
         assert!(
             !result.comparable && !result.evidence_incomplete.is_empty(),
@@ -777,7 +776,7 @@ fn coverage_distinguishes_zero_supported_partial_failures_and_skips() {
     let pass = classify(fixture()).expect("valid fixture");
     let mut partial = fixture();
     partial["entry"]["feature"] = json!("navigation");
-    partial["phases"]["neo"]["observation"]["status"] = json!("incomplete");
+    partial["phases"]["neo"]["journal"]["censusGaps"] = json!(["unwrapped namespace"]);
     partial["phases"]["neo"]["journal"]["calls"][0]["value"] =
         json!({"tag":"boolean","value":true});
     let partial = classify(partial).expect("valid fixture");
@@ -823,5 +822,348 @@ fn coverage_distinguishes_zero_supported_partial_failures_and_skips() {
     assert_eq!(
         summary.suites["tests/page/page-goto.spec.ts"].completed_count, 4,
         "suite totals preserve all categories"
+    );
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "Only the known fixture call is mutated."
+)]
+fn throws(value: &mut Value, engine: &str, name: &str, message: &str) {
+    let call = value["phases"][engine]["journal"]["calls"][0]
+        .as_object_mut()
+        .expect("fixture call");
+    call.insert("state".into(), json!("threw"));
+    call.remove("value");
+    call.insert(
+        "error".into(),
+        encode(&json!({"name":name,"message":message})),
+    );
+}
+
+#[test]
+fn tests_that_error_names_match_and_wording_is_counted_once_per_case() {
+    let mut value = fixture();
+    throws(&mut value, "reference", "TimeoutError", "reference wording");
+    throws(&mut value, "neo", "TimeoutError", "native wording");
+    for engine in ["reference", "neo"] {
+        let mut next = value["phases"][engine]["journal"]["calls"][0].clone();
+        next["ordinal"] = json!(1);
+        next["site"]["line"] = json!(2);
+        value["phases"][engine]["journal"]["calls"]
+            .as_array_mut()
+            .expect("calls")
+            .push(next);
+    }
+    let result = classify(value).expect("valid fixture");
+    assert_eq!(
+        result.verdict,
+        Verdict::Pass,
+        "message text is not behavior"
+    );
+    assert!(
+        result.differences.is_empty(),
+        "wording is separate from differences"
+    );
+    let serialized = serde_json::to_value(&result).expect("record");
+    assert_eq!(
+        serialized["wordingNotes"].as_array().expect("notes").len(),
+        2,
+        "one note per differing message"
+    );
+    let summary = serde_json::to_value(report::summarize(&[result])).expect("summary");
+    for totals in [
+        &summary["totals"],
+        &summary["features"]["unclassified"],
+        &summary["suites"]["tests/page/page-goto.spec.ts"],
+    ] {
+        assert_eq!(
+            totals["wordingCount"], 1,
+            "wording cases appear in every grouping"
+        );
+    }
+}
+
+#[test]
+fn tests_that_ansi_is_ignored_in_values_errors_and_effects_without_mutating_evidence() {
+    for errors in [false, true] {
+        let mut value = fixture();
+        if errors {
+            throws(&mut value, "reference", "Error", "plain");
+            throws(
+                &mut value,
+                "neo",
+                "\u{1b}[1;31mError\u{1b}[m",
+                "\u{1b}[32mplain\u{1b}[0m",
+            );
+        } else {
+            value["phases"]["reference"]["journal"]["calls"][0]["value"] =
+                encode(&json!({"key":["plain"]}));
+            value["phases"]["neo"]["journal"]["calls"][0]["value"] =
+                encode(&json!({"\u{1b}[31mkey\u{1b}[m":["\u{1b}[32mplain\u{1b}[0m"]}));
+        }
+        projection(&mut value, "reference", "events", &json!(["plain"]));
+        projection(
+            &mut value,
+            "neo",
+            "events",
+            &json!(["\u{1b}[31mplain\u{1b}[m"]),
+        );
+        let pair: Pair = serde_json::from_value(value).expect("pair");
+        let original = pair.phases["neo"]
+            .journal
+            .as_ref()
+            .expect("journal")
+            .calls
+            .clone();
+        let result = report::classify(&pair);
+        assert_eq!(
+            result.verdict,
+            Verdict::Pass,
+            "ANSI presentation is ignored"
+        );
+        assert_eq!(
+            pair.phases["neo"].journal.as_ref().expect("journal").calls,
+            original,
+            "raw journal stays unchanged"
+        );
+        assert_eq!(
+            serde_json::to_value(result).expect("record")["wordingNotes"],
+            json!([]),
+            "ANSI alone is not wording"
+        );
+    }
+}
+
+#[test]
+fn tests_that_upstream_assertion_diagnostics_strip_ansi() {
+    let mut value = fixture();
+    outcome(&mut value, "reference", "failed", "passed");
+    value["phases"]["reference"]["runner"]["outcomes"][0]["errors"] = json!([encode(
+        &json!({"message":"\u{1b}[31mExpected text\u{1b}[0m"})
+    )]);
+    let result = classify(value).expect("fixture");
+    assert!(
+        result.reason.ends_with("Expected text"),
+        "readable assertion text"
+    );
+    assert!(
+        !result.reason.contains('\u{1b}'),
+        "ANSI is stripped in assertion diagnostics"
+    );
+}
+
+#[test]
+fn tests_that_unproven_upstream_wording_assertions_stay_failures() {
+    let mut value = fixture();
+    throws(&mut value, "reference", "Error", "reference message");
+    throws(&mut value, "neo", "Error", "native message");
+    outcome(&mut value, "neo", "failed", "passed");
+    value["phases"]["neo"]["runner"]["outcomes"][0]["errors"] = json!([encode(
+        &json!({"message":"expect(received).toContain(expected)\nReceived: native message"})
+    )]);
+    assert_eq!(
+        classify(value).expect("fixture").verdict,
+        Verdict::Fail,
+        "rendered assertion text does not prove the received value"
+    );
+}
+
+fn bridge_fixture() -> Value {
+    let mut value = fixture();
+    value["phases"]["neo"]["journal"]["harnessLimitations"] =
+        json!(["bridge limit: host callback Page.on"]);
+    value
+}
+
+#[test]
+fn tests_that_bridge_limits_and_transport_errors_never_become_failures() {
+    for transport in ["label", "journal", "call"] {
+        let mut value = bridge_fixture();
+        if transport != "label" {
+            value["phases"]["neo"]["journal"]["harnessLimitations"] = json!([]);
+        }
+        if transport == "journal" {
+            value["phases"]["neo"]["journal"]["transportErrors"] =
+                json!(["cannot encode callback"]);
+        } else if transport == "call" {
+            value["phases"]["neo"]["journal"]["calls"][0]["state"] = json!("untransportable");
+            value["phases"]["neo"]["journal"]["calls"][0]["transportError"] =
+                json!("unsupported return");
+        }
+        outcome(&mut value, "neo", "failed", "passed");
+        let result = classify(value).expect("fixture");
+        assert_eq!(
+            serde_json::to_value(&result).expect("record")["verdict"],
+            "BridgeLimit",
+            "transport is not an SDK failure"
+        );
+        assert!(
+            !result.comparable,
+            "bridge-limited evidence cannot enter compatibility"
+        );
+        let summary = report::summarize(&[result]);
+        assert_eq!(
+            summary.totals.compatibility.denominator, 0,
+            "bridge limits have no pass rate"
+        );
+    }
+}
+
+#[test]
+fn tests_that_unsupported_and_invalid_references_take_precedence_over_bridge_limits() {
+    let mut value = bridge_fixture();
+    value["phases"]["neo"]["journal"]["missing"] = json!(["Page.evaluate"]);
+    assert_eq!(
+        classify(value).expect("fixture").verdict,
+        Verdict::Unsupported,
+        "actual missing APIs take precedence"
+    );
+    let mut value = bridge_fixture();
+    outcome(&mut value, "reference", "failed", "passed");
+    assert_eq!(
+        classify(value).expect("fixture").verdict,
+        Verdict::ReferenceFailure,
+        "reference must pass"
+    );
+}
+
+#[test]
+fn tests_that_infrastructure_errors_outrank_bridge_limits_and_unsupported() {
+    for defect in ["observer", "exit", "worker", "witness"] {
+        for unsupported in [false, true] {
+            let mut value = bridge_fixture();
+            if unsupported {
+                value["phases"]["neo"]["journal"]["missing"] = json!(["Page.evaluate"]);
+            }
+            match defect {
+                "observer" => value["phases"]["neo"]["observation"]["status"] = json!("incomplete"),
+                "exit" => value["phases"]["neo"]["exit"]["code"] = json!(1),
+                "worker" => value["phases"]["neo"]["infrastructureErrors"] = json!(["worker died"]),
+                "witness" => {
+                    value["phases"]["neo"]["journal"]["nativeOutcome"]["status"] = json!("error");
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                classify(value).expect("fixture").verdict,
+                Verdict::HarnessError,
+                "{defect} remains infrastructure"
+            );
+        }
+    }
+}
+
+#[test]
+fn tests_that_bridge_limit_counts_only_proven_earlier_differences() {
+    for earlier_difference in [false, true] {
+        let mut value = bridge_fixture();
+        if earlier_difference {
+            value["phases"]["neo"]["journal"]["calls"][0]["value"] = encode(&json!(true));
+        }
+        for engine in ["reference", "neo"] {
+            let mut next = call(
+                engine,
+                "Page.title",
+                (1, "Page"),
+                2,
+                0,
+                1,
+                encode(&json!("title")),
+            );
+            if engine == "neo" {
+                next["state"] = json!("pending");
+            }
+            value["phases"][engine]["journal"]["calls"]
+                .as_array_mut()
+                .expect("calls")
+                .push(next);
+        }
+        // A reference tail after the blocked call is evidence, not a proven earlier difference.
+        value["phases"]["reference"]["journal"]["calls"]
+            .as_array_mut()
+            .expect("calls")
+            .push(call(
+                "reference",
+                "Page.title",
+                (1, "Page"),
+                3,
+                0,
+                2,
+                encode(&json!("later")),
+            ));
+        let result = classify(value).expect("fixture");
+        assert!(!result.differences.is_empty(), "retain the incomplete tail");
+        let summary = serde_json::to_value(report::summarize(&[result])).expect("summary");
+        for totals in [
+            &summary["totals"],
+            &summary["features"]["unclassified"],
+            &summary["suites"]["tests/page/page-goto.spec.ts"],
+        ] {
+            assert_eq!(
+                totals["bridgeLimitWithEarlierDifferenceCount"],
+                usize::from(earlier_difference),
+                "only proven earlier differences count"
+            );
+        }
+    }
+}
+
+#[test]
+fn tests_that_invalid_reference_transport_cannot_establish_a_bridge_verdict() {
+    for missing in [false, true] {
+        let mut value = bridge_fixture();
+        if missing {
+            value["phases"]["reference"]["journal"] = Value::Null;
+        } else {
+            value["phases"]["reference"]["journal"]["transportErrors"] =
+                json!(["reference serialization failed"]);
+        }
+        assert_eq!(
+            classify(value).expect("fixture").verdict,
+            Verdict::HarnessError,
+            "unreadable reference transport is a harness error"
+        );
+    }
+}
+
+#[test]
+fn tests_that_ansi_normalization_preserves_object_origins_and_lone_surrogates() {
+    let mut value = fixture();
+    for engine in ["reference", "neo"] {
+        let key = if engine == "neo" {
+            "\u{1b}[31mchild\u{1b}[m"
+        } else {
+            "child"
+        };
+        value["phases"][engine]["journal"]["calls"][0]["value"] = json!({"tag":"record","nullPrototype":false,"entries":[[key.encode_utf16().collect::<Vec<_>>(),object(engine,10,"Page")]]});
+        let units = if engine == "neo" {
+            vec![0xd800, 0x1b, 0x5b, 0x6d, 65]
+        } else {
+            vec![0xd800, 65]
+        };
+        value["phases"][engine]["journal"]["calls"]
+            .as_array_mut()
+            .expect("calls")
+            .push(call(
+                engine,
+                "Page.title",
+                (10, "Page"),
+                2,
+                0,
+                1,
+                json!({"tag":"string","units":units}),
+            ));
+    }
+    assert_eq!(
+        classify(value.clone()).expect("fixture").verdict,
+        Verdict::Pass,
+        "ANSI in returned keys cannot change child receiver identities"
+    );
+    value["phases"]["neo"]["journal"]["calls"][1]["value"]["units"] = json!([0xfffd, 65]);
+    assert_eq!(
+        classify(value).expect("fixture").verdict,
+        Verdict::Fail,
+        "lone surrogates cannot collapse into replacement characters"
     );
 }
