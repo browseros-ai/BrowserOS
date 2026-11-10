@@ -827,6 +827,8 @@ export class OwnedBrowser {
           '--headless=new',
           // BrowserOS's sidecar has an independent lifecycle and must not escape this owner.
           '--disable-browseros-server',
+          // Bundled UI injects shadow DOM into upstream pages on both engines.
+          '--disable-browseros-extensions',
           '--remote-debugging-port=0',
           `--user-data-dir=${this.#profile}`,
           '--no-first-run',
