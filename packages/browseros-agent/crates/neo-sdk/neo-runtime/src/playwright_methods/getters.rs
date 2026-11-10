@@ -589,6 +589,7 @@ mod tests {
             parent: parent.map(str::to_string),
             name: name.to_string(),
             url: url.to_string(),
+            loader: String::new(),
         })
         .collect()
     }

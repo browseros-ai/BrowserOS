@@ -166,6 +166,37 @@ pub(crate) trait Tab: Send + Sync {
         &self,
         watched: Self::Navigations,
     ) -> impl Future<Output = Result<Vec<String>, PageError>> + Send;
+
+    /// proto-hook-pin spike (VS): every frame's document identity.
+    fn proto_snapshot(
+        &self,
+    ) -> impl Future<Output = Result<crate::proto_pin::ProtoSnapshot, PageError>> + Send {
+        async { Ok(crate::proto_pin::ProtoSnapshot::default()) }
+    }
+
+    /// proto-hook-pin spike (VS): why `element`'s document is not one the snapshot recorded.
+    fn proto_check(
+        &self,
+        _snapshot: &crate::proto_pin::ProtoSnapshot,
+        _element: &Self::Element,
+    ) -> impl Future<Output = Result<Option<String>, PageError>> + Send {
+        async { Ok(None) }
+    }
+
+    /// proto-hook-pin spike (VP): a second owner of a resolved element.
+    fn proto_clone(&self, _element: &Self::Element) -> Option<Self::Element> {
+        None
+    }
+
+    /// proto-hook-pin spike (VPX): types `value` page-side into `element` with
+    /// `document.execCommand('insertText')` in the element's own document.
+    fn proto_exec_insert(
+        &self,
+        _element: &Self::Element,
+        _value: &str,
+    ) -> impl Future<Output = Result<String, PageError>> + Send {
+        async { Err(PageError::Contract("proto: no exec insert on this tab".to_string())) }
+    }
 }
 
 /// What `describeSelector` learned, once per call.

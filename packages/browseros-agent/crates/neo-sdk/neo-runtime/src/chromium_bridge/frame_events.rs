@@ -301,18 +301,21 @@ mod tests {
                 id: TAB.into(),
                 parent: None,
                 name: String::new(),
+                loader: String::new(),
                 url: "https://a.test/".into(),
             },
             FrameInfo {
                 id: "A".into(),
                 parent: Some(TAB.into()),
                 name: String::new(),
+                loader: String::new(),
                 url: "https://a.test/a".into(),
             },
             FrameInfo {
                 id: "B".into(),
                 parent: Some("A".into()),
                 name: String::new(),
+                loader: String::new(),
                 url: "https://a.test/b".into(),
             },
         ]);

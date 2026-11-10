@@ -38,6 +38,9 @@ pub(crate) struct FrameInfo {
     #[serde(default)]
     pub(crate) name: String,
     pub(crate) url: String,
+    /// proto-hook-pin spike: the frame's current document loader.
+    #[serde(default, rename = "loaderId")]
+    pub(crate) loader: String,
 }
 
 type Contexts = Mutex<HashMap<String, Arc<FrameContext>>>;

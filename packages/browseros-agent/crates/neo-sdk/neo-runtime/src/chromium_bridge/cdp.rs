@@ -336,6 +336,7 @@ impl Browser {
         &self,
         command: Serialized<C>,
     ) -> Result<C::Reply, CdpError> {
+        crate::proto_pin::count_send(C::METHOD);
         let reply = self.client.send(C::METHOD, command.params?, None).await?;
         serde_json::from_value(reply).map_err(CdpError::from)
     }
@@ -403,6 +404,7 @@ impl Session {
         &self,
         command: Serialized<C>,
     ) -> Result<C::Reply, CdpError> {
+        crate::proto_pin::count_send(C::METHOD);
         let reply = self
             .browser
             .client
@@ -431,6 +433,7 @@ impl Session {
         input: &Input,
         _delivery: &InputTicket,
     ) -> Result<(), CdpError> {
+        crate::proto_pin::count_send(input.method);
         self.browser
             .client
             .send_raw_json_at_epoch(self.epoch, input.method, &input.params, Some(&self.id))

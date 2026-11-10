@@ -3111,6 +3111,91 @@ impl Tab for FrameTab {
         }
         Ok(barrier.committed)
     }
+
+    // proto-hook-pin spike (VS / VP). Throwaway.
+    async fn proto_snapshot(&self) -> Result<crate::proto_pin::ProtoSnapshot, PageError> {
+        let tree = self.frames.tree().await?;
+        Ok(crate::proto_pin::ProtoSnapshot {
+            frames: tree
+                .into_iter()
+                .map(|frame| {
+                    let world = self
+                        .frames
+                        .cached(&frame.id)
+                        .map(|context| (Arc::clone(&context.world), context.world.generation()));
+                    crate::proto_pin::ProtoFrame {
+                        id: frame.id,
+                        url: frame.url,
+                        loader: frame.loader,
+                        world,
+                    }
+                })
+                .collect(),
+        })
+    }
+
+    async fn proto_check(
+        &self,
+        snapshot: &crate::proto_pin::ProtoSnapshot,
+        element: &ResolvedElement,
+    ) -> Result<Option<String>, PageError> {
+        let id = &element.frame.id;
+        let Some(before) = snapshot.frames.iter().find(|frame| &frame.id == id) else {
+            return Ok(Some(format!(
+                "proto VS: the element's frame {id} did not exist when the hold began"
+            )));
+        };
+        let generation = element.frame.world.generation();
+        let world_changed = match &before.world {
+            Some((world, was)) => !Arc::ptr_eq(world, &element.frame.world) || *was != generation,
+            None => true,
+        };
+        let tree = self.frames.tree().await?;
+        let now = tree.iter().find(|frame| &frame.id == id);
+        let loader_now = now.map_or("<gone>", |frame| frame.loader.as_str());
+        let loader_changed = loader_now != before.loader;
+        if world_changed || loader_changed {
+            return Ok(Some(format!(
+                "proto VS: the element's frame {id} ({}) changed document since the hold began \
+                 (loader {} -> {loader_now}; world changed: {world_changed}; loader changed: \
+                 {loader_changed})",
+                before.url, before.loader
+            )));
+        }
+        Ok(None)
+    }
+
+    fn proto_clone(&self, element: &ResolvedElement) -> Option<ResolvedElement> {
+        Some(element.clone())
+    }
+
+    async fn proto_exec_insert(
+        &self,
+        element: &ResolvedElement,
+        value: &str,
+    ) -> Result<String, PageError> {
+        const PROTO_EXEC: &str = "function (v) { if (!this.isConnected) return 'detached'; \
+            const d = this.ownerDocument; if (d.activeElement !== this) this.focus(); \
+            return d.execCommand('insertText', false, v) ? 'inserted' : 'refused'; }";
+        let reply = element
+            .frame
+            .host
+            .send_command(cdp::runtime::CallFunctionOn {
+                function_declaration: PROTO_EXEC.to_string(),
+                object_id: Some(element.handle().id().object_id().to_string()),
+                arguments: Some(vec![playwright_injected_methods::argument(
+                    serde_json::json!(value),
+                )]),
+                return_by_value: Some(true),
+                ..cdp::runtime::CallFunctionOn::default()
+            })
+            .await
+            .map_err(|error| element.frame.host.classify(&error))?;
+        if let Some(details) = reply.get("exceptionDetails") {
+            return Err(PageError::Threw(details.to_string()));
+        }
+        Ok(reply["result"]["value"].as_str().unwrap_or("?").to_string())
+    }
 }
 
 enum FrameHitTarget {

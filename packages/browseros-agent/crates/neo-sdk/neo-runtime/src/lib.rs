@@ -76,6 +76,8 @@ mod method_router;
 mod mime;
 mod playwright_methods;
 mod progress;
+#[doc(hidden)]
+pub mod proto_pin;
 mod quickjs;
 mod quickjs_bridge;
 mod run;

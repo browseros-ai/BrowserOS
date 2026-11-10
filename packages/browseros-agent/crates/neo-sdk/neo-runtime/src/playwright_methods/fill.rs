@@ -98,6 +98,9 @@ pub(crate) async fn fill<T: FormTab + KeyboardTab>(
     progress: &Progress,
 ) -> Result<(), CallError> {
     let delivery = delivery(progress)?;
+    if crate::proto_pin::active(&options.value) {
+        return proto_fill(tab, options, delivery, progress).await;
+    }
     retry::retry_with_progress_if_not_connected(
         tab,
         &options.selector,
@@ -183,6 +186,183 @@ pub(crate) async fn input_value<T: FormTab>(
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// proto-hook-pin spike: THROWAWAY. A stand-in `beforeAction` hook on fill, four placements.
+// ---------------------------------------------------------------------------------------------
+
+async fn proto_hold(progress: &Progress, label: &str) -> Result<(), CallError> {
+    let hold = crate::proto_pin::hold();
+    progress.log(format!("proto: hold {}ms ({label})", hold.as_millis()));
+    crate::proto_pin::HELD.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if !hold.is_zero() {
+        progress.wait(hold).await?;
+    }
+    Ok(())
+}
+
+async fn proto_fill<T: FormTab + KeyboardTab>(
+    tab: &T,
+    options: &FillOptions,
+    delivery: &Arc<DeliveryCell>,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let secret = FillOptions {
+        value: crate::proto_pin::SECRET.to_string(),
+        ..options.clone()
+    };
+    let action = FillAction {
+        options: &secret,
+        delivery,
+        platform: OnceLock::new(),
+    };
+    let pre_checks = PreChecks::unless_forced(options.force);
+    let selector = &options.selector;
+    let strict = options.strict;
+    let variant = match crate::proto_pin::variant() {
+        4 => 2,
+        other => other,
+    };
+    match variant {
+        // V0: today's fill, held in the call's task before loop A starts.
+        0 => {
+            proto_hold(progress, "V0 before the action").await?;
+            retry::retry_with_progress_if_not_connected(
+                tab, selector, strict, pre_checks, progress, &action,
+            )
+            .await
+        }
+        // VS: record every frame's document, hold, then loop A as today but refuse an element
+        // whose frame document is not the recorded one.
+        1 => {
+            let snapshot = progress
+                .race(tab.proto_snapshot())
+                .await?
+                .map_err(|error| PlaywrightError::error(format!("proto VS snapshot: {error:?}")))?;
+            progress.log(format!(
+                "proto VS: snapshot of {} frames: {}",
+                snapshot.frames.len(),
+                snapshot
+                    .frames
+                    .iter()
+                    .map(|frame| format!("{}={}", frame.url, frame.loader))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            proto_hold(progress, "VS after the snapshot").await?;
+            retry::retry_with_progress_if_not_connected(
+                tab,
+                selector,
+                strict,
+                pre_checks,
+                progress,
+                &ProtoSnapshotAction {
+                    inner: action,
+                    snapshot,
+                },
+            )
+            .await
+        }
+        // VP: resolve once, hold, then act on that exact element; never re-resolve.
+        2 => {
+            let pinned = retry::retry_with_progress_if_not_connected(
+                tab, selector, strict, pre_checks, progress, &ProtoPinAction,
+            )
+            .await?;
+            proto_hold(progress, "VP after resolving once").await?;
+            match action.act(tab, &pinned, progress).await {
+                Ok(ActionResult::Done(())) => Ok(()),
+                Ok(ActionResult::NotConnected) => Err(PlaywrightError::error(
+                    "proto VP: the pinned element was detached; not re-resolving",
+                )
+                .into()),
+                Err(Stop::End(error)) => Err(error),
+                Err(Stop::Retry) => Err(PlaywrightError::error(
+                    "proto VP: a page step on the pinned element failed (its document is gone); \
+                     not re-resolving",
+                )
+                .into()),
+            }
+        }
+        // VG: hold inside loop A, after resolve and before act, on the first element only.
+        _ => {
+            retry::retry_with_progress_if_not_connected(
+                tab,
+                selector,
+                strict,
+                pre_checks,
+                progress,
+                &ProtoHoldInsideAction {
+                    inner: action,
+                    held: std::sync::atomic::AtomicBool::new(false),
+                },
+            )
+            .await
+        }
+    }
+}
+
+struct ProtoPinAction;
+
+impl<T: FormTab + KeyboardTab> ElementAction<T> for ProtoPinAction {
+    type Output = T::Element;
+
+    async fn act(
+        &self,
+        tab: &T,
+        element: &T::Element,
+        _progress: &Progress,
+    ) -> Result<ActionResult<T::Element>, Stop> {
+        tab.proto_clone(element).map(ActionResult::Done).ok_or_else(|| {
+            PlaywrightError::error("proto VP: this tab cannot pin an element").into()
+        })
+    }
+}
+
+struct ProtoSnapshotAction<'a> {
+    inner: FillAction<'a>,
+    snapshot: crate::proto_pin::ProtoSnapshot,
+}
+
+impl<T: FormTab + KeyboardTab> ElementAction<T> for ProtoSnapshotAction<'_> {
+    type Output = ();
+
+    async fn act(
+        &self,
+        tab: &T,
+        element: &T::Element,
+        progress: &Progress,
+    ) -> Result<ActionResult<()>, Stop> {
+        match progress.race(tab.proto_check(&self.snapshot, element)).await?? {
+            None => {
+                progress.log("proto VS: the element's frame document is the recorded one");
+                self.inner.act(tab, element, progress).await
+            }
+            Some(why) => Err(PlaywrightError::error(why).into()),
+        }
+    }
+}
+
+struct ProtoHoldInsideAction<'a> {
+    inner: FillAction<'a>,
+    held: std::sync::atomic::AtomicBool,
+}
+
+impl<T: FormTab + KeyboardTab> ElementAction<T> for ProtoHoldInsideAction<'_> {
+    type Output = ();
+
+    async fn act(
+        &self,
+        tab: &T,
+        element: &T::Element,
+        progress: &Progress,
+    ) -> Result<ActionResult<()>, Stop> {
+        if !self.held.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            proto_hold(progress, "VG inside loop A after resolve").await?;
+        }
+        self.inner.act(tab, element, progress).await
+    }
+}
+
 struct FillAction<'a> {
     options: &'a FillOptions,
     delivery: &'a Arc<DeliveryCell>,
@@ -239,6 +419,48 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
                 FillOutcome::NotConnected => return Ok(ActionResult::NotConnected),
                 FillOutcome::Missing(state) => log_missing(progress, state),
                 FillOutcome::NeedsInput(ticket) => {
+                    // proto-hook-pin spike: the focus -> insertText window, held on purpose.
+                    let after_focus = crate::proto_pin::after_focus_hold();
+                    if options.value == crate::proto_pin::SECRET && !after_focus.is_zero() {
+                        progress.log(format!(
+                            "proto: after-focus hold {}ms",
+                            after_focus.as_millis()
+                        ));
+                        crate::proto_pin::AFTER_FOCUS_HELD
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if let Err(error) = progress.wait(after_focus).await {
+                            ticket.unsent();
+                            return Err(error.into());
+                        }
+                    }
+                    // proto-hook-pin spike (VPX): type page-side, in the element's own document.
+                    if options.value == crate::proto_pin::SECRET && crate::proto_pin::variant() == 4
+                    {
+                        let inserted = progress
+                            .race(tab.proto_exec_insert(element, &options.value))
+                            .await;
+                        drop(input);
+                        return match inserted {
+                            Ok(Ok(answer)) if answer == "inserted" => {
+                                progress.log("proto VPX: execCommand insertText answered inserted");
+                                ticket.acked().delivered();
+                                Ok(ActionResult::Done(()))
+                            }
+                            Ok(Ok(answer)) => {
+                                ticket.unsent();
+                                Err(PlaywrightError::error(format!("proto VPX: {answer}")).into())
+                            }
+                            Ok(Err(PageError::NotConnected)) => {
+                                ticket.unsent();
+                                Err(PlaywrightError::error(
+                                    "proto VPX: the element's document is gone; nothing typed",
+                                )
+                                .into())
+                            }
+                            Ok(Err(other)) => Err(other.into()),
+                            Err(error) => Err(error.into()),
+                        };
+                    }
                     write_fill_input(tab, &options.value, delete, input, ticket, progress).await?;
                     return Ok(ActionResult::Done(()));
                 }
