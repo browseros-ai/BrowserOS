@@ -67,6 +67,10 @@ static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 /// Neo: counts runs, salting each run's random token, so two runs never share one.
 static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
 
+/// Deviation: `server/dispatchers/dispatcher.ts` `DispatcherConnection.maybeDisposeStaleDispatchers`: `d._dispose('gc');` Hosted runs refuse handles past this cap instead of silently evicting objects a Node worker may still hold; ordinary QuickJS runs are unchanged.
+#[cfg(feature = "hosted-run")]
+const MAX_HOSTED_HANDLES: usize = 10_000;
+
 /// Playwright: `server/frames.ts` `Frame.waitForFunctionExpression`: `return this.retryWithProgressAndTimeouts(progress, [100], async () => {`
 const WAIT_FOR_FUNCTION_RETRY: Duration = Duration::from_millis(100);
 
@@ -853,6 +857,9 @@ pub(crate) struct Handles {
     groups: Mutex<HashMap<SessionId, Arc<GroupGuard>>>,
     /// Set at run end: no handle is created after the run's groups are released.
     closed: AtomicBool,
+    /// Neo: Only an explicitly hosted run opts into a native handle-table bound.
+    #[cfg(feature = "hosted-run")]
+    hosted: AtomicBool,
 }
 
 /// What a guid names.
@@ -914,11 +921,19 @@ impl Default for Handles {
             entries: Mutex::default(),
             groups: Mutex::default(),
             closed: AtomicBool::default(),
+            #[cfg(feature = "hosted-run")]
+            hosted: AtomicBool::default(),
         }
     }
 }
 
 impl Handles {
+    /// Neo: A Node worker has no QuickJS heap ceiling; bound its native retained objects too.
+    #[cfg(feature = "hosted-run")]
+    pub(crate) fn limit_hosted(&self) {
+        self.hosted.store(true, Ordering::Relaxed);
+    }
+
     /// The element handle `guid` for a call that acts on its node (`ElementHandle.screenshot`),
     /// refused for a `JSHandle` as Playwright's dispatcher refuses `method` on one, and closed
     /// when the run has no such handle.
@@ -987,6 +1002,15 @@ impl Handles {
         if self.closed.load(Ordering::SeqCst) {
             return Err(PageError::Closed);
         }
+        #[cfg(feature = "hosted-run")]
+        if self.hosted.load(Ordering::Relaxed) {
+            groups.retain(|_, group| !group.is_closed());
+            if groups.len() >= MAX_HOSTED_HANDLES && !groups.contains_key(frame.host.session_id()) {
+                return Err(PageError::Contract(format!(
+                    "Neo hosted runs keep at most {MAX_HOSTED_HANDLES} handle groups"
+                )));
+            }
+        }
         Ok(Arc::clone(
             groups
                 .entry(frame.host.session_id().clone())
@@ -1017,6 +1041,25 @@ impl Handles {
         let mut entries = self.entries.lock().map_err(|_| table_error())?;
         if self.closed.load(Ordering::SeqCst) {
             return Err(PageError::Closed);
+        }
+        #[cfg(feature = "hosted-run")]
+        if self.hosted.load(Ordering::Relaxed) && entries.len() >= MAX_HOSTED_HANDLES {
+            // The page already produced this object. Refusing its guid must release the
+            // unclaimed object too, or repeated refusals would still grow Chromium's heap.
+            if let Remote::Object(id) = remote {
+                let frame = Arc::clone(frame);
+                tab.page.spawn_while_open(async move {
+                    let _ = frame
+                        .host
+                        .send_command(cdp::runtime::ReleaseObject {
+                            object_id: id.object_id().to_string(),
+                        })
+                        .await;
+                });
+            }
+            return Err(PageError::Contract(format!(
+                "Neo hosted runs keep at most {MAX_HOSTED_HANDLES} JS handles; dispose unused handles"
+            )));
         }
         entries.insert(
             guid.clone(),

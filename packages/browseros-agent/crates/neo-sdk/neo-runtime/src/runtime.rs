@@ -50,6 +50,7 @@ use crate::progress::{ErrorName, RunScope};
 use crate::quickjs;
 use crate::quickjs::Script;
 use crate::quickjs_bridge;
+#[cfg(not(feature = "hosted-run"))]
 use crate::quickjs_bridge::Getters;
 #[cfg(feature = "hosted-run")]
 use crate::run::StartPage;
@@ -85,6 +86,9 @@ pub struct Runtime {
     /// How every run's `path` options treat an absolute path (`artifacts.rs`).
     absolute_paths: AbsolutePaths,
     cleanup: TaskTracker,
+    /// Neo: Hosted engines have explicit shutdown; ordinary QuickJS runs keep their host's cancellation.
+    #[cfg(feature = "hosted-run")]
+    hosted: hosted_run::Runs,
 }
 
 /// Close the run's tracker on every exit, including a dropped future or failed tab open.
@@ -141,6 +145,8 @@ impl Runtime {
                     permissions: Permissions::new(cleanup.clone()),
                     absolute_paths: AbsolutePaths::default(),
                     cleanup,
+                    #[cfg(feature = "hosted-run")]
+                    hosted: hosted_run::Runs::default(),
                 })
             }
             Err(CdpError::Protocol { message, .. }) => {
@@ -247,6 +253,12 @@ impl Runtime {
         timeout: Duration,
         artifacts: Option<PathBuf>,
     ) -> Result<HostedRun, RunError> {
+        // Register before checking admission. Shutdown cancels before waiting, so it cannot
+        // miss an admitted open even if another thread is concurrently starting it.
+        let tracked = self.hosted.tasks.token();
+        if self.hosted.cancel.is_cancelled() {
+            return Err(RunError::target_closed());
+        }
         let tokio = Handle::try_current()
             .ok()
             .filter(|handle| handle.runtime_flavor() == RuntimeFlavor::MultiThread)
@@ -258,20 +270,24 @@ impl Runtime {
             })?;
         let (ready, opened) = oneshot::channel();
         let (completed, outcome) = watch::channel(None);
+        let cancel = self.hosted.cancel.child_token();
+        let opening = cancel.clone().drop_guard();
         let host = Host {
             ready,
             outcome: outcome.clone(),
-            done: CancellationToken::new(),
+            cancel: cancel.clone(),
+            getter_stop: CancellationToken::new(),
         };
         let request = RunRequest {
             code: String::new(),
             page: StartPage::NewTab,
             timeout,
-            cancel: CancellationToken::new(),
+            cancel,
             artifacts,
         };
         let runtime = self.clone();
         tokio.spawn(async move {
+            let _tracked = tracked;
             let result = runtime
                 .run_inner(
                     request,
@@ -284,6 +300,7 @@ impl Runtime {
             let _ = completed.send(Some(result));
         });
         if let Ok(run) = opened.await {
+            opening.disarm();
             Ok(run)
         } else {
             let result = hosted_run::outcome(outcome).await?;
@@ -291,6 +308,23 @@ impl Runtime {
                 RunError::new("Error", "hosted run stopped before opening".to_string())
             }))
         }
+    }
+
+    /// Neo: Stops hosted admission and cancels both opening and active hosted runs synchronously.
+    /// Hosts call this before scheduling shutdown, or when their engine is being unloaded.
+    #[cfg(feature = "hosted-run")]
+    pub fn cancel_hosted_runs(&self) {
+        self.hosted.cancel.cancel();
+    }
+
+    /// Neo: Cancels hosted runs, awaits their lifecycle reports and drains remaining browser work.
+    /// Idempotent across clones. The host can then disconnect its CDP client.
+    #[cfg(feature = "hosted-run")]
+    pub async fn shutdown_hosted_runs(&self) {
+        self.cancel_hosted_runs();
+        self.hosted.tasks.close();
+        self.hosted.tasks.wait().await;
+        self.drain().await;
     }
 
     async fn run_inner(
@@ -355,6 +389,9 @@ impl Runtime {
         let artifacts =
             Arc::new(Artifacts::new(artifacts).with_absolute_paths(self.absolute_paths));
         let run = RunScope::new(deadline.clone(), tasks).with_artifacts(Arc::clone(&artifacts));
+        #[cfg(feature = "hosted-run")]
+        let getters = hosted_run::getters(host.as_ref(), &run, tabs.clone(), tokio);
+        #[cfg(not(feature = "hosted-run"))]
         let getters = Getters::new(
             tabs.clone(),
             deadline.clone(),
@@ -363,6 +400,8 @@ impl Runtime {
         );
         let dispatcher = Dispatcher::new(tabs.clone(), run, calls);
         let events = tabs.events().clone();
+        #[cfg(feature = "hosted-run")]
+        let hosted_page = host.as_ref().map(|_| (tabs.clone(), page.clone()));
         // A run whose future is dropped lets go of its permission grants on the cleanup tracker.
         let grants = Grants {
             permissions: self.permissions.clone(),
@@ -380,6 +419,8 @@ impl Runtime {
         #[cfg(not(feature = "hosted-run"))]
         let outcome = quickjs::run(script, getters, dispatcher.clone(), deadline, events).await;
         let (calls, dropped, pages) = dispatcher.finish(run_end_of(&outcome)).await;
+        #[cfg(feature = "hosted-run")]
+        let pages = hosted_run::close_page(hosted_page, pages).await;
         // `Dispatcher::finish` let go of the grants (`Tabs::release_run_scoped`).
         grants.disarm();
         outcome
