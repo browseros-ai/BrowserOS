@@ -6,6 +6,7 @@ import path from 'node:path'
 import { source } from '../js/prepare.mjs'
 import { launchBrowser } from './browser.mjs'
 import { contextOptions } from './context-options.mjs'
+import { skipReason } from './curation.mjs'
 import { openSdk } from './loader.mjs'
 
 const require = createRequire(path.join(source, 'package.json'))
@@ -24,6 +25,9 @@ const builtins = builtinsFile.slice(
 )
 const builtinsSource = `(${builtins.trim()})(globalThis)`
 const implicitOptions = new WeakMap()
+const curationEntries = process.env.NEO_NODE_CURATION
+  ? JSON.parse(fs.readFileSync(process.env.NEO_NODE_CURATION, 'utf8')).entries
+  : []
 
 function unsupported(name) {
   throw new Error(`needs Playwright internals: ${name}`)
@@ -35,6 +39,26 @@ function markImplicit(testInfo, name) {
 }
 
 const ownedTest = browserTest.extend({
+  __neoCuration: [
+    async ({}, use, testInfo) => {
+      const file = path
+        .relative(
+          fs.realpathSync(process.env.NEO_NODE_OVERLAY),
+          fs.realpathSync(testInfo.file),
+        )
+        .split(path.sep)
+        .join('/')
+      const reason = skipReason(
+        curationEntries,
+        file,
+        // Worker title paths begin with the file; runner paths also have root/project suites.
+        testInfo.titlePath.slice(1),
+      )
+      if (reason) testInfo.skip(true, reason)
+      await use()
+    },
+    { auto: true },
+  ],
   _reuseContext: [false, { scope: 'worker' }],
   __neoWorker: [
     async ({}, use, workerInfo) => {

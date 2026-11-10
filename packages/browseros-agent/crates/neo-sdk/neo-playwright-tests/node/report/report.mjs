@@ -11,6 +11,7 @@ import {
   errorEvidence,
   verdicts,
 } from './classify.mjs'
+import { renderCuration } from './curation.mjs'
 import { refusals } from './refusals.mjs'
 
 function cell(value) {
@@ -141,6 +142,7 @@ export function renderReport({ neo, reference, bridge, corpus = [] }) {
     '',
     ...runDetails('Neo', neo),
     ...runDetails('Reference', reference),
+    ...renderCuration(neo, rows),
     '## Totals by verdict',
     '',
     table(
