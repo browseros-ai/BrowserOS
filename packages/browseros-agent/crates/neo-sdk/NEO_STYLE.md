@@ -12,7 +12,7 @@ The `crates/neo-sdk/` directory owns the runtime, its injected JavaScript packag
 | `neo-http` | Rust | Neo page capture HTTP routes and page presence |
 | `neo-playwright-tests` | Rust, JavaScript | Pinned upstream compatibility harness for the runtime |
 | `neo-playwright-protocol` | Rust, generated TS | Neo's cross-language contracts, translated from Playwright's protocol |
-| `neo-trace` | Rust | Correlates live code and call logs; depends on neo-runtime, never the reverse |
+| `neo-trace` | Rust | Correlates live code and call logs, persists runs/calls to SQLite through one queued SeaORM writer; depends on neo-runtime, never the reverse |
 | `neo-captcha` | Rust | Shared host-side CAPTCHA solver, reached through the runtime's `CaptchaHost` trait |
 | `neo-runtime` | Rust | Runs an agent's Playwright-style script in a QuickJS realm against one BrowserOS tab |
 | `neo-sdk-server` | Rust | Reusable MCP host, output budgets, retained results, artifacts and image blocks |

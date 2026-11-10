@@ -1,5 +1,6 @@
 //! Neo: Correlated live logs for one script and its actual Playwright calls.
-//! The runtime owns call records and cancellation; this adapter owns run ids and rendering.
+//! The runtime owns call records and cancellation; this adapter owns run ids, rendering,
+//! and the optional durable-write queue. Persistence never reaches back into execution.
 //! Raw code and parameters are logged at info by default. `CLAW_LOG=info,neo_trace=off`
 //! disables them in claw-server. Hosted operators must choose their payload logging policy
 //! before deployment because stderr may be collected outside the local machine.
@@ -7,6 +8,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::str::FromStr;
 use std::time::Instant;
 
 use neo_runtime::{
@@ -19,6 +21,10 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{dispatcher, field, info, warn};
 use ulid::Ulid;
 
+mod store;
+
+pub use store::{CallRow, RunDetail, RunRow, TraceError, TraceStore};
+
 /// Neo: Code log payloads stop at 64 KiB; the typed request is never shortened.
 const CODE_BYTES: usize = 64 * 1024;
 /// Neo: Large call parameters and failure logs stop at 4 KiB each in the log adapter only.
@@ -28,6 +34,14 @@ const FIELD_BYTES: usize = 4 * 1024;
 /// the same 26-character ULID string so concurrent runs can be correlated in any transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RunId(Ulid);
+
+impl FromStr for RunId {
+    type Err = ulid::DecodeError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse().map(Self)
+    }
+}
 
 impl fmt::Display for RunId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -42,8 +56,13 @@ impl Serialize for RunId {
 }
 
 /// Runs a script and logs its code, live calls, and outcome on target `neo_trace`.
+/// An optional store receives best-effort queued writes without database waits.
 /// Cancel through `request.cancel` and await completion; do not drop this future.
-pub async fn run(runtime: &Runtime, request: RunRequest) -> (RunId, RunOutcome) {
+pub async fn run(
+    runtime: &Runtime,
+    request: RunRequest,
+    store: Option<&TraceStore>,
+) -> (RunId, RunOutcome) {
     let id = RunId(Ulid::new());
     let started = Instant::now();
     // The runtime may create the first tab inside its deadline. Until it does, there is
@@ -56,6 +75,9 @@ pub async fn run(runtime: &Runtime, request: RunRequest) -> (RunId, RunOutcome) 
         target: "neo_trace", run = %id, page = page.map(field::debug),
         code = ?clip(&request.code, CODE_BYTES), "run.start"
     );
+    if let Some(store) = store {
+        store.start_run(id, &request);
+    }
     let (sender, receiver) = mpsc::unbounded_channel();
     let (finished, completion) = oneshot::channel();
     // QuickJS can occupy its async worker until a synchronous script yields. The
@@ -63,11 +85,12 @@ pub async fn run(runtime: &Runtime, request: RunRequest) -> (RunId, RunOutcome) 
     // Its future uses only channels, so Handle::block_on needs no separate I/O driver.
     // Carry the caller's subscriber explicitly across this thread boundary.
     let collector = Handle::try_current().ok().map(|handle| {
+        let store = store.cloned();
         let subscriber = dispatcher::get_default(Clone::clone);
         let collector_runtime = handle.clone();
         handle.spawn_blocking(move || {
             dispatcher::with_default(&subscriber, || {
-                collector_runtime.block_on(collect(id, receiver, completion))
+                collector_runtime.block_on(collect(id, receiver, completion, store.as_ref()))
             })
         })
     });
@@ -92,6 +115,9 @@ pub async fn run(runtime: &Runtime, request: RunRequest) -> (RunId, RunOutcome) 
             target: "neo_trace", run = %id, call,
             delivery = delivery.map(delivery_name), "call.delivery"
         );
+        if let Some(store) = store {
+            store.update_delivery(id, call, delivery);
+        }
     }
     let status = match outcome.status {
         RunStatus::Ok => "ok",
@@ -103,6 +129,11 @@ pub async fn run(runtime: &Runtime, request: RunRequest) -> (RunId, RunOutcome) 
         .error
         .as_ref()
         .map(|error| format!("{}: {}", error.name, error.message));
+    // Awaiting the collector above puts every live observation before the final delivery
+    // reconciliation and run end in the database queue, even across the blocking thread.
+    if let Some(store) = store {
+        store.finish_run(id, &outcome);
+    }
     info!(
         target: "neo_trace", run = %id, status, error = error.as_deref().map(field::debug),
         ms = started.elapsed().as_millis(), calls = outcome.calls.len(),
@@ -117,21 +148,27 @@ async fn collect(
     id: RunId,
     mut receiver: mpsc::UnboundedReceiver<CallEvent>,
     mut completion: oneshot::Receiver<()>,
+    store: Option<&TraceStore>,
 ) -> BTreeMap<u64, Option<Delivery>> {
     let mut deliveries = BTreeMap::new();
     loop {
         tokio::select! {
             _ = &mut completion => break,
-            Some(event) = receiver.recv() => log_call(id, event, &mut deliveries),
+            Some(event) = receiver.recv() => log_call(id, event, &mut deliveries, store),
         }
     }
     while let Ok(event) = receiver.try_recv() {
-        log_call(id, event, &mut deliveries);
+        log_call(id, event, &mut deliveries, store);
     }
     deliveries
 }
 
-fn log_call(id: RunId, event: CallEvent, deliveries: &mut BTreeMap<u64, Option<Delivery>>) {
+fn log_call(
+    id: RunId,
+    event: CallEvent,
+    deliveries: &mut BTreeMap<u64, Option<Delivery>>,
+    store: Option<&TraceStore>,
+) {
     match event {
         CallEvent::Started(call) => {
             let params = call.params.to_string();
@@ -142,6 +179,9 @@ fn log_call(id: RunId, event: CallEvent, deliveries: &mut BTreeMap<u64, Option<D
                 title = ?call.title.as_deref().unwrap_or(&call.method), guid = ?call.guid,
                 params = %clip(&params, FIELD_BYTES), "call.start"
             );
+            if let Some(store) = store {
+                store.start_call(id, call);
+            }
         }
         CallEvent::Finished(call) => {
             let (result, error) = match &call.result {
@@ -159,6 +199,9 @@ fn log_call(id: RunId, event: CallEvent, deliveries: &mut BTreeMap<u64, Option<D
                 log = log.as_deref().map(|log| field::debug(clip(log, FIELD_BYTES))), "call.end"
             );
             deliveries.insert(call.call_id, call.delivery);
+            if let Some(store) = store {
+                store.finish_call(id, call);
+            }
         }
     }
 }

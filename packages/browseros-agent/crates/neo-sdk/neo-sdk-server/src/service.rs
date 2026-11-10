@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use std::mem;
 use std::path::{self, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use axum::extract::Request;
@@ -21,7 +21,7 @@ use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use neo_runtime::{
     AbsolutePaths, CaptchaHost, PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage,
 };
-use neo_trace::RunId;
+use neo_trace::{RunId, TraceStore};
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
     Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
@@ -94,6 +94,9 @@ pub struct NeoSdkServer {
     permits: Arc<Semaphore>,
     captcha: Option<Arc<CaptchaCapability>>,
     browser: Arc<OnceCell<Arc<Browser>>>,
+    // Initialization returns a queue immediately; SQLite opens on its writer so even the
+    // first request cannot lose deadline budget to a busy or unwritable trace database.
+    trace_store: Arc<OnceLock<Option<TraceStore>>>,
     shutdown: CancellationToken,
     // Run cancellation must not cut rmcp's pending first message or SSE reply body.
     // Transport waits for counted reply ownership to end (or the consumer grace), while
@@ -160,6 +163,7 @@ impl NeoSdkServer {
             )),
             captcha: None,
             browser: Arc::new(OnceCell::new()),
+            trace_store: Arc::new(OnceLock::new()),
             shutdown,
             transport: CancellationToken::new(),
             replies: ReplyTracker::default(),
@@ -364,6 +368,11 @@ impl NeoSdkServer {
             browser.runtime.drain().await;
             browser.cdp.disconnect().await;
         }
+        // Runtime and run collectors have finished queuing all final records. Closing
+        // persistence last drains them before this process releases its state directory.
+        if let Some(Some(store)) = self.trace_store.get() {
+            store.close().await;
+        }
     }
 
     /// The complete MCP route and its request hygiene. The host keeps its listener and
@@ -421,6 +430,15 @@ impl NeoSdkServer {
         let page = args
             .page
             .map_or(StartPage::NewTab, |id| StartPage::Page(PageId::new(id)));
+        let store = self.trace_store.get_or_init(|| {
+            match TraceStore::open_lazy(self.state_dir.join("traces.db")) {
+                Ok(store) => Some(store),
+                Err(error) => {
+                    tracing::warn!(%error, "trace store unavailable; continuing with logs only");
+                    None
+                }
+            }
+        });
         let (run_id, mut outcome) = neo_trace::run(
             &browser.runtime,
             RunRequest {
@@ -430,6 +448,7 @@ impl NeoSdkServer {
                 cancel,
                 artifacts: Some(self.artifact_dir()),
             },
+            store.as_ref(),
         )
         .await;
         // Presentation and disk IO cannot hold a realm slot after the runtime has ended.

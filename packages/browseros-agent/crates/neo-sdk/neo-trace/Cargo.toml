@@ -9,8 +9,11 @@ description = "Correlated live logs for Neo scripts and their Playwright calls."
 
 [dependencies]
 neo-runtime = { path = "../neo-runtime" }
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 ulid.workspace = true
@@ -21,6 +24,8 @@ futures-util.workspace = true
 tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 tracing-subscriber.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -85,7 +85,7 @@ fn a_call_is_visible_before_a_blocked_synchronous_getter_is_released() -> Result
             // Put QuickJS on the sole async worker. The second history read never replies,
             // so only cancellation can release its synchronous getter after the assertion.
             let run = tokio::spawn(
-                async move { neo_trace::run(&neo, request).await }.with_current_subscriber(),
+                async move { neo_trace::run(&neo, request, None).await }.with_current_subscriber(),
             );
             let blocked = time::timeout(Duration::from_secs(2), async {
                 loop {
@@ -156,7 +156,7 @@ fn records_code_calls_errors_and_final_status_as_single_lines() -> Result<(), Bo
         neo_trace::run(&browser.runtime().await, fake_browser::run_request(
             "await page.click('#go');\nawait page.click('#missing', {timeout: 5}).catch(() => {});\nthrow new Error('broken\\nline');",
             Duration::from_secs(10), CancellationToken::new(),
-        )).await
+        ), None).await
     })?;
     assert_eq!(outcome.status, RunStatus::Error);
     let lines: Vec<_> = text.lines().collect();
@@ -205,6 +205,7 @@ async fn the_current_thread_runtime_still_returns_its_normal_error() {
     let (_, outcome) = neo_trace::run(
         &browser.runtime().await,
         fake_browser::run_request("return 1", Duration::from_secs(5), CancellationToken::new()),
+        None,
     )
     .await;
     assert_eq!(outcome.status, RunStatus::Error);
@@ -235,8 +236,8 @@ fn concurrent_runs_have_distinct_correlated_timelines() -> Result<(), Box<dyn Er
             )
         };
         tokio::join!(
-            neo_trace::run(&runtime, request()),
-            neo_trace::run(&runtime, request())
+            neo_trace::run(&runtime, request(), None),
+            neo_trace::run(&runtime, request(), None)
         )
     })?;
     assert_ne!(left.0, right.0);
@@ -274,6 +275,7 @@ fn clips_multibyte_code_params_and_failure_logs_without_changing_the_outcome()
         neo_trace::run(
             &browser.runtime().await,
             fake_browser::run_request(&code, Duration::from_secs(10), CancellationToken::new()),
+            None,
         )
         .await
     })?;
@@ -311,7 +313,8 @@ fn cancellation_still_writes_run_end_last() -> Result<(), Box<dyn Error>> {
                     "await page.click('#missing')",
                     Duration::from_secs(10),
                     cancel.clone(),
-                )
+                ),
+                None,
             ),
             cancellation,
         );
@@ -328,6 +331,42 @@ fn cancellation_still_writes_run_end_last() -> Result<(), Box<dyn Error>> {
     assert!(
         text.lines().last().expect("last event").contains("run.end"),
         "{text}"
+    );
+    Ok(())
+}
+
+#[test]
+fn persistence_failure_warns_without_changing_the_run() -> Result<(), Box<dyn Error>> {
+    let ((status, value), text) = capture(async {
+        let directory = tempfile::TempDir::new().expect("temporary state");
+        let store = neo_trace::TraceStore::open(&directory.path().join("traces.db"))
+            .await
+            .expect("open");
+        store.close().await;
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let (_, outcome) = neo_trace::run(
+            &browser.runtime().await,
+            fake_browser::run_request(
+                "return 42",
+                Duration::from_secs(5),
+                CancellationToken::new(),
+            ),
+            Some(&store),
+        )
+        .await;
+        (outcome.status, outcome.value)
+    })?;
+    assert_eq!(status, RunStatus::Ok);
+    assert_eq!(value, Some(serde_json::json!(42)));
+    assert!(
+        text.contains("trace store unavailable or queue full"),
+        "{text}"
+    );
+    assert_eq!(
+        text.matches("trace store unavailable or queue full")
+            .count(),
+        1,
+        "one warning for repeated rejected commands"
     );
     Ok(())
 }

@@ -19,13 +19,10 @@
 )]
 mod fake_browser;
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+use std::fs::File;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime};
 
 use fake_browser::{FakeBrowser, Replies};
 use futures_util::future::BoxFuture;
@@ -34,6 +31,7 @@ use neo_sdk_server::{Config, NeoSdkServer};
 use reqwest::Client;
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinHandle;
@@ -44,7 +42,7 @@ struct Server {
     neo: NeoSdkServer,
     url: String,
     task: JoinHandle<()>,
-    _state: TempDir,
+    state: TempDir,
 }
 
 impl Server {
@@ -68,7 +66,7 @@ impl Server {
             neo,
             url,
             task,
-            _state: state,
+            state,
         }
     }
 }
@@ -381,6 +379,64 @@ async fn tools_list_needs_no_browser_and_the_router_keeps_request_hygiene() {
         !server.neo.ready().await,
         "shutdown cannot reconnect through readiness"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_first_mcp_run_persists_its_reply_id_and_artifact_pruning_preserves_the_database() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let server = Server::start(browser.port()).await;
+    let client = Client::new();
+    let code = "return await page.title()";
+    let reply = run(
+        &client,
+        &server.url,
+        1,
+        json!({"page":fake_browser::PAGE,"code":code}),
+    )
+    .await;
+    assert_eq!(reply["structuredContent"]["status"], "ok", "{reply}");
+    let id = run_id(&reply)
+        .parse::<neo_trace::RunId>()
+        .expect("reply ULID");
+    // Shutdown must drain the lazy opener and its first run, not merely the browser work.
+    server.neo.shutdown().await;
+    let path = server.state.path().join("traces.db");
+    assert!(
+        path.is_file(),
+        "the first MCP request creates the process trace database"
+    );
+    let artifacts = server.state.path().join("artifacts");
+    fs::create_dir_all(&artifacts)
+        .await
+        .expect("artifact directory");
+    let stale = artifacts.join("stale.txt");
+    let file = File::create(&stale).expect("old artifact");
+    file.set_modified(SystemTime::UNIX_EPOCH)
+        .expect("age artifact");
+    let pruning = NeoSdkServer::new(
+        Config::new(browser.port(), server.state.path().to_path_buf()),
+        CancellationToken::new(),
+    );
+    pruning.shutdown().await;
+    assert!(!stale.exists(), "the boot artifact sweep actually ran");
+    assert!(
+        path.is_file(),
+        "pruning artifacts leaves traces.db outside its ownership root"
+    );
+    let traces = neo_trace::TraceStore::open(&path)
+        .await
+        .expect("read committed traces");
+    let detail = traces
+        .run(id)
+        .await
+        .expect("query trace")
+        .expect("the reply identifies a saved run");
+    assert_eq!(detail.run.id, run_id(&reply));
+    assert_eq!(detail.code, code);
+    assert_eq!(detail.run.status, "ok");
+    assert_eq!(detail.calls.len(), 1);
+    assert_eq!(detail.calls[0].method, "title");
+    traces.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
