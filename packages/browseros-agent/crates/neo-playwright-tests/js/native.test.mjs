@@ -257,7 +257,10 @@ test('tests that internal objects and foreign references remain transport errors
     run.page.sample = object
     const result = await get(page, 'sample')
     assert.equal(result.kind, 'transportError')
-    assert.match(result.message, /Untransportable object/)
+    assert.match(
+      result.message,
+      /^bridge limit: untransportable return object /,
+    )
   }
   for (const ref of [
     { ...page, epoch: 'other' },
