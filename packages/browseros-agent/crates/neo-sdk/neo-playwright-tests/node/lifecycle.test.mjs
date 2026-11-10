@@ -151,55 +151,59 @@ test(
 )
 
 for (const [signal, mode, code] of [
-  ['SIGINT', 'neo', 130],
+  ['SIGINT', 'claw', 130],
   ['SIGTERM', 'reference', 143],
 ]) {
-  test(
-    `${signal} of the ${mode} launcher cleans browsers and writes run completion`,
-    realBrowser,
-    async () => {
-      const root = output(`launcher-${mode}-`)
-      const args = [
-        fileURLToPath(new URL('./run.mjs', import.meta.url)),
-        '--skip-build',
-        '--workers',
-        '2',
-        'tests/page/page-click.spec.ts',
-        'tests/page/page-evaluate.spec.ts',
-      ]
-      if (mode === 'reference') args.push('--reference')
-      const { proc, exited } = child(process.execPath, args, root, {
-        ...process.env,
-        NEO_NODE_OUTPUT_DIR: root,
+  test(`${signal} of the ${mode} launcher cleans browsers and writes run completion`, {
+    ...realBrowser,
+    skip:
+      realBrowser.skip ||
+      (mode === 'claw' &&
+        !fs.existsSync(
+          new URL('./claw-addon/claw_node.node', import.meta.url),
+        )),
+  }, async () => {
+    const root = output(`launcher-${mode}-`)
+    const args = [
+      fileURLToPath(new URL('./run.mjs', import.meta.url)),
+      '--skip-build',
+      '--workers',
+      '2',
+      'tests/page/page-click.spec.ts',
+      'tests/page/page-evaluate.spec.ts',
+    ]
+    args.push('--engine', mode)
+    const { proc, exited } = child(process.execPath, args, root, {
+      ...process.env,
+      NEO_NODE_OUTPUT_DIR: root,
+    })
+    try {
+      const runDir = await until(() => {
+        const name = fs
+          .readdirSync(root)
+          .find((name) => name.startsWith(`${mode}-`))
+        if (!name) return undefined
+        const dir = path.join(root, name)
+        const workers = fs
+          .readdirSync(dir)
+          .filter((name) => name.startsWith('worker-'))
+        return (
+          workers.some((name) =>
+            fs.existsSync(path.join(dir, name, 'owner.json')),
+          ) && dir
+        )
       })
-      try {
-        const runDir = await until(() => {
-          const name = fs
-            .readdirSync(root)
-            .find((name) => name.startsWith(`${mode}-`))
-          if (!name) return undefined
-          const dir = path.join(root, name)
-          const workers = fs
-            .readdirSync(dir)
-            .filter((name) => name.startsWith('worker-'))
-          return (
-            workers.some((name) =>
-              fs.existsSync(path.join(dir, name, 'owner.json')),
-            ) && dir
-          )
-        })
-        proc.kill(signal)
-        assert.equal((await exited).code, code)
-        const run = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json')))
-        assert.equal(run.signal, signal)
-        assert.ok(run.endedAt)
-        for (const name of fs.readdirSync(runDir))
-          if (name.startsWith('worker-')) assertClean(path.join(runDir, name))
-      } finally {
-        if (proc.exitCode === null && proc.signalCode === null)
-          proc.kill('SIGTERM')
-        await exited
-      }
-    },
-  )
+      proc.kill(signal)
+      assert.equal((await exited).code, code)
+      const run = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json')))
+      assert.equal(run.signal, signal)
+      assert.ok(run.endedAt)
+      for (const name of fs.readdirSync(runDir))
+        if (name.startsWith('worker-')) assertClean(path.join(runDir, name))
+    } finally {
+      if (proc.exitCode === null && proc.signalCode === null)
+        proc.kill('SIGTERM')
+      await exited
+    }
+  })
 }

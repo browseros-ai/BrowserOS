@@ -1,6 +1,7 @@
 /** Neo: Pure interpretation of Playwright Test JSON; raw attempts never replace the runner's verdict. */
 import { stripVTControlCharacters } from 'node:util'
 import { refusals } from './refusals.mjs'
+import { clawRefusals } from './refusals-claw.mjs'
 
 /** Neo: Stable report columns, including every exclusive failure class. */
 export const verdicts = [
@@ -131,7 +132,7 @@ function errorsOf(test, location) {
 // `Neo hosted runs keep at most`: the Node door's own handle caps (hosted-run only), not product behavior.
 function isHarnessError(line) {
   if (isLoopError(line)) return false
-  return /(?:worker process|test worker).*exited unexpectedly|Browser (?:did not (?:start|publish|own)|exited at startup)|Owned browser process group survived cleanup|Cannot revalidate browser group|(?:^|: )harness-error:|ERR_DLOPEN_FAILED|Cannot find module .*neo_node|(?:browser|Browser) (?:process )?(?:crashed|disconnected unexpectedly)|browserType\.launch: (?:Executable doesn't exist|Failed to launch|Target .*closed|spawn )|connect ECONNREFUSED|EADDRINUSE|Timeout.*(?:setting up|tearing down).*"__neo"|Neo hosted runs keep at most/i.test(
+  return /(?:worker process|test worker).*exited unexpectedly|Browser (?:did not (?:start|publish|own)|exited at startup)|Owned browser process group survived cleanup|Cannot revalidate browser group|(?:^|: )harness-error:|ERR_DLOPEN_FAILED|Cannot find module .*(?:neo_node|claw_node)|dlopen\([^\n]*claw_node|(?:browser|Browser) (?:process )?(?:crashed|disconnected unexpectedly)|browserType\.launch: (?:Executable doesn't exist|Failed to launch|Target .*closed|spawn )|connect ECONNREFUSED|EADDRINUSE|Timeout.*(?:setting up|tearing down).*"__(?:neo|claw)"|Neo hosted runs keep at most/i.test(
     line,
   )
 }
@@ -272,12 +273,19 @@ function internalGap(error) {
   return null
 }
 
-function observedGap(error, row) {
+function observedGap(error, row, engine = 'neo') {
   const line = error.firstLine
   // `page.request` (APIRequestContext) is absent on Neo's objects, so its methods read undefined.
   const read = line.match(
     /Cannot read properties of undefined \(reading '([\w$]+)'\)/,
   )
+  if (engine === 'claw' && read) {
+    const evidence = `${error.snippet || ''}\n${error.message || ''}`
+    const namespace = evidence.match(
+      /\b(playwright\.(?:chromium|firefox|webkit|request|selectors)|browserType)(?:\.|\[)/,
+    )
+    if (namespace) return { key: namespace[1], missing: true }
+  }
   const owner =
     read &&
     `${error.snippet || ''}\n${error.message || ''}`.match(
@@ -319,14 +327,15 @@ function observedGap(error, row) {
   return { key, missing: Boolean(expression && apiKey(expression)) }
 }
 
-function classifyLoopError(error, neo) {
+function classifyLoopError(error, neo, engine, refusalList) {
   const readFailure = error.firstLine.split('; read failed: ')[1]
   const gap =
-    readFailure && observedGap({ ...error, firstLine: readFailure }, neo)
+    readFailure &&
+    observedGap({ ...error, firstLine: readFailure }, neo, engine)
   const missing =
     gap?.missing ||
     (readFailure &&
-      refusals.some((refusal) => refusal.pattern.test(readFailure)))
+      refusalList.some((refusal) => refusal.pattern.test(readFailure)))
   return {
     verdict: missing ? 'neo-lacks' : 'neo-differs',
     gapKey:
@@ -352,7 +361,8 @@ function nonFailure(row) {
   }
 }
 
-export function classifyCase(neo, reference) {
+export function classifyCase(neo, reference, { engine = 'neo' } = {}) {
+  const refusalList = engine === 'claw' ? clawRefusals : refusals
   const errors = errorsOf(neo.test, neo.location)
   const referenceErrors = reference
     ? errorsOf(reference.test, reference.location)
@@ -434,7 +444,8 @@ export function classifyCase(neo, reference) {
         'Real Playwright also reports an unexpected outcome',
     }
   const loopError = errors.find((error) => isLoopError(error.firstLine))
-  if (loopError) return { ...row, ...classifyLoopError(loopError, neo) }
+  if (loopError)
+    return { ...row, ...classifyLoopError(loopError, neo, engine, refusalList) }
   const internals = errors.map(internalGap)
   const internal = internals.find(Boolean)
   if (internal)
@@ -447,10 +458,10 @@ export function classifyCase(neo, reference) {
         internals.length > 0 && internals.every((gap) => gap?.expectOnly),
     }
   for (const error of errors) {
-    const gap = observedGap(error, neo)
+    const gap = observedGap(error, neo, engine)
     if (
       gap.missing ||
-      refusals.some((refusal) => refusal.pattern.test(error.firstLine))
+      refusalList.some((refusal) => refusal.pattern.test(error.firstLine))
     )
       return {
         ...row,
@@ -463,7 +474,7 @@ export function classifyCase(neo, reference) {
     ...row,
     verdict: 'neo-differs',
     gapKey: errors.length
-      ? observedGap(errors[0], neo).key
+      ? observedGap(errors[0], neo, engine).key
       : 'Playwright.expectedStatus',
     reason:
       errors[0]?.firstLine ||
@@ -471,12 +482,12 @@ export function classifyCase(neo, reference) {
   }
 }
 
-export function classifyRuns(neo, reference, corpus = []) {
+export function classifyRuns(neo, reference, corpus = [], options = {}) {
   const referenceCases = new Map(
     flattenResults(reference, corpus).map((row) => [row.key, row]),
   )
   return flattenResults(neo, corpus).map((row) =>
-    classifyCase(row, referenceCases.get(row.key)),
+    classifyCase(row, referenceCases.get(row.key), options),
   )
 }
 

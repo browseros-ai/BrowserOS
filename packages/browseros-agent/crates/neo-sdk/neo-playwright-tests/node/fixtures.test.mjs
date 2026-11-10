@@ -11,7 +11,11 @@ import { materialize } from './overlay.mjs'
 import { classifyRuns } from './report/classify.mjs'
 
 test('upstream fixtures retain real objects and expose unsupported internals explicitly', {
-  skip: !process.env.NEO_E2E_BROWSER,
+  skip:
+    !process.env.NEO_E2E_BROWSER ||
+    !fs.existsSync(
+      new URL('../../neo-quickjs-injected/dist/sdk.js', import.meta.url),
+    ),
   timeout: 90_000,
 }, async () => {
   const root =

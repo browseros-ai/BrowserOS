@@ -1,15 +1,17 @@
 /** Neo: Exercise object transport against the committed SDK without a browser. */
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import test from 'node:test'
+import nodeTest from 'node:test'
 import vm from 'node:vm'
 import { codecFactory } from './codec.mjs'
 import { nativeScript } from './native.mjs'
 
-const bundle = fs.readFileSync(
-  new URL('../../neo-quickjs-injected/dist/sdk.js', import.meta.url),
-  'utf8',
+const sdkFile = new URL(
+  '../../neo-quickjs-injected/dist/sdk.js',
+  import.meta.url,
 )
+const test = fs.existsSync(sdkFile) ? nodeTest : nodeTest.skip
+const bundle = fs.existsSync(sdkFile) ? fs.readFileSync(sdkFile, 'utf8') : ''
 const codec = codecFactory({ identify: () => undefined, resolve: (ref) => ref })
 
 async function native(t, respond = () => ({})) {

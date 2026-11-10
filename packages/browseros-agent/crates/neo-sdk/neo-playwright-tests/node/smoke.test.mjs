@@ -1,5 +1,6 @@
 /** Neo: Exercises the real Node SDK's synchronous door, reply ordering, idle wake and shutdown. */
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
@@ -10,6 +11,9 @@ import { launchBrowser } from './browser.mjs'
 import { openSdk } from './loader.mjs'
 
 test('real SDK in Node keeps getters synchronous, delivers events and finishes pending wakes', {
+  skip: !existsSync(
+    new URL('../../neo-quickjs-injected/dist/sdk.js', import.meta.url),
+  ),
   timeout: 60_000,
 }, async () => {
   assert.ok(process.env.NEO_E2E_BROWSER, 'Set NEO_E2E_BROWSER')

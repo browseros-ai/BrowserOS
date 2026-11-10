@@ -2,6 +2,8 @@
 
 export function runnerOptions(argv) {
   const options = {
+    engine: 'claw',
+    hostedMode: false,
     reference: false,
     skipBuild: false,
     debugBuild: false,
@@ -9,6 +11,15 @@ export function runnerOptions(argv) {
     curation: true,
     workers: 4,
     args: [],
+  }
+  let selectedEngine
+  const selectEngine = (engine) => {
+    if (!['reference', 'claw', 'neo'].includes(engine))
+      throw new Error('--engine must be reference, claw or neo')
+    if (selectedEngine && selectedEngine !== engine)
+      throw new Error('Conflicting engine switches')
+    selectedEngine = engine
+    options.engine = engine
   }
   const inversions = []
   let files = []
@@ -18,7 +29,10 @@ export function runnerOptions(argv) {
       files = argv.slice(index + 1)
       break
     }
-    if (arg === '--reference') options.reference = true
+    if (arg === '--reference') selectEngine('reference')
+    else if (arg === '--engine') selectEngine(argv[++index])
+    else if (arg.startsWith('--engine=')) selectEngine(arg.slice(9))
+    else if (arg === '--hosted-mode') options.hostedMode = true
     else if (arg === '--no-curation') options.curation = false
     else if (arg === '--skip-build') options.skipBuild = true
     else if (arg === '--debug-build') options.debugBuild = true
@@ -56,6 +70,7 @@ export function runnerOptions(argv) {
     inversions.map((value) => `(?:${value})`).join('|'),
   )
   if (files.length) options.args.push('--', ...files)
+  options.reference = options.engine === 'reference'
   if (options.reference) options.expectLoop = false
   return options
 }

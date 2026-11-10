@@ -13,6 +13,7 @@ import {
 } from './classify.mjs'
 import { renderCuration } from './curation.mjs'
 import { refusals } from './refusals.mjs'
+import { clawRefusals } from './refusals-claw.mjs'
 
 function cell(value) {
   return String(value ?? '')
@@ -88,6 +89,12 @@ function runDetails(label, run) {
     `Started: ${cell(meta.startedAt)}. Ended: ${cell(meta.endedAt)}. SDK SHA-256: ${cell(meta.sdkSha256)}.`,
     `Specs verified: ${cell(meta.specsVerified)}. Context option omissions: ${cell(JSON.stringify(meta.contextOptionOmissions || []))}.`,
     `expectLoop: ${cell(meta.expectLoop ?? false)}.`,
+    ...(meta.engine
+      ? [
+          `Engine: ${cell(meta.engine)}. BrowserOS: ${cell(meta.browserosVersion)}. SDK sources: ${cell(JSON.stringify(meta.sdkSources || {}))}. Add-on: ${cell(JSON.stringify(meta.addon || {}))}.`,
+          `Browser launch: ${cell(JSON.stringify(meta.browserLaunch || {}))}.`,
+        ]
+      : []),
     ...(meta.metadataSource
       ? [`Metadata provenance: ${cell(meta.metadataSource)}`]
       : []),
@@ -96,7 +103,10 @@ function runDetails(label, run) {
 }
 
 export function renderReport({ neo, reference, bridge, corpus = [] }) {
-  const rows = classifyRuns(neo.results, reference.results, corpus)
+  const engine = neo.metadata.engine || neo.metadata.mode || 'neo'
+  const label = engine === 'claw' ? 'v1' : 'Neo'
+  const refusalList = engine === 'claw' ? clawRefusals : refusals
+  const rows = classifyRuns(neo.results, reference.results, corpus, { engine })
   const counts = countVerdicts(rows)
   const comparison = compareBridge(rows, bridge, corpus)
   const suites = [...new Set(rows.map((row) => row.suite))].sort()
@@ -122,13 +132,13 @@ export function renderReport({ neo, reference, bridge, corpus = [] }) {
     skips.set(reason, (skips.get(reason) || 0) + 1)
   }
   const lines = [
-    '# Neo in Node: Playwright Test verdicts',
+    `# ${label} in Node: Playwright Test verdicts`,
     '',
     `${rows.length} selected cases in ${suites.length} ${suites.length === 1 ? 'suite' : 'suites'}. Playwright expected outcomes (including expected failures) and flaky outcomes count as pass; skips stay skips. Raw attempt statuses and all error evidence are retained in JSONL.`,
     '',
     'Failure precedence: harness-error → invalid-here → needs-internals → neo-lacks → neo-differs. invalid-here means the reference also has an unexpected test outcome; expected reference failures remain passes.',
     '',
-    `Flaky cases: ${flaky}. Missing reference matches: ${missingReference}. Reference skips for executed Neo cases: ${skippedReference}. Unscoped runner errors: ${diagnostics.length}. Missing/skipped reference results do not establish invalid-here.`,
+    `Flaky cases: ${flaky}. Missing reference matches: ${missingReference}. Reference skips for executed ${label} cases: ${skippedReference}. Unscoped runner errors: ${diagnostics.length}. Missing/skipped reference results do not establish invalid-here.`,
     ...(diagnostics.length
       ? [
           '',
@@ -146,7 +156,7 @@ export function renderReport({ neo, reference, bridge, corpus = [] }) {
     '',
     'Commands recorded in run.json.argv. Use the same prepared source and BrowserOS executable as these runs.',
     '',
-    ...runDetails('Neo', neo),
+    ...runDetails(label, neo),
     ...runDetails('Reference', reference),
     ...renderCuration(neo, rows),
     '## Totals by verdict',
@@ -195,7 +205,7 @@ export function renderReport({ neo, reference, bridge, corpus = [] }) {
     '',
     `Of the bridge's ${comparison.noVerdictTotal.toLocaleString('en-US')} no-verdict cases (BridgeLimit, CleanupBlur, HarnessError), **${comparison.recovered} now have a plain Playwright pass/fail** in this selection. ${comparison.noVerdictSelected} were selected; ${comparison.noVerdictSelected - comparison.recovered} remain skip/harness-error; ${comparison.noVerdictTotal - comparison.noVerdictSelected} were not selected. Plain pass/fail includes classified unexpected test failures, including needs-internals and invalid-here.`,
     '',
-    '## Top Neo gaps',
+    `## Top ${label} gaps`,
     '',
     'Ranked by tests hit, one primary gap per case; includes matcher/fixture dependencies. Reference and infrastructure failures are excluded.',
     '',
@@ -245,13 +255,16 @@ export function renderReport({ neo, reference, bridge, corpus = [] }) {
         ]
       : ['None recorded.']),
     '',
-    '## Recognized Neo refusals',
+    `## Recognized ${label} refusals`,
     '',
     'Audited SDK/runtime message families. A generic “unsupported” message, a normal Playwright validation error, or text inside an assertion diff is insufficient. Missing functions must name a recognized Neo receiver; unknown receivers remain neo-differs.',
     '',
     table(
       ['Message family', 'Source under crates/neo-sdk'],
-      refusals.map((refusal) => [refusal.wording, refusal.sources.join('\n')]),
+      refusalList.map((refusal) => [
+        refusal.wording,
+        refusal.sources.join('\n'),
+      ]),
     ),
     '',
   ]
@@ -273,7 +286,11 @@ function readRun(directory, mode) {
       ? metadata.argv.length > 0
       : Array.isArray(metadata.argv) &&
         metadata.argv.every((arg) => typeof arg === 'string')
-  if (metadata.mode !== mode || !argvValid)
+  const engine = metadata.engine || metadata.mode
+  if (
+    !(mode === 'neo' ? ['neo', 'claw'].includes(engine) : engine === mode) ||
+    !argvValid
+  )
     throw new Error(
       `${directory}/run.json must record mode=${mode} and its argv`,
     )

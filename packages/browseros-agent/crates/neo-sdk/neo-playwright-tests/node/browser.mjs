@@ -4,6 +4,42 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { verifyViewport } from './browser-defaults.mjs'
+
+export function browserVersion(executable) {
+  if (!executable || process.platform !== 'darwin') return undefined
+  const plist = path.join(path.dirname(path.dirname(executable)), 'Info.plist')
+  return execFileSync(
+    '/usr/libexec/PlistBuddy',
+    ['-c', 'Print :CFBundleShortVersionString', plist],
+    { encoding: 'utf8' },
+  ).trim()
+}
+
+export function browserLaunch(
+  executable,
+  profile = '<worker profile>',
+  hostedMode = process.env.NEO_NODE_HOSTED_MODE === '1',
+) {
+  return {
+    executable,
+    flags: [
+      '--headless=new',
+      '--disable-browseros-server',
+      '--disable-browseros-extensions',
+      '--remote-debugging-port=0',
+      `--user-data-dir=${profile}`,
+      '--no-first-run',
+      '--lang=en-US',
+      hostedMode ? '--window-size=1280,841' : '--window-size=1520,801',
+      '--force-device-scale-factor=1',
+      'about:blank',
+    ],
+    env: { BROWSERCLAW_HOSTED_MODE: hostedMode ? '1' : null },
+    viewportReason:
+      'BrowserOS window chrome consumes 240x81px in normal mode, 0x121px in hosted mode; both sizes must verify 1280x720@1 in launch and native tabs',
+  }
+}
 
 export function isAlive(pid) {
   try {
@@ -83,22 +119,20 @@ export async function startOwnedBrowser(executable, outputDir, signal) {
     signal.throwIfAborted()
     stdout = fs.openSync(path.join(outputDir, 'browser.stdout.log'), 'wx')
     stderr = fs.openSync(path.join(outputDir, 'browser.stderr.log'), 'wx')
-    child = spawn(
-      executable,
-      [
-        '--headless=new',
-        '--disable-browseros-server',
-        '--disable-browseros-extensions',
-        '--remote-debugging-port=0',
-        `--user-data-dir=${profile}`,
-        '--no-first-run',
-        '--lang=en-US',
-        '--window-size=1280,720',
-        '--force-device-scale-factor=1',
-        'about:blank',
-      ],
-      { detached: true, stdio: ['ignore', stdout, stderr] },
+    const launch = browserLaunch(executable, profile)
+    fs.writeFileSync(
+      path.join(outputDir, 'launch.json'),
+      JSON.stringify(launch, null, 2),
     )
+    child = spawn(executable, launch.flags, {
+      detached: true,
+      stdio: ['ignore', stdout, stderr],
+      env: Object.fromEntries(
+        Object.entries({ ...process.env, ...launch.env }).filter(
+          ([, value]) => value !== null,
+        ),
+      ),
+    })
     exited = new Promise((resolve) => {
       child.once('exit', (code, signal) => {
         exit = { code, signal }
@@ -122,8 +156,14 @@ export async function startOwnedBrowser(executable, outputDir, signal) {
         const [port] = fs
           .readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8')
           .split('\n')
-        if (/^\d+$/.test(port) && Number(port) > 0 && Number(port) !== 9200)
+        if (/^\d+$/.test(port) && Number(port) > 0 && Number(port) !== 9200) {
+          launch.viewport = await verifyViewport(Number(port))
+          fs.writeFileSync(
+            path.join(outputDir, 'launch.json'),
+            JSON.stringify(launch, null, 2),
+          )
           return { ...owner, port: Number(port), exited, close }
+        }
       } catch (error) {
         if (error.code !== 'ENOENT') throw error
       }

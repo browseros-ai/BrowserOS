@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { test as nodeTest } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { Worker } from 'node:worker_threads'
 import {
@@ -15,6 +15,13 @@ import {
   runner,
   validateRunnerExit,
 } from './run-case.mjs'
+
+// The legacy per-case bridge requires v2's SDK, absent on the v1 branch.
+const test = fs.existsSync(
+  new URL('../../neo-quickjs-injected/dist/sdk.js', import.meta.url),
+)
+  ? nodeTest
+  : nodeTest.skip
 
 const modulePath = fileURLToPath(new URL('./run-case.mjs', import.meta.url))
 const ioPath = new URL('./io-worker.mjs', import.meta.url)

@@ -5,24 +5,36 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { agent, sha256, source } from '../js/prepare.mjs'
-import { cleanupWorkers } from './browser.mjs'
+import { browserLaunch, browserVersion, cleanupWorkers } from './browser.mjs'
 import { curationArgs } from './curation.mjs'
 import { runnerOptions } from './options.mjs'
 import { materialize } from './overlay.mjs'
 
 const argv = process.argv.slice(2)
 const options = runnerOptions(argv)
+if (options.engine === 'neo') {
+  console.error("Neo v2's SDK is not on this branch")
+  process.exit(1)
+}
 const root = path.resolve(
   process.env.NEO_NODE_OUTPUT_DIR ||
     path.resolve(agent, '../../.llm/neo-node-results'),
 )
 fs.mkdirSync(root, { recursive: true })
 const output = fs.realpathSync(
-  fs.mkdtempSync(path.join(root, options.reference ? 'reference-' : 'neo-')),
+  fs.mkdtempSync(path.join(root, `${options.engine}-`)),
 )
 console.log(`Results: ${output}`)
 const run = {
-  mode: options.reference ? 'reference' : 'neo',
+  mode: options.engine,
+  engine: options.engine,
+  hostedMode: options.hostedMode,
+  browserosVersion: browserVersion(process.env.NEO_E2E_BROWSER),
+  browserLaunch: browserLaunch(
+    process.env.NEO_E2E_BROWSER,
+    undefined,
+    options.hostedMode,
+  ),
   expectLoop: options.expectLoop,
   argv,
   workers: options.workers,
@@ -32,14 +44,23 @@ const run = {
     cwd: agent,
     encoding: 'utf8',
   }).trim(),
-  sdkSha256: sha256(
-    fs.readFileSync(
-      new URL('../../neo-quickjs-injected/dist/sdk.js', import.meta.url),
-    ),
-  ),
+  sdkSources:
+    options.engine === 'claw'
+      ? Object.fromEntries(
+          [
+            'neo-server/src/runtime/js/bootstrap.js',
+            'neo-playwright/assets/prelude.js',
+            'neo-server/src/runtime/js/neo_prelude.js',
+          ].map((file) => [
+            file,
+            sha256(fs.readFileSync(new URL(`../../${file}`, import.meta.url))),
+          ]),
+        )
+      : {},
   specsVerified: false,
   contextOptionOmissions: [],
-  addonBuild: options.debugBuild ? 'debug' : 'release',
+  addonBuild:
+    options.engine === 'claw' || !options.debugBuild ? 'release' : 'debug',
 }
 const writeRun = () =>
   fs.writeFileSync(path.join(output, 'run.json'), JSON.stringify(run, null, 2))
@@ -113,28 +134,53 @@ try {
     !options.skipBuild &&
     !options.args.includes('--list')
   ) {
-    const addonDir = fileURLToPath(new URL('./addon/', import.meta.url))
+    const addonDir = fileURLToPath(
+      new URL(
+        options.engine === 'claw' ? './claw-addon/' : './addon/',
+        import.meta.url,
+      ),
+    )
     const target = path.resolve(
       process.env.CARGO_TARGET_DIR || path.join(addonDir, 'target'),
     )
-    const build = await command('cargo', [
+    const buildArgs = [
       'build',
       '--manifest-path',
       path.join(addonDir, 'Cargo.toml'),
       '--locked',
-      ...(options.debugBuild ? [] : ['--release']),
-    ])
+      ...(run.addonBuild === 'release' ? ['--release'] : []),
+    ]
+    run.addon = {
+      directory: addonDir,
+      target,
+      command: ['cargo', ...buildArgs],
+    }
+    writeRun()
+    const build = await command('cargo', buildArgs)
     if (build.code !== 0)
       throw new Error(`Add-on build failed: ${JSON.stringify(build)}`)
+    const stem = options.engine === 'claw' ? 'claw_node' : 'neo_node'
     const library =
       process.platform === 'darwin'
-        ? 'libneo_node.dylib'
+        ? `lib${stem}.dylib`
         : process.platform === 'win32'
-          ? 'neo_node.dll'
-          : 'libneo_node.so'
-    const temporary = path.join(addonDir, `neo_node.${process.pid}.node`)
+          ? `${stem}.dll`
+          : `lib${stem}.so`
+    const temporary = path.join(addonDir, `${stem}.${process.pid}.node`)
     fs.copyFileSync(path.join(target, run.addonBuild, library), temporary)
-    fs.renameSync(temporary, path.join(addonDir, 'neo_node.node'))
+    fs.renameSync(temporary, path.join(addonDir, `${stem}.node`))
+  }
+  if (!options.reference && !options.args.includes('--list')) {
+    const addonFile =
+      process.env.CLAW_NODE_ADDON ||
+      fileURLToPath(new URL('./claw-addon/claw_node.node', import.meta.url))
+    run.addon = {
+      ...run.addon,
+      file: addonFile,
+      reused: options.skipBuild,
+      sha256: sha256(fs.readFileSync(addonFile)),
+    }
+    writeRun()
   }
   const result = await command(
     process.execPath,
@@ -152,6 +198,7 @@ try {
         NEO_NODE_OVERLAY: overlay,
         NEO_NODE_OUTPUT: output,
         NEO_NODE_MODE: run.mode,
+        NEO_NODE_HOSTED_MODE: options.hostedMode ? '1' : '0',
         NEO_NODE_EXPECT_LOOP: options.expectLoop ? '1' : '0',
         NEO_NODE_CURATION: options.curation
           ? path.join(output, 'curation.json')
@@ -186,6 +233,15 @@ try {
     console.error(error)
     process.exitCode = 1
   } finally {
+    run.browserLaunch.workers = fs
+      .readdirSync(output)
+      .filter((name) => name.startsWith('worker-'))
+      .flatMap((name) => {
+        const file = path.join(output, name, 'launch.json')
+        return fs.existsSync(file)
+          ? [{ worker: name, ...JSON.parse(fs.readFileSync(file)) }]
+          : []
+      })
     run.endedAt = new Date().toISOString()
     run.signal = interrupted
     writeRun()

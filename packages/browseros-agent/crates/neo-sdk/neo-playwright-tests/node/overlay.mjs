@@ -3,11 +3,19 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { corpus, sha256, source, verifySource } from '../js/prepare.mjs'
+import { clawDefaults } from './claw-context-options.mjs'
 import { prepareCuration } from './curation.mjs'
 
 export function materialize(
   root,
-  { reference, output, workers = 4, expectLoop = true, curation = true },
+  {
+    reference,
+    engine = reference ? 'reference' : 'neo',
+    output,
+    workers = 4,
+    expectLoop = true,
+    curation = true,
+  },
 ) {
   const stamp = verifySource()
   fs.mkdirSync(root, { recursive: true })
@@ -63,7 +71,7 @@ export function materialize(
     file,
     reason: reference
       ? 'owned reference browser fixture'
-      : 'Neo SDK fixture seam',
+      : `${engine === 'claw' ? 'v1 Claw' : 'Neo'} SDK fixture seam`,
     beforeSha256: sha256(original),
     afterSha256: sha256(fs.readFileSync(path.join(root, file))),
   })
@@ -116,18 +124,24 @@ export function materialize(
     edits,
     contextOptionOmissions: reference
       ? []
-      : [
-          {
-            option: 'offline',
-            value: false,
-            when: 'implicit upstream default only',
-          },
-          {
-            option: 'acceptDownloads',
-            value: true,
-            when: 'implicit upstream default only',
-          },
-        ],
+      : engine === 'claw'
+        ? Object.entries(clawDefaults).map(([option, value]) => ({
+            option,
+            value,
+            when: 'implicit upstream default only; verified on the owned browser',
+          }))
+        : [
+            {
+              option: 'offline',
+              value: false,
+              when: 'implicit upstream default only',
+            },
+            {
+              option: 'acceptDownloads',
+              value: true,
+              when: 'implicit upstream default only',
+            },
+          ],
   }
   fs.writeFileSync(
     path.join(output, 'overlay.json'),

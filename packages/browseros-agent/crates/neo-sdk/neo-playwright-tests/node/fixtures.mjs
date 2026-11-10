@@ -4,11 +4,18 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { source } from '../js/prepare.mjs'
-import { launchBrowser } from './browser.mjs'
+import { browserVersion, launchBrowser } from './browser.mjs'
+import { clawContextOptions, clawDefaults } from './claw-context-options.mjs'
+import {
+  installFixtureBuiltins,
+  openHarness,
+  pageTargets,
+  resetClawTest,
+  serverOrigins,
+} from './claw-harness.mjs'
 import { contextOptions } from './context-options.mjs'
 import { skipReason } from './curation.mjs'
 import { createExpect } from './expect-loop.mjs'
-import { openSdk } from './loader.mjs'
 
 const require = createRequire(path.join(source, 'package.json'))
 const { expect: realExpect } = require('@playwright/test')
@@ -17,7 +24,7 @@ let neoLocator
 
 export function wrapExpect(original) {
   if (
-    process.env.NEO_NODE_MODE !== 'neo' ||
+    !['neo', 'claw'].includes(process.env.NEO_NODE_MODE) ||
     process.env.NEO_NODE_EXPECT_LOOP === '0'
   )
     return original
@@ -124,7 +131,7 @@ const referenceTest = ownedTest.extend({
   ],
 })
 
-const neoTest = ownedTest.extend({
+const sdkTest = ownedTest.extend({
   __neoExpectLoopSkip: [
     async ({}, use, testInfo) => {
       await use()
@@ -143,8 +150,65 @@ const neoTest = ownedTest.extend({
     },
     { auto: true },
   ],
+  context: async ({ _contextFactory }, use) => {
+    const { context, close } = await _contextFactory()
+    try {
+      await use(context)
+    } finally {
+      await close()
+    }
+  },
+  _setupArtifacts: [
+    async ({ trace, screenshot }, use) => {
+      if ((typeof trace === 'string' ? trace : trace.mode) !== 'off')
+        unsupported('trace fixture: playwright._instrumentation')
+      if (
+        (typeof screenshot === 'string' ? screenshot : screenshot.mode) !==
+        'off'
+      )
+        unsupported('screenshot fixture: playwright._instrumentation')
+      await use()
+    },
+    { auto: 'all-hooks-included' },
+  ],
+  _setupContextOptions: [
+    async ({ playwright, testIdAttribute }, use, testInfo) => {
+      if (testIdAttribute)
+        playwright.selectors.setTestIdAttribute(testIdAttribute)
+      testInfo.snapshotSuffix = process.platform
+      await use()
+    },
+    { auto: 'all-hooks-included' },
+  ],
+  _browserOptions: [
+    async ({ mode, headless, channel, launchOptions, connectOptions }, use) => {
+      if (mode !== 'default') unsupported(`mode=${mode}`)
+      if (
+        !headless ||
+        channel !== 'chromium' ||
+        Object.keys(launchOptions).length ||
+        connectOptions
+      )
+        unsupported('custom browser launch/connect options')
+      await use({})
+    },
+    { scope: 'worker', auto: true },
+  ],
+  toImplInWorkerScope: [
+    async ({}, use) => {
+      await use(() => unsupported('toImpl'))
+    },
+    { scope: 'worker' },
+  ],
+  startRemoteServer: async ({}, use) => {
+    await use(() => unsupported('startRemoteServer'))
+  },
+})
+
+const neoTest = sdkTest.extend({
   __neo: [
     async ({ __neoWorker }, use) => {
+      const { openSdk } = await import('./loader.mjs')
       const sdk = await openSdk(__neoWorker.port, {
         // Playwright owns each test's timeout; this is only a worker lifetime fence.
         timeoutMs: 86_400_000,
@@ -216,60 +280,149 @@ const neoTest = ownedTest.extend({
       return result
     })
   },
-  context: async ({ _contextFactory }, use) => {
-    const { context, close } = await _contextFactory()
-    try {
-      await use(context)
-    } finally {
-      await close()
-    }
-  },
-  _setupArtifacts: [
-    async ({ trace, screenshot }, use) => {
-      if ((typeof trace === 'string' ? trace : trace.mode) !== 'off')
-        unsupported('trace fixture: playwright._instrumentation')
-      if (
-        (typeof screenshot === 'string' ? screenshot : screenshot.mode) !==
-        'off'
-      )
-        unsupported('screenshot fixture: playwright._instrumentation')
-      await use()
+})
+
+const clawOptionFixtures = Object.fromEntries(
+  Object.entries(clawDefaults).map(([name, value]) => [
+    name,
+    [
+      async ({ contextOptions }, use, testInfo) => {
+        // test.use({ option: default }) bypasses this initializer and stays explicit.
+        if (!Object.hasOwn(contextOptions, name)) markImplicit(testInfo, name)
+        await use(
+          Object.hasOwn(contextOptions, name) ? contextOptions[name] : value,
+        )
+      },
+      { option: true },
+    ],
+  ]),
+)
+
+const clawTest = sdkTest.extend({
+  ...clawOptionFixtures,
+  __claw: [
+    async ({ __neoWorker }, use) => {
+      const { openClaw } = await import('./claw-loader.mjs')
+      const sdk = await openClaw(__neoWorker.port, {
+        timeoutMs: 86_400_000,
+        stateDir: path.join(__neoWorker.output, 'claw-state'),
+        executionDir: path.join(__neoWorker.profile, '.browseros'),
+        browserosVersion: browserVersion(process.env.NEO_E2E_BROWSER),
+      })
+      const initialPage = sdk.page || sdk.context.pages()[0]
+      if (initialPage) {
+        neoPage = initialPage.constructor
+        neoLocator = initialPage.locator(':root').constructor
+      }
+      try {
+        await use(sdk)
+      } finally {
+        fs.writeFileSync(
+          path.join(__neoWorker.output, 'outcome.json'),
+          await sdk.finish(),
+        )
+      }
     },
-    { auto: 'all-hooks-included' },
+    { scope: 'worker', timeout: 60_000 },
   ],
-  _setupContextOptions: [
-    async ({ playwright, testIdAttribute }, use, testInfo) => {
-      if (testIdAttribute)
-        playwright.selectors.setTestIdAttribute(testIdAttribute)
-      testInfo.snapshotSuffix = process.platform
-      await use()
-    },
-    { auto: 'all-hooks-included' },
-  ],
-  _browserOptions: [
-    async ({ mode, headless, channel, launchOptions, connectOptions }, use) => {
-      if (mode !== 'default') unsupported(`mode=${mode}`)
-      if (
-        !headless ||
-        channel !== 'chromium' ||
-        Object.keys(launchOptions).length ||
-        connectOptions
-      )
-        unsupported('custom browser launch/connect options')
-      await use({})
-    },
-    { scope: 'worker', auto: true },
-  ],
-  toImplInWorkerScope: [
-    async ({}, use) => {
-      await use(() => unsupported('toImpl'))
+  __clawHarness: [
+    async ({ __neoWorker }, use) => {
+      const cdp = await openHarness(__neoWorker.port)
+      try {
+        await use(cdp)
+      } finally {
+        await cdp.close()
+      }
     },
     { scope: 'worker' },
   ],
-  startRemoteServer: async ({}, use) => {
-    await use(() => unsupported('startRemoteServer'))
+  playwright: [
+    async ({}, use) => {
+      // v1 has no Playwright namespace. Missing members remain undefined.
+      await use({})
+    },
+    { scope: 'worker' },
+  ],
+  browser: [
+    async ({ __claw }, use) => {
+      await use(__claw.browser)
+    },
+    { scope: 'worker' },
+  ],
+  __clawIsolation: [
+    async (
+      {
+        __claw,
+        __clawHarness,
+        __neoWorker,
+        loopback,
+        actionTimeout,
+        navigationTimeout,
+      },
+      use,
+    ) => {
+      const context = __claw.context
+      const initialPages = new Set(context.pages())
+      context.setDefaultTimeout(actionTimeout || 0)
+      context.setDefaultNavigationTimeout(navigationTimeout || 0)
+      try {
+        await use()
+      } finally {
+        await resetClawTest({
+          context,
+          initialPages,
+          cdp: __clawHarness,
+          origins: serverOrigins(__neoWorker.serverPort, loopback),
+        })
+      }
+    },
+    { auto: true },
+  ],
+  _contextFactory: async (
+    { __claw, _combinedContextOptions, video },
+    use,
+    testInfo,
+  ) => {
+    if (process.env.PW_CLOCK) unsupported('clock fixture: context._wrapApiCall')
+    let calls = 0
+    await use(async (requested) => {
+      const explicit = clawContextOptions(
+        _combinedContextOptions,
+        requested,
+        implicitOptions.get(testInfo),
+      )
+      if ((typeof video === 'string' ? video : video.mode) !== 'off')
+        explicit.recordVideo = { dir: testInfo.outputPath('video') }
+      calls++
+      const forced = Object.keys(explicit).length
+        ? `explicit options: ${JSON.stringify(explicit)}`
+        : calls > 1
+          ? 'second context in one test'
+          : null
+      if (forced) {
+        testInfo.annotations.push({ type: 'claw-context', description: forced })
+        const context = await __claw.browser.newContext(explicit)
+        return { context, close: () => context.close() }
+      }
+      return { context: __claw.context, close: async () => {} }
+    })
+  },
+  __clawPageTargets: async ({ context, __clawHarness }, use) => {
+    // The dependency resolves before upstream's page fixture calls context.newPage().
+    if (!context) throw new Error('harness-error: no fixture context')
+    await use(await pageTargets(__clawHarness))
+  },
+  page: async ({ __clawPageTargets, page, __clawHarness }, use) => {
+    await installFixtureBuiltins(__clawHarness, __clawPageTargets)
+    neoPage = page.constructor
+    neoLocator = page.locator(':root').constructor
+    await use(page)
   },
 })
 
 export const test =
-  process.env.NEO_NODE_MODE === 'reference' ? referenceTest : neoTest
+  process.env.NEO_NODE_MODE === 'reference'
+    ? referenceTest
+    : process.env.NEO_NODE_MODE === 'claw'
+      ? clawTest
+      : neoTest
