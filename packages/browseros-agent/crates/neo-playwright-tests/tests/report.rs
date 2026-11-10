@@ -659,12 +659,12 @@ fn measured_differences_survive_incomplete_effects_and_target_witness() {
         let result = classify(value).expect("valid boundary fixture");
         assert_eq!(
             result.verdict,
-            Verdict::HarnessError,
+            Verdict::Fail,
             "an independent measured gap survives {defect} loss"
         );
         assert!(
             !result.differences.is_empty(),
-            "infrastructure does not erase measured gaps"
+            "incomplete evidence does not erase measured gaps"
         );
         assert!(
             !result.comparable && !result.evidence_incomplete.is_empty(),
@@ -776,7 +776,7 @@ fn coverage_distinguishes_zero_supported_partial_failures_and_skips() {
     let pass = classify(fixture()).expect("valid fixture");
     let mut partial = fixture();
     partial["entry"]["feature"] = json!("navigation");
-    partial["phases"]["neo"]["journal"]["censusGaps"] = json!(["unwrapped namespace"]);
+    partial["phases"]["neo"]["observation"]["status"] = json!("incomplete");
     partial["phases"]["neo"]["journal"]["calls"][0]["value"] =
         json!({"tag":"boolean","value":true});
     let partial = classify(partial).expect("valid fixture");
@@ -1030,19 +1030,15 @@ fn tests_that_unsupported_and_invalid_references_take_precedence_over_bridge_lim
 
 #[test]
 fn tests_that_infrastructure_errors_outrank_bridge_limits_and_unsupported() {
-    for defect in ["observer", "exit", "worker", "witness"] {
+    for defect in ["exit", "worker"] {
         for unsupported in [false, true] {
             let mut value = bridge_fixture();
             if unsupported {
                 value["phases"]["neo"]["journal"]["missing"] = json!(["Page.evaluate"]);
             }
             match defect {
-                "observer" => value["phases"]["neo"]["observation"]["status"] = json!("incomplete"),
                 "exit" => value["phases"]["neo"]["exit"]["code"] = json!(1),
                 "worker" => value["phases"]["neo"]["infrastructureErrors"] = json!(["worker died"]),
-                "witness" => {
-                    value["phases"]["neo"]["journal"]["nativeOutcome"]["status"] = json!("error");
-                }
                 _ => unreachable!(),
             }
             assert_eq!(
@@ -1056,74 +1052,202 @@ fn tests_that_infrastructure_errors_outrank_bridge_limits_and_unsupported() {
 
 #[test]
 fn tests_that_bridge_limit_counts_only_proven_earlier_differences() {
-    for earlier_difference in [false, true] {
-        let mut value = bridge_fixture();
-        if earlier_difference {
-            value["phases"]["neo"]["journal"]["calls"][0]["value"] = encode(&json!(true));
-        }
-        for engine in ["reference", "neo"] {
-            let mut next = call(
-                engine,
-                "Page.title",
-                (1, "Page"),
-                2,
-                0,
-                1,
-                encode(&json!("title")),
-            );
-            if engine == "neo" {
-                next["state"] = json!("pending");
+    for limited_engine in ["reference", "neo"] {
+        for earlier_difference in [false, true] {
+            let mut value = if limited_engine == "neo" {
+                bridge_fixture()
+            } else {
+                fixture()
+            };
+            if earlier_difference {
+                value["phases"]["neo"]["journal"]["calls"][0]["value"] = encode(&json!(true));
             }
-            value["phases"][engine]["journal"]["calls"]
+            for engine in ["reference", "neo"] {
+                let mut next = call(
+                    engine,
+                    "Page.title",
+                    (1, "Page"),
+                    2,
+                    0,
+                    1,
+                    encode(&json!("title")),
+                );
+                if engine == limited_engine {
+                    next["state"] = json!("untransportable");
+                    next["transportError"] = json!("cannot encode result");
+                }
+                value["phases"][engine]["journal"]["calls"]
+                    .as_array_mut()
+                    .expect("calls")
+                    .push(next);
+            }
+            // A reference tail after the blocked call is evidence, not a proven earlier difference.
+            value["phases"]["reference"]["journal"]["calls"]
                 .as_array_mut()
                 .expect("calls")
-                .push(next);
-        }
-        // A reference tail after the blocked call is evidence, not a proven earlier difference.
-        value["phases"]["reference"]["journal"]["calls"]
-            .as_array_mut()
-            .expect("calls")
-            .push(call(
-                "reference",
-                "Page.title",
-                (1, "Page"),
-                3,
-                0,
-                2,
-                encode(&json!("later")),
-            ));
-        let result = classify(value).expect("fixture");
-        assert!(!result.differences.is_empty(), "retain the incomplete tail");
-        let summary = serde_json::to_value(report::summarize(&[result])).expect("summary");
-        for totals in [
-            &summary["totals"],
-            &summary["features"]["unclassified"],
-            &summary["suites"]["tests/page/page-goto.spec.ts"],
-        ] {
-            assert_eq!(
-                totals["bridgeLimitWithEarlierDifferenceCount"],
-                usize::from(earlier_difference),
-                "only proven earlier differences count"
-            );
+                .push(call(
+                    "reference",
+                    "Page.title",
+                    (1, "Page"),
+                    3,
+                    0,
+                    2,
+                    encode(&json!("later")),
+                ));
+            let result = classify(value).expect("fixture");
+            assert!(!result.differences.is_empty(), "retain the incomplete tail");
+            let summary = serde_json::to_value(report::summarize(&[result])).expect("summary");
+            for totals in [
+                &summary["totals"],
+                &summary["features"]["unclassified"],
+                &summary["suites"]["tests/page/page-goto.spec.ts"],
+            ] {
+                assert_eq!(
+                    totals["bridgeLimitWithEarlierDifferenceCount"],
+                    usize::from(earlier_difference),
+                    "only proven earlier differences count"
+                );
+            }
         }
     }
 }
 
 #[test]
-fn tests_that_invalid_reference_transport_cannot_establish_a_bridge_verdict() {
-    for missing in [false, true] {
-        let mut value = bridge_fixture();
-        if missing {
-            value["phases"]["reference"]["journal"] = Value::Null;
-        } else {
+fn tests_that_reference_transport_is_bridge_limited_without_invalidating_the_reference() {
+    for transport in ["journal", "call"] {
+        let mut value = fixture();
+        if transport == "journal" {
             value["phases"]["reference"]["journal"]["transportErrors"] =
                 json!(["reference serialization failed"]);
+        } else {
+            value["phases"]["reference"]["journal"]["calls"][0]["state"] = json!("untransportable");
+            value["phases"]["reference"]["journal"]["calls"][0]["transportError"] =
+                json!("reference serialization failed");
         }
+        for (scenario, expected) in [
+            ("limit", Verdict::BridgeLimit),
+            ("unsupported", Verdict::Unsupported),
+            ("reference-failure", Verdict::ReferenceFailure),
+            ("infrastructure", Verdict::HarnessError),
+            ("neo-failure", Verdict::BridgeLimit),
+        ] {
+            let mut case = value.clone();
+            match scenario {
+                "unsupported" => {
+                    case["phases"]["neo"]["journal"]["missing"] = json!(["Page.evaluate"]);
+                }
+                "reference-failure" => outcome(&mut case, "reference", "failed", "passed"),
+                "infrastructure" => case["phases"]["neo"]["exit"]["code"] = json!(1),
+                "neo-failure" => outcome(&mut case, "neo", "failed", "passed"),
+                _ => {}
+            }
+            let result = classify(case).expect("fixture");
+            assert_eq!(result.verdict, expected, "{transport}: {scenario}");
+            assert_eq!(
+                result.reference_valid,
+                scenario != "reference-failure",
+                "transport completeness does not change raw reference validity"
+            );
+            assert!(
+                !result.reference_complete && !result.comparable,
+                "transport gaps remain incomplete"
+            );
+            if expected == Verdict::BridgeLimit {
+                assert_eq!(
+                    result.reason, "bridge limit: reference: reference serialization failed",
+                    "name the engine that lost transport"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn tests_that_missing_reference_journals_retain_base_validity_and_evidence_precedence() {
+    for (value, expected) in [
+        (fixture(), Verdict::HarnessError),
+        (bridge_fixture(), Verdict::BridgeLimit),
+    ] {
+        let mut value = value;
+        value["phases"]["reference"]["journal"] = Value::Null;
+        let result = classify(value).expect("fixture");
         assert_eq!(
-            classify(value).expect("fixture").verdict,
-            Verdict::HarnessError,
-            "unreadable reference transport is a harness error"
+            result.verdict, expected,
+            "a missing journal is an evidence facet"
         );
+        assert!(
+            result.reference_valid && !result.reference_complete,
+            "raw validity and completeness stay separate"
+        );
+    }
+}
+
+#[test]
+fn tests_that_incomplete_observations_and_witnesses_preserve_verdict_precedence() {
+    for defect in ["reference-observer", "neo-observer", "witness"] {
+        for (scenario, expected) in [
+            ("evidence-only", Verdict::HarnessError),
+            ("skip", Verdict::Skip),
+            ("reference-failure", Verdict::ReferenceFailure),
+            ("unsupported", Verdict::Unsupported),
+            ("bridge-limit", Verdict::BridgeLimit),
+            ("difference", Verdict::Fail),
+            ("assertion", Verdict::Fail),
+            ("infrastructure", Verdict::HarnessError),
+        ] {
+            let mut value = if scenario == "bridge-limit" {
+                bridge_fixture()
+            } else {
+                fixture()
+            };
+            match defect {
+                "reference-observer" => {
+                    value["phases"]["reference"]["observation"]["status"] = json!("incomplete");
+                }
+                "neo-observer" => projection(&mut value, "neo", "status", &json!("incomplete")),
+                "witness" => {
+                    value["phases"]["neo"]["journal"]["nativeOutcome"]["status"] = json!("error");
+                }
+                _ => unreachable!(),
+            }
+            match scenario {
+                "skip" => {
+                    for engine in ["reference", "neo"] {
+                        outcome(&mut value, engine, "skipped", "skipped");
+                    }
+                }
+                "reference-failure" => outcome(&mut value, "reference", "failed", "passed"),
+                "unsupported" => {
+                    value["phases"]["neo"]["journal"]["missing"] = json!(["Page.evaluate"]);
+                }
+                "difference" => {
+                    value["phases"]["neo"]["journal"]["calls"][0]["value"] = encode(&json!(true));
+                }
+                "assertion" => outcome(&mut value, "neo", "failed", "passed"),
+                "infrastructure" => {
+                    value["phases"]["neo"]["infrastructureErrors"] = json!(["worker died"]);
+                }
+                _ => {}
+            }
+            let result = classify(value).expect("fixture");
+            assert_eq!(result.verdict, expected, "{defect}: {scenario}");
+            assert!(
+                !result.comparable,
+                "incomplete evidence never becomes comparable"
+            );
+            if expected != Verdict::Skip {
+                assert!(
+                    !result.evidence_incomplete.is_empty(),
+                    "keep the evidence gap"
+                );
+            }
+            if expected == Verdict::Fail {
+                assert!(
+                    !result.differences.is_empty(),
+                    "retain the actual difference"
+                );
+            }
+        }
     }
 }
 
@@ -1166,4 +1290,36 @@ fn tests_that_ansi_normalization_preserves_object_origins_and_lone_surrogates() 
         Verdict::Fail,
         "lone surrogates cannot collapse into replacement characters"
     );
+}
+
+#[test]
+fn tests_that_other_harness_gaps_follow_the_same_verdict_precedence() {
+    for engine in ["reference", "neo"] {
+        for (scenario, expected) in [
+            ("gap", Verdict::HarnessError),
+            ("reference-failure", Verdict::ReferenceFailure),
+            ("unsupported", Verdict::Unsupported),
+            ("difference", Verdict::Fail),
+        ] {
+            let mut value = fixture();
+            value["phases"][engine]["journal"]["harnessLimitations"] =
+                json!(["fixture option not reproduced"]);
+            match scenario {
+                "reference-failure" => outcome(&mut value, "reference", "failed", "passed"),
+                "unsupported" => {
+                    value["phases"]["neo"]["journal"]["missing"] = json!(["Page.evaluate"]);
+                }
+                "difference" => {
+                    value["phases"]["neo"]["journal"]["calls"][0]["value"] = encode(&json!(true));
+                }
+                _ => {}
+            }
+            let result = classify(value).expect("fixture");
+            assert_eq!(result.verdict, expected, "{engine}: {scenario}");
+            assert!(
+                !result.comparable && !result.evidence_incomplete.is_empty(),
+                "retain the limitation independently"
+            );
+        }
+    }
 }

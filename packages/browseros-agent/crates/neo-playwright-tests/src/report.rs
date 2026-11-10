@@ -653,7 +653,7 @@ fn compare_journals(result: &mut ResultRecord, reference: &Phase, neo: &Phase) {
     let (Some(expected), Some(actual)) = (expected, actual) else {
         return;
     };
-    let bridge_boundary = neo.journal.as_ref().and_then(bridge_boundary);
+    let boundaries = [reference, neo].map(|phase| phase.journal.as_ref().and_then(bridge_boundary));
     for (key, expected_call) in &expected.calls {
         if let Some(actual_call) = actual.calls.get(key) {
             let left = canonical_outcome(expected_call, &expected.objects);
@@ -671,7 +671,9 @@ fn compare_journals(result: &mut ResultRecord, reference: &Phase, neo: &Phase) {
                 result.differences.push(format!("{}:{}:{} occurrence {} {} differs in method, value or error class (reference {}; Neo {} {})", key.site.file, key.site.line, key.site.column, key.occurrence, expected_call.method, outcome_kind(&expected_call.outcome), actual_call.method, outcome_kind(&actual_call.outcome)));
                 result.bridge_limit_with_earlier_difference |= left.is_some()
                     && right.is_some()
-                    && bridge_boundary.is_some_and(|boundary| actual_call.ordinal < boundary);
+                    && boundaries.iter().any(Option::is_some)
+                    && boundaries[0].is_none_or(|boundary| expected_call.ordinal < boundary)
+                    && boundaries[1].is_none_or(|boundary| actual_call.ordinal < boundary);
             }
         } else if !actual.might_be_unresolved(key) {
             result.differences.push(format!(
@@ -726,15 +728,19 @@ fn bridge_limit(journal: &Journal) -> Option<String> {
         .find(|text| text.starts_with("bridge limit: "))
         .cloned()
         .or_else(|| {
-            journal
-                .transport_errors
-                .first()
-                .map(|error| format!("bridge limit: transport: {error}"))
+            transport_error(journal).map(|error| format!("bridge limit: transport: {error}"))
         })
+}
+
+fn transport_error(journal: &Journal) -> Option<&str> {
+    journal
+        .transport_errors
+        .first()
+        .map(String::as_str)
         .or_else(|| {
             journal.calls.iter().find_map(|call| {
                 if let CallOutcome::Untransportable { transport_error } = &call.outcome {
-                    Some(format!("bridge limit: transport: {transport_error}"))
+                    Some(transport_error.as_str())
                 } else {
                     None
                 }
@@ -810,14 +816,10 @@ pub fn classify(pair: &Pair) -> ResultRecord {
     result.reference_valid = reference_test.is_some_and(passed)
         && reference.infrastructure_errors.is_empty()
         && exit_error(reference, reference_test).is_none()
-        && reference.journal.as_ref().is_some_and(|journal| {
-            journal.harness_limitations.is_empty()
-                && journal.transport_errors.is_empty()
-                && journal
-                    .calls
-                    .iter()
-                    .all(|call| outcome_value(&call.outcome).is_some())
-        });
+        && reference
+            .journal
+            .as_ref()
+            .is_none_or(|journal| journal.harness_limitations.is_empty());
     // A genuine upstream skip does not execute the fixture or need browser observations.
     if infrastructure.is_empty()
         && reference_test.is_some_and(|test| test.raw_status == "skipped")
@@ -831,13 +833,13 @@ pub fn classify(pair: &Pair) -> ResultRecord {
     compare_journals(&mut result, reference, neo);
     for (engine, phase) in [("reference", reference), ("neo", neo)] {
         if !complete(phase.observation.as_ref()) {
-            infrastructure.push(format!(
+            result.evidence_incomplete.insert(format!(
                 "{engine}: read-only observation is incomplete or unreadable"
             ));
         }
     }
     if let Err(error) = native_witness(neo) {
-        infrastructure.push(error);
+        result.evidence_incomplete.insert(error);
     }
     for error in &infrastructure {
         result
@@ -851,14 +853,6 @@ pub fn classify(pair: &Pair) -> ResultRecord {
     let (Some(reference_test), Some(neo_test)) = (reference_test, neo_test) else {
         return result;
     };
-    if let Some(limitation) = reference
-        .journal
-        .as_ref()
-        .and_then(|journal| journal.harness_limitations.first())
-    {
-        result.reason = format!("Harness limitation: reference: {limitation}");
-        return result;
-    }
     if !passed(reference_test) {
         result.verdict = Verdict::ReferenceFailure;
         result.reason = format!(
@@ -869,10 +863,6 @@ pub fn classify(pair: &Pair) -> ResultRecord {
             result.reason.push_str(": ");
             result.reason.push_str(&message);
         }
-        return result;
-    }
-    if !result.reference_valid {
-        result.reason = "Reference journal is missing or has incomplete call transport".into();
         return result;
     }
     if !result.missing_reference.is_empty() || !result.missing_observed.is_empty() {
@@ -888,16 +878,20 @@ pub fn classify(pair: &Pair) -> ResultRecord {
         );
         return result;
     }
-    if let Some(limit) = neo.journal.as_ref().and_then(bridge_limit) {
+    let limit = reference
+        .journal
+        .as_ref()
+        .and_then(transport_error)
+        .map(|error| format!("bridge limit: reference: {error}"))
+        .or_else(|| neo.journal.as_ref().and_then(bridge_limit));
+    if let Some(limit) = limit {
         result.verdict = Verdict::BridgeLimit;
         result.reason = limit;
         return result;
     }
-    if let Some(limitation) = result.harness_limitations.first() {
-        result.reason = format!("Harness limitation: {limitation}");
-        return result;
-    }
     if let (Some(expected), Some(actual)) = (&reference.observation, &neo.observation)
+        && complete(Some(expected))
+        && complete(Some(actual))
         && !effects_agree(expected, actual)
     {
         result
