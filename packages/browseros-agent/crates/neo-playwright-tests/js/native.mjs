@@ -50,9 +50,11 @@ export function nativeLoop(codecFactory, epoch) {
     try {
       return codec.encode(value)
     } catch (thrown) {
-      if (codec.isError(thrown))
-        thrown.message = `bridge limit: untransportable return ${thrown.message.replace(/^Untransportable /, '')} from ${command.object.family}.${codec.string(command.member)}`
-      throw thrown
+      // Encoding can also fail in a returned getter or object identification. Those
+      // errors belong to the bridge, even when they are not our codec's own class.
+      throw new ProtocolError(
+        `bridge limit: untransportable return ${String(thrown?.message ?? thrown).replace(/^Untransportable /, '')} from ${command.object.family}.${codec.string(command.member)}`,
+      )
     }
   }
   const reply = (frame) => __neo_test_host.reply(JSON.stringify(frame))
@@ -167,9 +169,10 @@ export function nativeLoop(codecFactory, epoch) {
               reply({
                 event: 'transportError',
                 id: command.id,
-                message: codec.isError(thrown)
-                  ? thrown.message
-                  : String(thrown),
+                message:
+                  codec.isError(thrown) || thrown instanceof ProtocolError
+                    ? thrown.message
+                    : String(thrown),
               }),
             )
         } else
@@ -183,7 +186,7 @@ export function nativeLoop(codecFactory, epoch) {
           reply({
             id: command.id,
             kind: 'transportError',
-            message: codec.isError(thrown) ? thrown.message : String(thrown),
+            message: thrown.message,
           })
         else reply({ id: command.id, kind: 'throw', ...error(thrown) })
       }

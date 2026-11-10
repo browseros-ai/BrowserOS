@@ -709,6 +709,14 @@ test('native receive loop preserves source and labels untransportable returns', 
     functionReturn() {
       return () => 1
     }
+    unreadableReturn() {
+      return Object.defineProperty(Object.create(null), 'value', {
+        enumerable: true,
+        get() {
+          throw new Error('unreadable returned property')
+        },
+      })
+    }
     get badProperty() {
       return new Date()
     }
@@ -728,6 +736,7 @@ test('native receive loop preserves source and labels untransportable returns', 
     'badSync',
     'badAsync',
     'functionReturn',
+    'unreadableReturn',
   ].entries()) {
     commands.push({
       id: index * 2 + 1,
@@ -745,12 +754,12 @@ test('native receive loop preserves source and labels untransportable returns', 
     })
   }
   commands.push({
-    id: 9,
+    id: 11,
     op: 'get',
     object,
     member: codec.units('badProperty'),
   })
-  commands.push({ id: 10, op: 'finish' })
+  commands.push({ id: 12, op: 'finish' })
   await vm.runInContext(
     `(${nativeLoop.toString()})(${codecFactory.toString()}, "loop")`,
     vm.createContext({
@@ -770,7 +779,8 @@ test('native receive loop preserves source and labels untransportable returns', 
     [4, 'badSync'],
     [6, 'badAsync'],
     [8, 'functionReturn'],
-    [9, 'badProperty'],
+    [10, 'unreadableReturn'],
+    [11, 'badProperty'],
   ]) {
     const reply = replies.find(
       (reply) =>
