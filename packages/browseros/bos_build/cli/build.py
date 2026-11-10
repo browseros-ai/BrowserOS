@@ -15,7 +15,11 @@ from ..core.patch_source import load_external_patch_version
 from ..core.checkout_lock import CheckoutLockError, ChromiumCheckoutLock
 from ..core.products import get_product_descriptor
 from ..lib.paths import get_package_root
-from ..lib.versions import load_chromium_version, load_semantic_version
+from ..lib.versions import (
+    load_chromium_version,
+    load_semantic_version,
+    validate_release_chromium_version,
+)
 from ..core.pipeline import validate_pipeline, show_available_modules
 from ..core.planner import (
     Profile,
@@ -363,7 +367,7 @@ def main(
             "extra_gn_args": extra_gn_args,
         }
         try:
-            patch_header = _patch_source_header(patch_root)
+            patch_header = _patch_source_header(patch_root, build_type or "debug")
             pipeline = resolve_pipeline(
                 cli_args, execution_order=EXECUTION_ORDER, quiet=show_plan
             )
@@ -566,15 +570,16 @@ class _PlanProjection:
     build_runs: Callable[[], List[Tuple[Context, List[str]]]] = _display_only_runs
 
 
-def _patch_source_header(patch_root: Optional[Path]) -> List[str]:
+def _patch_source_header(patch_root: Optional[Path], build_type: str) -> List[str]:
     """Validate selected patch inputs without requiring a Chromium checkout."""
-    if patch_root is None:
-        return []
-    root = patch_root.expanduser().resolve()
+    root = (patch_root or get_package_root()).expanduser().resolve()
     if root != get_package_root().resolve():
         version, _ = load_external_patch_version(root)
     else:
         version, _ = load_chromium_version(root)
+    validate_release_chromium_version(get_package_root(), version, build_type)
+    if patch_root is None:
+        return []
     return [f"Chromium patch root: {root}", f"Chromium version: {version}"]
 
 
@@ -606,7 +611,6 @@ def _resolve_preset(
     profile carrying modules: routes to the DIRECT-mode machinery.
     """
     try:
-        patch_header = _patch_source_header(patch_root)
         prof = (
             load_profile(_resolve_profile_path(profile))
             if profile
@@ -634,7 +638,7 @@ def _resolve_preset(
                 patch_root=patch_root,
                 extra_gn_args=extra_gn_args,
             )
-            return replace(projection, header=[*projection.header, *patch_header])
+            return projection
         if build_type is not None:
             raise ValueError(
                 "--build-type is owned by the preset (release/debug); drop it"
@@ -666,6 +670,7 @@ def _resolve_preset(
                 switches, skip=tuple(dict.fromkeys((*switches.skip, *cli_skip)))
             )
         switches = switches.resolved()
+        patch_header = _patch_source_header(patch_root, switches.build_type)
         if prepared_resources is not None and switches.resource_mode != "source":
             raise ValueError("--prepared-resources requires source mode")
         if source_sha is not None and switches.resource_mode != "source":
@@ -852,6 +857,7 @@ def _resolve_modules_profile(
     header = [
         "Modules profile (enumerated pipeline — you own this list)",
         f"product={eff_product} arch={eff_arch} build_type={eff_build_type}",
+        *_patch_source_header(patch_root, eff_build_type),
     ]
     if extra_gn_args:
         header.append(f"GN arg overrides: {', '.join(extra_gn_args)}")
