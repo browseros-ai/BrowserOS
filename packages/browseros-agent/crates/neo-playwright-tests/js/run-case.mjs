@@ -415,6 +415,7 @@ export async function runCase(
           executable,
           outputDir: phaseDir,
           signal,
+          testBuiltins: kind === 'neo',
         })
         check(signal)
         const script = path.join(phaseDir, 'native.js')

@@ -244,9 +244,13 @@ test('the real lease binds nonzero ports and retains one origin block across seq
   const dir = temporary(t)
   const { cancellation } = scope(t)
   const ports = []
+  const builtinFixtures = []
   const pair = await runCase(settings(dir), {
     cancellation,
-    startBrowser: async () => browser(),
+    startBrowser: async ({ testBuiltins }) => {
+      builtinFixtures.push(testBuiltins)
+      return browser()
+    },
     runRunner: async ({ kind, port }) => {
       ports.push(port)
       const servers = []
@@ -260,6 +264,11 @@ test('the real lease binds nonzero ports and retains one origin block across seq
   })
   assert(ports[0] > 0)
   assert.deepEqual(ports, [pair.port, pair.port])
+  assert.deepEqual(
+    builtinFixtures,
+    [false, true],
+    'only Neo needs the upstream test global',
+  )
   assert.equal(
     fs.existsSync(
       path.join(os.tmpdir(), 'neo-playwright-tests-ports', String(pair.port)),
