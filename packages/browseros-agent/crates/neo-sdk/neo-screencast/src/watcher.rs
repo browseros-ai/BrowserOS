@@ -111,7 +111,7 @@ async fn forward(hub: Arc<CaptureHub>, watch: Watch, quality: Quality, pending: 
                 }
             }
             Err(error) => {
-                tracing::trace!(session_id = %watch.session_id, %error, "watch not showable yet");
+                tracing::trace!(target: "neo_capture::watcher", session_id = %watch.session_id, %error, "watch not showable yet");
             }
         }
         tokio::select! {

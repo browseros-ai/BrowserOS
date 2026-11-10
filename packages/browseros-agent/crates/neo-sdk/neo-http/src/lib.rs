@@ -23,7 +23,7 @@ mod still;
 use std::sync::Arc;
 
 use axum::Router;
-use neo_capture::{CaptureHub, CaptureTransport, CdpPortTransport};
+use neo_screencast::{CaptureHub, CaptureTransport, CdpPortTransport};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 

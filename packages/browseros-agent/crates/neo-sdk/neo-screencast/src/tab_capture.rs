@@ -284,7 +284,7 @@ async fn run(link: Arc<Link>, capture: Arc<Capture>, registry: Registry, preset:
         Err(error) => Err(error),
     };
     if let Err(error) = result {
-        tracing::debug!(target_id = %capture.key.target_id, %error, "capture ended with an error");
+        tracing::debug!(target: "neo_capture::tab_capture", target_id = %capture.key.target_id, %error, "capture ended with an error");
         capture.ready.send_if_modified(|ready| {
             let unset = ready.is_none();
             if unset {

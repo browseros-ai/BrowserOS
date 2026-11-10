@@ -12,7 +12,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
-use neo_capture::{Attached, Link};
+use neo_screencast::{Attached, Link};
 use serde_json::{Value, json};
 
 use crate::NeoCapture;

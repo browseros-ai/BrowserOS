@@ -11,7 +11,7 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
-use neo_capture::{Attached, CaptureFailure, CaptureResult, Link};
+use neo_screencast::{Attached, CaptureFailure, CaptureResult, Link};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 

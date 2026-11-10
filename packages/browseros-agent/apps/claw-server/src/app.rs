@@ -28,7 +28,7 @@ use crate::{
     storage::JsonStore,
 };
 use axum::{Router, middleware};
-use neo_capture::{CaptureHub, CdpPortTransport};
+use neo_screencast::{CaptureHub, CdpPortTransport};
 use std::{env, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
 #[derive(Clone)]

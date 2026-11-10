@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use neo_capture::{
+use neo_screencast::{
     CaptureFailure, CaptureResult, CaptureTab, CaptureTransport, Link, SessionTabs, SessionView,
 };
 use serde_json::json;

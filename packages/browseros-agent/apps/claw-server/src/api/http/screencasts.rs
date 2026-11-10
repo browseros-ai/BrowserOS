@@ -32,7 +32,7 @@ use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use neo_capture::{Frame, Quality, Watch, Watcher};
+use neo_screencast::{Frame, Quality, Watch, Watcher};
 use std::time::Duration;
 use tokio::sync::watch;
 

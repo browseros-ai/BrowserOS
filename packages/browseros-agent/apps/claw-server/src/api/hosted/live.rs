@@ -1,8 +1,8 @@
 //! The live-view routes, `/screencast` (MJPEG) and `/video` (fragmented MP4). Both are thin:
 //! parse `quality` and `tab`, open the stream from [`CaptureHub`], and frame it for HTTP. What
-//! is captured, shared, followed and when it stops is decided in `neo_capture`.
+//! is captured, shared, followed and when it stops is decided in `neo_screencast`.
 //!
-//! [`CaptureHub`]: neo_capture::CaptureHub
+//! [`CaptureHub`]: neo_screencast::CaptureHub
 
 use super::{HostedError, integer};
 use crate::error::AppError;
@@ -15,7 +15,7 @@ use axum::{
     response::Response,
 };
 use futures_util::StreamExt;
-use neo_capture::{CaptureError, Quality, mjpeg};
+use neo_screencast::{CaptureError, Quality, mjpeg};
 use std::{collections::HashMap, convert::Infallible};
 
 pub(super) async fn screencast(

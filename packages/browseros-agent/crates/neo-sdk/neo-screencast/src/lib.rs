@@ -1,9 +1,10 @@
 //! Neo: shared live capture of browser tabs on a capture-owned CDP connection.
 //!
 //! `SessionTabs` adapts host identity and eligibility. Legacy claw-server supplies claimed
-//! session tabs; neo-service supplies one page and owns its persistent rendering presence.
+//! session tabs; neo-http supplies one page and owns its persistent rendering presence.
 //! The hub shares one capture per target, kind and quality, follows eligible tabs, and releases
 //! captures after the last viewer's grace period. Capture sessions never enable emulation.
+//! Tracing targets are part of the host's log-filter contract and keep their historical module names.
 //!
 //! ```text
 //! viewer -> CaptureHub -> capture lease -> target session -> Link -> browser
@@ -335,13 +336,13 @@ impl CaptureHub {
                             Ok(Ok(lease)) => showing = Some(Showing::new(next_tab, lease)),
                             // Retried at the next check; until then keep the old tab if it lives.
                             Ok(Err(error)) => {
-                                tracing::debug!(%error, "screencast could not switch tabs");
+                                tracing::debug!(target: "neo_capture", %error, "screencast could not switch tabs");
                                 if showing.as_ref().is_some_and(Showing::ended) {
                                     showing = None;
                                 }
                             }
                             Err(_) => {
-                                tracing::debug!("screencast tab switch timed out");
+                                tracing::debug!(target: "neo_capture", "screencast tab switch timed out");
                                 if showing.as_ref().is_some_and(Showing::ended) {
                                     showing = None;
                                 }
@@ -421,7 +422,7 @@ impl CaptureHub {
             Ok(Some(view)) if view.live => view,
             Ok(_) => return Resolved::End,
             Err(error) => {
-                tracing::debug!(%error, "live view session check failed");
+                tracing::debug!(target: "neo_capture", %error, "live view session check failed");
                 return Resolved::Wait;
             }
         };

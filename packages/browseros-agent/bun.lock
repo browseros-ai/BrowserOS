@@ -315,8 +315,8 @@
       "name": "@browseros/hosted-api-rust",
       "version": "0.0.0",
     },
-    "crates/neo-sdk/neo-capture": {
-      "name": "@browseros/neo-capture",
+    "crates/neo-sdk/neo-http": {
+      "name": "@browseros/neo-http",
       "version": "0.0.0",
     },
     "crates/neo-sdk/neo-playwright-injected": {
@@ -344,8 +344,8 @@
       "name": "@browseros/neo-runtime-rust",
       "version": "0.0.0",
     },
-    "crates/neo-sdk/neo-service": {
-      "name": "@browseros/neo-service",
+    "crates/neo-sdk/neo-screencast": {
+      "name": "@browseros/neo-screencast",
       "version": "0.0.0",
     },
     "packages/acpx-ai-provider": {
@@ -697,7 +697,7 @@
 
     "@browseros/hosted-api-rust": ["@browseros/hosted-api-rust@workspace:crates/hosted-api"],
 
-    "@browseros/neo-capture": ["@browseros/neo-capture@workspace:crates/neo-sdk/neo-capture"],
+    "@browseros/neo-http": ["@browseros/neo-http@workspace:crates/neo-sdk/neo-http"],
 
     "@browseros/neo-playwright-injected": ["@browseros/neo-playwright-injected@workspace:crates/neo-sdk/neo-playwright-injected"],
 
@@ -707,7 +707,7 @@
 
     "@browseros/neo-runtime-rust": ["@browseros/neo-runtime-rust@workspace:crates/neo-sdk/neo-runtime"],
 
-    "@browseros/neo-service": ["@browseros/neo-service@workspace:crates/neo-sdk/neo-service"],
+    "@browseros/neo-screencast": ["@browseros/neo-screencast@workspace:crates/neo-sdk/neo-screencast"],
 
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 

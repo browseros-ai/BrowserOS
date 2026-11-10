@@ -12,7 +12,7 @@ use claw_server::{
     config::{Config, ServerMode},
 };
 use futures_util::StreamExt;
-use neo_capture::{
+use neo_screencast::{
     CaptureHub, CaptureTab, SessionView,
     testing::{ScriptedCdp, ScriptedTransport, StaticSessionTabs},
 };

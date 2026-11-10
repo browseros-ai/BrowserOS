@@ -16,8 +16,8 @@ use claw_api::models::{
     AgentSettings, BrowserLink, HealthResponse, ShutdownResponse, SystemInfo,
     UpdateAgentSettingsRequest,
 };
+use neo_http::NeoCapture;
 use neo_sdk_server::{Config as NeoConfig, NeoSdkServer};
-use neo_service::NeoCapture;
 use rmcp::{serve_server, transport::stdio};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;

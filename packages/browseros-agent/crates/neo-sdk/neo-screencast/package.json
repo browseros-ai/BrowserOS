@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/neo-screencast",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package neo-screencast -- --check && cargo clippy --package neo-screencast --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package neo-screencast --locked"
+  }
+}

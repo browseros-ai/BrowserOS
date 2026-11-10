@@ -1,5 +1,5 @@
 [package]
-name = "neo-capture"
+name = "neo-http"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -16,9 +16,14 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 base64.workspace = true
+neo-screencast.workspace = true
+axum.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tower.workspace = true
+tempfile.workspace = true
+reqwest.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

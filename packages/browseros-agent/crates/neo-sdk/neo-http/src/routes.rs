@@ -15,7 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router, middleware};
 use futures_util::StreamExt;
-use neo_capture::{CaptureError, CaptureFailure, Quality, mjpeg};
+use neo_screencast::{CaptureError, CaptureFailure, Quality, mjpeg};
 use serde_json::json;
 
 use crate::{NeoCapture, pages, still};

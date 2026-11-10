@@ -24,8 +24,8 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/browseros-ai/BrowserOS"
 
 [workspace.dependencies]
-neo-capture = { path = "crates/neo-sdk/neo-capture" }
-neo-service = { path = "crates/neo-sdk/neo-service" }
+neo-screencast = { path = "crates/neo-sdk/neo-screencast" }
+neo-http = { path = "crates/neo-sdk/neo-http" }
 neo-captcha = { path = "crates/neo-sdk/neo-captcha" }
 harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }

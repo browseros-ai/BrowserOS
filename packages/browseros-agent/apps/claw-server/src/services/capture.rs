@@ -6,7 +6,7 @@ use crate::ids::SessionId;
 use crate::services::cockpit::SessionVisualService;
 use crate::services::sessions::Sessions;
 use futures_util::future::BoxFuture;
-use neo_capture::{CaptureFailure, CaptureResult, CaptureTab, SessionTabs, SessionView};
+use neo_screencast::{CaptureFailure, CaptureResult, CaptureTab, SessionTabs, SessionView};
 use std::sync::Arc;
 
 /// Production `SessionTabs`: liveness from the in-memory session map, existence from the audit,
