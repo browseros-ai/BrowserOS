@@ -11,7 +11,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = { version = "2.16", default-features = false, features = ["napi4"] }
+napi = { version = "2.16", default-features = false, features = ["napi5"] }
 napi-derive = "2.16"
 neo-runtime = { path = "../../../neo-runtime", features = ["hosted-run"] }
 browseros-cdp = { path = "../../../../browseros-cdp" }

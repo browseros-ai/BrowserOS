@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 
-export async function openSdk(cdpPort, options, { onUncaught } = {}) {
+export async function openSdk(cdpPort, options = {}, { onUncaught } = {}) {
   const require = createRequire(import.meta.url)
   const addon = require(process.env.NEO_NODE_ADDON || './addon/neo_node.node')
   const runtime = await addon.connect(cdpPort)
@@ -12,6 +12,7 @@ export async function openSdk(cdpPort, options, { onUncaught } = {}) {
   try {
     native = await runtime.openRun(options)
     let finishing = false
+    let finished
     const parked = new Promise(() => {})
     const uncaught =
       onUncaught ||
@@ -56,13 +57,16 @@ export async function openSdk(cdpPort, options, { onUncaught } = {}) {
       ...sdk,
       native,
       runtime,
-      async finish() {
+      finish() {
         finishing = true
-        try {
-          return await native.finish()
-        } finally {
-          await runtime.close()
-        }
+        finished ??= (async () => {
+          try {
+            return await native.finish()
+          } finally {
+            await runtime.close()
+          }
+        })()
+        return finished
       },
     }
   } catch (error) {
