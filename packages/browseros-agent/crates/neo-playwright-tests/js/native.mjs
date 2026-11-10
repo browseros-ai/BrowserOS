@@ -1,7 +1,8 @@
 /** Neo: The body of ONE native run. Reflection invokes actual SDK objects through the usual bridge. */
 import { codecFactory } from './codec.mjs'
+import { sdkCapabilities } from './sdk-families.mjs'
 
-export function nativeLoop(codecFactory, epoch) {
+export function nativeLoop(codecFactory, epoch, capabilities = {}) {
   class ProtocolError extends Error {}
   const objects = new Map()
   const reverse = new WeakMap()
@@ -22,11 +23,27 @@ export function nativeLoop(codecFactory, epoch) {
     [mainFrame, 'Frame'],
     [page.locator('__neo_capability_probe__'), 'Locator'],
   ]
+  if (typeof playwright !== 'undefined') seeds.push([playwright, 'Playwright'])
   const prototypes = new Map(
     seeds.map(([object, family]) => [Object.getPrototypeOf(object), family]),
   )
   const identify = (value) => {
-    const family = prototypes.get(Object.getPrototypeOf(value))
+    if (reverse.has(value)) return reverse.get(value)
+    let family
+    for (
+      let prototype = Object.getPrototypeOf(value);
+      prototype;
+      prototype = Object.getPrototypeOf(prototype)
+    ) {
+      family = prototypes.get(prototype)
+      if (!family) {
+        const name = Object.getOwnPropertyDescriptor(prototype, 'constructor')
+          ?.value?.name
+        if (Object.hasOwn(capabilities, name)) family = name
+      }
+      // Walk outward: ElementHandle must win over its public JSHandle base.
+      if (family) break
+    }
     if (!family) return undefined
     if (!reverse.has(value)) {
       const ref = {
@@ -54,9 +71,11 @@ export function nativeLoop(codecFactory, epoch) {
     }),
     errorStack: codec.encode(thrown?.stack),
   })
-  const capabilities = {}
+  // Collection freezes every public class's prototype members from the SDK bundle.
+  // Send them all at ready, even for objects this run never returns: Rust's absent()
+  // must not mistake an unseen family for an unsupported one. Roots add own fields.
   for (const [object, family] of seeds) {
-    const members = new Set()
+    const members = new Set(capabilities[family])
     for (
       let prototype = object;
       prototype;
@@ -72,6 +91,9 @@ export function nativeLoop(codecFactory, epoch) {
       page: codec.encode(page),
       context: codec.encode(context),
       mainFrame: codec.encode(mainFrame),
+      ...(typeof playwright !== 'undefined' && {
+        playwright: codec.encode(playwright),
+      }),
     },
     capabilities,
   })
@@ -173,4 +195,4 @@ export function nativeLoop(codecFactory, epoch) {
 }
 
 export const nativeScript = (epoch) =>
-  `return (${nativeLoop.toString()})(${codecFactory.toString()}, ${JSON.stringify(epoch)})`
+  `return (${nativeLoop.toString()})(${codecFactory.toString()}, ${JSON.stringify(epoch)}, ${JSON.stringify(sdkCapabilities())})`
