@@ -1990,6 +1990,7 @@ dependencies = [
  "browseros-cdp",
  "clap",
  "futures-util",
+ "http-body",
  "image",
  "imagesize",
  "neo-runtime",
@@ -2003,6 +2004,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

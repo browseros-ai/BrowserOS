@@ -3,13 +3,14 @@
 //! runtime so per-tab input ordering survives separate stateless HTTP requests.
 //!
 //! The host owns process boot and its listener. This crate owns /mcp, request hygiene,
-//! admission, cancellation and cleanup. Shutdown cancels requests, waits for owned work,
-//! drains runtime cleanup, then disconnects the browser. It owns no Claw sessions or effects.
+//! admission, cancellation and cleanup. Shutdown cancels runs, drains reply ownership, ends
+//! transport streams, drains runtime cleanup, then disconnects. It owns no Claw sessions or effects.
 
 mod artifacts;
 mod binary;
 mod budget;
 mod output;
+mod replies;
 mod service;
 
 use std::path::PathBuf;

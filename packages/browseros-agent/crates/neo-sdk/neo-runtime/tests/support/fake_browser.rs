@@ -20,7 +20,6 @@
 //! as test crates, so it is never one on its own.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
@@ -401,19 +400,18 @@ impl Drop for FakeBrowser {
 /// Each protocol command's parameters by name, and whether each is optional.
 type Protocol = HashMap<String, HashMap<String, bool>>;
 
-/// BrowserOS's protocol as browseros-cdp vendors it (`protocol/protocol.json`), read once per
-/// test process.
+/// BrowserOS's protocol as browseros-cdp vendors it (`protocol/protocol.json`), embedded from
+/// this fixture's location and parsed once per test process.
 fn protocol() -> &'static Protocol {
     /// Neo: Share the pinned schema across every fake connection in this test process.
     static PROTOCOL: OnceLock<Protocol> = OnceLock::new();
     PROTOCOL.get_or_init(|| {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../browseros-cdp/protocol/protocol.json"
-        );
-        let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
-        let protocol: Value =
-            serde_json::from_str(&text).unwrap_or_else(|error| panic!("parse {path}: {error}"));
+        // Neo: #[path] imports give CARGO_MANIFEST_DIR the importing crate's directory.
+        // Anchor the same vendored schema at this source file so every test crate validates
+        // against it, including hosts outside the neo-sdk crate directory.
+        let text = include_str!("../../../../browseros-cdp/protocol/protocol.json");
+        let protocol: Value = serde_json::from_str(text)
+            .unwrap_or_else(|error| panic!("parse browseros-cdp protocol.json: {error}"));
         let mut commands = Protocol::new();
         for domain in protocol["domains"].as_array().into_iter().flatten() {
             let name = domain["domain"].as_str().unwrap_or_default();

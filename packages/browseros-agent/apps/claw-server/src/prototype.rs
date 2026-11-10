@@ -108,17 +108,19 @@ pub async fn serve(
         }
     });
     tracing::info!(%bound, "Playwright prototype listening; legacy effects and background jobs are disabled");
-    let stop_token = shutdown.clone();
+    let stop_token = shutdown;
+    let closing = service.clone();
     let result = axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(async move {
             tokio::select! {
                 () = signal => {}
                 () = stop_token.cancelled() => {}
             }
-            stop_token.cancel();
+            // This runs while axum still serves existing responses. Keep capture on the
+            // run-shutdown token: it ends here; MCP transport ends after replies are drained.
+            closing.close_transport().await;
         })
         .await;
-    shutdown.cancel();
     service.shutdown().await;
     // Runs have drained. Only now may presence detach clear page focus.
     capture.close().await;

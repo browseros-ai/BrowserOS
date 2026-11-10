@@ -1,6 +1,11 @@
 //! Neo: Drives the reusable router over real loopback HTTP with the runtime's browser double.
 //! Separate stateless requests exercise shared ownership, admission and cancellation without
 //! the claw-server process, so another embedding host receives the same lifecycle behavior.
+//!
+//! T1 discriminates W1 deterministically. T1, T4, T6 and T7 are deterministic for outcome and
+//! non-discriminating for W2. Client-observed order across the POST and GET connections is not
+//! asserted, because it is not a server property. T3, T3c and T3c-L are the deterministic W2 and
+//! ordering proofs. T3b stays probabilistic.
 
 #![expect(
     clippy::unwrap_used,
@@ -368,4 +373,156 @@ async fn shutdown_waits_for_an_inflight_readiness_connection_and_keeps_it_closed
         !server.neo.connected(),
         "shutdown leaves no late browser connection cached"
     );
+}
+
+#[path = "support/wire.rs"]
+mod wire;
+
+// T1 deterministically discriminates W1. Hyper is not controlled here, so this test alone
+// cannot discriminate W2; T3 and T3c own that deterministic proof.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_delivers_the_active_modern_runs_cancelled_reply() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let server = Server::start(browser.port()).await;
+    let client = Client::new();
+    let url = server.url.clone();
+    let pending = tokio::spawn(async move {
+        let response = wire::modern(&client, &url, 501, "tools/call", json!({"name":"run","arguments":{
+            "page":fake_browser::PAGE,
+            "code":"await page.title(); page.url(); await new Promise(r => setTimeout(r, 60000))",
+            "timeout":120_000
+        }})).send().await.unwrap();
+        wire::result(response, 501).await
+    });
+    getter_started(&browser).await;
+    server.neo.shutdown().await;
+    let result = time::timeout(Duration::from_secs(10), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        result["structuredContent"]["status"], "cancelled",
+        "{result}"
+    );
+    assert!(
+        !result["structuredContent"]["calls"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+// T3b supplements T3/T3c. This is a probabilistic real-rmcp handoff stress test, not the
+// deterministic proof that the reply token is attached at the correct production layer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn probabilistic_rmcp_handoff_stress_never_loses_a_terminal_reply() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let client = Client::new();
+    for iteration in 0..200 {
+        let server = Server::start(browser.port()).await;
+        assert!(server.neo.ready().await);
+        let before = browser.exchanges().len();
+        let request = wire::modern(
+            &client,
+            &server.url,
+            iteration,
+            "tools/call",
+            json!({"name":"run","arguments":{
+                "page":fake_browser::PAGE,"code":"return 1"
+            }}),
+        );
+        let pending =
+            tokio::spawn(
+                async move { wire::result(request.send().await.unwrap(), iteration).await },
+            );
+        // HTTP arrival alone is not enough: post-shutdown arrivals are legitimately refused.
+        // A run's first live getter proves this run was admitted before cancellation.
+        wire::until(
+            || {
+                browser.exchanges()[before..]
+                    .iter()
+                    .any(|e| e.method() == "Page.getNavigationHistory")
+            },
+            "the stress run never entered the runtime",
+        )
+        .await;
+        let closing = server.neo.clone();
+        let shutdown = tokio::spawn(async move { closing.shutdown().await });
+        let result = pending.await.unwrap();
+        assert!(
+            matches!(
+                result["structuredContent"]["status"].as_str(),
+                Some("ok" | "cancelled")
+            ),
+            "iteration {iteration}: {result}"
+        );
+        shutdown.await.unwrap();
+    }
+}
+
+// T4 requires HTTP200/cancelled, a complete POST and clean GET EOF, driven concurrently.
+// T3c-L proves that GET cannot end while the legacy POST body is unread before the consumer
+// grace expires, and that POST ends on its own before transport cancellation. This real-HTTP
+// test is non-discriminating for W2 and asserts no client-observed connection order.
+#[expect(
+    clippy::print_stderr,
+    reason = "C5 requires per-run observation order, elapsed time and outcome evidence"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_cancelled_post_completes_and_the_open_get_stream_ends() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let server = Server::start(browser.port()).await;
+    let client = Client::new();
+    let session = wire::legacy_session(&client, &server.url).await;
+    let get = wire::legacy_get(&client, &server.url, &session).await;
+    let request = wire::legacy_run(
+        &client,
+        &server.url,
+        &session,
+        601,
+        &json!({
+            "page":fake_browser::PAGE,"code":"page.url(); await new Promise(r => setTimeout(r, 60000))",
+            "timeout":120_000
+        }),
+    );
+    let pending =
+        tokio::spawn(async move { wire::legacy_result(request.send().await.unwrap(), 601).await });
+    getter_started(&browser).await;
+    let closing = server.neo.clone();
+    let started = Instant::now();
+    let shutdown = tokio::spawn(async move { closing.shutdown().await });
+    let (result, observed_order) = wire::reply_and_get_eof(pending, get).await;
+    let elapsed = started.elapsed();
+    eprintln!(
+        "NEO_LEGACY_SHUTDOWN {}",
+        json!({"observedOrder":observed_order,"elapsedMs":elapsed.as_secs_f64() * 1000.0,
+            "status":result["structuredContent"]["status"],"postHttpStatus":200,
+            "postComplete":true,"getCleanEof":true})
+    );
+    // Mirrors the crate-private REPLY_DELIVERY_GRACE. A reply/GET ending only at that
+    // grace is a failure, even with a terminal result: this is no connection-order claim
+    // and creates no new production run or cleanup deadline.
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "legacy shutdown reached the five-second consumer grace: {elapsed:?}"
+    );
+    assert_eq!(result["structuredContent"]["status"], "cancelled");
+    time::timeout(Duration::from_secs(20), shutdown)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+// T5: a listen acknowledgment is an explicit barrier; closure must not need the 5 s
+// stalled-consumer grace. The 2 s bound is a harness discriminator, not a cleanup deadline.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_completes_listen_with_the_protocol_final_result_without_the_grace() {
+    let server = Server::start(1).await;
+    let client = Client::new();
+    let listen = wire::Listen::open(&client, &server.url, 701).await;
+    time::timeout(Duration::from_secs(2), async {
+        tokio::join!(server.neo.shutdown(), listen.complete());
+    })
+    .await
+    .unwrap();
 }

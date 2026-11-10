@@ -25,7 +25,7 @@ use rmcp::model::{
     Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
     ServerCapabilities, SubscriptionFilter, Tool, ToolAnnotations,
 };
-use rmcp::service::RequestContext;
+use rmcp::service::{RequestContext, SubscriptionContext};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::{
     StreamableHttpServerConfig, StreamableHttpService,
@@ -44,6 +44,7 @@ use crate::Config;
 
 use super::budget::{Budget, DEFAULT_TOKENS, LIMIT_MAX, LIMIT_MIN, MAX_TOKENS, MIN_TOKENS};
 use super::output::{RESULTS_DIR, Store};
+use super::replies::{REPLY_DELIVERY_GRACE, ReplyTracker};
 use super::{artifacts, binary};
 
 /// Neo: the default wall budget includes admission, connection, tab creation and the script.
@@ -78,6 +79,11 @@ pub struct NeoSdkServer {
     permits: Arc<Semaphore>,
     browser: Arc<OnceCell<Arc<Browser>>>,
     shutdown: CancellationToken,
+    // Run cancellation must not cut rmcp's pending first message or SSE reply body.
+    // Transport waits for counted reply ownership to end (or the consumer grace), while
+    // the host's connection drain handles flushing. A body drop is not client receipt.
+    transport: CancellationToken,
+    replies: ReplyTracker,
     runs: TaskTracker,
     output: Arc<Mutex<Store>>,
     state_dir: PathBuf,
@@ -138,6 +144,8 @@ impl NeoSdkServer {
             )),
             browser: Arc::new(OnceCell::new()),
             shutdown,
+            transport: CancellationToken::new(),
+            replies: ReplyTracker::default(),
             runs: TaskTracker::new(),
             output: Arc::new(Mutex::new(Store::default())),
             state_dir: config.state_dir,
@@ -268,14 +276,30 @@ impl NeoSdkServer {
             .is_some_and(|browser| browser.cdp.is_connected())
     }
 
-    /// Refuses new runs, cancels active requests and awaits owned cleanup before disconnecting.
-    /// Cleanup can outlive a script deadline while CDP delivery settles. Disconnecting sooner
-    /// would lose late tab-creation acknowledgements and the cleanup that closes those tabs.
-    pub async fn shutdown(&self) {
+    /// Refuses admission, cancels runs, awaits owned work without a deadline, then drains
+    /// reply ownership before ending transport streams. Safe inside a host's HTTP graceful future.
+    ///
+    /// Covered runs are in flight when shutdown is cancelled. New POSTs can extend the reply
+    /// drain within its consumer grace; a refused POST arriving after that drain resolved has
+    /// no in-flight delivery guarantee. The grace never bounds run work or runtime cleanup.
+    /// Calls after transport cancellation are no-ops.
+    pub async fn close_transport(&self) {
+        if self.transport.is_cancelled() {
+            return;
+        }
         self.permits.close();
         self.shutdown.cancel();
         self.runs.close();
         self.runs.wait().await;
+        let _delivered = self.replies.drain(REPLY_DELIVERY_GRACE).await;
+        self.transport.cancel();
+    }
+
+    /// Ends reply ownership and transport, then awaits runtime cleanup before disconnecting.
+    /// Cleanup can outlive a script deadline while CDP delivery settles. Disconnecting sooner
+    /// would lose late tab-creation acknowledgements and the cleanup that closes those tabs.
+    pub async fn shutdown(&self) {
+        self.close_transport().await;
         if let Some(browser) = self.browser.get() {
             browser.runtime.drain().await;
             browser.cdp.disconnect().await;
@@ -289,6 +313,12 @@ impl NeoSdkServer {
             "/mcp",
             Router::new()
                 .fallback_service(self.http_service())
+                // This inner layer wraps the rmcp fallback itself, including unpolled bodies.
+                // Other host routes (including capture) never enter MCP reply accounting.
+                .layer(middleware::from_fn_with_state(
+                    self.replies.clone(),
+                    ReplyTracker::track,
+                ))
                 .layer(middleware::from_fn(request_hygiene)),
         )
     }
@@ -297,7 +327,7 @@ impl NeoSdkServer {
     fn http_service(&self) -> StreamableHttpService<Self, LocalSessionManager> {
         let service = self.clone();
         let mut config = StreamableHttpServerConfig::default();
-        config.cancellation_token = self.shutdown.child_token();
+        config.cancellation_token = self.transport.clone();
         StreamableHttpService::new(
             move || Ok(service.clone()),
             Arc::new(LocalSessionManager::default()),
@@ -512,6 +542,16 @@ impl ServerHandler for NeoSdkServer {
         Some(requested.supported_by(&self.get_info().capabilities))
     }
 
+    /// A listen POST is counted like any reply, so it must finish without transport cancel.
+    /// Returning success lets rmcp emit the protocol's final subscription result.
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
+        tokio::select! {
+            () = context.cancelled() => {}
+            () = self.shutdown.cancelled() => {}
+        }
+        Ok(())
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "the existing run and retained-result modes share one protocol validation and budget boundary"
@@ -699,3 +739,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod shutdown_tests;

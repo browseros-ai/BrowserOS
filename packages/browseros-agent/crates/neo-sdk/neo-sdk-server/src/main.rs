@@ -35,14 +35,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
     let listener = TcpListener::bind(args.listen).await?;
     let shutdown = CancellationToken::new();
-    let server = NeoSdkServer::new(Config::new(args.cdp_port, args.state_dir), shutdown.clone());
+    let server = NeoSdkServer::new(Config::new(args.cdp_port, args.state_dir), shutdown);
+    let closing = server.clone();
     tracing::info!(address = %listener.local_addr()?, "Neo MCP server listening");
     let result = axum::serve(listener, server.router())
         .with_graceful_shutdown(async move {
             stop_signal().await;
-            // Active requests share this token, so stopping the listener also cancels their
-            // realms. Awaiting HTTP shutdown first without cancellation would stall on them.
-            shutdown.cancel();
+            // Keep serving while runs cancel and their bodies drain. Only then end GET and
+            // listen streams, so axum's connection drain cannot wait forever on those streams.
+            closing.close_transport().await;
         })
         .await;
     server.shutdown().await;

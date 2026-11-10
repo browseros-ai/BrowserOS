@@ -13,6 +13,7 @@ base64.workspace = true
 browseros-cdp.workspace = true
 clap.workspace = true
 futures-util.workspace = true
+http-body.workspace = true
 image.workspace = true
 imagesize.workspace = true
 neo-runtime = { path = "../neo-runtime" }
@@ -29,7 +30,9 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 reqwest.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true
+tower.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

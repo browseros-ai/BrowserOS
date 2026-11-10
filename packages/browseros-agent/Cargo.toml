@@ -53,6 +53,7 @@ rmcp = { version = "3.2", features = ["server", "transport-io", "transport-strea
 schemars = "1.0"
 axum = "0.8"
 http = "1"
+http-body = "1"
 tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 posthog-rs = { version = "0.21", default-features = false, features = ["async-client"] }
