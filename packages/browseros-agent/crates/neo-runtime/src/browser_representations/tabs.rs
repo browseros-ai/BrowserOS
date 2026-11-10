@@ -1064,10 +1064,10 @@ impl Tabs {
             return;
         }
         let id = PageId::new(info.target_id.clone());
-        let Some(closed) = self.new_tab_state(&id, info, closed).await else {
+        let Some((closed, tab_id)) = self.new_tab_state(&id, info, closed).await else {
             return;
         };
-        let entry = match self.register(id, None, false) {
+        let entry = match self.register(id, tab_id, false) {
             Ok(entry) => entry,
             Err(error) => {
                 debug!(?error, "a new page could not be registered");
@@ -1105,15 +1105,22 @@ impl Tabs {
         }
     }
 
-    /// Whether a new target is a tab of the run's context, as `pages()` decides, and whether it
-    /// is closed: `None` when it is not the run's. A live target BrowserOS knows no tab for is
+    /// Whether a new target is a tab of the run's context, as `pages()` decides, its closed
+    /// state and tab id: `None` when it is not the run's. Preserve the id for registration's
+    /// first `PageOpened`; a target destroyed before commit has no tab info left to read.
+    /// A live target BrowserOS knows no tab for is
     /// not a tab (an extension's action popup, a developer tools window) and is left out, as is a
     /// tab that closed between its commit and this read. A target destroyed before its first commit
     /// is the run's when it belonged to the run's browser context.
-    async fn new_tab_state(&self, id: &PageId, info: &TargetInfo, closed: bool) -> Option<bool> {
+    async fn new_tab_state(
+        &self,
+        id: &PageId,
+        info: &TargetInfo,
+        closed: bool,
+    ) -> Option<(bool, Option<i64>)> {
         if !closed {
             return match tab_info(&self.0.cdp, id).await {
-                Ok(Some(tab)) => self.0.scope.includes(&tab).then_some(false),
+                Ok(Some(tab)) => self.0.scope.includes(&tab).then_some((false, tab.tab_id)),
                 Ok(None) => None,
                 Err(error) => {
                     debug!(?error, "a new tab's info could not be read");
@@ -1122,7 +1129,7 @@ impl Tabs {
             };
         }
         let context = self.0.scope.context.as_ref()?;
-        (info.browser_context_id.as_ref() == Some(context)).then_some(true)
+        (info.browser_context_id.as_ref() == Some(context)).then_some((true, None))
     }
 
     /// Playwright's `page.opener()`: the open tab of the run's context that opened `entry`, with
@@ -1540,6 +1547,55 @@ fn created_page(entry: &PageEntry, url: String, closed: bool) -> CreatedPage {
 mod tests {
     use super::*;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::trace::testing;
+
+    #[tokio::test]
+    async fn discovered_page_opened_keeps_its_browseros_tab_id() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        browser.page.lock().unwrap().tabs.push(json!({
+            "targetId": "discovered", "tabId": 31, "windowId": 1,
+            "liveBrowserContextId": "profile", "url": "https://a.test/"
+        }));
+        let (tap, recording) = testing::tap();
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            TabScreenshots::default(),
+            Switches::default(),
+            Permissions::default(),
+            TaskTracker::new(),
+            &PageId::new(PAGE.to_string()),
+            tap,
+        )
+        .await
+        .unwrap();
+        tabs.0.events.subscribe(CONTEXT_GUID, "page", true);
+        tabs.report_new(
+            &TargetInfo {
+                target_id: "discovered".into(),
+                kind: "page".into(),
+                url: "https://a.test/".into(),
+                opener_id: None,
+                browser_context_id: Some("profile".into()),
+            },
+            false,
+        )
+        .await;
+        let page = recording
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|event| match event {
+                RunEvent::PageOpened { page, .. } if page.target.as_str() == "discovered" => {
+                    Some(page.clone())
+                }
+                _ => None,
+            })
+            .expect("discovery emitted PageOpened");
+        assert_eq!(page.tab_id, Some(31), "discovery discarded the tab id");
+    }
 
     #[tokio::test]
     async fn guids_resolve_the_registered_tab_and_starting_frame_scope() {
