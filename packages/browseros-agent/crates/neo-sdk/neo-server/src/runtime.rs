@@ -2,7 +2,8 @@
 //! 0.15.1). The only subtree that names rquickjs (STYLE.md P1).
 //!
 //! ```text
-//!  run_script ─ AsyncRuntime + AsyncContext ─ js/bootstrap.js, neo-playwright's
+//!  run_script ─ AsyncRuntime + AsyncContext ─ install_web_globals (pure URL/form natives),
+//!      │        js/bootstrap.js, neo-playwright's
 //!      │        prelude, js/neo_prelude.js, then the agent's code compiled as
 //!      │        `async function (console, …, page, context, browser, expect, neo)`
 //!      │        natives: __neo_invoke(name, json, site) → Promise<string>, never rejects
@@ -25,6 +26,7 @@
 //!   for a script awaiting a promise that never settles.
 
 mod bridge;
+mod install_web_globals;
 mod run_logs;
 mod run_script;
 #[cfg(test)]

@@ -109,15 +109,6 @@ it('tests that every masked result reads back as upstream reads it', async () =>
       answer: (call) => (call.name === 'page.evaluate' ? value.masked : null),
     })
     const upstream = upstreamResult(value.masked)
-    if (upstream instanceof URL) {
-      // QuickJS has no URL: the agent gets a URL-like object with the same href (a listed
-      // deviation), so the two compare as text.
-      const text = await runtime.run(
-        'return String(await page.evaluate(() => 0))',
-      )
-      expect([value.name, text]).toEqual([value.name, String(upstream)])
-      continue
-    }
     const described = json(
       await runtime.run(
         `const describe = ${describe.toString()}\nreturn describe(await page.evaluate(() => 0))`,

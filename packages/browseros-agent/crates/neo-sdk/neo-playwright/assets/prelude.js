@@ -7,8 +7,8 @@
  * crates/neo-sdk/neo-playwright/third_party/mime, with crates/neo-sdk/neo-playwright-js/src/prelude,
  * by crates/neo-sdk/neo-playwright-js/scripts/build.ts.
  * Changed by Neo: isomorphic/utilityScriptSerializers.ts and protocol/src/serializers.ts import
- * Neo's stand-ins for URL, Buffer, atob and btoa, which QuickJS lacks; every other upstream
- * module, and mime, is built unmodified.
+ * Neo's Buffer view, which QuickJS lacks; URL, atob and btoa use the realm globals.
+ * Every other upstream module, and mime, is built unmodified.
  * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
  */
 (() => {
@@ -1529,6 +1529,1731 @@
       const download = new Download(page, info);
       this.downloads.set(info.id, download);
       return download;
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers.ts
+  var kFunctionBindingPrefix = "__pw_fn_";
+  var kBindingsControllerProperty = "__playwright__binding__controller__";
+  function isRegExp(obj) {
+    try {
+      return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isDate(obj) {
+    try {
+      return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isURL(obj) {
+    try {
+      return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isError(obj) {
+    try {
+      return obj instanceof Error || obj && Object.getPrototypeOf(obj)?.name === "Error";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isTypedArray(obj, constructor) {
+    try {
+      return obj instanceof constructor || Object.prototype.toString.call(obj) === `[object ${constructor.name}]`;
+    } catch (error) {
+      return false;
+    }
+  }
+  function isArrayBuffer2(obj) {
+    try {
+      return obj instanceof ArrayBuffer || Object.prototype.toString.call(obj) === "[object ArrayBuffer]";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isMap(obj) {
+    try {
+      return obj instanceof Map || Object.prototype.toString.call(obj) === "[object Map]";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isSet(obj) {
+    try {
+      return obj instanceof Set || Object.prototype.toString.call(obj) === "[object Set]";
+    } catch (error) {
+      return false;
+    }
+  }
+  var typedArrayConstructors = {
+    i8: Int8Array,
+    ui8: Uint8Array,
+    ui8c: Uint8ClampedArray,
+    i16: Int16Array,
+    ui16: Uint16Array,
+    i32: Int32Array,
+    ui32: Uint32Array,
+    f32: Float32Array,
+    f64: Float64Array,
+    bi64: BigInt64Array,
+    bui64: BigUint64Array
+  };
+  function typedArrayToBase64(array) {
+    if ("toBase64" in array)
+      return array.toBase64();
+    const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).map((b) => String.fromCharCode(b)).join("");
+    return btoa(binary);
+  }
+  function base64ToTypedArray(base64, TypedArrayConstructor) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0;i < binary.length; i++)
+      bytes[i] = binary.charCodeAt(i);
+    return new TypedArrayConstructor(bytes.buffer);
+  }
+  function parseEvaluationResultValue(value, handles = [], refs = new Map) {
+    if (Object.is(value, undefined))
+      return;
+    if (typeof value === "object" && value) {
+      if ("ref" in value)
+        return refs.get(value.ref);
+      if ("v" in value) {
+        if (value.v === "undefined")
+          return;
+        if (value.v === "null")
+          return null;
+        if (value.v === "NaN")
+          return NaN;
+        if (value.v === "Infinity")
+          return Infinity;
+        if (value.v === "-Infinity")
+          return -Infinity;
+        if (value.v === "-0")
+          return -0;
+        return;
+      }
+      if ("d" in value) {
+        return new Date(value.d);
+      }
+      if ("u" in value)
+        return new URL(value.u);
+      if ("bi" in value)
+        return BigInt(value.bi);
+      if ("e" in value) {
+        const error = new Error(value.e.m);
+        error.name = value.e.n;
+        error.stack = value.e.s;
+        return error;
+      }
+      if ("r" in value)
+        return new RegExp(value.r.p, value.r.f);
+      if ("a" in value) {
+        const result = [];
+        refs.set(value.id, result);
+        for (const a of value.a)
+          result.push(parseEvaluationResultValue(a, handles, refs));
+        return result;
+      }
+      if ("o" in value) {
+        const result = {};
+        refs.set(value.id, result);
+        for (const { k, v } of value.o) {
+          if (k === "__proto__")
+            continue;
+          result[k] = parseEvaluationResultValue(v, handles, refs);
+        }
+        return result;
+      }
+      if ("m" in value) {
+        const result = new Map;
+        refs.set(value.id, result);
+        for (const { k, v } of value.m)
+          result.set(parseEvaluationResultValue(k, handles, refs), parseEvaluationResultValue(v, handles, refs));
+        return result;
+      }
+      if ("s" in value) {
+        const result = new Set;
+        refs.set(value.id, result);
+        for (const item of value.s)
+          result.add(parseEvaluationResultValue(item, handles, refs));
+        return result;
+      }
+      if ("h" in value)
+        return handles[value.h];
+      if ("fn" in value) {
+        const name = value.fn;
+        return (...args) => globalThis[kBindingsControllerProperty].callBinding(name, ...args);
+      }
+      if ("ta" in value)
+        return base64ToTypedArray(value.ta.b, typedArrayConstructors[value.ta.k]);
+      if ("ab" in value)
+        return base64ToTypedArray(value.ab.b, Uint8Array).buffer;
+    }
+    return value;
+  }
+  function serializeAsCallArgument(value, handleSerializer, options = {}) {
+    return serialize(value, handleSerializer, { visited: new Map, lastId: 0, extendedSerialization: options.extendedSerialization });
+  }
+  function serialize(value, handleSerializer, visitorInfo) {
+    if (value && typeof value === "object") {
+      if (typeof globalThis.Window === "function" && value instanceof globalThis.Window)
+        return "ref: <Window>";
+      if (typeof globalThis.Document === "function" && value instanceof globalThis.Document)
+        return "ref: <Document>";
+      if (typeof globalThis.Node === "function" && value instanceof globalThis.Node)
+        return "ref: <Node>";
+    }
+    return innerSerialize(value, handleSerializer, visitorInfo);
+  }
+  function innerSerialize(value, handleSerializer, visitorInfo) {
+    const result = handleSerializer(value);
+    if ("fallThrough" in result)
+      value = result.fallThrough;
+    else
+      return result;
+    if (typeof value === "symbol")
+      return { v: "undefined" };
+    if (Object.is(value, undefined))
+      return { v: "undefined" };
+    if (Object.is(value, null))
+      return { v: "null" };
+    if (Object.is(value, NaN))
+      return { v: "NaN" };
+    if (Object.is(value, Infinity))
+      return { v: "Infinity" };
+    if (Object.is(value, -Infinity))
+      return { v: "-Infinity" };
+    if (Object.is(value, -0))
+      return { v: "-0" };
+    if (typeof value === "boolean")
+      return value;
+    if (typeof value === "number")
+      return value;
+    if (typeof value === "string")
+      return value;
+    if (typeof value === "bigint")
+      return { bi: value.toString() };
+    if (isError(value)) {
+      let stack;
+      if (value.stack?.startsWith(value.name + ": " + value.message)) {
+        stack = value.stack;
+      } else {
+        stack = `${value.name}: ${value.message}
+${value.stack}`;
+      }
+      return { e: { n: value.name, m: value.message, s: stack } };
+    }
+    if (isDate(value))
+      return { d: value.toJSON() };
+    if (isURL(value))
+      return { u: value.toJSON() };
+    if (isRegExp(value))
+      return { r: { p: value.source, f: value.flags } };
+    for (const [k, ctor] of Object.entries(typedArrayConstructors)) {
+      if (isTypedArray(value, ctor))
+        return { ta: { b: typedArrayToBase64(value), k } };
+    }
+    if (isArrayBuffer2(value))
+      return { ab: { b: typedArrayToBase64(new Uint8Array(value)) } };
+    const id = visitorInfo.visited.get(value);
+    if (id)
+      return { ref: id };
+    if (visitorInfo.extendedSerialization) {
+      if (isMap(value)) {
+        const m = [];
+        const id = ++visitorInfo.lastId;
+        visitorInfo.visited.set(value, id);
+        const iterator = value.entries();
+        const next = new Map().entries().next;
+        while (true) {
+          const entry = next.call(iterator);
+          if (entry.done)
+            break;
+          m.push({ k: serialize(entry.value[0], handleSerializer, visitorInfo), v: serialize(entry.value[1], handleSerializer, visitorInfo) });
+        }
+        return { m, id };
+      }
+      if (isSet(value)) {
+        const s = [];
+        const id = ++visitorInfo.lastId;
+        visitorInfo.visited.set(value, id);
+        const iterator = value.values();
+        const next = new Set().values().next;
+        while (true) {
+          const entry = next.call(iterator);
+          if (entry.done)
+            break;
+          s.push(serialize(entry.value, handleSerializer, visitorInfo));
+        }
+        return { s, id };
+      }
+    }
+    if (Array.isArray(value)) {
+      const a = [];
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
+      for (let i = 0;i < value.length; ++i)
+        a.push(serialize(value[i], handleSerializer, visitorInfo));
+      return { a, id };
+    }
+    if (typeof value === "object") {
+      const o = [];
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
+      for (const name of Object.keys(value)) {
+        let item;
+        try {
+          item = value[name];
+        } catch (e) {
+          continue;
+        }
+        if (name === "toJSON" && typeof item === "function")
+          o.push({ k: name, v: { o: [], id: 0 } });
+        else
+          o.push({ k: name, v: serialize(item, handleSerializer, visitorInfo) });
+      }
+      let jsonWrapper;
+      try {
+        if (o.length === 0 && value.toJSON && typeof value.toJSON === "function")
+          jsonWrapper = { value: value.toJSON() };
+      } catch (e) {}
+      if (jsonWrapper)
+        return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);
+      return { o, id };
+    }
+    if (typeof value === "function" && value.name.startsWith(kFunctionBindingPrefix))
+      return { fn: value.name };
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/vendored-globals.ts
+  var Buffer2 = {
+    from: (buffer, byteOffset, length) => new Uint8Array(buffer, byteOffset, length)
+  };
+
+  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/protocol/src/serializers.ts
+  function parseSerializedValue(value, handles) {
+    return innerParseSerializedValue(value, handles, new Map, []);
+  }
+  function innerParseSerializedValue(value, handles, refs, accessChain) {
+    if (value.ref !== undefined)
+      return refs.get(value.ref);
+    if (value.n !== undefined)
+      return value.n;
+    if (value.s !== undefined)
+      return value.s;
+    if (value.b !== undefined)
+      return value.b;
+    if (value.v !== undefined) {
+      if (value.v === "undefined")
+        return;
+      if (value.v === "null")
+        return null;
+      if (value.v === "NaN")
+        return NaN;
+      if (value.v === "Infinity")
+        return Infinity;
+      if (value.v === "-Infinity")
+        return -Infinity;
+      if (value.v === "-0")
+        return -0;
+    }
+    if (value.d !== undefined)
+      return new Date(value.d);
+    if (value.u !== undefined)
+      return new URL(value.u);
+    if (value.bi !== undefined)
+      return BigInt(value.bi);
+    if (value.e !== undefined) {
+      const error = new Error(value.e.m);
+      error.name = value.e.n;
+      error.stack = value.e.s;
+      return error;
+    }
+    if (value.r !== undefined)
+      return new RegExp(value.r.p, value.r.f);
+    if (value.ta !== undefined) {
+      const ctor = typedArrayKindToConstructor[value.ta.k];
+      return new ctor(value.ta.b.buffer, value.ta.b.byteOffset, value.ta.b.length / ctor.BYTES_PER_ELEMENT);
+    }
+    if (value.a !== undefined) {
+      const result = [];
+      refs.set(value.id, result);
+      for (let i = 0;i < value.a.length; i++)
+        result.push(innerParseSerializedValue(value.a[i], handles, refs, [...accessChain, i]));
+      return result;
+    }
+    if (value.o !== undefined) {
+      const result = {};
+      refs.set(value.id, result);
+      for (const { k, v } of value.o)
+        result[k] = innerParseSerializedValue(v, handles, refs, [...accessChain, k]);
+      return result;
+    }
+    if (value.h !== undefined) {
+      if (handles === undefined)
+        throw new Error("Unexpected handle");
+      return handles[value.h];
+    }
+    if (value.fn !== undefined) {
+      const dummy = () => {};
+      Object.defineProperty(dummy, "name", { value: value.fn });
+      return dummy;
+    }
+    throw new Error(`Attempting to deserialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
+  }
+  function serializeValue(value, handleSerializer) {
+    return innerSerializeValue(value, handleSerializer, { lastId: 0, visited: new Map }, []);
+  }
+  function innerSerializeValue(value, handleSerializer, visitorInfo, accessChain) {
+    const handle = handleSerializer(value);
+    if ("fallThrough" in handle)
+      value = handle.fallThrough;
+    else
+      return handle;
+    if (typeof value === "symbol")
+      return { v: "undefined" };
+    if (Object.is(value, undefined))
+      return { v: "undefined" };
+    if (Object.is(value, null))
+      return { v: "null" };
+    if (Object.is(value, NaN))
+      return { v: "NaN" };
+    if (Object.is(value, Infinity))
+      return { v: "Infinity" };
+    if (Object.is(value, -Infinity))
+      return { v: "-Infinity" };
+    if (Object.is(value, -0))
+      return { v: "-0" };
+    if (typeof value === "boolean")
+      return { b: value };
+    if (typeof value === "number")
+      return { n: value };
+    if (typeof value === "string")
+      return { s: value };
+    if (typeof value === "bigint")
+      return { bi: value.toString() };
+    if (isError2(value))
+      return { e: { n: value.name, m: value.message, s: value.stack || "" } };
+    if (isDate2(value))
+      return { d: value.toJSON() };
+    if (isURL2(value))
+      return { u: value.toJSON() };
+    if (isRegExp2(value))
+      return { r: { p: value.source, f: value.flags } };
+    const typedArrayKind = constructorToTypedArrayKind.get(value.constructor);
+    if (typedArrayKind)
+      return { ta: { b: Buffer2.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind } };
+    const id = visitorInfo.visited.get(value);
+    if (id)
+      return { ref: id };
+    if (Array.isArray(value)) {
+      const a = [];
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
+      for (let i = 0;i < value.length; ++i)
+        a.push(innerSerializeValue(value[i], handleSerializer, visitorInfo, [...accessChain, i]));
+      return { a, id };
+    }
+    if (typeof value === "object") {
+      const o = [];
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
+      for (const name of Object.keys(value))
+        o.push({ k: name, v: innerSerializeValue(value[name], handleSerializer, visitorInfo, [...accessChain, name]) });
+      return { o, id };
+    }
+    throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
+  }
+  function accessChainToDisplayString(accessChain) {
+    const chainString = accessChain.map((accessor, i) => {
+      if (typeof accessor === "string")
+        return i ? `.${accessor}` : accessor;
+      return `[${accessor}]`;
+    }).join("");
+    return chainString.length > 0 ? ` at position "${chainString}"` : "";
+  }
+  function isRegExp2(obj) {
+    return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
+  }
+  function isDate2(obj) {
+    return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
+  }
+  function isURL2(obj) {
+    return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+  }
+  function isError2(obj) {
+    const proto = obj ? Object.getPrototypeOf(obj) : null;
+    return obj instanceof Error || proto?.name === "Error" || proto && isError2(proto);
+  }
+  var typedArrayKindToConstructor = {
+    i8: Int8Array,
+    ui8: Uint8Array,
+    ui8c: Uint8ClampedArray,
+    i16: Int16Array,
+    ui16: Uint16Array,
+    i32: Int32Array,
+    ui32: Uint32Array,
+    f32: Float32Array,
+    f64: Float64Array,
+    bi64: BigInt64Array,
+    bui64: BigUint64Array
+  };
+  var constructorToTypedArrayKind = new Map(Object.entries(typedArrayKindToConstructor).map(([k, v]) => [v, k]));
+
+  // crates/neo-sdk/neo-playwright/third_party/mime/types/other.ts
+  var types = {
+    "application/prs.cww": ["cww"],
+    "application/prs.xsf+xml": ["xsf"],
+    "application/vnd.1000minds.decision-model+xml": ["1km"],
+    "application/vnd.3gpp.pic-bw-large": ["plb"],
+    "application/vnd.3gpp.pic-bw-small": ["psb"],
+    "application/vnd.3gpp.pic-bw-var": ["pvb"],
+    "application/vnd.3gpp2.tcap": ["tcap"],
+    "application/vnd.3m.post-it-notes": ["pwn"],
+    "application/vnd.accpac.simply.aso": ["aso"],
+    "application/vnd.accpac.simply.imp": ["imp"],
+    "application/vnd.acucobol": ["acu"],
+    "application/vnd.acucorp": ["atc", "acutc"],
+    "application/vnd.adobe.air-application-installer-package+zip": ["air"],
+    "application/vnd.adobe.formscentral.fcdt": ["fcdt"],
+    "application/vnd.adobe.fxp": ["fxp", "fxpl"],
+    "application/vnd.adobe.xdp+xml": ["xdp"],
+    "application/vnd.adobe.xfdf": ["*xfdf"],
+    "application/vnd.age": ["age"],
+    "application/vnd.ahead.space": ["ahead"],
+    "application/vnd.airzip.filesecure.azf": ["azf"],
+    "application/vnd.airzip.filesecure.azs": ["azs"],
+    "application/vnd.amazon.ebook": ["azw"],
+    "application/vnd.americandynamics.acc": ["acc"],
+    "application/vnd.amiga.ami": ["ami"],
+    "application/vnd.android.package-archive": ["apk"],
+    "application/vnd.anser-web-certificate-issue-initiation": ["cii"],
+    "application/vnd.anser-web-funds-transfer-initiation": ["fti"],
+    "application/vnd.antix.game-component": ["atx"],
+    "application/vnd.apple.installer+xml": ["mpkg"],
+    "application/vnd.apple.keynote": ["key"],
+    "application/vnd.apple.mpegurl": ["m3u8"],
+    "application/vnd.apple.numbers": ["numbers"],
+    "application/vnd.apple.pages": ["pages"],
+    "application/vnd.apple.pkpass": ["pkpass"],
+    "application/vnd.aristanetworks.swi": ["swi"],
+    "application/vnd.astraea-software.iota": ["iota"],
+    "application/vnd.audiograph": ["aep"],
+    "application/vnd.autodesk.fbx": ["fbx"],
+    "application/vnd.balsamiq.bmml+xml": ["bmml"],
+    "application/vnd.blueice.multipass": ["mpm"],
+    "application/vnd.bmi": ["bmi"],
+    "application/vnd.businessobjects": ["rep"],
+    "application/vnd.chemdraw+xml": ["cdxml"],
+    "application/vnd.chipnuts.karaoke-mmd": ["mmd"],
+    "application/vnd.cinderella": ["cdy"],
+    "application/vnd.citationstyles.style+xml": ["csl"],
+    "application/vnd.claymore": ["cla"],
+    "application/vnd.cloanto.rp9": ["rp9"],
+    "application/vnd.clonk.c4group": ["c4g", "c4d", "c4f", "c4p", "c4u"],
+    "application/vnd.cluetrust.cartomobile-config": ["c11amc"],
+    "application/vnd.cluetrust.cartomobile-config-pkg": ["c11amz"],
+    "application/vnd.commonspace": ["csp"],
+    "application/vnd.contact.cmsg": ["cdbcmsg"],
+    "application/vnd.cosmocaller": ["cmc"],
+    "application/vnd.crick.clicker": ["clkx"],
+    "application/vnd.crick.clicker.keyboard": ["clkk"],
+    "application/vnd.crick.clicker.palette": ["clkp"],
+    "application/vnd.crick.clicker.template": ["clkt"],
+    "application/vnd.crick.clicker.wordbank": ["clkw"],
+    "application/vnd.criticaltools.wbs+xml": ["wbs"],
+    "application/vnd.ctc-posml": ["pml"],
+    "application/vnd.cups-ppd": ["ppd"],
+    "application/vnd.curl.car": ["car"],
+    "application/vnd.curl.pcurl": ["pcurl"],
+    "application/vnd.dart": ["dart"],
+    "application/vnd.data-vision.rdz": ["rdz"],
+    "application/vnd.dbf": ["dbf"],
+    "application/vnd.dcmp+xml": ["dcmp"],
+    "application/vnd.dece.data": ["uvf", "uvvf", "uvd", "uvvd"],
+    "application/vnd.dece.ttml+xml": ["uvt", "uvvt"],
+    "application/vnd.dece.unspecified": ["uvx", "uvvx"],
+    "application/vnd.dece.zip": ["uvz", "uvvz"],
+    "application/vnd.denovo.fcselayout-link": ["fe_launch"],
+    "application/vnd.dna": ["dna"],
+    "application/vnd.dolby.mlp": ["mlp"],
+    "application/vnd.dpgraph": ["dpg"],
+    "application/vnd.dreamfactory": ["dfac"],
+    "application/vnd.ds-keypoint": ["kpxx"],
+    "application/vnd.dvb.ait": ["ait"],
+    "application/vnd.dvb.service": ["svc"],
+    "application/vnd.dynageo": ["geo"],
+    "application/vnd.ecowin.chart": ["mag"],
+    "application/vnd.enliven": ["nml"],
+    "application/vnd.epson.esf": ["esf"],
+    "application/vnd.epson.msf": ["msf"],
+    "application/vnd.epson.quickanime": ["qam"],
+    "application/vnd.epson.salt": ["slt"],
+    "application/vnd.epson.ssf": ["ssf"],
+    "application/vnd.eszigno3+xml": ["es3", "et3"],
+    "application/vnd.ezpix-album": ["ez2"],
+    "application/vnd.ezpix-package": ["ez3"],
+    "application/vnd.fdf": ["*fdf"],
+    "application/vnd.fdsn.mseed": ["mseed"],
+    "application/vnd.fdsn.seed": ["seed", "dataless"],
+    "application/vnd.flographit": ["gph"],
+    "application/vnd.fluxtime.clip": ["ftc"],
+    "application/vnd.framemaker": ["fm", "frame", "maker", "book"],
+    "application/vnd.frogans.fnc": ["fnc"],
+    "application/vnd.frogans.ltf": ["ltf"],
+    "application/vnd.fsc.weblaunch": ["fsc"],
+    "application/vnd.fujitsu.oasys": ["oas"],
+    "application/vnd.fujitsu.oasys2": ["oa2"],
+    "application/vnd.fujitsu.oasys3": ["oa3"],
+    "application/vnd.fujitsu.oasysgp": ["fg5"],
+    "application/vnd.fujitsu.oasysprs": ["bh2"],
+    "application/vnd.fujixerox.ddd": ["ddd"],
+    "application/vnd.fujixerox.docuworks": ["xdw"],
+    "application/vnd.fujixerox.docuworks.binder": ["xbd"],
+    "application/vnd.fuzzysheet": ["fzs"],
+    "application/vnd.genomatix.tuxedo": ["txd"],
+    "application/vnd.geogebra.file": ["ggb"],
+    "application/vnd.geogebra.slides": ["ggs"],
+    "application/vnd.geogebra.tool": ["ggt"],
+    "application/vnd.geometry-explorer": ["gex", "gre"],
+    "application/vnd.geonext": ["gxt"],
+    "application/vnd.geoplan": ["g2w"],
+    "application/vnd.geospace": ["g3w"],
+    "application/vnd.gmx": ["gmx"],
+    "application/vnd.google-apps.document": ["gdoc"],
+    "application/vnd.google-apps.drawing": ["gdraw"],
+    "application/vnd.google-apps.form": ["gform"],
+    "application/vnd.google-apps.jam": ["gjam"],
+    "application/vnd.google-apps.map": ["gmap"],
+    "application/vnd.google-apps.presentation": ["gslides"],
+    "application/vnd.google-apps.script": ["gscript"],
+    "application/vnd.google-apps.site": ["gsite"],
+    "application/vnd.google-apps.spreadsheet": ["gsheet"],
+    "application/vnd.google-earth.kml+xml": ["kml"],
+    "application/vnd.google-earth.kmz": ["kmz"],
+    "application/vnd.gov.sk.xmldatacontainer+xml": ["xdcf"],
+    "application/vnd.grafeq": ["gqf", "gqs"],
+    "application/vnd.groove-account": ["gac"],
+    "application/vnd.groove-help": ["ghf"],
+    "application/vnd.groove-identity-message": ["gim"],
+    "application/vnd.groove-injector": ["grv"],
+    "application/vnd.groove-tool-message": ["gtm"],
+    "application/vnd.groove-tool-template": ["tpl"],
+    "application/vnd.groove-vcard": ["vcg"],
+    "application/vnd.hal+xml": ["hal"],
+    "application/vnd.handheld-entertainment+xml": ["zmm"],
+    "application/vnd.hbci": ["hbci"],
+    "application/vnd.hhe.lesson-player": ["les"],
+    "application/vnd.hp-hpgl": ["hpgl"],
+    "application/vnd.hp-hpid": ["hpid"],
+    "application/vnd.hp-hps": ["hps"],
+    "application/vnd.hp-jlyt": ["jlt"],
+    "application/vnd.hp-pcl": ["pcl"],
+    "application/vnd.hp-pclxl": ["pclxl"],
+    "application/vnd.hydrostatix.sof-data": ["sfd-hdstx"],
+    "application/vnd.ibm.minipay": ["mpy"],
+    "application/vnd.ibm.modcap": ["afp", "listafp", "list3820"],
+    "application/vnd.ibm.rights-management": ["irm"],
+    "application/vnd.ibm.secure-container": ["sc"],
+    "application/vnd.iccprofile": ["icc", "icm"],
+    "application/vnd.igloader": ["igl"],
+    "application/vnd.immervision-ivp": ["ivp"],
+    "application/vnd.immervision-ivu": ["ivu"],
+    "application/vnd.insors.igm": ["igm"],
+    "application/vnd.intercon.formnet": ["xpw", "xpx"],
+    "application/vnd.intergeo": ["i2g"],
+    "application/vnd.intu.qbo": ["qbo"],
+    "application/vnd.intu.qfx": ["qfx"],
+    "application/vnd.ipunplugged.rcprofile": ["rcprofile"],
+    "application/vnd.irepository.package+xml": ["irp"],
+    "application/vnd.is-xpr": ["xpr"],
+    "application/vnd.isac.fcs": ["fcs"],
+    "application/vnd.jam": ["jam"],
+    "application/vnd.jcp.javame.midlet-rms": ["rms"],
+    "application/vnd.jisp": ["jisp"],
+    "application/vnd.joost.joda-archive": ["joda"],
+    "application/vnd.kahootz": ["ktz", "ktr"],
+    "application/vnd.kde.karbon": ["karbon"],
+    "application/vnd.kde.kchart": ["chrt"],
+    "application/vnd.kde.kformula": ["kfo"],
+    "application/vnd.kde.kivio": ["flw"],
+    "application/vnd.kde.kontour": ["kon"],
+    "application/vnd.kde.kpresenter": ["kpr", "kpt"],
+    "application/vnd.kde.kspread": ["ksp"],
+    "application/vnd.kde.kword": ["kwd", "kwt"],
+    "application/vnd.kenameaapp": ["htke"],
+    "application/vnd.kidspiration": ["kia"],
+    "application/vnd.kinar": ["kne", "knp"],
+    "application/vnd.koan": ["skp", "skd", "skt", "skm"],
+    "application/vnd.kodak-descriptor": ["sse"],
+    "application/vnd.las.las+xml": ["lasxml"],
+    "application/vnd.llamagraphics.life-balance.desktop": ["lbd"],
+    "application/vnd.llamagraphics.life-balance.exchange+xml": ["lbe"],
+    "application/vnd.lotus-1-2-3": ["123"],
+    "application/vnd.lotus-approach": ["apr"],
+    "application/vnd.lotus-freelance": ["pre"],
+    "application/vnd.lotus-notes": ["nsf"],
+    "application/vnd.lotus-organizer": ["org"],
+    "application/vnd.lotus-screencam": ["scm"],
+    "application/vnd.lotus-wordpro": ["lwp"],
+    "application/vnd.macports.portpkg": ["portpkg"],
+    "application/vnd.mapbox-vector-tile": ["mvt"],
+    "application/vnd.mcd": ["mcd"],
+    "application/vnd.medcalcdata": ["mc1"],
+    "application/vnd.mediastation.cdkey": ["cdkey"],
+    "application/vnd.mfer": ["mwf"],
+    "application/vnd.mfmp": ["mfm"],
+    "application/vnd.micrografx.flo": ["flo"],
+    "application/vnd.micrografx.igx": ["igx"],
+    "application/vnd.mif": ["mif"],
+    "application/vnd.mobius.daf": ["daf"],
+    "application/vnd.mobius.dis": ["dis"],
+    "application/vnd.mobius.mbk": ["mbk"],
+    "application/vnd.mobius.mqy": ["mqy"],
+    "application/vnd.mobius.msl": ["msl"],
+    "application/vnd.mobius.plc": ["plc"],
+    "application/vnd.mobius.txf": ["txf"],
+    "application/vnd.mophun.application": ["mpn"],
+    "application/vnd.mophun.certificate": ["mpc"],
+    "application/vnd.mozilla.xul+xml": ["xul"],
+    "application/vnd.ms-artgalry": ["cil"],
+    "application/vnd.ms-cab-compressed": ["cab"],
+    "application/vnd.ms-excel": ["xls", "xlm", "xla", "xlc", "xlt", "xlw"],
+    "application/vnd.ms-excel.addin.macroenabled.12": ["xlam"],
+    "application/vnd.ms-excel.sheet.binary.macroenabled.12": ["xlsb"],
+    "application/vnd.ms-excel.sheet.macroenabled.12": ["xlsm"],
+    "application/vnd.ms-excel.template.macroenabled.12": ["xltm"],
+    "application/vnd.ms-fontobject": ["eot"],
+    "application/vnd.ms-htmlhelp": ["chm"],
+    "application/vnd.ms-ims": ["ims"],
+    "application/vnd.ms-lrm": ["lrm"],
+    "application/vnd.ms-officetheme": ["thmx"],
+    "application/vnd.ms-outlook": ["msg"],
+    "application/vnd.ms-pki.seccat": ["cat"],
+    "application/vnd.ms-pki.stl": ["*stl"],
+    "application/vnd.ms-powerpoint": ["ppt", "pps", "pot"],
+    "application/vnd.ms-powerpoint.addin.macroenabled.12": ["ppam"],
+    "application/vnd.ms-powerpoint.presentation.macroenabled.12": ["pptm"],
+    "application/vnd.ms-powerpoint.slide.macroenabled.12": ["sldm"],
+    "application/vnd.ms-powerpoint.slideshow.macroenabled.12": ["ppsm"],
+    "application/vnd.ms-powerpoint.template.macroenabled.12": ["potm"],
+    "application/vnd.ms-project": ["*mpp", "mpt"],
+    "application/vnd.ms-visio.viewer": ["vdx"],
+    "application/vnd.ms-word.document.macroenabled.12": ["docm"],
+    "application/vnd.ms-word.template.macroenabled.12": ["dotm"],
+    "application/vnd.ms-works": ["wps", "wks", "wcm", "wdb"],
+    "application/vnd.ms-wpl": ["wpl"],
+    "application/vnd.ms-xpsdocument": ["xps"],
+    "application/vnd.mseq": ["mseq"],
+    "application/vnd.musician": ["mus"],
+    "application/vnd.muvee.style": ["msty"],
+    "application/vnd.mynfc": ["taglet"],
+    "application/vnd.nato.bindingdataobject+xml": ["bdo"],
+    "application/vnd.neurolanguage.nlu": ["nlu"],
+    "application/vnd.nitf": ["ntf", "nitf"],
+    "application/vnd.noblenet-directory": ["nnd"],
+    "application/vnd.noblenet-sealer": ["nns"],
+    "application/vnd.noblenet-web": ["nnw"],
+    "application/vnd.nokia.n-gage.ac+xml": ["*ac"],
+    "application/vnd.nokia.n-gage.data": ["ngdat"],
+    "application/vnd.nokia.n-gage.symbian.install": ["n-gage"],
+    "application/vnd.nokia.radio-preset": ["rpst"],
+    "application/vnd.nokia.radio-presets": ["rpss"],
+    "application/vnd.novadigm.edm": ["edm"],
+    "application/vnd.novadigm.edx": ["edx"],
+    "application/vnd.novadigm.ext": ["ext"],
+    "application/vnd.oasis.opendocument.chart": ["odc"],
+    "application/vnd.oasis.opendocument.chart-template": ["otc"],
+    "application/vnd.oasis.opendocument.database": ["odb"],
+    "application/vnd.oasis.opendocument.formula": ["odf"],
+    "application/vnd.oasis.opendocument.formula-template": ["odft"],
+    "application/vnd.oasis.opendocument.graphics": ["odg"],
+    "application/vnd.oasis.opendocument.graphics-template": ["otg"],
+    "application/vnd.oasis.opendocument.image": ["odi"],
+    "application/vnd.oasis.opendocument.image-template": ["oti"],
+    "application/vnd.oasis.opendocument.presentation": ["odp"],
+    "application/vnd.oasis.opendocument.presentation-template": ["otp"],
+    "application/vnd.oasis.opendocument.spreadsheet": ["ods"],
+    "application/vnd.oasis.opendocument.spreadsheet-template": ["ots"],
+    "application/vnd.oasis.opendocument.text": ["odt"],
+    "application/vnd.oasis.opendocument.text-master": ["odm"],
+    "application/vnd.oasis.opendocument.text-template": ["ott"],
+    "application/vnd.oasis.opendocument.text-web": ["oth"],
+    "application/vnd.olpc-sugar": ["xo"],
+    "application/vnd.oma.dd2+xml": ["dd2"],
+    "application/vnd.openblox.game+xml": ["obgx"],
+    "application/vnd.openofficeorg.extension": ["oxt"],
+    "application/vnd.openstreetmap.data+xml": ["osm"],
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": [
+      "pptx"
+    ],
+    "application/vnd.openxmlformats-officedocument.presentationml.slide": [
+      "sldx"
+    ],
+    "application/vnd.openxmlformats-officedocument.presentationml.slideshow": [
+      "ppsx"
+    ],
+    "application/vnd.openxmlformats-officedocument.presentationml.template": [
+      "potx"
+    ],
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ["xlsx"],
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.template": [
+      "xltx"
+    ],
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [
+      "docx"
+    ],
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.template": [
+      "dotx"
+    ],
+    "application/vnd.osgeo.mapguide.package": ["mgp"],
+    "application/vnd.osgi.dp": ["dp"],
+    "application/vnd.osgi.subsystem": ["esa"],
+    "application/vnd.palm": ["pdb", "pqa", "oprc"],
+    "application/vnd.pawaafile": ["paw"],
+    "application/vnd.pg.format": ["str"],
+    "application/vnd.pg.osasli": ["ei6"],
+    "application/vnd.picsel": ["efif"],
+    "application/vnd.pmi.widget": ["wg"],
+    "application/vnd.pocketlearn": ["plf"],
+    "application/vnd.powerbuilder6": ["pbd"],
+    "application/vnd.previewsystems.box": ["box"],
+    "application/vnd.procrate.brushset": ["brushset"],
+    "application/vnd.procreate.brush": ["brush"],
+    "application/vnd.procreate.dream": ["drm"],
+    "application/vnd.proteus.magazine": ["mgz"],
+    "application/vnd.publishare-delta-tree": ["qps"],
+    "application/vnd.pvi.ptid1": ["ptid"],
+    "application/vnd.pwg-xhtml-print+xml": ["xhtm"],
+    "application/vnd.quark.quarkxpress": [
+      "qxd",
+      "qxt",
+      "qwd",
+      "qwt",
+      "qxl",
+      "qxb"
+    ],
+    "application/vnd.rar": ["rar"],
+    "application/vnd.realvnc.bed": ["bed"],
+    "application/vnd.recordare.musicxml": ["mxl"],
+    "application/vnd.recordare.musicxml+xml": ["musicxml"],
+    "application/vnd.rig.cryptonote": ["cryptonote"],
+    "application/vnd.rim.cod": ["cod"],
+    "application/vnd.rn-realmedia": ["rm"],
+    "application/vnd.rn-realmedia-vbr": ["rmvb"],
+    "application/vnd.route66.link66+xml": ["link66"],
+    "application/vnd.sailingtracker.track": ["st"],
+    "application/vnd.seemail": ["see"],
+    "application/vnd.sema": ["sema"],
+    "application/vnd.semd": ["semd"],
+    "application/vnd.semf": ["semf"],
+    "application/vnd.shana.informed.formdata": ["ifm"],
+    "application/vnd.shana.informed.formtemplate": ["itp"],
+    "application/vnd.shana.informed.interchange": ["iif"],
+    "application/vnd.shana.informed.package": ["ipk"],
+    "application/vnd.simtech-mindmapper": ["twd", "twds"],
+    "application/vnd.smaf": ["mmf"],
+    "application/vnd.smart.teacher": ["teacher"],
+    "application/vnd.software602.filler.form+xml": ["fo"],
+    "application/vnd.solent.sdkm+xml": ["sdkm", "sdkd"],
+    "application/vnd.spotfire.dxp": ["dxp"],
+    "application/vnd.spotfire.sfs": ["sfs"],
+    "application/vnd.stardivision.calc": ["sdc"],
+    "application/vnd.stardivision.draw": ["sda"],
+    "application/vnd.stardivision.impress": ["sdd"],
+    "application/vnd.stardivision.math": ["smf"],
+    "application/vnd.stardivision.writer": ["sdw", "vor"],
+    "application/vnd.stardivision.writer-global": ["sgl"],
+    "application/vnd.stepmania.package": ["smzip"],
+    "application/vnd.stepmania.stepchart": ["sm"],
+    "application/vnd.sun.wadl+xml": ["wadl"],
+    "application/vnd.sun.xml.calc": ["sxc"],
+    "application/vnd.sun.xml.calc.template": ["stc"],
+    "application/vnd.sun.xml.draw": ["sxd"],
+    "application/vnd.sun.xml.draw.template": ["std"],
+    "application/vnd.sun.xml.impress": ["sxi"],
+    "application/vnd.sun.xml.impress.template": ["sti"],
+    "application/vnd.sun.xml.math": ["sxm"],
+    "application/vnd.sun.xml.writer": ["sxw"],
+    "application/vnd.sun.xml.writer.global": ["sxg"],
+    "application/vnd.sun.xml.writer.template": ["stw"],
+    "application/vnd.sus-calendar": ["sus", "susp"],
+    "application/vnd.svd": ["svd"],
+    "application/vnd.symbian.install": ["sis", "sisx"],
+    "application/vnd.syncml+xml": ["xsm"],
+    "application/vnd.syncml.dm+wbxml": ["bdm"],
+    "application/vnd.syncml.dm+xml": ["xdm"],
+    "application/vnd.syncml.dmddf+xml": ["ddf"],
+    "application/vnd.tao.intent-module-archive": ["tao"],
+    "application/vnd.tcpdump.pcap": ["pcap", "cap", "dmp"],
+    "application/vnd.tmobile-livetv": ["tmo"],
+    "application/vnd.trid.tpt": ["tpt"],
+    "application/vnd.triscape.mxs": ["mxs"],
+    "application/vnd.trueapp": ["tra"],
+    "application/vnd.ufdl": ["ufd", "ufdl"],
+    "application/vnd.uiq.theme": ["utz"],
+    "application/vnd.umajin": ["umj"],
+    "application/vnd.unity": ["unityweb"],
+    "application/vnd.uoml+xml": ["uoml", "uo"],
+    "application/vnd.vcx": ["vcx"],
+    "application/vnd.visio": ["vsd", "vst", "vss", "vsw", "vsdx", "vtx"],
+    "application/vnd.visionary": ["vis"],
+    "application/vnd.vsf": ["vsf"],
+    "application/vnd.wap.wbxml": ["wbxml"],
+    "application/vnd.wap.wmlc": ["wmlc"],
+    "application/vnd.wap.wmlscriptc": ["wmlsc"],
+    "application/vnd.webturbo": ["wtb"],
+    "application/vnd.wolfram.player": ["nbp"],
+    "application/vnd.wordperfect": ["wpd"],
+    "application/vnd.wqd": ["wqd"],
+    "application/vnd.wt.stf": ["stf"],
+    "application/vnd.xara": ["xar"],
+    "application/vnd.xfdl": ["xfdl"],
+    "application/vnd.yamaha.hv-dic": ["hvd"],
+    "application/vnd.yamaha.hv-script": ["hvs"],
+    "application/vnd.yamaha.hv-voice": ["hvp"],
+    "application/vnd.yamaha.openscoreformat": ["osf"],
+    "application/vnd.yamaha.openscoreformat.osfpvg+xml": ["osfpvg"],
+    "application/vnd.yamaha.smaf-audio": ["saf"],
+    "application/vnd.yamaha.smaf-phrase": ["spf"],
+    "application/vnd.yellowriver-custom-menu": ["cmp"],
+    "application/vnd.zul": ["zir", "zirz"],
+    "application/vnd.zzazz.deck+xml": ["zaz"],
+    "application/x-7z-compressed": ["7z"],
+    "application/x-abiword": ["abw"],
+    "application/x-ace-compressed": ["ace"],
+    "application/x-apple-diskimage": ["*dmg"],
+    "application/x-arj": ["arj"],
+    "application/x-authorware-bin": ["aab", "x32", "u32", "vox"],
+    "application/x-authorware-map": ["aam"],
+    "application/x-authorware-seg": ["aas"],
+    "application/x-bcpio": ["bcpio"],
+    "application/x-bdoc": ["*bdoc"],
+    "application/x-bittorrent": ["torrent"],
+    "application/x-blender": ["blend"],
+    "application/x-blorb": ["blb", "blorb"],
+    "application/x-bzip": ["bz"],
+    "application/x-bzip2": ["bz2", "boz"],
+    "application/x-cbr": ["cbr", "cba", "cbt", "cbz", "cb7"],
+    "application/x-cdlink": ["vcd"],
+    "application/x-cfs-compressed": ["cfs"],
+    "application/x-chat": ["chat"],
+    "application/x-chess-pgn": ["pgn"],
+    "application/x-chrome-extension": ["crx"],
+    "application/x-cocoa": ["cco"],
+    "application/x-compressed": ["*rar"],
+    "application/x-conference": ["nsc"],
+    "application/x-cpio": ["cpio"],
+    "application/x-csh": ["csh"],
+    "application/x-debian-package": ["*deb", "udeb"],
+    "application/x-dgc-compressed": ["dgc"],
+    "application/x-director": [
+      "dir",
+      "dcr",
+      "dxr",
+      "cst",
+      "cct",
+      "cxt",
+      "w3d",
+      "fgd",
+      "swa"
+    ],
+    "application/x-doom": ["wad"],
+    "application/x-dtbncx+xml": ["ncx"],
+    "application/x-dtbook+xml": ["dtb"],
+    "application/x-dtbresource+xml": ["res"],
+    "application/x-dvi": ["dvi"],
+    "application/x-envoy": ["evy"],
+    "application/x-eva": ["eva"],
+    "application/x-font-bdf": ["bdf"],
+    "application/x-font-ghostscript": ["gsf"],
+    "application/x-font-linux-psf": ["psf"],
+    "application/x-font-pcf": ["pcf"],
+    "application/x-font-snf": ["snf"],
+    "application/x-font-type1": ["pfa", "pfb", "pfm", "afm"],
+    "application/x-freearc": ["arc"],
+    "application/x-futuresplash": ["spl"],
+    "application/x-gca-compressed": ["gca"],
+    "application/x-glulx": ["ulx"],
+    "application/x-gnumeric": ["gnumeric"],
+    "application/x-gramps-xml": ["gramps"],
+    "application/x-gtar": ["gtar"],
+    "application/x-hdf": ["hdf"],
+    "application/x-httpd-php": ["php"],
+    "application/x-install-instructions": ["install"],
+    "application/x-ipynb+json": ["ipynb"],
+    "application/x-iso9660-image": ["*iso"],
+    "application/x-iwork-keynote-sffkey": ["*key"],
+    "application/x-iwork-numbers-sffnumbers": ["*numbers"],
+    "application/x-iwork-pages-sffpages": ["*pages"],
+    "application/x-java-archive-diff": ["jardiff"],
+    "application/x-java-jnlp-file": ["jnlp"],
+    "application/x-keepass2": ["kdbx"],
+    "application/x-latex": ["latex"],
+    "application/x-lua-bytecode": ["luac"],
+    "application/x-lzh-compressed": ["lzh", "lha"],
+    "application/x-makeself": ["run"],
+    "application/x-mie": ["mie"],
+    "application/x-mobipocket-ebook": ["*prc", "mobi"],
+    "application/x-ms-application": ["application"],
+    "application/x-ms-shortcut": ["lnk"],
+    "application/x-ms-wmd": ["wmd"],
+    "application/x-ms-wmz": ["wmz"],
+    "application/x-ms-xbap": ["xbap"],
+    "application/x-msaccess": ["mdb"],
+    "application/x-msbinder": ["obd"],
+    "application/x-mscardfile": ["crd"],
+    "application/x-msclip": ["clp"],
+    "application/x-msdos-program": ["*exe"],
+    "application/x-msdownload": ["*exe", "*dll", "com", "bat", "*msi"],
+    "application/x-msmediaview": ["mvb", "m13", "m14"],
+    "application/x-msmetafile": ["*wmf", "*wmz", "*emf", "emz"],
+    "application/x-msmoney": ["mny"],
+    "application/x-mspublisher": ["pub"],
+    "application/x-msschedule": ["scd"],
+    "application/x-msterminal": ["trm"],
+    "application/x-mswrite": ["wri"],
+    "application/x-netcdf": ["nc", "cdf"],
+    "application/x-ns-proxy-autoconfig": ["pac"],
+    "application/x-nzb": ["nzb"],
+    "application/x-perl": ["pl", "pm"],
+    "application/x-pilot": ["*prc", "*pdb"],
+    "application/x-pkcs12": ["p12", "pfx"],
+    "application/x-pkcs7-certificates": ["p7b", "spc"],
+    "application/x-pkcs7-certreqresp": ["p7r"],
+    "application/x-rar-compressed": ["*rar"],
+    "application/x-redhat-package-manager": ["rpm"],
+    "application/x-research-info-systems": ["ris"],
+    "application/x-sea": ["sea"],
+    "application/x-sh": ["sh"],
+    "application/x-shar": ["shar"],
+    "application/x-shockwave-flash": ["swf"],
+    "application/x-silverlight-app": ["xap"],
+    "application/x-sql": ["*sql"],
+    "application/x-stuffit": ["sit"],
+    "application/x-stuffitx": ["sitx"],
+    "application/x-subrip": ["srt"],
+    "application/x-sv4cpio": ["sv4cpio"],
+    "application/x-sv4crc": ["sv4crc"],
+    "application/x-t3vm-image": ["t3"],
+    "application/x-tads": ["gam"],
+    "application/x-tar": ["tar"],
+    "application/x-tcl": ["tcl", "tk"],
+    "application/x-tex": ["tex"],
+    "application/x-tex-tfm": ["tfm"],
+    "application/x-texinfo": ["texinfo", "texi"],
+    "application/x-tgif": ["*obj"],
+    "application/x-ustar": ["ustar"],
+    "application/x-virtualbox-hdd": ["hdd"],
+    "application/x-virtualbox-ova": ["ova"],
+    "application/x-virtualbox-ovf": ["ovf"],
+    "application/x-virtualbox-vbox": ["vbox"],
+    "application/x-virtualbox-vbox-extpack": ["vbox-extpack"],
+    "application/x-virtualbox-vdi": ["vdi"],
+    "application/x-virtualbox-vhd": ["vhd"],
+    "application/x-virtualbox-vmdk": ["vmdk"],
+    "application/x-wais-source": ["src"],
+    "application/x-web-app-manifest+json": ["webapp"],
+    "application/x-x509-ca-cert": ["der", "crt", "pem"],
+    "application/x-xfig": ["fig"],
+    "application/x-xliff+xml": ["*xlf"],
+    "application/x-xpinstall": ["xpi"],
+    "application/x-xz": ["xz"],
+    "application/x-zip-compressed": ["*zip"],
+    "application/x-zmachine": ["z1", "z2", "z3", "z4", "z5", "z6", "z7", "z8"],
+    "audio/vnd.dece.audio": ["uva", "uvva"],
+    "audio/vnd.digital-winds": ["eol"],
+    "audio/vnd.dra": ["dra"],
+    "audio/vnd.dts": ["dts"],
+    "audio/vnd.dts.hd": ["dtshd"],
+    "audio/vnd.lucent.voice": ["lvp"],
+    "audio/vnd.ms-playready.media.pya": ["pya"],
+    "audio/vnd.nuera.ecelp4800": ["ecelp4800"],
+    "audio/vnd.nuera.ecelp7470": ["ecelp7470"],
+    "audio/vnd.nuera.ecelp9600": ["ecelp9600"],
+    "audio/vnd.rip": ["rip"],
+    "audio/x-aac": ["*aac"],
+    "audio/x-aiff": ["aif", "aiff", "aifc"],
+    "audio/x-caf": ["caf"],
+    "audio/x-flac": ["flac"],
+    "audio/x-m4a": ["*m4a"],
+    "audio/x-matroska": ["mka"],
+    "audio/x-mpegurl": ["m3u"],
+    "audio/x-ms-wax": ["wax"],
+    "audio/x-ms-wma": ["wma"],
+    "audio/x-pn-realaudio": ["ram", "ra"],
+    "audio/x-pn-realaudio-plugin": ["rmp"],
+    "audio/x-realaudio": ["*ra"],
+    "audio/x-wav": ["*wav"],
+    "chemical/x-cdx": ["cdx"],
+    "chemical/x-cif": ["cif"],
+    "chemical/x-cmdf": ["cmdf"],
+    "chemical/x-cml": ["cml"],
+    "chemical/x-csml": ["csml"],
+    "chemical/x-xyz": ["xyz"],
+    "image/prs.btif": ["btif", "btf"],
+    "image/prs.pti": ["pti"],
+    "image/vnd.adobe.photoshop": ["psd"],
+    "image/vnd.airzip.accelerator.azv": ["azv"],
+    "image/vnd.blockfact.facti": ["facti"],
+    "image/vnd.dece.graphic": ["uvi", "uvvi", "uvg", "uvvg"],
+    "image/vnd.djvu": ["djvu", "djv"],
+    "image/vnd.dvb.subtitle": ["*sub"],
+    "image/vnd.dwg": ["dwg"],
+    "image/vnd.dxf": ["dxf"],
+    "image/vnd.fastbidsheet": ["fbs"],
+    "image/vnd.fpx": ["fpx"],
+    "image/vnd.fst": ["fst"],
+    "image/vnd.fujixerox.edmics-mmr": ["mmr"],
+    "image/vnd.fujixerox.edmics-rlc": ["rlc"],
+    "image/vnd.microsoft.icon": ["ico"],
+    "image/vnd.ms-dds": ["dds"],
+    "image/vnd.ms-modi": ["mdi"],
+    "image/vnd.ms-photo": ["wdp"],
+    "image/vnd.net-fpx": ["npx"],
+    "image/vnd.pco.b16": ["b16"],
+    "image/vnd.tencent.tap": ["tap"],
+    "image/vnd.valve.source.texture": ["vtf"],
+    "image/vnd.wap.wbmp": ["wbmp"],
+    "image/vnd.xiff": ["xif"],
+    "image/vnd.zbrush.pcx": ["pcx"],
+    "image/x-3ds": ["3ds"],
+    "image/x-adobe-dng": ["dng"],
+    "image/x-cmu-raster": ["ras"],
+    "image/x-cmx": ["cmx"],
+    "image/x-freehand": ["fh", "fhc", "fh4", "fh5", "fh7"],
+    "image/x-icon": ["*ico"],
+    "image/x-jng": ["jng"],
+    "image/x-mrsid-image": ["sid"],
+    "image/x-ms-bmp": ["*bmp"],
+    "image/x-pcx": ["*pcx"],
+    "image/x-pict": ["pic", "pct"],
+    "image/x-portable-anymap": ["pnm"],
+    "image/x-portable-bitmap": ["pbm"],
+    "image/x-portable-graymap": ["pgm"],
+    "image/x-portable-pixmap": ["ppm"],
+    "image/x-rgb": ["rgb"],
+    "image/x-tga": ["tga"],
+    "image/x-xbitmap": ["xbm"],
+    "image/x-xpixmap": ["xpm"],
+    "image/x-xwindowdump": ["xwd"],
+    "message/vnd.wfa.wsc": ["wsc"],
+    "model/vnd.bary": ["bary"],
+    "model/vnd.cld": ["cld"],
+    "model/vnd.collada+xml": ["dae"],
+    "model/vnd.dwf": ["dwf"],
+    "model/vnd.gdl": ["gdl"],
+    "model/vnd.gtw": ["gtw"],
+    "model/vnd.mts": ["*mts"],
+    "model/vnd.opengex": ["ogex"],
+    "model/vnd.parasolid.transmit.binary": ["x_b"],
+    "model/vnd.parasolid.transmit.text": ["x_t"],
+    "model/vnd.pytha.pyox": ["pyo", "pyox"],
+    "model/vnd.sap.vds": ["vds"],
+    "model/vnd.usda": ["usda"],
+    "model/vnd.usdz+zip": ["usdz"],
+    "model/vnd.valve.source.compiled-map": ["bsp"],
+    "model/vnd.vtu": ["vtu"],
+    "text/prs.lines.tag": ["dsc"],
+    "text/vnd.curl": ["curl"],
+    "text/vnd.curl.dcurl": ["dcurl"],
+    "text/vnd.curl.mcurl": ["mcurl"],
+    "text/vnd.curl.scurl": ["scurl"],
+    "text/vnd.dvb.subtitle": ["sub"],
+    "text/vnd.familysearch.gedcom": ["ged"],
+    "text/vnd.fly": ["fly"],
+    "text/vnd.fmi.flexstor": ["flx"],
+    "text/vnd.graphviz": ["gv"],
+    "text/vnd.in3d.3dml": ["3dml"],
+    "text/vnd.in3d.spot": ["spot"],
+    "text/vnd.sun.j2me.app-descriptor": ["jad"],
+    "text/vnd.wap.wml": ["wml"],
+    "text/vnd.wap.wmlscript": ["wmls"],
+    "text/x-asm": ["s", "asm"],
+    "text/x-c": ["c", "cc", "cxx", "cpp", "h", "hh", "dic"],
+    "text/x-component": ["htc"],
+    "text/x-fortran": ["f", "for", "f77", "f90"],
+    "text/x-handlebars-template": ["hbs"],
+    "text/x-java-source": ["java"],
+    "text/x-lua": ["lua"],
+    "text/x-markdown": ["mkd"],
+    "text/x-nfo": ["nfo"],
+    "text/x-opml": ["opml"],
+    "text/x-org": ["*org"],
+    "text/x-pascal": ["p", "pas"],
+    "text/x-processing": ["pde"],
+    "text/x-sass": ["sass"],
+    "text/x-scss": ["scss"],
+    "text/x-setext": ["etx"],
+    "text/x-sfv": ["sfv"],
+    "text/x-suse-ymp": ["ymp"],
+    "text/x-uuencode": ["uu"],
+    "text/x-vcalendar": ["vcs"],
+    "text/x-vcard": ["vcf"],
+    "video/vnd.dece.hd": ["uvh", "uvvh"],
+    "video/vnd.dece.mobile": ["uvm", "uvvm"],
+    "video/vnd.dece.pd": ["uvp", "uvvp"],
+    "video/vnd.dece.sd": ["uvs", "uvvs"],
+    "video/vnd.dece.video": ["uvv", "uvvv"],
+    "video/vnd.dvb.file": ["dvb"],
+    "video/vnd.fvt": ["fvt"],
+    "video/vnd.mpegurl": ["mxu", "m4u"],
+    "video/vnd.ms-playready.media.pyv": ["pyv"],
+    "video/vnd.uvvu.mp4": ["uvu", "uvvu"],
+    "video/vnd.vivo": ["viv"],
+    "video/x-f4v": ["f4v"],
+    "video/x-fli": ["fli"],
+    "video/x-flv": ["flv"],
+    "video/x-m4v": ["m4v"],
+    "video/x-matroska": ["mkv", "mk3d", "mks"],
+    "video/x-mng": ["mng"],
+    "video/x-ms-asf": ["asf", "asx"],
+    "video/x-ms-vob": ["vob"],
+    "video/x-ms-wm": ["wm"],
+    "video/x-ms-wmv": ["wmv"],
+    "video/x-ms-wmx": ["wmx"],
+    "video/x-ms-wvx": ["wvx"],
+    "video/x-msvideo": ["avi"],
+    "video/x-sgi-movie": ["movie"],
+    "video/x-smv": ["smv"],
+    "x-conference/x-cooltalk": ["ice"]
+  };
+  Object.freeze(types);
+  var other_default = types;
+
+  // crates/neo-sdk/neo-playwright/third_party/mime/types/standard.ts
+  var types2 = {
+    "application/andrew-inset": ["ez"],
+    "application/appinstaller": ["appinstaller"],
+    "application/applixware": ["aw"],
+    "application/appx": ["appx"],
+    "application/appxbundle": ["appxbundle"],
+    "application/atom+xml": ["atom"],
+    "application/atomcat+xml": ["atomcat"],
+    "application/atomdeleted+xml": ["atomdeleted"],
+    "application/atomsvc+xml": ["atomsvc"],
+    "application/atsc-dwd+xml": ["dwd"],
+    "application/atsc-held+xml": ["held"],
+    "application/atsc-rsat+xml": ["rsat"],
+    "application/automationml-aml+xml": ["aml"],
+    "application/automationml-amlx+zip": ["amlx"],
+    "application/bdoc": ["bdoc"],
+    "application/calendar+xml": ["xcs"],
+    "application/ccxml+xml": ["ccxml"],
+    "application/cdfx+xml": ["cdfx"],
+    "application/cdmi-capability": ["cdmia"],
+    "application/cdmi-container": ["cdmic"],
+    "application/cdmi-domain": ["cdmid"],
+    "application/cdmi-object": ["cdmio"],
+    "application/cdmi-queue": ["cdmiq"],
+    "application/cpl+xml": ["cpl"],
+    "application/cu-seeme": ["cu"],
+    "application/cwl": ["cwl"],
+    "application/dash+xml": ["mpd"],
+    "application/dash-patch+xml": ["mpp"],
+    "application/davmount+xml": ["davmount"],
+    "application/dicom": ["dcm"],
+    "application/docbook+xml": ["dbk"],
+    "application/dssc+der": ["dssc"],
+    "application/dssc+xml": ["xdssc"],
+    "application/ecmascript": ["ecma"],
+    "application/emma+xml": ["emma"],
+    "application/emotionml+xml": ["emotionml"],
+    "application/epub+zip": ["epub"],
+    "application/exi": ["exi"],
+    "application/express": ["exp"],
+    "application/fdf": ["fdf"],
+    "application/fdt+xml": ["fdt"],
+    "application/font-tdpfr": ["pfr"],
+    "application/geo+json": ["geojson"],
+    "application/gml+xml": ["gml"],
+    "application/gpx+xml": ["gpx"],
+    "application/gxf": ["gxf"],
+    "application/gzip": ["gz"],
+    "application/hjson": ["hjson"],
+    "application/hyperstudio": ["stk"],
+    "application/inkml+xml": ["ink", "inkml"],
+    "application/ipfix": ["ipfix"],
+    "application/its+xml": ["its"],
+    "application/java-archive": ["jar", "war", "ear"],
+    "application/java-serialized-object": ["ser"],
+    "application/java-vm": ["class"],
+    "application/javascript": ["*js"],
+    "application/json": ["json", "map"],
+    "application/json5": ["json5"],
+    "application/jsonml+json": ["jsonml"],
+    "application/ld+json": ["jsonld"],
+    "application/lgr+xml": ["lgr"],
+    "application/lost+xml": ["lostxml"],
+    "application/mac-binhex40": ["hqx"],
+    "application/mac-compactpro": ["cpt"],
+    "application/mads+xml": ["mads"],
+    "application/manifest+json": ["webmanifest"],
+    "application/marc": ["mrc"],
+    "application/marcxml+xml": ["mrcx"],
+    "application/mathematica": ["ma", "nb", "mb"],
+    "application/mathml+xml": ["mathml"],
+    "application/mbox": ["mbox"],
+    "application/media-policy-dataset+xml": ["mpf"],
+    "application/mediaservercontrol+xml": ["mscml"],
+    "application/metalink+xml": ["metalink"],
+    "application/metalink4+xml": ["meta4"],
+    "application/mets+xml": ["mets"],
+    "application/mmt-aei+xml": ["maei"],
+    "application/mmt-usd+xml": ["musd"],
+    "application/mods+xml": ["mods"],
+    "application/mp21": ["m21", "mp21"],
+    "application/mp4": ["*mp4", "*mpg4", "mp4s", "m4p"],
+    "application/msix": ["msix"],
+    "application/msixbundle": ["msixbundle"],
+    "application/msword": ["doc", "dot"],
+    "application/mxf": ["mxf"],
+    "application/n-quads": ["nq"],
+    "application/n-triples": ["nt"],
+    "application/node": ["cjs"],
+    "application/octet-stream": [
+      "bin",
+      "dms",
+      "lrf",
+      "mar",
+      "so",
+      "dist",
+      "distz",
+      "pkg",
+      "bpk",
+      "dump",
+      "elc",
+      "deploy",
+      "exe",
+      "dll",
+      "deb",
+      "dmg",
+      "iso",
+      "img",
+      "msi",
+      "msp",
+      "msm",
+      "buffer"
+    ],
+    "application/oda": ["oda"],
+    "application/oebps-package+xml": ["opf"],
+    "application/ogg": ["ogx"],
+    "application/omdoc+xml": ["omdoc"],
+    "application/onenote": [
+      "onetoc",
+      "onetoc2",
+      "onetmp",
+      "onepkg",
+      "one",
+      "onea"
+    ],
+    "application/oxps": ["oxps"],
+    "application/p2p-overlay+xml": ["relo"],
+    "application/patch-ops-error+xml": ["xer"],
+    "application/pdf": ["pdf"],
+    "application/pgp-encrypted": ["pgp"],
+    "application/pgp-keys": ["asc"],
+    "application/pgp-signature": ["sig", "*asc"],
+    "application/pics-rules": ["prf"],
+    "application/pkcs10": ["p10"],
+    "application/pkcs7-mime": ["p7m", "p7c"],
+    "application/pkcs7-signature": ["p7s"],
+    "application/pkcs8": ["p8"],
+    "application/pkix-attr-cert": ["ac"],
+    "application/pkix-cert": ["cer"],
+    "application/pkix-crl": ["crl"],
+    "application/pkix-pkipath": ["pkipath"],
+    "application/pkixcmp": ["pki"],
+    "application/pls+xml": ["pls"],
+    "application/postscript": ["ai", "eps", "ps"],
+    "application/provenance+xml": ["provx"],
+    "application/pskc+xml": ["pskcxml"],
+    "application/raml+yaml": ["raml"],
+    "application/rdf+xml": ["rdf", "owl"],
+    "application/reginfo+xml": ["rif"],
+    "application/relax-ng-compact-syntax": ["rnc"],
+    "application/resource-lists+xml": ["rl"],
+    "application/resource-lists-diff+xml": ["rld"],
+    "application/rls-services+xml": ["rs"],
+    "application/route-apd+xml": ["rapd"],
+    "application/route-s-tsid+xml": ["sls"],
+    "application/route-usd+xml": ["rusd"],
+    "application/rpki-ghostbusters": ["gbr"],
+    "application/rpki-manifest": ["mft"],
+    "application/rpki-roa": ["roa"],
+    "application/rsd+xml": ["rsd"],
+    "application/rss+xml": ["rss"],
+    "application/rtf": ["rtf"],
+    "application/sbml+xml": ["sbml"],
+    "application/scvp-cv-request": ["scq"],
+    "application/scvp-cv-response": ["scs"],
+    "application/scvp-vp-request": ["spq"],
+    "application/scvp-vp-response": ["spp"],
+    "application/sdp": ["sdp"],
+    "application/senml+xml": ["senmlx"],
+    "application/sensml+xml": ["sensmlx"],
+    "application/set-payment-initiation": ["setpay"],
+    "application/set-registration-initiation": ["setreg"],
+    "application/shf+xml": ["shf"],
+    "application/sieve": ["siv", "sieve"],
+    "application/smil+xml": ["smi", "smil"],
+    "application/sparql-query": ["rq"],
+    "application/sparql-results+xml": ["srx"],
+    "application/sql": ["sql"],
+    "application/srgs": ["gram"],
+    "application/srgs+xml": ["grxml"],
+    "application/sru+xml": ["sru"],
+    "application/ssdl+xml": ["ssdl"],
+    "application/ssml+xml": ["ssml"],
+    "application/swid+xml": ["swidtag"],
+    "application/tei+xml": ["tei", "teicorpus"],
+    "application/thraud+xml": ["tfi"],
+    "application/timestamped-data": ["tsd"],
+    "application/toml": ["toml"],
+    "application/trig": ["trig"],
+    "application/ttml+xml": ["ttml"],
+    "application/ubjson": ["ubj"],
+    "application/urc-ressheet+xml": ["rsheet"],
+    "application/urc-targetdesc+xml": ["td"],
+    "application/voicexml+xml": ["vxml"],
+    "application/wasm": ["wasm"],
+    "application/watcherinfo+xml": ["wif"],
+    "application/widget": ["wgt"],
+    "application/winhlp": ["hlp"],
+    "application/wsdl+xml": ["wsdl"],
+    "application/wspolicy+xml": ["wspolicy"],
+    "application/xaml+xml": ["xaml"],
+    "application/xcap-att+xml": ["xav"],
+    "application/xcap-caps+xml": ["xca"],
+    "application/xcap-diff+xml": ["xdf"],
+    "application/xcap-el+xml": ["xel"],
+    "application/xcap-ns+xml": ["xns"],
+    "application/xenc+xml": ["xenc"],
+    "application/xfdf": ["xfdf"],
+    "application/xhtml+xml": ["xhtml", "xht"],
+    "application/xliff+xml": ["xlf"],
+    "application/xml": ["xml", "xsl", "xsd", "rng"],
+    "application/xml-dtd": ["dtd"],
+    "application/xop+xml": ["xop"],
+    "application/xproc+xml": ["xpl"],
+    "application/xslt+xml": ["*xsl", "xslt"],
+    "application/xspf+xml": ["xspf"],
+    "application/xv+xml": ["mxml", "xhvml", "xvml", "xvm"],
+    "application/yang": ["yang"],
+    "application/yin+xml": ["yin"],
+    "application/zip": ["zip"],
+    "application/zip+dotlottie": ["lottie"],
+    "audio/3gpp": ["*3gpp"],
+    "audio/aac": ["adts", "aac"],
+    "audio/adpcm": ["adp"],
+    "audio/amr": ["amr"],
+    "audio/basic": ["au", "snd"],
+    "audio/midi": ["mid", "midi", "kar", "rmi"],
+    "audio/mobile-xmf": ["mxmf"],
+    "audio/mp3": ["*mp3"],
+    "audio/mp4": ["m4a", "mp4a", "m4b"],
+    "audio/mpeg": ["mpga", "mp2", "mp2a", "mp3", "m2a", "m3a"],
+    "audio/ogg": ["oga", "ogg", "spx", "opus"],
+    "audio/s3m": ["s3m"],
+    "audio/silk": ["sil"],
+    "audio/wav": ["wav"],
+    "audio/wave": ["*wav"],
+    "audio/webm": ["weba"],
+    "audio/xm": ["xm"],
+    "font/collection": ["ttc"],
+    "font/otf": ["otf"],
+    "font/ttf": ["ttf"],
+    "font/woff": ["woff"],
+    "font/woff2": ["woff2"],
+    "image/aces": ["exr"],
+    "image/apng": ["apng"],
+    "image/avci": ["avci"],
+    "image/avcs": ["avcs"],
+    "image/avif": ["avif"],
+    "image/bmp": ["bmp", "dib"],
+    "image/cgm": ["cgm"],
+    "image/dicom-rle": ["drle"],
+    "image/dpx": ["dpx"],
+    "image/emf": ["emf"],
+    "image/fits": ["fits"],
+    "image/g3fax": ["g3"],
+    "image/gif": ["gif"],
+    "image/heic": ["heic"],
+    "image/heic-sequence": ["heics"],
+    "image/heif": ["heif"],
+    "image/heif-sequence": ["heifs"],
+    "image/hej2k": ["hej2"],
+    "image/ief": ["ief"],
+    "image/jaii": ["jaii"],
+    "image/jais": ["jais"],
+    "image/jls": ["jls"],
+    "image/jp2": ["jp2", "jpg2"],
+    "image/jpeg": ["jpg", "jpeg", "jpe"],
+    "image/jph": ["jph"],
+    "image/jphc": ["jhc"],
+    "image/jpm": ["jpm", "jpgm"],
+    "image/jpx": ["jpx", "jpf"],
+    "image/jxl": ["jxl"],
+    "image/jxr": ["jxr"],
+    "image/jxra": ["jxra"],
+    "image/jxrs": ["jxrs"],
+    "image/jxs": ["jxs"],
+    "image/jxsc": ["jxsc"],
+    "image/jxsi": ["jxsi"],
+    "image/jxss": ["jxss"],
+    "image/ktx": ["ktx"],
+    "image/ktx2": ["ktx2"],
+    "image/pjpeg": ["jfif"],
+    "image/png": ["png"],
+    "image/sgi": ["sgi"],
+    "image/svg+xml": ["svg", "svgz"],
+    "image/t38": ["t38"],
+    "image/tiff": ["tif", "tiff"],
+    "image/tiff-fx": ["tfx"],
+    "image/webp": ["webp"],
+    "image/wmf": ["wmf"],
+    "message/disposition-notification": ["disposition-notification"],
+    "message/global": ["u8msg"],
+    "message/global-delivery-status": ["u8dsn"],
+    "message/global-disposition-notification": ["u8mdn"],
+    "message/global-headers": ["u8hdr"],
+    "message/rfc822": ["eml", "mime", "mht", "mhtml"],
+    "model/3mf": ["3mf"],
+    "model/gltf+json": ["gltf"],
+    "model/gltf-binary": ["glb"],
+    "model/iges": ["igs", "iges"],
+    "model/jt": ["jt"],
+    "model/mesh": ["msh", "mesh", "silo"],
+    "model/mtl": ["mtl"],
+    "model/obj": ["obj"],
+    "model/prc": ["prc"],
+    "model/step": ["step", "stp", "stpnc", "p21", "210"],
+    "model/step+xml": ["stpx"],
+    "model/step+zip": ["stpz"],
+    "model/step-xml+zip": ["stpxz"],
+    "model/stl": ["stl"],
+    "model/u3d": ["u3d"],
+    "model/vrml": ["wrl", "vrml"],
+    "model/x3d+binary": ["*x3db", "x3dbz"],
+    "model/x3d+fastinfoset": ["x3db"],
+    "model/x3d+vrml": ["*x3dv", "x3dvz"],
+    "model/x3d+xml": ["x3d", "x3dz"],
+    "model/x3d-vrml": ["x3dv"],
+    "text/cache-manifest": ["appcache", "manifest"],
+    "text/calendar": ["ics", "ifb"],
+    "text/coffeescript": ["coffee", "litcoffee"],
+    "text/css": ["css"],
+    "text/csv": ["csv"],
+    "text/html": ["html", "htm", "shtml"],
+    "text/jade": ["jade"],
+    "text/javascript": ["js", "mjs"],
+    "text/jsx": ["jsx"],
+    "text/less": ["less"],
+    "text/markdown": ["md", "markdown"],
+    "text/mathml": ["mml"],
+    "text/mdx": ["mdx"],
+    "text/n3": ["n3"],
+    "text/plain": ["txt", "text", "conf", "def", "list", "log", "in", "ini"],
+    "text/richtext": ["rtx"],
+    "text/rtf": ["*rtf"],
+    "text/sgml": ["sgml", "sgm"],
+    "text/shex": ["shex"],
+    "text/slim": ["slim", "slm"],
+    "text/spdx": ["spdx"],
+    "text/stylus": ["stylus", "styl"],
+    "text/tab-separated-values": ["tsv"],
+    "text/troff": ["t", "tr", "roff", "man", "me", "ms"],
+    "text/turtle": ["ttl"],
+    "text/uri-list": ["uri", "uris", "urls"],
+    "text/vcard": ["vcard"],
+    "text/vtt": ["vtt"],
+    "text/wgsl": ["wgsl"],
+    "text/xml": ["*xml"],
+    "text/yaml": ["yaml", "yml"],
+    "video/3gpp": ["3gp", "3gpp"],
+    "video/3gpp2": ["3g2"],
+    "video/h261": ["h261"],
+    "video/h263": ["h263"],
+    "video/h264": ["h264"],
+    "video/iso.segment": ["m4s"],
+    "video/jpeg": ["jpgv"],
+    "video/jpm": ["*jpm", "*jpgm"],
+    "video/mj2": ["mj2", "mjp2"],
+    "video/mp2t": ["ts", "m2t", "m2ts", "mts"],
+    "video/mp4": ["mp4", "mp4v", "mpg4"],
+    "video/mpeg": ["mpeg", "mpg", "mpe", "m1v", "m2v"],
+    "video/ogg": ["ogv"],
+    "video/quicktime": ["qt", "mov"],
+    "video/webm": ["webm"]
+  };
+  Object.freeze(types2);
+  var standard_default = types2;
+
+  // crates/neo-sdk/neo-playwright/third_party/mime/src/Mime.ts
+  class Mime {
+    #extensionToType = new Map;
+    #typeToExtension = new Map;
+    #typeToExtensions = new Map;
+    constructor(...args) {
+      for (const arg of args) {
+        this.define(arg);
+      }
+    }
+    define(typeMap, force = false) {
+      for (let [type, extensions] of Object.entries(typeMap)) {
+        type = type.toLowerCase();
+        extensions = extensions.map((ext) => ext.toLowerCase());
+        if (!this.#typeToExtensions.has(type)) {
+          this.#typeToExtensions.set(type, new Set);
+        }
+        const allExtensions = this.#typeToExtensions.get(type);
+        let first = true;
+        for (let extension of extensions) {
+          const starred = extension.startsWith("*");
+          extension = starred ? extension.slice(1) : extension;
+          allExtensions?.add(extension);
+          if (first) {
+            this.#typeToExtension.set(type, extension);
+          }
+          first = false;
+          if (starred)
+            continue;
+          const currentType = this.#extensionToType.get(extension);
+          if (currentType && currentType != type && !force) {
+            throw new Error(`"${type} -> ${extension}" conflicts with "${currentType} -> ${extension}". Pass \`force=true\` to override this definition.`);
+          }
+          this.#extensionToType.set(extension, type);
+        }
+      }
+      return this;
+    }
+    getType(path) {
+      if (typeof path !== "string")
+        return null;
+      const last = path.replace(/^.*[/\\]/s, "").toLowerCase();
+      const ext = last.replace(/^.*\./s, "").toLowerCase();
+      const hasPath = last.length < path.length;
+      const hasDot = ext.length < last.length - 1;
+      if (!hasDot && hasPath)
+        return null;
+      return this.#extensionToType.get(ext) ?? null;
+    }
+    getExtension(type) {
+      if (typeof type !== "string")
+        return null;
+      type = type?.split?.(";")[0];
+      return (type && this.#typeToExtension.get(type.trim().toLowerCase())) ?? null;
+    }
+    getAllExtensions(type) {
+      if (typeof type !== "string")
+        return null;
+      return this.#typeToExtensions.get(type.toLowerCase()) ?? null;
+    }
+    _freeze() {
+      this.define = () => {
+        throw new Error("define() not allowed for built-in Mime objects. See https://github.com/broofa/mime/blob/main/README.md#custom-mime-instances");
+      };
+      Object.freeze(this);
+      for (const extensions of this.#typeToExtensions.values()) {
+        Object.freeze(extensions);
+      }
+      return this;
+    }
+    _getTestState() {
+      return {
+        types: this.#extensionToType,
+        extensions: this.#typeToExtension
+      };
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright/third_party/mime/src/index.ts
+  var src_default = new Mime(standard_default, other_default)._freeze();
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/files.ts
+  var UPLOAD_LIMIT = 50 * 1024 * 1024;
+  var NEO_UPLOAD_LIMIT = 10 * 1024 * 1024;
+  function inputFiles(api, files) {
+    const items = Array.isArray(files) ? files.slice() : [files];
+    if (items.some((item) => typeof item === "string")) {
+      const paths = items.filter((item) => typeof item === "string");
+      if (paths.length !== items.length)
+        throw unprefixedClientError(api, "File paths cannot be mixed with buffers");
+      return { paths };
+    }
+    const total = payloadBytes(api, items);
+    if (total >= UPLOAD_LIMIT)
+      throw unprefixedClientError(api, "Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.");
+    const checked = items.map((item, index) => checkedPayload(api, item, index));
+    if (total >= NEO_UPLOAD_LIMIT)
+      throw unprefixedClientError(api, "Cannot set buffer larger than 10Mb in Neo, please write it to a file and pass its path instead.");
+    return {
+      payloads: checked.map(({ name, mimeType, buffer }) => ({
+        name,
+        mimeType: mimeType || src_default.getType(name) || "application/octet-stream",
+        buffer: String(Reflect.apply(Reflect.get(buffer, "toString"), buffer, ["base64"]))
+      }))
+    };
+  }
+  function payloadBytes(api, items) {
+    let total = 0;
+    for (const item of items) {
+      if (item === null || item === undefined)
+        throw unprefixedClientError(api, `Cannot read properties of ${item} (reading 'buffer')`, "TypeError");
+      const buffer = Reflect.get(Object(item), "buffer");
+      if (!buffer)
+        continue;
+      const length = Reflect.get(Object(buffer), "byteLength");
+      total += length;
+    }
+    return total;
+  }
+  function checkedPayload(api, item, index) {
+    const at = `payloads[${index}]`;
+    if (item === null)
+      throw clientError(api, `${at}: expected object, got null`);
+    if (typeof item !== "object")
+      throw clientError(api, `${at}: expected object, got ${typeof item}`);
+    const name = validString(api, `${at}.name`, Reflect.get(item, "name"));
+    const rawType = Reflect.get(item, "mimeType");
+    const mimeType = rawType === undefined ? undefined : validString(api, `${at}.mimeType`, rawType);
+    const buffer = Reflect.get(item, "buffer");
+    if (!(buffer instanceof Buffer) && !(buffer instanceof Object))
+      throw clientError(api, `${at}.buffer: expected Buffer, got ${typeof buffer}`);
+    return mimeType === undefined ? { name, buffer } : { name, mimeType, buffer };
+  }
+  function validString(api, path, value) {
+    if (value instanceof String)
+      return value.valueOf();
+    if (typeof value === "string")
+      return value;
+    throw clientError(api, `${path}: expected string, got ${typeof value}`);
+  }
+  var CLIENT_MESSAGES = [
+    /^Multiple directories are not supported$/,
+    /^File paths must be all files or a single directory$/,
+    /^(?:E[A-Z0-9]+|UNKNOWN): [^,\n]+, stat '/
+  ];
+  var NUL_PATH = /^The argument 'path' must be a string, Uint8Array, or URL without null bytes\. Received /;
+  async function withClientErrors(api, call) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith(`${api}: `))
+        throw error;
+      const bare = error.message.slice(api.length + 2);
+      if (NUL_PATH.test(bare)) {
+        error.message = bare;
+        error.name = "TypeError";
+      } else if (CLIENT_MESSAGES.some((message) => message.test(bare)))
+        error.message = bare;
+      throw error;
     }
   }
 
@@ -3544,11 +5269,11 @@
           return `filter({ visible: ${body === "true" ? "true" : "false"} })`;
         case "role":
           const attrs = [];
-          if (isRegExp(options.name))
+          if (isRegExp3(options.name))
             attrs.push(`name: ${this.regexToSourceString(options.name)}`);
           else if (typeof options.name === "string")
             attrs.push(`name: ${this.quote(options.name)}`);
-          if (isRegExp(options.description))
+          if (isRegExp3(options.description))
             attrs.push(`description: ${this.regexToSourceString(options.description)}`);
           else if (typeof options.description === "string")
             attrs.push(`description: ${this.quote(options.description)}`);
@@ -3595,17 +5320,17 @@
       return normalizeEscapedRegexQuotes(String(re));
     }
     toCallWithExact(method, body, exact) {
-      if (isRegExp(body))
+      if (isRegExp3(body))
         return `${method}(${this.regexToSourceString(body)})`;
       return exact ? `${method}(${this.quote(body)}, { exact: true })` : `${method}(${this.quote(body)})`;
     }
     toHasText(body) {
-      if (isRegExp(body))
+      if (isRegExp3(body))
         return this.regexToSourceString(body);
       return this.quote(body);
     }
     toTestIdValue(value) {
-      if (isRegExp(value))
+      if (isRegExp3(value))
         return this.regexToSourceString(value);
       return this.quote(value);
     }
@@ -3641,11 +5366,11 @@
           return `filter(visible=${body === "true" ? "True" : "False"})`;
         case "role":
           const attrs = [];
-          if (isRegExp(options.name))
+          if (isRegExp3(options.name))
             attrs.push(`name=${this.regexToString(options.name)}`);
           else if (typeof options.name === "string")
             attrs.push(`name=${this.quote(options.name)}`);
-          if (isRegExp(options.description))
+          if (isRegExp3(options.description))
             attrs.push(`description=${this.regexToString(options.description)}`);
           else if (typeof options.description === "string")
             attrs.push(`description=${this.quote(options.description)}`);
@@ -3697,19 +5422,19 @@
       return `re.compile(r"${normalizeEscapedRegexQuotes(body.source).replace(/\\\//, "/").replace(/"/g, "\\\"")}"${suffix})`;
     }
     toCallWithExact(method, body, exact) {
-      if (isRegExp(body))
+      if (isRegExp3(body))
         return `${method}(${this.regexToString(body)})`;
       if (exact)
         return `${method}(${this.quote(body)}, exact=True)`;
       return `${method}(${this.quote(body)})`;
     }
     toHasText(body) {
-      if (isRegExp(body))
+      if (isRegExp3(body))
         return this.regexToString(body);
       return `${this.quote(body)}`;
     }
     toTestIdValue(value) {
-      if (isRegExp(value))
+      if (isRegExp3(value))
         return this.regexToString(value);
       return this.quote(value);
     }
@@ -3757,11 +5482,11 @@
           return `filter(new ${clazz}.FilterOptions().setVisible(${body === "true" ? "true" : "false"}))`;
         case "role":
           const attrs = [];
-          if (isRegExp(options.name))
+          if (isRegExp3(options.name))
             attrs.push(`.setName(${this.regexToString(options.name)})`);
           else if (typeof options.name === "string")
             attrs.push(`.setName(${this.quote(options.name)})`);
-          if (isRegExp(options.description))
+          if (isRegExp3(options.description))
             attrs.push(`.setDescription(${this.regexToString(options.description)})`);
           else if (typeof options.description === "string")
             attrs.push(`.setDescription(${this.quote(options.description)})`);
@@ -3809,19 +5534,19 @@
       return `Pattern.compile(${this.quote(normalizeEscapedRegexQuotes(body.source))}${suffix})`;
     }
     toCallWithExact(clazz, method, body, exact) {
-      if (isRegExp(body))
+      if (isRegExp3(body))
         return `${method}(${this.regexToString(body)})`;
       if (exact)
         return `${method}(${this.quote(body)}, new ${clazz}.${toTitleCase(method)}Options().setExact(true))`;
       return `${method}(${this.quote(body)})`;
     }
     toHasText(body) {
-      if (isRegExp(body))
+      if (isRegExp3(body))
         return this.regexToString(body);
       return this.quote(body);
     }
     toTestIdValue(value) {
-      if (isRegExp(value))
+      if (isRegExp3(value))
         return this.regexToString(value);
       return this.quote(value);
     }
@@ -3857,11 +5582,11 @@
           return `Filter(new() { Visible = ${body === "true" ? "true" : "false"} })`;
         case "role":
           const attrs = [];
-          if (isRegExp(options.name))
+          if (isRegExp3(options.name))
             attrs.push(`NameRegex = ${this.regexToString(options.name)}`);
           else if (typeof options.name === "string")
             attrs.push(`Name = ${this.quote(options.name)}`);
-          if (isRegExp(options.description))
+          if (isRegExp3(options.description))
             attrs.push(`DescriptionRegex = ${this.regexToString(options.description)}`);
           else if (typeof options.description === "string")
             attrs.push(`Description = ${this.quote(options.description)}`);
@@ -3909,24 +5634,24 @@
       return `new Regex(${this.quote(normalizeEscapedRegexQuotes(body.source))}${suffix})`;
     }
     toCallWithExact(method, body, exact) {
-      if (isRegExp(body))
+      if (isRegExp3(body))
         return `${method}(${this.regexToString(body)})`;
       if (exact)
         return `${method}(${this.quote(body)}, new() { Exact = true })`;
       return `${method}(${this.quote(body)})`;
     }
     toHasText(body) {
-      if (isRegExp(body))
+      if (isRegExp3(body))
         return `HasTextRegex = ${this.regexToString(body)}`;
       return `HasText = ${this.quote(body)}`;
     }
     toTestIdValue(value) {
-      if (isRegExp(value))
+      if (isRegExp3(value))
         return this.regexToString(value);
       return this.quote(value);
     }
     toHasNotText(body) {
-      if (isRegExp(body))
+      if (isRegExp3(body))
         return `HasNotTextRegex = ${this.regexToString(body)}`;
       return `HasNotText = ${this.quote(body)}`;
     }
@@ -3970,7 +5695,7 @@
     const flags = [...body.flags].filter((flag) => (flag in names)).map((flag) => `${flagsEnum}.${names[flag]}`);
     return flags.length ? `, ${flags.join(" | ")}` : "";
   }
-  function isRegExp(obj) {
+  function isRegExp3(obj) {
     return obj instanceof RegExp;
   }
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/locatorUtils.ts
@@ -4084,1848 +5809,6 @@
     tokens.push("$");
     return tokens.join("");
   }
-  // crates/neo-sdk/neo-playwright-js/src/prelude/url.ts
-  var DEFAULT_PORTS = {
-    "http:": "80",
-    "https:": "443",
-    "ws:": "80",
-    "wss:": "443",
-    "ftp:": "21"
-  };
-  var SPECIAL = new Set(["http:", "https:", "ws:", "wss:", "ftp:", "file:"]);
-  var ABSOLUTE = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(?:\/\/(?:([^@/?#]*)@)?(\[[^\]]*\]|[^:/?#]*)(?::(\d*))?)?([^?#]*)(\?[^#]*)?(#.*)?$/;
-  function decode2(text) {
-    try {
-      return decodeURIComponent(text.replace(/\+/g, " "));
-    } catch {
-      return text;
-    }
-  }
-  function urlLike(href) {
-    const match = ABSOLUTE.exec(href);
-    if (!match)
-      return null;
-    const [
-      ,
-      scheme = "",
-      userinfo = "",
-      host = "",
-      rawPort = "",
-      path = "",
-      query = "",
-      fragment = ""
-    ] = match;
-    const protocol = scheme.toLowerCase();
-    const special = SPECIAL.has(protocol);
-    const hostname = special ? host.toLowerCase() : host;
-    const port = rawPort === DEFAULT_PORTS[protocol] ? "" : rawPort;
-    const pathname = path === "" && special ? "/" : path;
-    const [username = "", password = ""] = userinfo.split(":");
-    const authority = href.slice(protocol.length).startsWith("//");
-    const hostPort = port ? `${hostname}:${port}` : hostname;
-    const credentials = userinfo ? `${userinfo}@` : "";
-    const normalized = authority ? `${protocol}//${credentials}${hostPort}${pathname}${query}${fragment}` : `${protocol}${pathname}${query}${fragment}`;
-    const search = query === "?" ? "" : query;
-    const pairs = search.slice(1).split("&").filter((pair) => pair !== "").map((pair) => {
-      const equals = pair.indexOf("=");
-      return equals === -1 ? [decode2(pair), ""] : [decode2(pair.slice(0, equals)), decode2(pair.slice(equals + 1))];
-    });
-    return {
-      href: normalized,
-      protocol,
-      username,
-      password,
-      host: hostPort,
-      hostname,
-      port,
-      origin: special && protocol !== "file:" ? `${protocol}//${hostPort}` : "null",
-      pathname,
-      search,
-      hash: fragment === "#" ? "" : fragment,
-      searchParams: {
-        get: (name) => pairs.find(([key]) => key === name)?.[1] ?? null,
-        has: (name) => pairs.some(([key]) => key === name),
-        getAll: (name) => pairs.filter(([key]) => key === name).map(([, value]) => value ?? "")
-      },
-      toString: () => normalized
-    };
-  }
-  function normalizeUrl(text) {
-    return urlLike(text)?.href ?? text;
-  }
-  function globMatches(glob, url) {
-    if (glob === "")
-      return true;
-    return new RegExp(globToRegexPattern(glob)).test(url);
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/vendored-globals.ts
-  var BASE642 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-  class URL2 {
-    href;
-    constructor(href) {
-      this.href = String(href);
-      Object.assign(this, urlLike(this.href));
-    }
-    toString() {
-      return this.href;
-    }
-    toJSON() {
-      return this.href;
-    }
-  }
-  var Buffer2 = {
-    from: (buffer, byteOffset, length) => new Uint8Array(buffer, byteOffset, length)
-  };
-  function btoa(binary) {
-    let out = "";
-    for (let index = 0;index < binary.length; index += 3) {
-      const [a = 0, b = 0, c = 0] = [0, 1, 2].map((offset) => binary.charCodeAt(index + offset) || 0);
-      const bits = a << 16 | b << 8 | c;
-      const left = binary.length - index;
-      out += BASE642.charAt(bits >> 18 & 63) + BASE642.charAt(bits >> 12 & 63);
-      out += left > 1 ? BASE642.charAt(bits >> 6 & 63) : "=";
-      out += left > 2 ? BASE642.charAt(bits & 63) : "=";
-    }
-    return out;
-  }
-  function atob(base64) {
-    const digits = String(base64).replace(/[^A-Za-z0-9+/]/g, "");
-    let out = "";
-    let bits = 0;
-    let held = 0;
-    for (const digit of digits) {
-      bits = (bits << 6 | BASE642.indexOf(digit)) & 16777215;
-      held += 6;
-      if (held >= 8) {
-        held -= 8;
-        out += String.fromCharCode(bits >> held & 255);
-      }
-    }
-    return out;
-  }
-
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers.ts
-  var kFunctionBindingPrefix = "__pw_fn_";
-  var kBindingsControllerProperty = "__playwright__binding__controller__";
-  function isRegExp2(obj) {
-    try {
-      return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
-    } catch (error) {
-      return false;
-    }
-  }
-  function isDate(obj) {
-    try {
-      return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
-    } catch (error) {
-      return false;
-    }
-  }
-  function isURL(obj) {
-    try {
-      return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
-    } catch (error) {
-      return false;
-    }
-  }
-  function isError(obj) {
-    try {
-      return obj instanceof Error || obj && Object.getPrototypeOf(obj)?.name === "Error";
-    } catch (error) {
-      return false;
-    }
-  }
-  function isTypedArray(obj, constructor) {
-    try {
-      return obj instanceof constructor || Object.prototype.toString.call(obj) === `[object ${constructor.name}]`;
-    } catch (error) {
-      return false;
-    }
-  }
-  function isArrayBuffer2(obj) {
-    try {
-      return obj instanceof ArrayBuffer || Object.prototype.toString.call(obj) === "[object ArrayBuffer]";
-    } catch (error) {
-      return false;
-    }
-  }
-  function isMap(obj) {
-    try {
-      return obj instanceof Map || Object.prototype.toString.call(obj) === "[object Map]";
-    } catch (error) {
-      return false;
-    }
-  }
-  function isSet(obj) {
-    try {
-      return obj instanceof Set || Object.prototype.toString.call(obj) === "[object Set]";
-    } catch (error) {
-      return false;
-    }
-  }
-  var typedArrayConstructors = {
-    i8: Int8Array,
-    ui8: Uint8Array,
-    ui8c: Uint8ClampedArray,
-    i16: Int16Array,
-    ui16: Uint16Array,
-    i32: Int32Array,
-    ui32: Uint32Array,
-    f32: Float32Array,
-    f64: Float64Array,
-    bi64: BigInt64Array,
-    bui64: BigUint64Array
-  };
-  function typedArrayToBase64(array) {
-    if ("toBase64" in array)
-      return array.toBase64();
-    const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).map((b) => String.fromCharCode(b)).join("");
-    return btoa(binary);
-  }
-  function base64ToTypedArray(base64, TypedArrayConstructor) {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0;i < binary.length; i++)
-      bytes[i] = binary.charCodeAt(i);
-    return new TypedArrayConstructor(bytes.buffer);
-  }
-  function parseEvaluationResultValue(value, handles = [], refs = new Map) {
-    if (Object.is(value, undefined))
-      return;
-    if (typeof value === "object" && value) {
-      if ("ref" in value)
-        return refs.get(value.ref);
-      if ("v" in value) {
-        if (value.v === "undefined")
-          return;
-        if (value.v === "null")
-          return null;
-        if (value.v === "NaN")
-          return NaN;
-        if (value.v === "Infinity")
-          return Infinity;
-        if (value.v === "-Infinity")
-          return -Infinity;
-        if (value.v === "-0")
-          return -0;
-        return;
-      }
-      if ("d" in value) {
-        return new Date(value.d);
-      }
-      if ("u" in value)
-        return new URL2(value.u);
-      if ("bi" in value)
-        return BigInt(value.bi);
-      if ("e" in value) {
-        const error = new Error(value.e.m);
-        error.name = value.e.n;
-        error.stack = value.e.s;
-        return error;
-      }
-      if ("r" in value)
-        return new RegExp(value.r.p, value.r.f);
-      if ("a" in value) {
-        const result = [];
-        refs.set(value.id, result);
-        for (const a of value.a)
-          result.push(parseEvaluationResultValue(a, handles, refs));
-        return result;
-      }
-      if ("o" in value) {
-        const result = {};
-        refs.set(value.id, result);
-        for (const { k, v } of value.o) {
-          if (k === "__proto__")
-            continue;
-          result[k] = parseEvaluationResultValue(v, handles, refs);
-        }
-        return result;
-      }
-      if ("m" in value) {
-        const result = new Map;
-        refs.set(value.id, result);
-        for (const { k, v } of value.m)
-          result.set(parseEvaluationResultValue(k, handles, refs), parseEvaluationResultValue(v, handles, refs));
-        return result;
-      }
-      if ("s" in value) {
-        const result = new Set;
-        refs.set(value.id, result);
-        for (const item of value.s)
-          result.add(parseEvaluationResultValue(item, handles, refs));
-        return result;
-      }
-      if ("h" in value)
-        return handles[value.h];
-      if ("fn" in value) {
-        const name = value.fn;
-        return (...args) => globalThis[kBindingsControllerProperty].callBinding(name, ...args);
-      }
-      if ("ta" in value)
-        return base64ToTypedArray(value.ta.b, typedArrayConstructors[value.ta.k]);
-      if ("ab" in value)
-        return base64ToTypedArray(value.ab.b, Uint8Array).buffer;
-    }
-    return value;
-  }
-  function serializeAsCallArgument(value, handleSerializer, options = {}) {
-    return serialize(value, handleSerializer, { visited: new Map, lastId: 0, extendedSerialization: options.extendedSerialization });
-  }
-  function serialize(value, handleSerializer, visitorInfo) {
-    if (value && typeof value === "object") {
-      if (typeof globalThis.Window === "function" && value instanceof globalThis.Window)
-        return "ref: <Window>";
-      if (typeof globalThis.Document === "function" && value instanceof globalThis.Document)
-        return "ref: <Document>";
-      if (typeof globalThis.Node === "function" && value instanceof globalThis.Node)
-        return "ref: <Node>";
-    }
-    return innerSerialize(value, handleSerializer, visitorInfo);
-  }
-  function innerSerialize(value, handleSerializer, visitorInfo) {
-    const result = handleSerializer(value);
-    if ("fallThrough" in result)
-      value = result.fallThrough;
-    else
-      return result;
-    if (typeof value === "symbol")
-      return { v: "undefined" };
-    if (Object.is(value, undefined))
-      return { v: "undefined" };
-    if (Object.is(value, null))
-      return { v: "null" };
-    if (Object.is(value, NaN))
-      return { v: "NaN" };
-    if (Object.is(value, Infinity))
-      return { v: "Infinity" };
-    if (Object.is(value, -Infinity))
-      return { v: "-Infinity" };
-    if (Object.is(value, -0))
-      return { v: "-0" };
-    if (typeof value === "boolean")
-      return value;
-    if (typeof value === "number")
-      return value;
-    if (typeof value === "string")
-      return value;
-    if (typeof value === "bigint")
-      return { bi: value.toString() };
-    if (isError(value)) {
-      let stack;
-      if (value.stack?.startsWith(value.name + ": " + value.message)) {
-        stack = value.stack;
-      } else {
-        stack = `${value.name}: ${value.message}
-${value.stack}`;
-      }
-      return { e: { n: value.name, m: value.message, s: stack } };
-    }
-    if (isDate(value))
-      return { d: value.toJSON() };
-    if (isURL(value))
-      return { u: value.toJSON() };
-    if (isRegExp2(value))
-      return { r: { p: value.source, f: value.flags } };
-    for (const [k, ctor] of Object.entries(typedArrayConstructors)) {
-      if (isTypedArray(value, ctor))
-        return { ta: { b: typedArrayToBase64(value), k } };
-    }
-    if (isArrayBuffer2(value))
-      return { ab: { b: typedArrayToBase64(new Uint8Array(value)) } };
-    const id = visitorInfo.visited.get(value);
-    if (id)
-      return { ref: id };
-    if (visitorInfo.extendedSerialization) {
-      if (isMap(value)) {
-        const m = [];
-        const id = ++visitorInfo.lastId;
-        visitorInfo.visited.set(value, id);
-        const iterator = value.entries();
-        const next = new Map().entries().next;
-        while (true) {
-          const entry = next.call(iterator);
-          if (entry.done)
-            break;
-          m.push({ k: serialize(entry.value[0], handleSerializer, visitorInfo), v: serialize(entry.value[1], handleSerializer, visitorInfo) });
-        }
-        return { m, id };
-      }
-      if (isSet(value)) {
-        const s = [];
-        const id = ++visitorInfo.lastId;
-        visitorInfo.visited.set(value, id);
-        const iterator = value.values();
-        const next = new Set().values().next;
-        while (true) {
-          const entry = next.call(iterator);
-          if (entry.done)
-            break;
-          s.push(serialize(entry.value, handleSerializer, visitorInfo));
-        }
-        return { s, id };
-      }
-    }
-    if (Array.isArray(value)) {
-      const a = [];
-      const id = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id);
-      for (let i = 0;i < value.length; ++i)
-        a.push(serialize(value[i], handleSerializer, visitorInfo));
-      return { a, id };
-    }
-    if (typeof value === "object") {
-      const o = [];
-      const id = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id);
-      for (const name of Object.keys(value)) {
-        let item;
-        try {
-          item = value[name];
-        } catch (e) {
-          continue;
-        }
-        if (name === "toJSON" && typeof item === "function")
-          o.push({ k: name, v: { o: [], id: 0 } });
-        else
-          o.push({ k: name, v: serialize(item, handleSerializer, visitorInfo) });
-      }
-      let jsonWrapper;
-      try {
-        if (o.length === 0 && value.toJSON && typeof value.toJSON === "function")
-          jsonWrapper = { value: value.toJSON() };
-      } catch (e) {}
-      if (jsonWrapper)
-        return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);
-      return { o, id };
-    }
-    if (typeof value === "function" && value.name.startsWith(kFunctionBindingPrefix))
-      return { fn: value.name };
-  }
-
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/protocol/src/serializers.ts
-  function parseSerializedValue(value, handles) {
-    return innerParseSerializedValue(value, handles, new Map, []);
-  }
-  function innerParseSerializedValue(value, handles, refs, accessChain) {
-    if (value.ref !== undefined)
-      return refs.get(value.ref);
-    if (value.n !== undefined)
-      return value.n;
-    if (value.s !== undefined)
-      return value.s;
-    if (value.b !== undefined)
-      return value.b;
-    if (value.v !== undefined) {
-      if (value.v === "undefined")
-        return;
-      if (value.v === "null")
-        return null;
-      if (value.v === "NaN")
-        return NaN;
-      if (value.v === "Infinity")
-        return Infinity;
-      if (value.v === "-Infinity")
-        return -Infinity;
-      if (value.v === "-0")
-        return -0;
-    }
-    if (value.d !== undefined)
-      return new Date(value.d);
-    if (value.u !== undefined)
-      return new URL2(value.u);
-    if (value.bi !== undefined)
-      return BigInt(value.bi);
-    if (value.e !== undefined) {
-      const error = new Error(value.e.m);
-      error.name = value.e.n;
-      error.stack = value.e.s;
-      return error;
-    }
-    if (value.r !== undefined)
-      return new RegExp(value.r.p, value.r.f);
-    if (value.ta !== undefined) {
-      const ctor = typedArrayKindToConstructor[value.ta.k];
-      return new ctor(value.ta.b.buffer, value.ta.b.byteOffset, value.ta.b.length / ctor.BYTES_PER_ELEMENT);
-    }
-    if (value.a !== undefined) {
-      const result = [];
-      refs.set(value.id, result);
-      for (let i = 0;i < value.a.length; i++)
-        result.push(innerParseSerializedValue(value.a[i], handles, refs, [...accessChain, i]));
-      return result;
-    }
-    if (value.o !== undefined) {
-      const result = {};
-      refs.set(value.id, result);
-      for (const { k, v } of value.o)
-        result[k] = innerParseSerializedValue(v, handles, refs, [...accessChain, k]);
-      return result;
-    }
-    if (value.h !== undefined) {
-      if (handles === undefined)
-        throw new Error("Unexpected handle");
-      return handles[value.h];
-    }
-    if (value.fn !== undefined) {
-      const dummy = () => {};
-      Object.defineProperty(dummy, "name", { value: value.fn });
-      return dummy;
-    }
-    throw new Error(`Attempting to deserialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
-  }
-  function serializeValue(value, handleSerializer) {
-    return innerSerializeValue(value, handleSerializer, { lastId: 0, visited: new Map }, []);
-  }
-  function innerSerializeValue(value, handleSerializer, visitorInfo, accessChain) {
-    const handle = handleSerializer(value);
-    if ("fallThrough" in handle)
-      value = handle.fallThrough;
-    else
-      return handle;
-    if (typeof value === "symbol")
-      return { v: "undefined" };
-    if (Object.is(value, undefined))
-      return { v: "undefined" };
-    if (Object.is(value, null))
-      return { v: "null" };
-    if (Object.is(value, NaN))
-      return { v: "NaN" };
-    if (Object.is(value, Infinity))
-      return { v: "Infinity" };
-    if (Object.is(value, -Infinity))
-      return { v: "-Infinity" };
-    if (Object.is(value, -0))
-      return { v: "-0" };
-    if (typeof value === "boolean")
-      return { b: value };
-    if (typeof value === "number")
-      return { n: value };
-    if (typeof value === "string")
-      return { s: value };
-    if (typeof value === "bigint")
-      return { bi: value.toString() };
-    if (isError2(value))
-      return { e: { n: value.name, m: value.message, s: value.stack || "" } };
-    if (isDate2(value))
-      return { d: value.toJSON() };
-    if (isURL2(value))
-      return { u: value.toJSON() };
-    if (isRegExp3(value))
-      return { r: { p: value.source, f: value.flags } };
-    const typedArrayKind = constructorToTypedArrayKind.get(value.constructor);
-    if (typedArrayKind)
-      return { ta: { b: Buffer2.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind } };
-    const id = visitorInfo.visited.get(value);
-    if (id)
-      return { ref: id };
-    if (Array.isArray(value)) {
-      const a = [];
-      const id = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id);
-      for (let i = 0;i < value.length; ++i)
-        a.push(innerSerializeValue(value[i], handleSerializer, visitorInfo, [...accessChain, i]));
-      return { a, id };
-    }
-    if (typeof value === "object") {
-      const o = [];
-      const id = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id);
-      for (const name of Object.keys(value))
-        o.push({ k: name, v: innerSerializeValue(value[name], handleSerializer, visitorInfo, [...accessChain, name]) });
-      return { o, id };
-    }
-    throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
-  }
-  function accessChainToDisplayString(accessChain) {
-    const chainString = accessChain.map((accessor, i) => {
-      if (typeof accessor === "string")
-        return i ? `.${accessor}` : accessor;
-      return `[${accessor}]`;
-    }).join("");
-    return chainString.length > 0 ? ` at position "${chainString}"` : "";
-  }
-  function isRegExp3(obj) {
-    return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
-  }
-  function isDate2(obj) {
-    return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
-  }
-  function isURL2(obj) {
-    return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
-  }
-  function isError2(obj) {
-    const proto = obj ? Object.getPrototypeOf(obj) : null;
-    return obj instanceof Error || proto?.name === "Error" || proto && isError2(proto);
-  }
-  var typedArrayKindToConstructor = {
-    i8: Int8Array,
-    ui8: Uint8Array,
-    ui8c: Uint8ClampedArray,
-    i16: Int16Array,
-    ui16: Uint16Array,
-    i32: Int32Array,
-    ui32: Uint32Array,
-    f32: Float32Array,
-    f64: Float64Array,
-    bi64: BigInt64Array,
-    bui64: BigUint64Array
-  };
-  var constructorToTypedArrayKind = new Map(Object.entries(typedArrayKindToConstructor).map(([k, v]) => [v, k]));
-
-  // crates/neo-sdk/neo-playwright/third_party/mime/types/other.ts
-  var types = {
-    "application/prs.cww": ["cww"],
-    "application/prs.xsf+xml": ["xsf"],
-    "application/vnd.1000minds.decision-model+xml": ["1km"],
-    "application/vnd.3gpp.pic-bw-large": ["plb"],
-    "application/vnd.3gpp.pic-bw-small": ["psb"],
-    "application/vnd.3gpp.pic-bw-var": ["pvb"],
-    "application/vnd.3gpp2.tcap": ["tcap"],
-    "application/vnd.3m.post-it-notes": ["pwn"],
-    "application/vnd.accpac.simply.aso": ["aso"],
-    "application/vnd.accpac.simply.imp": ["imp"],
-    "application/vnd.acucobol": ["acu"],
-    "application/vnd.acucorp": ["atc", "acutc"],
-    "application/vnd.adobe.air-application-installer-package+zip": ["air"],
-    "application/vnd.adobe.formscentral.fcdt": ["fcdt"],
-    "application/vnd.adobe.fxp": ["fxp", "fxpl"],
-    "application/vnd.adobe.xdp+xml": ["xdp"],
-    "application/vnd.adobe.xfdf": ["*xfdf"],
-    "application/vnd.age": ["age"],
-    "application/vnd.ahead.space": ["ahead"],
-    "application/vnd.airzip.filesecure.azf": ["azf"],
-    "application/vnd.airzip.filesecure.azs": ["azs"],
-    "application/vnd.amazon.ebook": ["azw"],
-    "application/vnd.americandynamics.acc": ["acc"],
-    "application/vnd.amiga.ami": ["ami"],
-    "application/vnd.android.package-archive": ["apk"],
-    "application/vnd.anser-web-certificate-issue-initiation": ["cii"],
-    "application/vnd.anser-web-funds-transfer-initiation": ["fti"],
-    "application/vnd.antix.game-component": ["atx"],
-    "application/vnd.apple.installer+xml": ["mpkg"],
-    "application/vnd.apple.keynote": ["key"],
-    "application/vnd.apple.mpegurl": ["m3u8"],
-    "application/vnd.apple.numbers": ["numbers"],
-    "application/vnd.apple.pages": ["pages"],
-    "application/vnd.apple.pkpass": ["pkpass"],
-    "application/vnd.aristanetworks.swi": ["swi"],
-    "application/vnd.astraea-software.iota": ["iota"],
-    "application/vnd.audiograph": ["aep"],
-    "application/vnd.autodesk.fbx": ["fbx"],
-    "application/vnd.balsamiq.bmml+xml": ["bmml"],
-    "application/vnd.blueice.multipass": ["mpm"],
-    "application/vnd.bmi": ["bmi"],
-    "application/vnd.businessobjects": ["rep"],
-    "application/vnd.chemdraw+xml": ["cdxml"],
-    "application/vnd.chipnuts.karaoke-mmd": ["mmd"],
-    "application/vnd.cinderella": ["cdy"],
-    "application/vnd.citationstyles.style+xml": ["csl"],
-    "application/vnd.claymore": ["cla"],
-    "application/vnd.cloanto.rp9": ["rp9"],
-    "application/vnd.clonk.c4group": ["c4g", "c4d", "c4f", "c4p", "c4u"],
-    "application/vnd.cluetrust.cartomobile-config": ["c11amc"],
-    "application/vnd.cluetrust.cartomobile-config-pkg": ["c11amz"],
-    "application/vnd.commonspace": ["csp"],
-    "application/vnd.contact.cmsg": ["cdbcmsg"],
-    "application/vnd.cosmocaller": ["cmc"],
-    "application/vnd.crick.clicker": ["clkx"],
-    "application/vnd.crick.clicker.keyboard": ["clkk"],
-    "application/vnd.crick.clicker.palette": ["clkp"],
-    "application/vnd.crick.clicker.template": ["clkt"],
-    "application/vnd.crick.clicker.wordbank": ["clkw"],
-    "application/vnd.criticaltools.wbs+xml": ["wbs"],
-    "application/vnd.ctc-posml": ["pml"],
-    "application/vnd.cups-ppd": ["ppd"],
-    "application/vnd.curl.car": ["car"],
-    "application/vnd.curl.pcurl": ["pcurl"],
-    "application/vnd.dart": ["dart"],
-    "application/vnd.data-vision.rdz": ["rdz"],
-    "application/vnd.dbf": ["dbf"],
-    "application/vnd.dcmp+xml": ["dcmp"],
-    "application/vnd.dece.data": ["uvf", "uvvf", "uvd", "uvvd"],
-    "application/vnd.dece.ttml+xml": ["uvt", "uvvt"],
-    "application/vnd.dece.unspecified": ["uvx", "uvvx"],
-    "application/vnd.dece.zip": ["uvz", "uvvz"],
-    "application/vnd.denovo.fcselayout-link": ["fe_launch"],
-    "application/vnd.dna": ["dna"],
-    "application/vnd.dolby.mlp": ["mlp"],
-    "application/vnd.dpgraph": ["dpg"],
-    "application/vnd.dreamfactory": ["dfac"],
-    "application/vnd.ds-keypoint": ["kpxx"],
-    "application/vnd.dvb.ait": ["ait"],
-    "application/vnd.dvb.service": ["svc"],
-    "application/vnd.dynageo": ["geo"],
-    "application/vnd.ecowin.chart": ["mag"],
-    "application/vnd.enliven": ["nml"],
-    "application/vnd.epson.esf": ["esf"],
-    "application/vnd.epson.msf": ["msf"],
-    "application/vnd.epson.quickanime": ["qam"],
-    "application/vnd.epson.salt": ["slt"],
-    "application/vnd.epson.ssf": ["ssf"],
-    "application/vnd.eszigno3+xml": ["es3", "et3"],
-    "application/vnd.ezpix-album": ["ez2"],
-    "application/vnd.ezpix-package": ["ez3"],
-    "application/vnd.fdf": ["*fdf"],
-    "application/vnd.fdsn.mseed": ["mseed"],
-    "application/vnd.fdsn.seed": ["seed", "dataless"],
-    "application/vnd.flographit": ["gph"],
-    "application/vnd.fluxtime.clip": ["ftc"],
-    "application/vnd.framemaker": ["fm", "frame", "maker", "book"],
-    "application/vnd.frogans.fnc": ["fnc"],
-    "application/vnd.frogans.ltf": ["ltf"],
-    "application/vnd.fsc.weblaunch": ["fsc"],
-    "application/vnd.fujitsu.oasys": ["oas"],
-    "application/vnd.fujitsu.oasys2": ["oa2"],
-    "application/vnd.fujitsu.oasys3": ["oa3"],
-    "application/vnd.fujitsu.oasysgp": ["fg5"],
-    "application/vnd.fujitsu.oasysprs": ["bh2"],
-    "application/vnd.fujixerox.ddd": ["ddd"],
-    "application/vnd.fujixerox.docuworks": ["xdw"],
-    "application/vnd.fujixerox.docuworks.binder": ["xbd"],
-    "application/vnd.fuzzysheet": ["fzs"],
-    "application/vnd.genomatix.tuxedo": ["txd"],
-    "application/vnd.geogebra.file": ["ggb"],
-    "application/vnd.geogebra.slides": ["ggs"],
-    "application/vnd.geogebra.tool": ["ggt"],
-    "application/vnd.geometry-explorer": ["gex", "gre"],
-    "application/vnd.geonext": ["gxt"],
-    "application/vnd.geoplan": ["g2w"],
-    "application/vnd.geospace": ["g3w"],
-    "application/vnd.gmx": ["gmx"],
-    "application/vnd.google-apps.document": ["gdoc"],
-    "application/vnd.google-apps.drawing": ["gdraw"],
-    "application/vnd.google-apps.form": ["gform"],
-    "application/vnd.google-apps.jam": ["gjam"],
-    "application/vnd.google-apps.map": ["gmap"],
-    "application/vnd.google-apps.presentation": ["gslides"],
-    "application/vnd.google-apps.script": ["gscript"],
-    "application/vnd.google-apps.site": ["gsite"],
-    "application/vnd.google-apps.spreadsheet": ["gsheet"],
-    "application/vnd.google-earth.kml+xml": ["kml"],
-    "application/vnd.google-earth.kmz": ["kmz"],
-    "application/vnd.gov.sk.xmldatacontainer+xml": ["xdcf"],
-    "application/vnd.grafeq": ["gqf", "gqs"],
-    "application/vnd.groove-account": ["gac"],
-    "application/vnd.groove-help": ["ghf"],
-    "application/vnd.groove-identity-message": ["gim"],
-    "application/vnd.groove-injector": ["grv"],
-    "application/vnd.groove-tool-message": ["gtm"],
-    "application/vnd.groove-tool-template": ["tpl"],
-    "application/vnd.groove-vcard": ["vcg"],
-    "application/vnd.hal+xml": ["hal"],
-    "application/vnd.handheld-entertainment+xml": ["zmm"],
-    "application/vnd.hbci": ["hbci"],
-    "application/vnd.hhe.lesson-player": ["les"],
-    "application/vnd.hp-hpgl": ["hpgl"],
-    "application/vnd.hp-hpid": ["hpid"],
-    "application/vnd.hp-hps": ["hps"],
-    "application/vnd.hp-jlyt": ["jlt"],
-    "application/vnd.hp-pcl": ["pcl"],
-    "application/vnd.hp-pclxl": ["pclxl"],
-    "application/vnd.hydrostatix.sof-data": ["sfd-hdstx"],
-    "application/vnd.ibm.minipay": ["mpy"],
-    "application/vnd.ibm.modcap": ["afp", "listafp", "list3820"],
-    "application/vnd.ibm.rights-management": ["irm"],
-    "application/vnd.ibm.secure-container": ["sc"],
-    "application/vnd.iccprofile": ["icc", "icm"],
-    "application/vnd.igloader": ["igl"],
-    "application/vnd.immervision-ivp": ["ivp"],
-    "application/vnd.immervision-ivu": ["ivu"],
-    "application/vnd.insors.igm": ["igm"],
-    "application/vnd.intercon.formnet": ["xpw", "xpx"],
-    "application/vnd.intergeo": ["i2g"],
-    "application/vnd.intu.qbo": ["qbo"],
-    "application/vnd.intu.qfx": ["qfx"],
-    "application/vnd.ipunplugged.rcprofile": ["rcprofile"],
-    "application/vnd.irepository.package+xml": ["irp"],
-    "application/vnd.is-xpr": ["xpr"],
-    "application/vnd.isac.fcs": ["fcs"],
-    "application/vnd.jam": ["jam"],
-    "application/vnd.jcp.javame.midlet-rms": ["rms"],
-    "application/vnd.jisp": ["jisp"],
-    "application/vnd.joost.joda-archive": ["joda"],
-    "application/vnd.kahootz": ["ktz", "ktr"],
-    "application/vnd.kde.karbon": ["karbon"],
-    "application/vnd.kde.kchart": ["chrt"],
-    "application/vnd.kde.kformula": ["kfo"],
-    "application/vnd.kde.kivio": ["flw"],
-    "application/vnd.kde.kontour": ["kon"],
-    "application/vnd.kde.kpresenter": ["kpr", "kpt"],
-    "application/vnd.kde.kspread": ["ksp"],
-    "application/vnd.kde.kword": ["kwd", "kwt"],
-    "application/vnd.kenameaapp": ["htke"],
-    "application/vnd.kidspiration": ["kia"],
-    "application/vnd.kinar": ["kne", "knp"],
-    "application/vnd.koan": ["skp", "skd", "skt", "skm"],
-    "application/vnd.kodak-descriptor": ["sse"],
-    "application/vnd.las.las+xml": ["lasxml"],
-    "application/vnd.llamagraphics.life-balance.desktop": ["lbd"],
-    "application/vnd.llamagraphics.life-balance.exchange+xml": ["lbe"],
-    "application/vnd.lotus-1-2-3": ["123"],
-    "application/vnd.lotus-approach": ["apr"],
-    "application/vnd.lotus-freelance": ["pre"],
-    "application/vnd.lotus-notes": ["nsf"],
-    "application/vnd.lotus-organizer": ["org"],
-    "application/vnd.lotus-screencam": ["scm"],
-    "application/vnd.lotus-wordpro": ["lwp"],
-    "application/vnd.macports.portpkg": ["portpkg"],
-    "application/vnd.mapbox-vector-tile": ["mvt"],
-    "application/vnd.mcd": ["mcd"],
-    "application/vnd.medcalcdata": ["mc1"],
-    "application/vnd.mediastation.cdkey": ["cdkey"],
-    "application/vnd.mfer": ["mwf"],
-    "application/vnd.mfmp": ["mfm"],
-    "application/vnd.micrografx.flo": ["flo"],
-    "application/vnd.micrografx.igx": ["igx"],
-    "application/vnd.mif": ["mif"],
-    "application/vnd.mobius.daf": ["daf"],
-    "application/vnd.mobius.dis": ["dis"],
-    "application/vnd.mobius.mbk": ["mbk"],
-    "application/vnd.mobius.mqy": ["mqy"],
-    "application/vnd.mobius.msl": ["msl"],
-    "application/vnd.mobius.plc": ["plc"],
-    "application/vnd.mobius.txf": ["txf"],
-    "application/vnd.mophun.application": ["mpn"],
-    "application/vnd.mophun.certificate": ["mpc"],
-    "application/vnd.mozilla.xul+xml": ["xul"],
-    "application/vnd.ms-artgalry": ["cil"],
-    "application/vnd.ms-cab-compressed": ["cab"],
-    "application/vnd.ms-excel": ["xls", "xlm", "xla", "xlc", "xlt", "xlw"],
-    "application/vnd.ms-excel.addin.macroenabled.12": ["xlam"],
-    "application/vnd.ms-excel.sheet.binary.macroenabled.12": ["xlsb"],
-    "application/vnd.ms-excel.sheet.macroenabled.12": ["xlsm"],
-    "application/vnd.ms-excel.template.macroenabled.12": ["xltm"],
-    "application/vnd.ms-fontobject": ["eot"],
-    "application/vnd.ms-htmlhelp": ["chm"],
-    "application/vnd.ms-ims": ["ims"],
-    "application/vnd.ms-lrm": ["lrm"],
-    "application/vnd.ms-officetheme": ["thmx"],
-    "application/vnd.ms-outlook": ["msg"],
-    "application/vnd.ms-pki.seccat": ["cat"],
-    "application/vnd.ms-pki.stl": ["*stl"],
-    "application/vnd.ms-powerpoint": ["ppt", "pps", "pot"],
-    "application/vnd.ms-powerpoint.addin.macroenabled.12": ["ppam"],
-    "application/vnd.ms-powerpoint.presentation.macroenabled.12": ["pptm"],
-    "application/vnd.ms-powerpoint.slide.macroenabled.12": ["sldm"],
-    "application/vnd.ms-powerpoint.slideshow.macroenabled.12": ["ppsm"],
-    "application/vnd.ms-powerpoint.template.macroenabled.12": ["potm"],
-    "application/vnd.ms-project": ["*mpp", "mpt"],
-    "application/vnd.ms-visio.viewer": ["vdx"],
-    "application/vnd.ms-word.document.macroenabled.12": ["docm"],
-    "application/vnd.ms-word.template.macroenabled.12": ["dotm"],
-    "application/vnd.ms-works": ["wps", "wks", "wcm", "wdb"],
-    "application/vnd.ms-wpl": ["wpl"],
-    "application/vnd.ms-xpsdocument": ["xps"],
-    "application/vnd.mseq": ["mseq"],
-    "application/vnd.musician": ["mus"],
-    "application/vnd.muvee.style": ["msty"],
-    "application/vnd.mynfc": ["taglet"],
-    "application/vnd.nato.bindingdataobject+xml": ["bdo"],
-    "application/vnd.neurolanguage.nlu": ["nlu"],
-    "application/vnd.nitf": ["ntf", "nitf"],
-    "application/vnd.noblenet-directory": ["nnd"],
-    "application/vnd.noblenet-sealer": ["nns"],
-    "application/vnd.noblenet-web": ["nnw"],
-    "application/vnd.nokia.n-gage.ac+xml": ["*ac"],
-    "application/vnd.nokia.n-gage.data": ["ngdat"],
-    "application/vnd.nokia.n-gage.symbian.install": ["n-gage"],
-    "application/vnd.nokia.radio-preset": ["rpst"],
-    "application/vnd.nokia.radio-presets": ["rpss"],
-    "application/vnd.novadigm.edm": ["edm"],
-    "application/vnd.novadigm.edx": ["edx"],
-    "application/vnd.novadigm.ext": ["ext"],
-    "application/vnd.oasis.opendocument.chart": ["odc"],
-    "application/vnd.oasis.opendocument.chart-template": ["otc"],
-    "application/vnd.oasis.opendocument.database": ["odb"],
-    "application/vnd.oasis.opendocument.formula": ["odf"],
-    "application/vnd.oasis.opendocument.formula-template": ["odft"],
-    "application/vnd.oasis.opendocument.graphics": ["odg"],
-    "application/vnd.oasis.opendocument.graphics-template": ["otg"],
-    "application/vnd.oasis.opendocument.image": ["odi"],
-    "application/vnd.oasis.opendocument.image-template": ["oti"],
-    "application/vnd.oasis.opendocument.presentation": ["odp"],
-    "application/vnd.oasis.opendocument.presentation-template": ["otp"],
-    "application/vnd.oasis.opendocument.spreadsheet": ["ods"],
-    "application/vnd.oasis.opendocument.spreadsheet-template": ["ots"],
-    "application/vnd.oasis.opendocument.text": ["odt"],
-    "application/vnd.oasis.opendocument.text-master": ["odm"],
-    "application/vnd.oasis.opendocument.text-template": ["ott"],
-    "application/vnd.oasis.opendocument.text-web": ["oth"],
-    "application/vnd.olpc-sugar": ["xo"],
-    "application/vnd.oma.dd2+xml": ["dd2"],
-    "application/vnd.openblox.game+xml": ["obgx"],
-    "application/vnd.openofficeorg.extension": ["oxt"],
-    "application/vnd.openstreetmap.data+xml": ["osm"],
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation": [
-      "pptx"
-    ],
-    "application/vnd.openxmlformats-officedocument.presentationml.slide": [
-      "sldx"
-    ],
-    "application/vnd.openxmlformats-officedocument.presentationml.slideshow": [
-      "ppsx"
-    ],
-    "application/vnd.openxmlformats-officedocument.presentationml.template": [
-      "potx"
-    ],
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ["xlsx"],
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.template": [
-      "xltx"
-    ],
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [
-      "docx"
-    ],
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.template": [
-      "dotx"
-    ],
-    "application/vnd.osgeo.mapguide.package": ["mgp"],
-    "application/vnd.osgi.dp": ["dp"],
-    "application/vnd.osgi.subsystem": ["esa"],
-    "application/vnd.palm": ["pdb", "pqa", "oprc"],
-    "application/vnd.pawaafile": ["paw"],
-    "application/vnd.pg.format": ["str"],
-    "application/vnd.pg.osasli": ["ei6"],
-    "application/vnd.picsel": ["efif"],
-    "application/vnd.pmi.widget": ["wg"],
-    "application/vnd.pocketlearn": ["plf"],
-    "application/vnd.powerbuilder6": ["pbd"],
-    "application/vnd.previewsystems.box": ["box"],
-    "application/vnd.procrate.brushset": ["brushset"],
-    "application/vnd.procreate.brush": ["brush"],
-    "application/vnd.procreate.dream": ["drm"],
-    "application/vnd.proteus.magazine": ["mgz"],
-    "application/vnd.publishare-delta-tree": ["qps"],
-    "application/vnd.pvi.ptid1": ["ptid"],
-    "application/vnd.pwg-xhtml-print+xml": ["xhtm"],
-    "application/vnd.quark.quarkxpress": [
-      "qxd",
-      "qxt",
-      "qwd",
-      "qwt",
-      "qxl",
-      "qxb"
-    ],
-    "application/vnd.rar": ["rar"],
-    "application/vnd.realvnc.bed": ["bed"],
-    "application/vnd.recordare.musicxml": ["mxl"],
-    "application/vnd.recordare.musicxml+xml": ["musicxml"],
-    "application/vnd.rig.cryptonote": ["cryptonote"],
-    "application/vnd.rim.cod": ["cod"],
-    "application/vnd.rn-realmedia": ["rm"],
-    "application/vnd.rn-realmedia-vbr": ["rmvb"],
-    "application/vnd.route66.link66+xml": ["link66"],
-    "application/vnd.sailingtracker.track": ["st"],
-    "application/vnd.seemail": ["see"],
-    "application/vnd.sema": ["sema"],
-    "application/vnd.semd": ["semd"],
-    "application/vnd.semf": ["semf"],
-    "application/vnd.shana.informed.formdata": ["ifm"],
-    "application/vnd.shana.informed.formtemplate": ["itp"],
-    "application/vnd.shana.informed.interchange": ["iif"],
-    "application/vnd.shana.informed.package": ["ipk"],
-    "application/vnd.simtech-mindmapper": ["twd", "twds"],
-    "application/vnd.smaf": ["mmf"],
-    "application/vnd.smart.teacher": ["teacher"],
-    "application/vnd.software602.filler.form+xml": ["fo"],
-    "application/vnd.solent.sdkm+xml": ["sdkm", "sdkd"],
-    "application/vnd.spotfire.dxp": ["dxp"],
-    "application/vnd.spotfire.sfs": ["sfs"],
-    "application/vnd.stardivision.calc": ["sdc"],
-    "application/vnd.stardivision.draw": ["sda"],
-    "application/vnd.stardivision.impress": ["sdd"],
-    "application/vnd.stardivision.math": ["smf"],
-    "application/vnd.stardivision.writer": ["sdw", "vor"],
-    "application/vnd.stardivision.writer-global": ["sgl"],
-    "application/vnd.stepmania.package": ["smzip"],
-    "application/vnd.stepmania.stepchart": ["sm"],
-    "application/vnd.sun.wadl+xml": ["wadl"],
-    "application/vnd.sun.xml.calc": ["sxc"],
-    "application/vnd.sun.xml.calc.template": ["stc"],
-    "application/vnd.sun.xml.draw": ["sxd"],
-    "application/vnd.sun.xml.draw.template": ["std"],
-    "application/vnd.sun.xml.impress": ["sxi"],
-    "application/vnd.sun.xml.impress.template": ["sti"],
-    "application/vnd.sun.xml.math": ["sxm"],
-    "application/vnd.sun.xml.writer": ["sxw"],
-    "application/vnd.sun.xml.writer.global": ["sxg"],
-    "application/vnd.sun.xml.writer.template": ["stw"],
-    "application/vnd.sus-calendar": ["sus", "susp"],
-    "application/vnd.svd": ["svd"],
-    "application/vnd.symbian.install": ["sis", "sisx"],
-    "application/vnd.syncml+xml": ["xsm"],
-    "application/vnd.syncml.dm+wbxml": ["bdm"],
-    "application/vnd.syncml.dm+xml": ["xdm"],
-    "application/vnd.syncml.dmddf+xml": ["ddf"],
-    "application/vnd.tao.intent-module-archive": ["tao"],
-    "application/vnd.tcpdump.pcap": ["pcap", "cap", "dmp"],
-    "application/vnd.tmobile-livetv": ["tmo"],
-    "application/vnd.trid.tpt": ["tpt"],
-    "application/vnd.triscape.mxs": ["mxs"],
-    "application/vnd.trueapp": ["tra"],
-    "application/vnd.ufdl": ["ufd", "ufdl"],
-    "application/vnd.uiq.theme": ["utz"],
-    "application/vnd.umajin": ["umj"],
-    "application/vnd.unity": ["unityweb"],
-    "application/vnd.uoml+xml": ["uoml", "uo"],
-    "application/vnd.vcx": ["vcx"],
-    "application/vnd.visio": ["vsd", "vst", "vss", "vsw", "vsdx", "vtx"],
-    "application/vnd.visionary": ["vis"],
-    "application/vnd.vsf": ["vsf"],
-    "application/vnd.wap.wbxml": ["wbxml"],
-    "application/vnd.wap.wmlc": ["wmlc"],
-    "application/vnd.wap.wmlscriptc": ["wmlsc"],
-    "application/vnd.webturbo": ["wtb"],
-    "application/vnd.wolfram.player": ["nbp"],
-    "application/vnd.wordperfect": ["wpd"],
-    "application/vnd.wqd": ["wqd"],
-    "application/vnd.wt.stf": ["stf"],
-    "application/vnd.xara": ["xar"],
-    "application/vnd.xfdl": ["xfdl"],
-    "application/vnd.yamaha.hv-dic": ["hvd"],
-    "application/vnd.yamaha.hv-script": ["hvs"],
-    "application/vnd.yamaha.hv-voice": ["hvp"],
-    "application/vnd.yamaha.openscoreformat": ["osf"],
-    "application/vnd.yamaha.openscoreformat.osfpvg+xml": ["osfpvg"],
-    "application/vnd.yamaha.smaf-audio": ["saf"],
-    "application/vnd.yamaha.smaf-phrase": ["spf"],
-    "application/vnd.yellowriver-custom-menu": ["cmp"],
-    "application/vnd.zul": ["zir", "zirz"],
-    "application/vnd.zzazz.deck+xml": ["zaz"],
-    "application/x-7z-compressed": ["7z"],
-    "application/x-abiword": ["abw"],
-    "application/x-ace-compressed": ["ace"],
-    "application/x-apple-diskimage": ["*dmg"],
-    "application/x-arj": ["arj"],
-    "application/x-authorware-bin": ["aab", "x32", "u32", "vox"],
-    "application/x-authorware-map": ["aam"],
-    "application/x-authorware-seg": ["aas"],
-    "application/x-bcpio": ["bcpio"],
-    "application/x-bdoc": ["*bdoc"],
-    "application/x-bittorrent": ["torrent"],
-    "application/x-blender": ["blend"],
-    "application/x-blorb": ["blb", "blorb"],
-    "application/x-bzip": ["bz"],
-    "application/x-bzip2": ["bz2", "boz"],
-    "application/x-cbr": ["cbr", "cba", "cbt", "cbz", "cb7"],
-    "application/x-cdlink": ["vcd"],
-    "application/x-cfs-compressed": ["cfs"],
-    "application/x-chat": ["chat"],
-    "application/x-chess-pgn": ["pgn"],
-    "application/x-chrome-extension": ["crx"],
-    "application/x-cocoa": ["cco"],
-    "application/x-compressed": ["*rar"],
-    "application/x-conference": ["nsc"],
-    "application/x-cpio": ["cpio"],
-    "application/x-csh": ["csh"],
-    "application/x-debian-package": ["*deb", "udeb"],
-    "application/x-dgc-compressed": ["dgc"],
-    "application/x-director": [
-      "dir",
-      "dcr",
-      "dxr",
-      "cst",
-      "cct",
-      "cxt",
-      "w3d",
-      "fgd",
-      "swa"
-    ],
-    "application/x-doom": ["wad"],
-    "application/x-dtbncx+xml": ["ncx"],
-    "application/x-dtbook+xml": ["dtb"],
-    "application/x-dtbresource+xml": ["res"],
-    "application/x-dvi": ["dvi"],
-    "application/x-envoy": ["evy"],
-    "application/x-eva": ["eva"],
-    "application/x-font-bdf": ["bdf"],
-    "application/x-font-ghostscript": ["gsf"],
-    "application/x-font-linux-psf": ["psf"],
-    "application/x-font-pcf": ["pcf"],
-    "application/x-font-snf": ["snf"],
-    "application/x-font-type1": ["pfa", "pfb", "pfm", "afm"],
-    "application/x-freearc": ["arc"],
-    "application/x-futuresplash": ["spl"],
-    "application/x-gca-compressed": ["gca"],
-    "application/x-glulx": ["ulx"],
-    "application/x-gnumeric": ["gnumeric"],
-    "application/x-gramps-xml": ["gramps"],
-    "application/x-gtar": ["gtar"],
-    "application/x-hdf": ["hdf"],
-    "application/x-httpd-php": ["php"],
-    "application/x-install-instructions": ["install"],
-    "application/x-ipynb+json": ["ipynb"],
-    "application/x-iso9660-image": ["*iso"],
-    "application/x-iwork-keynote-sffkey": ["*key"],
-    "application/x-iwork-numbers-sffnumbers": ["*numbers"],
-    "application/x-iwork-pages-sffpages": ["*pages"],
-    "application/x-java-archive-diff": ["jardiff"],
-    "application/x-java-jnlp-file": ["jnlp"],
-    "application/x-keepass2": ["kdbx"],
-    "application/x-latex": ["latex"],
-    "application/x-lua-bytecode": ["luac"],
-    "application/x-lzh-compressed": ["lzh", "lha"],
-    "application/x-makeself": ["run"],
-    "application/x-mie": ["mie"],
-    "application/x-mobipocket-ebook": ["*prc", "mobi"],
-    "application/x-ms-application": ["application"],
-    "application/x-ms-shortcut": ["lnk"],
-    "application/x-ms-wmd": ["wmd"],
-    "application/x-ms-wmz": ["wmz"],
-    "application/x-ms-xbap": ["xbap"],
-    "application/x-msaccess": ["mdb"],
-    "application/x-msbinder": ["obd"],
-    "application/x-mscardfile": ["crd"],
-    "application/x-msclip": ["clp"],
-    "application/x-msdos-program": ["*exe"],
-    "application/x-msdownload": ["*exe", "*dll", "com", "bat", "*msi"],
-    "application/x-msmediaview": ["mvb", "m13", "m14"],
-    "application/x-msmetafile": ["*wmf", "*wmz", "*emf", "emz"],
-    "application/x-msmoney": ["mny"],
-    "application/x-mspublisher": ["pub"],
-    "application/x-msschedule": ["scd"],
-    "application/x-msterminal": ["trm"],
-    "application/x-mswrite": ["wri"],
-    "application/x-netcdf": ["nc", "cdf"],
-    "application/x-ns-proxy-autoconfig": ["pac"],
-    "application/x-nzb": ["nzb"],
-    "application/x-perl": ["pl", "pm"],
-    "application/x-pilot": ["*prc", "*pdb"],
-    "application/x-pkcs12": ["p12", "pfx"],
-    "application/x-pkcs7-certificates": ["p7b", "spc"],
-    "application/x-pkcs7-certreqresp": ["p7r"],
-    "application/x-rar-compressed": ["*rar"],
-    "application/x-redhat-package-manager": ["rpm"],
-    "application/x-research-info-systems": ["ris"],
-    "application/x-sea": ["sea"],
-    "application/x-sh": ["sh"],
-    "application/x-shar": ["shar"],
-    "application/x-shockwave-flash": ["swf"],
-    "application/x-silverlight-app": ["xap"],
-    "application/x-sql": ["*sql"],
-    "application/x-stuffit": ["sit"],
-    "application/x-stuffitx": ["sitx"],
-    "application/x-subrip": ["srt"],
-    "application/x-sv4cpio": ["sv4cpio"],
-    "application/x-sv4crc": ["sv4crc"],
-    "application/x-t3vm-image": ["t3"],
-    "application/x-tads": ["gam"],
-    "application/x-tar": ["tar"],
-    "application/x-tcl": ["tcl", "tk"],
-    "application/x-tex": ["tex"],
-    "application/x-tex-tfm": ["tfm"],
-    "application/x-texinfo": ["texinfo", "texi"],
-    "application/x-tgif": ["*obj"],
-    "application/x-ustar": ["ustar"],
-    "application/x-virtualbox-hdd": ["hdd"],
-    "application/x-virtualbox-ova": ["ova"],
-    "application/x-virtualbox-ovf": ["ovf"],
-    "application/x-virtualbox-vbox": ["vbox"],
-    "application/x-virtualbox-vbox-extpack": ["vbox-extpack"],
-    "application/x-virtualbox-vdi": ["vdi"],
-    "application/x-virtualbox-vhd": ["vhd"],
-    "application/x-virtualbox-vmdk": ["vmdk"],
-    "application/x-wais-source": ["src"],
-    "application/x-web-app-manifest+json": ["webapp"],
-    "application/x-x509-ca-cert": ["der", "crt", "pem"],
-    "application/x-xfig": ["fig"],
-    "application/x-xliff+xml": ["*xlf"],
-    "application/x-xpinstall": ["xpi"],
-    "application/x-xz": ["xz"],
-    "application/x-zip-compressed": ["*zip"],
-    "application/x-zmachine": ["z1", "z2", "z3", "z4", "z5", "z6", "z7", "z8"],
-    "audio/vnd.dece.audio": ["uva", "uvva"],
-    "audio/vnd.digital-winds": ["eol"],
-    "audio/vnd.dra": ["dra"],
-    "audio/vnd.dts": ["dts"],
-    "audio/vnd.dts.hd": ["dtshd"],
-    "audio/vnd.lucent.voice": ["lvp"],
-    "audio/vnd.ms-playready.media.pya": ["pya"],
-    "audio/vnd.nuera.ecelp4800": ["ecelp4800"],
-    "audio/vnd.nuera.ecelp7470": ["ecelp7470"],
-    "audio/vnd.nuera.ecelp9600": ["ecelp9600"],
-    "audio/vnd.rip": ["rip"],
-    "audio/x-aac": ["*aac"],
-    "audio/x-aiff": ["aif", "aiff", "aifc"],
-    "audio/x-caf": ["caf"],
-    "audio/x-flac": ["flac"],
-    "audio/x-m4a": ["*m4a"],
-    "audio/x-matroska": ["mka"],
-    "audio/x-mpegurl": ["m3u"],
-    "audio/x-ms-wax": ["wax"],
-    "audio/x-ms-wma": ["wma"],
-    "audio/x-pn-realaudio": ["ram", "ra"],
-    "audio/x-pn-realaudio-plugin": ["rmp"],
-    "audio/x-realaudio": ["*ra"],
-    "audio/x-wav": ["*wav"],
-    "chemical/x-cdx": ["cdx"],
-    "chemical/x-cif": ["cif"],
-    "chemical/x-cmdf": ["cmdf"],
-    "chemical/x-cml": ["cml"],
-    "chemical/x-csml": ["csml"],
-    "chemical/x-xyz": ["xyz"],
-    "image/prs.btif": ["btif", "btf"],
-    "image/prs.pti": ["pti"],
-    "image/vnd.adobe.photoshop": ["psd"],
-    "image/vnd.airzip.accelerator.azv": ["azv"],
-    "image/vnd.blockfact.facti": ["facti"],
-    "image/vnd.dece.graphic": ["uvi", "uvvi", "uvg", "uvvg"],
-    "image/vnd.djvu": ["djvu", "djv"],
-    "image/vnd.dvb.subtitle": ["*sub"],
-    "image/vnd.dwg": ["dwg"],
-    "image/vnd.dxf": ["dxf"],
-    "image/vnd.fastbidsheet": ["fbs"],
-    "image/vnd.fpx": ["fpx"],
-    "image/vnd.fst": ["fst"],
-    "image/vnd.fujixerox.edmics-mmr": ["mmr"],
-    "image/vnd.fujixerox.edmics-rlc": ["rlc"],
-    "image/vnd.microsoft.icon": ["ico"],
-    "image/vnd.ms-dds": ["dds"],
-    "image/vnd.ms-modi": ["mdi"],
-    "image/vnd.ms-photo": ["wdp"],
-    "image/vnd.net-fpx": ["npx"],
-    "image/vnd.pco.b16": ["b16"],
-    "image/vnd.tencent.tap": ["tap"],
-    "image/vnd.valve.source.texture": ["vtf"],
-    "image/vnd.wap.wbmp": ["wbmp"],
-    "image/vnd.xiff": ["xif"],
-    "image/vnd.zbrush.pcx": ["pcx"],
-    "image/x-3ds": ["3ds"],
-    "image/x-adobe-dng": ["dng"],
-    "image/x-cmu-raster": ["ras"],
-    "image/x-cmx": ["cmx"],
-    "image/x-freehand": ["fh", "fhc", "fh4", "fh5", "fh7"],
-    "image/x-icon": ["*ico"],
-    "image/x-jng": ["jng"],
-    "image/x-mrsid-image": ["sid"],
-    "image/x-ms-bmp": ["*bmp"],
-    "image/x-pcx": ["*pcx"],
-    "image/x-pict": ["pic", "pct"],
-    "image/x-portable-anymap": ["pnm"],
-    "image/x-portable-bitmap": ["pbm"],
-    "image/x-portable-graymap": ["pgm"],
-    "image/x-portable-pixmap": ["ppm"],
-    "image/x-rgb": ["rgb"],
-    "image/x-tga": ["tga"],
-    "image/x-xbitmap": ["xbm"],
-    "image/x-xpixmap": ["xpm"],
-    "image/x-xwindowdump": ["xwd"],
-    "message/vnd.wfa.wsc": ["wsc"],
-    "model/vnd.bary": ["bary"],
-    "model/vnd.cld": ["cld"],
-    "model/vnd.collada+xml": ["dae"],
-    "model/vnd.dwf": ["dwf"],
-    "model/vnd.gdl": ["gdl"],
-    "model/vnd.gtw": ["gtw"],
-    "model/vnd.mts": ["*mts"],
-    "model/vnd.opengex": ["ogex"],
-    "model/vnd.parasolid.transmit.binary": ["x_b"],
-    "model/vnd.parasolid.transmit.text": ["x_t"],
-    "model/vnd.pytha.pyox": ["pyo", "pyox"],
-    "model/vnd.sap.vds": ["vds"],
-    "model/vnd.usda": ["usda"],
-    "model/vnd.usdz+zip": ["usdz"],
-    "model/vnd.valve.source.compiled-map": ["bsp"],
-    "model/vnd.vtu": ["vtu"],
-    "text/prs.lines.tag": ["dsc"],
-    "text/vnd.curl": ["curl"],
-    "text/vnd.curl.dcurl": ["dcurl"],
-    "text/vnd.curl.mcurl": ["mcurl"],
-    "text/vnd.curl.scurl": ["scurl"],
-    "text/vnd.dvb.subtitle": ["sub"],
-    "text/vnd.familysearch.gedcom": ["ged"],
-    "text/vnd.fly": ["fly"],
-    "text/vnd.fmi.flexstor": ["flx"],
-    "text/vnd.graphviz": ["gv"],
-    "text/vnd.in3d.3dml": ["3dml"],
-    "text/vnd.in3d.spot": ["spot"],
-    "text/vnd.sun.j2me.app-descriptor": ["jad"],
-    "text/vnd.wap.wml": ["wml"],
-    "text/vnd.wap.wmlscript": ["wmls"],
-    "text/x-asm": ["s", "asm"],
-    "text/x-c": ["c", "cc", "cxx", "cpp", "h", "hh", "dic"],
-    "text/x-component": ["htc"],
-    "text/x-fortran": ["f", "for", "f77", "f90"],
-    "text/x-handlebars-template": ["hbs"],
-    "text/x-java-source": ["java"],
-    "text/x-lua": ["lua"],
-    "text/x-markdown": ["mkd"],
-    "text/x-nfo": ["nfo"],
-    "text/x-opml": ["opml"],
-    "text/x-org": ["*org"],
-    "text/x-pascal": ["p", "pas"],
-    "text/x-processing": ["pde"],
-    "text/x-sass": ["sass"],
-    "text/x-scss": ["scss"],
-    "text/x-setext": ["etx"],
-    "text/x-sfv": ["sfv"],
-    "text/x-suse-ymp": ["ymp"],
-    "text/x-uuencode": ["uu"],
-    "text/x-vcalendar": ["vcs"],
-    "text/x-vcard": ["vcf"],
-    "video/vnd.dece.hd": ["uvh", "uvvh"],
-    "video/vnd.dece.mobile": ["uvm", "uvvm"],
-    "video/vnd.dece.pd": ["uvp", "uvvp"],
-    "video/vnd.dece.sd": ["uvs", "uvvs"],
-    "video/vnd.dece.video": ["uvv", "uvvv"],
-    "video/vnd.dvb.file": ["dvb"],
-    "video/vnd.fvt": ["fvt"],
-    "video/vnd.mpegurl": ["mxu", "m4u"],
-    "video/vnd.ms-playready.media.pyv": ["pyv"],
-    "video/vnd.uvvu.mp4": ["uvu", "uvvu"],
-    "video/vnd.vivo": ["viv"],
-    "video/x-f4v": ["f4v"],
-    "video/x-fli": ["fli"],
-    "video/x-flv": ["flv"],
-    "video/x-m4v": ["m4v"],
-    "video/x-matroska": ["mkv", "mk3d", "mks"],
-    "video/x-mng": ["mng"],
-    "video/x-ms-asf": ["asf", "asx"],
-    "video/x-ms-vob": ["vob"],
-    "video/x-ms-wm": ["wm"],
-    "video/x-ms-wmv": ["wmv"],
-    "video/x-ms-wmx": ["wmx"],
-    "video/x-ms-wvx": ["wvx"],
-    "video/x-msvideo": ["avi"],
-    "video/x-sgi-movie": ["movie"],
-    "video/x-smv": ["smv"],
-    "x-conference/x-cooltalk": ["ice"]
-  };
-  Object.freeze(types);
-  var other_default = types;
-
-  // crates/neo-sdk/neo-playwright/third_party/mime/types/standard.ts
-  var types2 = {
-    "application/andrew-inset": ["ez"],
-    "application/appinstaller": ["appinstaller"],
-    "application/applixware": ["aw"],
-    "application/appx": ["appx"],
-    "application/appxbundle": ["appxbundle"],
-    "application/atom+xml": ["atom"],
-    "application/atomcat+xml": ["atomcat"],
-    "application/atomdeleted+xml": ["atomdeleted"],
-    "application/atomsvc+xml": ["atomsvc"],
-    "application/atsc-dwd+xml": ["dwd"],
-    "application/atsc-held+xml": ["held"],
-    "application/atsc-rsat+xml": ["rsat"],
-    "application/automationml-aml+xml": ["aml"],
-    "application/automationml-amlx+zip": ["amlx"],
-    "application/bdoc": ["bdoc"],
-    "application/calendar+xml": ["xcs"],
-    "application/ccxml+xml": ["ccxml"],
-    "application/cdfx+xml": ["cdfx"],
-    "application/cdmi-capability": ["cdmia"],
-    "application/cdmi-container": ["cdmic"],
-    "application/cdmi-domain": ["cdmid"],
-    "application/cdmi-object": ["cdmio"],
-    "application/cdmi-queue": ["cdmiq"],
-    "application/cpl+xml": ["cpl"],
-    "application/cu-seeme": ["cu"],
-    "application/cwl": ["cwl"],
-    "application/dash+xml": ["mpd"],
-    "application/dash-patch+xml": ["mpp"],
-    "application/davmount+xml": ["davmount"],
-    "application/dicom": ["dcm"],
-    "application/docbook+xml": ["dbk"],
-    "application/dssc+der": ["dssc"],
-    "application/dssc+xml": ["xdssc"],
-    "application/ecmascript": ["ecma"],
-    "application/emma+xml": ["emma"],
-    "application/emotionml+xml": ["emotionml"],
-    "application/epub+zip": ["epub"],
-    "application/exi": ["exi"],
-    "application/express": ["exp"],
-    "application/fdf": ["fdf"],
-    "application/fdt+xml": ["fdt"],
-    "application/font-tdpfr": ["pfr"],
-    "application/geo+json": ["geojson"],
-    "application/gml+xml": ["gml"],
-    "application/gpx+xml": ["gpx"],
-    "application/gxf": ["gxf"],
-    "application/gzip": ["gz"],
-    "application/hjson": ["hjson"],
-    "application/hyperstudio": ["stk"],
-    "application/inkml+xml": ["ink", "inkml"],
-    "application/ipfix": ["ipfix"],
-    "application/its+xml": ["its"],
-    "application/java-archive": ["jar", "war", "ear"],
-    "application/java-serialized-object": ["ser"],
-    "application/java-vm": ["class"],
-    "application/javascript": ["*js"],
-    "application/json": ["json", "map"],
-    "application/json5": ["json5"],
-    "application/jsonml+json": ["jsonml"],
-    "application/ld+json": ["jsonld"],
-    "application/lgr+xml": ["lgr"],
-    "application/lost+xml": ["lostxml"],
-    "application/mac-binhex40": ["hqx"],
-    "application/mac-compactpro": ["cpt"],
-    "application/mads+xml": ["mads"],
-    "application/manifest+json": ["webmanifest"],
-    "application/marc": ["mrc"],
-    "application/marcxml+xml": ["mrcx"],
-    "application/mathematica": ["ma", "nb", "mb"],
-    "application/mathml+xml": ["mathml"],
-    "application/mbox": ["mbox"],
-    "application/media-policy-dataset+xml": ["mpf"],
-    "application/mediaservercontrol+xml": ["mscml"],
-    "application/metalink+xml": ["metalink"],
-    "application/metalink4+xml": ["meta4"],
-    "application/mets+xml": ["mets"],
-    "application/mmt-aei+xml": ["maei"],
-    "application/mmt-usd+xml": ["musd"],
-    "application/mods+xml": ["mods"],
-    "application/mp21": ["m21", "mp21"],
-    "application/mp4": ["*mp4", "*mpg4", "mp4s", "m4p"],
-    "application/msix": ["msix"],
-    "application/msixbundle": ["msixbundle"],
-    "application/msword": ["doc", "dot"],
-    "application/mxf": ["mxf"],
-    "application/n-quads": ["nq"],
-    "application/n-triples": ["nt"],
-    "application/node": ["cjs"],
-    "application/octet-stream": [
-      "bin",
-      "dms",
-      "lrf",
-      "mar",
-      "so",
-      "dist",
-      "distz",
-      "pkg",
-      "bpk",
-      "dump",
-      "elc",
-      "deploy",
-      "exe",
-      "dll",
-      "deb",
-      "dmg",
-      "iso",
-      "img",
-      "msi",
-      "msp",
-      "msm",
-      "buffer"
-    ],
-    "application/oda": ["oda"],
-    "application/oebps-package+xml": ["opf"],
-    "application/ogg": ["ogx"],
-    "application/omdoc+xml": ["omdoc"],
-    "application/onenote": [
-      "onetoc",
-      "onetoc2",
-      "onetmp",
-      "onepkg",
-      "one",
-      "onea"
-    ],
-    "application/oxps": ["oxps"],
-    "application/p2p-overlay+xml": ["relo"],
-    "application/patch-ops-error+xml": ["xer"],
-    "application/pdf": ["pdf"],
-    "application/pgp-encrypted": ["pgp"],
-    "application/pgp-keys": ["asc"],
-    "application/pgp-signature": ["sig", "*asc"],
-    "application/pics-rules": ["prf"],
-    "application/pkcs10": ["p10"],
-    "application/pkcs7-mime": ["p7m", "p7c"],
-    "application/pkcs7-signature": ["p7s"],
-    "application/pkcs8": ["p8"],
-    "application/pkix-attr-cert": ["ac"],
-    "application/pkix-cert": ["cer"],
-    "application/pkix-crl": ["crl"],
-    "application/pkix-pkipath": ["pkipath"],
-    "application/pkixcmp": ["pki"],
-    "application/pls+xml": ["pls"],
-    "application/postscript": ["ai", "eps", "ps"],
-    "application/provenance+xml": ["provx"],
-    "application/pskc+xml": ["pskcxml"],
-    "application/raml+yaml": ["raml"],
-    "application/rdf+xml": ["rdf", "owl"],
-    "application/reginfo+xml": ["rif"],
-    "application/relax-ng-compact-syntax": ["rnc"],
-    "application/resource-lists+xml": ["rl"],
-    "application/resource-lists-diff+xml": ["rld"],
-    "application/rls-services+xml": ["rs"],
-    "application/route-apd+xml": ["rapd"],
-    "application/route-s-tsid+xml": ["sls"],
-    "application/route-usd+xml": ["rusd"],
-    "application/rpki-ghostbusters": ["gbr"],
-    "application/rpki-manifest": ["mft"],
-    "application/rpki-roa": ["roa"],
-    "application/rsd+xml": ["rsd"],
-    "application/rss+xml": ["rss"],
-    "application/rtf": ["rtf"],
-    "application/sbml+xml": ["sbml"],
-    "application/scvp-cv-request": ["scq"],
-    "application/scvp-cv-response": ["scs"],
-    "application/scvp-vp-request": ["spq"],
-    "application/scvp-vp-response": ["spp"],
-    "application/sdp": ["sdp"],
-    "application/senml+xml": ["senmlx"],
-    "application/sensml+xml": ["sensmlx"],
-    "application/set-payment-initiation": ["setpay"],
-    "application/set-registration-initiation": ["setreg"],
-    "application/shf+xml": ["shf"],
-    "application/sieve": ["siv", "sieve"],
-    "application/smil+xml": ["smi", "smil"],
-    "application/sparql-query": ["rq"],
-    "application/sparql-results+xml": ["srx"],
-    "application/sql": ["sql"],
-    "application/srgs": ["gram"],
-    "application/srgs+xml": ["grxml"],
-    "application/sru+xml": ["sru"],
-    "application/ssdl+xml": ["ssdl"],
-    "application/ssml+xml": ["ssml"],
-    "application/swid+xml": ["swidtag"],
-    "application/tei+xml": ["tei", "teicorpus"],
-    "application/thraud+xml": ["tfi"],
-    "application/timestamped-data": ["tsd"],
-    "application/toml": ["toml"],
-    "application/trig": ["trig"],
-    "application/ttml+xml": ["ttml"],
-    "application/ubjson": ["ubj"],
-    "application/urc-ressheet+xml": ["rsheet"],
-    "application/urc-targetdesc+xml": ["td"],
-    "application/voicexml+xml": ["vxml"],
-    "application/wasm": ["wasm"],
-    "application/watcherinfo+xml": ["wif"],
-    "application/widget": ["wgt"],
-    "application/winhlp": ["hlp"],
-    "application/wsdl+xml": ["wsdl"],
-    "application/wspolicy+xml": ["wspolicy"],
-    "application/xaml+xml": ["xaml"],
-    "application/xcap-att+xml": ["xav"],
-    "application/xcap-caps+xml": ["xca"],
-    "application/xcap-diff+xml": ["xdf"],
-    "application/xcap-el+xml": ["xel"],
-    "application/xcap-ns+xml": ["xns"],
-    "application/xenc+xml": ["xenc"],
-    "application/xfdf": ["xfdf"],
-    "application/xhtml+xml": ["xhtml", "xht"],
-    "application/xliff+xml": ["xlf"],
-    "application/xml": ["xml", "xsl", "xsd", "rng"],
-    "application/xml-dtd": ["dtd"],
-    "application/xop+xml": ["xop"],
-    "application/xproc+xml": ["xpl"],
-    "application/xslt+xml": ["*xsl", "xslt"],
-    "application/xspf+xml": ["xspf"],
-    "application/xv+xml": ["mxml", "xhvml", "xvml", "xvm"],
-    "application/yang": ["yang"],
-    "application/yin+xml": ["yin"],
-    "application/zip": ["zip"],
-    "application/zip+dotlottie": ["lottie"],
-    "audio/3gpp": ["*3gpp"],
-    "audio/aac": ["adts", "aac"],
-    "audio/adpcm": ["adp"],
-    "audio/amr": ["amr"],
-    "audio/basic": ["au", "snd"],
-    "audio/midi": ["mid", "midi", "kar", "rmi"],
-    "audio/mobile-xmf": ["mxmf"],
-    "audio/mp3": ["*mp3"],
-    "audio/mp4": ["m4a", "mp4a", "m4b"],
-    "audio/mpeg": ["mpga", "mp2", "mp2a", "mp3", "m2a", "m3a"],
-    "audio/ogg": ["oga", "ogg", "spx", "opus"],
-    "audio/s3m": ["s3m"],
-    "audio/silk": ["sil"],
-    "audio/wav": ["wav"],
-    "audio/wave": ["*wav"],
-    "audio/webm": ["weba"],
-    "audio/xm": ["xm"],
-    "font/collection": ["ttc"],
-    "font/otf": ["otf"],
-    "font/ttf": ["ttf"],
-    "font/woff": ["woff"],
-    "font/woff2": ["woff2"],
-    "image/aces": ["exr"],
-    "image/apng": ["apng"],
-    "image/avci": ["avci"],
-    "image/avcs": ["avcs"],
-    "image/avif": ["avif"],
-    "image/bmp": ["bmp", "dib"],
-    "image/cgm": ["cgm"],
-    "image/dicom-rle": ["drle"],
-    "image/dpx": ["dpx"],
-    "image/emf": ["emf"],
-    "image/fits": ["fits"],
-    "image/g3fax": ["g3"],
-    "image/gif": ["gif"],
-    "image/heic": ["heic"],
-    "image/heic-sequence": ["heics"],
-    "image/heif": ["heif"],
-    "image/heif-sequence": ["heifs"],
-    "image/hej2k": ["hej2"],
-    "image/ief": ["ief"],
-    "image/jaii": ["jaii"],
-    "image/jais": ["jais"],
-    "image/jls": ["jls"],
-    "image/jp2": ["jp2", "jpg2"],
-    "image/jpeg": ["jpg", "jpeg", "jpe"],
-    "image/jph": ["jph"],
-    "image/jphc": ["jhc"],
-    "image/jpm": ["jpm", "jpgm"],
-    "image/jpx": ["jpx", "jpf"],
-    "image/jxl": ["jxl"],
-    "image/jxr": ["jxr"],
-    "image/jxra": ["jxra"],
-    "image/jxrs": ["jxrs"],
-    "image/jxs": ["jxs"],
-    "image/jxsc": ["jxsc"],
-    "image/jxsi": ["jxsi"],
-    "image/jxss": ["jxss"],
-    "image/ktx": ["ktx"],
-    "image/ktx2": ["ktx2"],
-    "image/pjpeg": ["jfif"],
-    "image/png": ["png"],
-    "image/sgi": ["sgi"],
-    "image/svg+xml": ["svg", "svgz"],
-    "image/t38": ["t38"],
-    "image/tiff": ["tif", "tiff"],
-    "image/tiff-fx": ["tfx"],
-    "image/webp": ["webp"],
-    "image/wmf": ["wmf"],
-    "message/disposition-notification": ["disposition-notification"],
-    "message/global": ["u8msg"],
-    "message/global-delivery-status": ["u8dsn"],
-    "message/global-disposition-notification": ["u8mdn"],
-    "message/global-headers": ["u8hdr"],
-    "message/rfc822": ["eml", "mime", "mht", "mhtml"],
-    "model/3mf": ["3mf"],
-    "model/gltf+json": ["gltf"],
-    "model/gltf-binary": ["glb"],
-    "model/iges": ["igs", "iges"],
-    "model/jt": ["jt"],
-    "model/mesh": ["msh", "mesh", "silo"],
-    "model/mtl": ["mtl"],
-    "model/obj": ["obj"],
-    "model/prc": ["prc"],
-    "model/step": ["step", "stp", "stpnc", "p21", "210"],
-    "model/step+xml": ["stpx"],
-    "model/step+zip": ["stpz"],
-    "model/step-xml+zip": ["stpxz"],
-    "model/stl": ["stl"],
-    "model/u3d": ["u3d"],
-    "model/vrml": ["wrl", "vrml"],
-    "model/x3d+binary": ["*x3db", "x3dbz"],
-    "model/x3d+fastinfoset": ["x3db"],
-    "model/x3d+vrml": ["*x3dv", "x3dvz"],
-    "model/x3d+xml": ["x3d", "x3dz"],
-    "model/x3d-vrml": ["x3dv"],
-    "text/cache-manifest": ["appcache", "manifest"],
-    "text/calendar": ["ics", "ifb"],
-    "text/coffeescript": ["coffee", "litcoffee"],
-    "text/css": ["css"],
-    "text/csv": ["csv"],
-    "text/html": ["html", "htm", "shtml"],
-    "text/jade": ["jade"],
-    "text/javascript": ["js", "mjs"],
-    "text/jsx": ["jsx"],
-    "text/less": ["less"],
-    "text/markdown": ["md", "markdown"],
-    "text/mathml": ["mml"],
-    "text/mdx": ["mdx"],
-    "text/n3": ["n3"],
-    "text/plain": ["txt", "text", "conf", "def", "list", "log", "in", "ini"],
-    "text/richtext": ["rtx"],
-    "text/rtf": ["*rtf"],
-    "text/sgml": ["sgml", "sgm"],
-    "text/shex": ["shex"],
-    "text/slim": ["slim", "slm"],
-    "text/spdx": ["spdx"],
-    "text/stylus": ["stylus", "styl"],
-    "text/tab-separated-values": ["tsv"],
-    "text/troff": ["t", "tr", "roff", "man", "me", "ms"],
-    "text/turtle": ["ttl"],
-    "text/uri-list": ["uri", "uris", "urls"],
-    "text/vcard": ["vcard"],
-    "text/vtt": ["vtt"],
-    "text/wgsl": ["wgsl"],
-    "text/xml": ["*xml"],
-    "text/yaml": ["yaml", "yml"],
-    "video/3gpp": ["3gp", "3gpp"],
-    "video/3gpp2": ["3g2"],
-    "video/h261": ["h261"],
-    "video/h263": ["h263"],
-    "video/h264": ["h264"],
-    "video/iso.segment": ["m4s"],
-    "video/jpeg": ["jpgv"],
-    "video/jpm": ["*jpm", "*jpgm"],
-    "video/mj2": ["mj2", "mjp2"],
-    "video/mp2t": ["ts", "m2t", "m2ts", "mts"],
-    "video/mp4": ["mp4", "mp4v", "mpg4"],
-    "video/mpeg": ["mpeg", "mpg", "mpe", "m1v", "m2v"],
-    "video/ogg": ["ogv"],
-    "video/quicktime": ["qt", "mov"],
-    "video/webm": ["webm"]
-  };
-  Object.freeze(types2);
-  var standard_default = types2;
-
-  // crates/neo-sdk/neo-playwright/third_party/mime/src/Mime.ts
-  class Mime {
-    #extensionToType = new Map;
-    #typeToExtension = new Map;
-    #typeToExtensions = new Map;
-    constructor(...args) {
-      for (const arg of args) {
-        this.define(arg);
-      }
-    }
-    define(typeMap, force = false) {
-      for (let [type, extensions] of Object.entries(typeMap)) {
-        type = type.toLowerCase();
-        extensions = extensions.map((ext) => ext.toLowerCase());
-        if (!this.#typeToExtensions.has(type)) {
-          this.#typeToExtensions.set(type, new Set);
-        }
-        const allExtensions = this.#typeToExtensions.get(type);
-        let first = true;
-        for (let extension of extensions) {
-          const starred = extension.startsWith("*");
-          extension = starred ? extension.slice(1) : extension;
-          allExtensions?.add(extension);
-          if (first) {
-            this.#typeToExtension.set(type, extension);
-          }
-          first = false;
-          if (starred)
-            continue;
-          const currentType = this.#extensionToType.get(extension);
-          if (currentType && currentType != type && !force) {
-            throw new Error(`"${type} -> ${extension}" conflicts with "${currentType} -> ${extension}". Pass \`force=true\` to override this definition.`);
-          }
-          this.#extensionToType.set(extension, type);
-        }
-      }
-      return this;
-    }
-    getType(path) {
-      if (typeof path !== "string")
-        return null;
-      const last = path.replace(/^.*[/\\]/s, "").toLowerCase();
-      const ext = last.replace(/^.*\./s, "").toLowerCase();
-      const hasPath = last.length < path.length;
-      const hasDot = ext.length < last.length - 1;
-      if (!hasDot && hasPath)
-        return null;
-      return this.#extensionToType.get(ext) ?? null;
-    }
-    getExtension(type) {
-      if (typeof type !== "string")
-        return null;
-      type = type?.split?.(";")[0];
-      return (type && this.#typeToExtension.get(type.trim().toLowerCase())) ?? null;
-    }
-    getAllExtensions(type) {
-      if (typeof type !== "string")
-        return null;
-      return this.#typeToExtensions.get(type.toLowerCase()) ?? null;
-    }
-    _freeze() {
-      this.define = () => {
-        throw new Error("define() not allowed for built-in Mime objects. See https://github.com/broofa/mime/blob/main/README.md#custom-mime-instances");
-      };
-      Object.freeze(this);
-      for (const extensions of this.#typeToExtensions.values()) {
-        Object.freeze(extensions);
-      }
-      return this;
-    }
-    _getTestState() {
-      return {
-        types: this.#extensionToType,
-        extensions: this.#typeToExtension
-      };
-    }
-  }
-
-  // crates/neo-sdk/neo-playwright/third_party/mime/src/index.ts
-  var src_default = new Mime(standard_default, other_default)._freeze();
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/files.ts
-  var UPLOAD_LIMIT = 50 * 1024 * 1024;
-  var NEO_UPLOAD_LIMIT = 10 * 1024 * 1024;
-  function inputFiles(api, files) {
-    const items = Array.isArray(files) ? files.slice() : [files];
-    if (items.some((item) => typeof item === "string")) {
-      const paths = items.filter((item) => typeof item === "string");
-      if (paths.length !== items.length)
-        throw unprefixedClientError(api, "File paths cannot be mixed with buffers");
-      return { paths };
-    }
-    const total = payloadBytes(api, items);
-    if (total >= UPLOAD_LIMIT)
-      throw unprefixedClientError(api, "Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.");
-    const checked = items.map((item, index) => checkedPayload(api, item, index));
-    if (total >= NEO_UPLOAD_LIMIT)
-      throw unprefixedClientError(api, "Cannot set buffer larger than 10Mb in Neo, please write it to a file and pass its path instead.");
-    return {
-      payloads: checked.map(({ name, mimeType, buffer }) => ({
-        name,
-        mimeType: mimeType || src_default.getType(name) || "application/octet-stream",
-        buffer: String(Reflect.apply(Reflect.get(buffer, "toString"), buffer, ["base64"]))
-      }))
-    };
-  }
-  function payloadBytes(api, items) {
-    let total = 0;
-    for (const item of items) {
-      if (item === null || item === undefined)
-        throw unprefixedClientError(api, `Cannot read properties of ${item} (reading 'buffer')`, "TypeError");
-      const buffer = Reflect.get(Object(item), "buffer");
-      if (!buffer)
-        continue;
-      const length = Reflect.get(Object(buffer), "byteLength");
-      total += length;
-    }
-    return total;
-  }
-  function checkedPayload(api, item, index) {
-    const at = `payloads[${index}]`;
-    if (item === null)
-      throw clientError(api, `${at}: expected object, got null`);
-    if (typeof item !== "object")
-      throw clientError(api, `${at}: expected object, got ${typeof item}`);
-    const name = validString(api, `${at}.name`, Reflect.get(item, "name"));
-    const rawType = Reflect.get(item, "mimeType");
-    const mimeType = rawType === undefined ? undefined : validString(api, `${at}.mimeType`, rawType);
-    const buffer = Reflect.get(item, "buffer");
-    if (!(buffer instanceof Buffer) && !(buffer instanceof Object))
-      throw clientError(api, `${at}.buffer: expected Buffer, got ${typeof buffer}`);
-    return mimeType === undefined ? { name, buffer } : { name, mimeType, buffer };
-  }
-  function validString(api, path, value) {
-    if (value instanceof String)
-      return value.valueOf();
-    if (typeof value === "string")
-      return value;
-    throw clientError(api, `${path}: expected string, got ${typeof value}`);
-  }
-  var CLIENT_MESSAGES = [
-    /^Multiple directories are not supported$/,
-    /^File paths must be all files or a single directory$/,
-    /^(?:E[A-Z0-9]+|UNKNOWN): [^,\n]+, stat '/
-  ];
-  var NUL_PATH = /^The argument 'path' must be a string, Uint8Array, or URL without null bytes\. Received /;
-  async function withClientErrors(api, call) {
-    try {
-      return await call();
-    } catch (error) {
-      if (!(error instanceof Error) || !error.message.startsWith(`${api}: `))
-        throw error;
-      const bare = error.message.slice(api.length + 2);
-      if (NUL_PATH.test(bare)) {
-        error.message = bare;
-        error.name = "TypeError";
-      } else if (CLIENT_MESSAGES.some((message) => message.test(bare)))
-        error.message = bare;
-      throw error;
-    }
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/prelude/selectors.ts
   function withLocatorOptions(api, frame, selector, options) {
     let result = selector;
@@ -6380,6 +6263,16 @@ ${value.stack}`;
     }
     return [...lines, ...unplaced].join(`
 `);
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/url.ts
+  function normalizeUrl(text) {
+    return URL.parse(text)?.href ?? text;
+  }
+  function globMatches(glob, url) {
+    if (glob === "")
+      return true;
+    return new RegExp(globToRegexPattern(glob)).test(url);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/frame.ts
@@ -7858,7 +7751,7 @@ ${value.stack}`;
         const current = frame.url();
         let matched;
         try {
-          matched = await url(urlLike(current) ?? current);
+          matched = await url(URL.parse(current) ?? current);
         } catch (error) {
           throw prefixed(api, error);
         }
@@ -8648,7 +8541,7 @@ ${error.message}`;
     for (;; ) {
       let passed;
       try {
-        passed = Boolean(await predicate(urlLike(page.url()) ?? page.url()));
+        passed = Boolean(await predicate(URL.parse(page.url()) ?? page.url()));
       } catch (error) {
         throw prefixed("expect.toHaveURL", error);
       }

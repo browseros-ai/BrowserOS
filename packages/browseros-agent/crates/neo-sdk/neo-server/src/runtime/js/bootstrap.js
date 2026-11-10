@@ -1,3 +1,5 @@
+// URL, URLSearchParams and QuickJS-ng's checked atob/btoa are realm globals, installed
+// before this bootstrap. Keep them out of the agent function's parameters so scripts can shadow them.
 // claw-sdk's bootstrap, evaluated first in every run's fresh QuickJS realm (run_script.rs).
 //
 // The bridge's three natives take and return strings only. This file turns them into the agent

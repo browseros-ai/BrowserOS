@@ -47,6 +47,11 @@ use tokio::time;
 
 use crate::live_run::{LiveRun, TestPage};
 
+// Use production's exact installer before the prelude, rather than teaching the test harness
+// its own URL/base64 implementation. It is pure and depends on no server or browser state.
+#[path = "../../../neo-server/src/runtime/install_web_globals.rs"]
+mod install_web_globals;
+
 /// claw-sdk's run bootstrap, read-only: Runner N runs the very file each run starts with.
 const BOOTSTRAP: &str = include_str!("../../../neo-server/src/runtime/js/bootstrap.js");
 
@@ -137,6 +142,9 @@ async fn evaluate<'js>(
     install(ctx, door)
         .catch(ctx)
         .map_err(|caught| fail("natives", &caught))?;
+    install_web_globals::install_web_globals(ctx, JS_MEMORY_BYTES)
+        .catch(ctx)
+        .map_err(|caught| fail("web_globals.js", &caught))?;
     for (file, source) in [("bootstrap.js", BOOTSTRAP), ("prelude.js", PRELUDE_JS)] {
         ctx.eval_with_options::<(), _>(source, options(file))
             .catch(ctx)

@@ -1,5 +1,5 @@
 // The prelude asset runs in claw-sdk's QuickJS runtime, which has ECMAScript's own globals
-// and none of a browser's or Node's: no URL, Intl or structuredClone, no process or Buffer.
+// plus neo-sdk's URL/base64 interfaces. It has no Intl, structuredClone, process or Buffer.
 // This reads every global the bundle names, used or not, so a code path that runs only on
 // some input cannot slip one in.
 import { expect, it } from 'bun:test'
@@ -69,6 +69,9 @@ const ECMASCRIPT_GLOBALS = new Set([
   'WeakRef',
   'WeakSet',
 ])
+
+// These additional free names are pinned by neo-sdk's real QuickJS realm tests.
+const REALM_GLOBALS = new Set(['URL', 'atob', 'btoa'])
 
 type Visit = (node: AstNode, parent: AstNode | undefined, key: string) => void
 
@@ -164,13 +167,13 @@ function freeIdentifiers(source: string): Set<string> {
   return new Set([...read].filter((name) => !declared.has(name)))
 }
 
-it('tests that the prelude asset names only ECMAScript globals, which QuickJS provides', () => {
+it('tests that the prelude asset names only globals provided by the production QuickJS realm', () => {
   const prelude = readFileSync(
     new URL('../../neo-playwright/assets/prelude.js', import.meta.url),
     'utf8',
   )
   const hostGlobals = [...freeIdentifiers(prelude)].filter(
-    (name) => !ECMASCRIPT_GLOBALS.has(name),
+    (name) => !ECMASCRIPT_GLOBALS.has(name) && !REALM_GLOBALS.has(name),
   )
   expect(hostGlobals).toEqual([])
 })

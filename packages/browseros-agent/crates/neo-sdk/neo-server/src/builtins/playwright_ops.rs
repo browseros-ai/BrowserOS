@@ -85,8 +85,7 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     polls every 100 ms for its default `polling: 'raf'`, since animation frames never fire in \
     Neo's background tabs, and the handle it resolves to holds a snapshot of the value, which \
     `jsonValue()` reads; `setContent` refuses `waitUntil: 'networkidle'`, which Neo cannot \
-    observe after a write, with nothing sent; a `URL` result has a URL's fields but is not a \
-    `URL`, since the script's realm has none; and a result nested more than about 50 objects \
+    observe after a write, with nothing sent; and a result nested more than about 50 objects \
     deep can fail `Maximum call stack size exceeded`, where Playwright allows 98. `goto` and \
     `reload` open only `http`, `https`, `data` and `about` URLs. `setInputFiles` uploads any \
     file Neo's process can read, as Playwright does \

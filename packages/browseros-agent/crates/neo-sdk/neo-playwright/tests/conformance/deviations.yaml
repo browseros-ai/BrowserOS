@@ -182,15 +182,6 @@
     threw:
       message: "page.evaluate: Maximum call stack size exceeded"
       name: Error
-- case: evaluate-values
-  path: /returned/url/1
-  kind: decided
-  reason: "held design (deviations table): QuickJS has no URL, so a URL result reaches the agent
-    as a URL-like object with a URL's href and parts (prelude/vendored-globals.ts over
-    prelude/url.ts), not an instance of URL. String() and the fields agree with upstream's;
-    Object.prototype.toString does not."
-  p: "[object URL]"
-  n: "[object Object]"
 - case: refusals
   path: /returned/route
   kind: decided

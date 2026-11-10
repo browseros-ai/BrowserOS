@@ -104,7 +104,14 @@ export function loadPrelude(
   // Each failed op's error, by op id, as bridge.rs remembers the failures it answered.
   const failures = new Map<unknown, Record<string, unknown>>()
   const answer = options.answer ?? (() => null)
+  // The vm rig supplies neo-sdk's realm contract. Production installation and semantics are
+  // tested through the real QuickJS run_script, rather than proved by these host implementations.
   const realm = createContext({
+    URL,
+    URLSearchParams,
+    atob,
+    btoa,
+    DOMException,
     __neo_invoke: async (name: string, inputJson: string): Promise<string> => {
       const call: Call = { name, input: JSON.parse(inputJson) }
       calls.push(call)

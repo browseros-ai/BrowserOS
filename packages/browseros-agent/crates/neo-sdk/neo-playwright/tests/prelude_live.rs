@@ -41,6 +41,27 @@ const SELECTOR_GOLDENS: &str =
 /// A host for scripts that must not reach Rust: builders are values and send nothing.
 struct NoOps;
 
+/// Component realms share production's globals, so URL revival and predicates cannot silently
+/// fall back to a test-only fake while the real server uses a different constructor.
+#[tokio::test]
+async fn tests_that_component_realms_use_the_production_web_globals() -> TestResult {
+    let host: Arc<dyn OpHost> = Arc::new(NoOps);
+    let result = js_runner::run_script(
+        &host,
+        &json!({ "page": null }),
+        "const u = new URL('/p?a=1', 'https://example.test/');
+         u.searchParams.append('b', 'x y');
+         return [u instanceof URL, u.searchParams instanceof URLSearchParams,
+                 u.href, atob(btoa('binary'))];",
+    )
+    .await?;
+    assert_eq!(
+        result,
+        json!([true, true, "https://example.test/p?a=1&b=x+y", "binary"])
+    );
+    Ok(())
+}
+
 impl OpHost for NoOps {
     fn invoke<'a>(
         &'a self,

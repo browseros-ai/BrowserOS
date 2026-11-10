@@ -43,7 +43,6 @@ import { markHandle, pick } from './options'
 import { Response } from './response'
 import type { LocatorOptions } from './selectors'
 import { type TimeoutOption, TimeoutSettings } from './timeouts'
-import { urlLike } from './url'
 import {
   type AriaSnapshotJSON,
   type ByRoleOptions,
@@ -901,7 +900,7 @@ export class Page extends EventEmitter {
       const current = frame.url()
       let matched: unknown
       try {
-        matched = await url(urlLike(current) ?? current)
+        matched = await url(URL.parse(current) ?? current)
       } catch (error) {
         throw prefixed(api, error)
       }

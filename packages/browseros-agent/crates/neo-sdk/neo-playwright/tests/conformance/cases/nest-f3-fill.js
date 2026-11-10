@@ -10,7 +10,6 @@ for (const [, name, ref] of snapshot.matchAll(/- textbox "([^"]+)" \[ref=([^\]]+
   filled[name] = await harness.settle(page.locator(`aria-ref=${ref}`).fill(`${name} typed`))
 const values = {}
 for (const frame of page.frames()) {
-  // QuickJS, Neo's runtime, has no URL.
   const file = frame.url().split('?')[0].split('/').pop()
   values[file] = await harness.settle(
     frame

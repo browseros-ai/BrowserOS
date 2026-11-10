@@ -47,6 +47,8 @@ State lives under `$BROWSERCLAW_DIR`:
 
 ## The `run` contract
 
+The realm provides `URL`, `URLSearchParams`, `atob`, `btoa` and `DOMException`. Known URL differences: `url` 2.5.8 retains the older opaque-path trailing-space rules; `URL.createObjectURL` and `URL.revokeObjectURL` are absent.
+
 The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: Playwright's `page`, `context`, `browser` and `expect`, and Node's `Buffer` (neo-playwright's prelude), `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
 
 The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `taskId` makes the task's last tab the run's `page`. Without it, `page` opens a background tab on the first call that needs one. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
@@ -57,7 +59,6 @@ The script's `page`, `context`, `browser` and `expect` behave as Playwright 1.64
 
 - A password, card or one-time-code field's value reads `[private]`, in what the script gets and in the trace.
 - `waitForFunction` polls every 100 ms for its default `polling: 'raf'`, because animation frames never fire in Neo's background tabs. The handle it resolves to holds a snapshot of the value, so `jsonValue()` reads it and `evaluate` on it fails `neo / unsupported`.
-- A `URL` result has a URL's fields but is not a `URL`, since the realm has none.
 - A result nested more than about 50 objects deep fails its call with `Maximum call stack size exceeded` (`page.evaluate: Maximum call stack size exceeded`, an `Error` with no owner or code, since the op answered), where Playwright allows 98. The prelude's result parser recurses on the realm's 512 KiB stack (`Defaults::JS_STACK_BYTES`); 50 was measured in a debug build.
 - `setContent` refuses `waitUntil: 'networkidle'` as `neo / unsupported`, with nothing sent. Chromium never fires `networkIdle` for a written document, and Neo does not count the page's requests itself, so the wait could only time out. Use `load`.
 - An owner's lock that blocks reads, taken while a script runs, withholds what the script read: the call fails `host / owner_has_control`, delivery `done`.

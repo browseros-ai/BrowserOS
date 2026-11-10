@@ -20,6 +20,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time;
 
+use super::install_web_globals::install_web_globals;
 use super::{Bridge, RunLogs};
 use crate::browser::PageRef;
 use crate::builtins::PLAYWRIGHT_PRELUDE;
@@ -197,6 +198,8 @@ async fn evaluate(
     runtime
         .set_interrupt_handler(Some(interrupt_handler(run, &clock, cause)))
         .await;
+    // full uses JS_NewContext, which installs QuickJS-ng's atob/btoa/DOMException.
+    // rquickjs's intrinsic::All omits them; web-global regression tests pin this contract.
     let context = match AsyncContext::full(&runtime).await {
         Ok(context) => context,
         Err(error) => return Evaluated::Engine(error.to_string()),
@@ -254,6 +257,9 @@ fn prepare<'js>(
     install(ctx, bridge)
         .catch(ctx)
         .map_err(|caught| engine(&caught))?;
+    install_web_globals(ctx, Defaults::JS_MEMORY_BYTES)
+        .catch(ctx)
+        .map_err(|caught| Evaluated::Engine(format!("web_globals.js: {caught}")))?;
     for file in iter::once(&BOOTSTRAP).chain(PRELUDES) {
         ctx.eval_with_options::<(), _>(file.source, options(file.name))
             .catch(ctx)
@@ -285,7 +291,7 @@ fn prepare<'js>(
     Ok((neo_run, main))
 }
 
-/// The realm's only natives (runtime/tests.rs pins that the realm gains nothing else). Each
+/// The only natives on the global object (runtime/tests.rs pins the realm's additions). Each
 /// closure owns an `Arc<Bridge>` and owned strings, never a JS value, so nothing JS-typed is
 /// held across an await or outlives the runtime.
 fn install(ctx: &Ctx<'_>, bridge: &Arc<Bridge>) -> rquickjs::Result<()> {

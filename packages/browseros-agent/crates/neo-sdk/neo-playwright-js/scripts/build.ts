@@ -142,10 +142,10 @@ const VALUE_SERIALIZERS = new Set([
 ])
 
 /**
- * The prelude's bundle loads the value serializers with an import of Neo's stand-ins for the
- * four globals they name and QuickJS lacks (`URL`, `Buffer`, `atob`, `btoa`;
- * src/prelude/vendored-globals.ts), so they bind as module-scope names and the agent's realm
- * gains no global. The page's bundles load the same files plain, on the page's own globals.
+ * The prelude's bundle injects Neo's Node Buffer view (src/prelude/vendored-globals.ts) as a
+ * module-scope import into the value serializers. The URL and base64 interfaces bind to
+ * neo-sdk's real realm globals, installed before this prelude. The page's bundles load the
+ * same files plain, on the page's own globals.
  */
 const preludeGlobals: BunPlugin = {
   name: 'prelude-globals',
@@ -160,7 +160,7 @@ const preludeGlobals: BunPlugin = {
         const globals = resolve(packageRoot, 'src/prelude/vendored-globals.ts')
         const source = await Bun.file(args.path).text()
         return {
-          contents: `import { atob, Buffer, btoa, URL } from ${JSON.stringify(globals)};\n${source}`,
+          contents: `import { Buffer } from ${JSON.stringify(globals)};\n${source}`,
           loader: 'ts',
         }
       },
@@ -244,8 +244,8 @@ export async function buildOutputs(): Promise<Output[]> {
  * crates/neo-sdk/neo-playwright/third_party/mime, with crates/neo-sdk/neo-playwright-js/src/prelude,
  * by crates/neo-sdk/neo-playwright-js/scripts/build.ts.
  * Changed by Neo: isomorphic/utilityScriptSerializers.ts and protocol/src/serializers.ts import
- * Neo's stand-ins for URL, Buffer, atob and btoa, which QuickJS lacks; every other upstream
- * module, and mime, is built unmodified.
+ * Neo's Buffer view, which QuickJS lacks; URL, atob and btoa use the realm globals.
+ * Every other upstream module, and mime, is built unmodified.
  * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
  */
 ${prelude}`

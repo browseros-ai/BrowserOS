@@ -23,7 +23,6 @@ for (const [, name, ref] of snapshot.matchAll(/- button "([^"]+)" \[ref=([^\]]+)
   clicked[name] = await click(page.locator(`aria-ref=${ref}`))
 const logs = {}
 for (const frame of page.frames()) {
-  // QuickJS, Neo's runtime, has no URL.
   const file = frame.url().split('?')[0].split('/').pop()
   logs[file] = await harness.settle(
     frame

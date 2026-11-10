@@ -9,8 +9,8 @@
  * Node's `Buffer` (buffer.ts), which upstream's payload examples build files with.
  * Every call they make reaches Rust as one op through bridge.ts, and every selector is built
  * by the vendored Playwright helpers imported in vendored.ts, in this one module graph.
- * QuickJS has no URL, Intl or structuredClone; tests/prelude-globals.test.ts fails if the
- * bundle names any global outside ECMAScript's own.
+ * neo-sdk installs URL and base64 globals; QuickJS has no Intl or structuredClone.
+ * tests/prelude-globals.test.ts pins the globals this bundle may name.
  */
 
 import { awaitsProviders, onReply, provide, registerBrand } from './bridge'

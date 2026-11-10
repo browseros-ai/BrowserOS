@@ -9,10 +9,11 @@ use std::time::Duration;
 use neo_trace::{
     Delivery, ErrorOwner, OperationId, Outcome, SecretSetConfig, SecretSource, SecretValue,
 };
-use rquickjs::{AsyncContext, AsyncRuntime};
+use rquickjs::{AsyncContext, AsyncRuntime, Context, Runtime};
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 
+use super::install_web_globals::install_web_globals;
 use super::{LogLevel, LogLine, Script, ScriptEnd, ScriptOutcome, run_script};
 use crate::config::Defaults;
 use crate::dispatch::{CallSite, ErrorCode, OperationError, RunCtx, StopReason};
@@ -63,7 +64,7 @@ async fn quickjs_globals() -> Result<BTreeSet<String>, TestError> {
 }
 
 #[test]
-fn a_fresh_realm_adds_only_the_natives_and_the_bootstrap_to_quickjs() -> Result<(), TestError> {
+fn a_fresh_realm_adds_only_the_bridge_bootstrap_and_web_interfaces() -> Result<(), TestError> {
     on_neo_runtime(async {
         let quickjs = quickjs_globals().await?;
         let rig = TestRig::new().await?;
@@ -77,7 +78,14 @@ fn a_fresh_realm_adds_only_the_natives_and_the_bootstrap_to_quickjs() -> Result<
             .collect();
         assert_eq!(
             added,
-            BTreeSet::from(["__neo", "__neo_invoke", "__neo_log", "__neo_sleep"]),
+            BTreeSet::from([
+                "__neo",
+                "__neo_invoke",
+                "__neo_log",
+                "__neo_sleep",
+                "URL",
+                "URLSearchParams"
+            ]),
             "the agent's API arrives as parameters, so no second native door into Rust appears"
         );
         assert!(
@@ -1125,6 +1133,426 @@ fn timers_wait_clear_and_stop_at_the_deadline() -> Result<(), TestError> {
             Some(StopReason::Deadline),
             "waking at the deadline stops the run there: {:?}",
             end.outcome
+        );
+        Ok(())
+    })
+}
+
+/// Browser-oracle URL/base64 cases, run through the production bootstrap and both preludes.
+/// Expectations agree between Node and Bun except iterator object key order, which is not
+/// specified (Bun's order here), and the owner's pinned opaque-path/object-URL decisions.
+#[test]
+fn web_globals_match_the_browser_cases_in_the_real_run_realm() -> Result<(), TestError> {
+    #[derive(serde::Deserialize)]
+    struct Case {
+        name: String,
+        code: String,
+        expected: Value,
+    }
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let cases: Vec<Case> = serde_json::from_str(include_str!("fixtures/web_globals.json"))?;
+        for case in cases {
+            let body = serde_json::to_string(&case.code)?;
+            let code = format!(
+                r"const parts = (u) => [u.href, u.origin, u.protocol, u.username, u.password,
+                    u.host, u.hostname, u.port, u.pathname, u.search, u.hash];
+                try {{
+                    const value = new Function('parts', {body})(parts);
+                    return {{ ok: value === undefined ? '<undefined>' : value }};
+                }} catch (error) {{ return {{ threw: error.name }}; }}",
+            );
+            let actual = returned(script(&rig, &code).await?)
+                .map_err(|error| format!("{}: {error}", case.name))?;
+            assert_eq!(actual, case.expected, "{}", case.name);
+        }
+        Ok(())
+    })
+}
+
+/// A same-built bare-context baseline would miss a switch away from `JS_NewContext` that
+/// silently dropped QuickJS-ng's base64/DOMException intrinsics. Pin the contract separately.
+#[test]
+fn web_globals_have_standard_descriptors_arity_and_shadowing() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const names = ['URL', 'URLSearchParams', 'atob', 'btoa', 'DOMException'];
+            return names.map((name) => {
+                const d = Object.getOwnPropertyDescriptor(globalThis, name);
+                return [typeof d.value, d.value.length, d.writable, d.enumerable, d.configurable];
+            });";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([
+                ["function", 1, true, false, true],
+                ["function", 0, true, false, true],
+                ["function", 1, true, false, true],
+                ["function", 1, true, false, true],
+                ["function", 2, true, false, true]
+            ]),
+            "the complete production realm exposes the standard interfaces"
+        );
+        assert_eq!(
+            returned(script(&rig, "const URL = 1; let atob = 2; return [URL, atob];").await?)?,
+            json!([1, 2]),
+            "web interfaces are globals, not extra agent function parameters"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn invalid_web_global_input_is_owned_by_the_script_with_its_call_site() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        for (code, name) in [
+            ("new URL('nope');", "TypeError"),
+            ("atob('@');", "InvalidCharacterError"),
+        ] {
+            let error = failed(script(&rig, code).await?)?;
+            assert_eq!(
+                (error.owner(), error.code()),
+                (ErrorOwner::Script, ErrorCode::SCRIPT_ERROR),
+                "a local input error is never blamed on the host or Neo"
+            );
+            assert!(
+                error.message().contains(name) && error.message().contains("run:1:"),
+                "the agent's call site survives the factory frame: {error}"
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn web_globals_preserve_binary_strings_and_empty_search_parameters() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const bytes = Array.from({ length: 256 }, (_, i) => String.fromCharCode(i)).join('');
+            const u = new URL('http://example.test/?a=1');
+            const p = u.searchParams;
+            u.href = 'https://other.test/?b=2';
+            const refreshed = [...p];
+            p.delete('b');
+            return [atob(btoa(bytes)) === bytes, new URLSearchParams(null).size,
+                new URLSearchParams(undefined).size, refreshed, p === u.searchParams, u.href,
+                typeof URL.revokeObjectURL];";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([
+                true,
+                0,
+                0,
+                [["b", "2"]],
+                true,
+                "https://other.test/",
+                "undefined"
+            ]),
+            "binary bytes round-trip and URL/searchParams keep one live list across href changes"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn web_idl_search_parameters_convert_once_and_iterators_stay_exhausted() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            let reads = 0;
+            const input = { get [Symbol.iterator]() {
+                reads++;
+                return function* () { yield ['a', '1']; };
+            } };
+            const params = new URLSearchParams(input);
+            const iterator = params.entries();
+            iterator.next(); iterator.next();
+            params.append('b', '2');
+            let conversions = 0;
+            const item = { toString() { conversions++; return 'x'; } };
+            try { new URLSearchParams([[item, item, item]]); } catch {}
+            const record = new URLSearchParams({ '\ud800': 'first', '\ud801': 'second' });
+            return [reads, iterator.next().done, conversions, record.toString()];";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([1, true, 3, "%EF%BF%BD=second"]),
+            "WebIDL converts a sequence before checking pair length, and normalizes record keys"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn web_parameter_constructor_converts_all_pairs_before_validation() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            function attempt(throwOnConversion) {
+                const events = [];
+                const lateError = new Error('later');
+                const later = { toString() {
+                    events.push('convert');
+                    if (throwOnConversion) throw lateError;
+                    return 'b';
+                } };
+                function* inner() {
+                    try {
+                        yield later;
+                        yield '2';
+                        events.push('inner exhausted');
+                    } finally { events.push('inner closed'); }
+                }
+                function* outer() {
+                    try {
+                        yield ['a'];
+                        yield inner();
+                        events.push('outer exhausted');
+                    } finally { events.push('outer closed'); }
+                }
+                try { new URLSearchParams(outer()); }
+                catch (e) { return [e === lateError ? 'conversion error' : e.name, events]; }
+            }
+            return [attempt(true), attempt(false)];";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([
+                [
+                    "conversion error",
+                    ["convert", "inner closed", "outer closed"]
+                ],
+                [
+                    "TypeError",
+                    [
+                        "convert",
+                        "inner exhausted",
+                        "inner closed",
+                        "outer exhausted",
+                        "outer closed"
+                    ]
+                ]
+            ])
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn web_base64_keeps_forgiving_decode_and_dom_exception_errors() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const attempt = (f) => {
+                try { return f(); } catch (e) {
+                    return [e.name, e.code, e instanceof DOMException, e instanceof Error];
+                }
+            };
+            const invalid = ['Y', 'YQ=', 'YQ===', '@', 'YQ\v=='].map(s => attempt(() => atob(s)));
+            const missing = [atob, btoa].map(f => { try { f(); } catch (e) { return e.name; } });
+            const u = new URL('http://example.test/');
+            u.searchParams.toString = () => 'forged';
+            u.searchParams.append('a', '1');
+            return [atob(' Y\tQ\n=\f=\r '), atob('YR=='), atob('YQ'), invalid,
+                attempt(() => btoa(String.fromCharCode(256))), attempt(() => btoa(String.fromCharCode(0xd800))), missing, u.search];";
+        let invalid = json!(["InvalidCharacterError", 5, true, true]);
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([
+                "a",
+                "a",
+                "a",
+                [&invalid, &invalid, &invalid, &invalid, &invalid],
+                &invalid,
+                &invalid,
+                ["TypeError", "TypeError"],
+                "?a=1"
+            ]),
+            "only Infra's ASCII whitespace is ignored; binary strings reject non-Latin-1 values"
+        );
+        Ok(())
+    })
+}
+
+/// A two-byte pair must not buy 48 bytes of Rust storage outside the 64 MiB realm cap.
+/// The native's lower-bound scan refuses this result before allocating decoded pairs/output.
+#[test]
+fn pair_dense_web_parameters_fail_with_the_existing_memory_outcome() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let error = failed(script(&rig, "new URLSearchParams('=&'.repeat(1 << 23));").await?)?;
+        assert_eq!(
+            (error.owner(), error.code()),
+            (ErrorOwner::Script, ErrorCode::OUT_OF_MEMORY),
+            "native bounds use QuickJS's allocation exception and preserve resource-limit ownership"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn web_url_setters_apply_after_conversion_to_the_current_live_state() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const u = new URL('https://a.test/start?a=1');
+            const p = u.searchParams;
+            u.pathname = { toString() { u.search = '?b=2'; return '/next'; } };
+            const linked = [u.href, p.toString(), new URL(u.href).searchParams.toString(), p === u.searchParams];
+            u.pathname = { toString() { u.hostname = 'new.test'; return '/last'; } };
+            const host = u.href;
+            u.search = { toString() { u.pathname = '/changed'; return '?q=1'; } };
+            const search = [u.href, p.toString()];
+            try { u.href = { toString() { u.search = '?kept=1'; return 'not a URL'; } }; } catch {}
+            let coerced = false;
+            let illegalReceiver = false;
+            const setHref = Object.getOwnPropertyDescriptor(URL.prototype, 'href').set;
+            try { setHref.call({}, { toString() { coerced = true; return u.href; } }); }
+            catch (e) { illegalReceiver = e instanceof TypeError; }
+            return [linked, host, search, u.href, p.toString(), illegalReceiver, coerced];";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([
+                ["https://a.test/next?b=2", "b=2", "b=2", true],
+                "https://new.test/last?b=2",
+                ["https://new.test/changed?q=1", "q=1"],
+                "https://new.test/changed?kept=1",
+                "kept=1",
+                true,
+                false
+            ]),
+            "conversion-time changes survive, and a held parameter list agrees with href"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn web_linked_parameter_append_keeps_both_views_after_caught_oom() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const u = new URL('https://a.test/?a=1');
+            const p = u.searchParams;
+            const keys = p.keys();
+            const first = keys.next().value;
+            let error;
+            try { p.append('x', 'a'.repeat(9600000)); }
+            catch (e) { error = [e.name, e.message]; }
+            const caught = [u.href, p.size, p.get('x'), p.toString(), p === u.searchParams];
+            p.append({ toString() { u.search = '?b=2'; return 'c'; } }, '3');
+            const added = keys.next().value;
+            u.href = 'https://b.test/?x=1&y=2&z=3';
+            return [error, caught, first, added, keys.next().value, u.href,
+                p.toString(), p === u.searchParams];";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([
+                ["InternalError", "out of memory"],
+                ["https://a.test/?a=1", 1, null, "a=1", true],
+                "a",
+                "c",
+                "z",
+                "https://b.test/?x=1&y=2&z=3",
+                "x=1&y=2&z=3",
+                true
+            ])
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn web_linked_parameter_rewrites_keep_both_views_after_caught_oom() -> Result<(), TestError> {
+    let runtime = Runtime::new()?;
+    let context = Context::full(&runtime)?;
+    let code = r"
+        (() => {
+            // The raw href fits the native budget. Updating it would encode each '%' as
+            // '%25', so the setter rejects the longer input even after removing a pair.
+            const raw = '%'.repeat(180);
+            const u = new URL('https://a.test/?b=' + raw + '&a=1&z=9');
+            const p = u.searchParams;
+            const href = u.href;
+            const cases = [() => p.delete('z'), () => p.sort(), () => p.set('b', raw + '%')];
+            const failures = cases.map((mutate) => {
+                try { mutate(); } catch (e) {
+                    return [e.name, u.href === href, p === u.searchParams, [...p.keys()], p.get('b') === raw];
+                }
+            });
+            p.set('b', '2');
+            return JSON.stringify([failures, u.search, p.toString()]);
+        })()";
+    let result = context.with(|ctx| -> rquickjs::Result<String> {
+        install_web_globals(&ctx, 4096)?;
+        ctx.eval(code)
+    })?;
+    let failure = json!(["InternalError", true, true, ["b", "a", "z"], true]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&result)?,
+        json!([
+            [&failure, &failure, &failure],
+            "?b=2&a=1&z=9",
+            "b=2&a=1&z=9"
+        ])
+    );
+    Ok(())
+}
+
+#[test]
+fn web_parameter_methods_check_receivers_before_coercing_arguments() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const proto = URLSearchParams.prototype;
+            const invalidReceivers = [Object.create(proto), new Proxy(new URLSearchParams(), {})];
+            let conversions = 0;
+            const arg = { toString() { conversions++; throw new Error('coercion ran'); } };
+            const invalid = invalidReceivers.map(receiver =>
+                ['append', 'delete', 'get', 'getAll', 'has', 'set', 'forEach'].map(method => {
+                    try { Reflect.apply(proto[method], receiver, [arg, arg]); }
+                    catch (e) { return e instanceof TypeError; }
+                })
+            );
+            return [invalid, conversions];";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([[vec![true; 7], vec![true; 7]], 0])
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn web_parameter_serialization_never_calls_inherited_json_hooks() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const results = [];
+            for (const prototype of [Array.prototype, Object.prototype]) {
+                const original = Object.getOwnPropertyDescriptor(prototype, 'toJSON');
+                const u = new URL('https://a.test/');
+                const p = u.searchParams;
+                let calls = 0;
+                try {
+                    Object.defineProperty(prototype, 'toJSON', {
+                        configurable: true,
+                        get() { calls++; return () => { throw new Error('internal arrays must never serialize'); }; }
+                    });
+                    p.append('x', 'y');
+                    p.append('a b', '+&');
+                    results.push([u.href, p.toString(), calls, p === u.searchParams]);
+                } finally {
+                    if (original) Object.defineProperty(prototype, 'toJSON', original);
+                    else delete prototype.toJSON;
+                }
+            }
+            return results;";
+        let expected = json!(["https://a.test/?x=y&a+b=%2B%26", "x=y&a+b=%2B%26", 0, true]);
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([&expected, &expected]),
+            "private list encoding passes only string pairs; user toJSON getters never run"
         );
         Ok(())
     })

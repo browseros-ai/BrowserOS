@@ -11,7 +11,7 @@ import { fail, header, type State } from './expect-values'
 import { Locator } from './locator'
 import { Page } from './page'
 import { type TimeoutOption, timeoutMs } from './timeouts'
-import { normalizeUrl, urlLike } from './url'
+import { normalizeUrl } from './url'
 
 export type Retrying = {
   receiver: 'Locator' | 'Page'
@@ -510,7 +510,7 @@ export async function urlPredicate(
   for (;;) {
     let passed: boolean
     try {
-      passed = Boolean(await predicate(urlLike(page.url()) ?? page.url()))
+      passed = Boolean(await predicate(URL.parse(page.url()) ?? page.url()))
     } catch (error) {
       throw prefixed('expect.toHaveURL', error)
     }
