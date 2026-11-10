@@ -47,6 +47,14 @@ keeps every provided parameter and stays pending until finish. Listener throws s
 Node's `unhandledRejection` event and are forwarded to `onUncaught` for the worker's lifetime;
 existing Node listeners still observe them. Use one loader run per worker.
 
+Web globals (`URL`, `URLSearchParams`, `atob`, `btoa`, `DOMException`) also come from Node's
+main realm, as in the prelude's VM test rig. The loader does not evaluate `web_globals.js`:
+its factory requires QuickJS's Rust natives. Production URL parsing uses Rust's `url` 2.5.8,
+which retains older opaque-path trailing-space rules and exposes no `URL.createObjectURL`
+or `URL.revokeObjectURL`. Node uses its own URL implementation and blob URL methods, so the
+comparison does not prove parity for these globals. `sources` still hashes the three
+production bootstrap and prelude files.
+
 The smoke skips without `NEO_E2E_BROWSER`. It owns a headless browser on a throwaway profile,
 verifies its process group before cleanup, and requires its Node child to exit naturally.
 The primary launch leaves `BROWSERCLAW_HOSTED_MODE` unset to match the comparison runner;
