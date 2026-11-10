@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { isDeepStrictEqual } from 'node:util'
+import { installTestBuiltins } from './test-builtins.mjs'
 
 const START_TIMEOUT_MS = 20_000
 const REPLY_TIMEOUT_MS = 10_000
@@ -753,8 +754,9 @@ export class OwnedBrowser {
   #activation = { status: 'incomplete', tabs: [] }
   #signal
   #outputReady = false
+  #testBuiltins = false
 
-  static async start({ executable, outputDir, signal }) {
+  static async start({ executable, outputDir, signal, testBuiltins = false }) {
     if (typeof executable !== 'string' || !executable)
       throw new TypeError('OwnedBrowser.start requires an executable')
     if (typeof outputDir !== 'string' || !outputDir)
@@ -762,6 +764,7 @@ export class OwnedBrowser {
     const owner = new OwnedBrowser()
     owner.#outputDir = resolve(outputDir)
     owner.#signal = signal
+    owner.#testBuiltins = testBuiltins
     // Startup owns partially acquired files and processes too. Abort is latched immediately,
     // while cleanup waits for startup to stop acquiring resources before closing them.
     const abort = () => {
@@ -827,6 +830,8 @@ export class OwnedBrowser {
           '--headless=new',
           // BrowserOS's sidecar has an independent lifecycle and must not escape this owner.
           '--disable-browseros-server',
+          // Bundled UI injects shadow DOM into upstream pages on both engines.
+          '--disable-browseros-extensions',
           '--remote-debugging-port=0',
           `--user-data-dir=${this.#profile}`,
           '--no-first-run',
@@ -1242,6 +1247,7 @@ export class OwnedBrowser {
         for (const child of tree.childFrames ?? []) visit(child)
       }
       visit(frameTree)
+      if (this.#testBuiltins) await installTestBuiltins(this.#cdp, session.id)
       await this.#cdp.send(
         'Page.addScriptToEvaluateOnNewDocument',
         {

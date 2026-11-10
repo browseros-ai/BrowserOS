@@ -131,6 +131,72 @@ fn matching_raw_failures_and_expected_failures_cannot_pass() {
 }
 
 #[test]
+fn tests_that_passing_cases_without_browser_calls_are_not_applicable() {
+    let mut value = fixture();
+    for engine in ["reference", "neo"] {
+        value["phases"][engine]["journal"]["calls"] = json!([]);
+        value["phases"][engine]["journal"]["requirements"] = json!([]);
+    }
+    let result = classify(value).expect("valid matcher-only fixture");
+    assert_eq!(
+        result.verdict,
+        Verdict::NotApplicable,
+        "passing pure matchers do not measure browser compatibility"
+    );
+    assert_eq!(result.reason, "no browser API calls in the body");
+    assert!(
+        !result.comparable,
+        "pure matchers cannot establish compatibility"
+    );
+}
+
+#[test]
+fn tests_that_empty_journals_do_not_hide_failures_or_missing_evidence() {
+    for defect in [
+        "reference-failure",
+        "neo-failure",
+        "effects",
+        "missing-journal",
+        "one-sided-call",
+    ] {
+        let mut value = fixture();
+        let reference_call = value["phases"]["reference"]["journal"]["calls"][0].clone();
+        for engine in ["reference", "neo"] {
+            value["phases"][engine]["journal"]["calls"] = json!([]);
+            value["phases"][engine]["journal"]["requirements"] = json!([]);
+        }
+        let expected = match defect {
+            "reference-failure" => {
+                outcome(&mut value, "reference", "failed", "passed");
+                Verdict::ReferenceFailure
+            }
+            "neo-failure" => {
+                outcome(&mut value, "neo", "failed", "passed");
+                Verdict::Fail
+            }
+            "effects" => {
+                projection(&mut value, "neo", "events", &json!([{"type":"click"}]));
+                Verdict::Fail
+            }
+            "missing-journal" => {
+                value["phases"]["neo"]["journal"] = Value::Null;
+                Verdict::HarnessError
+            }
+            "one-sided-call" => {
+                value["phases"]["reference"]["journal"]["calls"] = json!([reference_call]);
+                Verdict::Fail
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            classify(value).expect("valid boundary fixture").verdict,
+            expected,
+            "{defect} is not a passing matcher-only case"
+        );
+    }
+}
+
+#[test]
 fn complete_reference_census_ranks_later_missing_methods_and_retains_prefix_gaps() {
     let mut value = fixture();
     value["phases"]["reference"]["journal"]["requirements"] = json!([
@@ -1363,6 +1429,195 @@ fn tests_that_both_engines_failing_on_fixture_setup_are_bridge_limited() {
             classify(value).expect("fixture").verdict,
             Verdict::HarnessError,
             "real infrastructure failures still take precedence"
+        );
+    }
+}
+
+#[test]
+fn tests_that_trailing_native_window_blurs_are_counted_without_changing_evidence() {
+    let mut value = fixture();
+    projection(
+        &mut value,
+        "reference",
+        "events",
+        &json!([{"type":"click","target":"button"}]),
+    );
+    projection(
+        &mut value,
+        "neo",
+        "events",
+        &json!([
+            {"type":"click","target":"button"},
+            {"type":"blur","target":null},
+            {"type":"blur","target":null}
+        ]),
+    );
+    let pair: Pair = serde_json::from_value(value).expect("valid observed events");
+    let original = pair.phases["neo"].observation.clone();
+    let result = report::classify(&pair);
+    let record = serde_json::to_value(&result).expect("record");
+    assert_eq!(
+        record["verdict"], "CleanupBlur",
+        "cleanup blur has its own verdict rather than establishing a pass"
+    );
+    assert_eq!(
+        record["reason"],
+        "only difference: trailing Neo window blur after the run ended"
+    );
+    assert!(
+        !result.comparable,
+        "cleanup blur is excluded from fully comparable results"
+    );
+    assert_eq!(
+        pair.phases["neo"].observation, original,
+        "raw evidence is unchanged"
+    );
+    assert_eq!(
+        record["cleanupBlurNotes"].as_array().map(Vec::len),
+        Some(2),
+        "retain one note per omitted trailing event"
+    );
+    let summary = serde_json::to_value(report::summarize(&[result])).expect("summary");
+    for totals in [
+        &summary["totals"],
+        &summary["features"]["unclassified"],
+        &summary["suites"]["tests/page/page-goto.spec.ts"],
+    ] {
+        assert_eq!(
+            totals["cleanupBlurCount"], 1,
+            "count affected cases once in every grouping"
+        );
+    }
+}
+
+#[test]
+fn tests_that_non_cleanup_blurs_remain_behavior_differences() {
+    for (reference, neo) in [
+        (
+            json!([]),
+            json!([{"type":"blur","target":null},{"type":"click","target":"button"}]),
+        ),
+        (json!([]), json!([{"type":"blur","target":"input"}])),
+        (
+            json!([{"type":"click","target":null}]),
+            json!([{"type":"blur","target":null}]),
+        ),
+        (json!([{"type":"blur","target":null}]), json!([])),
+    ] {
+        let mut value = fixture();
+        projection(&mut value, "reference", "events", &reference);
+        projection(&mut value, "neo", "events", &neo);
+        let result = classify(value).expect("valid event fixture");
+        assert_eq!(
+            result.verdict,
+            Verdict::Fail,
+            "only extra trailing Neo window blurs may be omitted"
+        );
+        let record = serde_json::to_value(&result).expect("record");
+        assert_eq!(
+            record["cleanupBlurNotes"],
+            json!([]),
+            "no cleanup exception applies"
+        );
+    }
+}
+
+fn timestamp_fixture(actual: &Value) -> Value {
+    let mut value = fixture();
+    for engine in ["reference", "neo"] {
+        value["phases"][engine]["journal"]["roots"]["console"] =
+            object(engine, 8, "ConsoleMessage");
+        value["phases"][engine]["journal"]["capabilities"]["ConsoleMessage"] = json!(["timestamp"]);
+        value["phases"][engine]["journal"]["requirements"] = json!(["ConsoleMessage.timestamp"]);
+        value["phases"][engine]["journal"]["calls"] = json!([call(
+            engine,
+            "ConsoleMessage.timestamp",
+            (8, "ConsoleMessage"),
+            1,
+            0,
+            0,
+            if engine == "reference" {
+                json!({"tag":"number","value":100})
+            } else {
+                actual.clone()
+            },
+        )]);
+    }
+    value
+}
+
+#[test]
+fn tests_that_console_timestamps_compare_numeric_type_without_changing_raw_values() {
+    for actual in [
+        json!({"tag":"number","value":200}),
+        json!({"tag":"negativeZero"}),
+        json!({"tag":"nan"}),
+    ] {
+        let pair: Pair =
+            serde_json::from_value(timestamp_fixture(&actual)).expect("timestamp fixture");
+        let original = pair.phases["neo"]
+            .journal
+            .as_ref()
+            .expect("journal")
+            .calls
+            .clone();
+        assert_eq!(
+            report::classify(&pair).verdict,
+            Verdict::Pass,
+            "timestamps are specific to each run"
+        );
+        assert_eq!(
+            pair.phases["neo"].journal.as_ref().expect("journal").calls,
+            original,
+            "raw timestamp values remain available"
+        );
+    }
+}
+
+#[test]
+fn tests_that_timestamp_type_errors_and_other_numeric_returns_still_fail() {
+    assert_eq!(
+        classify(timestamp_fixture(&encode(&json!("200"))))
+            .expect("timestamp fixture")
+            .verdict,
+        Verdict::Fail,
+        "timestamps must remain numbers"
+    );
+    let mut value = fixture();
+    value["phases"]["reference"]["journal"]["calls"][0]["value"] =
+        json!({"tag":"number","value":100});
+    value["phases"]["neo"]["journal"]["calls"][0]["value"] = json!({"tag":"number","value":200});
+    assert_eq!(
+        classify(value).expect("ordinary numeric return").verdict,
+        Verdict::Fail,
+        "other method values still compare exactly"
+    );
+}
+
+#[test]
+fn tests_that_cleanup_blur_keeps_other_differences_and_evidence_gaps() {
+    for defect in ["return", "witness"] {
+        let mut value = fixture();
+        projection(
+            &mut value,
+            "neo",
+            "events",
+            &json!([{"type":"blur","target":null}]),
+        );
+        let expected = if defect == "return" {
+            value["phases"]["neo"]["journal"]["calls"][0]["value"] =
+                json!({"tag":"boolean","value":true});
+            Verdict::Fail
+        } else {
+            value["phases"]["neo"]["journal"]["nativeOutcome"]["pages"] = json!([]);
+            Verdict::HarnessError
+        };
+        let result = classify(value).expect("cleanup with independent defect");
+        assert_eq!(result.verdict, expected, "cleanup does not hide {defect}");
+        assert_eq!(
+            result.cleanup_blur_notes.len(),
+            1,
+            "the cleanup observation remains recorded"
         );
     }
 }

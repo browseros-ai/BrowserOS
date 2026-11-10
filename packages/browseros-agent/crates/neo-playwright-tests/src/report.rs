@@ -18,6 +18,7 @@ fn record(case: Case, reason: String) -> ResultRecord {
         reason,
         differences: Vec::new(),
         wording_notes: Vec::new(),
+        cleanup_blur_notes: Vec::new(),
         bridge_limit_with_earlier_difference: false,
         missing_reference: BTreeSet::new(),
         missing_observed: BTreeSet::new(),
@@ -430,7 +431,25 @@ fn canonical_outcome(call: &Call, objects: &BTreeMap<ObjectRef, Origin>) -> Opti
     comparable.then_some(outcome)
 }
 
-fn outcomes_agree(left: &CallOutcome, right: &CallOutcome) -> bool {
+fn is_number(value: &JsValue) -> bool {
+    matches!(
+        value,
+        JsValue::Number { .. }
+            | JsValue::NegativeZero
+            | JsValue::Nan
+            | JsValue::Infinity
+            | JsValue::NegativeInfinity
+    )
+}
+
+fn outcomes_agree(method: &str, left: &CallOutcome, right: &CallOutcome) -> bool {
+    // Console timestamps belong to separate browser runs, so only their numeric type agrees.
+    if method == "ConsoleMessage.timestamp"
+        && let (CallOutcome::Returned { value: left }, CallOutcome::Returned { value: right }) =
+            (left, right)
+    {
+        return is_number(left) && is_number(right);
+    }
     if let (CallOutcome::Threw { error: left }, CallOutcome::Threw { error: right }) = (left, right)
         && let (Some(JsValue::String { units: left }), Some(JsValue::String { units: right })) =
             (property(left, "name"), property(right, "name"))
@@ -666,7 +685,7 @@ fn compare_journals(result: &mut ResultRecord, reference: &Phase, neo: &Phase) {
                 right.as_ref(),
             );
             if expected_call.method != actual_call.method
-                || matches!((&left, &right), (Some(left), Some(right)) if !outcomes_agree(left, right))
+                || matches!((&left, &right), (Some(left), Some(right)) if !outcomes_agree(&expected_call.method, left, right))
             {
                 result.differences.push(format!("{}:{}:{} occurrence {} {} differs in method, value or error class (reference {}; Neo {} {})", key.site.file, key.site.line, key.site.column, key.occurrence, expected_call.method, outcome_kind(&expected_call.outcome), actual_call.method, outcome_kind(&actual_call.outcome)));
                 result.bridge_limit_with_earlier_difference |= left.is_some()
@@ -748,11 +767,41 @@ fn transport_error(journal: &Journal) -> Option<&str> {
         })
 }
 
-fn effects_agree(reference: &Observation, neo: &Observation) -> bool {
+fn is_window_blur(event: &JsValue) -> bool {
+    matches!(property(event, "type"), Some(JsValue::String { units }) if units.iter().copied().eq("blur".encode_utf16()))
+        && matches!(property(event, "target"), Some(JsValue::Null))
+}
+
+fn effects_agree(reference: &Observation, neo: &Observation, notes: &mut Vec<String>) -> bool {
     let mut expected = reference.data.clone();
     let mut actual = neo.data.clone();
     strip_value_ansi(&mut expected);
     strip_value_ansi(&mut actual);
+    // Native session detach disables focus emulation before its snapshot; the reference
+    // snapshots before disconnect. Only extra trailing window blurs are cleanup artifacts.
+    if let Some(JsValue::Array {
+        values: expected_events,
+    }) = property(&expected, "events")
+        && let JsValue::Record { entries, .. } = &mut actual
+        && let Some((
+            _,
+            JsValue::Array {
+                values: actual_events,
+            },
+        )) = entries
+            .iter_mut()
+            .find(|(key, _)| key.iter().copied().eq("events".encode_utf16()))
+    {
+        while actual_events.len() > expected_events.len()
+            && actual_events.last().is_some_and(is_window_blur)
+        {
+            notes.push(format!(
+                "Ignored trailing Neo window blur at event {} after native cleanup",
+                actual_events.len() - 1
+            ));
+            actual_events.pop();
+        }
+    }
     expected == actual
 }
 
@@ -904,7 +953,7 @@ pub fn classify(pair: &Pair) -> ResultRecord {
     if let (Some(expected), Some(actual)) = (&reference.observation, &neo.observation)
         && complete(Some(expected))
         && complete(Some(actual))
-        && !effects_agree(expected, actual)
+        && !effects_agree(expected, actual, &mut result.cleanup_blur_notes)
     {
         result
             .differences
@@ -915,6 +964,19 @@ pub fn classify(pair: &Pair) -> ResultRecord {
             "Neo upstream raw status {} (expected {})",
             neo_test.raw_status, neo_test.expected_status
         ));
+    }
+    if passed(neo_test)
+        && result.differences.is_empty()
+        && [reference, neo].into_iter().all(|phase| {
+            phase
+                .journal
+                .as_ref()
+                .is_some_and(|journal| journal.calls.is_empty())
+        })
+    {
+        result.verdict = Verdict::NotApplicable;
+        result.reason = "no browser API calls in the body".into();
+        return result;
     }
     if reference
         .journal
@@ -936,6 +998,9 @@ pub fn classify(pair: &Pair) -> ResultRecord {
         result.comparable = result.evidence_incomplete.is_empty() && result.reference_complete;
     } else if let Some(gap) = result.evidence_incomplete.first() {
         result.reason.clone_from(gap);
+    } else if !result.cleanup_blur_notes.is_empty() {
+        result.verdict = Verdict::CleanupBlur;
+        result.reason = "only difference: trailing Neo window blur after the run ended".into();
     } else {
         result.verdict = Verdict::Pass;
         result.reason =
@@ -1018,6 +1083,7 @@ pub struct Totals {
     pub partial_reference_count: usize,
     pub harness_limitation_count: usize,
     pub wording_count: usize,
+    pub cleanup_blur_count: usize,
     pub bridge_limit_with_earlier_difference_count: usize,
 }
 
@@ -1030,6 +1096,7 @@ impl Default for Totals {
                 Verdict::Fail,
                 Verdict::Unsupported,
                 Verdict::BridgeLimit,
+                Verdict::CleanupBlur,
                 Verdict::Skip,
                 Verdict::NotApplicable,
                 Verdict::ReferenceFailure,
@@ -1045,6 +1112,7 @@ impl Default for Totals {
             partial_reference_count: 0,
             harness_limitation_count: 0,
             wording_count: 0,
+            cleanup_blur_count: 0,
             bridge_limit_with_earlier_difference_count: 0,
         }
     }
@@ -1066,6 +1134,7 @@ impl Totals {
             usize::from(!record.reference_complete && !record.missing_reference.is_empty());
         self.harness_limitation_count += usize::from(!record.harness_limitations.is_empty());
         self.wording_count += usize::from(!record.wording_notes.is_empty());
+        self.cleanup_blur_count += usize::from(!record.cleanup_blur_notes.is_empty());
         self.bridge_limit_with_earlier_difference_count += usize::from(
             record.verdict == Verdict::BridgeLimit && record.bridge_limit_with_earlier_difference,
         );
