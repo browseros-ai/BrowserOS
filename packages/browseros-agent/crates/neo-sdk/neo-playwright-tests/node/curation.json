@@ -14,35 +14,67 @@
       "id": "PA-040",
       "title": "PA-040 expect should not print timed out error message when page closes",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-041",
       "title": "PA-041 addLocatorHandler should throw when page closes",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('custom reason');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-042",
       "title": "PA-042 should reject all promises when page is closed",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(kTargetClosedErrorMessage);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect((await frameErrorPromise).message).toContain(kTargetClosedErrorMessage);",
+          "replace": "expect((await frameErrorPromise)).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-045",
       "title": "PA-045 should terminate network waiters",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(message).toContain(kTargetClosedErrorMessage);",
+          "replace": "expect(results[i]).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(message).not.toContain('Timeout');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-048",
       "title": "PA-048 should fail with error upon disconnect",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(kTargetClosedErrorMessage);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/library/page-close.spec.ts",
@@ -65,36 +97,66 @@
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-054",
       "title": "PA-054 should reject response.finished if page closes",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('closed');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-click.spec.ts",
       "id": "EH-014",
       "title": "EH-014 should throw for detached nodes",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is not attached to the DOM');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-click.spec.ts",
       "id": "EH-015",
       "title": "EH-015 should throw for hidden nodes with force",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is not visible');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-click.spec.ts",
       "id": "EH-016",
       "title": "EH-016 should throw for recursively hidden nodes with force",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is not visible');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-click.spec.ts",
       "id": "EH-017",
       "title": "EH-017 should throw for <br> elements with force",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is outside of the viewport');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-convenience.spec.ts",
@@ -117,8 +179,18 @@
       "file": "tests/page/elementhandle-convenience.spec.ts",
       "id": "EH-030",
       "title": "EH-030 innerText should throw",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error1.message).toContain('Node is not an HTMLElement');",
+          "replace": "expect(error1).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error2.message).toContain('Node is not an HTMLElement');",
+          "replace": "expect(error2).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-convenience.spec.ts",
@@ -137,302 +209,354 @@
       "file": "tests/page/elementhandle-eval-on-selector.spec.ts",
       "id": "EH-041",
       "title": "EH-041 should throw in case of missing selector",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "error.message",
+          "replace": "error"
+        },
+        {
+          "find": "expect(errorMessage).toContain(`elementHandle.$eval: Failed to find element matching selector \".a\"`);",
+          "replace": "expect(errorMessage).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-screenshot.spec.ts",
       "id": "EH-083",
       "title": "element screenshot › EH-083 should fail to screenshot a detached element",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(screenshotError.message).toContain('Element is not attached to the DOM');",
+          "replace": "expect(screenshotError).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-screenshot.spec.ts",
       "id": "EH-084",
       "title": "element screenshot › EH-084 should timeout waiting for visible",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('elementHandle.screenshot: Timeout 3000ms exceeded');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain('element is not visible');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-scroll-into-view.spec.ts",
       "id": "EH-094",
       "title": "EH-094 should throw for detached element",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is not attached to the DOM');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-scroll-into-view.spec.ts",
       "id": "EH-101",
       "title": "EH-101 should timeout waiting for visible",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('element is not visible');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain('retrying scroll into view action');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-select-text.spec.ts",
       "id": "EH-105",
       "title": "EH-105 should timeout waiting for invisible element",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('element is not visible');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-wait-for-element-state.spec.ts",
       "id": "EH-114",
       "title": "EH-114 should timeout waiting for visible",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Timeout 1000ms exceeded');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-wait-for-element-state.spec.ts",
       "id": "EH-115",
       "title": "EH-115 should throw waiting for visible when detached",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is not attached to the DOM');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/elementhandle-wait-for-element-state.spec.ts",
       "id": "EH-119",
       "title": "EH-119 should throw waiting for enabled when detached",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is not attached to the DOM');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/eval-on-selector.spec.ts",
       "id": "ES-014",
       "title": "ES-014 should throw error if no element is found",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Failed to find element matching selector \"section\"');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/eval-on-selector.spec.ts",
       "id": "ES-020",
       "title": "ES-020 should throw on multiple * captures",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Only one of the selectors can capture using * modifier');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/eval-on-selector.spec.ts",
       "id": "ES-021",
       "title": "ES-021 should throw on malformed * capture",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Unknown engine \"\" while parsing selector *=div');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-005",
       "title": "toBeChecked › EX-005 with indeterminate:true and checked",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`Can\\'t assert indeterminate and checked at the same time`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-006",
       "title": "toBeChecked › EX-006 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-009",
       "title": "toBeChecked › EX-009 fail with not",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-010",
       "title": "toBeChecked › EX-010 fail with checked:false",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-011",
       "title": "toBeChecked › EX-011 fail with indeterminate: true",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-012",
       "title": "toBeChecked › EX-012 fail missing",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-014",
       "title": "toBeChecked › EX-014 friendly log",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-022",
       "title": "toBeEditable › EX-022 throws",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is not an <input>, <textarea>, <select> or [contenteditable] and does not have a role allowing [aria-readonly]');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-026",
       "title": "toBeEnabled › EX-026 failed",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-045",
       "title": "toBeVisible › EX-045 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-046",
       "title": "toBeVisible › EX-046 fail with not",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-057",
       "title": "toBeHidden › EX-057 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-058",
       "title": "toBeHidden › EX-058 fail with not",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-059",
       "title": "toBeHidden › EX-059 fail with not when nothing matching",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-064",
       "title": "EX-064 should print unknown engine error",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-065",
       "title": "EX-065 should print selector syntax error",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-068",
       "title": "EX-068 toBeOK fail with invalid argument",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('toBeOK can be only used with APIResponse object');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-069",
       "title": "EX-069 toBeOK fail with promise",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('toBeOK can be only used with APIResponse object');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-070",
       "title": "toBeOK should print response with text content type when fails › EX-070 text content type",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-071",
       "title": "toBeOK should print response with text content type when fails › EX-071 no content type",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-072",
       "title": "toBeOK should print response with text content type when fails › EX-072 image content type",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-081",
       "title": "toBeAttached › EX-081 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-082",
       "title": "toBeAttached › EX-082 fail with not",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/expect-builtins.spec.ts",
-      "id": "EX-149",
-      "title": ".toThrow() › EX-149 substring passes",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/expect-builtins.spec.ts",
-      "id": "EX-150",
-      "title": ".toThrow() › EX-150 substring fails when did not throw",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/expect-builtins.spec.ts",
-      "id": "EX-151",
-      "title": ".toThrow() › EX-151 substring fails when message did not match",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/expect-builtins.spec.ts",
-      "id": "EX-152",
-      "title": ".toThrow() › EX-152 regexp passes",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/expect-builtins.spec.ts",
-      "id": "EX-153",
-      "title": ".toThrow() › EX-153 regexp fails when did not throw",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/expect-builtins.spec.ts",
-      "id": "EX-155",
-      "title": ".toThrow() › EX-155 object with message passes",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/expect-builtins.spec.ts",
-      "id": "EX-156",
-      "title": ".toThrow() › EX-156 properly escapes strings when matching against errors",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/expect-builtins.spec.ts",
-      "id": "EX-157",
-      "title": ".toThrow() › EX-157 error message and cause properties",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-builtins.spec.ts",
@@ -619,70 +743,70 @@
       "id": "EX-186",
       "title": "toHaveCount › EX-186 fail zero",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-187",
       "title": "toHaveCount › EX-187 fail zero 2",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-189",
       "title": "toHaveJSProperty › EX-189 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-191",
       "title": "toHaveJSProperty › EX-191 fail string",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-193",
       "title": "toHaveJSProperty › EX-193 fail number",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-195",
       "title": "toHaveJSProperty › EX-195 fail boolean",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-197",
       "title": "toHaveJSProperty › EX-197 fail boolean 2",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-201",
       "title": "toHaveJSProperty › EX-201 fail nested",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-204",
       "title": "toHaveClass › EX-204 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-206",
       "title": "toHaveClass › EX-206 fail with array",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
@@ -702,7 +826,7 @@
       "id": "EX-209",
       "title": "toContainClass › EX-209 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
@@ -722,42 +846,48 @@
       "id": "EX-211",
       "title": "toContainClass › EX-211 fail with array",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-213",
       "title": "toHaveTitle › EX-213 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-215",
       "title": "toHaveURL › EX-215 fail string",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-216",
       "title": "toHaveURL › EX-216 fail with invalid argument",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(stripAnsi(error.message)).toContain(`expect(page).toHaveURL(expected) failed\n\nError: expected value must be a string or regular expression\nExpected has type:  object\nExpected has value: {}\n`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-217",
       "title": "toHaveURL › EX-217 fail with positive predicate",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-218",
       "title": "toHaveURL › EX-218 fail with negative predicate",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
@@ -798,91 +928,105 @@
       "id": "EX-235",
       "title": "toBeInViewport › EX-235 should have good stack",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-237",
       "title": "EX-237 toHaveCount should not produce logs twice",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-238",
       "title": "EX-238 toHaveText should not produce logs twice",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-239",
       "title": "EX-239 toHaveText that does not match should not produce logs twice",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-240",
       "title": "EX-240 strict mode violation error format",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-241",
       "title": "EX-241 invalid selector error format",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-242",
       "title": "EX-242 should report expect error details when page closes during expect",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-243",
       "title": "EX-243 should report page close reason when page closes during expect",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-244",
       "title": "EX-244 should print element not found",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-245",
       "title": "EX-245 should print timed out error message when value does not match",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-246",
       "title": "EX-246 should print timed out error message with impossible timeout",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-247",
       "title": "EX-247 should print timed out error message when value does not match with impossible timeout",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-251",
       "title": "EX-251 should timeout during first locator handler check",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(stripAnsi(error.message)).toContain(`expect(locator).toHaveText(expected) failed\n\nLocator:  locator('span')\nExpected: \"bye\"\nReceived: \"\"\nTimeout:  3000ms\n\nCall log:\n`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`locator handler has finished, waiting for locator('div') to be hidden`);",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain(`locator resolved to visible <div>hello</div>`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
@@ -984,119 +1128,151 @@
       "id": "EX-275",
       "title": "toHaveText with regex › EX-275 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-277",
       "title": "toContainText with regex › EX-277 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-279",
       "title": "toContainText with string › EX-279 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-282",
       "title": "toHaveText with text › EX-282 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-286",
       "title": "toHaveText with text › EX-286 fail with impossible timeout",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-287",
       "title": "toHaveText with text › EX-287 do not show \"element(s) not found\" when the real failure is a string mismatch",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-289",
       "title": "not.toHaveText › EX-289 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-290",
       "title": "not.toHaveText › EX-290 should work when selector does not match",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(stripAnsi(error.message)).toContain('Expected: not \"hello\"');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(stripAnsi(error.message)).toContain('Error: element(s) not found');",
+          "replace": ""
+        },
+        {
+          "find": "expect(stripAnsi(error.message)).toContain('waiting for locator(\\'span\\')');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-296",
       "title": "toHaveText with array › EX-296 fail on not+empty",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-298",
       "title": "toHaveText with array › EX-298 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-299",
       "title": "toHaveText with array › EX-299 fail on repeating array matchers",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('locator resolved to 1 element');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-301",
       "title": "toContainText with array › EX-301 fail",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "id": "EX-305",
       "title": "EX-305 should support failure",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "id": "EX-308",
       "title": "toHaveValues with multi-select › EX-308 exact match with text failure",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "id": "EX-310",
       "title": "toHaveValues with multi-select › EX-310 fails when items not selected",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "id": "EX-311",
       "title": "toHaveValues with multi-select › EX-311 fails when multiple not specified",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Not a select element with a multiple attribute');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "id": "EX-312",
       "title": "toHaveValues with multi-select › EX-312 fails when not a select element",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Not a select element with a multiple attribute');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/firefox-network-response.spec.ts",
@@ -1150,36 +1326,74 @@
       "file": "tests/page/frame-evaluate.spec.ts",
       "id": "FR-008",
       "title": "FR-008 should not allow cross-frame element handles when frames do not script each other",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Unable to adopt element handle from a different document');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/frame-evaluate.spec.ts",
       "id": "FR-009",
       "title": "FR-009 should throw for detached frames",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('frame.evaluate: Frame was detached');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/frame-frame-element.spec.ts",
       "id": "FR-017",
       "title": "FR-017 should throw when detached",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Frame has been detached.');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/frame-goto.spec.ts",
       "id": "FR-021",
       "title": "FR-021 should reject when frame detaches",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message.includes('net::ERR_ABORTED') || error.message.toLowerCase().includes('frame was detached')).toBe(true);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message.toLowerCase()).toContain('frame was detached');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/frame-goto.spec.ts",
       "id": "FR-022",
       "title": "FR-022 should continue after client redirect",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.goto: Timeout 5000ms exceeded.');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain(`navigating to \"${url}\", waiting until \"networkidle\"`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/interception.spec.ts",
@@ -1245,92 +1459,214 @@
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-003",
       "title": "LO-003 should fail click when elements match in multiple frames",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('frameLocator() matched elements in multiple frames');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`waiting for frameLocator().locator('button')`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-004",
       "title": "LO-004 should fail click upon strict mode violation inside a single frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('strict mode violation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`waiting for frameLocator().locator('button')`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-005",
       "title": "LO-005 should time out on click when there are no matches",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Timeout 1000ms exceeded');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain(`waiting for frameLocator().locator('button')`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-007",
       "title": "LO-007 should fail count when elements match in multiple frames",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('frameLocator() matched elements in multiple frames');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-010",
       "title": "LO-010 should fail toHaveCount when elements match in multiple frames",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('frameLocator() matched elements in multiple frames');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`Locator: frameLocator().locator('span')`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-013",
       "title": "LO-013 should fail toHaveText when elements match in multiple frames",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('frameLocator() matched elements in multiple frames');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`Locator: frameLocator().locator('div')`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-014",
       "title": "LO-014 should fail toHaveText with an array when elements match in multiple frames",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('frameLocator() matched elements in multiple frames');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-015",
       "title": "LO-015 should fail toHaveText upon strict mode violation inside a single frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('strict mode violation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`Locator: frameLocator().locator('div')`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-017",
       "title": "LO-017 should fail evaluate when elements match in multiple frames",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('frameLocator() matched elements in multiple frames');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-018",
       "title": "LO-018 should time out on evaluate when there are no matches",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Timeout 1000ms exceeded');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain(`waiting for frameLocator().locator('button')`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-020",
       "title": "LO-020 should fail evaluateAll when elements match in multiple frames",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('frameLocator() matched elements in multiple frames');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-039",
       "title": "LO-039 should fail when the frame to enter matches in multiple frames",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('frameLocator() matched elements in multiple frames');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-042",
       "title": "LO-042 should not allow frameLocator() inside a composite locator",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`frameLocator() is not allowed inside composite locators, while querying \"locator('button').or(frameLocator().locator('a'))\"`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error2.message).toContain(`frameLocator() is not allowed inside composite locators`);",
+          "replace": "expect(error2).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error3.message).toContain(`frameLocator() is not allowed inside composite locators, while querying \"frameLocator().locator('button').or(frameLocator().locator('a'))\"`);",
+          "replace": "expect(error3).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error4.message).toContain(`frameLocator() is not allowed inside composite locators`);",
+          "replace": "expect(error4).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error5.message).toContain(`frameLocator() matched elements in multiple frames`);",
+          "replace": "expect(error5).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
@@ -1357,8 +1693,14 @@
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-046",
       "title": "LO-046 should not allow owner on frameLocator()",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Selector cannot be empty after frameLocator()');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
@@ -1394,15 +1736,25 @@
       "file": "tests/page/locator-convenience.spec.ts",
       "id": "LO-062",
       "title": "LO-062 innerText should throw",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error1.message).toContain('Node is not an HTMLElement');",
+          "replace": "expect(error1).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error2.message).toContain('Node is not an HTMLElement');",
+          "replace": "expect(error2).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-convenience.spec.ts",
       "id": "LO-063",
       "title": "LO-063 innerText should produce log",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/locator-convenience.spec.ts",
@@ -1434,22 +1786,44 @@
       "file": "tests/page/locator-frame.spec.ts",
       "id": "LO-092",
       "title": "LO-092 should wait for frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`waiting for locator('body').locator('iframe').contentFrame()`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-frame.spec.ts",
       "id": "LO-102",
       "title": "LO-102 should non work for non-frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('<div></div>');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('<iframe> was expected');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/locator-frame.spec.ts",
       "id": "LO-104",
       "title": "LO-104 locator.frameLocator should throw on ambiguity",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`Error: strict mode violation: locator('body').locator('iframe') resolved to 3 elements`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-frame.spec.ts",
@@ -1481,15 +1855,27 @@
       "file": "tests/page/locator-is-visible.spec.ts",
       "id": "LO-125",
       "title": "LO-125 isVisible with invalid selector should throw",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Unknown engine \"hey\" while parsing selector hey=what');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-misc-1.spec.ts",
       "id": "LO-137",
       "title": "LO-137 focus should respect strictness",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('strict mode violation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-misc-2.spec.ts",
@@ -1516,22 +1902,40 @@
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-159",
       "title": "LO-159 should throw on capture w/ nth()",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(e.message).toContain(`Can't query n-th element`);",
+          "replace": "expect(e).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-160",
       "title": "LO-160 should throw on due to strictness",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(e.message).toContain(`strict mode violation`);",
+          "replace": "expect(e).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-161",
       "title": "LO-161 should throw on due to strictness 2",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(e.message).toContain(`strict mode violation`);",
+          "replace": "expect(e).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-query.spec.ts",
@@ -1567,22 +1971,27 @@
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-180",
       "title": "LO-180 should enforce same frame for has/leftOf/rightOf/above/below/near",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/locator-wait-for-function.spec.ts",
-      "id": "LO-189",
-      "title": "LO-189 should throw when predicate throws",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`Inner \"${option}\" locator must belong to the same frame.`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/locator-wait-for-function.spec.ts",
       "id": "LO-190",
       "title": "LO-190 should throw on strict mode violation",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('strict mode violation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/matchers.misc.spec.ts",
@@ -1605,8 +2014,14 @@
       "file": "tests/page/network-post-data.spec.ts",
       "id": "NE-110",
       "title": "NE-110 should throw on invalid JSON in post data",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('POST data is not a valid JSON object: <not a json>');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-add-init-script-callback.spec.ts",
@@ -1622,18 +2037,17 @@
       ]
     },
     {
-      "file": "tests/page/page-add-init-script-callback.spec.ts",
-      "id": "IS-018",
-      "title": "IS-018 should propagate callback errors to the page",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
       "file": "tests/page/page-add-init-script.spec.ts",
       "id": "IS-004",
       "title": "IS-004 should throw without path and content",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Either path or content property must be present');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-add-locator-handler.spec.ts",
@@ -1699,29 +2113,40 @@
       "file": "tests/page/page-add-script-tag.spec.ts",
       "id": "AT-001",
       "title": "AT-001 should throw an error if no options are provided",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-add-script-tag.spec.ts",
-      "id": "AT-008",
-      "title": "AT-008 should include sourceURL when path is provided",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Provide an object with a `url`, `path` or `content` property');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-add-script-tag.spec.ts",
       "id": "AT-012",
       "title": "AT-012 should throw a nice error when the request fails",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(url);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-add-style-tag.spec.ts",
       "id": "AT-013",
       "title": "AT-013 should throw an error if no options are provided",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Provide an object with a `url`, `path` or `content` property');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-aria-snapshot-ai.spec.ts",
@@ -1754,28 +2179,28 @@
       "id": "AW-010",
       "title": "AW-010 should report navigation in the log when clicking anchor",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-autowaiting-basic.spec.ts",
       "id": "AW-011",
       "title": "AW-011 should report and collapse log in action",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-autowaiting-basic.spec.ts",
       "id": "AW-012",
       "title": "AW-012 should report and collapse log in expect",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-basic.spec.ts",
       "id": "PA-002",
       "title": "PA-002 async stacks should work",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-basic.spec.ts",
@@ -1788,29 +2213,53 @@
       "file": "tests/page/page-check.spec.ts",
       "id": "CH-010",
       "title": "CH-010 should throw when not a checkbox",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Not a checkbox or radio button');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-check.spec.ts",
       "id": "CH-011",
       "title": "CH-011 should throw when not a checkbox 2",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Not a checkbox or radio button');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-check.spec.ts",
       "id": "CH-017",
       "title": "CH-017 should throw when trying to uncheck radio button",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Cannot uncheck radio button');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-click-react.spec.ts",
       "id": "CL-106",
       "title": "CL-106 should timeout when click opens alert",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.click: Timeout 3000ms exceeded.');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        }
+      ]
     },
     {
       "file": "tests/page/page-click-scroll.spec.ts",
@@ -1823,8 +2272,14 @@
       "file": "tests/page/page-click-scroll.spec.ts",
       "id": "CL-098",
       "title": "CL-098 should not crash when force-clicking hidden input",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is not visible');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-click-scroll.spec.ts",
@@ -1911,15 +2366,51 @@
       "file": "tests/page/page-click-timeout-2.spec.ts",
       "id": "CL-114",
       "title": "CL-114 should timeout waiting for display:none to be gone",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.click: Timeout 5000ms exceeded.');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain('waiting for element to be visible, enabled and stable');",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain('element is not visible');",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain('retrying click action');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-click-timeout-2.spec.ts",
       "id": "CL-115",
       "title": "CL-115 should timeout waiting for visibility:hidden to be gone",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.click: Timeout 5000ms exceeded.');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain('waiting for element to be visible, enabled and stable');",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain('element is not visible');",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain('retrying click action');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-click-timeout-3.spec.ts",
@@ -1946,22 +2437,58 @@
       "file": "tests/page/page-click-timeout-3.spec.ts",
       "id": "CL-117",
       "title": "CL-117 should timeout waiting for hit target",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('elementHandle.click: Timeout 5000ms exceeded.');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain('<div id=\"blocker\"></div> intercepts pointer events');",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain('retrying click action');",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain('waiting 500ms');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-click-timeout-3.spec.ts",
       "id": "CL-119",
       "title": "CL-119 should report wrong hit target subtree",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-click-timeout-4.spec.ts",
       "id": "CL-120",
       "title": "CL-120 should timeout waiting for stable position",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('elementHandle.click: Timeout 3000ms exceeded.');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain('waiting for element to be visible, enabled and stable');",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain('element is not stable');",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain('retrying click action');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-click-timeout-4.spec.ts",
@@ -2065,8 +2592,14 @@
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-068",
       "title": "CL-068 should retry when navigating during the click",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('element was detached from the DOM, retrying');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-click.spec.ts",
@@ -2181,15 +2714,27 @@
       "file": "tests/page/page-emulate-media.spec.ts",
       "id": "EM-002",
       "title": "EM-002 should throw in case of bad media argument",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('media: expected one of (screen|print|no-override)');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-emulate-media.spec.ts",
       "id": "EM-005",
       "title": "EM-005 should throw in case of bad colorScheme argument",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('colorScheme: expected one of (dark|light|no-preference|no-override)');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate-callback.spec.ts",
@@ -2205,39 +2750,43 @@
       ]
     },
     {
-      "file": "tests/page/page-evaluate-callback.spec.ts",
-      "id": "EV-120",
-      "title": "EV-120 should propagate callback errors to the page",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-evaluate-callback.spec.ts",
-      "id": "EV-129",
-      "title": "EV-129 should propagate callback errors with locator.evaluate",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
       "file": "tests/page/page-evaluate-no-stall.spec.ts",
       "id": "EV-136",
       "title": "EV-136 should throw while pending navigation",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Frame is currently attempting a navigation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate-no-stall.spec.ts",
       "id": "EV-137",
       "title": "EV-137 should throw when no main execution context",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect([\n    'Frame does not yet have a main execution context',\n    'Frame is currently attempting a navigation',\n    'Navigation interrupted the evaluation',\n  ]).toContain(error.message);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-022",
       "title": "EV-022 should throw when evaluation triggers reload",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('navigation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
@@ -2251,27 +2800,6 @@
           "replace": ""
         }
       ]
-    },
-    {
-      "file": "tests/page/page-evaluate.spec.ts",
-      "id": "EV-028",
-      "title": "EV-028 should support thrown strings as error messages",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/page-evaluate.spec.ts",
-      "id": "EV-029",
-      "title": "EV-029 should support thrown numbers as error messages",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/page-evaluate.spec.ts",
-      "id": "EV-031",
-      "title": "EV-031 should include a non-error rejection value in the error message",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
@@ -2290,8 +2818,14 @@
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-038",
       "title": "EV-038 should throw when passed more than one parameter",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect('' + error).toContain('Too many arguments');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
@@ -2323,78 +2857,79 @@
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-050",
       "title": "EV-050 should throw usable message for unserializable shallow function",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(() => page.evaluate(arg => arg, () => { }))\n      .rejects.toThrow(/Attempting to serialize unexpected value: \\(\\) => {}/)",
+          "replace": "expect(() => page.evaluate(arg => arg, () => { }))\n      .rejects.toThrow()"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-051",
       "title": "EV-051 should throw usable message for unserializable object one deep function",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(() => page.evaluate(arg => arg, { aProperty: () => { } }))\n      .rejects.toThrow(/Attempting to serialize unexpected value at position \"aProperty\": \\(\\) => {}/)",
+          "replace": "expect(() => page.evaluate(arg => arg, { aProperty: () => { } }))\n      .rejects.toThrow()"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-052",
       "title": "EV-052 should throw usable message for unserializable object nested function",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(() => page.evaluate(arg => arg, { a: { inner: { property: () => { } } } }))\n      .rejects.toThrow(/Attempting to serialize unexpected value at position \"a\\.inner\\.property\": \\(\\) => {}/)",
+          "replace": "expect(() => page.evaluate(arg => arg, { a: { inner: { property: () => { } } } }))\n      .rejects.toThrow()"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-053",
       "title": "EV-053 should throw usable message for unserializable array nested function",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/page-evaluate.spec.ts",
-      "id": "EV-056",
-      "title": "EV-056 should be able to throw a tricky error",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(() => page.evaluate(arg => arg, { a: { inner: ['firstValue', { property: () => { } }] } }))\n      .rejects.toThrow(/Attempting to serialize unexpected value at position \"a\\.inner\\[1\\]\\.property\": \\(\\) => {}/)",
+          "replace": "expect(() => page.evaluate(arg => arg, { a: { inner: ['firstValue', { property: () => { } }] } }))\n      .rejects.toThrow()"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-061",
       "title": "EV-061 should throw if underlying element was disposed",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('no object with guid');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-063",
       "title": "EV-063 should throw a nice error after a navigation",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-evaluate.spec.ts",
-      "id": "EV-068",
-      "title": "EV-068 should throw error with detailed information on exception inside promise ",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
-    },
-    {
-      "file": "tests/page/page-evaluate.spec.ts",
-      "id": "EV-073",
-      "title": "EV-073 should respect use strict expression",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-evaluate.spec.ts",
-      "id": "EV-075",
-      "title": "EV-075 should not leak handles",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-evaluate.spec.ts",
-      "id": "EV-077",
-      "title": "EV-077 should evaluate exception with a function on the stack",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('navigation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
@@ -2442,13 +2977,6 @@
           "replace": ""
         }
       ]
-    },
-    {
-      "file": "tests/page/page-event-console.spec.ts",
-      "id": "CM-020",
-      "title": "CM-020 pageErrors since-navigation filter should work",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
     },
     {
       "file": "tests/page/page-event-network.spec.ts",
@@ -2556,13 +3084,6 @@
     },
     {
       "file": "tests/page/page-event-pageerror.spec.ts",
-      "id": "ER-003",
-      "title": "ER-003 should contain sourceURL",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-event-pageerror.spec.ts",
       "id": "ER-004",
       "title": "ER-004 should contain the Error.name property",
       "action": "patch",
@@ -2586,34 +3107,6 @@
           "replace": ""
         }
       ]
-    },
-    {
-      "file": "tests/page/page-event-pageerror.spec.ts",
-      "id": "ER-006",
-      "title": "ER-006 should handle odd values",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-event-pageerror.spec.ts",
-      "id": "ER-007",
-      "title": "ER-007 should handle object",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-event-pageerror.spec.ts",
-      "id": "ER-008",
-      "title": "ER-008 should handle window",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-event-pageerror.spec.ts",
-      "id": "ER-010",
-      "title": "ER-010 should emit error from unhandled rejects",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
     },
     {
       "file": "tests/page/page-event-pageerror.spec.ts",
@@ -2648,13 +3141,6 @@
           "replace": ""
         }
       ]
-    },
-    {
-      "file": "tests/page/page-event-pageerror.spec.ts",
-      "id": "ER-013",
-      "title": "ER-013 should fire illegal character error",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
     },
     {
       "file": "tests/page/page-event-request.spec.ts",
@@ -2697,17 +3183,16 @@
     },
     {
       "file": "tests/page/page-expose-function.spec.ts",
-      "id": "EF-005",
-      "title": "EF-005 should throw exception in page context",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-expose-function.spec.ts",
       "id": "EF-014",
       "title": "EF-014 should throw for duplicate registrations",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.exposeFunction: Function \"foo\" has been already registered');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-expose-function.spec.ts",
@@ -2733,36 +3218,70 @@
       "file": "tests/page/page-fill.spec.ts",
       "id": "FI-003",
       "title": "FI-003 should throw on unsupported inputs",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`Input of type \"${type}\" cannot be filled`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-fill.spec.ts",
       "id": "FI-018",
       "title": "FI-018 should throw nice error without injected script stack when element is not an <input>",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.fill: Error: Element is not an <input>, <textarea> or [contenteditable] element\\nCall log:');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-fill.spec.ts",
       "id": "FI-019",
       "title": "FI-019 should throw if passed a non-string value",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('value: expected string, got number');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-fill.spec.ts",
       "id": "FI-029",
       "title": "FI-029 should not be able to fill text into the input[type=number]",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Cannot type text into input[type=number]');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-fill.spec.ts",
       "id": "FI-036",
       "title": "FI-036 should fail with a nice error on inert element",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Timeout 1000ms exceeded');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain('element is inert');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-focus.spec.ts",
@@ -2810,36 +3329,90 @@
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-023",
       "title": "NA-023 should fail when navigating to bad url",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Invalid URL');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('NS_ERROR_MALFORMED_URI');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('Cannot navigate to invalid URL');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('Invalid url');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-024",
       "title": "NA-024 should fail when navigating to bad SSL",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toMatch(expectedSSLError(browserName, platform, channel));",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-025",
       "title": "NA-025 should fail when navigating to bad SSL after redirects",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toMatch(expectedSSLError(browserName, platform, channel));",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-028",
       "title": "NA-028 should throw if networkidle2 is passed as an option",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`waitUntil: expected one of (load|domcontentloaded|networkidle|commit)`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-029",
       "title": "NA-029 should fail when main resources failed to load",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('net::ERR_CONNECTION_REFUSED');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`Could not connect to server`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('Could not connect');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('NS_ERROR_CONNECTION_REFUSED');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-goto.spec.ts",
@@ -2947,8 +3520,26 @@
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-037",
       "title": "NA-037 should fail when replaced by another navigation",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('net::ERR_ABORTED');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`page.goto: Navigation to \"${server.PREFIX + '/empty.html'}\" is interrupted by another navigation to \"${server.PREFIX + '/one-style.html'}\"`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('page.goto: Protocol error (browsingContext.navigate): unknown error');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message.includes(`page.goto: Navigation to \"${server.PREFIX + '/empty.html'}\" is interrupted by another navigation to \"${server.PREFIX + '/one-style.html'}\"`) || error.message.includes('NS_BINDING_ABORTED')).toBe(true);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-goto.spec.ts",
@@ -2972,21 +3563,37 @@
       "id": "NA-050",
       "title": "NA-050 should fail when navigating and show the url at the error message",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-054",
       "title": "NA-054 should reject referer option when setExtraHTTPHeaders provides referer",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('\"referer\" is already specified as extra HTTP header');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(server.PREFIX + '/grid.html');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-059",
       "title": "NA-059 should not throw unhandled rejections on invalid url",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(e.toString()).toContain('Panel Title');",
+          "replace": "expect(e).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-history.spec.ts",
@@ -3006,8 +3613,22 @@
       "file": "tests/page/page-keyboard.spec.ts",
       "id": "KB-027",
       "title": "KB-027 should throw on unknown keys",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Unknown key: \"NotARealKey\"');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error && error.message).toContain('Unknown key: \"ё\"');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error && error.message).toContain('Unknown key: \"😊\"');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-keyboard.spec.ts",
@@ -3059,8 +3680,14 @@
       "file": "tests/page/page-network-response.spec.ts",
       "id": "NE-036",
       "title": "NE-036 should throw when requesting body of redirected response",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Response body is unavailable for redirect responses');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-network-response.spec.ts",
@@ -3119,8 +3746,14 @@
       "file": "tests/page/page-request-continue.spec.ts",
       "id": "RO-064",
       "title": "RO-064 should not throw if request was cancelled by the page",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(cancelledRequest.failure().errorText).toMatch(/cancelled|aborted/i);",
+          "replace": "expect(cancelledRequest.failure()).not.toBeNull();"
+        }
+      ]
     },
     {
       "file": "tests/page/page-request-fulfill.spec.ts",
@@ -3153,8 +3786,18 @@
       "file": "tests/page/page-request-intercept.spec.ts",
       "id": "RO-143",
       "title": "RO-143 should support timeout option in route.fetch",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`route.fetch: Timeout 1000ms exceeded`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`Timeout 2000ms exceeded`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-route.spec.ts",
@@ -3181,8 +3824,14 @@
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-017",
       "title": "RO-017 should not throw if request was cancelled by the page",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(cancelledRequest.failure().errorText).toMatch(/cancelled|aborted/i);",
+          "replace": "expect(cancelledRequest.failure()).not.toBeNull();"
+        }
+      ]
     },
     {
       "file": "tests/page/page-route.spec.ts",
@@ -3239,13 +3888,6 @@
     },
     {
       "file": "tests/page/page-route.spec.ts",
-      "id": "RO-037",
-      "title": "RO-037 should respect cors overrides",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-route.spec.ts",
       "id": "RO-042",
       "title": "RO-042 should not abort preflighted cross-origin redirect when a route is registered",
       "action": "delete",
@@ -3255,71 +3897,131 @@
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-053",
       "title": "RO-053 route.abort should throw if called twice",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(e.message).toContain('Route is already handled!');",
+          "replace": "expect(e).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-053",
       "title": "RO-053 route.continue should throw if called twice",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(e.message).toContain('Route is already handled!');",
+          "replace": "expect(e).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-053",
       "title": "RO-053 route.fallback should throw if called twice",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(e.message).toContain('Route is already handled!');",
+          "replace": "expect(e).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-053",
       "title": "RO-053 route.fulfill should throw if called twice",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(e.message).toContain('Route is already handled!');",
+          "replace": "expect(e).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-008",
       "title": "page screenshot › SS-008 should throw on clip outside the viewport",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(screenshotError.message).toContain('Clipped area is either empty or outside the resulting image');",
+          "replace": "expect(screenshotError).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-009",
       "title": "page screenshot › SS-009 should throw on a negative clip size",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(screenshotError.message).toContain('Expected options.clip.width to be greater than 0');",
+          "replace": "expect(screenshotError).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-021",
       "title": "page screenshot › SS-021 quality option should throw for webp when out of range",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Expected options.quality to be between 0 and 100');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-032",
       "title": "page screenshot › SS-032 path option should throw for unsupported mime type",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('path: unsupported mime type \"text/plain\"');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-033",
       "title": "page screenshot › SS-033 quality option should throw for png",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('options.quality is unsupported for the png');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-034",
       "title": "page screenshot › SS-034 zero quality option should throw for png",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('options.quality is unsupported for the png');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-screenshot.spec.ts",
@@ -3372,22 +4074,52 @@
       "file": "tests/page/page-select-option.spec.ts",
       "id": "SO-015",
       "title": "SO-015 should throw when element is not a <select>",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is not a <select> element');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-select-option.spec.ts",
       "id": "SO-020",
       "title": "SO-020 should not allow null items",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('options[1]: expected object, got null');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-select-option.spec.ts",
       "id": "SO-024",
       "title": "SO-024 should throw if passed wrong types",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('options[0]: expected object, got number');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('options[0].value: expected string, got number');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('options[0].label: expected string, got number');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('options[0].index: expected integer, got string');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-select-option.spec.ts",
@@ -3449,8 +4181,14 @@
       "file": "tests/page/page-set-content.spec.ts",
       "id": "PA-034",
       "title": "PA-034 content() should throw nice error during navigation",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(contentOrError?.message).toContain('Unable to retrieve content because the page is navigating and changing the content.');",
+          "replace": "expect(contentOrError).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-set-content.spec.ts",
@@ -3469,15 +4207,31 @@
       "file": "tests/page/page-set-content.spec.ts",
       "id": "PA-037",
       "title": "PA-037 should handle timeout properly 2",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.setContent: Timeout 1000ms exceeded');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        }
+      ]
     },
     {
       "file": "tests/page/page-set-extra-http-headers.spec.ts",
       "id": "NE-117",
       "title": "NE-117 should throw for non-string header values",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error1.message).toContain('Expected value of header \"foo\" to be String, but \"number\" is found.');",
+          "replace": "expect(error1).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error2.message).toContain('Expected value of header \"foo\" to be String, but \"boolean\" is found.');",
+          "replace": "expect(error2).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-set-input-files.spec.ts",
@@ -3542,78 +4296,148 @@
       "file": "tests/page/page-set-input-files.spec.ts",
       "id": "IF-010",
       "title": "IF-010 should throw an error if the file does not exist",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('ENOENT: no such file or directory');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('i actually do not exist.txt');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-001",
       "title": "SM-001 should fail page.textContent in strict mode",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('strict mode violation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`1) <span>span1</span> aka getByText('span1')`);",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain(`2) <span>target</span> aka getByText('target')`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-002",
       "title": "SM-002 should fail page.getAttribute in strict mode",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('strict mode violation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-003",
       "title": "SM-003 should fail page.fill in strict mode",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('strict mode violation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`1) <input/> aka getByRole('textbox').first()`);",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain(`2) <input/> aka locator('div').getByRole('textbox')`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-004",
       "title": "SM-004 should fail page.$ in strict mode",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('strict mode violation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-005",
       "title": "SM-005 should fail page.waitForSelector in strict mode",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('strict mode violation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-006",
       "title": "SM-006 should fail page.dispatchEvent in strict mode",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('strict mode violation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain(`1) <span></span> aka locator('span').first()`);",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain(`2) <span></span> aka locator('div span')`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-007",
       "title": "SM-007 should properly format :nth-child() in strict mode message",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-008",
       "title": "SM-008 should escape class names",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-009",
       "title": "SM-009 should escape tag names",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-010",
       "title": "SM-010 should keep the engine name for a \"text=..\" selector in strict mode",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-function.spec.ts",
@@ -3632,29 +4456,14 @@
       "file": "tests/page/page-wait-for-function.spec.ts",
       "id": "WA-006",
       "title": "WA-006 should throw on polling:mutation",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-wait-for-function.spec.ts",
-      "id": "WA-008",
-      "title": "WA-008 should fail with predicate throwing on first call",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-wait-for-function.spec.ts",
-      "id": "WA-009",
-      "title": "WA-009 should fail with predicate throwing sometimes",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
-    },
-    {
-      "file": "tests/page/page-wait-for-function.spec.ts",
-      "id": "WA-010",
-      "title": "WA-010 should fail with ReferenceError on wrong page",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Unknown polling option: mutation');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-function.spec.ts",
@@ -3725,36 +4534,82 @@
       "file": "tests/page/page-wait-for-load-state.spec.ts",
       "id": "WA-078",
       "title": "WA-078 should respect timeout",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.waitForLoadState: Timeout 1ms exceeded.');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.stack.split('\\n')[1]).toContain(__filename);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-load-state.spec.ts",
       "id": "WA-080",
       "title": "WA-080 should throw for bad state",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`state: expected one of (load|domcontentloaded|networkidle|commit)`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-navigation.spec.ts",
       "id": "WA-096",
       "title": "WA-096 should respect timeout",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.waitForNavigation: Timeout 5000ms exceeded.');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        },
+        {
+          "find": "expect(error.message).toContain('waiting for navigation to \"**/frame.html\" until \"load\"');",
+          "replace": ""
+        },
+        {
+          "find": "expect(error.message).toContain(`navigated to \"${server.EMPTY_PAGE}\"`);",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-navigation.spec.ts",
       "id": "WA-100",
       "title": "WA-100 should work with clicking on links which do not commit navigation",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toMatch(expectedSSLError(browserName, platform, channel));",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-navigation.spec.ts",
       "id": "WA-109",
       "title": "WA-109 should fail when frame detaches",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('waiting for navigation until \"load\"');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('frame was detached');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-request.spec.ts",
@@ -3778,7 +4633,7 @@
       "id": "WA-125",
       "title": "WA-125 should log the url",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-response.spec.ts",
@@ -3798,49 +4653,67 @@
       "id": "WA-132",
       "title": "WA-132 should log the url",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-027",
       "title": "WA-027 should throw on waitFor",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error!.message).toContain('options.waitFor is not supported, did you mean options.state?');",
+          "replace": "expect(error!).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-032",
       "title": "WA-032 elementHandle.waitForSelector should timeout",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Timeout 100ms exceeded.');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-033",
       "title": "WA-033 elementHandle.waitForSelector should throw on navigation",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`waiting for locator('span') to be visible`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-036",
       "title": "WA-036 should report logs while waiting for visible",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-037",
       "title": "WA-037 should report logs while waiting for hidden",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-038",
       "title": "WA-038 should report logs when the selector resolves to multiple elements",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
@@ -3894,42 +4767,66 @@
       "id": "WA-054",
       "title": "WA-054 should have an error message specifically for awaiting an element to be hidden",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-057",
       "title": "WA-057 should have correct stack trace for timeout",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-058",
       "title": "WA-058 should throw for unknown state option",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('state: expected one of (attached|detached|visible|hidden)');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-059",
       "title": "WA-059 should throw for visibility option",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('options.visibility is not supported, did you mean options.state?');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-060",
       "title": "WA-060 should throw for true state option",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('state: expected one of (attached|detached|visible|hidden)');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-061",
       "title": "WA-061 should throw for false state option",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('state: expected one of (attached|detached|visible|hidden)');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
@@ -3965,29 +4862,53 @@
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-073",
       "title": "WA-073 should fail when navigating while on handle",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain(`waiting for locator('div') to be visible`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-074",
       "title": "WA-074 should fail if element handle was detached while waiting",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Element is not attached to the DOM');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/page-wait-for-url.spec.ts",
       "id": "WA-111",
       "title": "WA-111 should respect timeout",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.waitForURL: Timeout 2500ms exceeded.');",
+          "replace": "expect(error.name).toBe('TimeoutError');"
+        }
+      ]
     },
     {
       "file": "tests/page/queryselector.spec.ts",
       "id": "QS-001",
       "title": "QS-001 should throw for non-string selector",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('selector: expected string, got object');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-css.spec.ts",
@@ -4000,64 +4921,130 @@
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-105",
       "title": "SE-105 $eval should throw for missing frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('page.$eval: Failed to find element matching selector');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('elementHandle.$eval: Failed to find element matching selector');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-112",
       "title": "SE-112 should not allow dangling enter-frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Selector cannot end with');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('iframe >> internal:control=enter-frame');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-113",
       "title": "SE-113 should not allow leading enter-frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Selector cannot start with');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-114",
       "title": "SE-114 should not allow capturing before enter-frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Can not capture the selector before diving into the frame');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-123",
       "title": "SE-123 should non work for non-frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('<div></div>');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(error.message).toContain('<iframe> was expected');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-128",
       "title": "SE-128 should throw when matching elements in multiple frames",
-      "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('frameLocator() matched elements in multiple frames');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-129",
       "title": "SE-129 should not allow any-frame in the middle of a selector",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('\"any-frame\" is only allowed as the first selector token');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-131",
       "title": "SE-131 should not allow any-frame after entering a frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('\"any-frame\" is only allowed as the first selector token');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-132",
       "title": "SE-132 should not allow dangling enter-frame after any-frame",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(error.message).toContain('Selector cannot end with entering frame');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-misc.spec.ts",
@@ -4124,7 +5111,7 @@
       "id": "SE-145",
       "title": "SE-145 should print original xpath in error",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/selectors-misc.spec.ts",
@@ -4155,8 +5142,46 @@
       "file": "tests/page/selectors-role.spec.ts",
       "id": "SE-062",
       "title": "SE-062 errors",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(e0.message).toContain(`Role must not be empty`);",
+          "replace": "expect(e0).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(e1.message).toContain(`Unknown attribute \"sElected\", must be one of \"checked\", \"description\", \"disabled\", \"expanded\", \"include-hidden\", \"level\", \"name\", \"pressed\", \"selected\"`);",
+          "replace": "expect(e1).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(e2.message).toContain(`Unknown attribute \"bar.qux\"`);",
+          "replace": "expect(e2).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(e3.message).toContain(`\"level\" attribute must be compared to a number`);",
+          "replace": "expect(e3).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(e4.message).toContain(`\"checked\" must be one of true, false, \"mixed\"`);",
+          "replace": "expect(e4).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(e5.message).toContain(`cannot use ~= in attribute with non-string matching value`);",
+          "replace": "expect(e5).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(e6.message).toContain(`\"level\" attribute is only supported for roles: \"heading\", \"listitem\", \"row\", \"treeitem\"`);",
+          "replace": "expect(e6).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(e7.message).toContain(`\"name\" attribute must have a value`);",
+          "replace": "expect(e7).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(e8.message).toContain(`\"expanded\" must be one of true, false`);",
+          "replace": "expect(e8).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/selectors-text.spec.ts",
@@ -4204,7 +5229,7 @@
       "id": "AR-110",
       "title": "AR-110 should fail page with timeout",
       "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
@@ -4333,42 +5358,48 @@
       "id": "AR-127",
       "title": "AR-127 expected formatter",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-129",
       "title": "AR-129 should report error in YAML",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-130",
       "title": "AR-130 should report error in YAML keys",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-131",
       "title": "AR-131 call log should contain actual snapshot",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-133",
       "title": "AR-133 should not unshift actual template text",
       "action": "delete",
-      "reason": "error diagnostics only: message, stack or call-log formatting"
+      "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-134",
       "title": "AR-134 should not match what is not matched",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(stripAnsi(error.message)).toContain(`\n- - paragraph:\n-   - button \"bogus\"\n+ - paragraph: Text`);",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
@@ -4425,15 +5456,35 @@
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-139",
       "title": "AR-139 top-level deep-equal",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(stripAnsi(error.message)).toContain(`\n- - /children: deep-equal\n- - list\n+ - list:\n+   - listitem:\n+     - list:\n+       - listitem: \"1.1\"\n+       - listitem: \"1.2\"\n  `.trim());",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        }
+      ]
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-141",
       "title": "AR-141 treat bad regex as a string",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
+      "action": "patch",
+      "reason": "error wording: keep that it fails",
+      "patches": [
+        {
+          "find": "expect(stripAnsi(error.message)).toContain('expect(page).toMatchAriaSnapshot(expected) failed');",
+          "replace": "expect(error).toBeInstanceOf(Error);"
+        },
+        {
+          "find": "expect(stripAnsi(error.message)).toContain('-   - /url: /[a/');",
+          "replace": ""
+        },
+        {
+          "find": "expect(stripAnsi(error.message)).toContain('+   - /url: /foo');",
+          "replace": ""
+        }
+      ]
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
@@ -4477,13 +5528,6 @@
           "replace": ""
         }
       ]
-    },
-    {
-      "file": "tests/page/workers.spec.ts",
-      "id": "WO-011",
-      "title": "WO-011 should report errors",
-      "action": "delete",
-      "reason": "error diagnostics only: no independent behavior assertion remains"
     },
     {
       "file": "tests/page/workers.spec.ts",
