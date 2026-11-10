@@ -20,10 +20,10 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::Mutex as WriteTurn;
 
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     HighlightSpec, InjectedHideHighlightParams, InjectedSetHighlightsParams,
 };
-use neo_runtime_spec::serve::{FrameHideHighlightParams, FrameHighlightParams};
+use neo_playwright_protocol::serve::{FrameHideHighlightParams, FrameHighlightParams};
 
 use crate::browser_representations::page::{FrameTab, PageSession};
 use crate::chromium_bridge::frame_selector;

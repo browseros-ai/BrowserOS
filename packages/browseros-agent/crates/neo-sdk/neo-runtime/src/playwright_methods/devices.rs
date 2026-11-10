@@ -20,7 +20,7 @@
 
 use std::time::Duration;
 
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     PageCall, PageMouseClickParamsButton, PageMouseDownParamsButton, PageMouseUpParamsButton,
 };
 

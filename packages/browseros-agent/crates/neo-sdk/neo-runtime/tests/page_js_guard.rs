@@ -310,9 +310,9 @@ fn tests_that_the_door_declares_its_guarded_commands_without_building_one() {
 #[test]
 fn tests_that_markdown_prose_in_a_literal_is_not_a_send() {
     let prose = "let doc = \"crosses as a `Runtime.callFunctionOn` argument\";";
-    assert!(check("neo-runtime-spec/codegen/contract.rs", prose).is_empty());
+    assert!(check("neo-playwright-protocol/codegen/contract.rs", prose).is_empty());
     let half = "let m = \"`Runtime.evaluate\";";
-    assert!(!check("neo-runtime-spec/codegen/contract.rs", half).is_empty());
+    assert!(!check("neo-playwright-protocol/codegen/contract.rs", half).is_empty());
 }
 
 #[test]

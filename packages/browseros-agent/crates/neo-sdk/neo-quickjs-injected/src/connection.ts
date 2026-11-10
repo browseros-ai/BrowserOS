@@ -32,7 +32,7 @@ import type {
   RequestCommands,
   ResponseCommands,
   RouteCommands,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import type { BindingCommands } from './binding-call'
 import type { ClockCommands } from './clock'
 import {

@@ -20,7 +20,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use neo_runtime_spec::serve::FrameWaitForSelectorParamsState as SelectorState;
+use neo_playwright_protocol::serve::FrameWaitForSelectorParamsState as SelectorState;
 use tokio::sync::watch;
 
 use crate::browser_representations::page::{FrameTab, PageSession};

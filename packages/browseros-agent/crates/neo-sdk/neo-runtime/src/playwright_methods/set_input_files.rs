@@ -24,12 +24,12 @@ use std::sync::Arc;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::CdpError;
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     InjectedFileInputParams, InjectedInputEventWaiterParams, InjectedSetInputFilePayloadsParams,
     InjectedWaitForInputEventParams, InputEventWaiter, UploadFile,
 };
-use neo_runtime_spec::serve::FrameSetInputFilesParams;
-use neo_runtime_spec::{Binary, Element, Handle};
+use neo_playwright_protocol::serve::FrameSetInputFilesParams;
+use neo_playwright_protocol::{Binary, Element, Handle};
 use tokio::sync::oneshot;
 
 use crate::artifacts::{Artifacts, ExistingPath};

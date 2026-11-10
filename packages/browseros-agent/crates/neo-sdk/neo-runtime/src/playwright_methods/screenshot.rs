@@ -30,14 +30,14 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::CdpError;
 use futures_util::future;
-use neo_runtime_spec::Handle;
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::Handle;
+use neo_playwright_protocol::injected::{
     ElementState, InjectedFontsReadyParams, InjectedFullPageSizeParams,
     InjectedHideHighlightParams, InjectedMaskElementsParams, InjectedPrepareForScreenshotParams,
     InjectedRestoreAfterScreenshotParams, InjectedScrollOffsetParams, InjectedViewportSizeParams,
     ScreenshotCleanup,
 };
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     FrameWaitForSelectorParamsState as SelectorState, PageScreenshotParams,
     PageScreenshotParamsAnimations, PageScreenshotParamsCaret, PageScreenshotParamsScale,
     PageScreenshotParamsType, Rect,

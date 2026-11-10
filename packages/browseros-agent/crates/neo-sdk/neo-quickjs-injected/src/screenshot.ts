@@ -23,7 +23,7 @@
 import type {
   PagePdfParams,
   PageScreenshotParams,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import { getMimeTypeForPath } from '../vendor/playwright/isomorphic/mimeType'
 import { Buffer } from './buffer'
 import type { ApiName } from './connection'

@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     DropData, DropOutcome, HitTargetAction, InjectedDropOnParams, InjectedDropOnResult, Point,
     UploadFile,
 };
-use neo_runtime_spec::serve::FrameDropParams;
+use neo_playwright_protocol::serve::FrameDropParams;
 use tokio::fs;
 use tokio::sync::oneshot;
 
@@ -400,7 +400,7 @@ mod tests {
     use std::fs;
     use std::future;
 
-    use neo_runtime_spec::Binary;
+    use neo_playwright_protocol::Binary;
     use serde_json::json;
 
     use super::*;

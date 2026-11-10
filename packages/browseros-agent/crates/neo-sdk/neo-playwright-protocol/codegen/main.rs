@@ -12,7 +12,7 @@
 //! and the TypeScript cannot disagree. Run from `packages/browseros-agent`:
 //!
 //! ```text
-//! NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-runtime-spec --example codegen [-- --check]
+//! NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-playwright-protocol --example codegen [-- --check]
 //! ```
 //!
 //! Without `--check` it rewrites the generated files that changed. With it, it writes nothing

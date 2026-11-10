@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use neo_runtime_spec::serve::PagePdfParams;
+use neo_playwright_protocol::serve::PagePdfParams;
 use serde::Deserialize;
 use tokio::sync::oneshot;
 use tokio::time;
@@ -393,7 +393,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use neo_runtime_spec::serve::PagePdfParamsMargin;
+    use neo_playwright_protocol::serve::PagePdfParamsMargin;
     use tokio::runtime::Handle;
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;

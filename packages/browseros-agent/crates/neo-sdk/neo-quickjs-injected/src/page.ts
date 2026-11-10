@@ -14,7 +14,7 @@ import type {
   PageUnregisterLocatorHandlerParams,
   RequestInitializer,
   ResponseChannel,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import {
   isString,

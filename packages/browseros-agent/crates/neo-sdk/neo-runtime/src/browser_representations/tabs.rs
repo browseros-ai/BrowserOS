@@ -15,8 +15,8 @@ use std::time::Duration;
 use browseros_cdp::CdpError;
 use browseros_cdp::runtime::RemoteObject;
 use futures_util::future;
-use neo_runtime_spec::injected::InjectedPreviewNodeParams;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::injected::InjectedPreviewNodeParams;
+use neo_playwright_protocol::serve::{
     FrameChannel, FrameInitializer, PageChannel, PageInitializer, PageInitializerViewportSize,
 };
 use serde::Serialize;

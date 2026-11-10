@@ -34,7 +34,7 @@ browseros-decide = { path = "crates/browseros-decide" }
 browseros-mcp = { path = "crates/browseros-mcp" }
 claw-api = { path = "crates/claw-api" }
 hosted-api = { path = "crates/hosted-api" }
-neo-runtime-spec = { path = "crates/neo-sdk/neo-runtime-spec" }
+neo-playwright-protocol = { path = "crates/neo-sdk/neo-playwright-protocol" }
 neo-trace = { path = "crates/neo-sdk/neo-trace" }
 
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "process", "fs"] }

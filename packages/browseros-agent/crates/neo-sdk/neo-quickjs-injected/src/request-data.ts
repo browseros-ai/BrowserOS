@@ -6,7 +6,7 @@
  * and content type its server sends for each kind: what `route.fetch` sends (`route.ts`).
  */
 
-import type { NameValue } from '@browseros/neo-runtime-spec/serve'
+import type { NameValue } from '@browseros/neo-playwright-protocol/serve'
 import { encodeUtf8 } from './network'
 
 /** Neo: `data` as Playwright's client sends it, `jsonData` or `postData`. */

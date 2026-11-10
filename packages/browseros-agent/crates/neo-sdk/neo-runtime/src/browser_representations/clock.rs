@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use neo_runtime_spec::MethodMeta;
+use neo_playwright_protocol::MethodMeta;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
@@ -42,7 +42,7 @@ const BROWSER_NAME: &str = "chromium";
 macro_rules! clock_meta {
     ($name:ident, $method:literal, $title:literal, $subtitle:expr, $params:expr) => {
         /// Neo: the trace metadata of this `BrowserContext` clock command
-        /// (`neo-runtime-spec/spec/playwright/browserContext.yml`).
+        /// (`neo-playwright-protocol/spec/playwright/browserContext.yml`).
         pub(crate) static $name: MethodMeta = MethodMeta {
             interface: "BrowserContext",
             method: $method,

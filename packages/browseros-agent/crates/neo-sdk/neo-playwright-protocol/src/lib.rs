@@ -22,7 +22,7 @@
 //!   page does no serialization work, and the decode here is the only validation.
 //!
 //! The same types exist in TypeScript under `ts/`, in the bun package
-//! `@browseros/neo-runtime-spec` (exports `./serve`, `./injected` and `./spec-hash`).
+//! `@browseros/neo-playwright-protocol` (exports `./serve`, `./injected` and `./spec-hash`).
 //! `neo-playwright-injected`'s glue table is written as
 //! `export const glue = { ... } satisfies InjectedApi<InjectedScript, Handles>`, where `Handles`
 //! binds each named handle kind to its Playwright page type, so it fails `tsc` when it drifts
@@ -35,7 +35,7 @@
 //! `packages/browseros-agent`:
 //!
 //! ```text
-//! NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-runtime-spec --example codegen
+//! NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-playwright-protocol --example codegen
 //! ```
 //!
 //! A spec change without that run does not compile. `build.rs` hashes `spec/`, and this crate
@@ -85,7 +85,7 @@
 // Cargo links this library into the translator (the `codegen` example), which has to run
 // exactly when the freshness check below fails. Regenerating sets `NEO_RUNTIME_SPEC_CODEGEN`,
 // which build.rs turns into this cfg, and the library then builds empty.
-#![cfg(not(neo_runtime_spec_codegen))]
+#![cfg(not(neo_playwright_protocol_codegen))]
 
 mod binary;
 mod call;
@@ -120,7 +120,7 @@ pub const fn is_current(hash: &str) -> bool {
 const _: () = assert!(
     str_eq(SPEC_SHA256, env!("NEO_RUNTIME_SPEC_SHA256")),
     "spec/ changed since the code in src/ was generated: in packages/browseros-agent, run \
-     `NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-runtime-spec --example codegen`",
+     `NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-playwright-protocol --example codegen`",
 );
 
 /// `a == b` for strings, in a const context.

@@ -96,7 +96,7 @@ import type {
   FrameWaitForSelectorParams,
   FrameWaitForTimeoutParams,
   LifecycleEvent,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import {
   getByAltTextSelector,

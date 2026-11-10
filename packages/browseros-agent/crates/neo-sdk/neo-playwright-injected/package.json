@@ -12,6 +12,6 @@
     "test:browser": "node --test 'tests/*.test.mjs'"
   },
   "dependencies": {
-    "@browseros/neo-runtime-spec": "workspace:*"
+    "@browseros/neo-playwright-protocol": "workspace:*"
   }
 }

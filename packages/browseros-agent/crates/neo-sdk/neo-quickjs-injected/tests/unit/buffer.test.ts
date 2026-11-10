@@ -2,7 +2,7 @@
  * The binary transport's realm end (`src/buffer.ts`): `toBinary` and `Buffer.fromBinary` round
  * trip every length tail and every byte value, agree with the base64 Node writes (Playwright's
  * protocol `binary`), and refuse text that is not base64. The Rust end is pinned by
- * neo-runtime-spec's `tests/wire.rs`; both sides use standard base64 with padding.
+ * neo-playwright-protocol's `tests/wire.rs`; both sides use standard base64 with padding.
  */
 
 import { describe, expect, test } from 'bun:test'

@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex as SyncMutex, MutexGuard, OnceLock, Weak};
 
 use browseros_cdp::{CdpError, SessionId};
 use futures_util::future;
-use neo_runtime_spec::{MethodGroup, MethodMeta};
+use neo_playwright_protocol::{MethodGroup, MethodMeta};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
@@ -50,7 +50,7 @@ use crate::progress::{PlaywrightError, RunScope};
 /// Neo: the guid prefix of an init script's `Disposable`, which the SDK disposes by guid.
 pub(crate) const DISPOSABLE_PREFIX: &str = "disposable@";
 
-/// Neo: `Page.addInitScript`'s trace metadata (`neo-runtime-spec/spec/playwright/page.yml`).
+/// Neo: `Page.addInitScript`'s trace metadata (`neo-playwright-protocol/spec/playwright/page.yml`).
 pub(crate) static PAGE_ADD_INIT_SCRIPT_META: MethodMeta = MethodMeta {
     interface: "Page",
     method: "addInitScript",
@@ -62,7 +62,7 @@ pub(crate) static PAGE_ADD_INIT_SCRIPT_META: MethodMeta = MethodMeta {
     flags: &[],
 };
 /// Neo: `BrowserContext.addInitScript`'s trace metadata
-/// (`neo-runtime-spec/spec/playwright/browserContext.yml`).
+/// (`neo-playwright-protocol/spec/playwright/browserContext.yml`).
 pub(crate) static CONTEXT_ADD_INIT_SCRIPT_META: MethodMeta = MethodMeta {
     interface: "BrowserContext",
     method: "addInitScript",
@@ -73,7 +73,7 @@ pub(crate) static CONTEXT_ADD_INIT_SCRIPT_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[],
 };
-/// Neo: `Disposable.dispose`'s trace metadata (`neo-runtime-spec/spec/playwright/core.yml`).
+/// Neo: `Disposable.dispose`'s trace metadata (`neo-playwright-protocol/spec/playwright/core.yml`).
 pub(crate) static DISPOSABLE_DISPOSE_META: MethodMeta = MethodMeta {
     interface: "Disposable",
     method: "dispose",

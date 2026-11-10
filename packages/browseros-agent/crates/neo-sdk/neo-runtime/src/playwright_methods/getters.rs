@@ -13,7 +13,7 @@ use std::sync::MutexGuard;
 use std::time::Duration;
 
 use browseros_cdp::{CdpError, SessionId};
-use neo_runtime_spec::serve::{FrameChannel, FrameInitializer};
+use neo_playwright_protocol::serve::{FrameChannel, FrameInitializer};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time;

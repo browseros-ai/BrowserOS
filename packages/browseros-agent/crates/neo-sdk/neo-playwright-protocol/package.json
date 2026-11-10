@@ -1,5 +1,5 @@
 {
-  "name": "@browseros/neo-runtime-spec",
+  "name": "@browseros/neo-playwright-protocol",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -19,10 +19,10 @@
     }
   },
   "scripts": {
-    "codegen": "NEO_RUNTIME_SPEC_CODEGEN=1 cargo run --package neo-runtime-spec --example codegen",
-    "codegen:check": "NEO_RUNTIME_SPEC_CODEGEN=1 cargo run --package neo-runtime-spec --example codegen -- --check",
-    "lint:rust": "cargo fmt --package neo-runtime-spec -- --check && cargo clippy --package neo-runtime-spec --all-targets --locked -- -D warnings",
-    "test:rust": "cargo test --package neo-runtime-spec --locked",
+    "codegen": "NEO_RUNTIME_SPEC_CODEGEN=1 cargo run --package neo-playwright-protocol --example codegen",
+    "codegen:check": "NEO_RUNTIME_SPEC_CODEGEN=1 cargo run --package neo-playwright-protocol --example codegen -- --check",
+    "lint:rust": "cargo fmt --package neo-playwright-protocol -- --check && cargo clippy --package neo-playwright-protocol --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package neo-playwright-protocol --locked",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tests/ts"
   }
 }

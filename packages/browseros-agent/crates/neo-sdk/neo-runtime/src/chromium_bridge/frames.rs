@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use browseros_cdp::{CdpError, SessionId};
-use neo_runtime_spec::{Element, Handle, InjectedCall};
+use neo_playwright_protocol::{Element, Handle, InjectedCall};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::runtime::Handle as TokioHandle;

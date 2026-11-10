@@ -4,7 +4,7 @@
 
 use crate::playwright_methods::tab::{Arming, Geometry, NotReady, Scroll, StatesCheck, Stop, Tab};
 use crate::progress::Progress;
-use neo_runtime_spec::injected::{ElementState, HitTargetAction, Point};
+use neo_playwright_protocol::injected::{ElementState, HitTargetAction, Point};
 
 /// Which element states a caller needs before it can perform its action.
 /// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`

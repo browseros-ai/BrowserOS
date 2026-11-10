@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::Point;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::injected::Point;
+use neo_playwright_protocol::serve::{
     FrameCheckParams, FrameCheckParamsScroll, FrameUncheckParams, FrameUncheckParamsScroll,
 };
 
@@ -173,7 +173,7 @@ fn state_unchanged() -> Stop {
 mod tests {
     use std::time::Duration;
 
-    use neo_runtime_spec::injected::ElementState;
+    use neo_playwright_protocol::injected::ElementState;
 
     use super::*;
     use crate::playwright_methods::forms::CheckedState;

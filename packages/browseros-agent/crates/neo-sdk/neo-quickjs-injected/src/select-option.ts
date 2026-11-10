@@ -1,7 +1,7 @@
 /** Playwright's `client/elementHandle.ts` value conversion: ElementHandle values travel as
  * `elements`, which neo-runtime adopts into the select's world and Playwright's injected script
  * matches by node identity (`method_router.rs`, `forms.rs`); any other value as option objects. */
-import type { FrameSelectOptionParams } from '@browseros/neo-runtime-spec/serve'
+import type { FrameSelectOptionParams } from '@browseros/neo-playwright-protocol/serve'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import { ElementHandle } from './element-handle'
 
@@ -61,7 +61,7 @@ function elementsOf(list: unknown[]): FrameSelectOptionParams['elements'] {
       )
     elements[i] = { guid: value._guid }
   }
-  // The generated `ElementHandleChannel` has no values in neo-runtime-spec; the wire is the guid.
+  // The generated `ElementHandleChannel` has no values in neo-playwright-protocol; the wire is the guid.
   return elements as unknown as FrameSelectOptionParams['elements']
 }
 

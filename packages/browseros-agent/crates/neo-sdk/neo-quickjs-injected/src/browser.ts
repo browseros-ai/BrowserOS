@@ -17,7 +17,7 @@
 import type {
   BrowserCloseParams,
   BrowserNewContextParams,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import { BrowserContext, pageGuidOf } from './browser-context'
 import type { BrowserType } from './browser-type'
 import type { Connection } from './connection'

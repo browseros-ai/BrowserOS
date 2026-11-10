@@ -11,7 +11,7 @@
     "test:parity": "node --test --test-concurrency=1 'tests/parity/*.test.mjs'"
   },
   "dependencies": {
-    "@browseros/neo-runtime-spec": "workspace:*"
+    "@browseros/neo-playwright-protocol": "workspace:*"
   },
   "devDependencies": {
     "playwright-core": "1.64.1"

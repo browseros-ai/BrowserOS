@@ -40,8 +40,8 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures_util::future;
-use neo_runtime_spec::injected::ReadableElementState;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::injected::ReadableElementState;
+use neo_playwright_protocol::serve::{
     ArtifactCall, BrowserCall, BrowserContextCall, DebuggerCall, DialogCall,
     FrameAriaSnapshotJSONParams, FrameAriaSnapshotParams, FrameCall, FrameCheckParams,
     FrameCheckResult, FrameClickParams, FrameContentParams, FrameDblclickParams,
@@ -59,7 +59,7 @@ use neo_runtime_spec::serve::{
     FrameWaitForSelectorParams, FrameWaitForSelectorResult, FrameWaitForTimeoutParams,
     FrameWaitForTimeoutResult, Metadata, PageCall, RequestCall, ResponseCall, RouteCall,
 };
-use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
+use neo_playwright_protocol::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -2477,11 +2477,11 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use neo_runtime_spec::injected::AriaSnapshotMode;
-    use neo_runtime_spec::serve::FrameWaitForSelectorParamsState;
+    use neo_playwright_protocol::injected::AriaSnapshotMode;
+    use neo_playwright_protocol::serve::FrameWaitForSelectorParamsState;
 
     use super::*;
-    use neo_runtime_spec::injected::Point;
+    use neo_playwright_protocol::injected::Point;
 
     use crate::browser_representations::cookies_and_storage::Permissions;
     use crate::browser_representations::page::TabInputs;
@@ -3222,7 +3222,7 @@ mod tests {
 
     #[test]
     fn tests_that_navigation_and_title_keep_their_generated_reply_shapes() {
-        use neo_runtime_spec::serve::{FrameGotoResult, FrameTitleResult};
+        use neo_playwright_protocol::serve::{FrameGotoResult, FrameTitleResult};
 
         for (result, expected) in [
             (
@@ -3332,7 +3332,7 @@ mod tests {
 
     #[test]
     fn tests_that_text_reads_keep_empty_and_missing_wire_values_distinct() {
-        use neo_runtime_spec::serve::{FrameGetAttributeResult, FrameInnerTextResult};
+        use neo_playwright_protocol::serve::{FrameGetAttributeResult, FrameInnerTextResult};
         for (result, expected) in [
             (
                 encode_result::<FrameInnerTextParams>(&FrameInnerTextResult {
@@ -3454,7 +3454,7 @@ mod tests {
     /// client reads an absent `value` as `null`.
     #[test]
     fn reads_reply_with_their_generated_result_shapes() {
-        use neo_runtime_spec::serve::{FrameAriaSnapshotResult, FrameTextContentResult};
+        use neo_playwright_protocol::serve::{FrameAriaSnapshotResult, FrameTextContentResult};
 
         for (result, expected) in [
             (
@@ -3938,7 +3938,7 @@ mod tests {
 
     #[test]
     fn tests_that_count_replies_have_playwrights_generated_shape() {
-        use neo_runtime_spec::serve::FrameQueryCountResult;
+        use neo_playwright_protocol::serve::FrameQueryCountResult;
 
         let result = encode_result::<FrameQueryCountParams>(&FrameQueryCountResult { value: 3 })
             .expect("count encodes");
@@ -4041,7 +4041,7 @@ mod review_abort_priority {
 #[cfg(test)]
 mod captcha_wire_tests {
     use super::{ObjectCall, route_frame_extension};
-    use neo_runtime_spec::MethodFlag;
+    use neo_playwright_protocol::MethodFlag;
     use serde_json::json;
 
     #[test]

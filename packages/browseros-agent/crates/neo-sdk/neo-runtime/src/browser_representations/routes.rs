@@ -31,8 +31,10 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpError, SessionId};
 use futures_util::future;
-use neo_runtime_spec::serve::{NameValue, RouteCall, RouteContinueParams, RouteFulfillParams};
-use neo_runtime_spec::{Binary, MethodMeta};
+use neo_playwright_protocol::serve::{
+    NameValue, RouteCall, RouteContinueParams, RouteFulfillParams,
+};
+use neo_playwright_protocol::{Binary, MethodMeta};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -1727,7 +1729,7 @@ pub(crate) fn answered<T>(method: &str, sent: Result<T, CdpError>) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use neo_runtime_spec::serve::RouteAbortParams;
+    use neo_playwright_protocol::serve::RouteAbortParams;
 
     use super::*;
 

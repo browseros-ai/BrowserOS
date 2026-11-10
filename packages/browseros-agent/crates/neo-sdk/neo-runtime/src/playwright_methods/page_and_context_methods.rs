@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_cdp::CdpError;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     BrowserContextCall, BrowserContextCookiesParams, BrowserContextCookiesResult,
     BrowserContextNewPageResult, BrowserContextSetNetworkInterceptionPatternsParams,
     BrowserContextStorageStateParams, ConsoleMessagesFilter, NameValue, PageCall, PageChannel,

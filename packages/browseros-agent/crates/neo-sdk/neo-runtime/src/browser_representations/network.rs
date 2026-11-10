@@ -47,8 +47,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::SessionId;
-use neo_runtime_spec::Binary;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::Binary;
+use neo_playwright_protocol::serve::{
     FrameChannel, NameValue, RemoteAddr, RequestChannel, RequestInitializer, RequestSizes,
     ResourceTiming, ResponseChannel, ResponseInitializer, SecurityDetails,
 };

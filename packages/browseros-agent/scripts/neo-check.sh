@@ -15,7 +15,7 @@ lint_tables() {
 }
 
 manifests=(crates/neo-sdk/neo-*/Cargo.toml)
-reference=crates/neo-sdk/neo-runtime-spec/Cargo.toml
+reference=crates/neo-sdk/neo-playwright-protocol/Cargo.toml
 # Host adapters keep workspace lints; their behavior-preserving legacy moves are not ports.
 HOST_CRATES=(neo-captcha)
 for manifest in "${manifests[@]}"; do

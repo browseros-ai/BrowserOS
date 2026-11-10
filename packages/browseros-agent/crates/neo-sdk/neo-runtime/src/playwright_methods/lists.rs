@@ -6,8 +6,8 @@
 
 use std::future::Future;
 
-use neo_runtime_spec::injected::InjectedQueryCountParams;
-use neo_runtime_spec::serve::FrameQueryCountResult;
+use neo_playwright_protocol::injected::InjectedQueryCountParams;
+use neo_playwright_protocol::serve::FrameQueryCountResult;
 
 use crate::browser_representations::page::FrameTab;
 use crate::chromium_bridge::frame_selector;

@@ -21,7 +21,7 @@
 
 use std::borrow::Cow;
 
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     AriaChild, AriaInvalid, AriaInvalidKind, AriaNode, AriaNodeCursor, AriaRole, AriaTristate,
 };
 use serde_json::Value;

@@ -43,8 +43,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use neo_runtime_spec::injected::{HitTargetAction, Point};
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::injected::{HitTargetAction, Point};
+use neo_playwright_protocol::serve::{
     FrameClickParams, FrameClickParamsButton, FrameClickParamsModifiersItem,
     FrameClickParamsScroll, FrameDblclickParams, FrameDblclickParamsButton,
     FrameDblclickParamsModifiersItem, FrameDblclickParamsScroll, FrameHoverParams,
@@ -886,7 +886,7 @@ pub(crate) mod tests {
     use crate::playwright_methods::tab::{Geometry, SelectorFacts, StatesCheck};
     use crate::progress::ErrorName;
     use crate::run::Delivery;
-    use neo_runtime_spec::injected::ElementState;
+    use neo_playwright_protocol::injected::ElementState;
 
     fn options(selector: &str) -> ClickOptions {
         ClickOptions::from_params(

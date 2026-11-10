@@ -19,12 +19,12 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use browseros_cdp::CdpError;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     PagePdfParams, PagePdfResult, PageScreenshotParams, PageScreenshotParamsAnimations,
     PageScreenshotParamsCaret, PageScreenshotParamsMaskItem, PageScreenshotParamsScale,
     PageScreenshotParamsType, PageScreenshotResult,
 };
-use neo_runtime_spec::{Binary, MethodFlag, MethodMeta};
+use neo_playwright_protocol::{Binary, MethodFlag, MethodMeta};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -54,7 +54,7 @@ pub(crate) static NEO_SCREENSHOT_META: MethodMeta = MethodMeta {
     flags: &[],
 };
 
-/// Neo: `ElementHandle.screenshot`'s trace metadata, as `neo-runtime-spec/spec/playwright/handles.yml`
+/// Neo: `ElementHandle.screenshot`'s trace metadata, as `neo-playwright-protocol/spec/playwright/handles.yml`
 /// declares it. Handle calls are routed by hand (`evaluate.rs` `route_handle`), not by the
 /// generated serve spec.
 pub(crate) static ELEMENT_HANDLE_SCREENSHOT_META: MethodMeta = MethodMeta {

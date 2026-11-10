@@ -20,7 +20,7 @@
 import type {
   FrameInitializer,
   PageInitializer,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import { Buffer } from './buffer'
 import type { PausedDetails } from './debugger'
 import type { RawEvent } from './events'

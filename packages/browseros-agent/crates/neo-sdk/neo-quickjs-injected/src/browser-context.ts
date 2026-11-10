@@ -31,7 +31,7 @@ import type {
   ResponseInitializer,
   SerializedError,
   SetNetworkCookie,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import {
   BindingCall,
   type BindingCallback,

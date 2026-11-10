@@ -41,8 +41,8 @@ use std::sync::Arc;
 
 use browseros_cdp::CdpError;
 use browseros_cdp::runtime::{CallFunctionOnResult, ExceptionDetails, RemoteObject};
-use neo_runtime_spec::injected::{InjectedDocumentParams, InjectedInitializer};
-use neo_runtime_spec::{Element, Handle, HandleId};
+use neo_playwright_protocol::injected::{InjectedDocumentParams, InjectedInitializer};
+use neo_playwright_protocol::{Element, Handle, HandleId};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::{Mutex, OnceCell};

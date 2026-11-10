@@ -1957,6 +1957,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "neo-playwright-protocol"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde-saphyr",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "neo-playwright-tests"
 version = "0.1.0"
 dependencies = [
@@ -1979,7 +1990,7 @@ dependencies = [
  "browseros-cdp",
  "clap",
  "futures-util",
- "neo-runtime-spec",
+ "neo-playwright-protocol",
  "proc-macro2",
  "rand 0.9.4",
  "regex",
@@ -1995,17 +2006,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "neo-runtime-spec"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "serde",
- "serde-saphyr",
- "serde_json",
- "sha2",
 ]
 
 [[package]]

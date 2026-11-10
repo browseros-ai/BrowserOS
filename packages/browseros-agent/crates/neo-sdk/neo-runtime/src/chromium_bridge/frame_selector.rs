@@ -3,8 +3,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::{InjectedFrameOwnerByRefParams, InjectedFrameOwnerParams};
-use neo_runtime_spec::{Element, Handle};
+use neo_playwright_protocol::injected::{InjectedFrameOwnerByRefParams, InjectedFrameOwnerParams};
+use neo_playwright_protocol::{Element, Handle};
 use serde_json::Value;
 
 use crate::browser_representations::page::{FrameTab, GroupGuard};

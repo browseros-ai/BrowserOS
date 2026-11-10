@@ -70,13 +70,13 @@ use std::future::{self, Future};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     AriaChild, AriaFrameSnapshot, AriaIframe, AriaNode, AriaRole, AriaSnapshotMode, AttributeMatch,
     InjectedAriaSnapshotParams, InjectedAriaSnapshotResult, InjectedFrameOwnerRefParams,
     InjectedGetAttributeParams, InjectedInnerHTMLParams, InjectedInnerTextParams,
     InjectedTextContentParams, TextMatch,
 };
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     FrameAriaSnapshotJSONParams, FrameAriaSnapshotJSONParamsMode, FrameAriaSnapshotJSONResult,
     FrameAriaSnapshotParams, FrameAriaSnapshotParamsMode, FrameAriaSnapshotResult,
     FrameGetAttributeParams, FrameGetAttributeResult, FrameInnerHTMLParams, FrameInnerHTMLResult,
@@ -1092,7 +1092,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
-    use neo_runtime_spec::serve::{FrameGetAttributeResult, FrameInnerTextResult};
+    use neo_playwright_protocol::serve::{FrameGetAttributeResult, FrameInnerTextResult};
     use tokio::sync::Barrier;
     use tokio::time;
     use tokio::time::Instant;

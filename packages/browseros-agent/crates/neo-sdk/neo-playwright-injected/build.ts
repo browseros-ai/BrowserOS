@@ -27,7 +27,7 @@
  *                       `__pwClock`, an init script and an expression
  *   dist/clock-call.js  `(op, ...args) => unknown`                the calls on its controller,
  *                       by name, and the run's end (uninstall)
- *   dist/spec-sha256    neo-runtime-spec's SPEC_SHA256, no trailing newline, which neo-runtime
+ *   dist/spec-sha256    neo-playwright-protocol's SPEC_SHA256, no trailing newline, which neo-runtime
  *                       const-asserts against the Rust crate's own hash
  *
  * Each artifact is one function expression, because CDP's `Runtime.callFunctionOn` takes a
@@ -64,7 +64,7 @@
 
 import { readdirSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
-import { SPEC_SHA256 } from '@browseros/neo-runtime-spec/spec-hash'
+import { SPEC_SHA256 } from '@browseros/neo-playwright-protocol/spec-hash'
 import type { BunPlugin } from 'bun'
 
 const ENTRIES = [

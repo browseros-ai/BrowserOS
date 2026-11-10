@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
-use neo_runtime_spec::{MethodFlag, MethodMeta};
+use neo_playwright_protocol::{MethodFlag, MethodMeta};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::oneshot;

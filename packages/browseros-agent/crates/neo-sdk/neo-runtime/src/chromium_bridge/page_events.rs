@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use browseros_cdp::SessionId;
-use neo_runtime_spec::serve::SerializedError;
+use neo_playwright_protocol::serve::SerializedError;
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time;
@@ -1060,7 +1060,7 @@ pub(crate) fn enable(tabs: &Tabs, entry: Arc<PageEntry>, needs: Needs) {
 #[cfg(test)]
 mod tests {
     use browseros_cdp::runtime::ExecutionContextDescription;
-    use neo_runtime_spec::serve::PageConsoleMessagesResultMessagesItemLocation;
+    use neo_playwright_protocol::serve::PageConsoleMessagesResultMessagesItemLocation;
 
     use super::*;
 

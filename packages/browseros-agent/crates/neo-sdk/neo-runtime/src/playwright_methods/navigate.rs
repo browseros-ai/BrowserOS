@@ -2,7 +2,7 @@
 //! record in `network.rs`; this seam keeps event ordering, lifecycle waits, the response lookup
 //! and cancellation testable without a browser or input turns.
 
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     FrameGotoParams, FrameGotoResult, FrameTitleResult, LifecycleEvent, ResponseChannel,
 };
 use url::Url;

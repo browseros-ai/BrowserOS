@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 
 use browseros_cdp::CdpError;
-use neo_runtime_spec::serve::{DialogCall, DialogInitializer, PageChannel};
+use neo_playwright_protocol::serve::{DialogCall, DialogInitializer, PageChannel};
 use serde::Serialize;
 use serde_json::Value;
 

@@ -26,7 +26,7 @@
 
 use std::collections::HashMap;
 
-use neo_runtime_spec::serve::{FrameChannel, FrameInitializer};
+use neo_playwright_protocol::serve::{FrameChannel, FrameInitializer};
 use serde_json::{Value, json};
 
 use crate::chromium_bridge::cdp::{self, page};

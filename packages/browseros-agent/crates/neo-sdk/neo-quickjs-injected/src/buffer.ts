@@ -1,6 +1,6 @@
 /**
  * Neo: the realm's bytes for Playwright's protocol `binary`, which crosses the wire as base64
- * text in both directions (neo-runtime-spec `Binary` on the Rust side). Every result that
+ * text in both directions (neo-playwright-protocol `Binary` on the Rust side). Every result that
  * carries bytes resolves a `Buffer` (`page.screenshot`, `locator.screenshot`, `page.pdf`,
  * `response.body`), and every input that carries bytes sends `toBinary(bytes)`.
  *

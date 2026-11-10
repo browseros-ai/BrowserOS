@@ -17,7 +17,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use neo_runtime_spec::injected::ElementState;
+use neo_playwright_protocol::injected::ElementState;
 
 use crate::playwright_methods::tab::{NotReady, Stop, Tab};
 use crate::progress::{CallError, PlaywrightError, Progress};

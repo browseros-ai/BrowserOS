@@ -11,7 +11,7 @@
  * plain emitter for the same reason.
  */
 
-import type { DialogInitializer } from '@browseros/neo-runtime-spec/serve'
+import type { DialogInitializer } from '@browseros/neo-playwright-protocol/serve'
 import type { Connection } from './connection'
 import { isTargetClosedError } from './errors'
 import { EventEmitter } from './events'

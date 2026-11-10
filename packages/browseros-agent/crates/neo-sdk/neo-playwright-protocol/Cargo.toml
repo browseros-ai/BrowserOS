@@ -1,5 +1,5 @@
 [package]
-name = "neo-runtime-spec"
+name = "neo-playwright-protocol"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -24,7 +24,7 @@ sha2.workspace = true
 serde-saphyr.workspace = true
 sha2.workspace = true
 
-# The translator: `cargo run -p neo-runtime-spec --example codegen [-- --check]`. An example
+# The translator: `cargo run -p neo-playwright-protocol --example codegen [-- --check]`. An example
 # may use dev-dependencies, and `test = true` makes plain `cargo test` run its tests, including
 # the drift check, so CI needs no extra job.
 [[example]]

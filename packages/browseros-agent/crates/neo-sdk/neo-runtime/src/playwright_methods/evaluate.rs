@@ -35,12 +35,12 @@ use std::time::Duration;
 
 use browseros_cdp::runtime::RemoteObject;
 use browseros_cdp::{CdpError, SessionId};
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     InjectedListPreviewsParams, InjectedPreviewNodeParams, InjectedQueryAllParams,
     InjectedScopedQueryAllParams, InjectedScopedSelectorElementParams,
     InjectedSelectorElementParams,
 };
-use neo_runtime_spec::{Element, Handle, HandleId, MethodFlag, MethodGroup, MethodMeta};
+use neo_playwright_protocol::{Element, Handle, HandleId, MethodFlag, MethodGroup, MethodMeta};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use tokio::time;
@@ -110,7 +110,7 @@ const NODE_PREVIEW_PREFIX: &str = "JSHandle@";
 const NODE_TYPE: &str = "node";
 
 /// Neo: the trace metadata of Playwright's `Frame.evaluateExpression`, as
-/// `neo-runtime-spec/spec/playwright/frame.yml` declares it; written here because the spec does not
+/// `neo-playwright-protocol/spec/playwright/frame.yml` declares it; written here because the spec does not
 /// generate this command (its `arg` arrives in the page's format).
 pub(crate) static FRAME_EVALUATE_META: MethodMeta = MethodMeta {
     interface: "Frame",
@@ -123,7 +123,7 @@ pub(crate) static FRAME_EVALUATE_META: MethodMeta = MethodMeta {
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
 /// Neo: `Frame.evaluateExpressionHandle`'s trace metadata, as
-/// `neo-runtime-spec/spec/playwright/frame.yml` declares it.
+/// `neo-playwright-protocol/spec/playwright/frame.yml` declares it.
 pub(crate) static FRAME_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "evaluateExpressionHandle",
@@ -135,7 +135,7 @@ pub(crate) static FRAME_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
 /// Neo: `JSHandle.evaluateExpression`'s trace metadata (also an `ElementHandle`'s), as
-/// `neo-runtime-spec/spec/playwright/handles.yml` declares it.
+/// `neo-playwright-protocol/spec/playwright/handles.yml` declares it.
 pub(crate) static HANDLE_EVALUATE_META: MethodMeta = MethodMeta {
     interface: "JSHandle",
     method: "evaluateExpression",
@@ -147,7 +147,7 @@ pub(crate) static HANDLE_EVALUATE_META: MethodMeta = MethodMeta {
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
 /// Neo: `JSHandle.evaluateExpressionHandle`'s trace metadata, as
-/// `neo-runtime-spec/spec/playwright/handles.yml` declares it.
+/// `neo-playwright-protocol/spec/playwright/handles.yml` declares it.
 pub(crate) static HANDLE_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     interface: "JSHandle",
     method: "evaluateExpressionHandle",
@@ -158,7 +158,7 @@ pub(crate) static HANDLE_EVALUATE_HANDLE_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Neo: `JSHandle.jsonValue`'s trace metadata, as `neo-runtime-spec/spec/playwright/handles.yml`
+/// Neo: `JSHandle.jsonValue`'s trace metadata, as `neo-playwright-protocol/spec/playwright/handles.yml`
 /// declares it.
 pub(crate) static HANDLE_JSON_VALUE_META: MethodMeta = MethodMeta {
     interface: "JSHandle",
@@ -171,7 +171,7 @@ pub(crate) static HANDLE_JSON_VALUE_META: MethodMeta = MethodMeta {
     flags: &[],
 };
 /// Neo: `JSHandle.dispose`'s trace metadata, an internal command in
-/// `neo-runtime-spec/spec/playwright/handles.yml`.
+/// `neo-playwright-protocol/spec/playwright/handles.yml`.
 pub(crate) static HANDLE_DISPOSE_META: MethodMeta = MethodMeta {
     interface: "JSHandle",
     method: "dispose",
@@ -321,7 +321,7 @@ struct GetPropertyParams {
     name: String,
 }
 
-/// Neo: `Frame.addScriptTag`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+/// Neo: `Frame.addScriptTag`'s trace metadata (`neo-playwright-protocol/spec/playwright/frame.yml`).
 pub(crate) static FRAME_ADD_SCRIPT_TAG_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "addScriptTag",
@@ -332,7 +332,7 @@ pub(crate) static FRAME_ADD_SCRIPT_TAG_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Neo: `Frame.addStyleTag`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+/// Neo: `Frame.addStyleTag`'s trace metadata (`neo-playwright-protocol/spec/playwright/frame.yml`).
 pub(crate) static FRAME_ADD_STYLE_TAG_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "addStyleTag",
@@ -344,7 +344,7 @@ pub(crate) static FRAME_ADD_STYLE_TAG_META: MethodMeta = MethodMeta {
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
 
-/// Neo: `ElementHandle.dispatchEvent`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+/// Neo: `ElementHandle.dispatchEvent`'s trace metadata (`neo-playwright-protocol/spec/playwright/handles.yml`).
 pub(crate) static HANDLE_DISPATCH_EVENT_META: MethodMeta = MethodMeta {
     interface: "ElementHandle",
     method: "dispatchEvent",
@@ -356,7 +356,7 @@ pub(crate) static HANDLE_DISPATCH_EVENT_META: MethodMeta = MethodMeta {
     flags: &[MethodFlag::SlowMo, MethodFlag::Snapshot, MethodFlag::Pause],
 };
 
-/// Neo: `Frame.querySelector`'s trace metadata, as `neo-runtime-spec/spec/playwright/frame.yml`
+/// Neo: `Frame.querySelector`'s trace metadata, as `neo-playwright-protocol/spec/playwright/frame.yml`
 /// declares it.
 pub(crate) static FRAME_QUERY_META: MethodMeta = MethodMeta {
     interface: "Frame",
@@ -368,7 +368,7 @@ pub(crate) static FRAME_QUERY_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot],
 };
-/// Neo: `Frame.querySelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+/// Neo: `Frame.querySelectorAll`'s trace metadata (`neo-playwright-protocol/spec/playwright/frame.yml`).
 pub(crate) static FRAME_QUERY_ALL_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "querySelectorAll",
@@ -379,7 +379,7 @@ pub(crate) static FRAME_QUERY_ALL_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot],
 };
-/// Neo: `Frame.evalOnSelector`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+/// Neo: `Frame.evalOnSelector`'s trace metadata (`neo-playwright-protocol/spec/playwright/frame.yml`).
 pub(crate) static FRAME_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "evalOnSelector",
@@ -390,7 +390,7 @@ pub(crate) static FRAME_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Neo: `Frame.evalOnSelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+/// Neo: `Frame.evalOnSelectorAll`'s trace metadata (`neo-playwright-protocol/spec/playwright/frame.yml`).
 pub(crate) static FRAME_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "evalOnSelectorAll",
@@ -401,7 +401,7 @@ pub(crate) static FRAME_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Neo: `Frame.waitForFunction`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+/// Neo: `Frame.waitForFunction`'s trace metadata (`neo-playwright-protocol/spec/playwright/frame.yml`).
 pub(crate) static FRAME_WAIT_FOR_FUNCTION_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "waitForFunction",
@@ -412,7 +412,7 @@ pub(crate) static FRAME_WAIT_FOR_FUNCTION_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Neo: `ElementHandle.querySelector`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+/// Neo: `ElementHandle.querySelector`'s trace metadata (`neo-playwright-protocol/spec/playwright/handles.yml`).
 pub(crate) static ELEMENT_QUERY_META: MethodMeta = MethodMeta {
     interface: "ElementHandle",
     method: "querySelector",
@@ -423,7 +423,7 @@ pub(crate) static ELEMENT_QUERY_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot],
 };
-/// Neo: `ElementHandle.querySelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+/// Neo: `ElementHandle.querySelectorAll`'s trace metadata (`neo-playwright-protocol/spec/playwright/handles.yml`).
 pub(crate) static ELEMENT_QUERY_ALL_META: MethodMeta = MethodMeta {
     interface: "ElementHandle",
     method: "querySelectorAll",
@@ -434,7 +434,7 @@ pub(crate) static ELEMENT_QUERY_ALL_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot],
 };
-/// Neo: `ElementHandle.evalOnSelector`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+/// Neo: `ElementHandle.evalOnSelector`'s trace metadata (`neo-playwright-protocol/spec/playwright/handles.yml`).
 pub(crate) static ELEMENT_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
     interface: "ElementHandle",
     method: "evalOnSelector",
@@ -445,7 +445,7 @@ pub(crate) static ELEMENT_EVAL_ON_SELECTOR_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Neo: `ElementHandle.evalOnSelectorAll`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+/// Neo: `ElementHandle.evalOnSelectorAll`'s trace metadata (`neo-playwright-protocol/spec/playwright/handles.yml`).
 pub(crate) static ELEMENT_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
     interface: "ElementHandle",
     method: "evalOnSelectorAll",
@@ -456,7 +456,7 @@ pub(crate) static ELEMENT_EVAL_ON_SELECTOR_ALL_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[MethodFlag::Snapshot, MethodFlag::Pause],
 };
-/// Neo: `JSHandle.getProperty`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+/// Neo: `JSHandle.getProperty`'s trace metadata (`neo-playwright-protocol/spec/playwright/handles.yml`).
 pub(crate) static HANDLE_GET_PROPERTY_META: MethodMeta = MethodMeta {
     interface: "JSHandle",
     method: "getProperty",
@@ -467,7 +467,7 @@ pub(crate) static HANDLE_GET_PROPERTY_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[],
 };
-/// Neo: `JSHandle.getPropertyList`'s trace metadata (`neo-runtime-spec/spec/playwright/handles.yml`).
+/// Neo: `JSHandle.getPropertyList`'s trace metadata (`neo-playwright-protocol/spec/playwright/handles.yml`).
 pub(crate) static HANDLE_GET_PROPERTY_LIST_META: MethodMeta = MethodMeta {
     interface: "JSHandle",
     method: "getPropertyList",

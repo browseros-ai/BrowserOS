@@ -5,7 +5,7 @@
 
 use std::future::Future;
 
-use neo_runtime_spec::injected::{ElementState, HitTargetAction, Point};
+use neo_playwright_protocol::injected::{ElementState, HitTargetAction, Point};
 
 use crate::chromium_bridge::mouse_and_touch_input::{Devices, Plan};
 use crate::progress::{AckedInput, CallError, InputTicket, PlaywrightError, Progress};
@@ -329,7 +329,7 @@ pub(crate) mod fake {
     use std::time::Duration;
 
     use browseros_cdp::SessionId;
-    use neo_runtime_spec::injected::{ElementState, HitTargetAction, Point};
+    use neo_playwright_protocol::injected::{ElementState, HitTargetAction, Point};
     use serde_json::Value;
     use tokio::sync::oneshot;
     use tokio::time;

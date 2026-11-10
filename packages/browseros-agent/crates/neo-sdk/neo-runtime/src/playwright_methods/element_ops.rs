@@ -30,12 +30,12 @@
 use browseros_cdp::CdpError;
 use std::future::Future;
 
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     ElementState, InjectedBlurElementParams, InjectedSelectTextParams,
     InjectedSelectorElementParams, SelectTextOutcome, SelectTextOutcomeStatus,
 };
-use neo_runtime_spec::serve::{FrameBlurParams, FrameFocusParams};
-use neo_runtime_spec::{MethodFlag, MethodMeta};
+use neo_playwright_protocol::serve::{FrameBlurParams, FrameFocusParams};
+use neo_playwright_protocol::{MethodFlag, MethodMeta};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::oneshot;

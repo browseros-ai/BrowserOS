@@ -48,7 +48,7 @@ use std::time::Duration;
 
 use browseros_cdp::{CdpError, SessionId, dom};
 use futures_util::future;
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetAction,
     HitTargetInterceptor, HitTargetOutcome, HitTargetSetup, InjectedCheckElementStatesParams,
     InjectedCleanupDragParams, InjectedDescribeIFrameStyleParams, InjectedDescribeSelectorParams,
@@ -57,8 +57,8 @@ use neo_runtime_spec::injected::{
     InjectedSetupHitTargetInterceptorParams, InjectedStopHitTargetInterceptorParams,
     InjectedTitleParams, InjectedViewportSizeParams, Point, ScrollAlignment,
 };
-use neo_runtime_spec::serve::ResponseChannel;
-use neo_runtime_spec::{Element, Handle};
+use neo_playwright_protocol::serve::ResponseChannel;
+use neo_playwright_protocol::{Element, Handle};
 use serde_json::Value;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};

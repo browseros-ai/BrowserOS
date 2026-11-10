@@ -1,4 +1,4 @@
-# neo-runtime-spec
+# neo-playwright-protocol
 
 Rust and TypeScript types for the two calls that cross a language boundary in Neo's browser
 runtime, generated from one source:
@@ -20,16 +20,16 @@ Run these from `packages/browseros-agent`.
 
 ```sh
 # Regenerate src/{serve,injected,spec_hash}.rs and ts/*.ts after a spec change.
-NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-runtime-spec --example codegen
+NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-playwright-protocol --example codegen
 
 # Write nothing, and exit 1 if a committed file is stale. `cargo test` runs the same check.
-NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-runtime-spec --example codegen -- --check
+NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-playwright-protocol --example codegen -- --check
 
 # Upgrade Playwright. This copies its spec, re-pins spec/playwright/UPSTREAM, and regenerates.
-crates/neo-sdk/neo-runtime-spec/sync-playwright.sh <playwright-checkout>
+crates/neo-sdk/neo-playwright-protocol/sync-playwright.sh <playwright-checkout>
 ```
 
-The bun package `@browseros/neo-runtime-spec` wraps the first two as `codegen` and
+The bun package `@browseros/neo-playwright-protocol` wraps the first two as `codegen` and
 `codegen:check`, and its `typecheck` script runs `tsc` over `ts/` and over the negative cases in
 `tests/ts/`. The real glue table lives in `neo-playwright-injected`, whose `typecheck` checks it
 against `ts/injected.ts`.

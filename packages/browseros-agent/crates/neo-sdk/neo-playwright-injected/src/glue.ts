@@ -3,10 +3,10 @@
  * (`server/frameSelectors.ts`, `frames.ts`, `page.ts`, `dom.ts`), written once as named TypeScript
  * functions over Playwright's real, unchanged `InjectedScript`. neo-runtime calls each by name
  * through `dist/call.js`, with the JSON params and then the handles the spec declares
- * (`neo_runtime_spec::InjectedCall` documents the convention).
+ * (`neo_playwright_protocol::InjectedCall` documents the convention).
  *
  * `satisfies InjectedApi<InjectedScript, Handles>` ties three things in one `tsc` check: every
- * call in neo-runtime-spec's `spec/injected.yml` is here with the generated params, handle and
+ * call in neo-playwright-protocol's `spec/injected.yml` is here with the generated params, handle and
  * result types; every body calls `InjectedScript` with Playwright's own signatures; and each
  * named handle kind is bound to the one Playwright page type that the call producing it and the
  * call consuming it both use.
@@ -24,7 +24,7 @@ import type {
   AriaNode,
   AriaRole,
   InjectedApi,
-} from '@browseros/neo-runtime-spec/injected'
+} from '@browseros/neo-playwright-protocol/injected'
 import type {
   HitTargetInterceptionResult,
   InjectedScript,

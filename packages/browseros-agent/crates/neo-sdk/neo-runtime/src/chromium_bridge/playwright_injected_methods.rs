@@ -36,8 +36,8 @@ use std::sync::{Arc, RwLock};
 
 use browseros_cdp::CdpError;
 use browseros_cdp::runtime::{CallFunctionOnResult, PropertyDescriptor, RemoteObject};
-use neo_runtime_spec::injected::InjectedInitializer;
-use neo_runtime_spec::{
+use neo_playwright_protocol::injected::InjectedInitializer;
+use neo_playwright_protocol::{
     Element, Handle, HandleId, InjectedCall, PageResult, Properties, SPEC_SHA256,
 };
 use serde_json::{Value, json};
@@ -75,11 +75,11 @@ const CALL: &str = include_str!(concat!(
     "/../neo-playwright-injected/dist/call.js"
 ));
 
-// A spec edit regenerates `neo_runtime_spec::SPEC_SHA256`; until neo-playwright-injected is rebuilt
+// A spec edit regenerates `neo_playwright_protocol::SPEC_SHA256`; until neo-playwright-injected is rebuilt
 // and its dist committed, neo-runtime does not compile, so a page bundle built from another spec
 // can never answer this build's decode.
 const _: () = assert!(
-    neo_runtime_spec::is_current(include_str!(concat!(
+    neo_playwright_protocol::is_current(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../neo-playwright-injected/dist/spec-sha256"
     ))),
@@ -608,10 +608,10 @@ fn split_properties(descriptors: Vec<PropertyDescriptor>) -> Result<Properties, 
 
 #[cfg(test)]
 mod tests {
-    use neo_runtime_spec::injected::{
+    use neo_playwright_protocol::injected::{
         HitTargetSetup, InjectedResolveResult, InjectedSetupHitTargetInterceptorResult,
     };
-    use neo_runtime_spec::{Element, Handle};
+    use neo_playwright_protocol::{Element, Handle};
 
     use super::*;
 
@@ -675,7 +675,7 @@ mod tests {
     #[tokio::test]
     async fn a_detached_child_interrupts_a_pending_world_call() {
         use crate::fake_browser::{FakeBrowser, PAGE, Replies, Reply};
-        use neo_runtime_spec::injected::InjectedTitleParams;
+        use neo_playwright_protocol::injected::InjectedTitleParams;
         use tokio::task;
 
         let browser = FakeBrowser::start(Replies {

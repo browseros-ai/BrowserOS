@@ -29,7 +29,7 @@ import type {
   PageMouseUpParams,
   PageMouseWheelParams,
   PageTouchscreenTapParams,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import type { Page } from './page'
 import {
   PAGE_KEYBOARD_DOWN_KEYS,

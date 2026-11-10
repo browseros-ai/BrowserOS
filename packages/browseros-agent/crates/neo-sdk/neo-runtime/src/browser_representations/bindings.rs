@@ -41,7 +41,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, Weak};
 
 use browseros_cdp::SessionId;
-use neo_runtime_spec::{MethodGroup, MethodMeta};
+use neo_playwright_protocol::{MethodGroup, MethodMeta};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -79,7 +79,7 @@ const DISPOSABLE: &str = "disposable@binding.";
 /// for a call whose page or context went away.
 const RUN_ENDED: &str = "Target page, context or browser has been closed";
 
-/// Neo: `Page.exposeBinding`'s trace metadata (`neo-runtime-spec/spec/playwright/page.yml`).
+/// Neo: `Page.exposeBinding`'s trace metadata (`neo-playwright-protocol/spec/playwright/page.yml`).
 pub(crate) static PAGE_EXPOSE_BINDING_META: MethodMeta = MethodMeta {
     interface: "Page",
     method: "exposeBinding",
@@ -91,7 +91,7 @@ pub(crate) static PAGE_EXPOSE_BINDING_META: MethodMeta = MethodMeta {
     flags: &[],
 };
 /// Neo: `BrowserContext.exposeBinding`'s trace metadata
-/// (`neo-runtime-spec/spec/playwright/browserContext.yml`).
+/// (`neo-playwright-protocol/spec/playwright/browserContext.yml`).
 pub(crate) static CONTEXT_EXPOSE_BINDING_META: MethodMeta = MethodMeta {
     interface: "BrowserContext",
     method: "exposeBinding",
@@ -102,7 +102,7 @@ pub(crate) static CONTEXT_EXPOSE_BINDING_META: MethodMeta = MethodMeta {
     internal: false,
     flags: &[],
 };
-/// Neo: `BindingCall.resolve`'s trace metadata (`neo-runtime-spec/spec/playwright/playwright.yml`).
+/// Neo: `BindingCall.resolve`'s trace metadata (`neo-playwright-protocol/spec/playwright/playwright.yml`).
 pub(crate) static BINDING_CALL_RESOLVE_META: MethodMeta = MethodMeta {
     interface: "BindingCall",
     method: "resolve",
@@ -113,7 +113,7 @@ pub(crate) static BINDING_CALL_RESOLVE_META: MethodMeta = MethodMeta {
     internal: true,
     flags: &[],
 };
-/// Neo: `BindingCall.reject`'s trace metadata (`neo-runtime-spec/spec/playwright/playwright.yml`).
+/// Neo: `BindingCall.reject`'s trace metadata (`neo-playwright-protocol/spec/playwright/playwright.yml`).
 pub(crate) static BINDING_CALL_REJECT_META: MethodMeta = MethodMeta {
     interface: "BindingCall",
     method: "reject",

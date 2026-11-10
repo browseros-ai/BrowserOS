@@ -25,10 +25,10 @@
 use std::future::{self, Future};
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     InjectedSelectorElementParams, InjectedSelectorStateParams, SelectorMatch,
 };
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     FrameWaitForSelectorParams, FrameWaitForSelectorParamsState as SelectorState, LifecycleEvent,
 };
 use serde::Deserialize;
@@ -904,8 +904,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use neo_runtime_spec::injected::SelectorMatch;
-    use neo_runtime_spec::serve::{
+    use neo_playwright_protocol::injected::SelectorMatch;
+    use neo_playwright_protocol::serve::{
         FrameWaitForSelectorParamsState as SelectorState, LifecycleEvent,
     };
     use serde_json::json;

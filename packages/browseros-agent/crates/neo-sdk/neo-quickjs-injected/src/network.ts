@@ -31,7 +31,7 @@ import type {
   ResourceTiming,
   ResponseInitializer,
   SecurityDetails,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import { Buffer } from './buffer'
 import type { ApiName, Connection } from './connection'
 import { targetClosedError } from './errors'

@@ -33,7 +33,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Mutex;
 
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     ArtifactCall, ArtifactFailureParams, ArtifactFailureResult, ArtifactPathAfterFinishedParams,
     ArtifactPathAfterFinishedResult,
 };

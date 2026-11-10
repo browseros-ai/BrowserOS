@@ -14,11 +14,11 @@
 
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     InjectedWebStorageClearParams, InjectedWebStorageGetItemParams, InjectedWebStorageItemsParams,
     InjectedWebStorageRemoveItemParams, InjectedWebStorageSetItemParams, WebStorageKind,
 };
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     NameValue, PageCall, PageWebStorageClearParams, PageWebStorageClearParamsKind,
     PageWebStorageClearResult, PageWebStorageGetItemParams, PageWebStorageGetItemParamsKind,
     PageWebStorageGetItemResult, PageWebStorageItemsParams, PageWebStorageItemsParamsKind,

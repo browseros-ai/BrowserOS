@@ -22,7 +22,7 @@ use std::sync::{Arc, OnceLock};
 
 use browseros_cdp::{CdpError, SessionId};
 use futures_util::future::join_all;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     BrowserContextSetGeolocationParamsGeolocation, BrowserContextSetStorageStateParams,
     BrowserContextSetStorageStateParamsStorageState, BrowserContextStorageStateParams,
     BrowserContextStorageStateResult, NameValue, NetworkCookie, NetworkCookieSameSite,

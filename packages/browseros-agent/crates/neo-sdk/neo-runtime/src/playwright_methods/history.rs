@@ -41,7 +41,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use browseros_cdp::CdpError;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     LifecycleEvent, PageGoBackParams, PageGoForwardParams, PageReloadParams, ResponseChannel,
 };
 use serde::{Deserialize, Serialize};

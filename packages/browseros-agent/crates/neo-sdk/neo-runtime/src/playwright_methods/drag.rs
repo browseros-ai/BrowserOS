@@ -20,7 +20,7 @@
 //! run's end releases it (cancelling a drag that runs).
 
 use crate::playwright_methods::devices;
-use neo_runtime_spec::serve::{FrameDragAndDropParams, FrameDragAndDropParamsScroll, Point};
+use neo_playwright_protocol::serve::{FrameDragAndDropParams, FrameDragAndDropParamsScroll, Point};
 
 use crate::chromium_bridge::keyboard_input::KeyboardTab;
 use crate::playwright_methods::click::{self, PointerAction, PointerCall, PointerTarget};
@@ -107,7 +107,7 @@ mod tests {
     use super::*;
     use crate::playwright_methods::tab::fake::FakeTab;
     use crate::run::Delivery;
-    use neo_runtime_spec::injected::Point;
+    use neo_playwright_protocol::injected::Point;
 
     fn decode(params: &Value) -> Result<DragOptions, PlaywrightError> {
         DragOptions::from_params(serde_json::from_value(params.clone()).expect("params"))

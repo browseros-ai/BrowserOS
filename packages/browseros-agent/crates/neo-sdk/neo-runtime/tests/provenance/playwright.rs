@@ -38,7 +38,7 @@ pub(crate) const RUNTIME: Tree = Tree {
     manifest: true,
 };
 
-/// Every tree a citation may resolve in. The spec's YAML is hashed by neo-runtime-spec's own
+/// Every tree a citation may resolve in. The spec's YAML is hashed by neo-playwright-protocol's own
 /// tests (`UPSTREAM`), so it has no `VENDOR.md` here.
 pub(crate) const TREES: [Tree; 4] = [
     RUNTIME,
@@ -53,7 +53,7 @@ pub(crate) const TREES: [Tree; 4] = [
         manifest: true,
     },
     Tree {
-        dir: "neo-runtime-spec/spec/playwright",
+        dir: "neo-playwright-protocol/spec/playwright",
         repo_prefix: "packages/protocol/spec/",
         manifest: false,
     },
@@ -62,7 +62,7 @@ pub(crate) const TREES: [Tree; 4] = [
 /// Files in a tree that are not Playwright sources.
 const NOT_SOURCES: [&str; 4] = ["VENDOR.md", "LICENSE", "NOTICE", "UPSTREAM"];
 
-pub(crate) const UPSTREAM: &str = "neo-runtime-spec/spec/playwright/UPSTREAM";
+pub(crate) const UPSTREAM: &str = "neo-playwright-protocol/spec/playwright/UPSTREAM";
 
 /// One copy of the pinned commit outside `UPSTREAM`: where it is, how to find it, and whether
 /// it may be an abbreviation.
@@ -497,7 +497,7 @@ fn ternary(tokens: &[Token]) -> Option<Vec<String>> {
     None
 }
 
-/// The pinned commit, from neo-runtime-spec's `UPSTREAM`.
+/// The pinned commit, from neo-playwright-protocol's `UPSTREAM`.
 pub(crate) fn read_pin(crates: &Path) -> Result<String, String> {
     let path = crates.join(UPSTREAM);
     let text = fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;

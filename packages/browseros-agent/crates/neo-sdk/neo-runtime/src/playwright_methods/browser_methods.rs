@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use browseros_cdp::CdpError;
 use futures_util::future;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     BrowserCall, BrowserContextCall, BrowserContextChannel, BrowserContextNewPageResult,
     BrowserNewContextParams, BrowserNewContextParamsColorScheme, BrowserNewContextParamsContrast,
     BrowserNewContextParamsForcedColors, BrowserNewContextParamsReducedMotion,

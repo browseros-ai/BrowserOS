@@ -712,13 +712,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "neo-playwright-protocol"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "neo-runtime"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "browseros-cdp",
  "futures-util",
- "neo-runtime-spec",
+ "neo-playwright-protocol",
  "rand 0.9.5",
  "rquickjs",
  "serde",
@@ -728,16 +738,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "neo-runtime-spec"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "serde",
- "serde_json",
- "sha2",
 ]
 
 [[package]]

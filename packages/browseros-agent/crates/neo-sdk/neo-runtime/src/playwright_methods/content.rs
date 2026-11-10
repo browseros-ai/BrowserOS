@@ -13,11 +13,11 @@
 //!                                        → joined by enter-frame hops, main frame first
 //! ```
 
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     InjectedDocumentContentParams, InjectedGenerateOwnerSelectorParams,
     InjectedGenerateSelectorParams, InjectedWriteContentParams,
 };
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     FrameContentResult, FrameResolveSelectorResult, FrameSetContentParams, LifecycleEvent,
 };
 

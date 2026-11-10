@@ -13,8 +13,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::network::GetResponseBodyResult;
 use browseros_cdp::{CdpError, SessionId};
-use neo_runtime_spec::Binary;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::Binary;
+use neo_playwright_protocol::serve::{
     RequestCall, RequestRawRequestHeadersParams, RequestRawRequestHeadersResult,
     RequestResponseParams, RequestResponseResult, ResponseBodyParams, ResponseBodyResult,
     ResponseCall, ResponseHttpVersionParams, ResponseHttpVersionResult,

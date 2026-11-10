@@ -100,7 +100,7 @@ const dirty = spawnSync(
     'crates/neo-sdk/neo-playwright-tests',
     'crates/neo-sdk/neo-quickjs-injected',
     'crates/neo-sdk/neo-playwright-injected',
-    'crates/neo-sdk/neo-runtime-spec',
+    'crates/neo-sdk/neo-playwright-protocol',
   ],
   { cwd: agent, encoding: 'utf8' },
 )

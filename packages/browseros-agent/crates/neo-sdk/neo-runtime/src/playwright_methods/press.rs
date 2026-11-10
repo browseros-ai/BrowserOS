@@ -29,7 +29,7 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use neo_runtime_spec::serve::{FramePressParams, FrameTypeParams};
+use neo_playwright_protocol::serve::{FramePressParams, FrameTypeParams};
 
 use crate::chromium_bridge::keyboard_input::{self, KeyboardTab, Platform};
 use crate::chromium_bridge::mouse_and_touch_input::{Devices, Plan};

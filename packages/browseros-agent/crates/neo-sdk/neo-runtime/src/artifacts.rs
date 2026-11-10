@@ -27,7 +27,7 @@ use std::path::{self, Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
-use neo_runtime_spec::Binary;
+use neo_playwright_protocol::Binary;
 use serde::Serialize;
 use tokio::task;
 

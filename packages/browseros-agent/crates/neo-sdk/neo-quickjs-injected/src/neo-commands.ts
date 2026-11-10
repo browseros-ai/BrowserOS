@@ -45,7 +45,7 @@ import type {
   LifecycleEvent,
   PageScreenshotParams,
   ResponseChannel,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import { isString } from '../vendor/playwright/isomorphic/stringUtils'
 import type { ApiName } from './connection'
 import type { CreatedHandle } from './js-handle'

@@ -20,8 +20,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use neo_runtime_spec::serve::{DebuggerCall, DebuggerRunToParamsLocation, MetadataLocation};
-use neo_runtime_spec::{MethodFlag, MethodMeta};
+use neo_playwright_protocol::serve::{DebuggerCall, DebuggerRunToParamsLocation, MetadataLocation};
+use neo_playwright_protocol::{MethodFlag, MethodMeta};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
@@ -336,8 +336,8 @@ fn format_url(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neo_runtime_spec::Command;
-    use neo_runtime_spec::serve::{FrameClickParams, FrameGotoParams};
+    use neo_playwright_protocol::Command;
+    use neo_playwright_protocol::serve::{FrameClickParams, FrameGotoParams};
 
     use crate::events::EventHub;
 

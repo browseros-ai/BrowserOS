@@ -7,7 +7,7 @@
  * itself, so `dispose()` only lets it go.
  */
 
-import type { NameValue } from '@browseros/neo-runtime-spec/serve'
+import type { NameValue } from '@browseros/neo-playwright-protocol/serve'
 import { Buffer } from './buffer'
 import type { NeoRouteFetchResult } from './neo-commands'
 import { type Headers, RawHeaders } from './network'

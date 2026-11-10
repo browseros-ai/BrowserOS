@@ -4,8 +4,10 @@
 
 use std::sync::{Arc, OnceLock};
 
-use neo_runtime_spec::injected::ElementState;
-use neo_runtime_spec::serve::{FrameFillParams, FrameInputValueParams, FrameSelectOptionParams};
+use neo_playwright_protocol::injected::ElementState;
+use neo_playwright_protocol::serve::{
+    FrameFillParams, FrameInputValueParams, FrameSelectOptionParams,
+};
 
 use crate::chromium_bridge::keyboard_input::{self, KeyboardTab, Platform};
 use crate::chromium_bridge::mouse_and_touch_input::{Devices, Plan};
@@ -409,7 +411,7 @@ fn log_missing(progress: &Progress, state: ElementState) {
 mod tests {
     use std::time::Duration;
 
-    use neo_runtime_spec::injected::{
+    use neo_playwright_protocol::injected::{
         ElementState, FormFillOutcome, FormFillOutcomeStatus, FormSelectOutcome,
         FormSelectOutcomeError, InjectedFillResult, InjectedSelectOptionsResult, MissingState,
     };

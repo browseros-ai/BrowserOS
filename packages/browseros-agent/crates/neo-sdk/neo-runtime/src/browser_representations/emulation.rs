@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use browseros_cdp::{CdpError, SessionId};
 use futures_util::future;
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     PageEmulateMediaParams, PageEmulateMediaParamsColorScheme, PageEmulateMediaParamsContrast,
     PageEmulateMediaParamsForcedColors, PageEmulateMediaParamsMedia,
     PageEmulateMediaParamsReducedMotion,

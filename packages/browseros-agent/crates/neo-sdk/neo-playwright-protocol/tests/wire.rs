@@ -4,17 +4,17 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     AriaChild, AriaInvalid, AriaInvalidKind, AriaRole, AriaTristate, AriaTristateMixed,
     InjectedAriaSnapshotResult, InjectedTextContentResult, TextMatch,
 };
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     FrameCall, FrameClickParams, FrameClickParamsButton, FrameClickParamsModifiersItem,
     FrameClickParamsScroll, FrameClickResult, FrameGotoParams, FrameGotoResult,
     FrameTextContentParams, FrameTextContentResult, FrameTitleResult, LifecycleEvent, Metadata,
     PageCall, PageScreenshotResult, Point, RequestInitializer,
 };
-use neo_runtime_spec::{
+use neo_playwright_protocol::{
     Binary, CallDecodeError, Command, MethodFlag, MethodGroup, PageResult, SPEC_SHA256, is_current,
 };
 use serde_json::json;

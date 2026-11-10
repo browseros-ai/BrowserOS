@@ -24,5 +24,5 @@ cp "$checkout"/packages/protocol/spec/*.yml "$checkout"/LICENSE "$checkout"/NOTI
 # spec no longer matches the committed generated code, which fails the library's freshness
 # check; NEO_RUNTIME_SPEC_CODEGEN=1 builds the translator without that library code.
 cd "$crate"
-NEO_RUNTIME_SPEC_CODEGEN=1 cargo run --quiet -p neo-runtime-spec --example codegen -- --pin-playwright "$commit"
-NEO_RUNTIME_SPEC_CODEGEN=1 cargo run --quiet -p neo-runtime-spec --example codegen
+NEO_RUNTIME_SPEC_CODEGEN=1 cargo run --quiet -p neo-playwright-protocol --example codegen -- --pin-playwright "$commit"
+NEO_RUNTIME_SPEC_CODEGEN=1 cargo run --quiet -p neo-playwright-protocol --example codegen

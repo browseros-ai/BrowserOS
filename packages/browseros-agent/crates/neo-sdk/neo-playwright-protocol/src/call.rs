@@ -32,7 +32,7 @@ pub(crate) use sealed::Sealed;
 /// answering `goto` with `title`'s result does not compile. Other crates cannot implement it:
 ///
 /// ```compile_fail,E0277
-/// use neo_runtime_spec::{Command, MethodMeta};
+/// use neo_playwright_protocol::{Command, MethodMeta};
 ///
 /// #[derive(serde::Serialize, serde::Deserialize)]
 /// struct ForgedParams {}
@@ -94,8 +94,8 @@ pub trait Command: Serialize + DeserializeOwned + Sealed {
 /// `exceptionDetails`, so results never carry errors. Other crates cannot implement it:
 ///
 /// ```compile_fail,E0277
-/// use neo_runtime_spec::injected::InjectedTitleResult;
-/// use neo_runtime_spec::{HandleId, InjectedCall};
+/// use neo_playwright_protocol::injected::InjectedTitleResult;
+/// use neo_playwright_protocol::{HandleId, InjectedCall};
 ///
 /// #[derive(serde::Serialize)]
 /// struct ForgedParams {}
@@ -297,8 +297,8 @@ impl HandleKind for Element {
 /// The kind is part of the type, so a handle of one kind cannot reach a call that takes another:
 ///
 /// ```compile_fail,E0308
-/// use neo_runtime_spec::injected::{HitTargetInterceptor, InjectedGetElementBorderWidthParams};
-/// use neo_runtime_spec::{Handle, HandleId};
+/// use neo_playwright_protocol::injected::{HitTargetInterceptor, InjectedGetElementBorderWidthParams};
+/// use neo_playwright_protocol::{Handle, HandleId};
 ///
 /// let interceptor = Handle::<HitTargetInterceptor>::new(HandleId::new("-1.1.1".into()), None);
 /// let params = InjectedGetElementBorderWidthParams {

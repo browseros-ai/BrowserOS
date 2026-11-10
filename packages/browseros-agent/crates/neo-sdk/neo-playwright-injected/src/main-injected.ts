@@ -9,7 +9,7 @@
  * once the run ends ({@link MainWorldInjectedScript}).
  */
 
-import type { InjectedInitializer } from '@browseros/neo-runtime-spec/injected'
+import type { InjectedInitializer } from '@browseros/neo-playwright-protocol/injected'
 import {
   InjectedScript,
   type InjectedScriptOptions,

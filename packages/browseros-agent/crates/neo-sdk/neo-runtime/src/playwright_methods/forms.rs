@@ -6,7 +6,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     ElementState, FormFillOutcome, FormFillOutcomeStatus, FormSelectOutcome,
     FormSelectOutcomeError, InjectedElementListOfParams, InjectedElementListWithParams,
     InjectedElementStateParams, InjectedElementStateParamsState, InjectedFillParams,
@@ -16,7 +16,7 @@ use neo_runtime_spec::injected::{
 };
 use tokio::sync::oneshot;
 
-pub(crate) use neo_runtime_spec::injected::{
+pub(crate) use neo_playwright_protocol::injected::{
     FormFocusOutcome as FocusOutcome, FormInputValueMatch as InputValueMatch,
     FormSelectOption as SelectOption, InjectedElementStateResult as CheckedState,
 };
@@ -406,7 +406,7 @@ fn finish_select(
 pub(crate) mod tests {
     use std::time::Duration;
 
-    use neo_runtime_spec::injected::MissingState;
+    use neo_playwright_protocol::injected::MissingState;
     use tokio::time;
 
     use super::*;

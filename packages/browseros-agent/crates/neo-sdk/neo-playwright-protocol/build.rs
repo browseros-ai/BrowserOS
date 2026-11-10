@@ -7,7 +7,7 @@
 //!
 //! Cargo links a package's library into its examples, so the translator (`codegen/`, an
 //! example) could not build while that check fails, which is exactly when it has to run.
-//! `NEO_RUNTIME_SPEC_CODEGEN` (any value) sets `cfg(neo_runtime_spec_codegen)`, which builds the
+//! `NEO_RUNTIME_SPEC_CODEGEN` (any value) sets `cfg(neo_playwright_protocol_codegen)`, which builds the
 //! library empty, so neither a stale hash nor a broken generated file can stop the translator
 //! that replaces them.
 
@@ -22,9 +22,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Naming a directory makes Cargo rerun this script when any file under it changes.
     println!("cargo::rerun-if-changed=spec");
     println!("cargo::rerun-if-env-changed=NEO_RUNTIME_SPEC_CODEGEN");
-    println!("cargo::rustc-check-cfg=cfg(neo_runtime_spec_codegen)");
+    println!("cargo::rustc-check-cfg=cfg(neo_playwright_protocol_codegen)");
     if env::var_os("NEO_RUNTIME_SPEC_CODEGEN").is_some() {
-        println!("cargo::rustc-cfg=neo_runtime_spec_codegen");
+        println!("cargo::rustc-cfg=neo_playwright_protocol_codegen");
     }
     let manifest_dir = env::var("CARGO_MANIFEST_DIR")?;
     let files = spec_files::read(&Path::new(&manifest_dir).join("spec"))?;

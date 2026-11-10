@@ -11,7 +11,7 @@ The `crates/neo-sdk/` directory owns the runtime, its injected JavaScript packag
 | `neo-capture` | Rust | Shared capture hub, own CDP sockets, MJPEG and AV1 fMP4 |
 | `neo-service` | Rust | Neo page capture HTTP routes and page presence |
 | `neo-playwright-tests` | Rust, JavaScript | Pinned upstream compatibility harness for the runtime |
-| `neo-runtime-spec` | Rust, generated TS | Neo's cross-language contracts, translated from Playwright's protocol |
+| `neo-playwright-protocol` | Rust, generated TS | Neo's cross-language contracts, translated from Playwright's protocol |
 | `neo-trace` | Rust | Correlates live code and call logs; depends on neo-runtime, never the reverse |
 | `neo-captcha` | Rust | Shared host-side CAPTCHA solver, reached through the runtime's `CaptchaHost` trait |
 | `neo-runtime` | Rust | Runs an agent's Playwright-style script in a QuickJS realm against one BrowserOS tab |
@@ -21,11 +21,11 @@ The `crates/neo-sdk/` directory owns the runtime, its injected JavaScript packag
 
 Renamed in November 2026: `neo-quickjs-injected` was `neo-sdk`, and `neo-playwright-injected` was `neo-runtime-injected`.
 
-`neo-service` depends on `neo-capture`; claw-server depends on both. Dependencies point one way: `neo-quickjs-injected` and `neo-playwright-injected` are embedded by `neo-runtime`, which talks to the browser through `browseros-cdp` and may use `neo-runtime-spec`. `neo-quickjs-injected` and `neo-playwright-injected` never import each other; both take types from `neo-runtime-spec`'s TypeScript. Rust neo crates depend on those plus ordinary crates (tokio, serde, rquickjs, thiserror, tracing).
+`neo-service` depends on `neo-capture`; claw-server depends on both. Dependencies point one way: `neo-quickjs-injected` and `neo-playwright-injected` are embedded by `neo-runtime`, which talks to the browser through `browseros-cdp` and may use `neo-playwright-protocol`. `neo-quickjs-injected` and `neo-playwright-injected` never import each other; both take types from `neo-playwright-protocol`'s TypeScript. Rust neo crates depend on those plus ordinary crates (tokio, serde, rquickjs, thiserror, tracing).
 
 ## Page objects
 
-A page object that Rust refers to across page calls (an element, an armed hit-target interceptor) is a handle: `neo_runtime_spec::Handle<K>`, the CDP `objectId` of an object that stays in the page, typed by its kind. Each kind is declared in `spec/injected.yml` (the built-in `Element`, or a `type: handle` definition), and the translator lets a handle cross only as a top-level page call parameter or result property. Never pass a raw `objectId` string between page calls, and never keep element state in the page for Neo to look up later: a handle lives in the CDP object group of the session that read it, and releasing that group is what frees it.
+A page object that Rust refers to across page calls (an element, an armed hit-target interceptor) is a handle: `neo_playwright_protocol::Handle<K>`, the CDP `objectId` of an object that stays in the page, typed by its kind. Each kind is declared in `spec/injected.yml` (the built-in `Element`, or a `type: handle` definition), and the translator lets a handle cross only as a top-level page call parameter or result property. Never pass a raw `objectId` string between page calls, and never keep element state in the page for Neo to look up later: a handle lives in the CDP object group of the session that read it, and releasing that group is what frees it.
 
 `neo-captcha` is the one host-side exception to the browseros-core ban. It keeps workspace
 lints while moving the legacy solver unchanged, and reaches pages only through core's
@@ -41,7 +41,7 @@ Outside that host adapter, `browseros-core` is never a dependency of a neo crate
 
 ## Rust
 
-Google Rust style, enforced by the `[lints]` tables, `rustfmt.toml` and `clippy.toml` every Rust neo crate copies from `neo-runtime-spec`. The `[lints]` tables must stay identical across crates (`neo-check.sh` compares them); add crate-specific `clippy.toml` entries below the copied ones.
+Google Rust style, enforced by the `[lints]` tables, `rustfmt.toml` and `clippy.toml` every Rust neo crate copies from `neo-playwright-protocol`. The `[lints]` tables must stay identical across crates (`neo-check.sh` compares them); add crate-specific `clippy.toml` entries below the copied ones.
 
 Our exceptions to the guide:
 

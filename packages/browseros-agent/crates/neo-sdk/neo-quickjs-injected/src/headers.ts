@@ -4,7 +4,7 @@
  * protocol calls send.
  */
 
-import type { NameValue } from '@browseros/neo-runtime-spec/serve'
+import type { NameValue } from '@browseros/neo-playwright-protocol/serve'
 
 /** Playwright's `Headers`: a header name to its value. */
 export type Headers = Record<string, string>

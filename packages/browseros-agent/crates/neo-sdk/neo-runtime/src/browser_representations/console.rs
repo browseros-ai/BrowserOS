@@ -24,7 +24,7 @@
 
 use std::cmp::Ordering;
 
-use neo_runtime_spec::serve::{
+use neo_playwright_protocol::serve::{
     PageConsoleMessagesResultMessagesItem, PageConsoleMessagesResultMessagesItemLocation,
     SerializedError, SerializedErrorError,
 };

@@ -15,7 +15,7 @@
 
 use std::future::Future;
 
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     ElementStateMatch, InjectedElementStateOnSelectorParams, InjectedIsVisibleParams,
     ReadableElementState,
 };

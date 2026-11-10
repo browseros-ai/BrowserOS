@@ -16,8 +16,8 @@
  * Neo build with another spec or another test-id attribute is never returned to this one.
  */
 
-import type { InjectedInitializer } from '@browseros/neo-runtime-spec/injected'
-import { SPEC_SHA256 } from '@browseros/neo-runtime-spec/spec-hash'
+import type { InjectedInitializer } from '@browseros/neo-playwright-protocol/injected'
+import { SPEC_SHA256 } from '@browseros/neo-playwright-protocol/spec-hash'
 import {
   InjectedScript,
   type InjectedScriptOptions,

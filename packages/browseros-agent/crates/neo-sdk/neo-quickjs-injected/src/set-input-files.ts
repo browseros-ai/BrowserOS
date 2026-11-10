@@ -10,7 +10,7 @@
 import type {
   FrameDropParams,
   FrameSetInputFilesParams,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import { toBinary } from './buffer'
 
 /** Playwright's `FilePayload`. The realm has no Node `Buffer`, so `buffer` is any `Uint8Array`

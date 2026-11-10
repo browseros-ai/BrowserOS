@@ -15,8 +15,8 @@
 use browseros_cdp::CdpError;
 use std::sync::Arc;
 
-use neo_runtime_spec::injected::InjectedPreviewNodeParams;
-use neo_runtime_spec::{MethodGroup, MethodMeta};
+use neo_playwright_protocol::injected::InjectedPreviewNodeParams;
+use neo_playwright_protocol::{MethodGroup, MethodMeta};
 
 use crate::browser_representations::page::FrameTab;
 use crate::chromium_bridge::cdp::{self, Command};
@@ -28,7 +28,7 @@ use crate::progress::{CallError, PlaywrightError, Progress};
 /// Playwright: `server/chromium/crPage.ts` `CRPage.getFrameElement`: `throw new Error('Frame has been detached.');`
 const DETACHED: &str = "Frame has been detached.";
 
-/// Neo: `Frame.frameElement`'s trace metadata (`neo-runtime-spec/spec/playwright/frame.yml`).
+/// Neo: `Frame.frameElement`'s trace metadata (`neo-playwright-protocol/spec/playwright/frame.yml`).
 pub(crate) static FRAME_ELEMENT_META: MethodMeta = MethodMeta {
     interface: "Frame",
     method: "frameElement",

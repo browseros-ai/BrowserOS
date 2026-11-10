@@ -3,7 +3,7 @@
 //! half checks that the generated calls stay usable through the traits, which is the only way
 //! `neo-runtime` reaches them, and that each result decodes the way its spec says it crosses.
 
-use neo_runtime_spec::injected::{
+use neo_playwright_protocol::injected::{
     ElementState, ElementStatesOutcome, HitTargetAction, HitTargetBlocked, HitTargetOutcome,
     HitTargetSetup, InjectedAriaSnapshotParams, InjectedCheckElementStatesParams,
     InjectedCheckElementStatesResult, InjectedFrameOwnerParams, InjectedFrameOwnerResult,
@@ -12,8 +12,8 @@ use neo_runtime_spec::injected::{
     InjectedStopHitTargetInterceptorResult, InjectedTextContentParams, InjectedTitleParams,
     InjectedTitleResult, MissingState, NotConnected, Point,
 };
-use neo_runtime_spec::serve::FrameTitleParams;
-use neo_runtime_spec::{
+use neo_playwright_protocol::serve::FrameTitleParams;
+use neo_playwright_protocol::{
     Command, Element, Handle, HandleId, InjectedCall, PageResult, Properties, ResultDecodeError,
 };
 use serde_json::{Value, json};

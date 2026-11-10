@@ -18,7 +18,7 @@
  * Left out: Node's `util.inspect.custom` hook, which QuickJS does not have.
  */
 
-import type { PageConsoleMessagesResult } from '@browseros/neo-runtime-spec/serve'
+import type { PageConsoleMessagesResult } from '@browseros/neo-playwright-protocol/serve'
 import type { Connection } from './connection'
 import { handleFrom, type JSHandle } from './js-handle'
 import type { Page } from './page'

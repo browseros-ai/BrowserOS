@@ -14,14 +14,14 @@ test-host = []
 # A host can own the SDK's JavaScript engine while retaining the native run lifecycle.
 hosted-run = []
 
-# browseros-cdp and neo-runtime-spec are the only first-party dependencies; see
+# browseros-cdp and neo-playwright-protocol are the only first-party dependencies; see
 # crates/neo-sdk/NEO_STYLE.md. futures-util's `join_all` writes a click's pipelined mouse events in order.
 # rand's OS-seeded `ThreadRng` backs the realm's `crypto.getRandomValues` and `randomUUID`.
 [dependencies]
 base64.workspace = true
 browseros-cdp.workspace = true
 futures-util.workspace = true
-neo-runtime-spec.workspace = true
+neo-playwright-protocol.workspace = true
 rand.workspace = true
 rquickjs.workspace = true
 serde.workspace = true

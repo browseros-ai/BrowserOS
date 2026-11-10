@@ -70,7 +70,7 @@ import type {
   PageScreenshotParams,
   PageTouchscreenTapParams,
   PageUnregisterLocatorHandlerParams,
-} from '@browseros/neo-runtime-spec/serve'
+} from '@browseros/neo-playwright-protocol/serve'
 import type {
   ElementScreenshotParams,
   NeoScreenshotParams,
