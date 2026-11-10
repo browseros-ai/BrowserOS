@@ -86,6 +86,7 @@ function runDetails(label, run) {
     `Directory: ${cell(run.directory)}. Commit: ${cell(meta.commit)}. Workers: ${cell(meta.workers)}.`,
     `Started: ${cell(meta.startedAt)}. Ended: ${cell(meta.endedAt)}. SDK SHA-256: ${cell(meta.sdkSha256)}.`,
     `Specs verified: ${cell(meta.specsVerified)}. Context option omissions: ${cell(JSON.stringify(meta.contextOptionOmissions || []))}.`,
+    `expectLoop: ${cell(meta.expectLoop ?? false)}.`,
     ...(meta.metadataSource
       ? [`Metadata provenance: ${cell(meta.metadataSource)}`]
       : []),
@@ -114,6 +115,11 @@ export function renderReport({ neo, reference, bridge, corpus = [] }) {
       })) || [],
   )
   const gaps = groupGaps(rows)
+  const skips = new Map()
+  for (const row of rows.filter((row) => row.verdict === 'skip')) {
+    const reason = row.skipReasons.join('; ') || 'No reason recorded'
+    skips.set(reason, (skips.get(reason) || 0) + 1)
+  }
   const lines = [
     '# Neo in Node: Playwright Test verdicts',
     '',
@@ -147,6 +153,19 @@ export function renderReport({ neo, reference, bridge, corpus = [] }) {
       ['Verdict', 'Tests'],
       verdicts.map((verdict) => [verdict, counts[verdict]]),
     ),
+    '',
+    'Passing tests annotated with expectLoop count only as pass via expectLoop.',
+    '',
+    '## Skips by reason',
+    '',
+    ...(skips.size
+      ? [
+          table(
+            ['Reason', 'Tests'],
+            [...skips].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
+          ),
+        ]
+      : ['None recorded.']),
     '',
     '## Per suite',
     '',
@@ -196,7 +215,10 @@ export function renderReport({ neo, reference, bridge, corpus = [] }) {
     table(
       ['Case', 'Verdict', 'Gap key', 'First error line', 'Location'],
       rows
-        .filter((row) => !['pass', 'skip'].includes(row.verdict))
+        .filter(
+          (row) =>
+            !['pass', 'pass via expectLoop', 'skip'].includes(row.verdict),
+        )
         .map((row) => [
           `${row.suite}: ${row.title}`,
           row.verdict,

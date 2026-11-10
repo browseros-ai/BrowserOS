@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import { expectLoop } from '../expect-loop.mjs'
 import {
   caseKey,
   classifyRuns,
@@ -60,10 +61,81 @@ function classify(errors, referenceErrors = []) {
   return classifyRuns(neo, reference)
 }
 
+test('tests that loop diagnostics cannot misclassify assertion data or lose a missing read', async () => {
+  class Locator {}
+  const missing = await expectLoop(new Locator())
+    .toHaveJSProperty('value', {
+      first:
+        'this expected object is intentionally long enough to wrap across multiple lines',
+      second: 'so the missing read must remain visible in the first error line',
+    })
+    .catch((error) => error)
+  const mismatch = await expectLoop({ textContent: async () => 'actual' })
+    .toHaveText('worker process exited unexpectedly', { timeout: 5 })
+    .catch((error) => error)
+  assert.deepEqual(
+    classify([missing.message, mismatch.message]).map((row) => row.verdict),
+    ['neo-lacks', 'neo-differs'],
+  )
+})
+
+test('tests that annotated passes are separate and skip reasons survive', () => {
+  const rows = classify([
+    {
+      status: 'expected',
+      annotations: [{ type: 'expectLoop', description: 'toBeVisible' }],
+      results: [{ status: 'passed' }],
+    },
+    { status: 'expected', results: [{ status: 'passed' }] },
+    {
+      status: 'skipped',
+      annotations: [
+        {
+          type: 'skip',
+          description: 'expectLoop: toMatchAriaSnapshot is not covered',
+        },
+      ],
+      results: [{ status: 'skipped' }],
+    },
+    {
+      status: 'expected',
+      results: [
+        {
+          status: 'passed',
+          annotations: [{ type: 'expectLoop', description: 'toHaveText' }],
+        },
+      ],
+    },
+  ])
+  assert.deepEqual(
+    rows.map((row) => row.verdict),
+    ['pass via expectLoop', 'pass', 'skip', 'pass via expectLoop'],
+  )
+  assert.deepEqual(rows[2].skipReasons, [
+    'expectLoop: toMatchAriaSnapshot is not covered',
+  ])
+  assert.equal(rows[2].reason, 'expectLoop: toMatchAriaSnapshot is not covered')
+  assert.equal(countVerdicts(rows)['pass via expectLoop'], 2)
+})
+
+test('tests that expectLoop failures classify public reads without scanning expected text as internals', () => {
+  const rows = classify([
+    'expectLoop: toHaveText expected "_expect is not a function"; last received "no"',
+    'AssertionError: expectLoop: toHaveValue expected "x"; last received undefined; read failed: Locator.inputValue is not a function',
+    'expectLoop: toHaveText expected "x"; last received "y"',
+  ])
+  assert.deepEqual(
+    rows.map((row) => row.verdict),
+    ['neo-differs', 'neo-lacks', 'neo-differs'],
+  )
+  assert.equal(rows[1].gapKey, 'Locator.inputValue')
+})
+
 test('real page-goto fixture: expected failure passes; four failures get the observed classes', () => {
   const rows = classifyRuns(fixture('neo'), fixture('reference'))
   assert.deepEqual(countVerdicts(rows), {
     pass: 1,
+    'pass via expectLoop': 0,
     'neo-lacks': 1,
     'neo-differs': 0,
     'needs-internals': 3,

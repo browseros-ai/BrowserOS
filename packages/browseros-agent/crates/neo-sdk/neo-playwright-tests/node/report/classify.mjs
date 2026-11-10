@@ -5,6 +5,7 @@ import { refusals } from './refusals.mjs'
 /** Neo: Stable report columns, including every exclusive failure class. */
 export const verdicts = [
   'pass',
+  'pass via expectLoop',
   'neo-lacks',
   'neo-differs',
   'needs-internals',
@@ -129,7 +130,14 @@ function errorsOf(test, location) {
 /** Neo: Only explicit infrastructure signals; ordinary test timeouts/closed-page errors are outcomes. */
 // `Neo hosted runs keep at most`: the Node door's own handle caps (hosted-run only), not product behavior.
 function isHarnessError(line) {
+  if (isLoopError(line)) return false
   return /(?:worker process|test worker).*exited unexpectedly|Browser (?:did not (?:start|publish|own)|exited at startup)|Owned browser process group survived cleanup|Cannot revalidate browser group|(?:^|: )harness-error:|ERR_DLOPEN_FAILED|Cannot find module .*neo_node|(?:browser|Browser) (?:process )?(?:crashed|disconnected unexpectedly)|browserType\.launch: (?:Executable doesn't exist|Failed to launch|Target .*closed|spawn )|connect ECONNREFUSED|EADDRINUSE|Timeout.*(?:setting up|tearing down).*"__neo"|Neo hosted runs keep at most/i.test(
+    line,
+  )
+}
+
+function isLoopError(line) {
+  return /^(?:(?:AssertionError(?: \[ERR_ASSERTION\])?|Error): )?expectLoop:/.test(
     line,
   )
 }
@@ -284,6 +292,39 @@ function observedGap(error, row) {
   return { key, missing: Boolean(expression && apiKey(expression)) }
 }
 
+function classifyLoopError(error, neo) {
+  const readFailure = error.firstLine.split('; read failed: ')[1]
+  const gap =
+    readFailure && observedGap({ ...error, firstLine: readFailure }, neo)
+  const missing =
+    gap?.missing ||
+    (readFailure &&
+      refusals.some((refusal) => refusal.pattern.test(readFailure)))
+  return {
+    verdict: missing ? 'neo-lacks' : 'neo-differs',
+    gapKey:
+      gap?.key ||
+      `expectLoop.${error.firstLine.match(/expectLoop: (?:not\.)?(\w+)/)?.[1]}`,
+    reason: error.firstLine,
+  }
+}
+
+function nonFailure(row) {
+  const skipped = row.outcome === 'skip'
+  return {
+    ...row,
+    verdict: skipped
+      ? 'skip'
+      : row.expectLoopChecks.length
+        ? 'pass via expectLoop'
+        : 'pass',
+    reason:
+      skipped && row.skipReasons.length
+        ? row.skipReasons.join('; ')
+        : `Playwright Test: ${row.playwrightStatus}`,
+  }
+}
+
 export function classifyCase(neo, reference) {
   const errors = errorsOf(neo.test, neo.location)
   const referenceErrors = reference
@@ -291,6 +332,24 @@ export function classifyCase(neo, reference) {
     : []
   const neoOutcome = outcome(neo)
   const referenceOutcome = reference ? outcome(reference) : 'missing'
+  const annotations = [
+    ...(neo.test.annotations || []),
+    ...(neo.test.results || []).flatMap((result) => result.annotations || []),
+  ]
+  const expectLoopChecks = [
+    ...new Set(
+      annotations
+        .filter((a) => a.type === 'expectLoop')
+        .map((a) => a.description),
+    ),
+  ]
+  const skipReasons = [
+    ...new Set(
+      annotations
+        .filter((a) => a.type === 'skip' && a.description)
+        .map((a) => a.description),
+    ),
+  ]
   const row = {
     key: neo.key,
     suite: neo.suite,
@@ -311,13 +370,10 @@ export function classifyCase(neo, reference) {
     referenceEvidence: referenceErrors,
     gapKey: null,
     wouldPassWithExpect: false,
+    expectLoopChecks,
+    skipReasons,
   }
-  if (neoOutcome === 'pass' || neoOutcome === 'skip')
-    return {
-      ...row,
-      verdict: neoOutcome,
-      reason: `Playwright Test: ${neo.test.status}`,
-    }
+  if (neoOutcome === 'pass' || neoOutcome === 'skip') return nonFailure(row)
   const infrastructure = errors.find((error) => isHarnessError(error.firstLine))
   const referenceInfrastructure =
     referenceOutcome === 'fail' &&
@@ -350,6 +406,8 @@ export function classifyCase(neo, reference) {
         referenceErrors[0]?.firstLine ||
         'Real Playwright also reports an unexpected outcome',
     }
+  const loopError = errors.find((error) => isLoopError(error.firstLine))
+  if (loopError) return { ...row, ...classifyLoopError(loopError, neo) }
   const internals = errors.map(internalGap)
   const internal = internals.find(Boolean)
   if (internal)
