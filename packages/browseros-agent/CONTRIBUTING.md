@@ -57,6 +57,37 @@ A file watcher also tracks `apps/claw-server/src`, its `Cargo.toml`, and its tes
 
 Stop everything with `bun run dev:stop`.
 
+### SDK server
+
+```bash
+BROWSERCLAW_USE_SDK=1 bun run dev:claw:watch:new
+```
+
+This starts the dev browser and runs `neo-server` (`browseros-claw-sdk`) as its
+backend. The first Cargo build can take a few minutes. Changes to SDK Rust
+sources or embedded JavaScript assets restart the server. After editing the
+Playwright engine's TypeScript, run `bun run --filter @browseros/neo-playwright-js build`
+to update the watched assets.
+
+Wait for `neo-server ready: MCP at http://127.0.0.1:<port>/mcp`. Connect an MCP
+client to that URL to use the single `run` tool. To check it against the running
+browser, replace `<port>` with the logged server port:
+
+```bash
+python3 ../browseros/docker/neo/smoke_sdk.py --mcp-port <port>
+```
+
+The Claw UI still launches the browser. Its server-backed screens require
+claw-server's API, so use the MCP client to drive the browser in SDK mode.
+The SDK server logs that hosted mode is off because local popups open as
+separate windows. Unstamped browser builds report an unknown native version.
+Set `CLAW_NATIVE_BROWSEROS_VERSION` to your build's version to test features
+that require a specific browser version.
+
+Press Ctrl+C to stop the watch. Leave the flag unset for normal Claw
+development, or use it with `bun run dev:claw:watch` to keep the checkout's dev
+profile.
+
 ### `:new` versus plain
 
 There are two variants and the difference matters more than the name suggests.

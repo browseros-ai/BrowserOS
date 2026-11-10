@@ -23,7 +23,7 @@ func TestWatchModeRejectsManualClawCombination(t *testing.T) {
 		watchClaw = oldClaw
 	})
 
-	_, err := watchMode()
+	_, err := watchMode(false)
 	if err == nil {
 		t.Fatal("expected incompatible watch flags to return an error")
 	}
@@ -41,12 +41,23 @@ func TestWatchModeSelectsBrowserClaw(t *testing.T) {
 		watchClaw = oldClaw
 	})
 
-	mode, err := watchMode()
+	mode, err := watchMode(false)
 	if err != nil {
 		t.Fatalf("watchMode returned error: %v", err)
 	}
 	if mode != "BrowserOS neo" {
 		t.Fatalf("expected BrowserOS neo mode, got %q", mode)
+	}
+}
+
+func TestWatchModeLabelsSdkServer(t *testing.T) {
+	oldManual, oldClaw := watchManual, watchClaw
+	watchManual, watchClaw = false, true
+	t.Cleanup(func() { watchManual, watchClaw = oldManual, oldClaw })
+
+	mode, err := watchMode(true)
+	if err != nil || mode != "BrowserOS neo (SDK server)" {
+		t.Fatalf("SDK watch mode = %q, %v", mode, err)
 	}
 }
 
@@ -234,7 +245,7 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 		t.Fatalf("buildWatchEnv returned error: %v", err)
 	}
 	var killedPort int
-	cfg := clawServerProcConfig(root, env, ports, userDataDir, sidecarPath, func(port int, _ time.Duration) error {
+	cfg := clawBackendProcConfig(clawServerBackend, root, env, ports, userDataDir, sidecarPath, func(port int, _ time.Duration) error {
 		killedPort = port
 		return nil
 	})
@@ -312,7 +323,7 @@ func TestClawRustServerBuildsInItsOwnCargoDir(t *testing.T) {
 		{[]string{"CARGO_BUILD_BUILD_DIR=/ssd/build"}, ownDir, "/ssd/build"},
 	} {
 		shared := slices.Clone(tc.env)
-		cfg := clawServerProcConfig(root, tc.env, proc.Ports{}, t.TempDir(), "sidecar.json", nil)
+		cfg := clawBackendProcConfig(clawServerBackend, root, tc.env, proc.Ports{}, t.TempDir(), "sidecar.json", nil)
 		if got := envValue(cfg.Env, "CARGO_TARGET_DIR"); got != tc.wantTarget {
 			t.Errorf("env %v: expected CARGO_TARGET_DIR %q, got %q", tc.env, tc.wantTarget, got)
 		}
