@@ -45,6 +45,8 @@ Independent read-only observers retain DOM and delivered events.
 
 The two engines run sequentially on fresh processes and profiles, using the same leased upstream server origins and assets. Cargo runs four independent cases concurrently by default. Every case owns its processes and output files; only the Cargo parent writes the aggregate. No real Playwright object attaches to Neo's browser. Missing browser methods and browser-aware assertions have no fallback helpers. Unsupported transport values remain explicit evidence gaps.
 
+Both engines use `--disable-browseros-extensions` so bundled BrowserOS UI does not inject shadow DOM into upstream test pages. Neo's handling of its own bar is covered separately by `neo-quickjs-injected/tests/parity/browseros-ui.mjs`.
+
 Final effects are captured at the fixture boundary, before disconnecting the reference client resets its CDP viewport. The native fixture reaches that boundary after its single run and cleanup drain. A bounded file handshake keeps the independent observer in charge; a missing acknowledgement or lost snapshot stays an infrastructure error, with no later snapshot substituted.
 
 Both initial blank pages also receive Playwright's default focus emulation before either engine attaches, so reference setup cannot contribute an unmatched focus event. Events from the original bodies and native cleanup remain measured without filtering.
