@@ -285,8 +285,10 @@ fn print_totals(label: &str, totals: &report::Totals) {
         totals.counts[&Verdict::NotApplicable]
     );
     println!(
-        "    wording differences {}, bridge-limited with an earlier real difference {}",
-        totals.wording_count, totals.bridge_limit_with_earlier_difference_count
+        "    wording differences {}, cleanup blur cases {}, bridge-limited with an earlier real difference {}",
+        totals.wording_count,
+        totals.cleanup_blur_count,
+        totals.bridge_limit_with_earlier_difference_count
     );
     println!(
         "    partial evidence {}, partial Fail {} (included in pass+fail), partial reference census {}, harness limitations {}",

@@ -223,6 +223,7 @@ pub struct ResultRecord {
     pub reason: String,
     pub differences: Vec<String>,
     pub wording_notes: Vec<String>,
+    pub cleanup_blur_notes: Vec<String>,
     pub bridge_limit_with_earlier_difference: bool,
     pub missing_reference: BTreeSet<String>,
     pub missing_observed: BTreeSet<String>,
