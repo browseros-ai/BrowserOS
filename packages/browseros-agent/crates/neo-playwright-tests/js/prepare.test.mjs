@@ -37,6 +37,10 @@ function fixture(t) {
       "it.skip(({ headless }) => headless, 'avoid popping windows in headless mode');",
     'tests/page/example.spec.ts':
       'test("original", async ({ page }) => page.title());',
+    'tests/page/elementhandle-misc.spec.ts':
+      'test("handle", async ({ page }) => page.$("div"));',
+    'tests/page/page-evaluate.spec.ts':
+      'test("evaluate", async ({ page }) => page.evaluate(() => 1));',
   }
   for (const [file, text] of Object.entries(files)) {
     const full = path.join(checkout, file)
@@ -69,13 +73,13 @@ function fixture(t) {
   const pin = {
     revision: git(['rev-parse', 'HEAD']),
     version: 'fixture',
-    suites: [
-      {
-        file: 'tests/page/example.spec.ts',
+    suites: Object.keys(files)
+      .filter((file) => file.startsWith('tests/page/'))
+      .map((file) => ({
+        file,
         include: true,
-        sha256: sha256(files['tests/page/example.spec.ts']),
-      },
-    ],
+        sha256: sha256(files[file]),
+      })),
   }
   fs.cpSync(checkout, root, {
     recursive: true,
@@ -188,6 +192,27 @@ test('overlay preserves the full original fixture alias and fingerprints its exe
   fs.writeFileSync(path.join(harness, 'corpus.json'), JSON.stringify(pin))
   const overlay = path.join(scratch, 'overlay')
   const manifest = materialize(overlay, harness, { upstream: root, pin })
+  const config = fs.readFileSync(path.join(overlay, 'neo.config.mjs'), 'utf8')
+  for (const suite of pin.suites) {
+    assert.ok(config.includes(suite.file.replace(/^tests\//, '')))
+    assert.equal(
+      fs.readFileSync(path.join(overlay, suite.file), 'utf8'),
+      files[suite.file],
+    )
+  }
+  assert.ok(
+    fs
+      .readFileSync(path.join(overlay, 'tests/config/browserTest.ts'), 'utf8')
+      .includes('js/fixtures.mjs'),
+  )
+  assert.ok(
+    fs
+      .readFileSync(
+        path.join(overlay, 'tests/config/serverFixtures.ts'),
+        'utf8',
+      )
+      .includes('Number(process.env.NEO_TESTS_PORT)'),
+  )
   assert.equal(
     fs.readFileSync(path.join(overlay, manifest.fixtureAlias.file), 'utf8'),
     files['tests/config/browserTest.ts'],
@@ -217,4 +242,19 @@ test('overlay preserves the full original fixture alias and fingerprints its exe
     /input changed/,
   )
   assert.equal(fs.existsSync(path.join(scratch, 'rejected')), false)
+})
+
+test('every included suite digest is verified before creating an overlay', (t) => {
+  const { checkout, root, pin, scratch, files } = fixture(t)
+  upgradeStamp(checkout, { root, pin })
+  for (const suite of pin.suites) {
+    fs.appendFileSync(path.join(root, suite.file), 'drift')
+    const overlay = path.join(scratch, 'rejected')
+    assert.throws(
+      () => materialize(overlay, undefined, { upstream: root, pin }),
+      /Pinned upstream source changed/,
+    )
+    assert.equal(fs.existsSync(overlay), false)
+    fs.writeFileSync(path.join(root, suite.file), files[suite.file])
+  }
 })

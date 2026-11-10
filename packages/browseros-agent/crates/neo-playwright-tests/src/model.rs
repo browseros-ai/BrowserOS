@@ -201,6 +201,7 @@ pub enum Verdict {
     Pass,
     Fail,
     Unsupported,
+    BridgeLimit,
     Skip,
     NotApplicable,
     ReferenceFailure,
@@ -212,11 +213,17 @@ pub enum Verdict {
 /// only a valid reference with complete census contributes confirmed reference-path blockers.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Reference validity, completeness and earlier differences are independent evidence facets."
+)]
 pub struct ResultRecord {
     pub case: Case,
     pub verdict: Verdict,
     pub reason: String,
     pub differences: Vec<String>,
+    pub wording_notes: Vec<String>,
+    pub bridge_limit_with_earlier_difference: bool,
     pub missing_reference: BTreeSet<String>,
     pub missing_observed: BTreeSet<String>,
     pub reference_valid: bool,

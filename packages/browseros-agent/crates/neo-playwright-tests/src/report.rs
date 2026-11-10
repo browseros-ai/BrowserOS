@@ -17,6 +17,8 @@ fn record(case: Case, reason: String) -> ResultRecord {
         verdict: Verdict::HarnessError,
         reason,
         differences: Vec::new(),
+        wording_notes: Vec::new(),
+        bridge_limit_with_earlier_difference: false,
         missing_reference: BTreeSet::new(),
         missing_observed: BTreeSet::new(),
         reference_valid: false,
@@ -165,7 +167,7 @@ fn value_objects<'a>(
         }
         JsValue::Record { entries, .. } => {
             for (key, value) in entries {
-                path.push(ValuePath::Property(key.clone()));
+                path.push(ValuePath::Property(strip_ansi(key)));
                 value_objects(value, path, objects);
                 path.pop();
             }
@@ -364,13 +366,81 @@ fn canonicalize(value: &mut JsValue, objects: &BTreeMap<ObjectRef, Origin>) -> b
     }
 }
 
+/// Strip only SGR sequences (ESC [ digits/semicolons m), directly on UTF-16 so lone
+/// surrogates stay distinct. Callers normalize comparison copies, never retained evidence.
+fn strip_ansi(units: &[u16]) -> Vec<u16> {
+    let mut result = Vec::with_capacity(units.len());
+    let mut index = 0;
+    while index < units.len() {
+        if units[index..].starts_with(&[0x1b, 0x5b]) {
+            let mut end = index + 2;
+            while units
+                .get(end)
+                .is_some_and(|unit| matches!(unit, 0x30..=0x39 | 0x3b))
+            {
+                end += 1;
+            }
+            if units.get(end) == Some(&0x6d) {
+                index = end + 1;
+                continue;
+            }
+        }
+        result.push(units[index]);
+        index += 1;
+    }
+    result
+}
+
+fn strip_value_ansi(value: &mut JsValue) {
+    match value {
+        JsValue::String { units } => *units = strip_ansi(units),
+        JsValue::Array { values } => {
+            for value in values {
+                strip_value_ansi(value);
+            }
+        }
+        JsValue::Record { entries, .. } => {
+            for (key, value) in entries {
+                *key = strip_ansi(key);
+                strip_value_ansi(value);
+            }
+        }
+        JsValue::Regexp {
+            source_units,
+            flags,
+            last_index,
+        } => {
+            *source_units = strip_ansi(source_units);
+            *flags =
+                String::from_utf16_lossy(&strip_ansi(&flags.encode_utf16().collect::<Vec<_>>()));
+            strip_value_ansi(last_index);
+        }
+        _ => {}
+    }
+}
+
 fn canonical_outcome(call: &Call, objects: &BTreeMap<ObjectRef, Origin>) -> Option<CallOutcome> {
     let mut outcome = call.outcome.clone();
     let value = match &mut outcome {
         CallOutcome::Returned { value } | CallOutcome::Threw { error: value } => value,
         CallOutcome::Pending | CallOutcome::Untransportable { .. } => return None,
     };
-    canonicalize(value, objects).then_some(outcome)
+    let comparable = canonicalize(value, objects);
+    strip_value_ansi(value);
+    comparable.then_some(outcome)
+}
+
+fn outcomes_agree(left: &CallOutcome, right: &CallOutcome) -> bool {
+    if let (CallOutcome::Threw { error: left }, CallOutcome::Threw { error: right }) = (left, right)
+        && let (Some(JsValue::String { units: left }), Some(JsValue::String { units: right })) =
+            (property(left, "name"), property(right, "name"))
+        && !left.is_empty()
+        && !right.is_empty()
+    {
+        return left == right;
+    }
+    // Malformed/unnamed throws cannot establish matching error classes.
+    left == right
 }
 
 fn absent(method: &str, capabilities: &BTreeMap<String, BTreeSet<String>>) -> bool {
@@ -437,10 +507,10 @@ fn error_message(error: &Value) -> Option<String> {
     let JsValue::String { units } = message else {
         return None;
     };
-    // Diagnostic text escapes lone surrogates instead of replacing them. The retained
-    // tagged error and its exact public comparison never pass through this rendering.
+    // Diagnostic text escapes lone surrogates instead of replacing them. Raw tagged
+    // assertions stay unchanged; only this rendered explanation loses terminal colors.
     Some(
-        char::decode_utf16(units.iter().copied())
+        char::decode_utf16(strip_ansi(units))
             .map(|unit| match unit {
                 Ok(character) => character.to_string(),
                 Err(error) => format!("\\u{:04x}", error.unpaired_surrogate()),
@@ -515,6 +585,41 @@ fn journal_facets<'a>(
     Some(correlation)
 }
 
+fn compare_wording(
+    result: &mut ResultRecord,
+    key: &CallKey,
+    method: &str,
+    left: Option<&CallOutcome>,
+    right: Option<&CallOutcome>,
+) {
+    if let (Some(CallOutcome::Threw { error: left }), Some(CallOutcome::Threw { error: right })) =
+        (left, right)
+        && property(left, "message") != property(right, "message")
+    {
+        result.wording_notes.push(format!(
+            "{}:{}:{} occurrence {} {method} error wording differs",
+            key.site.file, key.site.line, key.site.column, key.occurrence,
+        ));
+    }
+}
+
+/// An unfinished invocation bounds the proven prefix. Unmatched reference tails and
+/// later effects cannot establish a behavioral difference preceding a bridge limit.
+fn bridge_boundary(journal: &Journal) -> Option<u64> {
+    bridge_limit(journal)?;
+    journal
+        .calls
+        .iter()
+        .filter(|call| {
+            matches!(
+                call.outcome,
+                CallOutcome::Pending | CallOutcome::Untransportable { .. }
+            )
+        })
+        .map(|call| call.ordinal)
+        .min()
+}
+
 fn compare_journals(result: &mut ResultRecord, reference: &Phase, neo: &Phase) {
     if let Some(journal) = &neo.journal {
         result.missing_observed.clone_from(&journal.missing);
@@ -548,14 +653,27 @@ fn compare_journals(result: &mut ResultRecord, reference: &Phase, neo: &Phase) {
     let (Some(expected), Some(actual)) = (expected, actual) else {
         return;
     };
+    let boundaries = [reference, neo].map(|phase| phase.journal.as_ref().and_then(bridge_boundary));
     for (key, expected_call) in &expected.calls {
         if let Some(actual_call) = actual.calls.get(key) {
             let left = canonical_outcome(expected_call, &expected.objects);
             let right = canonical_outcome(actual_call, &actual.objects);
+            compare_wording(
+                result,
+                key,
+                &expected_call.method,
+                left.as_ref(),
+                right.as_ref(),
+            );
             if expected_call.method != actual_call.method
-                || matches!((&left, &right), (Some(left), Some(right)) if left != right)
+                || matches!((&left, &right), (Some(left), Some(right)) if !outcomes_agree(left, right))
             {
-                result.differences.push(format!("{}:{}:{} occurrence {} {} differs in method, exact value or public error (reference {}; Neo {} {})", key.site.file, key.site.line, key.site.column, key.occurrence, expected_call.method, outcome_kind(&expected_call.outcome), actual_call.method, outcome_kind(&actual_call.outcome)));
+                result.differences.push(format!("{}:{}:{} occurrence {} {} differs in method, value or error class (reference {}; Neo {} {})", key.site.file, key.site.line, key.site.column, key.occurrence, expected_call.method, outcome_kind(&expected_call.outcome), actual_call.method, outcome_kind(&actual_call.outcome)));
+                result.bridge_limit_with_earlier_difference |= left.is_some()
+                    && right.is_some()
+                    && boundaries.iter().any(Option::is_some)
+                    && boundaries[0].is_none_or(|boundary| expected_call.ordinal < boundary)
+                    && boundaries[1].is_none_or(|boundary| actual_call.ordinal < boundary);
             }
         } else if !actual.might_be_unresolved(key) {
             result.differences.push(format!(
@@ -601,6 +719,41 @@ fn compare_journals(result: &mut ResultRecord, reference: &Phase, neo: &Phase) {
                 .push(format!("logical identity root {name} differs"));
         }
     }
+}
+
+fn bridge_limit(journal: &Journal) -> Option<String> {
+    journal
+        .harness_limitations
+        .iter()
+        .find(|text| text.starts_with("bridge limit: "))
+        .cloned()
+        .or_else(|| {
+            transport_error(journal).map(|error| format!("bridge limit: transport: {error}"))
+        })
+}
+
+fn transport_error(journal: &Journal) -> Option<&str> {
+    journal
+        .transport_errors
+        .first()
+        .map(String::as_str)
+        .or_else(|| {
+            journal.calls.iter().find_map(|call| {
+                if let CallOutcome::Untransportable { transport_error } = &call.outcome {
+                    Some(transport_error.as_str())
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn effects_agree(reference: &Observation, neo: &Observation) -> bool {
+    let mut expected = reference.data.clone();
+    let mut actual = neo.data.clone();
+    strip_value_ansi(&mut expected);
+    strip_value_ansi(&mut actual);
+    expected == actual
 }
 
 fn native_witness(neo: &Phase) -> Result<(), String> {
@@ -700,12 +853,16 @@ pub fn classify(pair: &Pair) -> ResultRecord {
     let (Some(reference_test), Some(neo_test)) = (reference_test, neo_test) else {
         return result;
     };
-    if let Some(limitation) = reference
-        .journal
-        .as_ref()
-        .and_then(|journal| journal.harness_limitations.first())
+    // Fixture refusals can fail both raw tests before their bodies execute.
+    // They describe harness coverage, not a failing Playwright reference.
+    if let Some(limitation) = [reference, neo]
+        .into_iter()
+        .filter_map(|phase| phase.journal.as_ref())
+        .flat_map(|journal| &journal.harness_limitations)
+        .find(|limitation| !limitation.starts_with("bridge limit: "))
     {
-        result.reason = format!("Harness limitation: reference: {limitation}");
+        result.verdict = Verdict::BridgeLimit;
+        result.reason = format!("bridge limit: fixture: {limitation}");
         return result;
     }
     if !passed(reference_test) {
@@ -733,13 +890,21 @@ pub fn classify(pair: &Pair) -> ResultRecord {
         );
         return result;
     }
-    if let Some(limitation) = result.harness_limitations.first() {
-        result.reason = format!("Harness limitation: {limitation}");
+    let limit = reference
+        .journal
+        .as_ref()
+        .and_then(transport_error)
+        .map(|error| format!("bridge limit: reference: {error}"))
+        .or_else(|| neo.journal.as_ref().and_then(bridge_limit));
+    if let Some(limit) = limit {
+        result.verdict = Verdict::BridgeLimit;
+        result.reason = limit;
         return result;
     }
-    if complete(reference.observation.as_ref())
-        && complete(neo.observation.as_ref())
-        && reference.observation != neo.observation
+    if let (Some(expected), Some(actual)) = (&reference.observation, &neo.observation)
+        && complete(Some(expected))
+        && complete(Some(actual))
+        && !effects_agree(expected, actual)
     {
         result
             .differences
@@ -764,8 +929,7 @@ pub fn classify(pair: &Pair) -> ResultRecord {
             .evidence_incomplete
             .insert("No measured browser API calls in the executed body".into());
     }
-    // A reliable unequal return or upstream assertion remains a real gap when a later
-    // observation or witness is lost. Completeness is an independent facet and gates Pass.
+    // Reliable differences survive in the record even when another facet takes precedence.
     if let Some(difference) = result.differences.first() {
         result.verdict = Verdict::Fail;
         result.reason.clone_from(difference);
@@ -774,7 +938,8 @@ pub fn classify(pair: &Pair) -> ResultRecord {
         result.reason.clone_from(gap);
     } else {
         result.verdict = Verdict::Pass;
-        result.reason = "Upstream assertions, every return/error and observed effects agree".into();
+        result.reason =
+            "Upstream assertions, returns, error classes and observed effects agree".into();
         result.comparable = result.reference_complete;
     }
     result
@@ -852,6 +1017,8 @@ pub struct Totals {
     pub partial_fail_count: usize,
     pub partial_reference_count: usize,
     pub harness_limitation_count: usize,
+    pub wording_count: usize,
+    pub bridge_limit_with_earlier_difference_count: usize,
 }
 
 impl Default for Totals {
@@ -862,6 +1029,7 @@ impl Default for Totals {
                 Verdict::Pass,
                 Verdict::Fail,
                 Verdict::Unsupported,
+                Verdict::BridgeLimit,
                 Verdict::Skip,
                 Verdict::NotApplicable,
                 Verdict::ReferenceFailure,
@@ -876,6 +1044,8 @@ impl Default for Totals {
             partial_fail_count: 0,
             partial_reference_count: 0,
             harness_limitation_count: 0,
+            wording_count: 0,
+            bridge_limit_with_earlier_difference_count: 0,
         }
     }
 }
@@ -895,6 +1065,10 @@ impl Totals {
         self.partial_reference_count +=
             usize::from(!record.reference_complete && !record.missing_reference.is_empty());
         self.harness_limitation_count += usize::from(!record.harness_limitations.is_empty());
+        self.wording_count += usize::from(!record.wording_notes.is_empty());
+        self.bridge_limit_with_earlier_difference_count += usize::from(
+            record.verdict == Verdict::BridgeLimit && record.bridge_limit_with_earlier_difference,
+        );
     }
 }
 
