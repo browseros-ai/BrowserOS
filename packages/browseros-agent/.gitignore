@@ -77,11 +77,11 @@ docs/plans/
 # TypeScript compiled output in tests (source files are .ts)
 **/tests/**/*.js
 # Fixture scripts the crate's live tests serve to a browser are sources.
-!crates/browseros-playwright/tests/data/**/*.js
+!crates/neo-sdk/neo-playwright/tests/data/**/*.js
 # So are conformance's case bodies, its fixture scripts and the case contract both runners read.
-!crates/browseros-playwright/tests/conformance/**/*.js
+!crates/neo-sdk/neo-playwright/tests/conformance/**/*.js
 # And upstream's page-test assets, vendored byte for byte by third_party/playwright/sync.sh.
-!crates/browseros-playwright/third_party/playwright/tests/**/*.js
+!crates/neo-sdk/neo-playwright/third_party/playwright/tests/**/*.js
 **/tests/**/*.d.ts
 **/tests/**/*.d.ts.map
 

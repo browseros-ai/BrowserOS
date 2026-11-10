@@ -1,5 +1,19 @@
 [workspace]
-members = ["crates/*", "apps/claw-server", "apps/claw-sdk"]
+# The grouping folder is not a package. Cargo excludes it from crates/*, but keeps these
+# literal members; add a member here whenever a new Neo crate joins the SDK.
+members = [
+    "crates/*",
+    "apps/claw-server",
+    "crates/neo-sdk/neo-sdk",
+    "crates/neo-sdk/neo-captcha",
+    "crates/neo-sdk/neo-capture",
+    "crates/neo-sdk/neo-playwright",
+    "crates/neo-sdk/neo-sdk-api",
+    "crates/neo-sdk/neo-service",
+    "crates/neo-sdk/neo-takeover",
+    "crates/neo-sdk/neo-trace",
+]
+exclude = ["crates/neo-sdk"]
 resolver = "3"
 
 [workspace.package]
@@ -11,17 +25,17 @@ repository = "https://github.com/browseros-ai/BrowserOS"
 [workspace.dependencies]
 harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }
-browseros-captcha = { path = "crates/browseros-captcha" }
-browseros-capture = { path = "crates/browseros-capture" }
+neo-captcha = { path = "crates/neo-sdk/neo-captcha" }
+neo-capture = { path = "crates/neo-sdk/neo-capture" }
 browseros-core = { path = "crates/browseros-core" }
 browseros-decide = { path = "crates/browseros-decide" }
 browseros-mcp = { path = "crates/browseros-mcp" }
-browseros-service = { path = "crates/browseros-service" }
-browseros-takeover = { path = "crates/browseros-takeover" }
-browseros-playwright = { path = "crates/browseros-playwright" }
-browseros-trace = { path = "crates/browseros-trace" }
+neo-service = { path = "crates/neo-sdk/neo-service" }
+neo-takeover = { path = "crates/neo-sdk/neo-takeover" }
+neo-playwright = { path = "crates/neo-sdk/neo-playwright" }
+neo-trace = { path = "crates/neo-sdk/neo-trace" }
 claw-api = { path = "crates/claw-api" }
-claw-sdk-api = { path = "crates/claw-sdk-api" }
+neo-sdk-api = { path = "crates/neo-sdk/neo-sdk-api" }
 hosted-api = { path = "crates/hosted-api" }
 
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "process", "fs"] }

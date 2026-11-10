@@ -7,7 +7,8 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "crates/*"
+    "crates/*",
+    "crates/neo-sdk/*"
   ],
   "scripts": {
     "postinstall": "lefthook install || true",
@@ -73,9 +74,9 @@
     "codegen:hosted-api": "bun scripts/codegen/hosted-api.ts",
     "codegen:hosted-api:check": "bun scripts/codegen/hosted-api.ts --check",
     "check:hosted-api-breaking": "bash contracts/hosted-api/check-breaking.sh",
-    "codegen:claw-sdk-api": "bun scripts/codegen/claw-sdk-api.ts",
-    "codegen:claw-sdk-api:check": "bun scripts/codegen/claw-sdk-api.ts --check",
-    "check:claw-sdk-api-breaking": "bash contracts/claw-sdk-api/check-breaking.sh",
+    "codegen:neo-sdk-api": "bun scripts/codegen/neo-sdk-api.ts",
+    "codegen:neo-sdk-api:check": "bun scripts/codegen/neo-sdk-api.ts --check",
+    "check:neo-sdk-api-breaking": "bash crates/neo-sdk/neo-sdk-api/check-breaking.sh",
     "test:claw-api-contract": "bun test contracts/claw-api/tests/fixtures.test.ts contracts/claw-api/tests/schema.test.ts",
     "test:claw-mcp-smoke": "bun contracts/claw-mcp/tests/run.ts --smoke",
     "test:captcha-e2e": "bun tools/captcha-testbed/e2e/run.ts",

@@ -1,0 +1,17 @@
+{
+  "name": "@browseros/neo-playwright-js",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "test": "bun run ../../../scripts/run-bun-test.ts --cwd=./crates/neo-sdk/neo-playwright-js ./crates/neo-sdk/neo-playwright-js",
+    "typecheck": "tsc --noEmit",
+    "build": "bun scripts/build.ts",
+    "build:check": "bun scripts/build.ts --check"
+  },
+  "devDependencies": {
+    "acorn": "^8.17.0",
+    "linkedom": "^0.18.13"
+  }
+}

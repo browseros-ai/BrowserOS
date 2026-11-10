@@ -1,6 +1,6 @@
 /**
  * Shared plumbing for the OpenAPI codegen scripts (`claw-api.ts`, `hosted-api.ts`,
- * `claw-sdk-api.ts`). The two models-only contracts share `runRustModelsCodegen` whole.
+ * `neo-sdk-api.ts`). The two models-only contracts share `runRustModelsCodegen` whole.
  *
  * Both run the same pinned OpenAPI Generator image and normalize its output so a fresh
  * generation is byte-identical across machines. Their `--check` modes rely on that to
@@ -89,13 +89,17 @@ export function assertTreeMatches(
 }
 
 /**
- * A contract whose spec generates only Rust models: `contracts/<name>/openapi.yaml` into
- * `crates/<name>/src/generated`, with `<name>` also the generated package's name.
+ * A contract whose spec generates only Rust models. Paths are relative to the agent root;
+ * defaults preserve the separate contracts/<name> and crates/<name> layout for existing APIs.
  */
 export interface RustModelsContract {
   name: string
   /** How messages name the API, e.g. `hosted API`. */
   label: string
+  /** Spec path when the contract lives alongside its generated crate. */
+  spec?: string
+  /** Crate root when it lives below a grouping folder. */
+  crateDir?: string
 }
 
 /**
@@ -108,7 +112,11 @@ export function runRustModelsCodegen(
   root: string,
   argv: string[],
 ): void {
-  const target = join(root, `crates/${contract.name}/src/generated`)
+  const target = join(
+    root,
+    contract.crateDir ?? `crates/${contract.name}`,
+    'src/generated',
+  )
   const temporaryRoot = mkdtempSync(join(tmpdir(), `${contract.name}-codegen-`))
   try {
     runDocker([
@@ -123,7 +131,7 @@ export function runRustModelsCodegen(
       OPENAPI_GENERATOR_IMAGE,
       'generate',
       '-i',
-      `/local/contracts/${contract.name}/openapi.yaml`,
+      `/local/${contract.spec ?? `contracts/${contract.name}/openapi.yaml`}`,
       '-g',
       'rust',
       '-o',

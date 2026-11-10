@@ -1,9 +1,0 @@
-{
-  "name": "@browseros/browseros-capture-rust",
-  "version": "0.0.0",
-  "private": true,
-  "scripts": {
-    "lint:rust": "cargo fmt --package browseros-capture -- --check && cargo clippy --package browseros-capture --all-targets --locked -- -D warnings",
-    "test:rust": "cargo test --package browseros-capture --locked"
-  }
-}

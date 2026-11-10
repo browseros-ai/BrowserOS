@@ -322,48 +322,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "browseros-captcha"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "base64 0.22.1",
- "browseros-cdp",
- "browseros-core",
- "browseros-mcp",
- "futures-util",
- "rand 0.9.4",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "browseros-capture"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "browseros-cdp",
- "browseros-core",
- "bytes",
- "futures-util",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "browseros-cdp"
 version = "0.1.0"
 dependencies = [
@@ -440,97 +398,6 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "browseros-playwright"
-version = "0.1.0"
-dependencies = [
- "browseros-cdp",
- "browseros-core",
- "browseros-trace",
- "futures-util",
- "rquickjs",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sha2",
- "tokio",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "browseros-service"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "browseros-capture",
- "browseros-cdp",
- "browseros-core",
- "browseros-takeover",
- "browseros-trace",
- "claw-sdk-api",
- "futures-util",
- "percent-encoding",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tower",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "url",
-]
-
-[[package]]
-name = "browseros-takeover"
-version = "0.1.0"
-dependencies = [
- "browseros-cdp",
- "browseros-core",
- "browseros-trace",
- "bytes",
- "futures-util",
- "percent-encoding",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "browseros-trace"
-version = "0.1.0"
-dependencies = [
- "aho-corasick",
- "browseros-core",
- "futures-util",
- "percent-encoding",
- "sea-orm",
- "sea-orm-migration",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "uuid",
- "zeroize",
 ]
 
 [[package]]
@@ -653,58 +520,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "claw-sdk"
-version = "0.1.0"
-dependencies = [
- "axum",
- "browseros-captcha",
- "browseros-cdp",
- "browseros-core",
- "browseros-playwright",
- "browseros-service",
- "browseros-takeover",
- "browseros-trace",
- "clap",
- "claw-sdk",
- "futures-util",
- "rmcp",
- "rquickjs",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sqlx",
- "syn 2.0.118",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "toml",
- "tower",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "zeroize",
-]
-
-[[package]]
-name = "claw-sdk-api"
-version = "1.0.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_with",
-]
-
-[[package]]
 name = "claw-server"
 version = "0.0.93"
 dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
- "browseros-captcha",
- "browseros-capture",
  "browseros-cdp",
  "browseros-core",
  "browseros-mcp",
@@ -714,6 +535,8 @@ dependencies = [
  "futures-util",
  "harness-integrations",
  "hosted-api",
+ "neo-captcha",
+ "neo-capture",
  "os_info",
  "posthog-rs",
  "pulldown-cmark",
@@ -2023,6 +1846,183 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "neo-captcha"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "browseros-cdp",
+ "browseros-core",
+ "browseros-mcp",
+ "futures-util",
+ "rand 0.9.4",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "neo-capture"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "browseros-cdp",
+ "browseros-core",
+ "bytes",
+ "futures-util",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "neo-playwright"
+version = "0.1.0"
+dependencies = [
+ "browseros-cdp",
+ "browseros-core",
+ "futures-util",
+ "neo-trace",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "neo-sdk"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "browseros-cdp",
+ "browseros-core",
+ "clap",
+ "futures-util",
+ "neo-captcha",
+ "neo-playwright",
+ "neo-sdk",
+ "neo-service",
+ "neo-takeover",
+ "neo-trace",
+ "rmcp",
+ "rquickjs",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sqlx",
+ "syn 2.0.118",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tower",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "zeroize",
+]
+
+[[package]]
+name = "neo-sdk-api"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_with",
+]
+
+[[package]]
+name = "neo-service"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "browseros-cdp",
+ "browseros-core",
+ "futures-util",
+ "neo-capture",
+ "neo-sdk-api",
+ "neo-takeover",
+ "neo-trace",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
+]
+
+[[package]]
+name = "neo-takeover"
+version = "0.1.0"
+dependencies = [
+ "browseros-cdp",
+ "browseros-core",
+ "bytes",
+ "futures-util",
+ "neo-trace",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "neo-trace"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "browseros-core",
+ "futures-util",
+ "percent-encoding",
+ "sea-orm",
+ "sea-orm-migration",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -1877,7 +1877,7 @@ MAIN_FIELDS = reach(fields=(Location.MAIN,))
 STRICT = frozenset({"script/strict_mode_violation"})
 EXPECT_FAILED = frozenset({"website/assertion_failed"})
 # The contract for a copy or cut chord in a sensitive field, or where Neo cannot tell
-# (a closed shadow root): refused, nothing sent (browseros-playwright copy_refusal.rs).
+# (a closed shadow root): refused, nothing sent (neo-playwright copy_refusal.rs).
 COPY_REFUSED = frozenset({"script/sensitive_copy_refused"})
 _COPY_OPS = frozenset({"keyboard.press", "locator.focus"})
 # A main-world method the prelude itself refuses (neo/unsupported) is not built yet.
@@ -2573,7 +2573,7 @@ RACE_KINDS: frozenset[Kind] = frozenset({Kind.PASSWORD, Kind.CC_NUMBER, Kind.OTP
 # Ops the harness drives itself to open, wait for and close the fixture: not probes.
 HARNESS_OPS = frozenset({"page.goto", "context.newPage", "page.close"})
 
-# Every other op of browseros-playwright's table (ops.generated.ts), with why no probe
+# Every other op of neo-playwright's table (ops.generated.ts), with why no probe
 # reads page data through it. leak_sdk_test fails when the table gains an op that is in
 # none of SPECS' ops, HARNESS_OPS or this map, so a new read cannot slip past the test.
 UNPROBED_OPS: Mapping[str, str] = {

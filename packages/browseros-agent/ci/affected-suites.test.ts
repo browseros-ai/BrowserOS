@@ -85,10 +85,10 @@ describe('computeAffectedSuites', () => {
 
   it('tests that a vendored Playwright or engine asset change selects the engine freshness suite', () => {
     for (const changed of [
-      'packages/browseros-agent/crates/browseros-playwright/assets/injected.js',
-      'packages/browseros-agent/crates/browseros-playwright/assets/prelude.js',
-      'packages/browseros-agent/crates/browseros-playwright/tests/data/probe-protocol.json',
-      'packages/browseros-agent/crates/browseros-playwright/third_party/playwright/packages/injected/src/injectedScript.ts',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/assets/injected.js',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/assets/prelude.js',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/tests/data/probe-protocol.json',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/injectedScript.ts',
     ]) {
       expect(suiteNames([], [changed])).toEqual(['browseros-playwright-js'])
     }
@@ -109,7 +109,9 @@ describe('computeAffectedSuites', () => {
   })
 
   it('runs the Rust suites and its own check script for a claw-sdk change', () => {
-    expect(suiteNames([pkg('@browseros/claw-sdk', 'apps/claw-sdk')])).toEqual([
+    expect(
+      suiteNames([pkg('@browseros/neo-sdk', 'crates/neo-sdk/neo-sdk')]),
+    ).toEqual([
       'claw-server',
       'claw-server-quality',
       'claw-sdk-quality',
@@ -230,12 +232,9 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
       pkg('@browseros/claw-server', 'apps/claw-server'),
-      pkg('@browseros/claw-sdk', 'apps/claw-sdk'),
+      pkg('@browseros/neo-sdk', 'crates/neo-sdk/neo-sdk'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
-      pkg(
-        '@browseros/browseros-playwright-js',
-        'packages/browseros-playwright-js',
-      ),
+      pkg('@browseros/neo-playwright-js', 'crates/neo-sdk/neo-playwright-js'),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(
       new Set(

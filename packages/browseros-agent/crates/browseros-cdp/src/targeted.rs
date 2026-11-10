@@ -6,8 +6,8 @@
 //! behind has not read, and these unbounded channels drop nothing.
 //!
 //! **Every subscriber of a method gets each of its events.** Independent features read the same
-//! method. `Runtime.bindingCalled` carries the sealed world's journal entries: browseros-playwright
-//! reads them for the frames the agent set up, and browseros-takeover's control journal reads
+//! method. `Runtime.bindingCalled` carries the sealed world's journal entries: neo-playwright
+//! reads them for the frames the agent set up, and neo-takeover's control journal reads
 //! them for the frames the owner types into during a takeover. If only one subscriber per method
 //! got events, whichever subscribed last would take every call and the other journal would
 //! register nothing, so values the owner typed would reach the agent unmasked.

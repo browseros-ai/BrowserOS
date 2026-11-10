@@ -195,10 +195,10 @@ jobs:
           CLAW_SENTRY_DSN: ${{ secrets.CLAW_SENTRY_DSN }}
         run: |
           set -euo pipefail
-          # The server input is its cargo package (docker_image.ServerKind).
+          # The input is the server kind (docker_image.ServerKind), mapped to its Cargo package.
           case "$SERVER" in
-            claw-server) bin=browseros-claw-server-rs ;;
-            claw-sdk) bin=browseros-claw-sdk ;;
+            claw-server) pkg=claw-server bin=browseros-claw-server-rs ;;
+            claw-sdk) pkg=neo-sdk bin=browseros-claw-sdk ;;
             *) echo "Unknown server '$SERVER'" >&2; exit 1 ;;
           esac
           # claw-sdk ships without PostHog (sdk-skeleton D1), so only claw-server
@@ -207,7 +207,7 @@ jobs:
             echo 'CLAW_POSTHOG_KEY is required' >&2
             exit 1
           fi
-          cargo zigbuild --release --locked --target "$RUST_TARGET.2.17" -p "$SERVER" --bin "$bin"
+          cargo zigbuild --release --locked --target "$RUST_TARGET.2.17" -p "$pkg" --bin "$bin"
           if [ "$SERVER" = claw-server ]; then
             python3 - <<'PY'
           import os

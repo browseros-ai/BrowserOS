@@ -28,7 +28,7 @@ import urllib.request
 from collections.abc import Generator
 from pathlib import Path
 
-# Neo keeps this many events for resumption (browseros-service's event log).
+# Neo keeps this many events for resumption (neo-service's event log).
 EVENT_RING = 1024
 # A replay of the ring arrives at once. These bound the wait when it does not,
 # so an export never hangs on a quiet stream.

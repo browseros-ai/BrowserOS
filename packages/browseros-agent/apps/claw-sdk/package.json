@@ -1,9 +1,0 @@
-{
-  "name": "@browseros/claw-sdk",
-  "version": "0.0.0",
-  "private": true,
-  "scripts": {
-    "lint:rust": "./check.sh",
-    "test:rust": "cargo test --package claw-sdk --locked"
-  }
-}

@@ -4248,18 +4248,18 @@ class DockerImageWorkflowTest(unittest.TestCase):
         download = next(step for step in self.jobs["verify"]["steps"]
                         if step.get("uses", "").startswith("actions/download-artifact@"))
         self.assertEqual(download["with"]["name"], upload["with"]["name"])
-        for server, binary, posthog_key, compiled in (
-            (ServerKind.CLAW_SERVER, "browseros-claw-server-rs", "phc_neo",
+        for server, package, binary, posthog_key, compiled in (
+            (ServerKind.CLAW_SERVER, "claw-server", "browseros-claw-server-rs", "phc_neo",
              "browseros-claw-server-version=1.2.3; phc_neo"),
             # claw-sdk ships without PostHog (sdk-skeleton D1): no key, none compiled in.
-            (ServerKind.CLAW_SDK, "browseros-claw-sdk", "", "browseros-claw-sdk-version=0.1.0;"),
+            (ServerKind.CLAW_SDK, "neo-sdk", "browseros-claw-sdk", "", "browseros-claw-sdk-version=0.1.0;"),
         ):
             with self.subTest(server=server.value):
                 run = self.build(server, posthog_key=posthog_key, compiled=compiled)
                 self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
                 self.assertEqual(run.argv("cargo"), [[
                     "zigbuild", "--release", "--locked", "--target", "x86_64-unknown-linux-gnu.2.17",
-                    "-p", server.value, "--bin", binary,
+                    "-p", package, "--bin", binary,
                 ]])
                 # What the job uploads is that binary, under the name the release CLI reads.
                 artifact = Path(self.resolve(upload["with"]["path"], {"runner": {"temp": run.runner_temp}}))

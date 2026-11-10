@@ -1,0 +1,39 @@
+{
+  "extends": "../../../tsconfig.json",
+  // The probe is type-checked against the vendored engine itself, so its calls into
+  // InjectedScript are checked too. This package imports vendored modules by relative path;
+  // the vendored sources themselves need:
+  // - upstream's @isomorphic alias, as in upstream's tsconfig;
+  // - the modules they import but that are not vendored: highlight and consoleApi (the build's
+  //   stand-ins) and the type-only selectorEngine and @protocol/structs. rootDirs lets the
+  //   vendored files' relative imports find them in src/stubs, with no upstream file edited;
+  // - Temporal (ESNext lib), and no noImplicitReturns, which upstream does not use.
+  // The project is not composite: nothing references it, and its files span two packages.
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "noImplicitReturns": false,
+    "lib": [
+      "ES2023",
+      "DOM",
+      "ES2024.Promise",
+      "ESNext.Iterator",
+      "ESNext.Collection",
+      "ESNext.Disposable",
+      "ESNext"
+    ],
+    "paths": {
+      "@isomorphic/*": [
+        "../neo-playwright/third_party/playwright/packages/isomorphic/*"
+      ],
+      "@protocol/*": ["./src/stubs/protocol/*"]
+    },
+    "rootDirs": [
+      "../neo-playwright/third_party/playwright/packages/injected/src",
+      "./src/stubs"
+    ]
+  },
+  "include": ["src/**/*", "scripts/**/*", "tests/**/*"]
+}

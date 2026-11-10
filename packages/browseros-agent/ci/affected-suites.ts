@@ -110,7 +110,7 @@ export const SUITES: Record<string, SuiteConfig> = {
   },
   'browseros-playwright-js': {
     suite: 'browseros-playwright-js',
-    command: '(cd packages/browseros-playwright-js && bun run test)',
+    command: '(cd crates/neo-sdk/neo-playwright-js && bun run test)',
     junit_path: 'test-results/browseros-playwright-js.xml',
     needs_browser: false,
     needs_rust: false,
@@ -149,7 +149,7 @@ export const SUITES: Record<string, SuiteConfig> = {
   // dependency graph check, so it runs as its own suite.
   'claw-sdk-quality': {
     suite: 'claw-sdk-quality',
-    command: 'apps/claw-sdk/check.sh',
+    command: 'crates/neo-sdk/check.sh',
     junit_path: 'test-results/claw-sdk-quality.xml',
     needs_browser: false,
     needs_rust: true,
@@ -186,11 +186,11 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   '@browseros/claw-onboard': ['claw-onboard'],
   '@browseros/app-onboard': ['app-onboard'],
   '@browseros/agent-cursor': ['agent-cursor', 'build'],
-  '@browseros/browseros-playwright-js': ['browseros-playwright-js'],
+  '@browseros/neo-playwright-js': ['browseros-playwright-js'],
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
-  '@browseros/claw-sdk': ['claw-sdk-quality'],
+  '@browseros/neo-sdk': ['claw-sdk-quality'],
 }
 
 /**
@@ -205,10 +205,11 @@ export interface AffectedPackage {
 }
 
 function isRustPackage(path: string): boolean {
+  // Colocating the JS sibling under crates/ must keep its existing JavaScript-only suites.
   return (
-    path.startsWith('crates/') ||
-    path === 'apps/claw-server' ||
-    path === 'apps/claw-sdk'
+    (path.startsWith('crates/') &&
+      path !== 'crates/neo-sdk/neo-playwright-js') ||
+    path === 'apps/claw-server'
   )
 }
 
@@ -264,10 +265,10 @@ export function computeAffectedSuites(
   if (
     changedFiles.some(
       (f) =>
-        f.startsWith(`${AGENT}crates/browseros-playwright/assets/`) ||
-        f.startsWith(`${AGENT}crates/browseros-playwright/third_party/`) ||
+        f.startsWith(`${AGENT}crates/neo-sdk/neo-playwright/assets/`) ||
+        f.startsWith(`${AGENT}crates/neo-sdk/neo-playwright/third_party/`) ||
         f ===
-          `${AGENT}crates/browseros-playwright/tests/data/probe-protocol.json`,
+          `${AGENT}crates/neo-sdk/neo-playwright/tests/data/probe-protocol.json`,
     )
   )
     keys.add('browseros-playwright-js')

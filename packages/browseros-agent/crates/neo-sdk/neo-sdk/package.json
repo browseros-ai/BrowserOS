@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/neo-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "../check.sh",
+    "test:rust": "cargo test --package neo-sdk --locked"
+  }
+}

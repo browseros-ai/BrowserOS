@@ -423,7 +423,7 @@ _SLOT_VALUE = re.compile(
     r'|\.type\(\\*"([^"\\]{0,64})'
 )
 # An expect failure's Received line, and the `unexpected value` line each poll adds to
-# its call log (browseros-playwright expect/matcher_message.rs): Received escapes only
+# its call log (neo-playwright expect/matcher_message.rs): Received escapes only
 # `"` and `\`, a poll line prints the value bare. In a keyed error they are the region's.
 _RECEIVED = re.compile(r'^Received(?: string)?: +"((?:[^"\\\n]|\\.)*)"$', re.M)
 _UNEXPECTED = re.compile(r'unexpected value "(.*)"$', re.M)

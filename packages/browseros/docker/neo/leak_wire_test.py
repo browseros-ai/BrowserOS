@@ -53,7 +53,7 @@ SSE_EVENTS = [
 
 
 def mjpeg_part(jpeg: bytes, url: str, frame_at: int) -> bytes:
-    """claw-sdk's part layout (browseros-service live_tabs.rs, mjpeg_part)."""
+    """claw-sdk's part layout (neo-service live_tabs.rs, mjpeg_part)."""
     head = (
         f"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {len(jpeg)}\r\n"
         f"X-Tab-Id: 42\r\nX-Url: {url}\r\nX-Frame-At: {frame_at}\r\n\r\n"

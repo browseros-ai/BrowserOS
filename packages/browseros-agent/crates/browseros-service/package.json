@@ -1,9 +1,0 @@
-{
-  "name": "@browseros/browseros-service-rust",
-  "version": "0.0.0",
-  "private": true,
-  "scripts": {
-    "lint:rust": "cargo fmt --package browseros-service -- --check && cargo clippy --package browseros-service --all-targets --locked -- -D warnings",
-    "test:rust": "cargo test --package browseros-service --locked"
-  }
-}

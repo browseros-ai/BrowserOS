@@ -1,4 +1,4 @@
-//! claw-server's door to the shared solver in `browseros-captcha`.
+//! claw-server's door to the shared solver in `neo-captcha`.
 //!
 //! The solver itself has no server mode. This wrapper owns claw-server's one policy on top of
 //! it: `solve_captcha` is offered only in hosted mode. It keeps the name and signatures the MCP
@@ -7,11 +7,11 @@
 
 use std::sync::Arc;
 
-use browseros_captcha::{CaptchaSolver, HumanHelp, types::SolveOutcome};
 use browseros_core::{BrowserView, PageId};
+use neo_captcha::{CaptchaSolver, HumanHelp, types::SolveOutcome};
 use tokio_util::sync::CancellationToken;
 
-pub use browseros_captcha::{SolveRefusal, config, reservation};
+pub use neo_captcha::{SolveRefusal, config, reservation};
 
 use crate::config::ServerMode;
 

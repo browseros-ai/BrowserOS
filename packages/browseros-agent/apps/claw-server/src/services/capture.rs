@@ -1,4 +1,4 @@
-//! claw-server's door to the shared capture hub in `browseros-capture`.
+//! claw-server's door to the shared capture hub in `neo-capture`.
 //!
 //! The hub, its streams and its CDP transport moved to the crate so claw-sdk can serve the same
 //! live views. What stays here is the one port only claw-server can answer: which tabs one of
@@ -13,11 +13,11 @@ use crate::{
     ids::SessionId,
     services::{cockpit::SessionVisualService, sessions::Sessions},
 };
-use browseros_capture::CaptureResult;
 use futures_util::future::BoxFuture;
+use neo_capture::CaptureResult;
 use std::sync::Arc;
 
-pub use browseros_capture::{
+pub use neo_capture::{
     CaptureError, CaptureFailure, CaptureHub, CaptureTab, CaptureTransport, CdpPortTransport,
     Frame, Frames, Quality, SessionTabs, SessionView, VideoChunks, Watch, Watcher, testing,
 };

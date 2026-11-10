@@ -1,6 +1,6 @@
 //! Keeps page JavaScript on known paths. Every `Runtime.evaluate` and `Runtime.callFunctionOn`
 //! that BrowserOS sends goes through `browseros_core::page_js`, which decides the world a script
-//! runs in, or through the browseros-playwright files in `ALLOWED`, which own its sealed
+//! runs in, or through the neo-playwright files in `ALLOWED`, which own its sealed
 //! `browseros-sdk` world and its main-world `page.evaluate`. A raw send anywhere else would run
 //! in the page's own world whatever the caller intended.
 //!
@@ -15,11 +15,11 @@ use std::{
 const METHODS: &[&str] = &["\"Runtime.evaluate\"", "\"Runtime.callFunctionOn\""];
 const ALLOWED: &[&str] = &[
     "crates/browseros-core/src/page_js.rs",
-    // `PageJs` cannot name browseros-playwright's sealed world. These files install it, speak
+    // `PageJs` cannot name neo-playwright's sealed world. These files install it, speak
     // its probe protocol, and run main-world scripts between two sweeps of field values.
-    "crates/browseros-playwright/src/world/sealed_world.rs",
-    "crates/browseros-playwright/src/probe/probe_call.rs",
-    "crates/browseros-playwright/src/page/evaluate_guard.rs",
+    "crates/neo-sdk/neo-playwright/src/world/sealed_world.rs",
+    "crates/neo-sdk/neo-playwright/src/probe/probe_call.rs",
+    "crates/neo-sdk/neo-playwright/src/page/evaluate_guard.rs",
 ];
 const SKIPPED_DIRS: &[&str] = &["target", "node_modules", "dist", "tests"];
 
@@ -57,7 +57,7 @@ fn tests_that_page_javascript_is_only_sent_through_page_js() -> std::io::Result<
     assert!(
         offenders.is_empty(),
         "page JavaScript must go through browseros_core::PageJs, which picks the isolated or the \
-         page world, or through the browseros-playwright files in ALLOWED:\n{}",
+         page world, or through the neo-playwright files in ALLOWED:\n{}",
         offenders.join("\n")
     );
     Ok(())

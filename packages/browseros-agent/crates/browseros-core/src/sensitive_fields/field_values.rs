@@ -5,7 +5,7 @@
 //! - the main-world guard around `page.evaluate` (sdk-playwright), which sweeps the frame's
 //!   sensitive fields before and after the script and masks their values in its result.
 //!
-//! Matching follows `browseros-trace`'s `SecretSet`: each value in its plain, JSON-escaped and
+//! Matching follows `neo-trace`'s `SecretSet`: each value in its plain, JSON-escaped and
 //! percent-encoded forms, leftmost-longest, replaced by the same `[private]` token. It adds the
 //! two forms the HTML serializer writes (text and attribute value), because serialized markup
 //! reaches the agent too: sdk-playwright's `page.content()`, and a main-world script that
@@ -19,7 +19,7 @@ use serde_json::Value;
 use std::fmt;
 use zeroize::Zeroizing;
 
-/// What an echoed value becomes. The same token as `browseros-trace`'s known-secret mask, so a
+/// What an echoed value becomes. The same token as `neo-trace`'s known-secret mask, so a
 /// reader sees one marker for "a secret was here", distinct from a field's own `••••`.
 pub const ECHO_MASK: &str = "[private]";
 
@@ -230,7 +230,7 @@ fn build_matcher(values: &[Zeroizing<String>], newlines: Newlines) -> Option<Aho
 
 /// `value` as Chromium's HTML serializer writes it as text and as an attribute value
 /// (`outerHTML`, `innerHTML`, `page.content()`). Either may equal `value`. Both masking layers
-/// match these: L1 here, for a value still in a field, and L2's secret set in browseros-trace,
+/// match these: L1 here, for a value still in a field, and L2's secret set in neo-trace,
 /// for a value only the host or a past field knows. One definition keeps them from drifting.
 pub fn html_spellings(value: &str) -> [Zeroizing<String>; 2] {
     [

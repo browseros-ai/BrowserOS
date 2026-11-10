@@ -231,7 +231,7 @@ The held calls report `script / method_unavailable`. The ones the SDK refuses it
 
 ## Gaps in Neo's trace
 
-The trace UI needs a few things the host API does not record. Each row says what the kit does meanwhile and which field would close the gap in `contracts/claw-sdk-api/openapi.yaml`.
+The trace UI needs a few things the host API does not record. Each row says what the kit does meanwhile and which field would close the gap in `crates/neo-sdk/neo-sdk-api/openapi.yaml`.
 
 | Missing | Kit meanwhile | Field and place |
 |---|---|---|

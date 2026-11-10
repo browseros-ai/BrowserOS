@@ -37,7 +37,7 @@ from leak_wire_test import (  # noqa: F401 - one entry point runs the wire's tes
 
 AGENT = Path(__file__).resolve().parents[3] / "browseros-agent"
 RULES = AGENT / "crates/browseros-core/src/sensitive_fields/rules.json"
-OPS = AGENT / "packages/browseros-playwright-js/src/prelude/ops.generated.ts"
+OPS = AGENT / "crates/neo-sdk/neo-playwright-js/src/prelude/ops.generated.ts"
 
 
 def run_instances(n: int = 8) -> list[P.Instance]:
@@ -1683,7 +1683,7 @@ class EvidenceTests(EvidenceBase):
 
 
 def matcher_error(locator: str, received: str, polled: str | None = None) -> dict:
-    """An expect failure as a keyed error, its message as browseros-playwright prints it
+    """An expect failure as a keyed error, its message as neo-playwright prints it
     (expect/matcher_message.rs): Received escapes `"` and `\\`, a poll line does not."""
     quoted = received.replace("\\", "\\\\").replace('"', '\\"')
     polled = received if polled is None else polled

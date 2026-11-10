@@ -284,12 +284,12 @@ impl FileTransfers {
         }
     }
 
-    /// Sets `files` on a file input the caller found itself, such as browseros-playwright's
+    /// Sets `files` on a file input the caller found itself, such as neo-playwright's
     /// `setInputFiles` on an element of its sealed world. A backend node id resolves only on
     /// the session of the target that holds the node, so `session` must be the endpoint the
     /// node was resolved in: the page's root session or a frame's session from
     /// [`crate::frames::FrameRegistry`]. Core admits `page` and trusts the caller that
-    /// `session` belongs to it, the same split browseros-playwright uses for every call of an
+    /// `session` belongs to it, the same split neo-playwright uses for every call of an
     /// operation.
     ///
     /// The rules are those of [`Self::upload`] with a file-input ref. Transfers on one page run

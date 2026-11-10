@@ -18,8 +18,8 @@ const testSuites = {
       argv: [bun, 'run', 'test'],
     },
     {
-      label: 'browseros-playwright engine tests',
-      cwd: resolve(projectRoot, 'packages/browseros-playwright-js'),
+      label: 'neo-playwright engine tests',
+      cwd: resolve(projectRoot, 'crates/neo-sdk/neo-playwright-js'),
       argv: [bun, 'run', 'test'],
     },
     {
