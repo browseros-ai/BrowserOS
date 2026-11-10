@@ -22,8 +22,12 @@ class ResolveConfigDirectModeTest(unittest.TestCase):
     def test_cli_chromium_src_and_arch_resolve(self):
         with tempfile.TemporaryDirectory() as tmp:
             m = MockChromium(Path(tmp))
+            package = MockBrowserOSRoot(
+                Path(tmp) / "patches", chromium_version="158.0.8127.18"
+            ).with_patch_store()
             cli_args = {
                 "chromium_src": str(m.src),
+                "patch_root": package.root,
                 "arch": "arm64",
                 "build_type": "release",
             }

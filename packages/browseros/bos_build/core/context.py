@@ -75,6 +75,9 @@ class Context:
     # run still fetches every arch's resources. Empty = single-arch/unknown.
     plan_architectures: tuple = ()
     build_type: str = "debug"
+    # Publication contexts validate existing artifacts and receipts, never build
+    # Chromium. Their local pin must not invent or reject the artifact's source.
+    artifact_only: bool = False
     chromium_version: str = ""
     browseros_build_offset: str = ""
     browseros_version_parts: tuple = ()  # (major, minor, build, patch) ints
@@ -130,6 +133,11 @@ class Context:
         elif not self.chromium_version:
             self.chromium_version, version_dict = versions_mod.load_chromium_version(
                 self.get_patch_root()
+            )
+
+        if not self.artifact_only:
+            versions_mod.validate_release_chromium_version(
+                self.root_dir, self.chromium_version, self.build_type
             )
 
         if not self.browseros_build_offset:
