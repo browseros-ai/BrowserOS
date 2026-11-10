@@ -15,14 +15,30 @@ lint_tables() {
 }
 
 manifests=(crates/neo-sdk/neo-*/Cargo.toml)
-reference=${manifests[0]}
+reference=crates/neo-sdk/neo-runtime-spec/Cargo.toml
+# Host adapters keep workspace lints; their behavior-preserving legacy moves are not ports.
+HOST_CRATES=(neo-captcha)
 for manifest in "${manifests[@]}"; do
+  crate=$(basename "$(dirname "$manifest")")
+  if [[ " ${HOST_CRATES[*]} " == *" $crate "* ]]; then continue; fi
   if ! diff -u --label "$reference" --label "$manifest" \
     <(lint_tables "$reference") <(lint_tables "$manifest") >&2; then
     echo "neo-check: the [lints] tables of $manifest differ from $reference" >&2
     exit 1
   fi
 done
+
+# The only direct core dependency is the host adapter; it never enters the runtime graph.
+for manifest in "${manifests[@]}"; do
+  if [[ "$manifest" != crates/neo-sdk/neo-captcha/Cargo.toml ]] && rg -q '^browseros-core[[:space:].=]' "$manifest"; then
+    echo "neo-check: browseros-core is host-only: $manifest" >&2
+    exit 1
+  fi
+done
+if cargo tree -p neo-runtime -e normal --prefix none | rg '^(browseros-core|neo-captcha) '; then
+  echo "neo-check: runtime must not depend on core or its CAPTCHA host" >&2
+  exit 1
+fi
 
 for manifest in "${manifests[@]}"; do
   crate=$(basename "$(dirname "$manifest")")

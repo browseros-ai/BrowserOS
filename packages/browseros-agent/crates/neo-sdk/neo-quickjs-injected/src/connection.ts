@@ -55,6 +55,7 @@ import type { SignalLike, TimeoutOptions } from './timeout-settings'
 
 /** The public methods that send a browser call, named as Playwright's client names them. */
 export type ApiName =
+  | 'neo.solveCaptcha'
   | 'page.frame'
   | 'keyboard.down'
   | 'keyboard.up'

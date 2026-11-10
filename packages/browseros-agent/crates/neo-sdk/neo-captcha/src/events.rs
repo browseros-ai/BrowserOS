@@ -88,7 +88,7 @@ fn typed<T: DeserializeOwned + Serialize>(data: &Value, key: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn log_data(event: &CaptchaEvent) -> Value {
+pub fn log_data(event: &CaptchaEvent) -> Value {
     let data = &event.data;
     let mut fields = json!({"type": typed::<CaptchaKind>(data, "type")});
     match event.event {
@@ -131,10 +131,12 @@ pub fn log_outcome(outcome: &SolveOutcome, host: Option<&str>, provider: Option<
             .or_else(|| url::Url::parse(&format!("https://{host}")).ok())
             .and_then(|url| url.host_str().map(str::to_owned))
     });
+    // The page owns this sticky input-failure flag; log its boolean, never error text.
     tracing::info!(target: "captcha", event = "captcha.outcome", request_id = %outcome.request_id,
         page = outcome.page, r#type = %json!(outcome.kind), host = host.as_deref(), method = %json!(outcome.method),
         attempts = ?outcome.attempts, latency_ms = outcome.duration_ms, status = %json!(outcome.status),
         reason = %json!(outcome.reason), paid_tasks = outcome.paid_tasks, cost_usd = outcome.cost_usd,
+        any_click_failed = outcome.any_click_failed,
         provider = %json!(provider), "CAPTCHA solve finished");
 }
 
@@ -244,72 +246,80 @@ mod tests {
 
     #[test]
     fn tests_that_tracing_records_contract_fields_without_sensitive_data() -> anyhow::Result<()> {
-        let writer = LogWriter::default();
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_writer(writer.clone())
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
-        let bus = CaptchaEventBus::new();
-        bus.emit(CaptchaEvent {
-            event: CaptchaEventName::Solving, request_id: "cap_test".into(), page: 42, at_ms: 10,
-            data: json!({"type":"recaptcha_v2", "method":"tiles", "attempt":1, "round":2, "token":"secret-token", "url":"https://example.com/private?q=secret", "image":"secret-image"}),
-        });
-        log_outcome(
-            &SolveOutcome {
-                status: SolveStatus::Solved,
-                kind: Some(CaptchaKind::RecaptchaV2),
-                method: SolveMethod::Tiles,
-                reason: SolveReason::TilesAccepted,
-                request_id: "cap_test".into(),
-                page: 42,
-                duration_ms: 123,
-                attempts: Attempts {
-                    checkbox: 1,
-                    tile_rounds: 2,
-                    token: 0,
+        for any_click_failed in [false, true] {
+            let writer = LogWriter::default();
+            let subscriber = tracing_subscriber::fmt()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(writer.clone())
+                .finish();
+            let _guard = tracing::subscriber::set_default(subscriber);
+            let bus = CaptchaEventBus::new();
+            bus.emit(CaptchaEvent {
+                event: CaptchaEventName::Solving, request_id: "cap_test".into(), page: 42, at_ms: 10,
+                data: json!({"type":"recaptcha_v2", "method":"tiles", "attempt":1, "round":2, "token":"secret-token", "url":"https://example.com/private?q=secret", "image":"secret-image"}),
+            });
+            log_outcome(
+                &SolveOutcome {
+                    any_click_failed,
+                    status: SolveStatus::Solved,
+                    kind: Some(CaptchaKind::RecaptchaV2),
+                    method: SolveMethod::Tiles,
+                    reason: SolveReason::TilesAccepted,
+                    request_id: "cap_test".into(),
+                    page: 42,
+                    duration_ms: 123,
+                    attempts: Attempts {
+                        checkbox: 1,
+                        tile_rounds: 2,
+                        token: 0,
+                    },
+                    paid_tasks: 2,
+                    cost_usd: 0.002,
+                    message: "secret-token https://example.com/private?q=secret secret-image"
+                        .into(),
+                    events: Vec::new(),
                 },
-                paid_tasks: 2,
-                cost_usd: 0.002,
-                message: "secret-token https://example.com/private?q=secret secret-image".into(),
-                events: Vec::new(),
-            },
-            Some("https://user:password@example.com/private?q=secret"),
-            Some(ProviderName::Capsolver),
-        );
-        let output = String::from_utf8(
-            writer
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone(),
-        )?;
-        assert_eq!(output.lines().count(), 2, "{output}");
-        for field in [
-            "captcha:",
-            "captcha.solving",
-            "request_id=cap_test",
-            "page=42",
-            "at_ms=10",
-            "recaptcha_v2",
-            "example.com",
-            "tiles_accepted",
-            "capsolver",
-            "paid_tasks=2",
-            "cost_usd=0.002",
-        ] {
-            assert!(output.contains(field), "missing {field}: {output}");
-        }
-        for secret in [
-            "secret-token",
-            "secret-image",
-            "https://",
-            "/private",
-            "q=secret",
-            "password",
-        ] {
-            assert!(!output.contains(secret), "leaked {secret}: {output}");
+                Some("https://user:password@example.com/private?q=secret"),
+                Some(ProviderName::Capsolver),
+            );
+            let output = String::from_utf8(
+                writer
+                    .0
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+            )?;
+            assert_eq!(output.lines().count(), 2, "{output}");
+            for field in [
+                "captcha:",
+                "captcha.solving",
+                "request_id=cap_test",
+                "page=42",
+                "at_ms=10",
+                "recaptcha_v2",
+                "example.com",
+                "tiles_accepted",
+                "capsolver",
+                "paid_tasks=2",
+                "cost_usd=0.002",
+            ] {
+                assert!(output.contains(field), "missing {field}: {output}");
+            }
+            for secret in [
+                "secret-token",
+                "secret-image",
+                "https://",
+                "/private",
+                "q=secret",
+                "password",
+            ] {
+                assert!(!output.contains(secret), "leaked {secret}: {output}");
+            }
+            assert!(
+                output.contains(&format!("any_click_failed={any_click_failed}")),
+                "missing closed click-failure boolean: {output}"
+            );
         }
         Ok(())
     }

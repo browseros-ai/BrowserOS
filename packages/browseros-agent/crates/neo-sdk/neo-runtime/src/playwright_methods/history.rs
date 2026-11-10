@@ -52,6 +52,7 @@ use crate::browser_representations::page::FrameTab;
 use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::playwright_injected_methods;
+use crate::file_navigation;
 use crate::playwright_methods::navigate::{
     self, Lifecycle, Navigation, NavigationTab, Observation,
 };
@@ -114,10 +115,10 @@ impl HistoryOptions {
 /// Playwright: `server/chromium/crPage.ts` `CRPage._go`: `await this._mainFrameSession._client.send('Page.navigateToHistoryEntry', { entryId: entry.id });`
 pub(crate) trait HistoryTab: NavigationTab {
     /// `Page.reload`, as Playwright's `CRPage.reload` sends it.
-    async fn reload(&self) -> Result<(), PlaywrightError>;
+    async fn reload(&self, refuse_file: bool) -> Result<(), PlaywrightError>;
     /// Playwright's `CRPage._go`: navigates to the history entry `delta` steps from the current
     /// one, or answers `false` when there is none.
-    async fn go(&self, delta: i64) -> Result<bool, PlaywrightError>;
+    async fn go(&self, delta: i64, refuse_file: bool) -> Result<bool, PlaywrightError>;
 }
 
 /// Playwright's server `Page.reload`, `goBack` and `goForward`: the main frame's
@@ -144,10 +145,17 @@ pub(crate) async fn navigate(
         waits::lifecycle_name(options.wait_until)
     ));
     match options.step {
-        HistoryStep::Reload => progress.race(tab.reload()).await??,
+        HistoryStep::Reload => {
+            progress
+                .race(tab.reload(progress.refuse_file_navigation()))
+                .await??;
+        }
         step => {
             let delta = if step == HistoryStep::Back { -1 } else { 1 };
-            if !progress.race(tab.go(delta)).await?? {
+            if !progress
+                .race(tab.go(delta, progress.refuse_file_navigation()))
+                .await??
+            {
                 return Ok(None);
             }
         }
@@ -713,14 +721,25 @@ async fn response_of<T: NavigationTab>(
 
 /// Playwright: `server/chromium/crPage.ts` `CRPage._go`: `const history = await this._mainFrameSession._client.send('Page.getNavigationHistory');`
 impl HistoryTab for FrameTab {
-    async fn reload(&self) -> Result<(), PlaywrightError> {
+    async fn reload(&self, refuse_file: bool) -> Result<(), PlaywrightError> {
+        if refuse_file {
+            let history = self
+                .send_command(cdp::page::GetNavigationHistory {})
+                .await
+                .map_err(|error| history_error(cdp::page::GetNavigationHistory::METHOD, &error))?;
+            let entry = usize::try_from(history.current_index)
+                .ok()
+                .and_then(|index| history.entries.get(index))
+                .ok_or_else(|| unreadable_history("the current entry is missing"))?;
+            file_navigation::check(true, &entry.url)?;
+        }
         self.send_command(cdp::page::Reload::default())
             .await
             .map(drop)
             .map_err(|error| history_error(cdp::page::Reload::METHOD, &error))
     }
 
-    async fn go(&self, delta: i64) -> Result<bool, PlaywrightError> {
+    async fn go(&self, delta: i64, refuse_file: bool) -> Result<bool, PlaywrightError> {
         let history = self
             .send_command(cdp::page::GetNavigationHistory {})
             .await
@@ -736,6 +755,7 @@ impl HistoryTab for FrameTab {
         else {
             return Ok(false);
         };
+        file_navigation::check(refuse_file, &entry.url)?;
         self.send_command(cdp::page::NavigateToHistoryEntry { entry_id: entry.id })
             .await
             .map_err(|error| history_error(cdp::page::NavigateToHistoryEntry::METHOD, &error))?;
@@ -982,13 +1002,17 @@ mod tests {
     }
 
     impl HistoryTab for FakeTab {
-        fn reload(&self) -> impl Future<Output = Result<(), PlaywrightError>> {
+        fn reload(&self, _refuse_file: bool) -> impl Future<Output = Result<(), PlaywrightError>> {
             self.record("reload");
             self.play();
             future::ready(Ok(()))
         }
 
-        fn go(&self, delta: i64) -> impl Future<Output = Result<bool, PlaywrightError>> {
+        fn go(
+            &self,
+            delta: i64,
+            _refuse_file: bool,
+        ) -> impl Future<Output = Result<bool, PlaywrightError>> {
             self.record(format!("go {delta}"));
             let (current, entries) = *self.history.lock().expect("history");
             let moved = (0..entries).contains(&(current + delta));

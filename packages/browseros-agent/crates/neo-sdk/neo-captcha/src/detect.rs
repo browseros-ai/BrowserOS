@@ -818,9 +818,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::services::captcha::types::{
-        CaptchaKind, ChallengeState, DocumentId, FrameRef, Rect, ScanOutcome,
-    };
+    use crate::types::{CaptchaKind, ChallengeState, DocumentId, FrameRef, Rect, ScanOutcome};
 
     struct FakePage {
         main: Mutex<VecDeque<Value>>,
@@ -1052,8 +1050,8 @@ mod tests {
 
     #[tokio::test]
     async fn tests_that_loaded_vendor_addresses_are_not_blocking() -> anyhow::Result<()> {
-        use crate::services::captcha::{
-            CaptchaService, LiveDriver,
+        use crate::{
+            CaptchaSolver, LiveDriver,
             config::CaptchaConfig,
             events::CaptchaEventBus,
             providers::ProviderChain,
@@ -1103,7 +1101,7 @@ mod tests {
             assert_eq!(result.challenges[0].kind, kind);
             assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
             assert_eq!(result.challenges[0].sitekey.as_deref(), key);
-            let service = CaptchaService {
+            let service = CaptchaSolver {
                 providers: ProviderChain::new(&CaptchaConfig::default()),
                 reservations: Default::default(),
                 events: CaptchaEventBus::new(),

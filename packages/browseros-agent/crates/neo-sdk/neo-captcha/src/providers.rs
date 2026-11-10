@@ -315,6 +315,10 @@ pub struct CapsolverClient {
 }
 
 impl CapsolverClient {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Test transports inject their own HTTP client")
+    )]
     pub fn new(config: &ProviderConfig, http: Client) -> Self {
         Self {
             config: config.clone(),
@@ -506,6 +510,10 @@ impl CapsolverClient {
         }
     }
 
+    #[expect(
+        dead_code,
+        reason = "Account diagnostics are independent of challenge solving"
+    )]
     pub async fn get_balance(&self) -> Result<f64, ProviderError> {
         let response = self
             .request(
@@ -812,7 +820,7 @@ mod tests {
     use tokio::{net::TcpListener, sync::Mutex, task::JoinHandle};
 
     use super::*;
-    use crate::services::captcha::{
+    use crate::{
         config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, PAID_TASK_LIMIT_ENV},
         types::{
             ProviderName, RecaptchaParams, SolveAnswer, TileGrid, TilePuzzle, TurnstileParams,

@@ -1,16 +1,39 @@
-pub mod arkose;
-pub mod aws_waf;
+//! Neo: CAPTCHA detection and solving for one BrowserOS page, shared by claw-server (the MCP
+//! `solve_captcha` tool) and the Neo run host (`neo.solveCaptcha`). The host-side browseros-core exception is
+//! documented in NEO_STYLE; neo-runtime itself never depends on this crate.
+//!
+//! The crate has no notion of a server mode. It detects the challenge, runs the per-type flow
+//! (free paths first, then a paid provider) and returns a [`types::SolveOutcome`]. Hosts branch
+//! on [`types::SolveOutcome::verdict`], whose `Unsolved` is never a guess. Outcome and busy
+//! messages are still worded for claw-server's MCP tools (`solve_captcha`, `request_human_help`).
+//! The host keeps three jobs:
+//! - deciding whether to offer solving at all (claw-server gates it to hosted mode);
+//! - refusing its own page writes while [`CaptchaSolver::reservations`] holds the page, because
+//!   the solver drives the page directly through `browseros_core`, not through the host;
+//! - holding any viewport lease around [`CaptchaSolver::solve`].
+//!
+//! ```text
+//! host ──solve(view, page)──▶ reserve page ─▶ detect ─▶ flow (recaptcha | turnstile | …)
+//!                                  │                       ├─ page: LivePage over BrowserView
+//!   host guards ◀── busy_message ──┘                       └─ providers: CapSolver → 2Captcha
+//! ```
+
+mod arkose;
+mod aws_waf;
 pub mod config;
-pub mod detect;
+mod detect;
 pub mod events;
-pub mod geetest;
-pub mod page;
-pub mod providers;
-pub mod recaptcha;
+mod geetest;
+mod page;
+mod providers;
+mod recaptcha;
 pub mod reservation;
-pub mod turnstile;
-pub mod twocaptcha;
+pub mod script;
+mod target;
+mod turnstile;
+mod twocaptcha;
 pub mod types;
+pub use target::TargetSolver;
 
 use std::{future::Future, sync::Arc, time::Duration};
 
@@ -19,8 +42,6 @@ use futures_util::FutureExt;
 use serde_json::json;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-
-use crate::config::ServerMode;
 
 use self::{
     events::{CaptchaEventBus, EventLog},
@@ -33,7 +54,7 @@ use self::{
     },
 };
 
-pub struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
+pub(crate) struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
     pub page: &'a P,
     pub backend: &'a B,
     pub events: &'a EventLog,
@@ -46,40 +67,51 @@ pub struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
     pub forced_method: Option<config::ForcedMethod>,
 }
 
-pub struct CaptchaService {
-    pub providers: ProviderChain,
+/// The solver a host holds for its whole process. The paid-task limit and the per-page
+/// reservations live here, so a second instance would get its own budget and would not see the
+/// first instance's busy pages.
+pub struct CaptchaSolver {
+    providers: ProviderChain,
     reservations: Arc<TabReservations>,
     events: CaptchaEventBus,
     forced_method: Option<config::ForcedMethod>,
 }
 
+/// Whether the host gives the agent a way to hand the page to a person. It picks the closing
+/// line of a `needs_human` or `unsupported` message and the `humanHelp` field of the handoff
+/// event: `Available` points at `request_human_help`, `Unavailable` says to stop and tell the
+/// user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HumanHelp {
+    Available,
+    Unavailable,
+}
+
+/// Why a solve never started. A refusal is not an outcome: nothing was detected, clicked or paid.
 #[derive(Debug)]
 pub enum SolveRefusal {
     InvalidPage(String),
+    /// Another solve owns the page; hosts report it instead of queueing behind it.
     Busy(ActiveSolve),
+    /// Reserved for hosts; [`CaptchaSolver::solve`] never returns it.
     BrowserUnavailable,
 }
 
-impl CaptchaService {
-    pub fn from_config(config: config::CaptchaConfig, mode: ServerMode) -> Option<Arc<Self>> {
+impl CaptchaSolver {
+    /// `None` when no provider key is configured. Hosts treat that as "solving not offered",
+    /// even though the free paths (auto-pass, checkbox) would not need a key.
+    pub fn new(config: config::CaptchaConfig) -> Option<Self> {
         if !config.has_provider() {
             return None;
         }
-        if !mode.is_hosted() {
-            tracing::info!(target: "captcha", "solve_captcha disabled: desktop mode");
-            return None;
-        }
-        Some(Arc::new(Self {
+        Some(Self {
             providers: ProviderChain::new(&config),
             reservations: Arc::default(),
             events: CaptchaEventBus::new(),
             forced_method: config.force_method,
-        }))
+        })
     }
 
-    pub fn from_env(mode: ServerMode) -> Option<Arc<Self>> {
-        Self::from_config(config::CaptchaConfig::from_env(), mode)
-    }
     pub fn reservations(&self) -> &Arc<TabReservations> {
         &self.reservations
     }
@@ -87,13 +119,29 @@ impl CaptchaService {
         &self.events
     }
 
+    /// Runs the flow for at most 120 s, then drains any started click without a separate
+    /// timeout. The host must await this future before releasing input or detaching sessions.
     pub async fn solve(
         &self,
         view: BrowserView,
         page: PageId,
         cancel: CancellationToken,
-        human_help_available: bool,
+        human_help: HumanHelp,
     ) -> Result<SolveOutcome, SolveRefusal> {
+        self.solve_target(view, page.clone(), page.0, cancel, human_help, &LiveDriver)
+            .await
+    }
+
+    async fn solve_target(
+        &self,
+        view: BrowserView,
+        page: PageId,
+        reservation_key: u32,
+        cancel: CancellationToken,
+        human_help: HumanHelp,
+        driver: &impl SolveDriver,
+    ) -> Result<SolveOutcome, SolveRefusal> {
+        let human_help_available = human_help == HumanHelp::Available;
         let deadline = Instant::now() + Duration::from_secs(120);
         let live = LivePage::new(view, page.clone());
         let validation = tokio::select! {
@@ -107,11 +155,11 @@ impl CaptchaService {
         }
         self.solve_with(
             &live,
-            page,
+            PageId(reservation_key),
             cancel,
             human_help_available,
             deadline,
-            &LiveDriver,
+            driver,
         )
         .boxed()
         .await
@@ -292,6 +340,8 @@ impl CaptchaService {
             _ = wait_for_page_close(page) => page_failure(PageError::Closed),
             result = work => result,
         };
+        // The flow is gone, but its lease still excludes legacy callers while input drains.
+        page.drain_input().await;
         let kind = self
             .reservations()
             .active(page_id.0)
@@ -367,6 +417,7 @@ impl CaptchaService {
             SolveStatus::AlreadyClear => {}
         }
         let outcome = SolveOutcome {
+            any_click_failed: page.any_input_failed(),
             status: flow.status,
             kind,
             method: flow.method,
@@ -524,23 +575,6 @@ async fn wait_for_page_close(page: &impl CaptchaPage) {
 mod tests {
     use super::*;
 
-    #[derive(Clone, Default)]
-    struct LogWriter(Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl std::io::Write for LogWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     #[test]
     fn tests_that_coordination_stubs_use_stable_constructors() -> anyhow::Result<()> {
         let reservations = Arc::<TabReservations>::default();
@@ -551,69 +585,6 @@ mod tests {
         assert_eq!(lease.page(), 42);
         assert_eq!(lease.request_id(), "cap_test");
         assert!(log.events().is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_service_is_disabled_without_a_provider() {
-        for mode in [ServerMode::Desktop, ServerMode::Hosted] {
-            assert!(CaptchaService::from_config(config::CaptchaConfig::default(), mode).is_none());
-        }
-    }
-
-    #[test]
-    fn tests_that_service_requires_hosted_mode_with_either_provider() -> anyhow::Result<()> {
-        let file = tempfile::NamedTempFile::new()?;
-        std::fs::write(file.path(), "test-key")?;
-        for key_env in [
-            config::CAPSOLVER_KEY_FILE_ENV,
-            config::TWOCAPTCHA_KEY_FILE_ENV,
-        ] {
-            let config = config::CaptchaConfig::from_lookup(|name| {
-                (name == key_env).then(|| file.path().to_string_lossy().into_owned())
-            });
-            for mode in [ServerMode::Desktop, ServerMode::Hosted] {
-                assert_eq!(
-                    CaptchaService::from_config(config.clone(), mode).is_some(),
-                    mode.is_hosted(),
-                    "{key_env} in {mode:?}"
-                );
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_desktop_logs_one_info_line_without_the_key() -> anyhow::Result<()> {
-        let file = tempfile::NamedTempFile::new()?;
-        std::fs::write(file.path(), "private-test-key")?;
-        let config = config::CaptchaConfig::from_lookup(|name| {
-            (name == config::CAPSOLVER_KEY_FILE_ENV)
-                .then(|| file.path().to_string_lossy().into_owned())
-        });
-        let writer = LogWriter::default();
-        let output = writer.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_max_level(tracing::Level::INFO)
-            .with_writer(move || writer.clone())
-            .finish();
-        tracing::subscriber::with_default(subscriber, || {
-            assert!(CaptchaService::from_config(config, ServerMode::Desktop).is_none());
-        });
-        let bytes = output
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let logs = String::from_utf8_lossy(&bytes);
-        assert_eq!(logs.lines().count(), 1, "{logs}");
-        assert!(logs.contains("INFO"), "{logs}");
-        assert!(
-            logs.contains("solve_captcha disabled: desktop mode"),
-            "{logs}"
-        );
-        assert!(!logs.contains("private-test-key"));
         Ok(())
     }
 }
@@ -747,8 +718,8 @@ mod orchestration_tests {
             })
         }
     }
-    fn service() -> CaptchaService {
-        CaptchaService {
+    fn service() -> CaptchaSolver {
+        CaptchaSolver {
             providers: ProviderChain::new(&config::CaptchaConfig::default()),
             reservations: Arc::default(),
             events: CaptchaEventBus::new(),
@@ -877,8 +848,8 @@ mod orchestration_tests {
             config::TEST_FORCE_METHOD_ENV => Some("token".into()),
             _ => None,
         });
-        let service = CaptchaService::from_config(config, ServerMode::Hosted)
-            .ok_or_else(|| anyhow::anyhow!("missing service"))?;
+        let service =
+            CaptchaSolver::new(config).ok_or_else(|| anyhow::anyhow!("missing service"))?;
         let driver = FakeDriver {
             expected_forced_method: Some(config::ForcedMethod::Token),
             ..FakeDriver::new(scan(

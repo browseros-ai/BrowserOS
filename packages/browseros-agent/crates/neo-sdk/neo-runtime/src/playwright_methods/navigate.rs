@@ -7,6 +7,7 @@ use neo_runtime_spec::serve::{
 };
 use url::Url;
 
+use crate::file_navigation;
 use crate::playwright_methods::tab::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
@@ -118,6 +119,7 @@ pub(crate) async fn goto(
     options: &GotoOptions,
     progress: &Progress,
 ) -> Result<FrameGotoResult, CallError> {
+    file_navigation::check(progress.refuse_file_navigation(), &options.url)?;
     // server/frames.ts:690-753: normalize before logging, completeUserURL only afterwards.
     let url = Url::parse(&options.url).map_or_else(|_| options.url.clone(), |url| url.to_string());
     let wait_until = match options.wait_until {

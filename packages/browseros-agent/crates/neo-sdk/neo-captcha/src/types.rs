@@ -342,6 +342,45 @@ pub enum SolveStatus {
     NeedsHuman,
 }
 
+impl SolveStatus {
+    /// The match has no wildcard on purpose: a new status must not compile until someone decides
+    /// whether it is definitely unsolved, because hosts spend money on `Unsolved` (zuzu's wrap
+    /// switches to a residential proxy and solves again).
+    pub const fn verdict(self) -> Verdict {
+        match self {
+            Self::Solved => Verdict::Solved,
+            Self::TokenApplied => Verdict::TokenApplied,
+            Self::AlreadyClear => Verdict::AlreadyClear,
+            Self::NeedsHuman | Self::Unsupported => Verdict::Unsolved,
+            Self::Cancelled => Verdict::Cancelled,
+            Self::Failed => Verdict::Unknown,
+        }
+    }
+}
+
+/// What a host can branch on after a solve, coarser than [`SolveStatus`]. Neo returns it as
+/// `neo.solveCaptcha`'s `verdict`; claw-server's MCP output does not carry it. The fine-grained
+/// [`SolveReason`] still says why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// The challenge passed and the page confirmed it.
+    Solved,
+    /// A token is in the page; the site checks it when the form is submitted.
+    TokenApplied,
+    /// Nothing was blocking: no CAPTCHA, already passed, or a widget that does not block.
+    AlreadyClear,
+    /// The solver ran to its end and the challenge definitely still blocks the page. Never a
+    /// guess: timeouts, browser errors and navigations land in `Unknown` or `Cancelled`.
+    Unsolved,
+    /// Stopped early: the caller cancelled, the tab closed, or the page navigated. Navigation can
+    /// mean the site moved past the challenge, so this is not `Unsolved`.
+    Cancelled,
+    /// The solver could not tell whether the challenge passed: incomplete scan, browser error,
+    /// deadline, or unconfirmed acceptance. Look at the page again before acting.
+    Unknown,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SolveMethod {
@@ -416,6 +455,9 @@ pub struct CaptchaEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SolveOutcome {
+    /// Sticky proof of any failed input task, consumed by the Neo host only.
+    #[serde(skip)]
+    pub any_click_failed: bool,
     pub status: SolveStatus,
     #[serde(rename = "type")]
     pub kind: Option<CaptchaKind>,
@@ -430,8 +472,13 @@ pub struct SolveOutcome {
     pub message: String,
     pub events: Vec<CaptchaEvent>,
 }
+impl SolveOutcome {
+    pub fn verdict(&self) -> Verdict {
+        self.status.verdict()
+    }
+}
 
-/// What a flow (recaptcha.rs / turnstile.rs) returns; mod.rs adds request id, page, timing, events.
+/// What a flow (recaptcha.rs / turnstile.rs) returns; the solver adds request id, page, timing and events.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlowResult {
     pub status: SolveStatus,
@@ -515,6 +562,44 @@ pub(super) fn new_token_tasks() -> [(CaptchaKind, SolveTask, &'static str); 4] {
 mod tests {
     use super::*;
     use serde_json::{json, to_value};
+
+    #[test]
+    fn tests_that_only_finished_blocking_statuses_are_unsolved() {
+        for (status, verdict) in [
+            (SolveStatus::Solved, Verdict::Solved),
+            (SolveStatus::TokenApplied, Verdict::TokenApplied),
+            (SolveStatus::AlreadyClear, Verdict::AlreadyClear),
+            (SolveStatus::NeedsHuman, Verdict::Unsolved),
+            (SolveStatus::Unsupported, Verdict::Unsolved),
+            (SolveStatus::Cancelled, Verdict::Cancelled),
+            (SolveStatus::Failed, Verdict::Unknown),
+        ] {
+            assert_eq!(status.verdict(), verdict, "{status:?}");
+        }
+    }
+
+    #[test]
+    fn tests_that_verdicts_serialize_as_the_sdk_spells_them() -> Result<(), serde_json::Error> {
+        assert_eq!(
+            to_value([
+                Verdict::Solved,
+                Verdict::TokenApplied,
+                Verdict::AlreadyClear,
+                Verdict::Unsolved,
+                Verdict::Cancelled,
+                Verdict::Unknown,
+            ])?,
+            json!([
+                "solved",
+                "token_applied",
+                "already_clear",
+                "unsolved",
+                "cancelled",
+                "unknown"
+            ])
+        );
+        Ok(())
+    }
 
     #[test]
     fn tests_that_new_token_tasks_have_stable_labels() {
@@ -641,6 +726,7 @@ mod tests {
             ),
         ] {
             let outcome = SolveOutcome {
+                any_click_failed: false,
                 status,
                 kind,
                 method,

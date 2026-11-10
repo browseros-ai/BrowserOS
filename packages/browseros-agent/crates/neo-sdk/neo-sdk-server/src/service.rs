@@ -18,7 +18,9 @@ use axum::{Json, Router};
     reason = "the server owns connection lifecycle and passes browser operations to Runtime"
 )]
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use neo_runtime::{AbsolutePaths, PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage};
+use neo_runtime::{
+    AbsolutePaths, CaptchaHost, PageId, RunOutcome, RunRequest, RunStatus, Runtime, StartPage,
+};
 use neo_trace::RunId;
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
@@ -70,6 +72,19 @@ struct Browser {
     runtime: Runtime,
 }
 
+/// Binds a host-selected solver once to the server-owned connection. The reusable server
+/// never reads credentials or constructs a provider; runtime cleanup owns all solver input.
+struct CaptchaCapability {
+    factory: Arc<CaptchaFactory>,
+    instructions: &'static str,
+}
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "the host factory only binds its capability to this server-owned connection"
+)]
+type CaptchaFactory = dyn Fn(CdpClient) -> Arc<dyn CaptchaHost> + Send + Sync;
+
 /// A cheap transport-local clone of the process's browser/runtime and shutdown owner.
 #[derive(Clone)]
 pub struct NeoSdkServer {
@@ -77,6 +92,7 @@ pub struct NeoSdkServer {
     // A spinning realm holds its Tokio worker until it notices cancellation. Leave workers
     // available to receive cancellation and tools/list while other runs are executing.
     permits: Arc<Semaphore>,
+    captcha: Option<Arc<CaptchaCapability>>,
     browser: Arc<OnceCell<Arc<Browser>>>,
     shutdown: CancellationToken,
     // Run cancellation must not cut rmcp's pending first message or SSE reply body.
@@ -142,6 +158,7 @@ impl NeoSdkServer {
                 Handle::try_current()
                     .map_or(1, |handle| (handle.metrics().num_workers() / 2).max(1)),
             )),
+            captcha: None,
             browser: Arc::new(OnceCell::new()),
             shutdown,
             transport: CancellationToken::new(),
@@ -153,6 +170,42 @@ impl NeoSdkServer {
         };
         service.prune_artifacts();
         service
+    }
+
+    /// Installs a host-selected capability before sharing this server or connecting it.
+    /// The factory runs once with the owned connection, so all requests share one solver
+    /// identity, while shutdown still drains its runtime before disconnecting CDP.
+    #[must_use]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the callback receives only the connection this server owns for Runtime::connect"
+    )]
+    pub fn with_captcha<F>(self, factory: F, instructions: &'static str) -> Self
+    where
+        F: Fn(CdpClient) -> Arc<dyn CaptchaHost> + Send + Sync + 'static,
+    {
+        Self {
+            captcha: Some(Arc::new(CaptchaCapability {
+                factory: Arc::new(factory),
+                instructions,
+            })),
+            ..self
+        }
+    }
+
+    fn instructions(&self) -> String {
+        let mut instructions = instructions();
+        if let Some(capability) = &self.captcha {
+            instructions.push(' ');
+            instructions.push_str(capability.instructions);
+        }
+        instructions
+    }
+
+    fn tool(&self) -> Tool {
+        let mut tool = tool();
+        tool.description = Some(self.instructions().into());
+        tool
     }
 
     /// Every run's artifact directory, `<state_dir>/artifacts` (`artifacts.rs`).
@@ -211,6 +264,7 @@ impl NeoSdkServer {
         let browsers = Arc::clone(&self.browser);
         let port = self.cdp_port;
         let shutdown = self.shutdown.clone();
+        let captcha = self.captcha.clone();
         // Connecting starts CDP reader/supervisor tasks. A request timing out must not
         // drop their initializer halfway through; finish it under the process owner so
         // shutdown can disconnect the resulting link even if the caller has gone.
@@ -240,6 +294,12 @@ impl NeoSdkServer {
                                     cdp.disconnect().await;
                                     return Err("Neo server is shutting down".to_string());
                                 }
+                                let runtime = match &captcha {
+                                    Some(capability) => {
+                                        runtime.with_captcha((capability.factory)(cdp.clone()))
+                                    }
+                                    None => runtime,
+                                };
                                 Ok(Arc::new(Browser {
                                     cdp,
                                     runtime: runtime.with_absolute_paths(AbsolutePaths::Redirect),
@@ -503,7 +563,7 @@ impl ServerHandler for NeoSdkServer {
                 "browseros-neo",
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions(instructions())
+            .with_instructions(self.instructions())
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -521,7 +581,7 @@ impl ServerHandler for NeoSdkServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        let mut result = ListToolsResult::with_all_items(vec![tool()]);
+        let mut result = ListToolsResult::with_all_items(vec![self.tool()]);
         if context
             .protocol_version()
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
@@ -532,7 +592,7 @@ impl ServerHandler for NeoSdkServer {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        (name == "run").then(tool)
+        (name == "run").then(|| self.tool())
     }
 
     fn accepted_subscription_filter(

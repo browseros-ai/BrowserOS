@@ -26,6 +26,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     VERSION,
     analytics::NoopAnalyticsSink,
+    api::mcp::neo_captcha,
     config::Config,
     services::{harness::HarnessService, harness_skills::load_playwright_skill, runtime_file},
 };
@@ -58,6 +59,14 @@ pub async fn serve(
         NeoConfig::new(config.cdp_port, config.browserclaw_dir.clone()),
         shutdown.clone(),
     );
+    // Host policy stays in Claw; the reusable server binds this capability to its own
+    // connection and retains the runtime's cancellation/input cleanup through shutdown.
+    let service = neo_captcha::activation(
+        |name| std::env::var(name).ok(),
+        config.mode,
+        &config.browserclaw_dir.join("artifacts"),
+    )
+    .install(service);
     if stdio_mode {
         let running = serve_server(service.clone(), stdio()).await?;
         let cancellation = running.cancellation_token();

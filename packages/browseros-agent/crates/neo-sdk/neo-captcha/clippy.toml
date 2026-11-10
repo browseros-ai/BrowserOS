@@ -1,0 +1,2 @@
+# Fixture assertions can panic with context; production retains the workspace's expect ban.
+allow-expect-in-tests = true

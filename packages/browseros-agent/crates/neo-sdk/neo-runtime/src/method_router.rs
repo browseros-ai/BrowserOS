@@ -86,11 +86,13 @@ use crate::browser_representations::page::{DialogAnswer, FrameTab, PageSession};
 use crate::browser_representations::responses::{self, NetworkCall};
 use crate::browser_representations::routes;
 use crate::browser_representations::tabs::{self, PageEntry, Tabs};
+use crate::captcha::{self, Admitted as CaptchaAdmission, Params as CaptchaParams};
 use crate::chromium_bridge::cdp::page;
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::keyboard_input::KeyboardTab;
 use crate::debugger::{CallToGate, DEBUGGER_PREFIX, DEFAULT_CONTEXT};
 use crate::events::{ALL_PAGES, EventHub};
+use crate::file_navigation;
 use crate::playwright_methods::browser_methods::{self, BROWSER_GUID, CreatedContext};
 use crate::playwright_methods::capture::{
     self, Capture, ELEMENT_HANDLE_SCREENSHOT_META, ElementScreenshotParams, NEO_SCREENSHOT_META,
@@ -303,6 +305,44 @@ enum ReleaseClaim {
 }
 
 impl Inner {
+    /// Claims solver ownership before the dispatcher yields. This policy is separate from
+    /// in-flight accounting: an input call arriving next must see the claim immediately.
+    fn captcha_admission(
+        &self,
+        mut route: ObjectCall,
+        target: Option<&(Arc<PageEntry>, FrameScope)>,
+        meta: Option<&MethodMeta>,
+    ) -> Result<ObjectCall, PlaywrightError> {
+        // Child-frame goto is otherwise unserved. Give its unsafe URLs the host's file
+        // refusal before the generic unsupported-method error, without enabling navigation.
+        if target.is_some_and(|(_, scope)| *scope != FrameScope::Main)
+            && let ObjectCall::Frame(Route::FrameGoto(options)) = &route
+        {
+            file_navigation::check(self.run.captcha.is_some(), &options.url)?;
+        }
+        if matches!(route, ObjectCall::Captcha(_)) {
+            let host = self
+                .run
+                .captcha
+                .clone()
+                .ok_or_else(|| PlaywrightError::error(captcha::UNAVAILABLE))?;
+            let (page, scope) = target.ok_or_else(PlaywrightError::target_closed)?;
+            if *scope != FrameScope::Main {
+                return Err(PlaywrightError::error("neo.solveCaptcha takes a page"));
+            }
+            let claim = self.run.captcha_claims.claim(&page.id)?;
+            route = ObjectCall::Captcha(Some(CaptchaAdmission { host, claim }));
+        } else if meta.is_some_and(|meta| meta.has(MethodFlag::Input))
+            && let Some((page, _)) = target
+        {
+            self.run.captcha_claims.check_input(
+                &page.id,
+                meta.and_then(|meta| meta.title).unwrap_or("Input"),
+            )?;
+        }
+        Ok(route)
+    }
+
     /// Admits `route`: its release claim ([`Inner::release_claim`]), or else a share of the
     /// in-flight caps.
     fn admit(
@@ -476,6 +516,8 @@ enum PlatformObject {
 }
 
 enum ObjectCall {
+    /// The claim is installed synchronously before any subsequent JS call can enter.
+    Captcha(Option<CaptchaAdmission>),
     Context(BrowserContextCall),
     /// `context.storageState` and `context.setStorageState`, with the `path` the spec's params
     /// lack (`neo_path`).
@@ -642,6 +684,7 @@ impl Dispatcher {
         }));
         inner.trace.push(Arc::clone(&entry));
         let admitted = route.and_then(|route| {
+            let route = inner.captcha_admission(route, target.as_ref(), meta)?;
             let admission = inner.admit(&route, target.as_ref(), message.len())?;
             Ok((route, admission))
         });
@@ -1327,6 +1370,13 @@ fn page_call(
 /// element commands, navigation waits, evaluation) or that `FrameCall` must not see
 /// (`selectOption` with element handles). `None` hands the call to `FrameCall::decode`.
 fn route_frame_extension(method: &str, params: Option<&Value>) -> Option<Routed> {
+    if method == captcha::META.method {
+        return Some(Routed {
+            meta: Some(&captcha::META),
+            route: decode_neo_params::<CaptchaParams>(params.cloned(), &captcha::META)
+                .map(|_| ObjectCall::Captcha(None)),
+        });
+    }
     if method == WAIT_FOR_URL_META.method {
         return Some(Routed {
             meta: Some(&WAIT_FOR_URL_META),
@@ -1635,29 +1685,14 @@ async fn serve_call(
         finish_reply(Err(error), reply).await;
         return;
     }
-    // A page's call waits for what the run's subscriptions switched on there (console messages,
-    // the dialog watcher), so the call cannot cause an event before its producer listens; a
-    // context call (`newPage`) waits for target discovery's baseline. A dialog's answer never
-    // waits: an open dialog can hold that very enable, and only the answer frees the page.
-    let gate = match (&route, &target) {
-        // A route's answer never waits either: the paused request may be what the page's
-        // enable, or the script's goto, waits for. A download's calls start nothing in a page;
-        // `cancel` must not wait for a page's enables.
-        (ObjectCall::Dialog(..) | ObjectCall::Download(..) | ObjectCall::Intercepted(..), _) => {
-            None
-        }
-        (ObjectCall::Context(_) | ObjectCall::StorageState(..), _) => Some(ALL_PAGES),
-        (_, Some((page, _))) => Some(page.id.as_str()),
-        (_, None) => None,
-    };
-    if let Some(gate) = gate
-        && reply.events.enabling(gate)
-        && let Err(error) = progress.race(reply.events.ready(gate)).await
-    {
+    if let Err(error) = call_enables(&route, target.as_ref(), &reply.events, &progress).await {
         finish_reply(Err(error), reply).await;
         return;
     }
     let result = match (route, target) {
+        (ObjectCall::Captcha(Some(admitted)), Some((entry, _))) => {
+            serve_captcha(&tabs, &entry, admitted, &progress).await
+        }
         (ObjectCall::Context(call), _) => {
             page_and_context_methods::context(&tabs, call, &progress).await
         }
@@ -1744,6 +1779,44 @@ async fn serve_call(
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply).await;
+}
+
+/// Waits for subscription enables before a call can cause its first event. Answers that
+/// unblock those enables (dialogs and intercepted requests) must bypass this wait.
+async fn call_enables(
+    route: &ObjectCall,
+    target: Option<&(Arc<PageEntry>, FrameScope)>,
+    events: &EventHub,
+    progress: &Progress,
+) -> Result<(), CallError> {
+    let gate = match (route, target) {
+        // A route's answer never waits either: the paused request may be what the page's
+        // enable, or the script's goto, waits for. A download's calls start nothing in a page;
+        // `cancel` must not wait for a page's enables.
+        (ObjectCall::Dialog(..) | ObjectCall::Download(..) | ObjectCall::Intercepted(..), _) => {
+            None
+        }
+        (ObjectCall::Context(_) | ObjectCall::StorageState(..), _) => Some(ALL_PAGES),
+        (_, Some((page, _))) => Some(page.id.as_str()),
+        (_, None) => None,
+    };
+    if let Some(gate) = gate
+        && events.enabling(gate)
+    {
+        progress.race(events.ready(gate)).await?;
+    }
+    Ok(())
+}
+
+/// Attaches through the same session door as ordinary calls before handing input to the host.
+async fn serve_captcha(
+    tabs: &Tabs,
+    entry: &PageEntry,
+    admitted: CaptchaAdmission,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    let page = call_session(tabs, entry, progress).await?;
+    captcha::serve(page, entry.id.clone(), admitted, progress).await
 }
 
 /// A clock command (`clock.rs`), raced against the call's progress; it answers `{}`.
@@ -2557,6 +2630,7 @@ mod tests {
     /// The frame route inside a routed Frame message.
     fn frame_route(route: Result<ObjectCall, PlaywrightError>) -> Result<Route, PlaywrightError> {
         route.map(|call| match call {
+            ObjectCall::Captcha(_) => panic!("CAPTCHA is served through its host seam"),
             ObjectCall::Frame(route) => route,
             ObjectCall::Context(_)
             | ObjectCall::StorageState(..)
@@ -3960,6 +4034,30 @@ mod review_abort_priority {
                 reason: RunEnd::Settled
             },
             "run end has priority over the signal abort at admission"
+        );
+    }
+}
+
+#[cfg(test)]
+mod captcha_wire_tests {
+    use super::{ObjectCall, route_frame_extension};
+    use neo_runtime_spec::MethodFlag;
+    use serde_json::json;
+
+    #[test]
+    fn captcha_wire_pins_empty_params_and_input_metadata() {
+        let routed =
+            route_frame_extension("neo:solveCaptcha", Some(&json!({}))).expect("extension");
+        let meta = routed.meta.expect("metadata");
+        assert_eq!(meta.method, "neo:solveCaptcha");
+        assert_eq!(meta.interface, "Frame");
+        assert!(meta.has(MethodFlag::Input));
+        assert!(matches!(routed.route, Ok(ObjectCall::Captcha(None))));
+        assert!(
+            route_frame_extension("neo:solveCaptcha", Some(&json!({"key":"never accepted"})))
+                .expect("extension")
+                .route
+                .is_err()
         );
     }
 }

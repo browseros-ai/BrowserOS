@@ -88,6 +88,9 @@ async fn async_main() -> anyhow::Result<()> {
     // Process-wide and fixed from here on; every page script reads it as it runs.
     browseros_core::page_js::set_isolated_world_enabled(config.behavior.isolated_world);
     let _guard = init_tracing(config.clone())?;
+    if std::env::var(claw_server::api::mcp::neo_captcha::FLAG).is_ok_and(|value| value == "1") {
+        tracing::info!(target: "captcha", "Neo CAPTCHA disabled: prototype not running");
+    }
     log_native_identity(&config);
     // A boot that fails before the server binds used to leave no reason in the log: the error went
     // to stderr (which the supervising browser does not capture) and the buffered file appender

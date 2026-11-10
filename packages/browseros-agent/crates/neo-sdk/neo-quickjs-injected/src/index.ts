@@ -5,6 +5,7 @@ import { Connection } from './connection'
 import { EventPipe, onUncaughtListenerError } from './events'
 import { standardGlobals } from './globals'
 import { setTestIdAttribute } from './locator'
+import { createNeo } from './neo-namespace'
 import type { Page } from './page'
 import { Playwright } from './playwright'
 import { onReplyEvents } from './runtime-bridge'
@@ -49,7 +50,7 @@ export function createRun(init: RunInit): {
   playwright: Playwright
   uncaught: Promise<never>
   exportValue: typeof exportValue
-  globals: Record<string, unknown>
+  globals: Record<string, unknown> & { neo: ReturnType<typeof createNeo> }
 } {
   setTestIdAttribute(init.testIdAttribute)
   const connection = new Connection(init.lineOffset)
@@ -73,6 +74,6 @@ export function createRun(init: RunInit): {
     playwright,
     uncaught: pipe.uncaught,
     exportValue,
-    globals: standardGlobals(),
+    globals: { ...standardGlobals(), neo: createNeo(connection) },
   }
 }

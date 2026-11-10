@@ -41,6 +41,7 @@ use crate::artifacts::Artifacts;
 use crate::browser_representations::bindings::Bindings;
 use crate::browser_representations::clock::Clock;
 use crate::browser_representations::init_scripts::InitScripts;
+use crate::captcha::{CaptchaHost, Claims};
 use crate::deadline::{Deadline, Stop};
 use crate::playwright_methods::evaluate::Handles;
 use crate::run::{
@@ -164,6 +165,10 @@ pub(crate) struct RunScope {
     pub(crate) bindings: Arc<Bindings>,
     /// The run's fake clock (`clock.rs`); uninstalled in every frame at run end.
     pub(crate) clock: Arc<Clock>,
+    /// The host capability also enables solver-scoped file-navigation refusal.
+    pub(crate) captcha: Option<Arc<dyn CaptchaHost>>,
+    /// Shared with every run of this Runtime, so admission precedes any asynchronous wait.
+    pub(crate) captcha_claims: Claims,
 }
 
 impl RunScope {
@@ -179,12 +184,26 @@ impl RunScope {
             artifacts: Arc::default(),
             bindings: Arc::default(),
             clock: Arc::default(),
+            captcha: None,
+            captcha_claims: Claims::default(),
         }
     }
 
     /// The run's artifact directory and its record of written files.
     pub(crate) fn with_artifacts(self, artifacts: Arc<Artifacts>) -> Self {
         Self { artifacts, ..self }
+    }
+
+    pub(crate) fn with_captcha(
+        self,
+        captcha: Option<Arc<dyn CaptchaHost>>,
+        captcha_claims: Claims,
+    ) -> Self {
+        Self {
+            captcha,
+            captcha_claims,
+            ..self
+        }
     }
 
     /// Records `reason` (the first one wins) and cancels `ended`.
@@ -207,6 +226,7 @@ fn run_end(stop: Stop) -> RunEnd {
 
 /// The live handle a handler gets for one call. Narrow on purpose: a handler races and waits,
 /// logs, and reaches the delivery cell; spawning belongs to whoever owns the session.
+#[derive(Clone)]
 pub(crate) struct Progress {
     entry: Arc<CallEntry>,
     /// `metadata.timeout` in ms exactly as the client sent it, for the timeout message and for
@@ -408,6 +428,11 @@ impl Progress {
     /// The call's delivery cell; `None` for a method the spec does not flag `input`.
     pub(crate) fn delivery(&self) -> Option<&Arc<DeliveryCell>> {
         self.entry.delivery.as_ref()
+    }
+
+    /// Solver installation and its file-navigation guard are one capability.
+    pub(crate) fn refuse_file_navigation(&self) -> bool {
+        self.run.captcha.is_some()
     }
 
     /// The run's artifact directory, where a `path` option writes.

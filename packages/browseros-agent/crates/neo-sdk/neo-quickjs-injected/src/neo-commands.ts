@@ -159,6 +159,10 @@ export type NeoReleaseNavigationParams = { cursor: number }
 /** Neo's commands on a frame guid, shaped as the generated `FrameCommands`;
  * `neo:boundingBox`'s `value` is absent when the element has no box. */
 export type NeoFrameCommands = {
+  'neo:solveCaptcha': {
+    params: Record<string, never>
+    result: NeoCaptchaOutcome
+  }
   'neo:scrollIntoViewIfNeeded': {
     params: NeoElementParams
     result: Record<string, never>
@@ -243,4 +247,20 @@ export function isRegExp(value: unknown): value is RegExp {
     value instanceof RegExp ||
     Object.prototype.toString.call(value) === '[object RegExp]'
   )
+}
+
+/** Neo: A solver verdict is data, including unsolved and unknown; caller cancellation rejects. */
+export type NeoCaptchaOutcome = {
+  verdict:
+    | 'solved'
+    | 'token_applied'
+    | 'already_clear'
+    | 'unsolved'
+    | 'cancelled'
+    | 'unknown'
+  type: string | null
+  reason: string
+  message: string
+  durationMs: number
+  paidTasks: number
 }

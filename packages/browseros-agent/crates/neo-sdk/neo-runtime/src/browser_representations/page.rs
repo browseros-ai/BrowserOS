@@ -73,6 +73,7 @@ use crate::browser_representations::init_scripts::{self, Link, until_gone};
 use crate::browser_representations::locator_handlers::{self, LocatorHandlers};
 use crate::browser_representations::network::{Happening, Lookup, NetworkLog};
 use crate::browser_representations::routes::{Answer, ContextRoutes, Pause, Routes};
+use crate::captcha::Claims;
 use crate::chromium_bridge::cdp::input::{DragIntercepted, SetInterceptDrags};
 use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frame_selector::{self, FrameOwner};
@@ -780,6 +781,11 @@ impl PageSession {
         &self.session.door
     }
 
+    /// The solver borrows the ordinary tab turn without reaching Neo's device model.
+    pub(crate) async fn captcha_turn(&self) -> InputPermit {
+        InputPermit::take(&self.input, self.session.id().clone()).await
+    }
+
     pub(crate) fn closed(&self) -> CancellationToken {
         self.closed.clone()
     }
@@ -1405,12 +1411,16 @@ impl TabInput {
 /// task still holding a turn, does; the next run then starts from Playwright's new page. Runs of
 /// another `Runtime`, and other CDP clients, are not coordinated.
 #[derive(Clone, Default)]
-pub(crate) struct TabInputs(Arc<Mutex<HashMap<PageId, Weak<TabInput>>>>);
+pub(crate) struct TabInputs {
+    locks: Arc<Mutex<HashMap<PageId, Weak<TabInput>>>>,
+    /// Admission claims share this Runtime's input ownership across every run.
+    pub(crate) solving: Claims,
+}
 
 impl TabInputs {
     /// The input lock of `page`, the one every live run on it shares.
     pub(crate) async fn lock_for(&self, page: &PageId) -> Arc<TabInput> {
-        let mut locks = self.0.lock().await;
+        let mut locks = self.locks.lock().await;
         if let Some(lock) = locks.get(page).and_then(Weak::upgrade) {
             return lock;
         }

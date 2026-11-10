@@ -35,6 +35,7 @@ use crate::artifacts::{AbsolutePaths, Artifacts};
 use crate::browser_representations::cookies_and_storage::Permissions;
 use crate::browser_representations::page::TabInputs;
 use crate::browser_representations::tabs::Tabs;
+use crate::captcha::CaptchaHost;
 use crate::chromium_bridge::browser_connection_settings::Switches;
 use crate::chromium_bridge::cdp::browser::{GetTabInfo, TabExists};
 use crate::chromium_bridge::cdp::{Browser, Command};
@@ -89,6 +90,8 @@ pub struct Runtime {
     /// Neo: Hosted engines have explicit shutdown; ordinary QuickJS runs keep their host's cancellation.
     #[cfg(feature = "hosted-run")]
     hosted: hosted_run::Runs,
+    /// Host capability; installing it also refuses script-started file navigation.
+    captcha: Option<Arc<dyn CaptchaHost>>,
 }
 
 /// Close the run's tracker on every exit, including a dropped future or failed tab open.
@@ -147,6 +150,7 @@ impl Runtime {
                     cleanup,
                     #[cfg(feature = "hosted-run")]
                     hosted: hosted_run::Runs::default(),
+                    captcha: None,
                 })
             }
             Err(CdpError::Protocol { message, .. }) => {
@@ -165,6 +169,16 @@ impl Runtime {
     pub fn with_absolute_paths(self, absolute_paths: AbsolutePaths) -> Self {
         Self {
             absolute_paths,
+            ..self
+        }
+    }
+
+    /// Installs a solver and the accompanying file:, view-source: and filesystem: refusal.
+    /// This is defense in depth; an existing file: tab can still read host-readable files.
+    #[must_use]
+    pub fn with_captcha(self, host: Arc<dyn CaptchaHost>) -> Self {
+        Self {
+            captcha: Some(host),
             ..self
         }
     }
@@ -388,7 +402,11 @@ impl Runtime {
         // group-release tasks the page spawns, so `finish` waits for them all.
         let artifacts =
             Arc::new(Artifacts::new(artifacts).with_absolute_paths(self.absolute_paths));
-        let run = RunScope::new(deadline.clone(), tasks).with_artifacts(Arc::clone(&artifacts));
+        // Both JavaScript engines share this scope: changing the getter transport must
+        // retain CAPTCHA admission and tab input ownership for the hosted lifecycle too.
+        let run = RunScope::new(deadline.clone(), tasks)
+            .with_artifacts(Arc::clone(&artifacts))
+            .with_captcha(self.captcha.clone(), self.inputs.solving.clone());
         #[cfg(feature = "hosted-run")]
         let getters = hosted_run::getters(host.as_ref(), &run, tabs.clone(), tokio);
         #[cfg(not(feature = "hosted-run"))]

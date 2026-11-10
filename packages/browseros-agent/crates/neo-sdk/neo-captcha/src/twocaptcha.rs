@@ -55,6 +55,13 @@ impl TwoCaptchaClient {
     }
 
     // https://2captcha.com/api-docs/get-balance
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Account diagnostics are exercised by the mock-provider tests"
+        )
+    )]
     pub async fn get_balance(
         &self,
         deadline: Instant,

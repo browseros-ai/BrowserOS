@@ -13,6 +13,7 @@ The `crates/neo-sdk/` directory owns the runtime, its injected JavaScript packag
 | `neo-playwright-tests` | Rust, JavaScript | Pinned upstream compatibility harness for the runtime |
 | `neo-runtime-spec` | Rust, generated TS | Neo's cross-language contracts, translated from Playwright's protocol |
 | `neo-trace` | Rust | Correlates live code and call logs; depends on neo-runtime, never the reverse |
+| `neo-captcha` | Rust | Shared host-side CAPTCHA solver, reached through the runtime's `CaptchaHost` trait |
 | `neo-runtime` | Rust | Runs an agent's Playwright-style script in a QuickJS realm against one BrowserOS tab |
 | `neo-sdk-server` | Rust | Reusable MCP host, output budgets, retained results, artifacts and image blocks |
 | `neo-quickjs-injected` | TypeScript | The Playwright-shaped objects a script sees; `neo-runtime` embeds its `dist/sdk.js` |
@@ -26,7 +27,17 @@ Renamed in November 2026: `neo-quickjs-injected` was `neo-sdk`, and `neo-playwri
 
 A page object that Rust refers to across page calls (an element, an armed hit-target interceptor) is a handle: `neo_runtime_spec::Handle<K>`, the CDP `objectId` of an object that stays in the page, typed by its kind. Each kind is declared in `spec/injected.yml` (the built-in `Element`, or a `type: handle` definition), and the translator lets a handle cross only as a top-level page call parameter or result property. Never pass a raw `objectId` string between page calls, and never keep element state in the page for Neo to look up later: a handle lives in the CDP object group of the session that read it, and releasing that group is what frees it.
 
-`browseros-core` is never a dependency of a neo crate. Read it for patterns and copy what you need; Neo is a rebuild, and depending on it would pull the old runtime's state model back in.
+`neo-captcha` is the one host-side exception to the browseros-core ban. It keeps workspace
+lints while moving the legacy solver unchanged, and reaches pages only through core's
+`PageJs`, input and screenshot. Neither neo-runtime nor the QuickJS SDK depends on it; hosts
+bridge it through `neo_runtime::CaptchaHost`. `scripts/neo-check.sh` guards both boundaries.
+Neo solving requires explicit `BROWSERCLAW_NEO_CAPTCHA=1` opt-in in the prototype, hosted mode,
+and readable keys outside artifacts. Its file-navigation refusal is defense in depth, not
+isolation: existing file: tabs remain readable. Isolation requires provider files the browser
+process cannot read. A flow still sees its 3 s click timeout; started clicks and their drain
+have no separate timeout and can retain the input turn for multiple CDP request timeouts.
+
+Outside that host adapter, `browseros-core` is never a dependency of a neo crate. Read it for patterns and copy what you need; Neo is a rebuild, and depending on it would pull the old runtime's state model back in.
 
 ## Rust
 

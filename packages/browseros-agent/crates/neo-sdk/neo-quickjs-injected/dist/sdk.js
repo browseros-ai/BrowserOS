@@ -9551,6 +9551,17 @@ function standardGlobals() {
   };
 }
 
+// src/neo-namespace.ts
+function createNeo(connection) {
+  return Object.freeze({
+    solveCaptcha(page) {
+      if (!(page instanceof Page))
+        throw new TypeError("neo.solveCaptcha takes a page");
+      return connection.sendNeo("neo.solveCaptcha", page.mainFrame()._guid, "neo:solveCaptcha", {}, 0);
+    }
+  });
+}
+
 // src/browser-type.ts
 var ATTACHED_REFUSAL = "Neo runs attached to BrowserOS; use the provided context / context.browser()";
 var CHROMIUM_ONLY_REFUSAL = "Neo drives BrowserOS (Chromium) only; firefox and webkit are not available";
@@ -9648,7 +9659,7 @@ function createRun(init) {
     playwright,
     uncaught: pipe.uncaught,
     exportValue,
-    globals: standardGlobals()
+    globals: { ...standardGlobals(), neo: createNeo(connection) }
   };
 }
 return { createRun };

@@ -388,6 +388,42 @@ fn tests_that_a_function_declaration_must_be_a_built_artifact() {
     assert!(!check("neo-runtime/src/playwright_methods/evaluate.rs", elsewhere).is_empty());
 }
 
+#[test]
+fn a_function_declaration_parameter_may_reach_the_core_page_js_adapter() {
+    let source = r"
+        async fn scan(session: &Session, function_declaration: &str) {
+            browseros_core::PageJs::page_world(session)
+                .call(node_id, function_declaration, &[]).await;
+        }
+        fn identity(function_declaration: &str) -> &str { function_declaration }
+    ";
+    assert!(check("neo-captcha/src/page.rs", source).is_empty());
+}
+
+#[test]
+fn a_parameter_name_does_not_exempt_raw_payloads_methods_or_command_types() {
+    for body in [
+        r#"json!({"functionDeclaration": function_declaration})"#,
+        "Params { function_declaration: function_declaration.to_string() }",
+        "params.function_declaration = function_declaration.to_string()",
+        "runtime::CallFunctionOn { function_declaration }",
+        "browseros_cdp::runtime::CallFunctionOnParams::default()",
+        r#"session.send("Runtime.callFunctionOn", params)"#,
+    ] {
+        let source = format!("fn arbitrary(function_declaration: &str) {{ {body}; }}");
+        assert!(
+            !check("neo-captcha/src/page.rs", &source).is_empty(),
+            "not refused: {body}"
+        );
+    }
+    let arbitrary = r#"
+        fn arbitrary(function_declaration: &str) {
+            json!({"functionDeclaration": function_declaration});
+        }
+    "#;
+    assert!(!check("neo-runtime/src/chromium_bridge/main_world.rs", arbitrary).is_empty());
+}
+
 // ---------------------------------------------------------------------------------------------
 // The check.
 // ---------------------------------------------------------------------------------------------
@@ -529,9 +565,29 @@ fn composes_method(text: &str) -> bool {
 /// is a built const, or a parameter every in-file call passes a built const.
 fn declarations(relative: &str, tokens: &[Token], door: bool, built: &[String]) -> Vec<String> {
     let mut problems = Vec::new();
+    let mut delimiters = Vec::new();
     for (index, token) in tokens.iter().enumerate() {
+        if let Token::Punct { text, .. } = token {
+            match text {
+                '(' | '[' | '{' => delimiters.push(*text),
+                ')' | ']' | '}' => {
+                    delimiters.pop();
+                }
+                _ => {}
+            }
+        }
+        // The snake-case name is also a legitimate parameter or argument of the approved
+        // browseros-core PageJs adapter. Only a field initializer or assignment builds a
+        // payload; guarded command type names are checked separately, including shorthand.
+        let field_initializer = delimiters.last() == Some(&'{')
+            && tokens.get(index + 1).is_some_and(|token| token.is(":"))
+            && !tokens.get(index + 2).is_some_and(|token| token.is(":"));
+        let field_assignment = index > 0
+            && tokens[index - 1].is(".")
+            && tokens.get(index + 1).is_some_and(|token| token.is("="));
         let is_key = matches!(token, Token::Str { text, .. } if text == "functionDeclaration")
-            || matches!(token, Token::Ident { text, .. } if text == "function_declaration");
+            || (matches!(token, Token::Ident { text, .. } if text == "function_declaration")
+                && (field_initializer || field_assignment));
         if !is_key {
             continue;
         }

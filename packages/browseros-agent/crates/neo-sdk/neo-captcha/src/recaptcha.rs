@@ -10,6 +10,8 @@ use super::{
 
 const WAIT: Duration = Duration::from_secs(6);
 const POLL: Duration = Duration::from_millis(250);
+// This caps the whole post-click observation, including WAIT, without delaying idle retries.
+const VERIFY_LIMIT: Duration = Duration::from_secs(30);
 
 const ANCHOR: &str = r#"/*recaptcha:anchor*/(() => {
  const a=document.querySelector('#recaptcha-anchor'), e=document.querySelector('.recaptcha-checkbox-border')||a;
@@ -220,6 +222,50 @@ fn viewport(frame: &FrameRef, local: Rect) -> Result<Rect, Stop> {
         ..local
     })
 }
+
+/// A checkbox decision from one read; targets borrow the geometry validated in that view.
+enum CheckboxState<'a> {
+    Passed,
+    Leave,
+    Target(&'a FrameRef, Rect),
+    Verifying,
+}
+
+fn classify_checkbox(v: &View) -> Result<CheckboxState<'_>, Stop> {
+    if v.passed() {
+        return Ok(CheckboxState::Passed);
+    }
+    if v.state.as_ref().is_none_or(|a| a.checked) || v.grid.as_ref().is_some_and(|g| g.ready) {
+        return Ok(CheckboxState::Leave);
+    }
+    let (Some(frame), Some(a)) = (
+        v.anchor.as_ref().filter(|f| f.rect.is_some_and(usable)),
+        v.state.as_ref(),
+    ) else {
+        return Ok(CheckboxState::Leave);
+    };
+    let Some(rect) = a.rect else {
+        return Ok(CheckboxState::Leave);
+    };
+    // Google hides the border during a free check. Only finite zero-size geometry
+    // represents that state; malformed geometry must still fail before any attempt.
+    let finite_zero = [rect.x, rect.y, rect.width, rect.height]
+        .iter()
+        .all(|n| n.is_finite())
+        && rect.width >= 0.
+        && rect.height >= 0.
+        && (rect.width == 0. || rect.height == 0.);
+    if finite_zero {
+        return Ok(if a.error {
+            CheckboxState::Leave
+        } else {
+            CheckboxState::Verifying
+        });
+    }
+    viewport(frame, rect)?;
+    Ok(CheckboxState::Target(frame, rect))
+}
+
 // Google's identifiers are documented in CapSolver's ReCaptchaClassification guide.
 fn question_id(label: &str) -> Option<&'static str> {
     match label.trim().to_ascii_lowercase().as_str() {
@@ -352,6 +398,24 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             let v = self.read().await?;
             if until(&v) || Instant::now() >= end {
                 return Ok(v);
+            }
+            self.pause(POLL).await?;
+        }
+    }
+    async fn await_verification(&self, origin: Instant) -> Result<View, Stop> {
+        let end = origin + VERIFY_LIMIT;
+        loop {
+            // read/pause retain bounded()'s configured deadline and caller cancellation.
+            // No input or provider work is owned by this wait, including at its cap.
+            let v = self.read().await?;
+            if !matches!(classify_checkbox(&v)?, CheckboxState::Verifying) {
+                return Ok(v);
+            }
+            if Instant::now() >= end {
+                return Err(fail(
+                    SolveReason::AcceptanceUnconfirmed,
+                    "reCAPTCHA was still verifying the checkbox. Take a fresh snapshot before retrying.",
+                ));
             }
             self.pause(POLL).await?;
         }
@@ -802,32 +866,38 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             return self.token().await;
         }
         let mut v = self.read().await?;
-        if v.passed() {
-            return Ok((SolveMethod::Checkbox, SolveReason::CheckboxPassed));
-        }
-        for _ in 0..2 {
-            if v.state.as_ref().is_none_or(|a| a.checked)
-                || v.grid.as_ref().is_some_and(|g| g.ready)
-            {
-                break;
-            }
-            let (Some(frame), Some(rect)) = (
-                v.anchor.as_ref().filter(|f| f.rect.is_some_and(usable)),
-                v.state.as_ref().and_then(|a| a.rect),
-            ) else {
-                break;
-            };
-            self.mark(SolveMethod::Checkbox, 0);
-            self.click(frame, rect).await?;
-            v = self
-                .wait(|v| {
-                    v.passed()
-                        || v.grid.as_ref().is_some_and(|g| g.ready)
-                        || v.state.as_ref().is_some_and(|a| a.error)
-                })
-                .await?;
-            if v.passed() {
-                return Ok((SolveMethod::Checkbox, SolveReason::CheckboxPassed));
+        loop {
+            match classify_checkbox(&v)? {
+                CheckboxState::Passed => {
+                    return Ok((SolveMethod::Checkbox, SolveReason::CheckboxPassed));
+                }
+                CheckboxState::Leave => break,
+                CheckboxState::Verifying => {
+                    // A check already running at the initial read consumes no click budget.
+                    v = self.await_verification(Instant::now()).await?;
+                }
+                CheckboxState::Target(frame, rect) => {
+                    if self.out.attempts.checkbox >= 2 {
+                        break;
+                    }
+                    // Count only a validated click call. click() rechecks geometry; input errors
+                    // remain terminal, and the page retains ownership of delivery and draining.
+                    self.mark(SolveMethod::Checkbox, 0);
+                    self.click(frame, rect).await?;
+                    let origin = Instant::now();
+                    v = self
+                        .wait(|v| {
+                            v.passed()
+                                || v.grid.as_ref().is_some_and(|g| g.ready)
+                                || v.state.as_ref().is_some_and(|a| a.error)
+                        })
+                        .await?;
+                    // Even after the second click, a live free check must finish or reach
+                    // its observation cap before the unchanged tile/token paths may run.
+                    if matches!(classify_checkbox(&v)?, CheckboxState::Verifying) {
+                        v = self.await_verification(origin).await?;
+                    }
+                }
             }
         }
         if self.tiles().await? {
@@ -874,7 +944,7 @@ pub async fn solve<P: CaptchaPage, B: CaptchaBackend>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::captcha::{
+    use crate::{
         events::{CaptchaEventBus, EventLog},
         reservation::TabReservations,
     };
@@ -887,7 +957,47 @@ mod tests {
     use tokio::time::Instant;
     use tokio_util::sync::CancellationToken;
 
+    // Keep an independent 30-second expectation so the production cap and elapsed
+    // assertions cannot drift together; the fixed-contract test binds the two.
+    const EXPECTED_VERIFY_LIMIT: Duration = Duration::from_secs(30);
+
+    /// Virtual widget outcomes are independent of solver reads and its six-second retry.
+    #[derive(Clone, Copy)]
+    enum VerificationEnd {
+        Checked,
+        Idle,
+        Error,
+        Grid,
+    }
+
+    struct Verification {
+        until: Option<Instant>,
+        end: VerificationEnd,
+    }
+
+    #[derive(Clone, Copy)]
+    enum PageEvent {
+        Navigate,
+        Close,
+    }
+
+    /// Records actual fake presses separately from attempted input calls (which can fail).
+    #[derive(Clone)]
+    struct AnchorPress {
+        at: Instant,
+        zero_area: bool,
+    }
+
     struct State {
+        verification: Option<Verification>,
+        checkbox_outcomes: VecDeque<(Option<Duration>, VerificationEnd)>,
+        verifying_rect: Rect,
+        anchor_rect: Option<Rect>,
+        anchor_error: bool,
+        anchor_calls: Vec<Instant>,
+        anchor_presses: Vec<AnchorPress>,
+        click_error: Option<PageError>,
+        page_event: Option<(Instant, PageEvent)>,
         tiles: bool,
         ignored_checkbox_clicks: u32,
         checked: bool,
@@ -923,10 +1033,82 @@ mod tests {
         clicks: Vec<(f64, f64)>,
         scripts: Vec<String>,
     }
+    impl State {
+        fn anchor_geometry(&self) -> Rect {
+            if self.verification.is_some() {
+                self.verifying_rect
+            } else {
+                self.anchor_rect.unwrap_or(Rect {
+                    x: 10.,
+                    y: 20.,
+                    width: 28.,
+                    height: 28.,
+                })
+            }
+        }
+
+        fn begin_verification(&mut self, duration: Option<Duration>, end: VerificationEnd) {
+            self.checked = false;
+            self.response = false;
+            self.anchor_error = false;
+            self.verification = Some(Verification {
+                until: duration.map(|duration| Instant::now() + duration),
+                end,
+            });
+        }
+
+        // Advancing only the fake's observed state lets paused tokio time drive races.
+        // Production polling, input delivery and cancellation ownership are untouched.
+        fn observe_clock(&mut self) {
+            let now = Instant::now();
+            if self.page_event.as_ref().is_some_and(|(at, _)| now >= *at)
+                && let Some((_, event)) = self.page_event.take()
+            {
+                match event {
+                    PageEvent::Navigate => self.navigated = true,
+                    PageEvent::Close => self.fail = Some(PageError::Closed),
+                }
+            }
+            if self
+                .verification
+                .as_ref()
+                .is_some_and(|phase| phase.until.is_some_and(|until| now >= until))
+                && let Some(phase) = self.verification.take()
+            {
+                self.anchor_rect = None;
+                match phase.end {
+                    VerificationEnd::Checked => {
+                        self.checked = true;
+                        self.response = true;
+                        // The measured widget remains zero-size even after acceptance.
+                        self.anchor_rect = Some(self.verifying_rect);
+                    }
+                    VerificationEnd::Idle => {}
+                    VerificationEnd::Error => self.anchor_error = true,
+                    VerificationEnd::Grid => self.tiles = true,
+                }
+            }
+        }
+    }
+
     struct FakePage(Arc<Mutex<State>>);
     impl FakePage {
         fn new(tiles: bool) -> Self {
             Self(Arc::new(Mutex::new(State {
+                verification: None,
+                checkbox_outcomes: VecDeque::new(),
+                verifying_rect: Rect {
+                    x: 0.,
+                    y: 0.,
+                    width: 0.,
+                    height: 0.,
+                },
+                anchor_rect: None,
+                anchor_error: false,
+                anchor_calls: Vec::new(),
+                anchor_presses: Vec::new(),
+                click_error: None,
+                page_event: None,
                 tiles,
                 ignored_checkbox_clicks: 0,
                 checked: false,
@@ -964,10 +1146,14 @@ mod tests {
             })))
         }
         fn edit(&self, f: impl FnOnce(&mut State)) {
-            f(&mut self.0.lock().unwrap_or_else(|e| e.into_inner()));
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.observe_clock();
+            f(&mut state);
         }
         fn read<T>(&self, f: impl FnOnce(&State) -> T) -> T {
-            f(&self.0.lock().unwrap_or_else(|e| e.into_inner()))
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.observe_clock();
+            f(&state)
         }
     }
     fn frame(anchor: bool) -> FrameRef {
@@ -1075,7 +1261,7 @@ mod tests {
             Ok(self.read(|s| {
                 json!({"response": s.response, "present": !(s.applied && s.transition),
                 "visible": !(s.applied && (s.transition || s.dim_after_apply)),
-                "hidden": s.applied && s.transition, "frameReady": true})
+                "hidden": s.applied && s.transition, "frameReady": s.verification.is_none()})
             }))
         }
         async fn eval_in_frame(&self, f: &FrameRef, expression: &str) -> Result<Value, PageError> {
@@ -1097,8 +1283,8 @@ mod tests {
             }
             if f.frame_id == "anchor" {
                 return Ok(self.read(|s| {
-                    json!({"checked": s.checked, "error": false,
-                    "rect": {"x": 10., "y": 20., "width": 28., "height": 28.}})
+                    json!({"checked": s.checked, "error": s.anchor_error,
+                    "rect": s.anchor_geometry()})
                 }));
             }
             self.edit(|s| {
@@ -1123,14 +1309,31 @@ mod tests {
             }))
         }
         async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
+            let anchor = x < 100. && y < 200.;
+            if anchor {
+                self.edit(|state| state.anchor_calls.push(Instant::now()));
+                if let Some(error) = self.read(|state| state.click_error.clone()) {
+                    return Err(error);
+                }
+            }
             self.edit(|s| {
+                if anchor {
+                    let rect = s.anchor_geometry();
+                    s.anchor_presses.push(AnchorPress {
+                        at: Instant::now(),
+                        zero_area: rect.width == 0. || rect.height == 0.,
+                    });
+                }
                 s.clicks.push((x, y));
                 if x < 100. && !s.tiles {
                     if s.ignored_checkbox_clicks > 0 {
                         s.ignored_checkbox_clicks -= 1;
+                    } else if let Some((duration, end)) = s.checkbox_outcomes.pop_front() {
+                        s.begin_verification(duration, end);
                     } else {
                         s.checked = true;
                         s.response = true;
+                        s.anchor_error = false;
                     }
                 } else if y > 700. {
                     if s.rejected > 0 {
@@ -1929,5 +2132,568 @@ mod tests {
             backend.tasks().as_slice(),
             [SolveTask::RecaptchaToken(_)]
         ));
+    }
+
+    fn verifying_page(duration: Option<Duration>, end: VerificationEnd) -> FakePage {
+        let page = FakePage::new(false);
+        page.edit(|state| state.checkbox_outcomes.push_back((duration, end)));
+        page
+    }
+
+    fn assert_anchor_accounting(page: &FakePage, result: &FlowResult, expected: u32) {
+        let (calls, presses) =
+            page.read(|state| (state.anchor_calls.clone(), state.anchor_presses.clone()));
+        assert_eq!(
+            result.attempts.checkbox, expected,
+            "validated click-call count"
+        );
+        assert_eq!(calls.len(), expected as usize);
+        assert_eq!(presses.len(), expected as usize);
+        assert!(
+            presses.iter().all(|press| !press.zero_area),
+            "an anchor press landed while its geometry was zero-size"
+        );
+    }
+
+    fn assert_no_paid_fallback(backend: &FakeBackend, events: &[CaptchaEvent]) {
+        assert!(
+            backend.tasks().is_empty(),
+            "verification prematurely requested a token: {}",
+            backend
+                .tasks()
+                .iter()
+                .any(|task| matches!(task, SolveTask::RecaptchaToken(_)))
+        );
+        assert!(events.iter().all(|event| {
+            event.event != CaptchaEventName::Solving
+                || (event.data["method"] != json!("tiles")
+                    && event.data["method"] != json!("token"))
+        }));
+    }
+
+    async fn delayed_checkbox_pass(rect: Rect) {
+        let page = verifying_page(Some(Duration::from_secs(8)), VerificationEnd::Checked);
+        page.edit(|state| state.verifying_rect = rect);
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            start + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            ),
+            "V1 must observe acceptance after the original retry window"
+        );
+        assert_eq!(Instant::now() - start, Duration::from_secs(8));
+        assert_anchor_accounting(&page, &result, 1);
+        assert_no_paid_fallback(&backend, &events);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v1_waits_past_retry_window_for_checkbox_acceptance() {
+        delayed_checkbox_pass(Rect {
+            x: 0.,
+            y: 0.,
+            width: 0.,
+            height: 0.,
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v1_finite_zero_width_is_verifying() {
+        delayed_checkbox_pass(Rect {
+            x: 0.,
+            y: 0.,
+            width: 0.,
+            height: 28.,
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v1_finite_zero_height_is_verifying() {
+        delayed_checkbox_pass(Rect {
+            x: 0.,
+            y: 0.,
+            width: 28.,
+            height: 0.,
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v1_finite_zero_size_with_negative_origin_still_waits() {
+        delayed_checkbox_pass(Rect {
+            x: -5.,
+            y: -7.,
+            width: 0.,
+            height: 28.,
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v2_unresolved_verification_is_bounded_without_payment() {
+        let page = verifying_page(None, VerificationEnd::Checked);
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            start + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed),
+            "V2 must report an unresolved verification, not a phantom geometry failure"
+        );
+        let origin = page.read(|state| state.anchor_presses[0].at);
+        let elapsed = Instant::now() - origin;
+        assert!(elapsed >= EXPECTED_VERIFY_LIMIT && elapsed <= EXPECTED_VERIFY_LIMIT + POLL);
+        assert_anchor_accounting(&page, &result, 1);
+        assert_no_paid_fallback(&backend, &events);
+    }
+
+    async fn verification_allows_second_click(end: VerificationEnd) {
+        let page = verifying_page(Some(Duration::from_secs(8)), end);
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            start + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            ),
+            "V3/V4 may retry only after verification visibly ends"
+        );
+        assert_anchor_accounting(&page, &result, 2);
+        assert!(page.read(|state| state.anchor_presses[1].at) >= start + Duration::from_secs(8));
+        assert_no_paid_fallback(&backend, &events);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v3_idle_after_verification_allows_the_second_click() {
+        verification_allows_second_click(VerificationEnd::Idle).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v4_usable_error_after_verification_allows_the_second_click() {
+        verification_allows_second_click(VerificationEnd::Error).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v5_verification_can_resolve_to_a_paid_tile_challenge() {
+        let page = verifying_page(Some(Duration::from_secs(8)), VerificationEnd::Grid);
+        let backend = FakeBackend::new(vec![SolveAnswer::Tiles(vec![0])]);
+        let (result, _) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            Instant::now() + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Tiles,
+                SolveReason::TilesAccepted
+            ),
+            "V5 must reach tiles only after free verification resolves to a ready grid"
+        );
+        assert_anchor_accounting(&page, &result, 1);
+        let tasks = backend.tasks();
+        assert_eq!(tasks.len(), 1);
+        assert!(matches!(&tasks[0], SolveTask::RecaptchaTiles(_)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v6_second_click_verification_does_not_start_a_token_task() {
+        let page = verifying_page(Some(Duration::from_secs(8)), VerificationEnd::Checked);
+        page.edit(|state| state.ignored_checkbox_clicks = 1);
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            start + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_no_paid_fallback(&backend, &events);
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            ),
+            "V6 second registered click must finish its free verification"
+        );
+        assert_anchor_accounting(&page, &result, 2);
+        assert!(page.read(|state| state.anchor_presses[1].at) >= start + WAIT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v7_second_click_verification_expires_without_a_token_task() {
+        let page = verifying_page(None, VerificationEnd::Checked);
+        page.edit(|state| state.ignored_checkbox_clicks = 1);
+        let backend = FakeBackend::new(vec![]);
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            Instant::now() + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_no_paid_fallback(&backend, &events);
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed),
+            "V7 exhausted click budget cannot pay while verification is unresolved"
+        );
+        assert_anchor_accounting(&page, &result, 2);
+        let origin = page.read(|state| state.anchor_presses[1].at);
+        let elapsed = Instant::now() - origin;
+        assert!(elapsed >= EXPECTED_VERIFY_LIMIT && elapsed <= EXPECTED_VERIFY_LIMIT + POLL);
+    }
+
+    #[derive(Clone, Copy)]
+    enum VerificationInterruption {
+        Cancel,
+        Deadline,
+        Navigate,
+        Close,
+    }
+
+    async fn verification_interruption(interruption: VerificationInterruption) {
+        let page = verifying_page(None, VerificationEnd::Checked);
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let cancel = CancellationToken::new();
+        let cancel_task = if matches!(interruption, VerificationInterruption::Cancel) {
+            let cancel = cancel.clone();
+            Some(tokio::spawn(async move {
+                tokio::time::sleep_until(start + Duration::from_secs(7)).await;
+                cancel.cancel();
+            }))
+        } else {
+            None
+        };
+        page.edit(|state| {
+            state.page_event = match interruption {
+                VerificationInterruption::Navigate => {
+                    Some((start + Duration::from_secs(7), PageEvent::Navigate))
+                }
+                VerificationInterruption::Close => {
+                    Some((start + Duration::from_secs(7), PageEvent::Close))
+                }
+                _ => None,
+            };
+        });
+        let deadline = start
+            + if matches!(interruption, VerificationInterruption::Deadline) {
+                Duration::from_secs(10)
+            } else {
+                Duration::from_secs(120)
+            };
+        let (result, events) =
+            run_with_method(&page, &backend, &challenge(), &cancel, deadline, None).await;
+        let elapsed = Instant::now() - start;
+        if let Some(task) = cancel_task {
+            task.abort();
+        }
+        let (status, reason, expected_elapsed) = match interruption {
+            VerificationInterruption::Cancel => (
+                SolveStatus::Cancelled,
+                SolveReason::CallerCancelled,
+                Duration::from_secs(7),
+            ),
+            VerificationInterruption::Deadline => (
+                SolveStatus::Failed,
+                SolveReason::DeadlineExceeded,
+                Duration::from_secs(10),
+            ),
+            VerificationInterruption::Navigate => (
+                SolveStatus::Cancelled,
+                SolveReason::Navigated,
+                Duration::from_secs(7),
+            ),
+            VerificationInterruption::Close => (
+                SolveStatus::Cancelled,
+                SolveReason::TabClosed,
+                Duration::from_secs(7),
+            ),
+        };
+        assert_eq!(
+            (result.status, result.reason),
+            (status, reason),
+            "V8 configured deadline/cancel/navigation/close must win during verification"
+        );
+        assert!(elapsed >= expected_elapsed && elapsed <= expected_elapsed + POLL);
+        assert_anchor_accounting(&page, &result, 1);
+        assert_no_paid_fallback(&backend, &events);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v8_caller_cancel_wins_during_verification() {
+        verification_interruption(VerificationInterruption::Cancel).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v8_configured_deadline_wins_over_verification_limit() {
+        verification_interruption(VerificationInterruption::Deadline).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v8_navigation_wins_during_verification() {
+        verification_interruption(VerificationInterruption::Navigate).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v8_tab_close_wins_during_verification() {
+        verification_interruption(VerificationInterruption::Close).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v9_initial_verification_can_pass_without_any_click() {
+        let page = FakePage::new(false);
+        page.edit(|state| {
+            state.begin_verification(Some(Duration::from_secs(3)), VerificationEnd::Checked);
+        });
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            start + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            ),
+            "V9 an already-running check must not consume an anchor attempt"
+        );
+        assert_eq!(Instant::now() - start, Duration::from_secs(3));
+        assert_anchor_accounting(&page, &result, 0);
+        assert_no_paid_fallback(&backend, &events);
+    }
+
+    async fn unsupported_anchor_geometry(rect: Rect) {
+        let page = FakePage::new(false);
+        page.edit(|state| state.anchor_rect = Some(rect));
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            start + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::BrowserError)
+        );
+        assert_anchor_accounting(&page, &result, 0);
+        assert_eq!(
+            Instant::now() - start,
+            Duration::ZERO,
+            "V10 must fail before waiting"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event != CaptchaEventName::Solving)
+        );
+        assert_no_paid_fallback(&backend, &events);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v10_out_of_frame_geometry_fails_before_mark() {
+        unsupported_anchor_geometry(Rect {
+            x: 303.,
+            y: 20.,
+            width: 28.,
+            height: 28.,
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v10_negative_width_fails_before_mark() {
+        unsupported_anchor_geometry(Rect {
+            x: 10.,
+            y: 20.,
+            width: -1.,
+            height: 28.,
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v10_negative_height_fails_before_mark() {
+        unsupported_anchor_geometry(Rect {
+            x: 10.,
+            y: 20.,
+            width: 28.,
+            height: -1.,
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v10_negative_x_fails_before_mark() {
+        unsupported_anchor_geometry(Rect {
+            x: -1.,
+            y: 20.,
+            width: 28.,
+            height: 28.,
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v10_negative_y_fails_before_mark() {
+        unsupported_anchor_geometry(Rect {
+            x: 10.,
+            y: -1.,
+            width: 28.,
+            height: 28.,
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_input_failure_keeps_validated_call_accounting_without_a_press() {
+        let page = FakePage::new(false);
+        page.edit(|state| state.click_error = Some(PageError::Timeout));
+        let backend = FakeBackend::new(vec![]);
+        let result = attempt(&page, &backend).await;
+        assert_eq!(result.reason, SolveReason::BrowserError);
+        assert_eq!(result.attempts.checkbox, 1);
+        assert_eq!(page.read(|state| state.anchor_calls.len()), 1);
+        assert!(page.read(|state| state.anchor_presses.is_empty()));
+        assert!(page.read(|state| {
+            state.anchor_presses.iter().all(|press| !press.zero_area)
+                && state.anchor_presses.len() <= result.attempts.checkbox as usize
+        }));
+        assert!(backend.tasks().is_empty());
+    }
+
+    #[test]
+    fn tests_that_viewport_rejects_nonfinite_geometry_without_json_coercion() {
+        for (field, value) in [
+            (0, f64::NAN),
+            (1, f64::INFINITY),
+            (2, f64::NEG_INFINITY),
+            (3, f64::NAN),
+        ] {
+            let mut rect = Rect {
+                x: 10.,
+                y: 20.,
+                width: 28.,
+                height: 28.,
+            };
+            match field {
+                0 => rect.x = value,
+                1 => rect.y = value,
+                2 => rect.width = value,
+                _ => rect.height = value,
+            }
+            assert!(viewport(&frame(true), rect).is_err());
+        }
+    }
+
+    #[test]
+    fn tests_that_verification_limit_matches_the_fixed_contract() {
+        assert_eq!(VERIFY_LIMIT, EXPECTED_VERIFY_LIMIT);
+    }
+
+    #[test]
+    fn tests_that_checkbox_classifier_rejects_every_nonfinite_geometry_field() {
+        // JSON would turn nonfinite numbers into null and fail decoding first. Build
+        // View directly to prove the classifier never treats them as a verification.
+        for zero_size in [false, true] {
+            for (field, name) in ["x", "y", "width", "height"].into_iter().enumerate() {
+                for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                    let mut fields = if zero_size {
+                        [0., 0., 0., 0.]
+                    } else {
+                        [10., 20., 28., 28.]
+                    };
+                    fields[field] = value;
+                    let v = View {
+                        anchor: Some(frame(true)),
+                        state: Some(Anchor {
+                            checked: false,
+                            error: false,
+                            rect: Some(Rect {
+                                x: fields[0],
+                                y: fields[1],
+                                width: fields[2],
+                                height: fields[3],
+                            }),
+                        }),
+                        frame: None,
+                        grid: None,
+                        main: Main {
+                            response: false,
+                            present: true,
+                            hidden: false,
+                            frame_ready: false,
+                        },
+                    };
+                    assert!(
+                        matches!(
+                            classify_checkbox(&v),
+                            Err(Stop(SolveStatus::Failed, SolveReason::BrowserError, message))
+                                if message == "Widget geometry is unsupported"
+                        ),
+                        "nonfinite {name}={value} with zero_size={zero_size} must fail before input or waiting"
+                    );
+                }
+            }
+        }
     }
 }

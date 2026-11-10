@@ -125,11 +125,16 @@ pub struct Replies {
     pub create_tab_delay: Option<Duration>,
     /// Closing removes the tab immediately, before acknowledging the request.
     pub close_tab_delay: Option<Duration>,
+    /// Emit the browser's detach event for every session of a closed target.
+    pub emit_close_events: bool,
     /// Beforeunload completes after the Page.close acknowledgement, provided its watcher
     /// is still attached to answer the delayed dialog.
     pub before_unload_delay: Option<Duration>,
     /// `Page.getNavigationHistory`, which backs `page.url()`.
     pub history: Reply,
+    /// Optional fixed URLs for CAPTCHA file-navigation admission checks.
+    pub history_urls: Option<&'static [&'static str]>,
+    pub history_index: usize,
     /// `Input.dispatchMouseEvent`, counted per event: `answers: 2` acknowledges a click's move
     /// and press and holds its release.
     pub mouse: Reply,
@@ -600,6 +605,14 @@ async fn serve_cdp(
         } else {
             answer(&command, &replies, &mut calls, &page)
         };
+        if replies.emit_close_events && command["method"] == "Target.closeTarget" {
+            for (session, target) in &calls.sessions {
+                if command["params"]["targetId"] == *target {
+                    calls.closed.insert(session.clone());
+                    let _ = outgoing.send(json!({"method":"Target.detachedFromTarget","params":{"sessionId":session,"targetId":target}}).to_string());
+                }
+            }
+        }
         navigation_events(&command, &replies, &mut calls, &outgoing, &page, &mut tasks);
         let Some(delay) = when else {
             continue;
@@ -1067,6 +1080,13 @@ fn navigation_history(
     }
     // Every field the pinned protocol's `Page.NavigationEntry` requires: the runtime decodes the
     // reply strictly.
+    if let Some(urls) = replies.history_urls {
+        let entries = urls.iter().enumerate().map(|(index, url)| json!({"id":index + 1,"url":url,"userTypedURL":url,"title":"","transitionType":"typed"})).collect::<Vec<_>>();
+        return (
+            json!({"result":{"currentIndex":replies.history_index,"entries":entries}}),
+            replies.history.when(call),
+        );
+    }
     let entry = json!({
         "id": 1, "url": url, "userTypedURL": url, "title": "", "transitionType": "typed",
     });

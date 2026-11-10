@@ -547,6 +547,7 @@ dependencies = [
  "hosted-api",
  "image",
  "imagesize",
+ "neo-captcha",
  "neo-capture",
  "neo-runtime",
  "neo-sdk-server",
@@ -1912,6 +1913,32 @@ checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
 dependencies = [
  "num-traits",
  "pxfm",
+]
+
+[[package]]
+name = "neo-captcha"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "browseros-cdp",
+ "browseros-core",
+ "browseros-mcp",
+ "futures-util",
+ "rand 0.9.4",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
+ "uuid",
 ]
 
 [[package]]

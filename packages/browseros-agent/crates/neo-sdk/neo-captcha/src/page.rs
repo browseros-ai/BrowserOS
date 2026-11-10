@@ -1,3 +1,6 @@
+//! Neo: The shared solver's browseros-core adapter. Click tasks stay owned here after a flow
+//! times out or is cancelled, so solve drains them before its host detaches sessions.
+
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -11,7 +14,12 @@ use browseros_core::{
     screenshot::{ScreenshotCaptureOptions, ScreenshotFormat, Viewport},
 };
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use tokio::sync::{Mutex, oneshot};
+use tokio::task::JoinHandle;
 
 use super::types::{DocumentId, FrameRef, PageError, Rect};
 
@@ -56,6 +64,13 @@ pub trait CaptchaPage: Send + Sync {
     ) -> impl Future<Output = Result<Vec<Value>, PageError>> + Send {
         async { Ok(vec![]) }
     }
+    /// Retains the page reservation while a started input task finishes after flow cancellation.
+    fn drain_input(&self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn any_input_failed(&self) -> bool {
+        false
+    }
     fn click_at(&self, x: f64, y: f64) -> impl Future<Output = Result<(), PageError>> + Send;
     fn screenshot_clip(&self, rect: Rect)
     -> impl Future<Output = Result<String, PageError>> + Send;
@@ -70,10 +85,13 @@ pub trait CaptchaPage: Send + Sync {
     ) -> impl Future<Output = Result<Option<Rect>, PageError>> + Send;
 }
 
+/// One solve's page, including the input task whose lifetime may exceed the flow.
 pub struct LivePage {
     pub view: BrowserView,
     pub page: PageId,
-    last_point: Mutex<(f64, f64)>,
+    last_point: Arc<Mutex<(f64, f64)>>,
+    pending_click: Mutex<Option<JoinHandle<()>>>,
+    any_click_failed: Arc<AtomicBool>,
     frame_parents: Mutex<HashMap<String, String>>,
 }
 
@@ -82,10 +100,32 @@ impl LivePage {
         Self {
             view,
             page,
-            last_point: Mutex::new((0.0, 0.0)),
+            last_point: Arc::new(Mutex::new((0.0, 0.0))),
+            pending_click: Mutex::new(None),
+            any_click_failed: Arc::new(AtomicBool::new(false)),
             frame_parents: Mutex::new(HashMap::new()),
         }
     }
+    /// Wait with no outer timeout: a stalled CDP request can keep the host's input turn
+    /// occupied for its client timeout. Detaching early would race a possible release.
+    pub async fn drain_click(&self) {
+        let mut pending = self.pending_click.lock().await;
+        self.settle_click(&mut pending).await;
+    }
+
+    async fn settle_click(&self, pending: &mut Option<JoinHandle<()>>) {
+        if let Some(task) = pending.as_mut() {
+            if task.await.is_err() {
+                self.any_click_failed.store(true, Ordering::Release);
+            }
+            *pending = None;
+        }
+    }
+
+    pub fn any_click_failed(&self) -> bool {
+        self.any_click_failed.load(Ordering::Acquire)
+    }
+
     async fn top(&self) -> Result<ProtocolSession, PageError> {
         Ok(browser(self.view.page_session(self.page.clone()))
             .await?
@@ -114,6 +154,12 @@ impl LivePage {
 }
 
 impl CaptchaPage for LivePage {
+    fn any_input_failed(&self) -> bool {
+        self.any_click_failed()
+    }
+    async fn drain_input(&self) {
+        self.drain_click().await;
+    }
     /// The page world: widget probes read provider globals such as `turnstile` and `grecaptcha`.
     async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
         let top = self.top().await?;
@@ -287,23 +333,49 @@ impl CaptchaPage for LivePage {
         if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
             return Err(bad("Invalid click point"));
         }
-        let mut last = self.last_point.lock().await;
+        let mut pending = self.pending_click.lock().await;
+        self.settle_click(&mut pending).await;
+        // Acquiring an input handle sends no mouse events: its old 3 s timeout stays safe.
         let input = browser(self.view.input(self.page.clone())).await?;
-        browser(input.click_at(
-            x,
-            y,
-            ClickOptions {
-                humanlike_from: Some(Point {
-                    x: last.0,
-                    y: last.1,
-                }),
-                ..Default::default()
-            },
-        ))
-        .await?;
-        *last = (x, y);
-        Ok(())
+        let last_point = Arc::clone(&self.last_point);
+        let failed = Arc::clone(&self.any_click_failed);
+        let (reply, receiver) = oneshot::channel();
+        // Store the task before awaiting anything. In particular, cancellation while a later
+        // click waits for this one must leave the JoinHandle in LivePage, never take it out.
+        *pending = Some(tokio::spawn(async move {
+            let from = *last_point.lock().await;
+            // No whole-gesture timeout here: dropping after mousePressed can skip release.
+            // Each request still has the host CDP client's timeout (125 s in the Neo host).
+            let result = input
+                .click_at(
+                    x,
+                    y,
+                    ClickOptions {
+                        humanlike_from: Some(Point {
+                            x: from.0,
+                            y: from.1,
+                        }),
+                        ..ClickOptions::default()
+                    },
+                )
+                .await;
+            if result.is_ok() {
+                *last_point.lock().await = (x, y);
+            } else {
+                // A later successful click cannot prove an earlier event was acknowledged.
+                failed.store(true, Ordering::Release);
+            }
+            let _ = reply.send(result);
+        }));
+        drop(pending);
+        // Keep the flow's historical timing, but never use this timer to cancel the task.
+        tokio::time::timeout(REQUEST_TIMEOUT, receiver)
+            .await
+            .map_err(|_| PageError::Timeout)?
+            .map_err(|_| bad("Click task ended without a result"))?
+            .map_err(page_error)
     }
+
     async fn screenshot_clip(&self, rect: Rect) -> Result<String, PageError> {
         if !valid_rect(rect) || rect.x < 0.0 || rect.y < 0.0 {
             return Err(bad("Invalid screenshot clip"));
@@ -588,6 +660,9 @@ fn collect_shadow_roots<'a>(node: &'a Value, roots: &mut Vec<&'a Value>) {
 }
 
 #[cfg(test)]
+pub(crate) use tests::Native;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use browseros_cdp::{CdpError, CdpEvent};
@@ -605,8 +680,12 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
     type Call = (String, Value, Option<SessionId>, tokio::time::Instant);
-    struct Native {
+    pub(crate) struct Native {
         widget_url: &'static str,
+        pub(crate) attach_delay: Mutex<Duration>,
+        pub(crate) tabs_override: Mutex<Option<Vec<Value>>>,
+        pub(crate) release_delay: Mutex<Duration>,
+        pub(crate) release_failure: AtomicBool,
         calls: Mutex<Vec<Call>>,
         evaluations: Mutex<VecDeque<Result<Value, CdpError>>>,
         function_results: Mutex<VecDeque<Result<Value, CdpError>>>,
@@ -617,9 +696,13 @@ mod tests {
         events: broadcast::Sender<CdpEvent>,
     }
     impl Native {
-        fn new(widget_url: &'static str) -> Arc<Self> {
+        pub(crate) fn new(widget_url: &'static str) -> Arc<Self> {
             Arc::new(Self {
                 widget_url,
+                attach_delay: Mutex::new(Duration::ZERO),
+                tabs_override: Mutex::new(None),
+                release_delay: Mutex::new(Duration::ZERO),
+                release_failure: AtomicBool::new(false),
                 calls: Mutex::new(Vec::new()),
                 evaluations: Mutex::new(VecDeque::new()),
                 function_results: Mutex::new(VecDeque::new()),
@@ -672,7 +755,7 @@ mod tests {
             let tab = json!({"tabId":1,"targetId":"page","url":"http://fixture.test","title":"fixture","isActive":true,"isLoading":false,"loadProgress":1.0,"isPinned":false,"isHidden":false,"windowId":1});
             Ok(match method {
                 "Browser.getTabs" => {
-                    json!({"tabs":if self.page_open.load(Ordering::SeqCst) {vec![tab]} else {vec![]}})
+                    json!({"tabs": self.tabs_override.lock().map_err(|_| CdpError::SessionGone)?.clone().unwrap_or_else(|| if self.page_open.load(Ordering::SeqCst) {vec![tab]} else {vec![]})})
                 }
                 "Browser.getTabInfo" => {
                     if !self.page_open.load(Ordering::SeqCst) {
@@ -756,7 +839,8 @@ mod tests {
                 | "Accessibility.enable"
                 | "Target.setAutoAttach"
                 | "Runtime.releaseObject"
-                | "Input.dispatchMouseEvent" => json!({}),
+                | "Input.dispatchMouseEvent"
+                | "Target.detachFromTarget" => json!({}),
                 _ => {
                     return Err(CdpError::Protocol {
                         code: -1,
@@ -765,7 +849,7 @@ mod tests {
                 }
             })
         }
-        fn calls(&self, method: &str) -> Result<Vec<Call>, String> {
+        pub(crate) fn calls(&self, method: &str) -> Result<Vec<Call>, String> {
             Ok(self
                 .calls
                 .lock()
@@ -783,7 +867,38 @@ mod tests {
             params: Value,
             session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
-            Box::pin(async move { self.reply(method, params, session) })
+            Box::pin(async move {
+                let release =
+                    method == "Input.dispatchMouseEvent" && params["type"] == "mouseReleased";
+                let result = self.reply(method, params, session);
+                if method == "Target.attachToTarget" {
+                    let delay = *self
+                        .attach_delay
+                        .lock()
+                        .map_err(|_| CdpError::SessionGone)?;
+                    tokio::time::sleep(delay).await;
+                }
+                if release {
+                    let delay = *self
+                        .release_delay
+                        .lock()
+                        .map_err(|_| CdpError::SessionGone)?;
+                    tokio::time::sleep(delay).await;
+                    if self.release_failure.swap(false, Ordering::SeqCst) {
+                        return Err(CdpError::Protocol {
+                            code: -32000,
+                            message: "release failed".into(),
+                        });
+                    }
+                    self.calls.lock().map_err(|_| CdpError::SessionGone)?.push((
+                        "release_ack".into(),
+                        json!({}),
+                        session.cloned(),
+                        tokio::time::Instant::now(),
+                    ));
+                }
+                result
+            })
         }
         fn send_raw_json<'a>(
             &'a self,
@@ -799,6 +914,24 @@ mod tests {
                 )?)?)
             })
         }
+        fn send_at_epoch<'a>(
+            &'a self,
+            _epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            self.send(method, params, session)
+        }
+        fn send_raw_json_at_epoch<'a>(
+            &'a self,
+            _epoch: u64,
+            method: &'a str,
+            params: &'a str,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            self.send_raw_json(method, params, session)
+        }
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
         }
@@ -809,7 +942,7 @@ mod tests {
             1
         }
     }
-    fn fixture() -> (Arc<Native>, LivePage) {
+    pub(crate) fn fixture() -> (Arc<Native>, LivePage) {
         let native = Native::new("https://widget.test");
         let view = BrowserView::unbound(
             BrowserSession::new(native.clone(), Default::default()),
@@ -1569,5 +1702,136 @@ mod tests {
         browser.close_page(id).await?;
         connection.disconnect().await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod click_lifetime_tests {
+    use super::tests::{Native, fixture};
+    use super::*;
+
+    async fn wait_for_event(native: &Native, kind: &str, count: usize) {
+        for _ in 0..1000 {
+            if native
+                .calls("Input.dispatchMouseEvent")
+                .expect("calls")
+                .iter()
+                .filter(|call| call.1["type"] == kind)
+                .count()
+                >= count
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("missing {kind}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn captcha_soft_timeout_preserves_release_and_done_delivery_proof() {
+        let (native, page) = fixture();
+        *native.release_delay.lock().expect("delay") = Duration::from_secs(5);
+        let began = tokio::time::Instant::now();
+        assert_eq!(page.click_at(20.0, 30.0).await, Err(PageError::Timeout));
+        assert_eq!(began.elapsed(), REQUEST_TIMEOUT);
+        assert_eq!(native.calls("release_ack").expect("calls").len(), 0);
+        page.drain_click().await;
+        assert_eq!(native.calls("release_ack").expect("calls").len(), 1);
+        assert!(!page.any_click_failed());
+        assert_eq!(*page.last_point.lock().await, (20.0, 30.0));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn captcha_cancel_during_press_still_writes_release_before_drain_returns() {
+        let (native, page) = fixture();
+        let page = Arc::new(page);
+        let clicking = {
+            let page = Arc::clone(&page);
+            tokio::spawn(async move { page.click_at(20.0, 30.0).await })
+        };
+        // Advance the four humanlike moves, then stop the flow in its 90 ms press window.
+        for _ in 0..5 {
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_millis(12)).await;
+        }
+        wait_for_event(&native, "mousePressed", 1).await;
+        clicking.abort();
+        assert!(clicking.await.expect_err("flow aborted").is_cancelled());
+        assert!(native.calls("release_ack").expect("calls").is_empty());
+        page.drain_click().await;
+        assert_eq!(native.calls("release_ack").expect("calls").len(), 1);
+        assert!(!page.any_click_failed());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn captcha_failed_click_then_success_keeps_delivery_unknown() {
+        let (native, page) = fixture();
+        native.release_failure.store(true, Ordering::SeqCst);
+        assert!(page.click_at(20.0, 30.0).await.is_err());
+        assert_eq!(*page.last_point.lock().await, (0.0, 0.0));
+        assert!(page.any_click_failed());
+        page.click_at(60.0, 70.0)
+            .await
+            .expect("second click succeeds");
+        page.drain_click().await;
+        assert!(
+            page.any_click_failed(),
+            "success cannot acknowledge the earlier failed release"
+        );
+        assert_eq!(*page.last_point.lock().await, (60.0, 70.0));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn captcha_second_click_wait_and_its_cancellation_preserve_the_first_handle() {
+        let (native, page) = fixture();
+        *native.release_delay.lock().expect("delay") = Duration::from_secs(5);
+        let page = Arc::new(page);
+        assert_eq!(page.click_at(20.0, 30.0).await, Err(PageError::Timeout));
+        let second = {
+            let page = Arc::clone(&page);
+            tokio::spawn(async move { page.click_at(60.0, 70.0).await })
+        };
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            native
+                .calls("Input.dispatchMouseEvent")
+                .expect("calls")
+                .iter()
+                .filter(|call| call.1["type"] == "mousePressed")
+                .count(),
+            1
+        );
+        second.abort();
+        assert!(
+            second
+                .await
+                .expect_err("second wait aborted")
+                .is_cancelled()
+        );
+        page.drain_click().await;
+        assert_eq!(native.calls("release_ack").expect("calls").len(), 1);
+        assert!(!page.any_click_failed());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn captcha_second_click_cannot_press_until_first_release_acknowledges() {
+        let (native, page) = fixture();
+        *native.release_delay.lock().expect("delay") = Duration::from_secs(5);
+        let page = Arc::new(page);
+        assert_eq!(page.click_at(20.0, 30.0).await, Err(PageError::Timeout));
+        *native.release_delay.lock().expect("delay") = Duration::ZERO;
+        page.click_at(60.0, 70.0).await.expect("second click");
+        page.drain_click().await;
+        let ack = native.calls("release_ack").expect("ack")[0].3;
+        let presses = native
+            .calls("Input.dispatchMouseEvent")
+            .expect("calls")
+            .into_iter()
+            .filter(|call| call.1["type"] == "mousePressed")
+            .collect::<Vec<_>>();
+        assert_eq!(presses.len(), 2);
+        assert!(presses[1].3 >= ack);
     }
 }

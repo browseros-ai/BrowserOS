@@ -26,6 +26,7 @@ repository = "https://github.com/browseros-ai/BrowserOS"
 [workspace.dependencies]
 neo-capture = { path = "crates/neo-sdk/neo-capture" }
 neo-service = { path = "crates/neo-sdk/neo-service" }
+neo-captcha = { path = "crates/neo-sdk/neo-captcha" }
 harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }
 browseros-core = { path = "crates/browseros-core" }

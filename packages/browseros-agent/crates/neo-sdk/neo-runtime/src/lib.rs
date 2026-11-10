@@ -79,10 +79,12 @@ mod fake_browser;
 mod abort;
 mod artifacts;
 mod browser_representations;
+mod captcha;
 mod chromium_bridge;
 mod deadline;
 mod debugger;
 mod events;
+mod file_navigation;
 #[cfg(feature = "hosted-run")]
 mod hosted_run;
 mod method_router;
@@ -98,6 +100,7 @@ mod test_host;
 mod url_match;
 
 pub use artifacts::{AbsolutePaths, RunArtifact};
+pub use captcha::{CaptchaHost, SolveReply};
 #[cfg(feature = "hosted-run")]
 pub use hosted_run::HostedRun;
 pub use run::{

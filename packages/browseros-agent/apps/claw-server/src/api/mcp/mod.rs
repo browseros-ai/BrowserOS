@@ -6,6 +6,7 @@ pub mod guards;
 pub mod helper_runtime;
 pub mod hosted;
 pub mod naming;
+pub mod neo_captcha;
 pub mod observers;
 mod prompt;
 pub mod script_hook;

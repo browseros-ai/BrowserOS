@@ -19,14 +19,23 @@
 )]
 mod fake_browser;
 
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use fake_browser::{FakeBrowser, Replies};
+use futures_util::future::BoxFuture;
+use neo_runtime::{CaptchaHost, PageId, SolveReply};
 use neo_sdk_server::{Config, NeoSdkServer};
 use reqwest::Client;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
@@ -40,11 +49,15 @@ struct Server {
 
 impl Server {
     async fn start(port: u16) -> Self {
+        Self::configured(port, |server| server).await
+    }
+
+    async fn configured(port: u16, configure: impl FnOnce(NeoSdkServer) -> NeoSdkServer) -> Self {
         let state = TempDir::new().unwrap();
-        let neo = NeoSdkServer::new(
+        let neo = configure(NeoSdkServer::new(
             Config::new(port, state.path().to_path_buf()),
             CancellationToken::new(),
-        );
+        ));
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let url = format!("http://{}/mcp", listener.local_addr().unwrap());
         let router = neo.router();
@@ -151,6 +164,172 @@ async fn getter_started(browser: &FakeBrowser) {
         );
         time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+/// A capability supplied by the embedding host; the reusable server only binds and owns it.
+struct ValueCaptcha(AtomicUsize);
+
+impl CaptchaHost for ValueCaptcha {
+    fn solve(&self, _page: PageId, _stop: CancellationToken) -> BoxFuture<'static, SolveReply> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            SolveReply::Value {
+                value: json!({"verdict":"already_clear"}),
+                log: Vec::new(),
+                input_settled: false,
+            }
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn captcha_factory_binds_once_and_keeps_truthful_delivery_across_requests() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let factories = Arc::new(AtomicUsize::new(0));
+    let host = Arc::new(ValueCaptcha(AtomicUsize::new(0)));
+    let server = Server::configured(browser.port(), {
+        let factories = Arc::clone(&factories);
+        let host = Arc::clone(&host);
+        move |server| {
+            server.with_captcha(
+                move |cdp| -> Arc<dyn CaptchaHost> {
+                    assert!(
+                        cdp.is_connected(),
+                        "factory receives the owned live connection"
+                    );
+                    factories.fetch_add(1, Ordering::SeqCst);
+                    Arc::<ValueCaptcha>::clone(&host)
+                },
+                "CAPTCHA fixture capability",
+            )
+        }
+    })
+    .await;
+    let client = Client::new();
+    let listed = rpc(&client, &server.url, 1, "tools/list", json!({})).await;
+    let description = listed["tools"][0]["description"].as_str().unwrap();
+    assert!(description.contains("CAPTCHA fixture capability"));
+    assert!(description.contains(neo_runtime::api_description()));
+    assert_eq!(
+        factories.load(Ordering::SeqCst),
+        0,
+        "listing stays browser-free"
+    );
+    for id in [2, 3] {
+        let reply = run(
+            &client,
+            &server.url,
+            id,
+            json!({"page":fake_browser::PAGE,"code":"return await neo.solveCaptcha(page)"}),
+        )
+        .await;
+        assert_eq!(reply["structuredContent"]["status"], "ok", "{reply}");
+        assert_eq!(
+            reply["structuredContent"]["value"]["verdict"],
+            "already_clear"
+        );
+        assert_eq!(
+            reply["structuredContent"]["calls"][0]["delivery"],
+            "unknown"
+        );
+        let _trace = run_id(&reply);
+    }
+    assert_eq!(
+        factories.load(Ordering::SeqCst),
+        1,
+        "requests share one bound host"
+    );
+    assert_eq!(host.0.load(Ordering::SeqCst), 2);
+    server.neo.shutdown().await;
+}
+
+/// Models input cleanup that must retain the runtime's turn after request cancellation.
+struct DrainingCaptcha {
+    entered: Arc<Notify>,
+    cancelled: Arc<Notify>,
+    release: Arc<Semaphore>,
+}
+
+impl CaptchaHost for DrainingCaptcha {
+    fn solve(&self, _page: PageId, stop: CancellationToken) -> BoxFuture<'static, SolveReply> {
+        let entered = Arc::clone(&self.entered);
+        let cancelled = Arc::clone(&self.cancelled);
+        let release = Arc::clone(&self.release);
+        Box::pin(async move {
+            entered.notify_one();
+            stop.cancelled().await;
+            cancelled.notify_one();
+            release.acquire().await.unwrap().forget();
+            SolveReply::Stopped
+        })
+    }
+}
+
+/// Combined T2 preserves both boundaries: CAPTCHA cleanup blocks CDP disconnect, and
+/// transport shutdown delivers a successful cancelled reply to the connected caller.
+/// The shared RPC helper keeps HTTP and JSON-RPC failures fatal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn captcha_shutdown_waits_for_host_cleanup_before_disconnecting() {
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let host = Arc::new(DrainingCaptcha {
+        entered: Arc::new(Notify::new()),
+        cancelled: Arc::new(Notify::new()),
+        release: Arc::new(Semaphore::new(0)),
+    });
+    let server = Server::configured(browser.port(), {
+        let host = Arc::clone(&host);
+        move |server| {
+            server.with_captcha(
+                move |_cdp| -> Arc<dyn CaptchaHost> { Arc::<DrainingCaptcha>::clone(&host) },
+                "CAPTCHA fixture capability",
+            )
+        }
+    })
+    .await;
+    let request = tokio::spawn({
+        let url = server.url.clone();
+        async move {
+            let client = Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            run(
+                &client,
+                &url,
+                1,
+                json!({"page":fake_browser::PAGE,"code":"return await neo.solveCaptcha(page)"}),
+            )
+            .await
+        }
+    });
+    time::timeout(Duration::from_secs(5), host.entered.notified())
+        .await
+        .unwrap();
+    let shutdown = tokio::spawn({
+        let neo = server.neo.clone();
+        async move { neo.shutdown().await }
+    });
+    time::timeout(Duration::from_secs(5), host.cancelled.notified())
+        .await
+        .unwrap();
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown cannot abandon host input cleanup"
+    );
+    assert!(
+        server.neo.connected(),
+        "CDP remains connected while host input cleanup is held"
+    );
+    host.release.add_permits(1);
+    time::timeout(Duration::from_secs(5), shutdown)
+        .await
+        .unwrap()
+        .unwrap();
+    let reply = time::timeout(Duration::from_secs(5), request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reply["structuredContent"]["status"], "cancelled", "{reply}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
