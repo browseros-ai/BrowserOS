@@ -55,10 +55,11 @@ async fn login_and_page_lifecycle_survive_reopen_without_password_bytes() {
         .await
         .unwrap()
         .with_sinks([traces.sink()]);
-    let secret = "store-e2e-password-never-persist-9427";
+    let secret = "store-e2e-password'never-persist-9427";
+    let literal = r"store-e2e-password\'never-persist-9427";
     let url = format!("{}/login", tab.origin);
     let outcome = runtime.run(RunRequest {
-        code: format!("await page.goto({}); await page.fill('#password', {secret:?}); await page.click('#go'); const created = await context.newPage(); await created.close(); return page.url();", json!(url)),
+        code: format!("await page.goto({}); await page.fill('#password', '{literal}'); await page.click('#go'); const created = await context.newPage(); await created.close(); return page.url();", json!(url)),
         page: PageId::new(tab.target_id.clone()),
         timeout: Duration::from_secs(30),
         cancel: CancellationToken::new(),
@@ -81,6 +82,7 @@ async fn login_and_page_lifecycle_survive_reopen_without_password_bytes() {
         "inspect the live WAL before checkpointing"
     );
     assert_no_secret(&path, secret);
+    assert_no_secret(&path, literal);
     let reopened = support::reopen(&runtime, traces, &path).await;
     let (run, calls) = support::complete(&reopened, outcome.run_id).await;
     support::matches_outcome(&run, &calls, &outcome);
@@ -123,6 +125,7 @@ async fn login_and_page_lifecycle_survive_reopen_without_password_bytes() {
         PageId::new(tab.target_id.clone())
     );
     assert_no_secret(&path, secret);
+    assert_no_secret(&path, literal);
     support::assert_clean(&reopened.close(support::BUDGET).await);
     tab.close().await;
 }

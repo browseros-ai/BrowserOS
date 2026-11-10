@@ -23,7 +23,8 @@
 //! secret neo-extensions writes for the agent, is scrubbed there too.
 //!
 //! What escapes, said plainly: secrets shorter than [`MIN_SECRET_CHARS`] in free text, a secret
-//! the page transforms before it is echoed, and a selector built from a secret.
+//! the page transforms before it is echoed, and a selector built from a secret. Computed
+//! script secrets (concatenation or `\x`/`\u` escapes) cannot be reached by value scrubbing.
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
@@ -479,7 +480,8 @@ impl Scrubber {
     }
 
     /// `text` for a record: every registered secret replaced, in each of the forms text can
-    /// carry it in.
+    /// carry it in, including ordinary JS string literals. Computed secrets (concatenation,
+    /// `\x`/`\u` escapes) are not reachable by value scrubbing.
     pub(crate) fn scrub<'t>(&self, text: &'t str) -> Cow<'t, str> {
         self.0.scan(text, false)
     }
@@ -526,7 +528,7 @@ impl Scrubber {
 }
 
 impl SecretSet {
-    /// This set with `start` (a secret's first [`MATCH_CHARS`] characters) added in its three
+    /// This set with `start` (a secret's first [`MATCH_CHARS`] characters) added in its literal
     /// forms, or `None` when nothing changes.
     fn with(&self, start: &str, is_cut: bool, protected: bool) -> Option<SecretSet> {
         let known = self
@@ -564,7 +566,19 @@ impl SecretSet {
                 let secret = next.count;
                 next.count += 1;
                 next.originals.push((Arc::from(start), is_cut));
-                let mut forms = vec![start.to_owned(), json_escaped(start), url_encoded(start)];
+                let json = json_escaped(start);
+                // JSON's double-quote escape is unnecessary in single-quoted strings and
+                // templates. Keep their delimiter/interpolation escapes as separate forms;
+                // templates may contain either literal or escaped control characters.
+                let js = json.replace("\\\"", "\"");
+                let mut forms = vec![
+                    start.to_owned(),
+                    json,
+                    url_encoded(start),
+                    js.replace('\'', "\\'"),
+                    template_escaped(&js),
+                    template_escaped(&start.replace('\\', "\\\\")),
+                ];
                 forms.sort_unstable();
                 forms.dedup();
                 next.patterns.extend(forms.into_iter().map(|form| Pattern {
@@ -801,6 +815,11 @@ fn cut_chars(text: &str, max: usize) -> &str {
 fn json_escaped(text: &str) -> String {
     let quoted = Value::String(text.to_owned()).to_string();
     quoted[1..quoted.len() - 1].to_owned()
+}
+
+/// Escapes a template's delimiter and interpolation start after backslashes are escaped.
+fn template_escaped(text: &str) -> String {
+    text.replace('`', "\\`").replace("${", "\\${")
 }
 
 /// `text` as JavaScript's `encodeURIComponent` writes it, the form a script builds URLs with.
@@ -1167,6 +1186,30 @@ mod tests {
             "#a stays",
             "a selector is not a secret"
         );
+    }
+
+    #[test]
+    fn javascript_literal_spellings_are_scrubbed() {
+        for (secret, literal) in [
+            ("hunter'42", r"'hunter\'42'"),
+            (
+                "pa\\ss'\n\t\r\u{0008}\u{000c}\0word",
+                r"'pa\\ss\'\n\t\r\b\f\u0000word'",
+            ),
+            ("pa\\ss`${word}", r"`pa\\ss\`\${word}`"),
+            ("pa\\ss\n`${word}", "`pa\\\\ss\n\\`\\${word}`"),
+        ] {
+            let secrets = scrubber(&[secret]);
+            assert_eq!(
+                secrets.scrub(literal),
+                format!(
+                    "{}[redacted]{}",
+                    &literal[..1],
+                    &literal[literal.len() - 1..]
+                ),
+                "literal {literal:?}"
+            );
+        }
     }
 
     #[test]
