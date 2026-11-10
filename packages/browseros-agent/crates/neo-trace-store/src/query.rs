@@ -25,6 +25,9 @@ use crate::views::{
     SessionTimeline, Settled, Timeline, TraceError,
 };
 
+/// Neo: bounds SeaORM's one-bind-per-parent relation loader below SQLite's variable limit.
+const ID_QUERY_RUNS: usize = 1000;
+
 pub(crate) async fn runs(
     db: &DatabaseConnection,
     query: &RunQuery,
@@ -269,15 +272,21 @@ pub(crate) async fn knows(db: &DatabaseConnection, key: &SessionKey) -> Result<b
     Ok(known > 0)
 }
 
-/// Rows of runs, with their ids loaded in one more query, as summaries.
+/// Rows of runs with their host ids. Session timelines can contain every run, so relation
+/// loads use bounded batches; appending their results preserves the caller's run order.
 async fn summaries(
     db: &DatabaseConnection,
     rows: Vec<trace_runs::Model>,
 ) -> Result<Vec<RunSummary>, StoreError> {
-    let ids = rows
-        .load_many(trace_run_ids::Entity, db)
-        .await
-        .map_err(StoreError::db)?;
+    let mut ids = Vec::with_capacity(rows.len());
+    for chunk in rows.chunks(ID_QUERY_RUNS) {
+        ids.extend(
+            chunk
+                .load_many(trace_run_ids::Entity, db)
+                .await
+                .map_err(StoreError::db)?,
+        );
+    }
     rows.into_iter()
         .zip(ids)
         .map(|(row, ids)| summary(row, ids))

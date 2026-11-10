@@ -5,6 +5,7 @@
 mod apply;
 mod migrations;
 mod open;
+mod query;
 mod retention;
 mod support;
 mod writer;
