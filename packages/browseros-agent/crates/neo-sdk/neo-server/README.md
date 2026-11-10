@@ -4,6 +4,55 @@ claw-sdk is hosted BrowserOS Neo's sidecar. Chromium launches it beside the brow
 
 The binary is `browseros-claw-sdk`. Code style and review rules are in [STYLE.md](STYLE.md).
 
+## Hosting the real SDK in Node
+
+The default-off Cargo feature `hosted-run` exports `hosted::{HostedRuntime, HostedOptions,
+HostedRun}`. It builds the real trace store, secrets, privacy hooks, browser link, Playwright
+facade, built-ins, dispatcher and tab janitor. It binds no listeners and disables the trace
+screenshot queue. Feature-off builds retain the product path.
+
+Each connection owns an `App::runtime()` executor with the product's worker stack size.
+`open_run(timeout)` starts a real `RunCtx` and seeds the same masked tab listing as MCP runs.
+`invoke(name, json, site)` enters that executor and calls `Bridge::submit` synchronously; its
+returned future always resolves to the bridge envelope. `log` and `sleep` use the same bridge.
+`finish()` stops, drains operations, builds the reply and records the end exactly once; a
+deadline or dropped run also ends through that path. `close()` drains runs, flushes traces
+and releases the private executor, including core's background tasks and CDP socket.
+
+`state_dir` is required; the store is `<state_dir>/claw-sdk/trace.db`. Pass Chromium's
+`<user-data-dir>/.browseros` as `execution_dir` to locate the secret profile, and the installed
+app's version as `browseros_version` for native capability gates. Without an execution directory,
+the product refuses path uploads. An initial run has `init.page = null`; `init.pages` includes
+all existing tabs, including the launch tab. The lazy default page opens when the SDK needs it.
+
+The isolated N-API crate is `../neo-playwright-tests/node/claw-addon` (its own workspace and
+lockfile, seeded from the agent lock). From `packages/browseros-agent`:
+
+```sh
+cargo build --release --locked --manifest-path crates/neo-sdk/neo-playwright-tests/node/claw-addon/Cargo.toml
+cp "$CARGO_TARGET_DIR/release/libclaw_node.dylib" crates/neo-sdk/neo-playwright-tests/node/claw-addon/claw_node.node
+node --test crates/neo-sdk/neo-playwright-tests/node/claw-smoke.test.mjs
+```
+
+The loader `openClaw(cdpPort, { timeoutMs, stateDir, executionDir, browserosVersion },
+{ onUncaught })` returns the real SDK parameters, the native run, runtime, source hashes and
+an idempotent `finish()`. `CLAW_NODE_ADDON` overrides the add-on path. Omitted `stateDir`
+uses a temporary directory removed at close. The default run timeout is 24 hours.
+
+The loader reads bootstrap, Playwright prelude and Neo prelude verbatim, adds the production
+strict-mode prefix and evaluates them with `vm.compileFunction` in Node's main realm. A
+`globalThis` parameter holds the natives and `__neo` privately. The SDK's Promise, Error and
+Uint8Array have Node's identity; QuickJS's memory and CPU limits do not apply. `__neo.run`
+keeps every provided parameter and stays pending until finish. Listener throws surface through
+Node's `unhandledRejection` event and are forwarded to `onUncaught` for the worker's lifetime;
+existing Node listeners still observe them. Use one loader run per worker.
+
+The smoke skips without `NEO_E2E_BROWSER`. It owns a headless browser on a throwaway profile,
+verifies its process group before cleanup, and requires its Node child to exit naturally.
+The primary launch leaves `BROWSERCLAW_HOSTED_MODE` unset to match the comparison runner;
+`CLAW_SMOKE_HOSTED=1` repeats it with BrowserOS hosted mode and reports console, popup and
+`setContent` differences. `NEO_NODE_OUTPUT_DIR` retains proof, logs and cleanup records.
+
 ## How it runs
 
 Chromium starts the binary with its launch JSON and reads the exit code.
