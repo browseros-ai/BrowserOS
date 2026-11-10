@@ -5,6 +5,10 @@
 //! still releases its keys, a fill cut short mid-insertText still inserts its whole value
 //! before the next input, and a run's end releases its keys while a frame of the tab is busy.
 //! Behaviour only: page-seen events, values and delivery records.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(
     dead_code,

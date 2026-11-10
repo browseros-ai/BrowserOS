@@ -45,11 +45,11 @@ use neo_runtime_spec::serve::{
     LifecycleEvent, PageGoBackParams, PageGoForwardParams, PageReloadParams, ResponseChannel,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::browser_representations::page::FrameTab;
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::playwright_injected_methods;
 use crate::playwright_methods::click::PageError;
@@ -630,8 +630,11 @@ fn unanswered(index: u64) -> PlaywrightError {
 }
 
 /// Neo: a `Page.getNavigationHistory` reply Chromium never sends.
-fn unreadable_history(error: &serde_json::Error) -> PlaywrightError {
-    PlaywrightError::error(format!("Page.getNavigationHistory answered: {error}"))
+fn unreadable_history(error: &str) -> PlaywrightError {
+    PlaywrightError::error(format!(
+        "{} answered: {error}",
+        cdp::page::GetNavigationHistory::METHOD
+    ))
 }
 
 /// Neo: a broken invariant (a poisoned lock) as an error instead of a panic, `crates/NEO_STYLE.md`.
@@ -708,35 +711,23 @@ async fn response_of<T: NavigationTab>(
     }
 }
 
-/// `Page.getNavigationHistory`'s reply, as `CRPage._go` reads it.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NavigationHistory {
-    current_index: i64,
-    entries: Vec<HistoryEntry>,
-}
-
-#[derive(Deserialize)]
-struct HistoryEntry {
-    id: i64,
-}
-
 /// Playwright: `server/chromium/crPage.ts` `CRPage._go`: `const history = await this._mainFrameSession._client.send('Page.getNavigationHistory');`
 impl HistoryTab for FrameTab {
     async fn reload(&self) -> Result<(), PlaywrightError> {
-        self.send("Page.reload", json!({}))
+        self.send_command(cdp::page::Reload::default())
             .await
-            .map(|_| ())
-            .map_err(|error| history_error("Page.reload", &error))
+            .map(drop)
+            .map_err(|error| history_error(cdp::page::Reload::METHOD, &error))
     }
 
     async fn go(&self, delta: i64) -> Result<bool, PlaywrightError> {
-        let reply = self
-            .send("Page.getNavigationHistory", json!({}))
+        let history = self
+            .send_command(cdp::page::GetNavigationHistory {})
             .await
-            .map_err(|error| history_error("Page.getNavigationHistory", &error))?;
-        let history: NavigationHistory =
-            serde_json::from_value(reply).map_err(|error| unreadable_history(&error))?;
+            .map_err(|error| match error {
+                CdpError::Json(message) => unreadable_history(&message),
+                error => history_error(cdp::page::GetNavigationHistory::METHOD, &error),
+            })?;
         let Some(entry) = history
             .current_index
             .checked_add(delta)
@@ -745,12 +736,9 @@ impl HistoryTab for FrameTab {
         else {
             return Ok(false);
         };
-        self.send(
-            "Page.navigateToHistoryEntry",
-            json!({ "entryId": entry.id }),
-        )
-        .await
-        .map_err(|error| history_error("Page.navigateToHistoryEntry", &error))?;
+        self.send_command(cdp::page::NavigateToHistoryEntry { entry_id: entry.id })
+            .await
+            .map_err(|error| history_error(cdp::page::NavigateToHistoryEntry::METHOD, &error))?;
         Ok(true)
     }
 }

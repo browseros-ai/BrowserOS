@@ -1,4 +1,4 @@
-//! A stand-in for BrowserOS on a loopback WebSocket, so tests can run scripts without a real
+//! Neo: A stand-in for BrowserOS on a loopback WebSocket, so tests can run scripts without a real
 //! browser. It answers the CDP calls a run makes for one open tab, [`PAGE`] at [`PAGE_URL`],
 //! including a click's: the lazy domains, the utility world and the glue's page calls (answered
 //! by glue name, as a page holding one ready button, [`BUTTON`], would answer them), quads, and
@@ -11,17 +11,32 @@
 //! hit-target interceptor slot ([`FakeBrowser::armed_interceptor`]), and the clicks that reached
 //! the page's handlers past it ([`FakeBrowser::page_clicks`]).
 //!
+//! Every command it receives is checked against BrowserOS's protocol, browseros-cdp's
+//! `protocol.json`: a method the protocol lacks, a parameter the method does not declare, or a
+//! required one missing fails the test when the fake drops. So a typo in a hand-written params
+//! struct fails here, where BrowserOS would reject or silently ignore it.
+//!
 //! Test crates include this file with `#[path]`. Cargo builds only top-level `tests/*.rs` files
 //! as test crates, so it is never one on its own.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::fs;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::thread;
 use std::time::Duration;
 
+use browseros_cdp::page::{
+    Frame, FrameNavigatedEvent, LifecycleEventEvent, NavigatedWithinDocumentEvent,
+};
+#[expect(
+    clippy::disallowed_types,
+    reason = "the fixture imports the client it connects and hands into Runtime's typed CDP door"
+)]
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use futures_util::{SinkExt, StreamExt};
 use neo_runtime::{PageId, RunRequest, Runtime};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -37,6 +52,25 @@ pub const PAGE_URL: &str = "https://example.test/start";
 /// The one button on the fake's page, which only the selector `#go` matches. It is always
 /// visible, enabled, stable and the hit target, so a click on it succeeds.
 pub const BUTTON: &str = "<button id=\"go\">Go</button>";
+
+/// A tab of the fake's strip as BrowserOS's `Browser.getTabs` reports one: every field the
+/// pinned protocol's `Browser.TabInfo` requires, since the runtime decodes the reply strictly.
+/// Each record gets a tab id of its own.
+pub fn tab_record(
+    target: &str,
+    url: &str,
+    window: i64,
+    context: Option<&str>,
+    active: bool,
+) -> Value {
+    static NEXT_TAB_ID: AtomicI64 = AtomicI64::new(1);
+    json!({
+        "tabId": NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed), "targetId": target, "url": url,
+        "title": "", "isActive": active, "isLoading": false, "loadProgress": 1.0,
+        "isPinned": false, "isHidden": false, "windowId": window,
+        "liveBrowserContextId": context,
+    })
+}
 
 /// When the fake answers one CDP method: each of the first `answers` calls after `delay`, and
 /// later calls never. On the history read, `answers: 1` lets the run's own read at start
@@ -156,6 +190,8 @@ impl Exchange {
 pub struct FakeBrowser {
     port: u16,
     exchanges: Arc<Mutex<Vec<Exchange>>>,
+    /// Why the protocol rejects each command it rejects ([`protocol_violations`]).
+    rejected: Arc<Mutex<Vec<String>>>,
     pub page: Arc<Mutex<Page>>,
     tasks: [JoinHandle<()>; 2],
 }
@@ -194,10 +230,7 @@ impl Default for Page {
     fn default() -> Self {
         Self {
             drag_listeners: false,
-            tabs: vec![json!({
-                "targetId": PAGE, "url": PAGE_URL, "windowId": 1,
-                "liveBrowserContextId": "profile", "isActive": true,
-            })],
+            tabs: vec![tab_record(PAGE, PAGE_URL, 1, Some("profile"), true)],
             frames: None,
             tab_info_delay: None,
             next_tab: 0,
@@ -214,10 +247,13 @@ impl Default for Page {
 impl Page {
     fn add_tab(&mut self, window: i64, url: &str) -> Value {
         self.next_tab += 1;
-        let tab = json!({
-            "targetId":format!("new-page-{}",self.next_tab), "url":url, "windowId":window,
-            "liveBrowserContextId":"profile", "isActive":false,
-        });
+        let tab = tab_record(
+            &format!("new-page-{}", self.next_tab),
+            url,
+            window,
+            Some("profile"),
+            false,
+        );
         self.tabs.push(tab.clone());
         tab
     }
@@ -237,9 +273,11 @@ impl FakeBrowser {
     )]
     pub async fn start(replies: Replies) -> Self {
         let exchanges = Arc::new(Mutex::new(Vec::new()));
+        let rejected = Arc::new(Mutex::new(Vec::new()));
         let page = Arc::new(Mutex::new(Page::default()));
         let (websocket, websocket_port) = bind().await;
         let recorded = Arc::clone(&exchanges);
+        let checked = Arc::clone(&rejected);
         let shared_page = Arc::clone(&page);
         let websocket_task = tokio::spawn(async move {
             // Aborting this task drops the set, which ends the connections it accepted too.
@@ -249,6 +287,7 @@ impl FakeBrowser {
                     stream,
                     replies,
                     Arc::clone(&recorded),
+                    Arc::clone(&checked),
                     Arc::clone(&shared_page),
                 ));
             }
@@ -279,11 +318,16 @@ impl FakeBrowser {
         Self {
             port,
             exchanges,
+            rejected,
             page,
             tasks: [websocket_task, discovery_task],
         }
     }
 
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the fixture connects a client for tests to hand into Runtime's typed CDP door"
+    )]
     pub async fn cdp(&self) -> CdpClient {
         CdpClient::connect(ConnectOptions {
             host: Some("127.0.0.1".to_string()),
@@ -322,11 +366,85 @@ impl FakeBrowser {
 }
 
 impl Drop for FakeBrowser {
+    /// Stops serving, then fails the test if any command it received broke the protocol, unless
+    /// the test is already failing.
     fn drop(&mut self) {
         for task in &self.tasks {
             task.abort();
         }
+        if !thread::panicking() {
+            let rejected = lock(&self.rejected);
+            assert!(
+                rejected.is_empty(),
+                "the fake browser received commands BrowserOS's protocol rejects:\n{}",
+                rejected.join("\n")
+            );
+        }
     }
+}
+
+/// Each protocol command's parameters by name, and whether each is optional.
+type Protocol = HashMap<String, HashMap<String, bool>>;
+
+/// BrowserOS's protocol as browseros-cdp vendors it (`protocol/protocol.json`), read once per
+/// test process.
+fn protocol() -> &'static Protocol {
+    /// Neo: Share the pinned schema across every fake connection in this test process.
+    static PROTOCOL: OnceLock<Protocol> = OnceLock::new();
+    PROTOCOL.get_or_init(|| {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../browseros-cdp/protocol/protocol.json"
+        );
+        let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
+        let protocol: Value =
+            serde_json::from_str(&text).unwrap_or_else(|error| panic!("parse {path}: {error}"));
+        let mut commands = Protocol::new();
+        for domain in protocol["domains"].as_array().into_iter().flatten() {
+            let name = domain["domain"].as_str().unwrap_or_default();
+            for command in domain["commands"].as_array().into_iter().flatten() {
+                let parameters = command["parameters"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|parameter| {
+                        let name = parameter["name"].as_str().unwrap_or_default().to_string();
+                        (name, parameter["optional"].as_bool().unwrap_or(false))
+                    })
+                    .collect();
+                let method = command["name"].as_str().unwrap_or_default();
+                commands.insert(format!("{name}.{method}"), parameters);
+            }
+        }
+        commands
+    })
+}
+
+/// Why BrowserOS would reject `command`: a method its protocol lacks, a parameter the method
+/// does not declare, or a required one missing. Empty for a command it accepts.
+fn protocol_violations(command: &Value) -> Vec<String> {
+    let method = command["method"].as_str().unwrap_or_default();
+    let Some(parameters) = protocol().get(method) else {
+        return vec![format!("{method}: not a command of the protocol")];
+    };
+    let no_params = Map::new();
+    let params = match &command["params"] {
+        Value::Null => &no_params,
+        Value::Object(params) => params,
+        other => return vec![format!("{method}: params {other} are not an object")],
+    };
+    let mut violations: Vec<String> = params
+        .keys()
+        .filter(|key| !parameters.contains_key(*key))
+        .map(|key| format!("{method}: undeclared parameter {key:?}"))
+        .collect();
+    violations.extend(
+        parameters
+            .iter()
+            .filter(|(name, optional)| !**optional && !params.contains_key(*name))
+            .map(|(name, _)| format!("{method}: missing required parameter {name:?}")),
+    );
+    violations
 }
 
 /// A run of `code` against the fake's tab.
@@ -402,6 +520,7 @@ async fn serve_cdp(
     stream: TcpStream,
     replies: Replies,
     exchanges: Arc<Mutex<Vec<Exchange>>>,
+    rejected: Arc<Mutex<Vec<String>>>,
     page: Arc<Mutex<Page>>,
 ) {
     let Ok(socket) = tokio_tungstenite::accept_async(stream).await else {
@@ -426,6 +545,7 @@ async fn serve_cdp(
         let Ok(command) = serde_json::from_str::<Value>(text.as_str()) else {
             continue;
         };
+        lock(&rejected).extend(protocol_violations(&command));
         let index = {
             let mut exchanges = lock(&exchanges);
             exchanges.push(Exchange {
@@ -511,7 +631,7 @@ fn navigation_events(
         for name in ["init", "DOMContentLoaded", "load"] {
             let _ = outgoing.send(
                 json!({"sessionId":session,"method":"Page.lifecycleEvent",
-                "params":{"frameId":PAGE,"loaderId":"initial","name":name}})
+                "params":lifecycle_event("initial", name)})
                 .to_string(),
             );
         }
@@ -548,10 +668,13 @@ fn commit_during_call(
     };
     if commit && !calls.committed {
         calls.committed = true;
-        let _ = outgoing.send(json!({
-            "sessionId":command["sessionId"], "method":"Page.frameNavigated",
-            "params":{"frame":{"id":PAGE,"loaderId":"next","url":"https://example.test/next"},"type":"Navigation"}
-        }).to_string());
+        let _ = outgoing.send(
+            json!({
+                "sessionId":command["sessionId"], "method":"Page.frameNavigated",
+                "params":frame_navigated("next", "https://example.test/next", "Navigation")
+            })
+            .to_string(),
+        );
     }
 }
 
@@ -593,13 +716,20 @@ async fn emit_navigation(
     let (method, params) = if script.same_document {
         (
             "Page.navigatedWithinDocument",
-            json!({"frameId":PAGE,"url":url}),
+            to_json(&NavigatedWithinDocumentEvent {
+                frame_id: PAGE.to_string(),
+                url: url.as_str().unwrap_or_default().to_string(),
+                navigation_type: "fragment".to_string(),
+            }),
         )
     } else {
-        (
-            "Page.frameNavigated",
-            json!({"frame":{"id":PAGE,"loaderId":"new","url":url},"type":if script.restored_from_bfcache { "BackForwardCacheRestore" } else { "Navigation" }}),
-        )
+        let kind = if script.restored_from_bfcache {
+            "BackForwardCacheRestore"
+        } else {
+            "Navigation"
+        };
+        let url = url.as_str().unwrap_or_default();
+        ("Page.frameNavigated", frame_navigated("new", url, kind))
     };
     send(method, params);
     if script.stop_loading {
@@ -611,7 +741,7 @@ async fn emit_navigation(
             } else {
                 "new"
             };
-            let _ = outgoing.send(json!({"sessionId":session,"method":"Page.lifecycleEvent","params":{"frameId":PAGE,"loaderId":loader,"name":name}}).to_string());
+            let _ = outgoing.send(json!({"sessionId":session,"method":"Page.lifecycleEvent","params":lifecycle_event(loader, name)}).to_string());
         }
     }
 }
@@ -830,6 +960,35 @@ fn input_command(
     }
 }
 
+/// An event as BrowserOS sends it: browseros-cdp's generated payload, so every field the pinned
+/// protocol requires is there, as the door decodes it.
+fn to_json(event: &impl serde::Serialize) -> Value {
+    serde_json::to_value(event).unwrap_or_default()
+}
+
+/// The tab's main frame committing document `loader` at `url`.
+fn frame_navigated(loader: &str, url: &str, kind: &str) -> Value {
+    to_json(&FrameNavigatedEvent {
+        frame: Frame {
+            id: PAGE.to_string(),
+            loader_id: loader.to_string(),
+            url: url.to_string(),
+            ..Frame::default()
+        },
+        r#type: kind.to_string(),
+    })
+}
+
+/// The tab's main frame's document `loader` reaching lifecycle point `name`.
+fn lifecycle_event(loader: &str, name: &str) -> Value {
+    to_json(&LifecycleEventEvent {
+        frame_id: PAGE.to_string(),
+        loader_id: loader.to_string(),
+        name: name.to_string(),
+        timestamp: 0.0,
+    })
+}
+
 fn box_model() -> Value {
     let quad = json!([8, 8, 65.5, 8, 65.5, 29, 8, 29]);
     json!({ "result": { "model": { "content":quad, "padding":quad, "border":quad, "margin":quad, "width":58,"height":21 } } })
@@ -892,10 +1051,13 @@ fn navigation_history(
         }
         calls.new_page_history += 1;
     }
+    // Every field the pinned protocol's `Page.NavigationEntry` requires: the runtime decodes the
+    // reply strictly.
+    let entry = json!({
+        "id": 1, "url": url, "userTypedURL": url, "title": "", "transitionType": "typed",
+    });
     (
-        json!({
-            "result": { "currentIndex": 0, "entries": [{ "id": 1, "url": url }] },
-        }),
+        json!({ "result": { "currentIndex": 0, "entries": [entry] } }),
         replies.history.when(call),
     )
 }

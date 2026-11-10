@@ -25,12 +25,12 @@ use std::collections::{BTreeSet, HashMap};
 use std::pin::pin;
 use std::sync::{Arc, Mutex};
 
-use browseros_cdp::{CdpEvent, SessionId};
+use browseros_cdp::SessionId;
 use tokio::sync::Notify;
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::browser_representations::page::FrameTab;
+use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::frame_selector;
 use crate::playwright_methods::click::{PageError, Tab};
 use crate::playwright_methods::navigate::{self, Observation};
@@ -294,7 +294,7 @@ pub(crate) async fn set_content(
 /// Neo: waits until the frame `frame` on session `session` fires `wait_until` after the `init`
 /// of its reopened document.
 async fn reopened(
-    mut events: broadcast::Receiver<CdpEvent>,
+    mut events: cdp::Events,
     session: SessionId,
     frame: String,
     wait_until: LifecycleEvent,
@@ -311,20 +311,21 @@ async fn reopened(
                 ));
             }
         };
-        if event.method != "Page.lifecycleEvent"
-            || event.session_id.as_ref() != Some(&session)
-            || event.params["frameId"].as_str() != Some(frame.as_str())
-        {
+        if !event.on_session(&session) {
             continue;
         }
-        match event.params["name"].as_str() {
-            Some("init") => opened = true,
-            Some("DOMContentLoaded")
-                if opened && wait_until == LifecycleEvent::Domcontentloaded =>
-            {
+        let Some(lifecycle) = event.decode::<cdp::page::LifecycleEvent>() else {
+            continue;
+        };
+        if lifecycle.frame_id != frame {
+            continue;
+        }
+        match lifecycle.name.as_str() {
+            "init" => opened = true,
+            "DOMContentLoaded" if opened && wait_until == LifecycleEvent::Domcontentloaded => {
                 return Ok(());
             }
-            Some("load") if opened => return Ok(()),
+            "load" if opened => return Ok(()),
             _ => {}
         }
     }

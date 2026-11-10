@@ -14,8 +14,11 @@
 
 use std::sync::Arc;
 
-use browseros_cdp::{CdpClient, CdpError, browser};
-use serde_json::Value;
+#[expect(
+    clippy::disallowed_types,
+    reason = "imports the host's client type for Runtime::connect, which hands it into chromium_bridge/cdp.rs"
+)]
+use browseros_cdp::{CdpClient, CdpError};
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio_util::task::TaskTracker;
 
@@ -24,6 +27,8 @@ use crate::browser_representations::cookies_and_storage::Permissions;
 use crate::browser_representations::page::TabInputs;
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::Switches;
+use crate::chromium_bridge::cdp::browser::{GetTabInfo, TabExists};
+use crate::chromium_bridge::cdp::{Browser, Command};
 use crate::deadline::Deadline;
 use crate::method_router::Dispatcher;
 use crate::playwright_methods::getters::CLOSED_TAB_MESSAGE;
@@ -54,12 +59,13 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 /// first to let go would turn either off for the other's.
 #[derive(Clone)]
 pub struct Runtime {
-    cdp: CdpClient,
+    /// The door over the client the host connected: the one place neo-runtime holds it.
+    browser: Browser,
     inputs: TabInputs,
     screenshots: TabScreenshots,
-    /// Target discovery and download reports on `cdp`, each on while any run listens for them.
+    /// Target discovery and download reports on the connection, each on while any run listens for them.
     switches: Switches,
-    /// The runs' permission grants on `cdp`, reset once no run holds one (`cookies_and_storage.rs`).
+    /// The runs' permission grants on the connection, reset once no run holds one (`cookies_and_storage.rs`).
     permissions: Permissions,
     /// How every run's `path` options treat an absolute path (`artifacts.rs`).
     absolute_paths: AbsolutePaths,
@@ -83,7 +89,8 @@ pub enum RuntimeError {
     /// `page.isClosed()` reads BrowserOS's `Browser.getTabInfo`; a browser that lacks it, or
     /// reports a missing tab differently, cannot answer it.
     #[error(
-        "Browser.getTabInfo does not report a missing tab as {CLOSED_TAB_MESSAGE:?}; is this BrowserOS? It answered: {0}"
+        "{method} does not report a missing tab as {CLOSED_TAB_MESSAGE:?}; is this BrowserOS? It answered: {0}",
+        method = TabExists::METHOD
     )]
     UnsupportedBrowser(String),
 }
@@ -96,22 +103,23 @@ impl Runtime {
     ///
     /// [`RuntimeError::UnsupportedBrowser`] when `Browser.getTabInfo` is missing or reports
     /// an unknown tab differently, and [`RuntimeError::Cdp`] when the check itself fails.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the runtime hands its host's connected client straight into chromium_bridge/cdp.rs"
+    )]
     pub async fn connect(cdp: CdpClient) -> Result<Self, RuntimeError> {
-        let probe = cdp
-            .send_typed::<_, Value>(
-                "Browser.getTabInfo",
-                browser::GetTabInfoParams {
-                    target_id: Some(PROBE_TARGET_ID.to_string()),
-                    tab_id: None,
-                },
-                None,
-            )
+        let browser = Browser::new(cdp);
+        let probe = browser
+            .send(TabExists(GetTabInfo {
+                target_id: Some(PROBE_TARGET_ID.to_string()),
+                tab_id: None,
+            }))
             .await;
         match probe {
             Err(CdpError::Protocol { message, .. }) if message.contains(CLOSED_TAB_MESSAGE) => {
                 let cleanup = TaskTracker::new();
                 Ok(Self {
-                    cdp,
+                    browser,
                     inputs: TabInputs::default(),
                     screenshots: TabScreenshots::default(),
                     switches: Switches::new(cleanup.clone()),
@@ -212,7 +220,7 @@ impl Runtime {
             stop = deadline.reached() => {
                 return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
             }
-            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &page) => opened,
+            opened = Tabs::open(self.browser.clone(), tokio.clone(), self.inputs.clone(), self.screenshots.clone(), self.switches.clone(), self.permissions.clone(), tasks.clone(), &page) => opened,
         };
         let (tabs, url) = match opened {
             Ok(opened) => opened,
@@ -250,7 +258,7 @@ impl Runtime {
         // A run whose future is dropped lets go of its permission grants on the cleanup tracker.
         let grants = Grants {
             permissions: self.permissions.clone(),
-            cdp: self.cdp.clone(),
+            browser: self.browser.clone(),
             run: tabs.run_id(),
             released: false,
         };
@@ -271,7 +279,7 @@ impl Runtime {
 /// its grants are then released on the cleanup tracker.
 struct Grants {
     permissions: Permissions,
-    cdp: CdpClient,
+    browser: Browser,
     run: u64,
     released: bool,
 }
@@ -286,7 +294,8 @@ impl Grants {
 impl Drop for Grants {
     fn drop(&mut self) {
         if !self.released && Handle::try_current().is_ok() {
-            self.permissions.release_later(self.cdp.clone(), self.run);
+            self.permissions
+                .release_later(self.browser.clone(), self.run);
         }
     }
 }

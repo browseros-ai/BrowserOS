@@ -27,11 +27,17 @@
 //!
 //! Test crates include this file with `#[path]`. Cargo builds only top-level `tests/*.rs` files
 //! as test crates, so it is never one on its own.
+#![expect(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the browser fixture drives an independent CDP session as the test oracle"
+)]
 
 use std::collections::BTreeSet;
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fmt::Display;
+use std::fmt;
+use std::fmt::{Display, Write as _};
 use std::fs;
 use std::future::Future;
 use std::io;
@@ -54,9 +60,16 @@ use tokio::sync::{Mutex, MutexGuard};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
+use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Id, Record};
+use tracing::subscriber::set_global_default;
+use tracing::{Event, Level, Metadata, Subscriber};
 
-/// The browser binary, or `None` (and a note on stderr) when the test should skip.
+/// The browser binary, or `None` (and a note on stderr) when the test should skip. A test that
+/// runs also prints the runtime's warnings ([`Warnings`]).
 pub fn e2e_browser() -> Option<OsString> {
+    // Only the first test of a binary installs it; the rest find it there.
+    let _installed = set_global_default(Warnings);
     let binary = env::var_os("NEO_E2E_BROWSER");
     if binary.is_none() {
         let _ = writeln!(
@@ -65,6 +78,51 @@ pub fn e2e_browser() -> Option<OsString> {
         );
     }
     binary
+}
+
+/// Prints every warning and error the runtime logs to stderr, which the test harness does not
+/// capture, so a run against the real browser shows a CDP event the door could not decode
+/// (`src/chromium_bridge/cdp.rs` `Raw::decode`): a protocol skew, not Neo's own failure.
+struct Warnings;
+
+impl Subscriber for Warnings {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        *metadata.level() <= Level::WARN
+    }
+
+    fn new_span(&self, _span: &Attributes<'_>) -> Id {
+        Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+    fn event(&self, event: &Event<'_>) {
+        let mut fields = Fields(String::new());
+        event.record(&mut fields);
+        let metadata = event.metadata();
+        let _ = writeln!(
+            io::stderr(),
+            "{} {}:{}",
+            metadata.level(),
+            metadata.target(),
+            fields.0
+        );
+    }
+
+    fn enter(&self, _span: &Id) {}
+
+    fn exit(&self, _span: &Id) {}
+}
+
+/// An event's fields as ` name=value` pairs, its message among them.
+struct Fields(String);
+
+impl Visit for Fields {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        let _ = write!(self.0, " {}={value:?}", field.name());
+    }
 }
 
 /// Opens a visible browser for manual inspection when explicitly requested.
@@ -229,6 +287,11 @@ impl Tab {
         wait_for_url(&self.cdp, &self.driver, &url, deadline)
             .await
             .unwrap_or_else(|failure| panic!("{failure}"));
+    }
+
+    /// The browser's CDP port, for a test that reads its HTTP endpoints, as `/json/protocol`.
+    pub fn port(&self) -> u16 {
+        self.browser.port
     }
 
     /// Closes the browser ([`Browser::close`]), failing the test if any of its processes

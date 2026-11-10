@@ -12,13 +12,14 @@
 //!      main world as a new handle of the run → { element }
 //! ```
 
+use browseros_cdp::CdpError;
 use std::sync::Arc;
 
 use neo_runtime_spec::injected::InjectedPreviewNodeParams;
 use neo_runtime_spec::{MethodGroup, MethodMeta};
-use serde_json::json;
 
 use crate::browser_representations::page::FrameTab;
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::playwright_methods::click::PageError;
 use crate::playwright_methods::evaluate::{self, CreatedHandle};
@@ -74,12 +75,18 @@ async fn owner_handle(
     // Playwright: `server/chromium/crPage.ts` `CRPage.getFrameElement`: `const { backendNodeId } = await parentSession._client.send('DOM.getFrameOwner', { frameId: frame._id }).catch(e => {`
     let owner = parent
         .host
-        .send("DOM.getFrameOwner", json!({ "frameId": child }))
+        .send_command(cdp::dom::GetFrameOwner {
+            frame_id: child.to_string(),
+        })
         .await
-        .map_err(|error| parent.host.classify(&error))?;
-    let backend = owner["backendNodeId"].as_i64().ok_or_else(|| {
-        PageError::Contract("DOM.getFrameOwner returned no backendNodeId".to_string())
-    })?;
+        .map_err(|error| match error {
+            CdpError::Json(message) => PageError::Contract(format!(
+                "{} answered: {message}",
+                cdp::dom::GetFrameOwner::METHOD
+            )),
+            error => parent.host.classify(&error),
+        })?;
+    let backend = owner.backend_node_id;
     let group = tab.group(parent, "frame-element");
     let element = parent.element(group.group(), backend).await?;
     // Playwright: `server/dom.ts` `ElementHandle._initializePreview`: `const utility = await this._context.injectedScript();`

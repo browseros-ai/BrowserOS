@@ -18,6 +18,10 @@ use std::process::ExitCode;
 use std::time::Duration;
 use std::{fs, io};
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "the example host imports the client it connects and hands into Runtime's typed CDP door"
+)]
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use clap::Parser;
 use neo_runtime::{AbsolutePaths, PageId, RunRequest, RunStatus, Runtime};
@@ -64,6 +68,10 @@ async fn main() -> ExitCode {
     }
 }
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "the example host connects a client and passes it into Runtime's typed CDP door"
+)]
 async fn run(args: Args) -> Result<RunStatus, String> {
     let code = fs::read_to_string(&args.script)
         .map_err(|error| format!("reading {}: {error}", args.script.display()))?;

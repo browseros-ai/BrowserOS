@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use browseros_cdp::{CdpClient, CdpError};
+use browseros_cdp::CdpError;
 use futures_util::future;
 use neo_runtime_spec::serve::{
     BrowserCall, BrowserContextCall, BrowserContextChannel, BrowserContextNewPageResult,
@@ -44,6 +44,7 @@ use tracing::debug;
 use crate::browser_representations::emulation::{ContextEmulation, EmulatedMedia, Size};
 use crate::browser_representations::page::PageSession;
 use crate::browser_representations::tabs::{self, CreatedPage, PageEntry, Tabs};
+use crate::chromium_bridge::cdp;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::quickjs_bridge;
 use crate::run::PageId;
@@ -76,7 +77,7 @@ const URL_BACKOFF_MAX: Duration = Duration::from_millis(16);
 /// The contexts a run created, and what the run read of the browser once. Lives in the run's
 /// [`Tabs`], so calls and getters reach the same contexts.
 pub(crate) struct CreatedContexts {
-    cdp: CdpClient,
+    cdp: cdp::Browser,
     tokio: Handle,
     registry: Mutex<Registry>,
     version: OnceCell<Version>,
@@ -112,25 +113,6 @@ struct Version {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct VersionReply {
-    product: String,
-    user_agent: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatedContextReply {
-    browser_context_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatedTargetReply {
-    target_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct TargetsReply {
     target_infos: Vec<TargetInfo>,
 }
@@ -147,7 +129,7 @@ struct TargetInfo {
 }
 
 impl CreatedContexts {
-    pub(crate) fn new(cdp: CdpClient, tokio: Handle) -> Self {
+    pub(crate) fn new(cdp: cdp::Browser, tokio: Handle) -> Self {
         Self {
             cdp,
             tokio,
@@ -187,9 +169,9 @@ impl CreatedContexts {
     async fn version(&self) -> Result<Version, PlaywrightError> {
         self.version
             .get_or_try_init(|| async {
-                let reply: VersionReply = self
+                let reply = self
                     .cdp
-                    .send_typed("Browser.getVersion", json!({}), None)
+                    .send(cdp::browser::GetVersion {})
                     .await
                     .map_err(|error| tabs::cdp_error(&error))?;
                 Ok(Version {
@@ -322,11 +304,10 @@ async fn new_context(
     tabs.spawn(created.creating.track_future(async move {
         // Playwright: `server/chromium/crBrowser.ts` `CRBrowser.doCreateNewContext`: `disposeOnDetach: true,`
         let sent = cdp
-            .send_typed::<_, CreatedContextReply>(
-                "Target.createBrowserContext",
-                json!({ "disposeOnDetach": true }),
-                None,
-            )
+            .send(cdp::target::CreateBrowserContext {
+                dispose_on_detach: Some(true),
+                ..cdp::target::CreateBrowserContext::default()
+            })
             .await;
         let result = match sent {
             Ok(created) => register(&owner, created.browser_context_id, emulation).await,
@@ -388,12 +369,12 @@ async fn new_page(
         return Err(PlaywrightError::target_closed().into());
     }
     // Playwright: `server/chromium/crBrowser.ts` `CRBrowserContext.doCreateNewPage`: `const { targetId } = await this._browser._session.send('Target.createTarget', { url: 'about:blank', browserContextId: this._browserContextId });`
-    let created: CreatedTargetReply = progress
-        .race(tabs.cdp().send_typed(
-            "Target.createTarget",
-            json!({ "url": "about:blank", "browserContextId": context.id }),
-            None,
-        ))
+    let created = progress
+        .race(tabs.cdp().send(cdp::target::CreateTarget {
+            url: "about:blank".to_string(),
+            browser_context_id: Some(context.id.clone()),
+            ..cdp::target::CreateTarget::default()
+        }))
         .await?
         .map_err(|error| tabs::cdp_error(&error))?;
     // A tab created under a cancelled call stays registered, so the run's outcome lists it and
@@ -469,7 +450,10 @@ pub(crate) async fn disconnect(tabs: &Tabs, progress: &Progress) -> Result<(), C
     for (_, session) in tabs.attached() {
         if session.events.dialogs.take_open_beforeunload() {
             let dismissed = progress
-                .race(session.send("Page.handleJavaScriptDialog", json!({ "accept": false })))
+                .race(session.send_command(cdp::page::HandleJavaScriptDialog {
+                    accept: false,
+                    prompt_text: None,
+                }))
                 .await?;
             if let Err(error) = dismissed {
                 debug!(%error, "dismissing a beforeunload dialog as the run disconnected failed");
@@ -539,13 +523,11 @@ pub(crate) async fn dispose_all(tabs: &Tabs) {
 }
 
 /// `Target.disposeBrowserContext`. A context the browser no longer has is disposed already.
-async fn dispose(cdp: &CdpClient, id: &str) -> Result<(), PlaywrightError> {
+async fn dispose(cdp: &cdp::Browser, id: &str) -> Result<(), PlaywrightError> {
     match cdp
-        .send(
-            "Target.disposeBrowserContext",
-            json!({ "browserContextId": id }),
-            None,
-        )
+        .send(cdp::target::DisposeBrowserContext {
+            browser_context_id: id.to_string(),
+        })
         .await
     {
         Ok(_) => Ok(()),
@@ -585,11 +567,13 @@ pub(crate) async fn context_pages(
     if context.is_disposed() {
         return Ok(Vec::new());
     }
-    let reply: TargetsReply = tabs
+    let reply = tabs
         .cdp()
-        .send_typed("Target.getTargets", json!({}), None)
+        .send(cdp::target::GetTargets::default())
         .await
         .map_err(|error| tabs::cdp_error(&error))?;
+    let reply: TargetsReply =
+        serde_json::from_value(reply).map_err(|error| tabs::cdp_error(&CdpError::from(error)))?;
     let live: HashMap<String, String> = reply
         .target_infos
         .into_iter()

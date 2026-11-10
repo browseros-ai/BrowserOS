@@ -46,7 +46,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId, dom, target};
+use browseros_cdp::{CdpError, SessionId, dom};
 use futures_util::future;
 use neo_runtime_spec::injected::{
     ElementState, ElementStatesOutcome, FrameStyle, FrameStyleStatus, HitTargetAction,
@@ -59,8 +59,7 @@ use neo_runtime_spec::injected::{
 };
 use neo_runtime_spec::serve::ResponseChannel;
 use neo_runtime_spec::{Element, Handle};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{Mutex, OnceCell, OwnedMutexGuard, broadcast, oneshot, watch};
@@ -74,11 +73,13 @@ use crate::browser_representations::init_scripts::{self, Link, until_gone};
 use crate::browser_representations::locator_handlers::{self, LocatorHandlers};
 use crate::browser_representations::network::{Happening, Lookup, NetworkLog};
 use crate::browser_representations::routes::{Answer, ContextRoutes, Pause, Routes};
+use crate::chromium_bridge::cdp::input::{DragIntercepted, SetInterceptDrags};
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frame_selector::{self, FrameOwner};
 use crate::chromium_bridge::frames::{FrameContext, FrameScope, Frames, Host, local_tree};
 use crate::chromium_bridge::keyboard_input;
 use crate::chromium_bridge::mouse_and_touch_input::{
-    self, Devices, Effect, EffectSink, InputDevices, InputSender, Owner, Plan,
+    self, Devices, Effect, EffectSink, InputDevices, InputSender, Owner, Pen, Plan, PlannedInput,
 };
 use crate::chromium_bridge::page_events::PageEvents;
 use crate::chromium_bridge::playwright_injected_methods::{
@@ -94,8 +95,7 @@ use crate::playwright_methods::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
 use crate::playwright_methods::network_idle::{IdleChange, SharedIdle};
-use crate::progress::InputTicket;
-use crate::progress::{PlaywrightError, Progress};
+use crate::progress::{InputTicket, PlaywrightError, Progress};
 use crate::run::PageId;
 
 /// Detaching is best effort. It runs in the background after a run, so this bound only keeps
@@ -117,58 +117,36 @@ const DRAG_INTERCEPT_WAIT: Duration = Duration::from_secs(5);
 /// the browser answered the attach: the script's end, a failed or stopped setup, an answer
 /// that arrives after the run stopped, and a caller that drops the run's future.
 pub(crate) struct Session {
-    pub(crate) cdp: CdpClient,
-    pub(crate) id: SessionId,
-    /// browseros-cdp's socket incarnation, read just before the attach is sent: the
-    /// incarnation `id` belongs to. Mouse input is written with `send_at_epoch(epoch, …)`, so
-    /// a press is never sent on a reconnected socket under a session id that does not exist
-    /// there.
-    epoch: u64,
+    /// The door's session, attached through it ([`cdp::Browser::attach`]): it binds input to
+    /// the socket incarnation the attach was sent on, so a press is never sent on a
+    /// reconnected socket under a session id that does not exist there.
+    pub(crate) door: cdp::Session,
     /// Drop is synchronous, so the detach and every cleanup task run on this runtime.
     tokio: TokioHandle,
 }
 
 impl Session {
     pub(crate) async fn attach(
-        cdp: CdpClient,
+        browser: cdp::Browser,
         page: PageId,
         tokio: TokioHandle,
     ) -> Result<Self, CdpError> {
-        let epoch = cdp.epoch();
-        let attached: target::AttachToTargetResult = cdp
-            .send_typed(
-                "Target.attachToTarget",
-                target::AttachToTargetParams {
-                    target_id: page.as_str().to_string(),
-                    flatten: Some(true),
-                },
-                None,
-            )
-            .await?;
-        Ok(Self {
-            cdp,
-            id: SessionId::from(attached.session_id),
-            epoch,
-            tokio,
-        })
+        let door = browser.attach(page.as_str()).await?;
+        Ok(Self { door, tokio })
+    }
+
+    pub(crate) fn id(&self) -> &SessionId {
+        self.door.id()
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let cdp = self.cdp.clone();
-        let session = self.id.clone();
+        let session = self.id().clone();
+        let detach = self.door.detach();
         self.tokio.spawn(async move {
-            let detach = cdp.send_typed::<_, Value>(
-                "Target.detachFromTarget",
-                target::DetachFromTargetParams {
-                    session_id: Some(session.as_str().to_string()),
-                    target_id: None,
-                },
-                None,
-            );
             match time::timeout(DETACH_TIMEOUT, detach).await {
-                Ok(Ok(_)) => {}
+                Ok(Ok(())) => {}
                 // Expected once the tab has closed: the session went with it.
                 Ok(Err(error)) => debug!(%session, %error, "detaching a run's session failed"),
                 Err(_) => debug!(%session, "detaching a run's session timed out"),
@@ -489,26 +467,26 @@ impl FrameFeeds {
     /// Applies one event of `session` to the child frame it names. `main_frame` is the tab's
     /// main frame, whose events the tab's own [`PageState`] takes instead. Whether the event was
     /// the `init` of the frame's document a `setContent` write reopened.
-    fn apply(&self, event: &CdpEvent, session: &SessionId, main_frame: Option<&str>) -> bool {
-        if event.session_id.as_ref() != Some(session) {
+    fn apply(&self, event: &cdp::Raw, session: &SessionId, main_frame: Option<&str>) -> bool {
+        if !event.on_session(session) {
             return false;
         }
         let Some(frame) = event_frame(event) else {
             return false;
         };
-        if Some(frame) == main_frame {
+        if Some(frame.as_str()) == main_frame {
             return false;
         }
         let Ok(mut frames) = self.frames.lock() else {
             return false;
         };
-        let feed = frames.entry(frame.to_string()).or_insert_with(new_feed);
+        let feed = frames.entry(frame.clone()).or_insert_with(new_feed);
         let mut navigation = None;
         let mut removed = false;
         let mut reopened = false;
         feed.state.send_if_modified(|state| {
-            if event.method == "Page.frameDetached" {
-                if event.params["reason"] == "swap" {
+            if let Some(detached) = event.decode::<cdp::page::FrameDetached>() {
+                if detached.reason == "swap" {
                     // The frame's next document lives in another process: forget this one so
                     // that process's lifecycle replay seeds the new document.
                     let page = &mut state.page;
@@ -527,16 +505,15 @@ impl FrameFeeds {
             }
             if state.swapped_from.as_ref() == Some(session) {
                 // A frame coming back to this session announces itself before its document.
-                if !matches!(
-                    event.method.as_str(),
-                    "Page.frameAttached" | "Page.frameNavigated"
-                ) {
+                if !(event.is::<cdp::page::FrameAttached>()
+                    || event.is::<cdp::page::FrameNavigated>())
+                {
                     return false;
                 }
                 state.swapped_from = None;
             }
             let reopens = state.page.reopens;
-            let applied = apply_frame(&mut state.page, event, frame);
+            let applied = apply_frame(&mut state.page, event, &frame);
             navigation = applied.navigation;
             reopened = state.page.reopens > reopens;
             applied.changed
@@ -546,7 +523,7 @@ impl FrameFeeds {
         }
         if removed {
             // Waits keep their receivers and read `detached`; the frame id is never reused.
-            frames.remove(frame);
+            frames.remove(&frame);
         }
         reopened
     }
@@ -557,7 +534,7 @@ impl FrameFeeds {
     /// `Network.loadingFailed`), which the frame's feed follows as the main frame's state does
     /// ([`apply_navigation_request`]): its pending document, and a failure that aborts it.
     /// Network events name no frame's session, so the tab's watcher routes them here by frame.
-    fn apply_network(&self, event: &CdpEvent, frame: &str) {
+    fn apply_network(&self, event: &cdp::Raw, frame: &str) {
         let Ok(mut frames) = self.frames.lock() else {
             return;
         };
@@ -608,17 +585,39 @@ fn feeds_error() -> PageError {
 }
 
 /// The frame a `Page` event is about: `frame.id` of a commit, `frameId` of the others.
-pub(crate) fn event_frame(event: &CdpEvent) -> Option<&str> {
-    match event.method.as_str() {
-        "Page.frameNavigated" => event.params["frame"]["id"].as_str(),
-        "Page.frameRequestedNavigation"
-        | "Page.navigatedWithinDocument"
-        | "Page.frameStoppedLoading"
-        | "Page.lifecycleEvent"
-        | "Page.frameAttached"
-        | "Page.frameDetached" => event.params["frameId"].as_str(),
-        _ => None,
+pub(crate) fn event_frame(event: &cdp::Raw) -> Option<String> {
+    use cdp::page;
+    if let Some(navigated) = event.decode::<page::FrameNavigated>() {
+        return Some(navigated.frame.id);
     }
+    event
+        .decode::<page::FrameRequestedNavigation>()
+        .map(|event| event.frame_id)
+        .or_else(|| {
+            event
+                .decode::<page::NavigatedWithinDocument>()
+                .map(|event| event.frame_id)
+        })
+        .or_else(|| {
+            event
+                .decode::<page::FrameStoppedLoading>()
+                .map(|event| event.frame_id)
+        })
+        .or_else(|| {
+            event
+                .decode::<page::LifecycleEvent>()
+                .map(|event| event.frame_id)
+        })
+        .or_else(|| {
+            event
+                .decode::<page::FrameAttached>()
+                .map(|event| event.frame_id)
+        })
+        .or_else(|| {
+            event
+                .decode::<page::FrameDetached>()
+                .map(|event| event.frame_id)
+        })
 }
 
 /// How the watcher answers a dialog: Playwright's default with no `page.on('dialog')` listener
@@ -696,22 +695,12 @@ impl PageSession {
         let child_routes = Arc::clone(&routes);
         let init_children = Arc::new(InitChildren::default());
         let reported = Arc::clone(&init_children);
-        let events = PageEvents::new(
-            hub,
-            page.as_str(),
-            session.cdp.clone(),
-            session.id.clone(),
-            discovered,
-        );
+        let events = PageEvents::new(hub, page.as_str(), session.door.clone(), discovered);
         let child_events = events.clone();
         let network = Arc::new(NetworkLog::new(page.as_str().to_string()));
         let child_network = Arc::clone(&network);
-        let world = World::new(
-            session.cdp.clone(),
-            session.id.clone(),
-            page.as_str().to_string(),
-        )
-        .with_test_id(test_id);
+        let world =
+            World::new(session.door.clone(), page.as_str().to_string()).with_test_id(test_id);
         let session = Arc::new(session);
         let world = Arc::new(world);
         let frames = Arc::new(Frames::new(
@@ -741,8 +730,8 @@ impl PageSession {
                     // runs (`FrameSession._initialize`); Neo's is attached lazily, so its
                     // requests pause from now on.
                     if routes.intercepting() {
-                        for (method, params) in interception(true) {
-                            if let Err(error) = host.send(method, params).await {
+                        for command in interception(true) {
+                            if let Err(error) = command.send_on_host(&host).await {
                                 debug!(%error, "pausing a frame session's requests failed");
                             }
                         }
@@ -782,12 +771,13 @@ impl PageSession {
     }
 
     pub(crate) fn session_id(&self) -> &SessionId {
-        &self.session.id
+        self.session.id()
     }
 
-    /// The browser connection the session lives on, for commands to its child sessions.
-    pub(crate) fn cdp(&self) -> &CdpClient {
-        &self.session.cdp
+    /// The tab's session, as the door sends on it; through it, the door reaches the browser
+    /// and the tab's child sessions.
+    pub(crate) fn cdp(&self) -> &cdp::Session {
+        &self.session.door
     }
 
     pub(crate) fn closed(&self) -> CancellationToken {
@@ -810,15 +800,14 @@ impl PageSession {
     pub(crate) async fn prepare(&self) -> Result<(), CdpError> {
         self.prepared
             .get_or_try_init(|| async {
-                let events = self.session.cdp.events();
+                let events = self.session.door.events();
                 let (seed_ready, ready) = oneshot::channel();
-                let cdp = self.session.cdp.clone();
-                let session = self.session.id.clone();
+                let tab = self.session.door.clone();
                 let producer = self.events.clone();
                 // The seed's frame tree, read once the lifecycle replay has been applied (see
                 // `seed_url`), is where the run's frame and lifecycle events start.
-                let initial_url = seed_url(ready, move |method| async move {
-                    let tree = cdp.send(method, json!({}), Some(&session)).await;
+                let initial_url = seed_url(ready, move || async move {
+                    let tree = tab.send(cdp::page::GetFrameTree {}).await;
                     producer.seeded(tree.as_ref().ok());
                     tree
                 });
@@ -828,8 +817,7 @@ impl PageSession {
                 let stop_guard = stop.clone().drop_guard();
                 self.session.tokio.spawn(watch_events(
                     events,
-                    self.session.cdp.clone(),
-                    self.session.id.clone(),
+                    self.session.door.clone(),
                     self.main_frame.clone(),
                     PageUpdates {
                         state: self.state_updates.clone(),
@@ -846,10 +834,10 @@ impl PageSession {
                     self.closed.clone(),
                     stop,
                 ));
-                self.send("Page.enable", json!({})).await?;
+                self.send_command(cdp::page::Enable::default()).await?;
                 // Chromium replays the existing document's lifecycle here (navigation_e2e),
                 // including pages loaded before this run and restored from bfcache.
-                self.send("Page.setLifecycleEventsEnabled", json!({ "enabled": true }))
+                self.send_command(cdp::page::SetLifecycleEventsEnabled { enabled: true })
                     .await?;
                 // The replay preceded the reply: once the watcher has applied it, the main
                 // frame's lifecycle events are the run's (`PageEvents`). Free when nothing is
@@ -860,10 +848,7 @@ impl PageSession {
                 // Preparation never waits for that read: clicks must not pay for the seed.
                 let _ = seed_ready.send(());
                 let focus = self
-                    .send(
-                        "Emulation.setFocusEmulationEnabled",
-                        json!({ "enabled": true }),
-                    )
+                    .send_command(cdp::emulation::SetFocusEmulationEnabled { enabled: true })
                     .await;
                 if let Err(error) = focus {
                     debug!(%error, "focus emulation refused; a background tab may not paint");
@@ -890,8 +875,8 @@ impl PageSession {
         self.runtime_enabled
             .get_or_try_init(|| async {
                 self.events.console.request(self.session_id());
-                self.send("Runtime.enable", json!({})).await?;
-                self.send("Log.enable", json!({})).await?;
+                self.send_command(cdp::runtime::Enable {}).await?;
+                self.send_command(cdp::log::Enable {}).await?;
                 self.events.hub().replay_barrier().await;
                 self.events.console.go_live(self.session_id());
                 // The out-of-process frames this run already attached report on their own
@@ -918,7 +903,7 @@ impl PageSession {
         self.prepare().await?;
         self.network_enabled
             .get_or_try_init(|| async {
-                self.send("Network.enable", json!({})).await?;
+                self.send_command(cdp::network::Enable::default()).await?;
                 self.network.mark_enabled();
                 self.restart_idle().await;
                 for host in self.frames.child_hosts() {
@@ -946,7 +931,7 @@ impl PageSession {
         let tab = future::try_join_all(
             interception(on)
                 .into_iter()
-                .map(|(method, params)| self.send(method, params)),
+                .map(|command| command.send(&self.session.door)),
         );
         let hosts = self
             .frames
@@ -957,7 +942,7 @@ impl PageSession {
                 let sent = future::join_all(
                     interception(on)
                         .into_iter()
-                        .map(|(method, params)| host.send(method, params)),
+                        .map(|command| command.send_on_host(&host)),
                 )
                 .await;
                 for error in sent.into_iter().filter_map(Result::err) {
@@ -995,7 +980,10 @@ impl PageSession {
                 let hosted = frames.child_hosts().iter().any(|host| {
                     host.target_id() == Some(frame.as_str()) && network.has_child(host.session_id())
                 });
-                let child = InitChild { cdp, link };
+                let child = InitChild {
+                    session: cdp.adopt(link.session.clone()),
+                    link,
+                };
                 if hosted || !children.adopt(&frame, &child) {
                     return;
                 }
@@ -1016,7 +1004,7 @@ impl PageSession {
     /// adds to the ones the watcher saw attach. A failed read leaves the tree as the watcher knows
     /// it.
     async fn restart_idle(&self) {
-        let frames = match self.send("Page.getFrameTree", json!({})).await {
+        let frames = match self.send_command(cdp::page::GetFrameTree {}).await {
             Ok(reply) => local_tree(&reply).unwrap_or_default(),
             Err(error) => {
                 debug!(%error, "the frame tree for networkidle could not be read");
@@ -1044,23 +1032,27 @@ impl PageSession {
         self.idle.moved();
     }
 
-    pub(crate) async fn send(&self, method: &str, params: Value) -> Result<Value, CdpError> {
-        self.session
-            .cdp
-            .send(method, params, Some(&self.session.id))
-            .await
+    /// Sends `command` on the tab's session ([`cdp::Session::send`]).
+    pub(crate) fn send_command<C: cdp::Command<Via = cdp::OnSession>>(
+        &self,
+        command: C,
+    ) -> impl Future<Output = Result<C::Reply, CdpError>> {
+        self.session.door.send(command)
     }
 
-    /// Sends on `session`, one of this tab's out-of-process frame sessions, or on the tab's own
-    /// for `None`: where a request the network log recorded is read (`responses.rs`).
-    pub(crate) async fn send_to(
+    /// Sends `command` on `session`, one of this tab's out-of-process frame sessions, or on the
+    /// tab's own for `None`: where a request the network log recorded is read (`responses.rs`).
+    pub(crate) fn send_command_to<C: cdp::Command<Via = cdp::OnSession>>(
         &self,
         session: Option<&SessionId>,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, CdpError> {
-        let session = session.unwrap_or(&self.session.id);
-        self.session.cdp.send(method, params, Some(session)).await
+        command: C,
+    ) -> impl Future<Output = Result<C::Reply, CdpError>> {
+        let target = session.map_or_else(
+            || self.session.door.clone(),
+            |session| self.session.door.browser().adopt(session.clone()),
+        );
+        let command = cdp::Serialized::new(command);
+        async move { target.send_serialized(command).await }
     }
 
     /// Runs a cleanup or writer task on the run's tracker. Spawned on the session's runtime
@@ -1197,7 +1189,7 @@ impl PageSession {
         watcher
             .get_or_try_init(|| async {
                 // Subscribed before any command, so no event the setup causes is missed.
-                let events = self.session.cdp.events();
+                let events = self.session.door.events();
                 let (seeded, ready) = oneshot::channel();
                 let stop = CancellationToken::new();
                 let guard = stop.clone().drop_guard();
@@ -1284,7 +1276,9 @@ impl NavigationTab for FrameTab {
         self.enable_network().await.map_err(
             |error| match playwright_injected_methods::classify(&error) {
                 PageError::Closed => PageError::Closed,
-                _ => PageError::Contract(format!("Network.enable failed: {error}")),
+                _ => {
+                    PageError::Contract(format!("{} failed: {error}", cdp::network::Enable::METHOD))
+                }
             },
         )?;
         Ok(self.network.lags())
@@ -1322,25 +1316,31 @@ impl NavigationTab for FrameTab {
         url: &str,
         referer: Option<&str>,
     ) -> Result<NavigateReply, PlaywrightError> {
-        let mut params =
-            json!({"url": url, "frameId": self.main_frame, "referrerPolicy": "unsafeUrl"});
-        if let Some(referer) = referer {
-            params["referrer"] = json!(referer);
-        }
+        let navigate = cdp::page::Navigate {
+            url: url.to_string(),
+            referrer: referer.map(str::to_string),
+            transition_type: None,
+            frame_id: Some(self.main_frame.clone()),
+            referrer_policy: Some("unsafeUrl".to_string()),
+        };
         let reply = self
-            .send("Page.navigate", params)
+            .send_command(navigate)
             .await
             .map_err(|error| match error {
-                CdpError::Protocol { message, .. } => {
-                    PlaywrightError::error(format!("Protocol error (Page.navigate): {message}"))
-                }
+                CdpError::Protocol { message, .. } => PlaywrightError::error(format!(
+                    "Protocol error ({}): {message}",
+                    cdp::page::Navigate::METHOD
+                )),
                 error if playwright_injected_methods::classify(&error) == PageError::Closed => {
                     PlaywrightError::target_closed()
                 }
                 error => PlaywrightError::error(error.to_string()),
             })?;
-        serde_json::from_value(reply)
-            .map_err(|error| PlaywrightError::error(format!("Page.navigate answered: {error}")))
+        Ok(NavigateReply {
+            loader_id: reply.loader_id,
+            error_text: reply.error_text,
+            is_download: reply.is_download.unwrap_or(false),
+        })
     }
 
     async fn read_title(&self) -> Result<String, PageError> {
@@ -1522,23 +1522,22 @@ impl Devices for InputPermit {
 /// queries the page or completes its seed; its stop guard disposes the watcher instead.
 async fn seed_url<F, Fut>(ready: oneshot::Receiver<()>, read: F) -> Result<Option<String>, CdpError>
 where
-    F: FnOnce(&'static str) -> Fut,
+    F: FnOnce() -> Fut,
     Fut: Future<Output = Result<Value, CdpError>>,
 {
     if ready.await.is_err() {
         return future::pending().await;
     }
-    let reply = read("Page.getFrameTree").await?;
-    // frameTree and Page.frameNavigated carry the same frame payload; child frames are ignored.
-    let tree: FrameNavigated = serde_json::from_value(reply["frameTree"].clone())?;
-    let frame = tree.frame;
-    if frame.url.is_empty() {
+    let reply = read().await?;
+    // The main frame's URL, as `Page.frameNavigated` would carry it; child frames are ignored.
+    let frame = &reply["frameTree"]["frame"];
+    let url = frame["url"].as_str().unwrap_or_default();
+    if url.is_empty() {
         return Ok(None);
     }
     Ok(Some(format!(
-        "{}{}",
-        frame.url,
-        frame.url_fragment.as_deref().unwrap_or("")
+        "{url}{}",
+        frame["urlFragment"].as_str().unwrap_or("")
     )))
 }
 
@@ -1553,9 +1552,8 @@ where
 /// Lost commits and lifecycle events are not reconstructed; a navigation can time out after
 /// overflow. A frame-tree resync would also need ordered lifecycle replay.
 async fn watch_events(
-    mut events: broadcast::Receiver<CdpEvent>,
-    cdp: CdpClient,
-    session: SessionId,
+    mut events: cdp::Events,
+    tab: cdp::Session,
     main_frame: String,
     updates: PageUpdates<impl Future<Output = Result<Option<String>, CdpError>>>,
     closed: CancellationToken,
@@ -1575,8 +1573,8 @@ async fn watch_events(
     } = updates;
     let (producer, mut flushes) = producer.unzip();
     let mut watcher = Watcher {
-        cdp,
-        session,
+        session: tab.id().clone(),
+        tab,
         main_frame,
         state,
         navigations,
@@ -1696,7 +1694,8 @@ async fn next_flush(flushes: &mut Option<Flushes>) -> Option<oneshot::Sender<()>
 
 /// What [`watch_events`] applies each event to.
 struct Watcher {
-    cdp: CdpClient,
+    /// The tab's session, which dialogs and paused requests are answered on.
+    tab: cdp::Session,
     session: SessionId,
     main_frame: String,
     state: watch::Sender<PageState>,
@@ -1717,12 +1716,12 @@ impl Watcher {
     /// `reopened`: the event was the `init` of a frame's document a `setContent` write reopened,
     /// which clears the frame here in socket order, before any request the written document
     /// starts.
-    fn idle_event(&self, event: &CdpEvent, happenings: &[Happening], reopened: bool) {
+    fn idle_event(&self, event: &cdp::Raw, happenings: &[Happening], reopened: bool) {
+        use cdp::page;
         let Some(idle) = &self.idle else {
             return;
         };
         let now = Instant::now();
-        let params = &event.params;
         let changes = idle
             .with(|idle| {
                 for happening in happenings {
@@ -1738,50 +1737,33 @@ impl Watcher {
                         Happening::Response(_) => {}
                     }
                 }
-                match event.method.as_str() {
-                    "Page.frameAttached" => {
-                        if let (Some(frame), Some(parent)) =
-                            (params["frameId"].as_str(), params["parentFrameId"].as_str())
-                        {
-                            idle.attach(frame, parent, now);
-                        }
-                        Vec::new()
+                if let Some(attached) = event.decode::<page::FrameAttached>() {
+                    idle.attach(&attached.frame_id, &attached.parent_frame_id, now);
+                    Vec::new()
+                } else if let Some(detached) = event.decode::<page::FrameDetached>() {
+                    idle.detach(&detached.frame_id)
+                } else if let Some(navigated) = event.decode::<page::FrameNavigated>() {
+                    let frame = navigated.frame;
+                    if let Some(parent) = &frame.parent_id {
+                        idle.attach(&frame.id, parent, now);
                     }
-                    "Page.frameDetached" => params["frameId"]
-                        .as_str()
-                        .map(|frame| idle.detach(frame))
-                        .unwrap_or_default(),
-                    "Page.frameNavigated" => {
-                        let frame = &params["frame"];
-                        match (frame["id"].as_str(), frame["loaderId"].as_str()) {
-                            (Some(id), Some(loader)) => {
-                                if let Some(parent) = frame["parentId"].as_str() {
-                                    idle.attach(id, parent, now);
-                                }
-                                idle.commit(id, loader, now)
-                            }
-                            _ => Vec::new(),
+                    idle.commit(&frame.id, &frame.loader_id, now)
+                } else if let Some(lifecycle) = event.decode::<page::LifecycleEvent>() {
+                    let name = match lifecycle.name.as_str() {
+                        "DOMContentLoaded" => Some("domcontentloaded"),
+                        "load" => Some("load"),
+                        _ => None,
+                    };
+                    match name {
+                        Some(name) => idle.lifecycle_event(&lifecycle.frame_id, name),
+                        // Playwright: `server/frames.ts` `Frame.setContent`: `this._onClearLifecycle();`
+                        None if reopened && lifecycle.name == "init" => {
+                            idle.clear_lifecycle(&lifecycle.frame_id, &lifecycle.loader_id, now)
                         }
+                        None => Vec::new(),
                     }
-                    "Page.lifecycleEvent" => {
-                        let name = match params["name"].as_str() {
-                            Some("DOMContentLoaded") => Some("domcontentloaded"),
-                            Some("load") => Some("load"),
-                            _ => None,
-                        };
-                        match (params["frameId"].as_str(), name) {
-                            (Some(frame), Some(name)) => idle.lifecycle_event(frame, name),
-                            // Playwright: `server/frames.ts` `Frame.setContent`: `this._onClearLifecycle();`
-                            (Some(frame), None) if reopened && params["name"] == "init" => idle
-                                .clear_lifecycle(
-                                    frame,
-                                    params["loaderId"].as_str().unwrap_or_default(),
-                                    now,
-                                ),
-                            _ => Vec::new(),
-                        }
-                    }
-                    _ => Vec::new(),
+                } else {
+                    Vec::new()
                 }
             })
             .unwrap_or_default();
@@ -1791,45 +1773,33 @@ impl Watcher {
     /// The tab's routes' share of one event (`routes.rs`): a pause of the tab's session or of an
     /// attached frame session's; a `requestWillBeSent` a parked pause waited for, its `request`
     /// event just gone, so its `route` event follows it; a frame session gone with its pauses.
-    fn route_event(&self, event: &CdpEvent) {
+    fn route_event(&self, event: &cdp::Raw) {
         let Some(routes) = &self.routes else {
             return;
         };
-        let from = || match event.session_id.as_ref() {
+        let from = || match event.session() {
             Some(from) if from == &self.session => Some(None),
             Some(from) if self.network.has_child(from) => Some(Some(from)),
             _ => None,
         };
-        match event.method.as_str() {
-            "Fetch.requestPaused" => {
-                if let Some(from) = from() {
-                    let pause = routes.paused(from, &event.params, &self.network);
-                    self.apply_pause(pause);
-                }
+        if let Some(paused) = event.decode::<cdp::fetch::RequestPaused>() {
+            if let Some(from) = from() {
+                let pause = routes.paused(from, &paused.0, &self.network);
+                self.apply_pause(pause);
             }
-            "Network.requestWillBeSent" => {
-                if from().is_some()
-                    && let Some(request) = event.params["requestId"].as_str()
-                    && let Some(pause) = routes.unpark(request, &self.network)
-                {
-                    self.apply_pause(pause);
-                }
+        } else if let Some(started) = event.decode::<cdp::network::RequestWillBeSent>() {
+            if from().is_some()
+                && let Some(pause) = routes.unpark(&started.request_id, &self.network)
+            {
+                self.apply_pause(pause);
             }
-            "Target.detachedFromTarget" => {
-                if let Some(child) = event.params["sessionId"].as_str() {
-                    routes.forget_session(&SessionId::from(child));
-                }
-            }
+        } else if let Some(detached) = event.decode::<cdp::target::DetachedFromTarget>() {
+            routes.forget_session(&SessionId::from(detached.session_id));
+        } else if let Some(failed) = event.decode::<cdp::network::LoadingFailed>() {
             // A fetch waits on its request: a failure on the network ends it.
-            "Network.loadingFailed" => {
-                if from().is_some()
-                    && let Some(request) = event.params["requestId"].as_str()
-                {
-                    let error = event.params["errorText"].as_str().unwrap_or_default();
-                    routes.fetch_failed(request, error);
-                }
+            if from().is_some() {
+                routes.fetch_failed(&failed.request_id, &failed.error_text);
             }
-            _ => {}
         }
     }
 
@@ -1837,7 +1807,7 @@ impl Watcher {
     /// run's `route` event, whose pause goes on untouched when nobody takes it.
     fn apply_pause(&self, pause: Pause) {
         match pause {
-            Pause::Answer(answer) => send_answer(&self.cdp, &self.session, answer),
+            Pause::Answer(answer) => send_answer(&self.tab, answer),
             Pause::Parked => {}
             Pause::Route {
                 index,
@@ -1854,7 +1824,7 @@ impl Watcher {
                 {
                     routes.emitted(index);
                 } else if let Some(answer) = routes.release(index) {
-                    send_answer(&self.cdp, &self.session, answer);
+                    send_answer(&self.tab, answer);
                 }
             }
         }
@@ -1864,44 +1834,41 @@ impl Watcher {
     /// (`Page.frameDetached`, reason `remove`), and for the requests of an out-of-process frame
     /// session that detached (`Target.detachedFromTarget`). A frame whose document moved to
     /// another process (reason `swap`) is noted for its later removal.
-    fn detached_requests(&self, event: &CdpEvent) -> Vec<Happening> {
-        match event.method.as_str() {
-            "Page.frameDetached" if event.session_id.as_ref() == Some(&self.session) => {
-                let Some(frame) = event.params["frameId"].as_str() else {
-                    return Vec::new();
-                };
-                match event.params["reason"].as_str() {
-                    Some("remove") => self.network.detach_frame(frame),
-                    Some("swap") => {
-                        self.network.frame_moved(frame);
-                        Vec::new()
-                    }
-                    _ => Vec::new(),
-                }
+    fn detached_requests(&self, event: &cdp::Raw) -> Vec<Happening> {
+        if let Some(detached) = event.decode::<cdp::page::FrameDetached>() {
+            if !event.on_session(&self.session) {
+                return Vec::new();
             }
-            "Target.detachedFromTarget" => event.params["sessionId"]
-                .as_str()
-                .map(SessionId::from)
-                .filter(|child| self.network.has_child(child))
-                .map(|child| self.network.detach_session(&child))
-                .unwrap_or_default(),
-            _ => Vec::new(),
+            return match detached.reason.as_str() {
+                "remove" => self.network.detach_frame(&detached.frame_id),
+                "swap" => {
+                    self.network.frame_moved(&detached.frame_id);
+                    Vec::new()
+                }
+                _ => Vec::new(),
+            };
         }
+        event
+            .decode::<cdp::target::DetachedFromTarget>()
+            .map(|detached| SessionId::from(detached.session_id))
+            .filter(|child| self.network.has_child(child))
+            .map(|child| self.network.detach_session(&child))
+            .unwrap_or_default()
     }
 
     /// A child frame's navigation request starting or failing, routed to that frame's feed: the
     /// start names its frame, the failure only its request, whose frame the network log knows.
     /// `recorded`: the event came from a session the network log records.
-    fn child_navigation_request(&self, feeds: &FrameFeeds, event: &CdpEvent, recorded: bool) {
+    fn child_navigation_request(&self, feeds: &FrameFeeds, event: &cdp::Raw, recorded: bool) {
         if !recorded {
             return;
         }
-        let frame = match event.method.as_str() {
-            "Network.requestWillBeSent" => event.params["frameId"].as_str().map(str::to_string),
-            "Network.loadingFailed" => event.params["requestId"]
-                .as_str()
-                .and_then(|request| self.network.frame_of(request)),
-            _ => None,
+        let frame = if let Some(started) = event.decode::<cdp::network::RequestWillBeSent>() {
+            started.frame_id
+        } else {
+            event
+                .decode::<cdp::network::LoadingFailed>()
+                .and_then(|failed| self.network.frame_of(&failed.request_id))
         };
         if let Some(frame) = frame.filter(|frame| *frame != self.main_frame) {
             feeds.apply_network(event, &frame);
@@ -1931,16 +1898,16 @@ impl Watcher {
     /// an out-of-process frame session once the page enabled its Network domain
     /// (`enable_child_network`), applied and reported to the run's listeners. Answers what it
     /// changed and whether the log records the event's session.
-    fn network_event(&self, event: &CdpEvent) -> (Vec<Happening>, bool) {
-        if !event.method.starts_with("Network.") {
+    fn network_event(&self, event: &cdp::Raw) -> (Vec<Happening>, bool) {
+        if !event.in_domain("Network") {
             return (Vec::new(), false);
         }
-        let from = match event.session_id.as_ref() {
+        let from = match event.session() {
             Some(from) if *from == self.session => None,
             Some(from) if self.network.has_child(from) => Some(from),
             _ => return (Vec::new(), false),
         };
-        let happenings = self.network.apply(from, &event.method, &event.params);
+        let happenings = self.network.apply(from, event);
         if let Some(producer) = &self.producer {
             producer.network(&self.network, &happenings);
         }
@@ -1948,7 +1915,7 @@ impl Watcher {
     }
 
     /// Applies one event, or the ring's lag or end. Returns `false` once the session is gone.
-    fn on(&mut self, event: Result<CdpEvent, RecvError>) -> bool {
+    fn on(&mut self, event: Result<cdp::Raw, RecvError>) -> bool {
         let session = &self.session;
         match event {
             Ok(event) => {
@@ -1964,13 +1931,12 @@ impl Watcher {
                     }
                     happenings.extend(detached);
                 }
-                if event.method == "Page.frameNavigated"
-                    && event.session_id.as_ref() == Some(session)
-                    && let Some(frame) = event.params["frame"]["id"].as_str()
-                    && frame != self.main_frame
+                if event.on_session(session)
+                    && let Some(navigated) = event.decode::<cdp::page::FrameNavigated>()
+                    && navigated.frame.id != self.main_frame
                     && let Some(frames) = &self.frames
                 {
-                    frames.committed(frame);
+                    frames.committed(&navigated.frame.id);
                 }
                 let mut applied = Applied::default();
                 // The event reopened the main frame's document for a `setContent` write.
@@ -1999,7 +1965,7 @@ impl Watcher {
                 }
                 // After the frames' state, so a commit's cleared lifecycle comes first. Only the
                 // tab's own session reports the frames `networkidle` follows (`network_idle.rs`).
-                if event.session_id.as_ref() == Some(session) {
+                if event.on_session(session) {
                     self.idle_event(&event, &happenings, reopened);
                 }
                 // The run's events from this one, after the page state they may describe. A
@@ -2009,7 +1975,7 @@ impl Watcher {
                     None => applied.dialog,
                 };
                 if let Some(answer) = answer {
-                    answer_dialog(&self.cdp, session, answer);
+                    answer_dialog(&self.tab, answer);
                 }
                 if applied.closed {
                     if let Some(producer) = &self.producer {
@@ -2035,7 +2001,7 @@ impl Watcher {
                 if let Some(producer) = &self.producer {
                     producer.lagged();
                 }
-                answer_dialog(&self.cdp, session, DialogAnswer::Dismiss);
+                answer_dialog(&self.tab, DialogAnswer::Dismiss);
             }
             Err(RecvError::Closed) => {
                 if let Some(producer) = &self.producer {
@@ -2062,7 +2028,8 @@ struct InitChildren(SyncMutex<HashMap<String, InitChild>>);
 /// Neo: one init-script session of an out-of-process frame.
 #[derive(Clone)]
 struct InitChild {
-    cdp: CdpClient,
+    /// The frame's session, as the door sends on it.
+    session: cdp::Session,
     link: Link,
 }
 
@@ -2107,13 +2074,10 @@ impl InitChildren {
 }
 
 impl InitChild {
-    /// Sends `method` on the session, until it detaches or [`CHILD_NETWORK_WAIT`] passes.
-    async fn send(&self, method: &str, params: Value) -> bool {
-        let sent = until_gone(
-            &self.link.gone,
-            self.cdp.send(method, params, Some(&self.link.session)),
-        );
-        matches!(time::timeout(CHILD_NETWORK_WAIT, sent).await, Ok(Some(_)))
+    /// Sends `command` on the session, until it detaches or [`CHILD_NETWORK_WAIT`] passes.
+    async fn send(&self, command: Interception) -> bool {
+        let sent = until_gone(&self.link.gone, command.send(&self.session));
+        matches!(time::timeout(CHILD_NETWORK_WAIT, sent).await, Ok(Some(())))
     }
 
     /// `Network.enable` on the session, whose requests are the tab's from then on, once.
@@ -2123,7 +2087,10 @@ impl InitChild {
             return;
         }
         network.add_child(session);
-        if !self.send("Network.enable", json!({})).await {
+        if !self
+            .send(Interception::Network(cdp::network::Enable::default()))
+            .await
+        {
             debug!(%session, "an init-script frame's network did not turn on");
         }
     }
@@ -2133,7 +2100,7 @@ impl InitChild {
         let sent = future::join_all(
             interception(on)
                 .into_iter()
-                .map(|(method, params)| self.send(method, params)),
+                .map(|command| self.send(command)),
         )
         .await;
         if sent.contains(&false) {
@@ -2151,7 +2118,8 @@ async fn enable_child_network(network: &NetworkLog, host: &Arc<Host>) {
         return;
     }
     network.add_child(&session);
-    match time::timeout(CHILD_NETWORK_WAIT, host.send("Network.enable", json!({}))).await {
+    let enable = host.send_command(cdp::network::Enable::default());
+    match time::timeout(CHILD_NETWORK_WAIT, enable).await {
         Ok(Ok(_)) => {}
         Ok(Err(error)) => debug!(%session, %error, "a frame's network did not turn on"),
         Err(_) => debug!(%session, "a frame's network did not turn on in time"),
@@ -2163,29 +2131,64 @@ async fn enable_child_network(network: &NetworkLog, host: &Arc<Host>) {
 /// Deviation: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onAuthRequired`: `authChallengeResponse: { response, username, password },`
 /// Neo pauses requests without taking their auth challenges (`handleAuthRequests: false`):
 /// with no credentials Playwright answers `Default`, which is Chromium's own handling.
-fn interception(on: bool) -> [(&'static str, Value); 2] {
+fn interception(on: bool) -> [Interception; 2] {
     let fetch = if on {
-        (
-            "Fetch.enable",
-            json!({ "handleAuthRequests": false, "patterns": [{ "urlPattern": "*", "requestStage": "Request" }] }),
-        )
+        Interception::Pause(cdp::fetch::Enable {
+            handle_auth_requests: Some(false),
+            patterns: Some(vec![cdp::fetch::RequestPattern {
+                url_pattern: Some("*".to_string()),
+                request_stage: Some("Request".to_string()),
+                resource_type: None,
+            }]),
+        })
     } else {
-        ("Fetch.disable", json!({}))
+        Interception::Resume(cdp::fetch::Disable {})
     };
     [
         // Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._updateProtocolRequestInterceptionForSession`: `const cachePromise = info.session.send('Network.setCacheDisabled', { cacheDisabled: enabled });`
-        ("Network.setCacheDisabled", json!({ "cacheDisabled": on })),
+        Interception::Cache(cdp::network::SetCacheDisabled { cache_disabled: on }),
         fetch,
     ]
 }
 
+/// Neo: one command that turns a frame session's request reports or pausing over, which
+/// [`interception`] and an init-script frame's network enable send.
+enum Interception {
+    Network(cdp::network::Enable),
+    Cache(cdp::network::SetCacheDisabled),
+    Pause(cdp::fetch::Enable),
+    Resume(cdp::fetch::Disable),
+}
+
+/// Neo: sent on a session as it is, or on a frame host, which answers at once once its session
+/// is gone.
+impl Interception {
+    async fn send(self, session: &cdp::Session) -> Result<(), CdpError> {
+        match self {
+            Self::Network(command) => session.send(command).await.map(drop),
+            Self::Cache(command) => session.send(command).await.map(drop),
+            Self::Pause(command) => session.send(command).await.map(drop),
+            Self::Resume(command) => session.send(command).await.map(drop),
+        }
+    }
+
+    async fn send_on_host(self, host: &Host) -> Result<(), CdpError> {
+        match self {
+            Self::Network(command) => host.send_command(command).await.map(drop),
+            Self::Cache(command) => host.send_command(command).await.map(drop),
+            Self::Pause(command) => host.send_command(command).await.map(drop),
+            Self::Resume(command) => host.send_command(command).await.map(drop),
+        }
+    }
+}
+
 /// Sends a pause's answer without waiting for it (`_sendMayFail`): the request may already be
 /// gone, which only the page sees.
-fn send_answer(cdp: &CdpClient, tab: &SessionId, answer: Answer) {
-    let cdp = cdp.clone();
-    let session = answer.session.unwrap_or_else(|| tab.clone());
+fn send_answer(tab: &cdp::Session, answer: Answer) {
+    let session = answer.session.clone().unwrap_or_else(|| tab.id().clone());
+    let sent = answer.send(tab);
     tokio::spawn(async move {
-        if let Err(error) = cdp.send(answer.method, answer.params, Some(&session)).await {
+        if let Err(error) = sent.await {
             debug!(%session, %error, "answering a paused request failed");
         }
     });
@@ -2193,19 +2196,17 @@ fn send_answer(cdp: &CdpClient, tab: &SessionId, answer: Answer) {
 
 /// Sends a dialog answer without waiting for it: the renderer is blocked until it lands, and
 /// the watcher must keep reading events meanwhile.
-fn answer_dialog(cdp: &CdpClient, session: &SessionId, answer: DialogAnswer) {
-    let cdp = cdp.clone();
-    let session = session.clone();
+fn answer_dialog(tab: &cdp::Session, answer: DialogAnswer) {
+    let tab = tab.clone();
     tokio::spawn(async move {
-        let accept = answer == DialogAnswer::Accept;
-        let answered = cdp
-            .send(
-                "Page.handleJavaScriptDialog",
-                json!({ "accept": accept }),
-                Some(&session),
-            )
+        let answered = tab
+            .send(cdp::page::HandleJavaScriptDialog {
+                accept: answer == DialogAnswer::Accept,
+                prompt_text: None,
+            })
             .await;
         if let Err(error) = answered {
+            let session = tab.id();
             debug!(%session, %error, "answering a dialog failed");
         }
     });
@@ -2219,7 +2220,7 @@ fn answer_dialog(cdp: &CdpClient, session: &SessionId, answer: DialogAnswer) {
 /// the tab session only (spike Q12). Holds the host, so its session stays attached while it
 /// runs; holds no page, so the page's drop stops it.
 async fn watch_host_frames(
-    mut events: broadcast::Receiver<CdpEvent>,
+    mut events: cdp::Events,
     host: Arc<Host>,
     feeds: Arc<FrameFeeds>,
     seeded: oneshot::Sender<Result<(), PageError>>,
@@ -2227,10 +2228,10 @@ async fn watch_host_frames(
 ) {
     let session = host.session_id().clone();
     let setup = async {
-        host.send("Page.enable", json!({})).await?;
-        host.send("Page.setLifecycleEventsEnabled", json!({ "enabled": true }))
+        host.send_command(cdp::page::Enable::default()).await?;
+        host.send_command(cdp::page::SetLifecycleEventsEnabled { enabled: true })
             .await?;
-        host.send("Page.getFrameTree", json!({})).await
+        host.send_command(cdp::page::GetFrameTree {}).await
     };
     tokio::pin!(setup);
     let mut seeded = Some(seeded);
@@ -2240,8 +2241,9 @@ async fn watch_host_frames(
             () = stop.cancelled() => return,
             event = events.recv() => match event {
                 Ok(event) => {
-                    if event.method == "Target.detachedFromTarget"
-                        && event.params["sessionId"].as_str() == Some(session.as_str())
+                    if event
+                        .decode::<cdp::target::DetachedFromTarget>()
+                        .is_some_and(|detached| detached.session_id == session.as_str())
                     {
                         return;
                     }
@@ -2273,144 +2275,51 @@ async fn watch_host_frames(
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FrameRequestedNavigation {
-    frame_id: String,
-    url: String,
-    disposition: String,
-}
-
-#[derive(Deserialize)]
-struct FrameNavigated {
-    frame: NavigatedFrame,
-    #[serde(rename = "type", default)]
-    kind: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NavigatedFrame {
-    id: String,
-    url: String,
-    #[serde(default)]
-    url_fragment: Option<String>,
-    #[serde(default)]
-    loader_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LifecycleEvent {
-    frame_id: String,
-    loader_id: String,
-    name: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FrameEvent {
-    frame_id: String,
-    #[serde(default)]
-    url: Option<String>,
-}
-
-/// The fields of `Network.requestWillBeSent` that tell a navigation request.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NavigationRequestStarted {
-    request_id: String,
-    loader_id: String,
-    #[serde(default)]
-    frame_id: Option<String>,
-    #[serde(rename = "type", default)]
-    kind: Option<String>,
-    request: StartedRequest,
-}
-
-#[derive(Deserialize)]
-struct StartedRequest {
-    url: String,
-}
-
-/// The fields of `Network.loadingFailed` a navigation's failure needs.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NavigationRequestFailed {
-    request_id: String,
-    #[serde(default)]
-    error_text: Option<String>,
-    #[serde(default)]
-    blocked_reason: Option<String>,
-    #[serde(default)]
-    canceled: bool,
-}
-
-impl NavigationRequestFailed {
-    /// The text a navigation wait rejects with.
-    ///
-    /// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onLoadingFailed`: `request.request._setFailureText(event.errorText || event.blockedReason || '');`
-    /// Playwright: `server/frames.ts` `FrameManager.requestFailed`: `errorText += '; maybe frame was detached?';`
-    fn error_text(&self) -> String {
-        let mut text = [&self.error_text, &self.blocked_reason]
-            .into_iter()
-            .flatten()
-            .find(|text| !text.is_empty())
-            .cloned()
-            .unwrap_or_default();
-        if self.canceled {
-            text.push_str("; maybe frame was detached?");
-        }
-        text
+/// The text a navigation wait rejects with when its document's request failed.
+///
+/// Playwright: `server/chromium/crNetworkManager.ts` `CRNetworkManager._onLoadingFailed`: `request.request._setFailureText(event.errorText || event.blockedReason || '');`
+/// Playwright: `server/frames.ts` `FrameManager.requestFailed`: `errorText += '; maybe frame was detached?';`
+fn navigation_error(failed: &cdp::network::LoadingFailed) -> String {
+    let mut text = [Some(&failed.error_text), failed.blocked_reason.as_ref()]
+        .into_iter()
+        .flatten()
+        .find(|text| !text.is_empty())
+        .cloned()
+        .unwrap_or_default();
+    if failed.canceled == Some(true) {
+        text.push_str("; maybe frame was detached?");
     }
+    text
 }
 
-#[derive(Deserialize)]
-struct DialogOpening {
-    #[serde(rename = "type")]
-    kind: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DetachedFromTarget {
-    #[serde(default)]
-    session_id: Option<String>,
-}
-
-/// Applies one event to the page state. Pure. Event shapes are local serde structs:
-/// browseros-cdp's typed surface lacks most of them, and adding them would change a shared
-/// crate that core also compiles.
+/// Applies one event to the page state. Pure.
 pub(crate) fn apply(
     state: &mut PageState,
-    event: &CdpEvent,
+    event: &cdp::Raw,
     session: &SessionId,
     main_frame: &str,
 ) -> Applied {
     let mut applied = Applied::default();
-    if event.method == "Target.detachedFromTarget" {
-        let detached = serde_json::from_value::<DetachedFromTarget>(event.params.clone());
-        applied.closed =
-            detached.is_ok_and(|detached| detached.session_id.as_deref() == Some(session.as_str()));
+    if let Some(detached) = event.decode::<cdp::target::DetachedFromTarget>() {
+        applied.closed = detached.session_id == session.as_str();
         return applied;
     }
-    if event.session_id.as_ref() != Some(session) {
+    if !event.on_session(session) {
         return applied;
     }
-    match event.method.as_str() {
-        "Page.javascriptDialogOpening" => {
-            let beforeunload = serde_json::from_value::<DialogOpening>(event.params.clone())
-                .is_ok_and(|dialog| dialog.kind == "beforeunload");
-            state.dialogs_opened += 1;
-            applied.changed = true;
-            applied.dialog = Some(if beforeunload {
-                DialogAnswer::Accept
-            } else {
-                DialogAnswer::Dismiss
-            });
-        }
-        "Inspector.detached" | "Inspector.targetCrashed" => applied.closed = true,
-        _ => applied = apply_frame(state, event, main_frame),
+    if let Some(dialog) = event.decode::<cdp::page::JavascriptDialogOpening>() {
+        state.dialogs_opened += 1;
+        applied.changed = true;
+        applied.dialog = Some(if dialog.r#type == "beforeunload" {
+            DialogAnswer::Accept
+        } else {
+            DialogAnswer::Dismiss
+        });
+    } else if event.is::<cdp::inspector::Detached>() || event.is::<cdp::inspector::TargetCrashed>()
+    {
+        applied.closed = true;
+    } else {
+        applied = apply_frame(state, event, main_frame);
     }
     applied
 }
@@ -2421,21 +2330,15 @@ pub(crate) fn apply(
 /// receives them). The main frame's state and every child frame's feed ([`FrameFeeds`]) both
 /// take it, so a child frame's document is followed exactly as the main frame's is. The caller
 /// has already matched the event's session.
-fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> Applied {
-    if matches!(
-        event.method.as_str(),
-        "Network.requestWillBeSent" | "Network.loadingFailed"
-    ) {
+fn apply_frame(state: &mut PageState, event: &cdp::Raw, main_frame: &str) -> Applied {
+    use cdp::page;
+    if event.is::<cdp::network::RequestWillBeSent>() || event.is::<cdp::network::LoadingFailed>() {
         return apply_navigation_request(state, event, main_frame);
     }
     let mut applied = Applied::default();
-    let params = event.params.clone();
-    match event.method.as_str() {
-        "Page.frameRequestedNavigation" => {
-            if let Ok(requested) = serde_json::from_value::<FrameRequestedNavigation>(params)
-                && requested.frame_id == main_frame
-                && requested.disposition == "currentTab"
-            {
+    if let Some(requested) = event.decode::<page::FrameRequestedNavigation>() {
+        {
+            if requested.frame_id == main_frame && requested.disposition == "currentTab" {
                 state.navigations_requested += 1;
                 state.pending_url = Some(requested.url);
                 // server/frames.ts frameRequestedNavigation: a navigation whose request is not
@@ -2444,14 +2347,14 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 applied.changed = true;
             }
         }
-        "Page.frameNavigated" => {
-            if let Ok(FrameNavigated { frame, kind }) = serde_json::from_value(params)
-                && frame.id == main_frame
-            {
+    } else if let Some(navigated) = event.decode::<page::FrameNavigated>() {
+        let (frame, kind) = (navigated.frame, navigated.r#type);
+        {
+            if frame.id == main_frame {
                 state.commits += 1;
                 let fragment = frame.url_fragment.as_deref().unwrap_or("");
                 state.committed_url = Some(format!("{}{fragment}", frame.url));
-                state.document = frame.loader_id;
+                state.document = Some(frame.loader_id);
                 // server/frames.ts frameCommittedNewDocumentNavigation: the pending document is
                 // this one, with its request, or, with no request known, assumed to be; a later
                 // navigation whose request already started stays pending.
@@ -2468,7 +2371,7 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                     Some(PendingDocument::Requested) | None => false,
                 };
                 state.clear_lifecycle();
-                if kind.as_deref() == Some("BackForwardCacheRestore") {
+                if kind == "BackForwardCacheRestore" {
                     // Deviation: `server/chromium/chromiumSwitches.ts` `chromiumSwitches`: `'--disable-back-forward-cache',`
                     // Playwright's Chromium never restores a cached document, and one it met
                     // would never fire `load`, so its history navigation would time out. Neo
@@ -2490,13 +2393,10 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 applied.changed = true;
             }
         }
-        "Page.navigatedWithinDocument" => {
-            if let Ok(FrameEvent {
-                frame_id,
-                url: Some(url),
-            }) = serde_json::from_value(params)
-                && frame_id == main_frame
-            {
+    } else if let Some(within) = event.decode::<page::NavigatedWithinDocument>() {
+        let (frame_id, url) = (within.frame_id, within.url);
+        {
+            if frame_id == main_frame {
                 state.commits += 1;
                 state.committed_url = Some(url.clone());
                 state.pending_url = None;
@@ -2514,24 +2414,17 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
                 applied.changed = true;
             }
         }
-        "Page.frameStoppedLoading" => {
-            if let Ok(FrameEvent { frame_id, .. }) = serde_json::from_value(params)
-                && frame_id == main_frame
-            {
-                state.pending_url = None;
-                applied.changed = true;
-            }
+    } else if let Some(stopped) = event.decode::<page::FrameStoppedLoading>() {
+        if stopped.frame_id == main_frame {
+            state.pending_url = None;
+            applied.changed = true;
         }
-        "Page.lifecycleEvent" => {
-            if let Ok(event) = serde_json::from_value::<LifecycleEvent>(params)
-                && event.frame_id == main_frame
-            {
-                let before = (state.dom_content_loaded, state.load);
-                applied.changed = apply_lifecycle(state, &event);
-                applied.fired = Fired::between(before, state);
-            }
-        }
-        _ => {}
+    } else if let Some(event) = event.decode::<page::LifecycleEvent>()
+        && event.frame_id == main_frame
+    {
+        let before = (state.dom_content_loaded, state.load);
+        applied.changed = apply_lifecycle(state, &event);
+        applied.fired = Fired::between(before, state);
     }
     applied
 }
@@ -2539,15 +2432,12 @@ fn apply_frame(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> App
 /// The main frame's navigation requests, for [`apply_frame`]: one starting is the pending
 /// document; the pending document's request failing aborts its navigation, as a navigation event
 /// with its error.
-fn apply_navigation_request(state: &mut PageState, event: &CdpEvent, main_frame: &str) -> Applied {
+fn apply_navigation_request(state: &mut PageState, event: &cdp::Raw, main_frame: &str) -> Applied {
     let mut applied = Applied::default();
-    // Read in place: every subresource request passes through here.
-    let params = &event.params;
-    if event.method == "Network.requestWillBeSent" {
+    if let Some(started) = event.decode::<cdp::network::RequestWillBeSent>() {
         // server/frames.ts requestStarted, for crNetworkManager.ts's navigation requests:
         // `requestId === loaderId`, type `Document`, and never a `data:` URL.
-        if let Ok(started) = NavigationRequestStarted::deserialize(params)
-            && started.frame_id.as_deref() == Some(main_frame)
+        if started.frame_id.as_deref() == Some(main_frame)
             && started.request_id == started.loader_id
             && started.kind.as_deref() == Some("Document")
             && !started.request.url.starts_with("data:")
@@ -2559,7 +2449,7 @@ fn apply_navigation_request(state: &mut PageState, event: &CdpEvent, main_frame:
     }
     // server/frames.ts requestFailed: only the pending document's request aborts the navigation;
     // an older one that a newer navigation replaced fails silently.
-    if let Ok(failed) = NavigationRequestFailed::deserialize(params)
+    if let Some(failed) = event.decode::<cdp::network::LoadingFailed>()
         && state.pending_document == Some(PendingDocument::Started(failed.request_id.clone()))
     {
         state.pending_document = None;
@@ -2567,7 +2457,7 @@ fn apply_navigation_request(state: &mut PageState, event: &CdpEvent, main_frame:
             url: state.committed_url.clone().unwrap_or_default(),
             lifecycle: state.lifecycle(),
             request: false,
-            error: Some(failed.error_text()),
+            error: Some(navigation_error(&failed)),
             document: Some(failed.request_id),
         });
         applied.changed = true;
@@ -2586,7 +2476,7 @@ fn expect(state: &mut PageState, expected: bool) -> u64 {
     state.reopens + u64::from(state.reopens_expected)
 }
 
-fn apply_lifecycle(state: &mut PageState, event: &LifecycleEvent) -> bool {
+fn apply_lifecycle(state: &mut PageState, event: &cdp::page::LifecycleEvent) -> bool {
     let seeded = state.document.is_none();
     if seeded {
         state.document = Some(event.loader_id.clone());
@@ -2633,10 +2523,9 @@ impl Drop for GroupGuard {
         self.page.spawn_while_open(async move {
             let released = frame
                 .host
-                .send(
-                    "Runtime.releaseObjectGroup",
-                    json!({ "objectGroup": group }),
-                )
+                .send_command(cdp::runtime::ReleaseObjectGroup {
+                    object_group: group,
+                })
                 .await;
             if let Err(error) = released {
                 debug!(%error, "releasing an object group failed");
@@ -2744,7 +2633,7 @@ impl Drop for ArmedInterceptor {
 
 /// Navigation events of this session, from a receiver subscribed before a click's input.
 pub(crate) struct NavigationWatch {
-    events: broadcast::Receiver<CdpEvent>,
+    events: cdp::Events,
 }
 
 /// What a click's own navigations came to while draining a [`NavigationWatch`]: the same
@@ -2760,7 +2649,7 @@ struct Barrier {
 }
 
 impl Barrier {
-    fn apply(&mut self, event: &CdpEvent, session: &SessionId, main_frame: &str) {
+    fn apply(&mut self, event: &cdp::Raw, session: &SessionId, main_frame: &str) {
         let before = (self.state.navigations_requested, self.state.commits);
         let was_pending = self.state.pending_url.is_some();
         if !apply(&mut self.state, event, session, main_frame).changed {
@@ -2865,10 +2754,10 @@ impl Tab for FrameTab {
                 owner
                     .frame
                     .host
-                    .send(
-                        "DOM.scrollIntoViewIfNeeded",
-                        json!({"objectId":owner.element.id().object_id()}),
-                    )
+                    .send_command(cdp::dom::ScrollIntoViewIfNeeded {
+                        object_id: Some(owner.element.id().object_id().to_string()),
+                        ..cdp::dom::ScrollIntoViewIfNeeded::default()
+                    })
                     .await
                     .map_err(|error| owner.frame.host.classify(&error))?;
             }
@@ -2916,15 +2805,7 @@ impl Tab for FrameTab {
                     }),
                     ..dom::ScrollIntoViewIfNeededParams::default()
                 };
-                let scrolled = element
-                    .frame
-                    .host
-                    .send(
-                        "DOM.scrollIntoViewIfNeeded",
-                        serde_json::to_value(params)
-                            .map_err(|error| PageError::Contract(error.to_string()))?,
-                    )
-                    .await;
+                let scrolled = element.frame.host.send_command(params).await;
                 return match scrolled {
                     Ok(_) => Ok(None),
                     Err(CdpError::Protocol { message, .. })
@@ -3004,9 +2885,12 @@ impl Tab for FrameTab {
                 return Err(PageError::NotConnected);
             }
         }
-        let params = json!({"objectId":element.handle.id().object_id()});
+        let object_id = Some(element.handle.id().object_id().to_string());
         if position.is_some() {
-            let model = element.frame.host.send("DOM.getBoxModel", params);
+            let model = element.frame.host.send_command(cdp::dom::GetBoxModel {
+                object_id,
+                ..cdp::dom::GetBoxModel::default()
+            });
             let border_params = InjectedGetElementBorderWidthParams {
                 element: element.handle.clone(),
             };
@@ -3020,8 +2904,6 @@ impl Tab for FrameTab {
                 Ok(border) => border,
                 Err(error) => return no_geometry(&error),
             };
-            let model: dom::GetBoxModelResult = serde_json::from_value(model)
-                .map_err(|error| PageError::Contract(error.to_string()))?;
             let offset = self
                 .frames
                 .offset(&element.frame.host)
@@ -3032,7 +2914,10 @@ impl Tab for FrameTab {
                 border: (border.left, border.top),
             });
         }
-        let quads = element.frame.host.send("DOM.getContentQuads", params);
+        let quads = element.frame.host.send_command(cdp::dom::GetContentQuads {
+            object_id,
+            ..cdp::dom::GetContentQuads::default()
+        });
         let viewport_frame = self.frames.main();
         let viewport = viewport_frame.call(None, &InjectedViewportSizeParams {});
         let (quads, viewport) = tokio::join!(quads, viewport);
@@ -3041,8 +2926,6 @@ impl Tab for FrameTab {
             Ok(quads) => quads,
             Err(error) => return no_geometry(&element.frame.host.classify(&error)),
         };
-        let quads: dom::GetContentQuadsResult = serde_json::from_value(quads)
-            .map_err(|error| PageError::Contract(error.to_string()))?;
         let offset = self
             .frames
             .offset(&element.frame.host)
@@ -3061,7 +2944,7 @@ impl Tab for FrameTab {
     /// A turn at the tab's input lock, granted in arrival order. tokio's lock is cancel-safe: a
     /// wait dropped before its turn holds nothing.
     async fn input(&self) -> InputPermit {
-        InputPermit::take(&self.input, self.session.id.clone()).await
+        InputPermit::take(&self.input, self.session.id().clone()).await
     }
 
     /// [`arm_interceptor`] on the run's tracker, spawned on the first poll, and a wait for its
@@ -3188,7 +3071,7 @@ impl Tab for FrameTab {
 
     fn watch_navigations(&self) -> NavigationWatch {
         NavigationWatch {
-            events: self.session.cdp.events(),
+            events: self.session.door.events(),
         }
     }
 
@@ -3204,13 +3087,13 @@ impl Tab for FrameTab {
         &self,
         mut watched: NavigationWatch,
     ) -> Result<Vec<String>, PageError> {
-        if let Err(error) = self.send("Page.enable", json!({})).await
+        if let Err(error) = self.send_command(cdp::page::Enable::default()).await
             && playwright_injected_methods::classify(&error) == PageError::Closed
         {
             return Err(PageError::Closed);
         }
         let mut barrier = Barrier::default();
-        let session = &self.session.id;
+        let session = self.session.id();
         loop {
             match watched.events.try_recv() {
                 Ok(event) => barrier.apply(&event, session, &self.main_frame),
@@ -3248,10 +3131,10 @@ async fn frame_hit_target(
         let model = owner
             .frame
             .host
-            .send(
-                "DOM.getBoxModel",
-                json!({"objectId":owner.element.id().object_id()}),
-            )
+            .send_command(cdp::dom::GetBoxModel {
+                object_id: Some(owner.element.id().object_id().to_string()),
+                ..cdp::dom::GetBoxModel::default()
+            })
             .await
             .map_err(|error| match owner.frame.host.classify(&error) {
                 PageError::Closed => PageError::Closed,
@@ -3275,8 +3158,6 @@ async fn frame_hit_target(
             }
             FrameStyle::Insets(insets) => insets,
         };
-        let model: dom::GetBoxModelResult = serde_json::from_value(model)
-            .map_err(|error| PageError::Contract(error.to_string()))?;
         let offset = page
             .frames
             .offset(&owner.frame.host)
@@ -3410,10 +3291,23 @@ fn pixels(value: i64) -> f64 {
 // Input, written by `mouse_and_touch_input.rs`.
 // ---------------------------------------------------------------------------------------------
 
-/// Every input writer sends through the session at its socket incarnation.
+/// Every input writer writes through the door's session, at its socket incarnation: a call's
+/// writes under its delivery record ([`cdp::Session::write`]), a run end's releases under none
+/// ([`cdp::Session::release`]).
 impl InputSender for Arc<PageSession> {
-    async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
-        self.send_input_json(method, &params).await
+    async fn send_input(&self, input: &PlannedInput, pen: Pen<'_>) -> Result<(), CdpError> {
+        match (pen, input) {
+            (Pen::Call(delivery), _) => self.session.door.write(input.input(), delivery).await,
+            (Pen::RunEnd, PlannedInput::Release(release)) => {
+                self.session.door.release(release).await
+            }
+            // A run's end plans only releases (`write_run_releases`); any other write has no
+            // record to go under, so it is refused before anything goes out.
+            (Pen::RunEnd, PlannedInput::Write(input)) => Err(CdpError::Transport(format!(
+                "{} is not a release, and a run's end writes only releases",
+                input.method()
+            ))),
+        }
     }
 
     /// Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `await progress.race(client.send('Input.setInterceptDrags', { enabled: true }));`
@@ -3421,7 +3315,11 @@ impl InputSender for Arc<PageSession> {
     /// The listeners go into every frame's utility world, interception is on for the move
     /// alone and always turned off again, and a frame that saw a drag start hands Neo the
     /// drag Chromium intercepted.
-    async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
+    async fn move_intercepting_drag(
+        &self,
+        moved: &PlannedInput,
+        delivery: &InputTicket,
+    ) -> Result<Option<Value>, CdpError> {
         let frames = self.drag_frames().await;
         future::join_all(frames.iter().map(|frame| {
             time::timeout(
@@ -3431,23 +3329,17 @@ impl InputSender for Arc<PageSession> {
         }))
         .await;
         // Subscribed before interception is on, so its event cannot slip past.
-        let mut events = self.session.cdp.events();
-        if let Err(error) = self
-            .send_input_json("Input.setInterceptDrags", r#"{"enabled":true}"#)
-            .await
-        {
+        let mut events = self.session.door.events();
+        let intercept = |enabled| cdp::Input::new(&SetInterceptDrags { enabled });
+        if let Err(error) = self.session.door.write(&intercept(true), delivery).await {
             // Playwright: `server/chromium/crDragDrop.ts` `DragManager.interceptDragCausedByMove`: `this._crPage._page.safeNonStallingEvaluateInAllFrames('window.__cleanupDrag?.()', 'utility').catch(() => {});`
             // The listeners go on every exit, this one included.
             PageSession::cleanup_drag(&frames).await;
             return Err(error);
         }
-        let moved = self
-            .send_input_json("Input.dispatchMouseEvent", &params)
-            .await;
+        let moved = self.session.door.write(moved.input(), delivery).await;
         let started = PageSession::cleanup_drag(&frames).await;
-        let disabled = self
-            .send_input_json("Input.setInterceptDrags", r#"{"enabled":false}"#)
-            .await;
+        let disabled = self.session.door.write(&intercept(false), delivery).await;
         moved?;
         disabled?;
         if !started {
@@ -3456,11 +3348,10 @@ impl InputSender for Arc<PageSession> {
         let intercepted = async {
             loop {
                 match events.recv().await {
-                    Ok(event)
-                        if event.method == "Input.dragIntercepted"
-                            && event.session_id.as_ref() == Some(&self.session.id) =>
-                    {
-                        return Ok(event.params["data"].clone());
+                    Ok(event) if event.on_session(self.session.door.id()) => {
+                        if let Some(intercepted) = event.decode::<DragIntercepted>() {
+                            return Ok(intercepted.data);
+                        }
                     }
                     Ok(_) | Err(RecvError::Lagged(_)) => {}
                     Err(RecvError::Closed) => return Err(CdpError::SessionGone),
@@ -3470,7 +3361,7 @@ impl InputSender for Arc<PageSession> {
         time::timeout(DRAG_INTERCEPT_WAIT, intercepted)
             .await
             .map_err(|_| CdpError::Timeout {
-                method: "Input.dragIntercepted".to_string(),
+                method: <DragIntercepted as cdp::Event>::METHOD.to_string(),
             })?
             .map(Some)
     }
@@ -3530,7 +3421,7 @@ impl PageSession {
     /// A run's end records it on every tab before any of its cleanup waits
     /// (`Tabs::mark_input_ended`).
     pub(crate) fn mark_input_ended(&self) {
-        self.input.mark_ended(&self.session.id);
+        self.input.mark_ended(self.session.id());
     }
 
     /// Releases every key and button this run's session left held on the tab (design section
@@ -3545,7 +3436,7 @@ impl PageSession {
         if self.closed.is_cancelled() {
             return;
         }
-        let permit = InputPermit::take(&self.input, self.session.id.clone()).await;
+        let permit = InputPermit::take(&self.input, self.session.id().clone()).await;
         write_run_releases(self, &permit).await;
     }
 }
@@ -3561,8 +3452,14 @@ async fn write_run_releases(sender: &impl InputSender, permit: &InputPermit) {
     let mut plan = Plan::default();
     keyboard_input::plan_key_releases(&mut plan, &mut simulated, &owner);
     mouse_and_touch_input::plan_button_releases(&mut plan, &mut simulated, &owner);
-    let written =
-        mouse_and_touch_input::write_plan(sender, permit, &plan, &CancellationToken::new()).await;
+    let written = mouse_and_touch_input::write_plan(
+        sender,
+        Pen::RunEnd,
+        permit,
+        &plan,
+        &CancellationToken::new(),
+    )
+    .await;
     if let Some(Err(error)) = written.outcomes.iter().find(|outcome| outcome.is_err()) {
         debug!(%error, "releasing the run's held input failed");
     }
@@ -3570,31 +3467,14 @@ async fn write_run_releases(sender: &impl InputSender, permit: &InputPermit) {
 
 // Input commands and the browser's platform go through these two.
 impl PageSession {
-    /// One input command on the session's own socket incarnation, its params already JSON and
-    /// written unchanged (key events keep Playwright's field order on the wire). browseros-cdp
-    /// refuses it with `ConnectionEpochChanged` before writing once the socket was replaced, so
-    /// no input goes out under a session id the new socket does not know, and a writer can
-    /// prove it wrote nothing.
-    pub(crate) async fn send_input_json(&self, method: &str, params: &str) -> Result<(), CdpError> {
-        self.session
-            .cdp
-            .send_raw_json_at_epoch(self.session.epoch, method, params, Some(&self.session.id))
-            .await
-            .map(|_| ())
-    }
-
     /// The browser's userAgent: `Browser.getVersion`, a browser-wide command sent without the
     /// session, as Playwright reads it once per browser (`crBrowser.ts`).
     pub(crate) async fn user_agent(&self) -> Result<String, CdpError> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Version {
-            user_agent: String,
-        }
-        let version: Version = self
+        let version = self
             .session
-            .cdp
-            .send_typed("Browser.getVersion", json!({}), None)
+            .door
+            .browser()
+            .send(cdp::browser::GetVersion {})
             .await?;
         Ok(version.user_agent)
     }
@@ -3605,30 +3485,78 @@ mod tests {
     use std::mem;
     use std::sync::atomic::AtomicBool;
 
+    use serde_json::json;
     use tokio::sync::Notify;
     use tokio::task::JoinHandle;
 
     use super::*;
+    use crate::progress::DeliveryCell;
 
     const SESSION: &str = "S1";
     const MAIN: &str = "MAIN";
 
-    fn event(method: &str, session: Option<&str>, params: Value) -> CdpEvent {
-        CdpEvent {
-            method: method.to_string(),
-            params,
-            session_id: session.map(SessionId::from),
+    /// A delivery record no test reads, for a writer the test drives itself.
+    fn unread_ticket() -> InputTicket {
+        Arc::new(DeliveryCell::default())
+            .begin()
+            .expect("a fresh record")
+    }
+
+    /// An event as Chromium sends it: `params`, with each field the pinned protocol requires and
+    /// the test leaves out filled in ([`as_chromium_sends`]).
+    fn event(method: &str, session: Option<&str>, params: Value) -> cdp::Raw {
+        cdp::Raw::fixture(method, session, as_chromium_sends(method, params))
+    }
+
+    /// `params` with each required field it lacks, at a value nothing under test reads: the
+    /// runtime decodes events strictly, and Chromium always sends these. A field the watcher
+    /// reads (a requested navigation's `disposition`, a commit's `type` aside) is the test's to
+    /// give.
+    fn as_chromium_sends(method: &str, mut params: Value) -> Value {
+        let defaults = match method {
+            "Page.frameNavigated" => json!({
+                "type": "Navigation",
+                "frame": {
+                    "domainAndRegistry": "", "securityOrigin": "", "mimeType": "text/html",
+                    "secureContextType": "Secure",
+                    "crossOriginIsolatedContextType": "NotIsolated", "gatedAPIFeatures": [],
+                },
+            }),
+            "Page.lifecycleEvent" => json!({ "timestamp": 0.0 }),
+            "Page.navigatedWithinDocument" => json!({ "navigationType": "fragment" }),
+            "Page.frameRequestedNavigation" => json!({ "reason": "scriptInitiated" }),
+            "Page.javascriptDialogOpening" => json!({ "frameId": MAIN }),
+            "Network.requestWillBeSent" => json!({ "timestamp": 0.0, "wallTime": 0.0 }),
+            "Network.loadingFailed" => json!({ "timestamp": 0.0, "type": "Document" }),
+            _ => json!({}),
+        };
+        fill(&mut params, defaults);
+        params
+    }
+
+    /// Inserts each field of `defaults` that `params` lacks, into nested objects too.
+    fn fill(params: &mut Value, defaults: Value) {
+        let (Some(params), Value::Object(defaults)) = (params.as_object_mut(), defaults) else {
+            return;
+        };
+        for (key, default) in defaults {
+            match params.get_mut(&key) {
+                Some(present) => fill(present, default),
+                None => {
+                    params.insert(key, default);
+                }
+            }
         }
     }
 
-    fn applied(state: &mut PageState, event: &CdpEvent) -> Applied {
+    fn applied(state: &mut PageState, event: &cdp::Raw) -> Applied {
         apply(state, event, &SessionId::from(SESSION), MAIN)
     }
 
     const CHILD: &str = "CHILD";
     const OOPIF_SESSION: &str = "S2";
 
-    fn lifecycle(session: &str, frame: &str, loader: &str, name: &str) -> CdpEvent {
+    fn lifecycle(session: &str, frame: &str, loader: &str, name: &str) -> cdp::Raw {
         event(
             "Page.lifecycleEvent",
             Some(session),
@@ -3636,7 +3564,7 @@ mod tests {
         )
     }
 
-    fn navigated(session: &str, frame: &str, url: &str, loader: &str) -> CdpEvent {
+    fn navigated(session: &str, frame: &str, url: &str, loader: &str) -> cdp::Raw {
         event(
             "Page.frameNavigated",
             Some(session),
@@ -3644,7 +3572,7 @@ mod tests {
         )
     }
 
-    fn detached(session: &str, frame: &str, reason: &str) -> CdpEvent {
+    fn detached(session: &str, frame: &str, reason: &str) -> cdp::Raw {
         event(
             "Page.frameDetached",
             Some(session),
@@ -3751,7 +3679,7 @@ mod tests {
             &event(
                 "Page.frameAttached",
                 Some(SESSION),
-                json!({ "frameId": CHILD }),
+                json!({ "frameId": CHILD, "parentFrameId": MAIN }),
             ),
             &tab,
             Some(MAIN),
@@ -4019,7 +3947,7 @@ mod tests {
         }
     }
 
-    fn request_started(id: &str, frame: &str, url: &str, kind: &str) -> CdpEvent {
+    fn request_started(id: &str, frame: &str, url: &str, kind: &str) -> cdp::Raw {
         event(
             "Network.requestWillBeSent",
             Some(SESSION),
@@ -4030,7 +3958,7 @@ mod tests {
         )
     }
 
-    fn request_failed(id: &str, error: &str, canceled: bool) -> CdpEvent {
+    fn request_failed(id: &str, error: &str, canceled: bool) -> cdp::Raw {
         event(
             "Network.loadingFailed",
             Some(SESSION),
@@ -4038,7 +3966,7 @@ mod tests {
         )
     }
 
-    fn committed(loader: &str) -> CdpEvent {
+    fn committed(loader: &str) -> cdp::Raw {
         event(
             "Page.frameNavigated",
             Some(SESSION),
@@ -4400,7 +4328,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let cdp = browser.cdp().await;
         for committed in [false, true] {
-            let (events, receiver) = broadcast::channel(16);
+            let (events, receiver) = cdp::Ring::new(16);
             let (state, mut current) = watch::channel(PageState::default());
             let (navigations, _) = broadcast::channel(16);
             let stop = CancellationToken::new();
@@ -4438,8 +4366,7 @@ mod tests {
                 state,
                 navigations,
                 world: Arc::new(World::new(
-                    cdp.clone(),
-                    SessionId::from(SESSION),
+                    cdp::Browser::new(cdp.clone()).adopt(SessionId::from(SESSION)),
                     MAIN.to_string(),
                 )),
                 network: Arc::new(NetworkLog::new(MAIN.to_string())),
@@ -4452,8 +4379,7 @@ mod tests {
             };
             let watcher = watch_events(
                 receiver,
-                cdp.clone(),
-                SessionId::from(SESSION),
+                cdp::Browser::new(cdp.clone()).adopt(SessionId::from(SESSION)),
                 MAIN.to_string(),
                 updates,
                 CancellationToken::new(),
@@ -4484,9 +4410,13 @@ mod tests {
 
         let browser = FakeBrowser::start(Replies::default()).await;
         let id = PageId::new(PAGE.to_string());
-        let session = Session::attach(browser.cdp().await, id.clone(), TokioHandle::current())
-            .await
-            .expect("attach");
+        let session = Session::attach(
+            cdp::Browser::new(browser.cdp().await),
+            id.clone(),
+            TokioHandle::current(),
+        )
+        .await
+        .expect("attach");
         let page = Arc::new(PageSession::new(
             session,
             &id,
@@ -4529,7 +4459,7 @@ mod tests {
 
     /// A session on the fake's tab with its own tracker and closed token.
     async fn tracked_page(
-        cdp: CdpClient,
+        cdp: cdp::Browser,
         tasks: &TaskTracker,
         closed: &CancellationToken,
     ) -> Arc<PageSession> {
@@ -4567,7 +4497,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let tasks = TaskTracker::new();
         let closed = CancellationToken::new();
-        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let page = tracked_page(cdp::Browser::new(browser.cdp().await), &tasks, &closed).await;
         let (held, released) = oneshot::channel::<()>();
         page.spawn_while_open(async move {
             future::pending::<()>().await;
@@ -4596,7 +4526,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let tasks = TaskTracker::new();
         let closed = CancellationToken::new();
-        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let page = tracked_page(cdp::Browser::new(browser.cdp().await), &tasks, &closed).await;
         let (done, finished) = oneshot::channel();
         page.spawn_while_open(async move {
             time::sleep(Duration::from_millis(20)).await;
@@ -4633,7 +4563,7 @@ mod tests {
         let browser = FakeBrowser::start(Replies::default()).await;
         let tasks = TaskTracker::new();
         let closed = CancellationToken::new();
-        let page = tracked_page(browser.cdp().await, &tasks, &closed).await;
+        let page = tracked_page(cdp::Browser::new(browser.cdp().await), &tasks, &closed).await;
         let tab = FrameTab {
             page: Arc::clone(&page),
             scope: FrameScope::Main,
@@ -4665,20 +4595,22 @@ mod tests {
 
         let browser = FakeBrowser::start(Replies::default()).await;
         let cdp = browser.cdp().await;
-        let (events, receiver) = broadcast::channel(16);
+        let (events, receiver) = cdp::Ring::new(16);
         let (state, mut current) = watch::channel(PageState::default());
         let (navigations, _) = broadcast::channel(16);
         let closed = CancellationToken::new();
         let stop = CancellationToken::new();
         let watcher = watch_events(
             receiver,
-            cdp.clone(),
-            SessionId::from(SESSION),
+            cdp::Browser::new(cdp.clone()).adopt(SessionId::from(SESSION)),
             MAIN.to_string(),
             PageUpdates {
                 state,
                 navigations,
-                world: Arc::new(World::new(cdp, SessionId::from(SESSION), MAIN.to_string())),
+                world: Arc::new(World::new(
+                    cdp::Browser::new(cdp).adopt(SessionId::from(SESSION)),
+                    MAIN.to_string(),
+                )),
                 network: Arc::new(NetworkLog::new(MAIN.to_string())),
                 frames: None,
                 feeds: None,
@@ -4740,8 +4672,7 @@ mod tests {
             enabled.send(()).expect("enable completed");
             let result = time::timeout(
                 Duration::from_secs(1),
-                seed_url(ready, |method| {
-                    assert_eq!(method, "Page.getFrameTree");
+                seed_url(ready, || {
                     future::ready(Ok(json!({"frameTree":{"frame":{
                         "id": MAIN, "url": url, "urlFragment": fragment,
                         "unreachableUrl": "http://127.0.0.1:9/unreachable"
@@ -4762,7 +4693,7 @@ mod tests {
         let (enabled, ready) = oneshot::channel::<()>();
         let queried = AtomicBool::new(false);
         drop(enabled);
-        let seed = seed_url(ready, |_| {
+        let seed = seed_url(ready, || {
             queried.store(true, Ordering::Relaxed);
             future::ready(Ok(json!({})))
         });
@@ -4868,7 +4799,7 @@ mod tests {
         let navigated = event(
             "Page.frameNavigated",
             Some(SESSION),
-            json!({ "frame": { "id": MAIN, "url": "https://a.test/b" } }),
+            json!({ "frame": { "id": MAIN, "url": "https://a.test/b", "loaderId": "B" } }),
         );
         barrier.apply(&navigated, &session, MAIN);
         assert_eq!(barrier.waiting, 0);
@@ -4911,8 +4842,9 @@ mod tests {
     }
 
     impl InputSender for ReviewDelayedInput {
-        async fn send_input(&self, _method: &'static str, params: String) -> Result<(), CdpError> {
-            let value: Value = serde_json::from_str(&params).expect("input params");
+        async fn send_input(&self, input: &PlannedInput, _pen: Pen<'_>) -> Result<(), CdpError> {
+            let input = input.input();
+            let value: Value = serde_json::from_str(input.params()).expect("input params");
             self.events.lock().expect("events").push(
                 value["type"]
                     .as_str()
@@ -4978,8 +4910,14 @@ mod tests {
         let stopped = CancellationToken::new();
         let writer_stop = stopped.clone();
         let writer = tokio::spawn(async move {
-            let result =
-                mouse_and_touch_input::write_plan(&writer_sender, &a, &plan, &writer_stop).await;
+            let result = mouse_and_touch_input::write_plan(
+                &writer_sender,
+                Pen::Call(&unread_ticket()),
+                &a,
+                &plan,
+                &writer_stop,
+            )
+            .await;
             drop(a);
             result
         });
@@ -5027,17 +4965,27 @@ mod tests {
         )
         .expect("B's Shift");
         let immediate = ReviewDelayedInput::new(false);
-        let _down =
-            mouse_and_touch_input::write_plan(&immediate, &b, &down_b, &CancellationToken::new())
-                .await;
+        let _down = mouse_and_touch_input::write_plan(
+            &immediate,
+            Pen::Call(&unread_ticket()),
+            &b,
+            &down_b,
+            &CancellationToken::new(),
+        )
+        .await;
         let mut simulated = b.snapshot().expect("B's devices");
         let mut end_b = Plan::default();
         keyboard_input::plan_key_releases(&mut end_b, &mut simulated, &owner_b);
         mouse_and_touch_input::plan_button_releases(&mut end_b, &mut simulated, &owner_b);
         let releasing = ReviewDelayedInput::new(false);
-        let _end =
-            mouse_and_touch_input::write_plan(&releasing, &b, &end_b, &CancellationToken::new())
-                .await;
+        let _end = mouse_and_touch_input::write_plan(
+            &releasing,
+            Pen::Call(&unread_ticket()),
+            &b,
+            &end_b,
+            &CancellationToken::new(),
+        )
+        .await;
         assert_eq!(
             releasing.events(),
             ["keyUp"],
@@ -5083,12 +5031,26 @@ mod tests {
             .expect("a");
         let sender = ReviewDelayedInput::new(false);
         let never = CancellationToken::new();
-        let _pressed = mouse_and_touch_input::write_plan(&sender, &permit, &press, &never).await;
+        let _pressed = mouse_and_touch_input::write_plan(
+            &sender,
+            Pen::Call(&unread_ticket()),
+            &permit,
+            &press,
+            &never,
+        )
+        .await;
         assert!(sender.events().is_empty(), "an ended run presses nothing");
         let mut simulated = permit.snapshot().expect("devices");
         let mut end = Plan::default();
         keyboard_input::plan_key_releases(&mut end, &mut simulated, &a);
-        let _released = mouse_and_touch_input::write_plan(&sender, &permit, &end, &never).await;
+        let _released = mouse_and_touch_input::write_plan(
+            &sender,
+            Pen::Call(&unread_ticket()),
+            &permit,
+            &end,
+            &never,
+        )
+        .await;
         assert_eq!(sender.events(), ["keyUp"], "its release still goes out");
         assert_eq!(permit.devices().keyboard, KeyboardState::default());
     }
@@ -5251,8 +5213,10 @@ mod tests {
     }
 
     impl InputSender for FuzzSender {
-        async fn send_input(&self, method: &'static str, params: String) -> Result<(), CdpError> {
-            let event: Value = serde_json::from_str(&params).expect("input params");
+        async fn send_input(&self, input: &PlannedInput, _pen: Pen<'_>) -> Result<(), CdpError> {
+            let input = input.input();
+            let method = input.method();
+            let event: Value = serde_json::from_str(input.params()).expect("input params");
             let (answer, held_back) = {
                 let mut browser = self.browser.lock().expect("browser");
                 let answer = browser.answer();
@@ -5286,8 +5250,12 @@ mod tests {
 
         /// The move, and then, with the left button down and no drag running, a drag the page
         /// starts three times in four, which Chromium hands over (`Input.dragIntercepted`).
-        async fn move_intercepting_drag(&self, params: String) -> Result<Option<Value>, CdpError> {
-            self.send_input("Input.dispatchMouseEvent", params).await?;
+        async fn move_intercepting_drag(
+            &self,
+            moved: &PlannedInput,
+            delivery: &InputTicket,
+        ) -> Result<Option<Value>, CdpError> {
+            self.send_input(moved, Pen::Call(delivery)).await?;
             let mut browser = self.browser.lock().expect("browser");
             let left_down = browser
                 .down
@@ -5455,8 +5423,14 @@ mod tests {
                 let mut simulated = permit.snapshot().expect("devices");
                 let mut plan = Plan::default();
                 call.plan(&mut plan, &mut simulated, &owner);
-                let written =
-                    mouse_and_touch_input::write_plan(&sender, &permit, &plan, &stop).await;
+                let written = mouse_and_touch_input::write_plan(
+                    &sender,
+                    Pen::Call(&unread_ticket()),
+                    &permit,
+                    &plan,
+                    &stop,
+                )
+                .await;
                 let mut browser = sender.browser.lock().expect("browser");
                 browser.released.clear();
                 // A call whose every write was answered resolves, a drag's skipped press

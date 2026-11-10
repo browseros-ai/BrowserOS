@@ -37,9 +37,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use browseros_cdp::{CdpClient, CdpEvent, SessionId};
+use browseros_cdp::SessionId;
 use neo_runtime_spec::serve::SerializedError;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time;
@@ -54,6 +53,7 @@ use crate::browser_representations::network::{Happening, NetworkLog};
 use crate::browser_representations::page::{Applied, DialogAnswer};
 use crate::browser_representations::routes::Channel;
 use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::chromium_bridge::cdp::{self, inspector, log, page, runtime};
 use crate::chromium_bridge::contexts::ContextFrames;
 use crate::chromium_bridge::frame_events::FrameModel;
 use crate::chromium_bridge::frames::{self, Host};
@@ -73,7 +73,9 @@ pub(crate) struct PageEvents {
     hub: EventHub,
     page_guid: String,
     target: String,
-    cdp: CdpClient,
+    /// The tab's own session, which the run attached, as the door sends on it.
+    tab: cdp::Session,
+    /// Its id.
     session: SessionId,
     /// The out-of-process frame sessions of this tab the run attached, whose console events the
     /// tab's watcher takes as the tab's, with the frame each hosts.
@@ -115,27 +117,6 @@ pub(crate) struct PageEvents {
 pub(crate) type ChildSessionHook =
     Arc<dyn Fn(SessionId) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
-/// CDP's `Page.fileChooserOpened` params.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FileChooserOpened {
-    frame_id: String,
-    mode: String,
-    #[serde(default)]
-    backend_node_id: Option<i64>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DialogOpening {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(default)]
-    message: String,
-    #[serde(default)]
-    default_prompt: Option<String>,
-}
-
 impl PageEvents {
     /// `locatorHandlerTriggered` on the page while the realm listens (`locator_handlers.rs`):
     /// whether it went out.
@@ -156,19 +137,13 @@ impl PageEvents {
 
     /// `discovered`: the run's discovery reported the tab as new, so its first lifecycle replay
     /// is the page's own new life and reaches listeners.
-    pub(crate) fn new(
-        hub: EventHub,
-        target: &str,
-        cdp: CdpClient,
-        session: SessionId,
-        discovered: bool,
-    ) -> Self {
+    pub(crate) fn new(hub: EventHub, target: &str, tab: cdp::Session, discovered: bool) -> Self {
         Self {
             hub,
             page_guid: quickjs_bridge::page_guid(&PageId::new(target.to_string())),
             target: target.to_string(),
-            cdp,
-            session,
+            session: tab.id().clone(),
+            tab,
             children: Arc::default(),
             args: Arc::default(),
             choosers: Arc::default(),
@@ -236,11 +211,11 @@ impl PageEvents {
         }
         let switched = time::timeout(
             CHILD_ENABLE_WAIT,
-            self.cdp.send(
-                "Page.setInterceptFileChooserDialog",
-                json!({ "enabled": wanted }),
-                Some(&self.session),
-            ),
+            self.on(&self.session)
+                .send(page::SetInterceptFileChooserDialog {
+                    enabled: wanted,
+                    cancel: None,
+                }),
         )
         .await;
         match switched {
@@ -272,18 +247,16 @@ impl PageEvents {
     /// a session intercepting that frame's own, and a session intercepts only once its `Page`
     /// domain is on (measured). Bounded by [`CHILD_ENABLE_WAIT`]; a failure is logged.
     async fn intercept_child(&self, session: &SessionId, enabled: bool) {
+        let frame = self.on(session);
         let switch = async {
             if enabled {
-                self.cdp
-                    .send("Page.enable", json!({}), Some(session))
-                    .await?;
+                frame.send(page::Enable::default()).await?;
             }
-            self.cdp
-                .send(
-                    "Page.setInterceptFileChooserDialog",
-                    json!({ "enabled": enabled }),
-                    Some(session),
-                )
+            frame
+                .send(page::SetInterceptFileChooserDialog {
+                    enabled,
+                    cancel: None,
+                })
                 .await
         };
         match time::timeout(CHILD_ENABLE_WAIT, switch).await {
@@ -308,10 +281,9 @@ impl PageEvents {
     /// A frame of the tab committed a new document at `url`: its origin is visited, unless it
     /// has none (`about:blank`, `data:`). The documents the tab held when the run attached are
     /// not visits, as Playwright skips its initial ones.
-    fn visit(&self, url: &Value) {
-        let Some(origin) = url
-            .as_str()
-            .and_then(|url| Url::parse(url).ok())
+    fn visit(&self, url: &str) {
+        let Some(origin) = Url::parse(url)
+            .ok()
             .map(|url| url.origin())
             .filter(Origin::is_tuple)
             .map(|origin| origin.ascii_serialization())
@@ -333,9 +305,15 @@ impl PageEvents {
             .unwrap_or_default()
     }
 
-    /// The client of the tab's sessions.
-    pub(crate) fn cdp(&self) -> &CdpClient {
-        &self.cdp
+    /// The tab's own session, through which the door reaches its child sessions too.
+    pub(crate) fn cdp(&self) -> &cdp::Session {
+        &self.tab
+    }
+
+    /// `session`, the tab's own or one of its out-of-process frames', as the door sends on it.
+    /// These sessions only send here, never write input.
+    fn on(&self, session: &SessionId) -> cdp::Session {
+        self.tab.browser().adopt(session.clone())
     }
 
     /// The tab's own session, then each out-of-process frame session of it the run attached.
@@ -357,8 +335,8 @@ impl PageEvents {
         }
         self.console.request(&session);
         let enable = async {
-            host.send("Runtime.enable", json!({})).await?;
-            host.send("Log.enable", json!({})).await
+            host.send_command(runtime::Enable {}).await?;
+            host.send_command(log::Enable {}).await
         };
         match time::timeout(CHILD_ENABLE_WAIT, enable).await {
             Ok(Ok(_)) => {}
@@ -413,8 +391,8 @@ impl PageEvents {
     /// Applies one event the watcher already applied to the page's state (`applied`), and
     /// returns the dialog answer the watcher still owes: `applied.dialog` unless a listener now
     /// owns the dialog.
-    pub(crate) fn apply(&self, event: &CdpEvent, applied: &Applied) -> Option<DialogAnswer> {
-        let Some(session) = event.session_id.as_ref() else {
+    pub(crate) fn apply(&self, event: &cdp::Raw, applied: &Applied) -> Option<DialogAnswer> {
+        let Some(session) = event.session() else {
             return applied.dialog;
         };
         self.track_context(event, session);
@@ -428,8 +406,8 @@ impl PageEvents {
                 .and_then(|children| children.get(session).cloned());
             if let Some(hosted) = hosted {
                 self.context_frames.apply(event);
-                if event.method == "Page.fileChooserOpened" {
-                    self.file_chooser(&event.params, hosted);
+                if let Some(opened) = event.decode::<page::FileChooserOpened>() {
+                    self.file_chooser(opened, hosted);
                 }
                 self.console_event(event, session);
                 self.frame_event(event);
@@ -438,11 +416,16 @@ impl PageEvents {
         }
         self.context_frames.apply(event);
         let mut answer = applied.dialog;
-        match event.method.as_str() {
-            "Page.javascriptDialogOpening" => answer = self.dialog_opening(&event.params, answer),
-            "Page.javascriptDialogClosed" => self.dialog_closed(),
-            "Page.fileChooserOpened" => self.file_chooser(&event.params, None),
-            _ => self.console_event(event, session),
+        if event.is::<page::JavascriptDialogOpening>() {
+            answer = self.dialog_opening(event, answer);
+        } else if event.is::<page::JavascriptDialogClosed>() {
+            self.dialog_closed();
+        } else if event.is::<page::FileChooserOpened>() {
+            if let Some(opened) = event.decode() {
+                self.file_chooser(opened, None);
+            }
+        } else {
+            self.console_event(event, session);
         }
         if applied.new_document {
             self.console.mark_navigation();
@@ -456,47 +439,36 @@ impl PageEvents {
     ///
     /// The page-world execution contexts of the tab's own session and of the out-of-process
     /// frame sessions the watcher takes, each with its frame.
-    fn track_context(&self, event: &CdpEvent, session: &SessionId) {
+    fn track_context(&self, event: &cdp::Raw, session: &SessionId) {
         let Ok(mut contexts) = self.contexts.lock() else {
             return;
         };
-        match event.method.as_str() {
-            "Runtime.executionContextCreated" => {
-                let context = &event.params["context"];
-                let page_world = context["auxData"]["isDefault"].as_bool() == Some(true);
-                if let (Some(id), Some(frame), true) = (
-                    context["id"].as_i64(),
-                    context["auxData"]["frameId"].as_str(),
-                    page_world,
-                ) {
-                    contexts.insert((session.clone(), id), frame.to_string());
-                }
+        if let Some(created) = event.decode::<runtime::ExecutionContextCreated>() {
+            let context = created.context;
+            // `auxData` is free-form in the protocol: Chromium's frame and page-world flags.
+            let aux = context.aux_data.unwrap_or_default();
+            let page_world = aux["isDefault"].as_bool() == Some(true);
+            if let (Some(frame), true) = (aux["frameId"].as_str(), page_world) {
+                contexts.insert((session.clone(), context.id), frame.to_string());
             }
-            "Runtime.executionContextDestroyed" => {
-                if let Some(id) = event.params["executionContextId"].as_i64() {
-                    contexts.remove(&(session.clone(), id));
-                }
-            }
-            "Runtime.executionContextsCleared" => {
-                contexts.retain(|(of, _), _| of != session);
-            }
-            _ => {}
+        } else if let Some(destroyed) = event.decode::<runtime::ExecutionContextDestroyed>() {
+            contexts.remove(&(session.clone(), destroyed.execution_context_id));
+        } else if event.is::<runtime::ExecutionContextsCleared>() {
+            contexts.retain(|(of, _), _| of != session);
         }
     }
 
     /// A frame change of the tab, for the page's and the context's frame listeners.
-    fn frame_event(&self, event: &CdpEvent) {
-        if !matches!(
-            event.method.as_str(),
-            "Page.frameAttached"
-                | "Page.frameDetached"
-                | "Page.frameNavigated"
-                | "Page.navigatedWithinDocument"
-        ) {
+    fn frame_event(&self, event: &cdp::Raw) {
+        let frame_change = event.is::<page::FrameAttached>()
+            || event.is::<page::FrameDetached>()
+            || event.is::<page::FrameNavigated>()
+            || event.is::<page::NavigatedWithinDocument>();
+        if !frame_change {
             return;
         }
-        if event.method == "Page.frameNavigated" {
-            self.visit(&event.params["frame"]["url"]);
+        if let Some(navigated) = event.decode::<page::FrameNavigated>() {
+            self.visit(&navigated.frame.url);
         }
         let Ok(changes) = self.frames.lock().map(|mut model| model.apply(event)) else {
             return;
@@ -531,8 +503,8 @@ impl PageEvents {
 
     /// The session ended: the tab closed or crashed. Emits `close` or `crash` on the page; the
     /// SDK's `close` also runs the context's `pageclose` listeners.
-    pub(crate) fn closing(&self, event: Option<&CdpEvent>) {
-        let crashed = event.is_some_and(|event| event.method == "Inspector.targetCrashed");
+    pub(crate) fn closing(&self, event: Option<&cdp::Raw>) {
+        let crashed = event.is_some_and(cdp::Raw::is::<inspector::TargetCrashed>);
         let wanted = if crashed {
             self.hub.subscribed(&self.page_guid, "crash")
         } else {
@@ -550,49 +522,47 @@ impl PageEvents {
     }
 
     /// A console message, log entry or page error of `session`, the tab's or a frame's.
-    fn console_event(&self, event: &CdpEvent, session: &SessionId) {
-        match event.method.as_str() {
-            "Runtime.consoleAPICalled" => self.console_api(&event.params, session),
-            "Log.entryAdded" => self.log_entry(&event.params, session),
-            "Runtime.exceptionThrown" => self.exception(&event.params, session),
-            _ => {}
+    fn console_event(&self, event: &cdp::Raw, session: &SessionId) {
+        if event.is::<ConsoleApiCalled>() {
+            self.console_api(event, session);
+        } else if event.is::<LogEntryAdded>() {
+            self.log_entry(event, session);
+        } else if event.is::<ExceptionThrown>() {
+            self.exception(event, session);
         }
     }
 
-    fn console_api(&self, params: &Value, session: &SessionId) {
-        let Ok(event) = serde_json::from_value::<ConsoleApiCalled>(params.clone()) else {
+    fn console_api(&self, event: &cdp::Raw, session: &SessionId) {
+        let Some(called) = event.decode::<ConsoleApiCalled>() else {
             return;
         };
-        let Some(record) = console::from_console_api(&event) else {
+        let Some(record) = console::from_console_api(&called) else {
             return;
         };
-        let args = params["args"].as_array().cloned().unwrap_or_default();
+        let args = event
+            .decode::<runtime::ConsoleArgs>()
+            .and_then(|console| console.args.as_array().cloned())
+            .unwrap_or_default();
         // Playwright: `server/chromium/crPage.ts` `FrameSession._onConsoleAPI`: `const context = this._contextIdToContext.get(event.executionContextId);`
-        let frame = params["executionContextId"].as_i64().and_then(|id| {
-            self.contexts
-                .lock()
-                .ok()
-                .and_then(|contexts| contexts.get(&(session.clone(), id)).cloned())
+        let frame = self.contexts.lock().ok().and_then(|contexts| {
+            contexts
+                .get(&(session.clone(), called.execution_context_id))
+                .cloned()
         });
-        self.message(record, event.timestamp, session, args, frame);
+        self.message(record, called.timestamp, session, args, frame);
     }
 
-    fn log_entry(&self, params: &Value, session: &SessionId) {
-        let Ok(LogEntryAdded { entry }) = serde_json::from_value::<LogEntryAdded>(params.clone())
-        else {
+    fn log_entry(&self, event: &cdp::Raw, session: &SessionId) {
+        let Some(LogEntryAdded { entry }) = event.decode() else {
             return;
         };
         // Playwright: `server/chromium/crPage.ts` `FrameSession._onLogEntryAdded`: `args.map(arg => releaseObject(this._client, arg.objectId!));`
         for object in console::log_entry_object_ids(&entry) {
-            let cdp = self.cdp.clone();
+            let frame = self.on(session);
             let session = session.clone();
             tokio::spawn(async move {
-                let released = cdp
-                    .send(
-                        "Runtime.releaseObject",
-                        json!({ "objectId": object }),
-                        Some(&session),
-                    )
+                let released = frame
+                    .send(runtime::ReleaseObject { object_id: object })
                     .await;
                 if let Err(error) = released {
                     debug!(%session, %error, "releasing a log entry's argument failed");
@@ -640,8 +610,8 @@ impl PageEvents {
         }
     }
 
-    fn exception(&self, params: &Value, session: &SessionId) {
-        let Ok(event) = serde_json::from_value::<ExceptionThrown>(params.clone()) else {
+    fn exception(&self, event: &cdp::Raw, session: &SessionId) {
+        let Some(event) = event.decode::<ExceptionThrown>() else {
             return;
         };
         let record = console::from_exception(&event);
@@ -666,14 +636,18 @@ impl PageEvents {
         }
     }
 
-    fn dialog_opening(&self, params: &Value, answer: Option<DialogAnswer>) -> Option<DialogAnswer> {
-        let Ok(opening) = serde_json::from_value::<DialogOpening>(params.clone()) else {
+    fn dialog_opening(
+        &self,
+        event: &cdp::Raw,
+        answer: Option<DialogAnswer>,
+    ) -> Option<DialogAnswer> {
+        let Some(opening) = event.decode::<page::JavascriptDialogOpening>() else {
             return answer;
         };
         let Some((index, record)) = self.dialogs.opened(
             &self.target,
             &self.page_guid,
-            &opening.kind,
+            &opening.r#type,
             &opening.message,
             opening.default_prompt.as_deref().unwrap_or(""),
         ) else {
@@ -691,17 +665,14 @@ impl PageEvents {
             return None;
         }
         self.dialogs.answered_by_default(index);
-        Some(answer.unwrap_or_else(|| dialogs::default_answer(&opening.kind)))
+        Some(answer.unwrap_or_else(|| dialogs::default_answer(&opening.r#type)))
     }
 
     /// Playwright: `server/page.ts` `Page._onFileChooserOpened`: `if (!this.listenerCount(Page.Events.FileChooser)) {`
     /// A file chooser the page opened while the run intercepts them: Playwright's `fileChooser`
     /// event on the page when the run listens, else nothing (the chooser stays closed). `host`:
     /// the out-of-process frame whose session reported it, `None` for the tab's own.
-    fn file_chooser(&self, params: &Value, host: Option<String>) {
-        let Ok(opened) = serde_json::from_value::<FileChooserOpened>(params.clone()) else {
-            return;
-        };
+    fn file_chooser(&self, opened: page::FileChooserOpened, host: Option<String>) {
         let Some(backend) = opened.backend_node_id else {
             return;
         };
@@ -748,14 +719,12 @@ impl PageEvents {
             if !self.console.requested(&session) {
                 continue;
             }
-            let cdp = self.cdp.clone();
+            let frame = self.on(&session);
             tokio::spawn(async move {
-                let released = cdp
-                    .send(
-                        "Runtime.releaseObjectGroup",
-                        json!({ "objectGroup": "console" }),
-                        Some(&session),
-                    )
+                let released = frame
+                    .send(runtime::ReleaseObjectGroup {
+                        object_group: "console".to_string(),
+                    })
                     .await;
                 if let Err(error) = released {
                     debug!(%session, %error, "releasing the console's objects failed");
@@ -1090,6 +1059,7 @@ pub(crate) fn enable(tabs: &Tabs, entry: Arc<PageEntry>, needs: Needs) {
 
 #[cfg(test)]
 mod tests {
+    use browseros_cdp::runtime::ExecutionContextDescription;
     use neo_runtime_spec::serve::PageConsoleMessagesResultMessagesItemLocation;
 
     use super::*;
@@ -1160,8 +1130,7 @@ mod tests {
         let events = PageEvents::new(
             hub.clone(),
             "T",
-            browser.cdp().await,
-            SessionId::from("s"),
+            cdp::Browser::new(browser.cdp().await).adopt(SessionId::from("s")),
             false,
         );
         let switches = || -> Vec<Value> {
@@ -1206,27 +1175,27 @@ mod tests {
         let events = PageEvents::new(
             EventHub::default(),
             "T",
-            browser.cdp().await,
-            SessionId::from("s"),
+            cdp::Browser::new(browser.cdp().await).adopt(SessionId::from("s")),
             false,
         );
-        let context = |method: &str, params: Value| CdpEvent {
-            method: method.to_string(),
-            params,
-            session_id: Some(SessionId::from("s")),
+        let context = |method: &str, params: Value| cdp::Raw::fixture(method, Some("s"), params);
+        // As Chromium sends it: every field the pinned protocol requires.
+        let created = |id: i64, default: bool| {
+            serde_json::to_value(runtime::ExecutionContextCreated {
+                context: ExecutionContextDescription {
+                    id,
+                    aux_data: Some(json!({ "frameId": "CHILD", "isDefault": default })),
+                    ..ExecutionContextDescription::default()
+                },
+            })
+            .unwrap()
         };
         events.track_context(
-            &context(
-                "Runtime.executionContextCreated",
-                json!({ "context": { "id": 7, "auxData": { "frameId": "CHILD", "isDefault": true } } }),
-            ),
+            &context("Runtime.executionContextCreated", created(7, true)),
             &SessionId::from("s"),
         );
         events.track_context(
-            &context(
-                "Runtime.executionContextCreated",
-                json!({ "context": { "id": 8, "auxData": { "frameId": "CHILD", "isDefault": false } } }),
-            ),
+            &context("Runtime.executionContextCreated", created(8, false)),
             &SessionId::from("s"),
         );
         let frame_of = |id: i64| {
@@ -1267,8 +1236,7 @@ mod tests {
             let events = PageEvents::new(
                 hub.clone(),
                 "T",
-                cdp.clone(),
-                SessionId::from("s"),
+                cdp::Browser::new(cdp.clone()).adopt(SessionId::from("s")),
                 discovered,
             );
             events.lifecycle(&loaded);

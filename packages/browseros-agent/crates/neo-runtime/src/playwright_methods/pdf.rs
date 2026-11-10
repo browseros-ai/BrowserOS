@@ -13,12 +13,12 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use neo_runtime_spec::serve::PagePdfParams;
 use serde::Deserialize;
-use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio::time;
 use tracing::debug;
 
 use crate::browser_representations::page::PageSession;
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::playwright_methods::capture;
 use crate::progress::{self, CallError, PlaywrightError, Progress};
 
@@ -95,26 +95,26 @@ impl PdfOptions {
         })
     }
 
-    fn to_cdp(&self) -> Value {
-        json!({
-            "transferMode": "ReturnAsStream",
-            "landscape": self.landscape,
-            "displayHeaderFooter": self.display_header_footer,
-            "headerTemplate": self.header_template,
-            "footerTemplate": self.footer_template,
-            "printBackground": self.print_background,
-            "scale": self.scale,
-            "paperWidth": self.paper_width,
-            "paperHeight": self.paper_height,
-            "marginTop": self.margin_top,
-            "marginBottom": self.margin_bottom,
-            "marginLeft": self.margin_left,
-            "marginRight": self.margin_right,
-            "pageRanges": self.page_ranges,
-            "preferCSSPageSize": self.prefer_css_page_size,
-            "generateTaggedPDF": self.tagged,
-            "generateDocumentOutline": self.outline,
-        })
+    fn to_cdp(&self) -> cdp::page::PrintToPdf {
+        cdp::page::PrintToPdf {
+            transfer_mode: Some("ReturnAsStream".to_string()),
+            landscape: Some(self.landscape),
+            display_header_footer: Some(self.display_header_footer),
+            header_template: Some(self.header_template.clone()),
+            footer_template: Some(self.footer_template.clone()),
+            print_background: Some(self.print_background),
+            scale: Some(self.scale),
+            paper_width: Some(self.paper_width),
+            paper_height: Some(self.paper_height),
+            margin_top: Some(self.margin_top),
+            margin_bottom: Some(self.margin_bottom),
+            margin_left: Some(self.margin_left),
+            margin_right: Some(self.margin_right),
+            page_ranges: Some(self.page_ranges.clone()),
+            prefer_css_page_size: Some(self.prefer_css_page_size),
+            generate_tagged_pdf: Some(self.tagged),
+            generate_document_outline: Some(self.outline),
+        }
     }
 }
 
@@ -288,17 +288,23 @@ pub(crate) async fn pdf(
     let (sent, printed) = oneshot::channel();
     let session = Arc::clone(page);
     page.spawn(async move {
-        let answer = session.send("Page.printToPDF", options.to_cdp()).await;
+        let answer = session.send_command(options.to_cdp()).await;
         let stream = match answer {
-            Ok(answer) => match answer.get("stream").and_then(Value::as_str) {
+            Ok(answer) => match answer.stream {
                 Some(handle) => Ok(Stream {
                     page: Arc::clone(&session),
-                    handle: handle.to_string(),
+                    handle,
                     closed: false,
                 }),
-                None => Err(capture::malformed("Page.printToPDF", "no stream")),
+                None => Err(capture::malformed(
+                    cdp::page::PrintToPdf::METHOD,
+                    "no stream",
+                )),
             },
-            Err(error) => Err(capture::protocol_error("Page.printToPDF", &error)),
+            Err(error) => Err(capture::protocol_error(
+                cdp::page::PrintToPdf::METHOD,
+                &error,
+            )),
         };
         // A call that stopped waiting drops the stream here, which closes it.
         let _unread = sent.send(stream);
@@ -326,15 +332,18 @@ impl Stream {
         let mut bytes = Vec::new();
         loop {
             let reply = progress
-                .race(self.page.send("IO.read", json!({ "handle": self.handle })))
+                .race(self.page.send_command(cdp::io::Read {
+                    handle: self.handle.clone(),
+                    ..cdp::io::Read::default()
+                }))
                 .await?
-                .map_err(|error| capture::protocol_error("IO.read", &error))?;
+                .map_err(|error| capture::protocol_error(cdp::io::Read::METHOD, &error))?;
             let chunk: IoChunk = serde_json::from_value(reply)
-                .map_err(|error| capture::malformed("IO.read", error))?;
+                .map_err(|error| capture::malformed(cdp::io::Read::METHOD, error))?;
             if chunk.base64_encoded {
                 let decoded = STANDARD
                     .decode(chunk.data.as_bytes())
-                    .map_err(|error| capture::malformed("IO.read", error))?;
+                    .map_err(|error| capture::malformed(cdp::io::Read::METHOD, error))?;
                 bytes.extend_from_slice(&decoded);
             } else {
                 bytes.extend_from_slice(chunk.data.as_bytes());
@@ -346,7 +355,9 @@ impl Stream {
         // A call that stops before the close is answered leaves the stream to `Drop`, which
         // sends the close again: it may never have gone out.
         let closed = progress
-            .race(self.page.send("IO.close", json!({ "handle": self.handle })))
+            .race(self.page.send_command(cdp::io::Close {
+                handle: self.handle.clone(),
+            }))
             .await?;
         self.closed = true;
         if let Err(error) = closed {
@@ -366,7 +377,7 @@ impl Drop for Stream {
         let page = Arc::clone(&self.page);
         let handle = self.handle.clone();
         self.page.spawn(async move {
-            let close = page.send("IO.close", json!({ "handle": handle }));
+            let close = page.send_command(cdp::io::Close { handle });
             match time::timeout(ABANDONED_STREAM_CLOSE, close).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(error)) => debug!(%error, "closing an abandoned PDF stream failed"),
@@ -386,7 +397,11 @@ mod tests {
     use tokio::runtime::Handle;
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
+
+    use serde_json::{Value, json};
     use tokio_util::task::TaskTracker;
+
+    use crate::chromium_bridge::cdp;
 
     use super::*;
     use crate::browser_representations::page::{PageSetup, Session};
@@ -401,9 +416,13 @@ mod tests {
         closed: &CancellationToken,
     ) -> Arc<PageSession> {
         let id = PageId::new(PAGE.to_string());
-        let session = Session::attach(browser.cdp().await, id.clone(), Handle::current())
-            .await
-            .expect("attach");
+        let session = Session::attach(
+            cdp::Browser::new(browser.cdp().await),
+            id.clone(),
+            Handle::current(),
+        )
+        .await
+        .expect("attach");
         Arc::new(PageSession::new(
             session,
             &id,
@@ -483,7 +502,7 @@ mod tests {
     fn tests_that_defaults_are_playwrights() {
         let options = PdfOptions::from_params(&params(|_| {})).expect("defaults");
         assert_eq!(
-            options.to_cdp(),
+            json!(options.to_cdp()),
             json!({
                 "transferMode": "ReturnAsStream", "landscape": false,
                 "displayHeaderFooter": false, "headerTemplate": "", "footerTemplate": "",

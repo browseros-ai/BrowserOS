@@ -1,5 +1,9 @@
 //! The run-lifetime Clock deviation must also restore timing APIs on cancel and timeout.
 //! Native page behavior is the control; the fake clock is confirmed before ending the run.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[path = "support/browser.rs"]
 #[expect(dead_code, reason = "the shared fixture serves other browser tests")]

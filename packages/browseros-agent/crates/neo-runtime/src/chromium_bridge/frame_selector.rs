@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use neo_runtime_spec::injected::{InjectedFrameOwnerByRefParams, InjectedFrameOwnerParams};
 use neo_runtime_spec::{Element, Handle};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::browser_representations::page::{FrameTab, GroupGuard};
+use crate::chromium_bridge::cdp::dom;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::playwright_methods::click::PageError;
 
@@ -452,12 +453,10 @@ pub(crate) async fn direct_owners(
         let group = tab.group(&parent, "direct-frame-owner");
         let owner = parent
             .host
-            .send("DOM.getFrameOwner", json!({"frameId":child}))
+            .send_command(dom::GetFrameOwner { frame_id: child })
             .await
             .map_err(|error| parent.host.classify(&error))?;
-        let backend = owner["backendNodeId"].as_i64().ok_or_else(|| {
-            PageError::Contract("DOM.getFrameOwner returned no backendNodeId".to_string())
-        })?;
+        let backend = owner.backend_node_id;
         let element = parent.element(group.group(), backend).await?;
         owners.push(FrameOwner {
             frame: parent,
@@ -575,10 +574,10 @@ impl Hops for Resolver<'_> {
         };
         let described = frame
             .host
-            .send(
-                "DOM.describeNode",
-                json!({ "objectId": element.id().object_id() }),
-            )
+            .send_command(dom::DescribeNode {
+                object_id: Some(element.id().object_id().to_string()),
+                ..dom::DescribeNode::default()
+            })
             .await
             .map_err(|error| {
                 let error = frame.host.classify(&error);
@@ -587,7 +586,7 @@ impl Hops for Resolver<'_> {
                 }
                 error
             })?;
-        let Some(id) = described["node"]["frameId"].as_str() else {
+        let Some(id) = described.node.frame_id.as_deref() else {
             return Ok(None);
         };
         let child = self.tab.frames.context(id, Some(&frame.host)).await?;

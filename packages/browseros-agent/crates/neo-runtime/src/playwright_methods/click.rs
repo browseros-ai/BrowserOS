@@ -1641,8 +1641,8 @@ pub(crate) mod tests {
         let events: Vec<Value> = plan
             .commands
             .iter()
-            .filter(|command| command.method.is_some())
-            .map(|command| serde_json::from_str(&command.params).expect("params are JSON"))
+            .filter(|command| command.method().is_some())
+            .map(|command| serde_json::from_str(command.params()).expect("params are JSON"))
             .collect();
         let kind = |event: &Value| event["type"].as_str().unwrap_or_default().to_string();
         if let Some(start) = events.iter().find(|event| kind(event) == "touchStart") {
@@ -2751,11 +2751,11 @@ pub(crate) mod tests {
     fn plan_events(plan: &Plan) -> Vec<String> {
         plan.commands
             .iter()
-            .filter(|command| command.method.is_some())
+            .filter(|command| command.method().is_some())
             .map(|command| {
-                let event: Value = serde_json::from_str(&command.params).expect("params are JSON");
+                let event: Value = serde_json::from_str(command.params()).expect("params are JSON");
                 let kind = event["type"].as_str().unwrap_or_default();
-                if command.method == Some("Input.dispatchKeyEvent") {
+                if command.method() == Some("Input.dispatchKeyEvent") {
                     format!("{kind} {}", event["key"].as_str().unwrap_or_default())
                 } else {
                     format!("{kind} modifiers={}", event["modifiers"])
@@ -2769,7 +2769,7 @@ pub(crate) mod tests {
         plan.commands
             .iter()
             .filter_map(|command| {
-                let event: Value = serde_json::from_str(&command.params).ok()?;
+                let event: Value = serde_json::from_str(command.params()).ok()?;
                 (event["type"] == "mouseMoved").then(|| {
                     (
                         event["x"].as_f64().unwrap_or_default(),

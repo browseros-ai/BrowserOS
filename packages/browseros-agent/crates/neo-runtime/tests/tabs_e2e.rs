@@ -1,4 +1,8 @@
 //! Tab lifecycle and per-target routing on a throwaway BrowserOS profile.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[path = "support/browser.rs"]
 #[expect(

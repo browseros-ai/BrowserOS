@@ -1,4 +1,8 @@
 //! Frame routing on a real browser: visible effects distinguish each document and each run.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(
     dead_code,

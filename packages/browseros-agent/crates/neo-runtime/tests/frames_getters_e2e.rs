@@ -1,4 +1,8 @@
 //! Frame getters in QuickJS against same-origin, OOPIF and nested documents on a fresh browser.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[path = "support/browser.rs"]
 #[expect(

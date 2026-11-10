@@ -52,10 +52,17 @@ use neo_runtime_spec::serve::{
     FrameChannel, NameValue, RemoteAddr, RequestChannel, RequestInitializer, RequestSizes,
     ResourceTiming, ResponseChannel, ResponseInitializer, SecurityDetails,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Map, Value};
 use tokio::sync::watch;
 use url::Url;
+
+use crate::chromium_bridge::cdp;
+use crate::chromium_bridge::cdp::network::{
+    LoadingFailed, LoadingFinished, RequestServedFromCache, RequestWillBeSent,
+    RequestWillBeSentExtraInfo as RequestExtraInfo, ResponsePayload, ResponseReceived,
+    ResponseReceivedExtraInfo as ResponseExtraInfo,
+};
 
 /// How many navigation chains one session keeps. A run navigates a tab far fewer times; the
 /// cap only bounds a script that loops on `goto`, whose records live in Rust outside the realm.
@@ -465,18 +472,13 @@ impl NetworkLog {
 
     /// Applies one event of the tab's session (`session` `None`) or of an out-of-process frame
     /// session ([`Self::add_child`]), and answers what Playwright's server would report for it.
-    /// Any method outside `Network.*` is ignored.
-    pub(crate) fn apply(
-        &self,
-        session: Option<&SessionId>,
-        method: &str,
-        params: &Value,
-    ) -> Vec<Happening> {
+    /// Any event outside `Network.*` is ignored.
+    pub(crate) fn apply(&self, session: Option<&SessionId>, event: &cdp::Raw) -> Vec<Happening> {
         let Ok(mut log) = self.log.lock() else {
             return Vec::new();
         };
         let mut happenings = Vec::new();
-        let changed = log.apply(session, method, params, &mut happenings);
+        let changed = log.apply(session, event, &mut happenings);
         drop(log);
         if changed {
             self.changes
@@ -1027,43 +1029,30 @@ impl Log {
     fn apply(
         &mut self,
         session: Option<&SessionId>,
-        method: &str,
-        params: &Value,
+        event: &cdp::Raw,
         happenings: &mut Vec<Happening>,
     ) -> bool {
-        match method {
-            "Network.requestWillBeSent" => {
-                decode(params).is_some_and(|event: RequestWillBeSent| {
-                    self.request_will_be_sent(session, &event, happenings)
-                })
-            }
-            "Network.responseReceived" => decode(params)
-                .is_some_and(|event: ResponseReceived| self.response_received(&event, happenings)),
-            "Network.requestWillBeSentExtraInfo" => {
-                decode(params).is_some_and(|event: RequestExtraInfo| {
-                    let headers = headers_to_array(&event.headers, Some('\n'));
-                    self.extra(event.request_id, Extra::Request(headers))
-                })
-            }
-            "Network.responseReceivedExtraInfo" => {
-                decode(params).is_some_and(|event: ResponseExtraInfo| {
-                    let extra = ResponseExtra {
-                        headers: headers_to_array(&event.headers, Some('\n')),
-                        headers_size: event.headers_text.map_or(0, |text| utf16_len(&text)),
-                    };
-                    self.extra(event.request_id, Extra::Response(extra))
-                })
-            }
-            "Network.requestServedFromCache" => decode(params).is_some_and(|event: RequestId| {
-                self.extra(event.request_id, Extra::ServedFromCache)
-            }),
-            "Network.loadingFinished" => decode(params).is_some_and(|event: LoadingFinished| {
-                self.loading_finished(session, &event, happenings)
-            }),
-            "Network.loadingFailed" => decode(params).is_some_and(|event: LoadingFailed| {
-                self.loading_failed(session, event, happenings)
-            }),
-            _ => false,
+        if let Some(event) = event.decode::<RequestWillBeSent>() {
+            self.request_will_be_sent(session, &event, happenings)
+        } else if let Some(event) = event.decode::<ResponseReceived>() {
+            self.response_received(&event, happenings)
+        } else if let Some(event) = event.decode::<RequestExtraInfo>() {
+            let headers = headers_to_array(&event.headers, Some('\n'));
+            self.extra(event.request_id, Extra::Request(headers))
+        } else if let Some(event) = event.decode::<ResponseExtraInfo>() {
+            let extra = ResponseExtra {
+                headers: headers_to_array(&event.headers, Some('\n')),
+                headers_size: event.headers_text.map_or(0, |text| utf16_len(&text)),
+            };
+            self.extra(event.request_id, Extra::Response(extra))
+        } else if let Some(event) = event.decode::<RequestServedFromCache>() {
+            self.extra(event.request_id, Extra::ServedFromCache)
+        } else if let Some(event) = event.decode::<LoadingFinished>() {
+            self.loading_finished(session, &event, happenings)
+        } else if let Some(event) = event.decode::<LoadingFailed>() {
+            self.loading_failed(session, event, happenings)
+        } else {
+            false
         }
     }
 
@@ -1296,8 +1285,7 @@ impl Log {
             return true;
         }
         hop.failure = Some(
-            event
-                .error_text
+            Some(event.error_text)
                 .filter(|text| !text.is_empty())
                 .or(event.blocked_reason)
                 .unwrap_or_default(),
@@ -1922,150 +1910,6 @@ fn headers_to_array(headers: &Map<String, Value>, separator: Option<char>) -> Ve
     array
 }
 
-fn decode<T: for<'de> Deserialize<'de>>(params: &Value) -> Option<T> {
-    T::deserialize(params).ok()
-}
-
-// Event shapes are local serde structs: browseros-cdp's typed surface lacks the Network domain,
-// and adding it would change a shared crate that core also compiles.
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RequestWillBeSent {
-    request_id: String,
-    loader_id: String,
-    #[serde(rename = "type", default)]
-    kind: Option<String>,
-    #[serde(default)]
-    frame_id: Option<String>,
-    request: RequestPayload,
-    timestamp: f64,
-    wall_time: f64,
-    #[serde(default)]
-    redirect_response: Option<ResponsePayload>,
-    #[serde(default)]
-    redirect_has_extra_info: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RequestPayload {
-    url: String,
-    method: String,
-    #[serde(default)]
-    headers: Map<String, Value>,
-    #[serde(default)]
-    post_data_entries: Option<Vec<PostDataEntry>>,
-}
-
-#[derive(Deserialize)]
-struct PostDataEntry {
-    #[serde(default)]
-    bytes: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResponseReceived {
-    request_id: String,
-    response: ResponsePayload,
-    #[serde(default)]
-    has_extra_info: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResponsePayload {
-    status: i64,
-    #[serde(default)]
-    status_text: String,
-    #[serde(default)]
-    headers: Map<String, Value>,
-    #[serde(default)]
-    timing: Option<TimingPayload>,
-    #[serde(default)]
-    from_service_worker: bool,
-    #[serde(default)]
-    protocol: Option<String>,
-    #[serde(rename = "remoteIPAddress", default)]
-    remote_ip_address: Option<String>,
-    #[serde(default)]
-    remote_port: Option<i64>,
-    #[serde(default)]
-    security_details: Option<SecurityPayload>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TimingPayload {
-    request_time: f64,
-    dns_start: f64,
-    dns_end: f64,
-    connect_start: f64,
-    ssl_start: f64,
-    connect_end: f64,
-    send_start: f64,
-    receive_headers_end: f64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SecurityPayload {
-    #[serde(default)]
-    protocol: Option<String>,
-    #[serde(default)]
-    subject_name: Option<String>,
-    #[serde(default)]
-    issuer: Option<String>,
-    #[serde(default)]
-    valid_from: Option<f64>,
-    #[serde(default)]
-    valid_to: Option<f64>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RequestExtraInfo {
-    request_id: String,
-    #[serde(default)]
-    headers: Map<String, Value>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResponseExtraInfo {
-    request_id: String,
-    #[serde(default)]
-    headers: Map<String, Value>,
-    #[serde(default)]
-    headers_text: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RequestId {
-    request_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LoadingFinished {
-    request_id: String,
-    timestamp: f64,
-    encoded_data_length: f64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LoadingFailed {
-    request_id: String,
-    timestamp: f64,
-    #[serde(default)]
-    error_text: Option<String>,
-    #[serde(default)]
-    blocked_reason: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -2075,6 +1919,19 @@ mod tests {
     use tokio::task;
 
     use super::*;
+
+    impl NetworkLog {
+        /// [`NetworkLog::apply`] of an event as JSON, as the goldens record them.
+        pub(crate) fn apply_json(
+            &self,
+            session: Option<&SessionId>,
+            method: &str,
+            params: &Value,
+        ) -> Vec<Happening> {
+            let event = cdp::Raw::fixture(method, session.map(SessionId::as_str), params.clone());
+            self.apply(session, &event)
+        }
+    }
 
     /// `tests/network-goldens.mjs`'s recording: each goto's CDP events and Playwright's answer.
     const GOLDENS: &str = include_str!(concat!(
@@ -2124,7 +1981,7 @@ mod tests {
     fn replay(main_frame: &str, events: &[(String, Value)]) -> NetworkLog {
         let log = NetworkLog::new(main_frame.to_string());
         for (method, params) in events {
-            log.apply(None, method, params);
+            log.apply_json(None, method, params);
         }
         log
     }
@@ -2406,7 +2263,7 @@ mod tests {
                 navigation("N", "MAIN", "Document", "https://a.test/"),
                 event(
                     "Network.loadingFailed",
-                    json!({"requestId": "N", "timestamp": 10.5, "errorText": "",
+                    json!({"requestId": "N", "timestamp": 10.5, "type": "Document", "errorText": "",
                            "blockedReason": "inspector"}),
                 ),
             ],
@@ -2505,7 +2362,7 @@ mod tests {
         assert_eq!(log.raw_response_headers(&hop), Ok(None), "still pending");
         assert_eq!(log.sizes(&hop), Ok(None), "sizes await the header size");
         for (method, params) in &late {
-            log.apply(None, method, params);
+            log.apply_json(None, method, params);
         }
         let want = &golden.playwright["hops"][0];
         assert_eq!(
@@ -2535,7 +2392,7 @@ mod tests {
         assert!(!log.finished(&hop).expect("hop"));
         assert!(is_unset(log.timing(&hop).expect("hop").response_end));
         let (method, params) = &golden.events[finished];
-        log.apply(None, method, params);
+        log.apply_json(None, method, params);
         assert_eq!(
             log.body(&hop),
             Ok(Some(BodyRead {
@@ -2667,7 +2524,7 @@ mod tests {
     fn apply_all(log: &NetworkLog, events: &[(String, Value)]) -> Vec<Happening> {
         events
             .iter()
-            .flat_map(|(method, params)| log.apply(None, method, params))
+            .flat_map(|(method, params)| log.apply_json(None, method, params))
             .collect()
     }
 
@@ -2720,7 +2577,7 @@ mod tests {
         no_content.1["response"]["status"] = json!(204);
         let aborted = event(
             "Network.loadingFailed",
-            json!({"requestId": "S", "timestamp": 2.0, "errorText": "net::ERR_ABORTED"}),
+            json!({"requestId": "S", "timestamp": 2.0, "type": "Fetch", "errorText": "net::ERR_ABORTED"}),
         );
         let happenings = apply_all(
             &log,
@@ -2770,7 +2627,7 @@ mod tests {
     fn tests_that_requests_keep_playwrights_window() {
         let log = NetworkLog::new("MAIN".to_string());
         for i in 0..101 {
-            log.apply(
+            log.apply_json(
                 None,
                 &sub(&format!("S{i}"), "https://a.test/x", "Fetch").0,
                 &sub(&format!("S{i}"), "https://a.test/x", "Fetch").1,
@@ -2784,7 +2641,7 @@ mod tests {
     #[test]
     fn tests_that_other_requests_past_their_cap_drop_an_ended_one_first() {
         let log = NetworkLog::new("MAIN".to_string());
-        log.apply(
+        log.apply_json(
             None,
             &sub("LIVE", "https://a.test/stream", "Fetch").0,
             &sub("LIVE", "https://a.test/stream", "Fetch").1,
@@ -2798,9 +2655,9 @@ mod tests {
         for i in 0..MAX_REQUESTS {
             let id = format!("E{i}");
             let start = sub(&id, "https://a.test/e", "Fetch");
-            log.apply(None, &start.0, &start.1);
+            log.apply_json(None, &start.0, &start.1);
             let end = finished(&id);
-            log.apply(None, &end.0, &end.1);
+            log.apply_json(None, &end.0, &end.1);
         }
         assert!(
             log.created_request(&at("LIVE", 0)).is_ok(),
@@ -2839,7 +2696,7 @@ mod tests {
             ],
         );
         let document = navigation("DOC2", "CHILD", "Document", "https://b.test/");
-        log.apply(None, &document.0, &document.1);
+        log.apply_json(None, &document.0, &document.1);
         assert_eq!(
             log.detach_frame("CHILD"),
             [
@@ -2867,10 +2724,10 @@ mod tests {
         );
         let late = event(
             "Network.loadingFailed",
-            json!({"requestId": "C1", "timestamp": 3.0, "errorText": "net::ERR_FAILED"}),
+            json!({"requestId": "C1", "timestamp": 3.0, "type": "Fetch", "errorText": "net::ERR_FAILED"}),
         );
         assert!(
-            log.apply(None, &late.0, &late.1).is_empty(),
+            log.apply_json(None, &late.0, &late.1).is_empty(),
             "Chromium's own failure after it reports nothing twice"
         );
     }
@@ -2884,10 +2741,10 @@ mod tests {
         log.frame_moved("REMOTE");
         log.add_child(&child);
         let again = navigation("DOC2", "REMOTE", "Document", "https://b.test/2");
-        log.apply(Some(&child), &again.0, &again.1);
+        log.apply_json(Some(&child), &again.0, &again.1);
         let mut fetch = sub("F1", "https://b.test/data", "Fetch");
         fetch.1["frameId"] = json!("REMOTE");
-        log.apply(Some(&child), &fetch.0, &fetch.1);
+        log.apply_json(Some(&child), &fetch.0, &fetch.1);
         assert_eq!(
             log.detach_frame("REMOTE"),
             [
@@ -2920,9 +2777,9 @@ mod tests {
         log.add_child(&child);
         let mut start = sub("O1", "https://b.test/stream", "Fetch");
         start.1["frameId"] = json!("REMOTE");
-        log.apply(Some(&child), &start.0, &start.1);
+        log.apply_json(Some(&child), &start.0, &start.1);
         let back = navigation("BACK", "REMOTE", "Document", "https://a.test/back");
-        log.apply(Some(&child), &back.0, &back.1);
+        log.apply_json(Some(&child), &back.0, &back.1);
         assert_eq!(
             log.detach_session(&child),
             [Happening::Failed(at("O1", 0))],
@@ -2937,7 +2794,7 @@ mod tests {
         let mut happenings = Vec::new();
         for i in 0..=MAX_REQUESTS {
             let start = sub(&format!("L{i}"), "https://a.test/l", "Fetch");
-            happenings.extend(log.apply(None, &start.0, &start.1));
+            happenings.extend(log.apply_json(None, &start.0, &start.1));
         }
         assert!(
             log.created_request(&at("L0", 0)).is_ok(),
@@ -2952,7 +2809,7 @@ mod tests {
         let mut more = Vec::new();
         for i in MAX_REQUESTS + 1..=MAX_LIVE_REQUESTS {
             let start = sub(&format!("L{i}"), "https://a.test/l", "Fetch");
-            more.extend(log.apply(None, &start.0, &start.1));
+            more.extend(log.apply_json(None, &start.0, &start.1));
         }
         assert!(
             more.contains(&Happening::Forgotten(at("L0", 0))),
@@ -2969,21 +2826,21 @@ mod tests {
         let log = NetworkLog::new("MAIN".to_string());
         for i in 0..MAX_REQUESTS + 5 {
             let start = sub(&format!("A{i}"), "https://a.test/a", "Fetch");
-            log.apply(None, &start.0, &start.1);
+            log.apply_json(None, &start.0, &start.1);
         }
         for i in 0..MAX_REQUESTS + 5 {
             let failed = event(
                 "Network.loadingFailed",
-                json!({"requestId": format!("A{i}"), "timestamp": 2.0, "errorText": "net::ERR_ABORTED"}),
+                json!({"requestId": format!("A{i}"), "timestamp": 2.0, "type": "Fetch", "errorText": "net::ERR_ABORTED"}),
             );
             assert_eq!(
-                log.apply(None, &failed.0, &failed.1),
+                log.apply_json(None, &failed.0, &failed.1),
                 [Happening::Failed(at(&format!("A{i}"), 0))],
                 "every loading request's failure is reported"
             );
         }
         let next = sub("NEXT", "https://a.test/n", "Fetch");
-        log.apply(None, &next.0, &next.1);
+        log.apply_json(None, &next.0, &next.1);
         for i in 0..6 {
             assert!(
                 log.created_request(&at(&format!("A{i}"), 0)).is_err(),
@@ -2997,17 +2854,17 @@ mod tests {
     fn tests_that_a_navigation_ending_in_a_frame_session_reads_its_body_there() {
         let log = NetworkLog::new("MAIN".to_string());
         let child = SessionId::from("OOPIF");
-        log.apply(
+        log.apply_json(
             None,
             &navigation("D", "FRAME", "Document", "https://b.test/").0,
             &navigation("D", "FRAME", "Document", "https://b.test/").1,
         );
-        log.apply(None, &response("D", false).0, &response("D", false).1);
+        log.apply_json(None, &response("D", false).0, &response("D", false).1);
         let finished = event(
             "Network.loadingFinished",
             json!({"requestId": "D", "timestamp": 2.0, "encodedDataLength": 5.0}),
         );
-        log.apply(Some(&child), &finished.0, &finished.1);
+        log.apply_json(Some(&child), &finished.0, &finished.1);
         let read = log.body(&at("D", 0)).expect("a body").expect("done");
         assert_eq!(read.session, Some(child), "_maybeUpdateRequestSession");
         assert_eq!(log.frame_of("D").as_deref(), Some("FRAME"));
@@ -3131,7 +2988,7 @@ mod tests {
             Err(LogError::Lost),
             "maybe never seen"
         );
-        log.apply(
+        log.apply_json(
             None,
             response("N", false).0.as_str(),
             &response("N", false).1,
@@ -3147,7 +3004,7 @@ mod tests {
             &[navigation("A", "MAIN", "Document", "https://a.test/")],
         );
         let (method, params) = response("A", false);
-        answered.apply(None, &method, &params);
+        answered.apply_json(None, &method, &params);
         answered.lagged();
         assert!(
             matches!(answered.lookup("A", 0), Ok(Lookup::Response(_))),
@@ -3173,9 +3030,9 @@ mod tests {
                                      "headers": {"Location": "/next"}},
             }),
         );
-        log.apply(None, &method, &params);
+        log.apply_json(None, &method, &params);
         let (method, params) = response("N", false);
-        log.apply(None, &method, &params);
+        log.apply_json(None, &method, &params);
         assert_eq!(log.lookup("N", before), Err(LogError::Lost));
         assert_eq!(
             log.lookup("N", log.lags()),
@@ -3205,7 +3062,7 @@ mod tests {
         task::yield_now().await;
         assert!(!waiting.is_finished(), "nothing to answer yet");
         let (method, params) = response("N", false);
-        log.apply(None, &method, &params);
+        log.apply_json(None, &method, &params);
         assert!(matches!(
             waiting.await.expect("waiter"),
             Ok(Lookup::Response(_))
@@ -3390,7 +3247,7 @@ mod tests {
             "answered before the lag"
         );
         for (method, params) in &late {
-            log.apply(None, method, params);
+            log.apply_json(None, method, params);
         }
         assert!(
             log.raw_response_headers(&hop).expect("arrived").is_some(),

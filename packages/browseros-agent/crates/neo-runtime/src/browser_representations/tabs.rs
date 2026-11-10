@@ -7,14 +7,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use browseros_cdp::CdpError;
 use browseros_cdp::runtime::RemoteObject;
-use browseros_cdp::{CdpClient, CdpError};
 use futures_util::future;
 use neo_runtime_spec::injected::InjectedPreviewNodeParams;
 use neo_runtime_spec::serve::{
     FrameChannel, FrameInitializer, PageChannel, PageInitializer, PageInitializerViewportSize,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::sync::{OnceCell, oneshot};
@@ -31,6 +31,7 @@ use crate::browser_representations::network::HopId;
 use crate::browser_representations::page::{FrameTab, PageSession, PageSetup, Session, TabInputs};
 use crate::browser_representations::routes::{self, ContextRoutes};
 use crate::chromium_bridge::browser_connection_settings::Switches;
+use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::discovery::{self, TargetInfo};
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::chromium_bridge::page_events::{self, Kept, MAX_KEPT_ARGS, MAX_KEPT_CHOOSERS};
@@ -56,7 +57,7 @@ const ARGS_WAIT: Duration = Duration::from_secs(5);
 pub(crate) struct Tabs(Arc<Inner>);
 
 struct Inner {
-    cdp: CdpClient,
+    cdp: cdp::Browser,
     tokio: Handle,
     inputs: TabInputs,
     /// The `Runtime`'s screenshot turns, one per tab, across runs.
@@ -123,43 +124,7 @@ struct Scope {
 
 /// BrowserOS's tab-strip record. `liveBrowserContextId` is routable; the older
 /// `browserContextId` field is only a human-readable profile label.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct TabInfo {
-    target_id: String,
-    url: String,
-    window_id: Option<i64>,
-    live_browser_context_id: Option<String>,
-    #[serde(default)]
-    pub(crate) is_active: bool,
-}
-
-#[derive(Deserialize)]
-struct TabReply {
-    tab: TabInfo,
-}
-
-#[derive(Deserialize)]
-struct TabsReply {
-    tabs: Vec<TabInfo>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetInfoReply {
-    target_info: TargetInfo,
-}
-
-#[derive(Deserialize)]
-struct WindowReply {
-    window: CreatedWindow,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatedWindow {
-    window_id: i64,
-}
+pub(crate) use crate::chromium_bridge::cdp::browser::TabInfo;
 
 /// A pending newPage transaction. Dropping it wakes the creation task, which closes the
 /// new tab unless the handler has committed a successful result with `keep`.
@@ -196,7 +161,7 @@ impl Tabs {
         reason = "each per-tab share the Runtime keeps (inputs, screenshots, switches, permissions) is one argument"
     )]
     pub(crate) async fn open(
-        cdp: CdpClient,
+        cdp: cdp::Browser,
         tokio: Handle,
         inputs: TabInputs,
         screenshots: TabScreenshots,
@@ -250,7 +215,7 @@ impl Tabs {
         Ok((tabs, url))
     }
 
-    pub(crate) fn cdp(&self) -> &CdpClient {
+    pub(crate) fn cdp(&self) -> &cdp::Browser {
         &self.0.cdp
     }
 
@@ -553,7 +518,7 @@ impl Tabs {
             return Ok(page);
         }
         let overrides = Arc::clone(&self.0.overrides);
-        let cdp = page.events.cdp().clone();
+        let cdp = page.events.cdp().browser().clone();
         let id = entry.id.clone();
         let slots = self.0.permissions.slots().clone();
         let run = self.0.run_id;
@@ -572,7 +537,7 @@ impl Tabs {
             self.0
                 .overrides
                 .apply_to_new(
-                    page.events.cdp(),
+                    page.events.cdp().browser(),
                     own,
                     &entry.id,
                     false,
@@ -612,10 +577,10 @@ impl Tabs {
     }
 
     async fn infos(&self) -> Result<Vec<TabInfo>, PlaywrightError> {
-        let reply: TabsReply = self
+        let reply = self
             .0
             .cdp
-            .send_typed("Browser.getTabs", json!({}), None)
+            .send(cdp::browser::GetTabs::default())
             .await
             .map_err(|error| cdp_error(&error))?;
         Ok(reply
@@ -691,25 +656,27 @@ impl Tabs {
     }
 
     async fn create_registered(&self) -> Result<Arc<PageEntry>, PlaywrightError> {
-        let mut params = json!({ "url": "about:blank", "background": true });
         let run_tab = tab_info(&self.0.cdp, &self.0.run_page).await?;
         let window = match run_tab {
             Some(info) => info.window_id,
             None => self.infos().await?.first().and_then(|info| info.window_id),
         };
-        if let Some(window) = window {
-            params["windowId"] = json!(window);
-        } else if let Some(context) = &self.0.scope.context {
+        if window.is_none() {
+            let Some(context) = &self.0.scope.context else {
+                // A context with no surviving window and no routable identity cannot safely
+                // create a tab: omitting both would let BrowserOS choose another profile.
+                return Err(PlaywrightError::target_closed());
+            };
             // BrowserOS's context-routed windows are shown inactive. createTab alone
             // requires a surviving normal window, so recreate one after the last closes.
-            let window: WindowReply = self
+            let window = self
                 .0
                 .cdp
-                .send_typed(
-                    "Browser.createWindow",
-                    json!({"browserContextId":context,"url":"about:blank"}),
-                    None,
-                )
+                .send(cdp::browser::CreateWindow {
+                    url: Some("about:blank".to_string()),
+                    browser_context_id: Some(context.clone()),
+                    ..cdp::browser::CreateWindow::default()
+                })
                 .await
                 .map_err(|error| cdp_error(&error))?;
             let info = self
@@ -719,15 +686,16 @@ impl Tabs {
                 .find(|info| info.window_id == Some(window.window.window_id))
                 .ok_or_else(|| PlaywrightError::error("the new window has no initial tab"))?;
             return self.register(PageId::new(info.target_id), true);
-        } else {
-            // A context with no surviving window and no routable identity cannot safely
-            // create a tab: omitting both would let BrowserOS choose another profile.
-            return Err(PlaywrightError::target_closed());
         }
-        let reply: TabReply = self
+        let reply = self
             .0
             .cdp
-            .send_typed("Browser.createTab", params, None)
+            .send(cdp::browser::CreateTab {
+                url: Some("about:blank".to_string()),
+                window_id: window,
+                background: Some(true),
+                ..cdp::browser::CreateTab::default()
+            })
             .await
             .map_err(|error| cdp_error(&error))?;
         self.register(PageId::new(reply.tab.target_id), true)
@@ -739,11 +707,9 @@ impl Tabs {
             let _closed = self
                 .0
                 .cdp
-                .send(
-                    "Target.closeTarget",
-                    json!({"targetId":entry.id.as_str()}),
-                    None,
-                )
+                .send(cdp::target::CloseTarget {
+                    target_id: entry.id.as_str().to_string(),
+                })
                 .await;
             loop {
                 if self.is_closed(entry).await? {
@@ -973,14 +939,12 @@ impl Tabs {
         let info = self
             .0
             .cdp
-            .send_typed::<_, TargetInfoReply>(
-                "Target.getTargetInfo",
-                json!({ "targetId": frame }),
-                None,
-            )
+            .send(cdp::target::GetTargetInfo {
+                target_id: Some(frame.to_string()),
+            })
             .await
             .ok()
-            .map(|reply| reply.target_info);
+            .map(|reply| TargetInfo::from(reply.target_info));
         let owner = match (info, opened) {
             (Some(info), _) if info.kind != "page" => return None,
             // Discovery saw the tab open and never commit. Its target names the URL it navigates
@@ -1119,11 +1083,9 @@ impl Tabs {
             let reply = self
                 .0
                 .cdp
-                .send_typed::<_, TargetInfoReply>(
-                    "Target.getTargetInfo",
-                    json!({ "targetId": entry.id.as_str() }),
-                    None,
-                )
+                .send(cdp::target::GetTargetInfo {
+                    target_id: Some(entry.id.as_str().to_string()),
+                })
                 .await;
             // A closed page names no opener here; Playwright's would still name an open one,
             // but Neo never saw it.
@@ -1409,15 +1371,14 @@ impl Scope {
 }
 
 pub(crate) async fn tab_info(
-    cdp: &CdpClient,
+    cdp: &cdp::Browser,
     page: &PageId,
 ) -> Result<Option<TabInfo>, PlaywrightError> {
     let reply = cdp
-        .send_typed::<_, TabReply>(
-            "Browser.getTabInfo",
-            json!({ "targetId": page.as_str() }),
-            None,
-        )
+        .send(cdp::browser::GetTabInfo {
+            target_id: Some(page.as_str().to_string()),
+            tab_id: None,
+        })
         .await;
     match reply {
         Ok(reply) => Ok(Some(reply.tab)),
@@ -1495,7 +1456,7 @@ mod tests {
     async fn guids_resolve_the_registered_tab_and_starting_frame_scope() {
         let browser = FakeBrowser::start(Replies::default()).await;
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),

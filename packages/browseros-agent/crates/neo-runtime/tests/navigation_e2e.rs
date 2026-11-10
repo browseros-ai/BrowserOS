@@ -1,5 +1,13 @@
 //! Navigation, titles and document freshness on an isolated real BrowserOS neo profile.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
+#[expect(
+    dead_code,
+    reason = "shared browser harness also serves protocol_e2e.rs, which reads the browser's port"
+)]
 #[path = "support/browser.rs"]
 mod browser;
 

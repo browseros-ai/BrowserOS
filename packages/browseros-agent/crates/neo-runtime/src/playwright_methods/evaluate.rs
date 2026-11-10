@@ -32,8 +32,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use browseros_cdp::SessionId;
-use browseros_cdp::runtime::{GetPropertiesResult, RemoteObject};
+use browseros_cdp::runtime::RemoteObject;
+use browseros_cdp::{CdpError, SessionId};
 use neo_runtime_spec::injected::{
     InjectedListPreviewsParams, InjectedPreviewNodeParams, InjectedQueryAllParams,
     InjectedScopedQueryAllParams, InjectedScopedSelectorElementParams,
@@ -45,6 +45,7 @@ use serde_json::{Value, json};
 use tokio::time;
 
 use crate::browser_representations::page::{FrameTab, GroupGuard, PageSession};
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frame_selector;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::chromium_bridge::main_world::{
@@ -1131,10 +1132,9 @@ pub(crate) async fn serve(
                 let _released = entry
                     .frame
                     .host
-                    .send(
-                        "Runtime.releaseObject",
-                        json!({ "objectId": id.object_id() }),
-                    )
+                    .send_command(cdp::runtime::ReleaseObject {
+                        object_id: id.object_id().to_string(),
+                    })
                     .await;
             }
             return Ok(None);
@@ -1964,16 +1964,21 @@ async fn own_properties(
     frame: &FrameContext,
     object_id: &str,
 ) -> Result<Vec<(String, RemoteObject)>, PageError> {
-    let reply = frame
+    let properties = frame
         .host
-        .send(
-            "Runtime.getProperties",
-            json!({ "objectId": object_id, "ownProperties": true }),
-        )
+        .send_command(cdp::runtime::GetProperties {
+            object_id: object_id.to_string(),
+            own_properties: Some(true),
+            ..cdp::runtime::GetProperties::default()
+        })
         .await
-        .map_err(|error| frame.host.classify(&error))?;
-    let properties: GetPropertiesResult = serde_json::from_value(reply)
-        .map_err(|error| PageError::Contract(format!("Runtime.getProperties answered: {error}")))?;
+        .map_err(|error| match error {
+            CdpError::Json(message) => PageError::Contract(format!(
+                "{} answered: {message}",
+                cdp::runtime::GetProperties::METHOD
+            )),
+            error => frame.host.classify(&error),
+        })?;
     // Playwright: `server/chromium/crExecutionContext.ts` `CRExecutionContext.getProperties`: `if (!property.enumerable || !property.value)`
     Ok(properties
         .result
@@ -1992,10 +1997,9 @@ async fn release(handles: &Handles, created: &[CreatedHandle]) {
             let _released = entry
                 .frame
                 .host
-                .send(
-                    "Runtime.releaseObject",
-                    json!({ "objectId": id.object_id() }),
-                )
+                .send_command(cdp::runtime::ReleaseObject {
+                    object_id: id.object_id().to_string(),
+                })
                 .await;
         }
     }
@@ -2122,7 +2126,9 @@ async fn get_property(
         .map_err(page_error)?;
     let _released = frame
         .host
-        .send("Runtime.releaseObject", json!({ "objectId": holder_id }))
+        .send_command(cdp::runtime::ReleaseObject {
+            object_id: holder_id,
+        })
         .await;
     let value = properties
         .into_iter()
@@ -2348,7 +2354,7 @@ async fn abort_waiter(tab: FrameTab, frame: Arc<FrameContext>, waiter: String) {
         .await;
     let _released = frame
         .host
-        .send("Runtime.releaseObject", json!({ "objectId": waiter }))
+        .send_command(cdp::runtime::ReleaseObject { object_id: waiter })
         .await;
     drop(tab);
 }

@@ -15,7 +15,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
-use browseros_cdp::{CdpEvent, SessionId};
+use browseros_cdp::SessionId;
+
+use crate::chromium_bridge::cdp::{self, runtime};
 
 /// Neo: how many destroyed contexts a map keeps naming their frames, oldest dropped first: a
 /// session's every navigation destroys a few, and a map lives as long as its producer.
@@ -72,49 +74,40 @@ impl Contexts {
 impl ContextFrames {
     /// Applies one event of `Runtime.executionContextCreated` (a default context only),
     /// `executionContextDestroyed` or `executionContextsCleared`; any other event is ignored.
-    pub(crate) fn apply(&self, event: &CdpEvent) {
-        let Some(session) = event.session_id.as_ref().map(SessionId::as_str) else {
+    pub(crate) fn apply(&self, event: &cdp::Raw) {
+        let Some(session) = event.session().map(SessionId::as_str) else {
             return;
         };
         let Ok(mut contexts) = self.0.lock() else {
             return;
         };
-        match event.method.as_str() {
-            "Runtime.executionContextCreated" => {
-                let context = &event.params["context"];
-                let aux = &context["auxData"];
-                if let (Some(id), Some(frame), Some(true)) = (
-                    context["id"].as_i64(),
-                    aux["frameId"].as_str(),
-                    aux["isDefault"].as_bool(),
-                ) {
-                    contexts.frames.insert(
-                        (session.to_string(), id),
-                        Context {
-                            frame: frame.to_string(),
-                            unique: context["uniqueId"].as_str().map(str::to_string),
-                            died: None,
-                        },
-                    );
-                }
+        if let Some(created) = event.decode::<runtime::ExecutionContextCreated>() {
+            let context = created.context;
+            // `auxData` is free-form in the protocol: Chromium's frame and page-world flags.
+            let aux = context.aux_data.unwrap_or_default();
+            if let (Some(frame), Some(true)) = (aux["frameId"].as_str(), aux["isDefault"].as_bool())
+            {
+                contexts.frames.insert(
+                    (session.to_string(), context.id),
+                    Context {
+                        frame: frame.to_string(),
+                        unique: Some(context.unique_id),
+                        died: None,
+                    },
+                );
             }
-            "Runtime.executionContextDestroyed" => {
-                if let Some(id) = event.params["executionContextId"].as_i64() {
-                    contexts.kill((session.to_string(), id));
-                }
+        } else if let Some(destroyed) = event.decode::<runtime::ExecutionContextDestroyed>() {
+            contexts.kill((session.to_string(), destroyed.execution_context_id));
+        } else if event.is::<runtime::ExecutionContextsCleared>() {
+            let owned: Vec<(String, i64)> = contexts
+                .frames
+                .iter()
+                .filter(|((owner, _), context)| owner == session && context.died.is_none())
+                .map(|(key, _)| key.clone())
+                .collect();
+            for key in owned {
+                contexts.kill(key);
             }
-            "Runtime.executionContextsCleared" => {
-                let owned: Vec<(String, i64)> = contexts
-                    .frames
-                    .iter()
-                    .filter(|((owner, _), context)| owner == session && context.died.is_none())
-                    .map(|(key, _)| key.clone())
-                    .collect();
-                for key in owned {
-                    contexts.kill(key);
-                }
-            }
-            _ => {}
         }
     }
 
@@ -168,18 +161,44 @@ impl ContextFrames {
     }
 }
 
+/// Execution-context events as Chromium sends them, every field the pinned protocol requires
+/// filled.
+#[cfg(test)]
+mod fixtures {
+    use browseros_cdp::runtime::ExecutionContextDescription;
+    use serde_json::{Value, json};
+
+    use crate::chromium_bridge::cdp::runtime;
+
+    pub(super) fn created(id: i64, frame: &str, default: bool, unique: &str) -> Value {
+        serde_json::to_value(runtime::ExecutionContextCreated {
+            context: ExecutionContextDescription {
+                id,
+                unique_id: unique.to_string(),
+                aux_data: Some(json!({ "frameId": frame, "isDefault": default })),
+                ..ExecutionContextDescription::default()
+            },
+        })
+        .expect("the event serializes")
+    }
+
+    pub(super) fn destroyed(id: i64) -> Value {
+        serde_json::to_value(runtime::ExecutionContextDestroyed {
+            execution_context_id: id,
+            execution_context_unique_id: format!("unique.{id}"),
+        })
+        .expect("the event serializes")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
 
     use super::*;
 
-    fn event(method: &str, session: &str, params: Value) -> CdpEvent {
-        CdpEvent {
-            method: method.to_string(),
-            params,
-            session_id: Some(SessionId::from(session)),
-        }
+    fn event(method: &str, session: &str, params: Value) -> cdp::Raw {
+        cdp::Raw::fixture(method, Some(session), params)
     }
 
     #[test]
@@ -189,7 +208,7 @@ mod tests {
             event(
                 "Runtime.executionContextCreated",
                 session,
-                json!({"context": {"id": id, "auxData": {"frameId": frame, "isDefault": default}}}),
+                fixtures::created(id, frame, default, &format!("unique.{id}")),
             )
         };
         contexts.apply(&created("tab", 1, "main", true));
@@ -206,7 +225,7 @@ mod tests {
         contexts.apply(&event(
             "Runtime.executionContextDestroyed",
             "tab",
-            json!({"executionContextId": 2}),
+            fixtures::destroyed(2),
         ));
         assert_eq!(
             contexts.frame_of("tab", 2).as_deref(),
@@ -234,12 +253,12 @@ mod tests {
             contexts.apply(&event(
                 "Runtime.executionContextCreated",
                 "tab",
-                json!({"context": {"id": id, "auxData": {"frameId": "frame", "isDefault": true}}}),
+                fixtures::created(id, "frame", true, &format!("unique.{id}")),
             ));
             contexts.apply(&event(
                 "Runtime.executionContextDestroyed",
                 "tab",
-                json!({"executionContextId": id}),
+                fixtures::destroyed(id),
             ));
         }
         assert_eq!(contexts.frame_of("tab", 0), None, "the oldest went first");
@@ -254,16 +273,12 @@ mod unique_tests {
 
     use super::*;
 
-    fn created(session: &str, id: i64, frame: &str, unique: &str) -> CdpEvent {
-        CdpEvent {
-            method: "Runtime.executionContextCreated".to_string(),
-            params: json!({"context": {
-                "id": id,
-                "uniqueId": unique,
-                "auxData": {"frameId": frame, "isDefault": true},
-            }}),
-            session_id: Some(SessionId::from(session)),
-        }
+    fn created(session: &str, id: i64, frame: &str, unique: &str) -> cdp::Raw {
+        cdp::Raw::fixture(
+            "Runtime.executionContextCreated",
+            Some(session),
+            fixtures::created(id, frame, true, unique),
+        )
     }
 
     #[test]
@@ -275,11 +290,11 @@ mod unique_tests {
             Some(("main".to_string(), Some("old.1".to_string())))
         );
         // Another process numbers its first context 1 again: only its unique id tells them apart.
-        contexts.apply(&CdpEvent {
-            method: "Runtime.executionContextsCleared".to_string(),
-            params: json!({}),
-            session_id: Some(SessionId::from("tab")),
-        });
+        contexts.apply(&cdp::Raw::fixture(
+            "Runtime.executionContextsCleared",
+            Some("tab"),
+            json!({}),
+        ));
         contexts.apply(&created("tab", 1, "main", "new.1"));
         assert_eq!(
             contexts.context_of("tab", 1),

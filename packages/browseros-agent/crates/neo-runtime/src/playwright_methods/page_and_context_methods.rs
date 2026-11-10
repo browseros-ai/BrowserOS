@@ -28,6 +28,7 @@ use crate::browser_representations::page::{FrameTab, PageSession};
 use crate::browser_representations::routes::{self, Patterns};
 use crate::browser_representations::tabs::{self, PageEntry, Tabs};
 use crate::browser_representations::web_storage;
+use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::frames::FrameScope;
 use crate::debugger::DEFAULT_CONTEXT;
 use crate::method_router::encode_result;
@@ -325,7 +326,7 @@ async fn bring_to_front(
     // Playwright 26137face server/chromium/crPage.ts:207 sends Page.bringToFront.
     let page = progress.race(tabs.session(entry)).await??;
     let brought = progress
-        .race(page.send("Page.bringToFront", json!({})))
+        .race(page.send_command(cdp::page::BringToFront {}))
         .await?;
     checked(tabs, entry, progress, brought).await?;
     let info = progress
@@ -336,11 +337,10 @@ async fn bring_to_front(
     // entry. Browser.activateTab changes that selection (see probes-runtime.md).
     if !info.is_active {
         let activated = progress
-            .race(tabs.cdp().send(
-                "Browser.activateTab",
-                json!({"targetId":entry.id.as_str()}),
-                None,
-            ))
+            .race(tabs.cdp().send(cdp::browser::ActivateTab {
+                target_id: Some(entry.id.as_str().to_string()),
+                ..cdp::browser::ActivateTab::default()
+            }))
             .await?;
         checked(tabs, entry, progress, activated).await?;
     }
@@ -595,7 +595,7 @@ async fn run_before_unload(
     progress.check()?;
     entry.request_close();
     tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
-    match progress.race(page.send("Page.close", json!({}))).await {
+    match progress.race(page.send_command(cdp::page::Close {})).await {
         Ok(Ok(_)) => {}
         Ok(Err(error)) => debug!(%error, "running beforeunload failed"),
         // The watcher can report closure before Page.close's acknowledgement.
@@ -613,11 +613,9 @@ async fn close(tabs: &Tabs, entry: &PageEntry, progress: &Progress) -> Result<()
     }
     entry.request_close();
     let closed = progress
-        .race(tabs.cdp().send(
-            "Target.closeTarget",
-            json!({"targetId":entry.id.as_str()}),
-            None,
-        ))
+        .race(tabs.cdp().send(cdp::target::CloseTarget {
+            target_id: entry.id.as_str().to_string(),
+        }))
         .await?;
     if let Err(error) = closed {
         debug!(%error, "closing a tab failed; checking whether it is gone");

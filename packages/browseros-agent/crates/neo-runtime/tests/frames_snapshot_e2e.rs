@@ -9,6 +9,10 @@
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
 //! each test passes as a skip.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(
     dead_code,

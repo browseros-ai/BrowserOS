@@ -85,6 +85,7 @@ use crate::browser_representations::page::{DialogAnswer, FrameTab, PageSession};
 use crate::browser_representations::responses::{self, NetworkCall};
 use crate::browser_representations::routes;
 use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::chromium_bridge::cdp::page;
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::keyboard_input::KeyboardTab;
 use crate::debugger::{CallToGate, DEBUGGER_PREFIX, DEFAULT_CONTEXT};
@@ -1762,7 +1763,11 @@ async fn answer_left_open(tabs: &Tabs) {
         Some(async move {
             let accept = answer == DialogAnswer::Accept;
             let answered = session
-                .send("Page.handleJavaScriptDialog", json!({ "accept": accept }))
+                .cdp()
+                .send(page::HandleJavaScriptDialog {
+                    accept,
+                    prompt_text: None,
+                })
                 .await;
             if let Err(error) = answered {
                 debug!(%error, "answering a dialog left open at run end failed");
@@ -2382,8 +2387,9 @@ mod tests {
     use crate::browser_representations::cookies_and_storage::Permissions;
     use crate::browser_representations::page::TabInputs;
     use crate::chromium_bridge::browser_connection_settings::Switches;
+    use crate::chromium_bridge::cdp;
     use crate::deadline::Deadline;
-    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies, tab_record};
     use crate::playwright_methods::click::tests::FakeTab;
     use crate::playwright_methods::forms::SelectOption;
     use crate::playwright_methods::screenshot::TabScreenshots;
@@ -2400,7 +2406,7 @@ mod tests {
         let deadline = Deadline::new(Duration::from_secs(5), CancellationToken::new());
         let run = RunScope::new(deadline, tasks.clone());
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
@@ -2469,17 +2475,20 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn tests_that_closing_pages_share_one_finish_budget() {
         let browser = FakeBrowser::start(Replies::default()).await;
-        browser.page.lock().unwrap().tabs.push(json!({
-            "targetId":"other", "url":"about:blank", "windowId":1,
-            "liveBrowserContextId":"profile", "isActive":false,
-        }));
+        browser.page.lock().unwrap().tabs.push(tab_record(
+            "other",
+            "about:blank",
+            1,
+            Some("profile"),
+            false,
+        ));
         let tasks = TaskTracker::new();
         let run = RunScope::new(
             Deadline::new(Duration::from_secs(10), CancellationToken::new()),
             tasks.clone(),
         );
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
@@ -3841,6 +3850,7 @@ mod review_abort_priority {
     use crate::browser_representations::cookies_and_storage::Permissions;
     use crate::browser_representations::page::TabInputs;
     use crate::chromium_bridge::browser_connection_settings::Switches;
+    use crate::chromium_bridge::cdp;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::playwright_methods::screenshot::TabScreenshots;
@@ -3857,7 +3867,7 @@ mod review_abort_priority {
             tasks.clone(),
         );
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),

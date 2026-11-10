@@ -122,10 +122,10 @@ mod tests {
             ),
             (
                 "Network.loadingFailed",
-                json!({"requestId": "1.2", "timestamp": 2.5, "errorText": "net::ERR_FAILED"}),
+                json!({"requestId": "1.2", "timestamp": 2.5, "type": "Image", "errorText": "net::ERR_FAILED"}),
             ),
         ] {
-            log.apply(None, method, &params);
+            log.apply_json(None, method, &params);
         }
         log
     }

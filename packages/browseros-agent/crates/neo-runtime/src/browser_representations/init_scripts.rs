@@ -31,18 +31,19 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, MutexGuard, OnceLock, Weak};
 
-use browseros_cdp::{CdpClient, CdpError, CdpEvent, SessionId};
+use browseros_cdp::{CdpError, SessionId};
 use futures_util::future;
 use neo_runtime_spec::{MethodGroup, MethodMeta};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, oneshot};
 use tokio::time::{self, Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::browser_representations::bindings::Bindings;
 use crate::browser_representations::page::PageSession;
+use crate::chromium_bridge::cdp;
 use crate::debugger::DEFAULT_CONTEXT;
 use crate::progress::{PlaywrightError, RunScope};
 
@@ -130,7 +131,7 @@ pub(crate) struct InitScripts {
     /// arrives: what run end undoes.
     registry: Arc<SyncMutex<Registry>>,
     /// The run's CDP client, once a page showed its scripts.
-    cdp: OnceLock<CdpClient>,
+    cdp: OnceLock<cdp::Browser>,
     /// Whether the run added a script, so a call need not touch the pages before.
     any: AtomicBool,
     /// The context each live script belongs to, by `Disposable` guid, for the dispatcher's
@@ -278,8 +279,9 @@ struct ShownPage {
 /// given the session and the frame's target id: the page's own producers on it, its requests
 /// and their routes (`page.rs` `PageSession::init_child_hook`), late-bound so this file names
 /// none of them, as the bindings' are (`Bindings::prepare_child`).
-pub(crate) type SessionHook =
-    Arc<dyn Fn(CdpClient, Link, String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+pub(crate) type SessionHook = Arc<
+    dyn Fn(cdp::Browser, Link, String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
+>;
 
 /// A session that shows a page the run touched, with the token its detach cancels.
 #[derive(Clone)]
@@ -328,7 +330,7 @@ impl InitScripts {
     /// `TargetClosedError` after the run ended or when the page's own session cannot take it.
     pub(crate) async fn add(
         self: &Arc<Self>,
-        cdp: &CdpClient,
+        cdp: &cdp::Browser,
         page: Option<&Arc<PageSession>>,
         context: &str,
         source: &str,
@@ -348,7 +350,7 @@ impl InitScripts {
     /// As [`Self::add`].
     pub(crate) async fn add_ranked(
         self: &Arc<Self>,
-        cdp: &CdpClient,
+        cdp: &cdp::Browser,
         page: Option<&Arc<PageSession>>,
         context: &str,
         source: &str,
@@ -412,7 +414,7 @@ impl InitScripts {
     /// was.
     pub(crate) async fn ensure(
         self: &Arc<Self>,
-        cdp: &CdpClient,
+        cdp: &cdp::Browser,
         page: &Arc<PageSession>,
         context: &str,
     ) {
@@ -424,7 +426,7 @@ impl InitScripts {
     /// (`runImmediately`).
     pub(crate) async fn show_new(
         self: &Arc<Self>,
-        cdp: &CdpClient,
+        cdp: &cdp::Browser,
         page: &Arc<PageSession>,
         context: &str,
     ) {
@@ -433,7 +435,7 @@ impl InitScripts {
 
     async fn show(
         self: &Arc<Self>,
-        cdp: &CdpClient,
+        cdp: &cdp::Browser,
         page: &Arc<PageSession>,
         context: &str,
         always: bool,
@@ -512,7 +514,7 @@ impl InitScripts {
     /// session took it.
     async fn install(
         &self,
-        cdp: &CdpClient,
+        cdp: &cdp::Browser,
         link: &Link,
         guid: &str,
         source: &str,
@@ -571,7 +573,7 @@ impl InitScripts {
     /// Turns auto-attach on for `link`'s session, as run end turns it off: registered before it
     /// is sent, and on a task of its own that turns it off again when its reply comes after run
     /// end, so the session is left without it whichever request Chromium reads last.
-    async fn attach_iframes(&self, cdp: &CdpClient, link: &Link) {
+    async fn attach_iframes(&self, cdp: &cdp::Browser, link: &Link) {
         let Some((id, done)) = lock(&self.registry).and_then(|mut registry| {
             let begun = registry.begin(link, false)?;
             registry.attaching.push(link.clone());
@@ -698,7 +700,7 @@ impl InitScripts {
     /// that reach the page (at once when it was held at its start), and Chromium attaches its own
     /// iframes too; whatever it is, it then runs. Each attach is answered on its own task, so one
     /// iframe never waits on another's requests.
-    async fn attached(self: Arc<Self>, cdp: CdpClient, attach: Attach) {
+    async fn attached(self: Arc<Self>, cdp: cdp::Browser, attach: Attach) {
         let Attach {
             target,
             frame,
@@ -716,11 +718,9 @@ impl InitScripts {
             let State { scripts, pages } = &mut *state;
             if let Some(page) = pages.iter_mut().find(|page| page.target == target) {
                 let context = page.context.clone();
-                let _enabled = until_gone(
-                    &link.gone,
-                    cdp.send("Page.enable", json!({}), Some(&link.session)),
-                )
-                .await;
+                let session = on(&cdp, &link);
+                let _enabled =
+                    until_gone(&link.gone, session.send(cdp::page::Enable::default())).await;
                 for script in for_new_session(scripts, &target, &context) {
                     self.install(&cdp, &link, &script.guid, &script.source, held)
                         .await;
@@ -750,13 +750,10 @@ impl InitScripts {
         // Sent together, in this order, as Playwright's `FrameSession` sends its batch: a target
         // held at its start may answer `Target.setAutoAttach` only once it runs.
         // Playwright: `server/chromium/crPage.ts` `FrameSession._initialize`: `promises.push(this._client.send('Runtime.runIfWaitingForDebugger'));`
+        let session = on(&cdp, &link);
         let resume = until_gone(
             &link.gone,
-            cdp.send(
-                "Runtime.runIfWaitingForDebugger",
-                json!({}),
-                Some(&link.session),
-            ),
+            session.send(cdp::runtime::RunIfWaitingForDebugger {}),
         );
         if shown_here {
             let ((), _resumed) = tokio::join!(self.attach_iframes(&cdp, &link), resume);
@@ -817,11 +814,7 @@ struct Attach {
 /// scripts (`stop`), on its own task, which neither the run's calls nor its end wait for. It never
 /// waits on CDP: a detach cancels its session's token at once, and each attach is answered on a
 /// task of its own (`InitScripts::attached`).
-async fn watch(
-    scripts: Weak<InitScripts>,
-    cdp: CdpClient,
-    mut events: broadcast::Receiver<CdpEvent>,
-) {
+async fn watch(scripts: Weak<InitScripts>, cdp: cdp::Browser, mut events: cdp::Events) {
     let Some(stop) = scripts.upgrade().map(|scripts| scripts.stop.clone()) else {
         return;
     };
@@ -836,45 +829,37 @@ async fn watch(
             Err(RecvError::Lagged(_)) => continue,
             Err(RecvError::Closed) => return,
         };
-        let attach = match event.method.as_str() {
-            "Target.attachedToTarget" => true,
-            "Target.detachedFromTarget" => false,
-            _ => continue,
-        };
-        let (Some(scripts), Some(session)) =
-            (scripts.upgrade(), event.params["sessionId"].as_str())
-        else {
-            continue;
-        };
-        if attach {
+        if let Some(attached) = event.decode::<cdp::target::AttachedToTarget>() {
+            let Some(scripts) = scripts.upgrade() else {
+                continue;
+            };
             let Some(target) = event
-                .session_id
-                .as_ref()
+                .session()
                 .and_then(|parent| scripts.watched_target(parent.as_str()))
             else {
                 continue;
             };
-            let session = SessionId::from(session);
+            let session = SessionId::from(attached.session_id);
             let attach = Attach {
                 link: Link {
                     gone: scripts.watched(&session, &target),
                     session,
                 },
-                frame: event.params["targetInfo"]["targetId"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
+                iframe: attached.target_info.r#type == "iframe",
+                frame: attached.target_info.target_id,
                 target,
-                held: event.params["waitingForDebugger"]
-                    .as_bool()
-                    .unwrap_or(false),
-                iframe: event.params["targetInfo"]["type"].as_str() == Some("iframe"),
+                held: attached.waiting_for_debugger,
             };
             tokio::spawn(scripts.attached(cdp.clone(), attach));
-        } else if let Some(watched) = scripts.unwatched(session) {
-            watched.gone.cancel();
-            let session = session.to_string();
-            tokio::spawn(async move { scripts.detached(&watched.target, &session).await });
+        } else if let Some(detached) = event.decode::<cdp::target::DetachedFromTarget>() {
+            let Some(scripts) = scripts.upgrade() else {
+                continue;
+            };
+            if let Some(watched) = scripts.unwatched(&detached.session_id) {
+                watched.gone.cancel();
+                let session = detached.session_id;
+                tokio::spawn(async move { scripts.detached(&watched.target, &session).await });
+            }
         }
     }
 }
@@ -918,54 +903,45 @@ pub(crate) fn target_of(page: &PageSession) -> String {
 /// Playwright: `server/chromium/crPage.ts` `FrameSession._evaluateOnNewDocument`: `this._initScriptIds.set(initScript, identifier);`
 /// The script's identifier on `session`, `None` when the session is gone.
 async fn add_script(
-    cdp: &CdpClient,
+    cdp: &cdp::Browser,
     link: &Link,
     source: &str,
     run_immediately: bool,
 ) -> Option<String> {
-    let reply = until_gone(
-        &link.gone,
-        cdp.send(
-            "Page.addScriptToEvaluateOnNewDocument",
-            json!({ "source": source, "runImmediately": run_immediately }),
-            Some(&link.session),
-        ),
-    )
-    .await?;
-    reply["identifier"].as_str().map(str::to_string)
+    let session = on(cdp, link);
+    // The rest left at its default: the script runs in the page's own world.
+    let add = session.send(cdp::page::AddScriptToEvaluateOnNewDocument {
+        source: source.to_string(),
+        run_immediately: Some(run_immediately),
+        ..cdp::page::AddScriptToEvaluateOnNewDocument::default()
+    });
+    Some(until_gone(&link.gone, add).await?.identifier)
 }
 
 /// Playwright: `server/chromium/crPage.ts` `FrameSession._removeEvaluatesOnNewDocument`: `this._client.send('Page.removeScriptToEvaluateOnNewDocument', { identifier }).catch(() => {})`
-async fn remove_script(cdp: &CdpClient, link: &Link, identifier: &str) {
-    let _removed = until_gone(
-        &link.gone,
-        cdp.send(
-            "Page.removeScriptToEvaluateOnNewDocument",
-            json!({ "identifier": identifier }),
-            Some(&link.session),
-        ),
-    )
-    .await;
+async fn remove_script(cdp: &cdp::Browser, link: &Link, identifier: &str) {
+    let session = on(cdp, link);
+    let remove = session.send(cdp::page::RemoveScriptToEvaluateOnNewDocument {
+        identifier: identifier.to_string(),
+    });
+    let _removed = until_gone(&link.gone, remove).await;
 }
 
 /// Neo: Chromium attaches each out-of-process iframe of the session's frame as it starts, held
 /// until its scripts are in (probe C1); off again when the run removes its scripts, which
 /// detaches those iframes' sessions.
-async fn set_auto_attach(cdp: &CdpClient, link: &Link, on: bool) {
-    let _set = until_gone(
-        &link.gone,
-        cdp.send(
-            "Target.setAutoAttach",
-            json!({
-                "autoAttach": on,
-                "waitForDebuggerOnStart": on,
-                "flatten": true,
-                "filter": [{ "type": "iframe" }],
-            }),
-            Some(&link.session),
-        ),
-    )
-    .await;
+async fn set_auto_attach(cdp: &cdp::Browser, link: &Link, on: bool) {
+    let session = self::on(cdp, link);
+    let set = session.send(cdp::target::SetAutoAttach {
+        auto_attach: on,
+        wait_for_debugger_on_start: on,
+        flatten: Some(true),
+        filter: Some(vec![cdp::target::FilterEntry {
+            r#type: Some("iframe".to_string()),
+            exclude: None,
+        }]),
+    });
+    let _set = until_gone(&link.gone, set).await;
 }
 
 /// Waits for the requests still out when the release closed the registry: each undoes its own
@@ -973,7 +949,7 @@ async fn set_auto_attach(cdp: &CdpClient, link: &Link, on: bool) {
 /// session whose installation has not answered within [`PENDING_WAIT`] already runs that script
 /// on its next document, and only the reply names it, so its new-document scripts stop at once
 /// ([`suspend_scripts`]); the script itself still goes when the reply comes.
-async fn settle(cdp: &CdpClient, pending: HashMap<u64, Pending>) {
+async fn settle(cdp: &cdp::Browser, pending: HashMap<u64, Pending>) {
     let deadline = Instant::now() + PENDING_WAIT;
     let mut suspended: Vec<SessionId> = Vec::new();
     for (_, request) in pending {
@@ -991,12 +967,14 @@ async fn settle(cdp: &CdpClient, pending: HashMap<u64, Pending>) {
 /// running on its next documents (measured on BrowserOS neo 155.0.8318.26: `Page.enable` would
 /// bring them back, and nothing enables the page of a released run again). The session's
 /// isolated worlds keep working.
-async fn suspend_scripts(cdp: &CdpClient, link: &Link) {
-    let _disabled = until_gone(
-        &link.gone,
-        cdp.send("Page.disable", json!({}), Some(&link.session)),
-    )
-    .await;
+async fn suspend_scripts(cdp: &cdp::Browser, link: &Link) {
+    let session = on(cdp, link);
+    let _disabled = until_gone(&link.gone, session.send(cdp::page::Disable {})).await;
+}
+
+/// `link`'s session, as the door sends on it.
+fn on(cdp: &cdp::Browser, link: &Link) -> cdp::Session {
+    cdp.adopt(link.session.clone())
 }
 
 /// The registry's lock, `None` once a panic poisoned it: the run then counts as ended, so

@@ -1,4 +1,8 @@
 //! Neo: Real frame input tests cover ancestor hit targets, geometry, focus, dialogs and tab turns.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(dead_code, reason = "shared browser fixture serves other e2e suites")]
 #[path = "support/browser.rs"]

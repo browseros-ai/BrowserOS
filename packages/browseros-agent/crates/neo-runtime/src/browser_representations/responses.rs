@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use browseros_cdp::network::GetResponseBodyResult;
 use browseros_cdp::{CdpError, SessionId};
 use neo_runtime_spec::Binary;
 use neo_runtime_spec::serve::{
@@ -21,13 +22,13 @@ use neo_runtime_spec::serve::{
     ResponseSecurityDetailsParams, ResponseSecurityDetailsResult, ResponseServerAddrParams,
     ResponseServerAddrResult, ResponseSizesParams, ResponseSizesResult,
 };
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::browser_representations::network::{
     self, HopId, LogError, NetworkLog, Refetch, Settled,
 };
 use crate::browser_representations::page::PageSession;
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::playwright_injected_methods;
 use crate::method_router::encode_result;
 use crate::playwright_methods::click::PageError;
@@ -89,10 +90,11 @@ pub(crate) async fn serve(
         NetworkCall::Response(hop, ResponseCall::Body(_)) => {
             let read = wait(progress, log, |log| log.body(&hop)).await?;
             let reply = progress
-                .race(page.send_to(
+                .race(page.send_command_to(
                     read.session.as_ref(),
-                    "Network.getResponseBody",
-                    json!({ "requestId": read.request_id }),
+                    cdp::network::GetResponseBody {
+                        request_id: read.request_id.clone(),
+                    },
                 ))
                 .await?
                 .map_err(body_error)?;
@@ -131,26 +133,15 @@ fn log_error(error: LogError) -> PlaywrightError {
     PlaywrightError::error(error.to_string())
 }
 
-/// `Network.getResponseBody`'s answer.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResponseBody {
-    body: String,
-    #[serde(default)]
-    base64_encoded: bool,
-}
-
 /// The body as the wire's `binary`, as `createResponseBodyCallback` builds the `Buffer`: base64
 /// bodies decoded, text bodies as their UTF-8 bytes. An empty body whose `content-length` says
 /// otherwise is loaded again only for a static subresource or a prefetch ([`load_again`]); a
 /// navigation's document is neither.
-fn body(reply: Value) -> Result<Binary, PlaywrightError> {
-    let ResponseBody {
+fn body(reply: GetResponseBodyResult) -> Result<Binary, PlaywrightError> {
+    let GetResponseBodyResult {
         body,
         base64_encoded,
-    } = serde_json::from_value(reply).map_err(|error| {
-        PlaywrightError::error(format!("Network.getResponseBody answered: {error}"))
-    })?;
+    } = reply;
     if base64_encoded {
         // Decoded here, so a body Chromium encodes differently still reaches the SDK as one form.
         let bytes = STANDARD
@@ -172,24 +163,33 @@ async fn load_again(
     refetch: &Refetch,
 ) -> Result<Binary, PlaywrightError> {
     let loaded = page
-        .send_to(
+        .send_command_to(
             session,
-            "Network.loadNetworkResource",
-            json!({
-                "url": refetch.url,
-                "frameId": refetch.frame,
-                "options": { "disableCache": false, "includeCredentials": true },
-            }),
+            cdp::network::LoadNetworkResource {
+                frame_id: Some(refetch.frame.clone()),
+                url: refetch.url.clone(),
+                options: cdp::network::LoadNetworkResourceOptions {
+                    disable_cache: false,
+                    include_credentials: true,
+                },
+            },
         )
         .await
         .map_err(body_error)?;
-    let Some(stream) = loaded["resource"]["stream"].as_str() else {
+    let Some(stream) = loaded.resource.stream else {
         return Ok(Binary(Vec::new()));
     };
     let mut bytes = Vec::new();
     loop {
         let chunk = page
-            .send_to(session, "IO.read", json!({ "handle": stream }))
+            .send_command_to(
+                session,
+                cdp::io::Read {
+                    handle: stream.clone(),
+                    offset: None,
+                    size: None,
+                },
+            )
             .await
             .map_err(body_error)?;
         let data = chunk["data"].as_str().unwrap_or_default();
@@ -204,7 +204,7 @@ async fn load_again(
         }
         if chunk["eof"].as_bool() != Some(false) {
             let _closed = page
-                .send_to(session, "IO.close", json!({ "handle": stream }))
+                .send_command_to(session, cdp::io::Close { handle: stream })
                 .await;
             break;
         }
@@ -215,7 +215,8 @@ async fn load_again(
 fn body_error(error: CdpError) -> PlaywrightError {
     match error {
         CdpError::Protocol { message, .. } => PlaywrightError::error(format!(
-            "Protocol error (Network.getResponseBody): {message}\n{BODY_GONE}"
+            "Protocol error ({}): {message}\n{BODY_GONE}",
+            cdp::network::GetResponseBody::METHOD
         )),
         error if playwright_injected_methods::classify(&error) == PageError::Closed => {
             PlaywrightError::target_closed()
@@ -228,9 +229,16 @@ fn body_error(error: CdpError) -> PlaywrightError {
 mod tests {
     use super::*;
 
+    fn reply(body: &str, base64_encoded: bool) -> GetResponseBodyResult {
+        GetResponseBodyResult {
+            body: body.to_string(),
+            base64_encoded,
+        }
+    }
+
     #[test]
     fn tests_that_text_bodies_cross_as_their_utf8_bytes() {
-        let binary = body(json!({"body": "héllo", "base64Encoded": false})).expect("a body");
+        let binary = body(reply("héllo", false)).expect("a body");
         assert_eq!(
             binary.as_bytes(),
             "héllo".as_bytes(),
@@ -240,21 +248,19 @@ mod tests {
 
     #[test]
     fn tests_that_base64_bodies_keep_their_bytes() {
-        let binary = body(json!({"body": "//5BAMM=", "base64Encoded": true})).expect("a body");
+        let binary = body(reply("//5BAMM=", true)).expect("a body");
         assert_eq!(binary.as_bytes(), [0xff, 0xfe, 0x41, 0x00, 0xc3]);
     }
 
     #[test]
     fn tests_that_an_empty_document_body_stays_empty() {
-        let binary = body(json!({"body": "", "base64Encoded": false})).expect("a body");
+        let binary = body(reply("", false)).expect("a body");
         assert!(binary.is_empty(), "{binary:?}");
     }
 
     #[test]
-    fn tests_that_a_malformed_reply_is_an_error() {
-        let error = body(json!({"base64Encoded": true})).expect_err("no body");
-        assert!(error.message.contains("getResponseBody"), "{error:?}");
-        let error = body(json!({"body": "%%%", "base64Encoded": true})).expect_err("bad base64");
+    fn tests_that_a_body_that_does_not_decode_is_an_error() {
+        let error = body(reply("%%%", true)).expect_err("bad base64");
         assert!(error.message.contains("response body"), "{error:?}");
     }
 

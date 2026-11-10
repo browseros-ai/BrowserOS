@@ -8,6 +8,10 @@
 //! NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo" \
 //!   cargo test -p neo-runtime --test hacker_news_live -- --ignored --nocapture
 //! ```
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[path = "../tests/support/browser.rs"]
 #[expect(

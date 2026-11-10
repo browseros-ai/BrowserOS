@@ -27,40 +27,42 @@
 
 use std::collections::{HashMap, HashSet};
 
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::CdpError;
 use serde::Deserialize;
-use serde_json::{Value, json};
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tracing::warn;
 
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::browser_connection_settings::{Setting, Switch};
+use crate::chromium_bridge::cdp::{self, target};
 use crate::events::{EventHub, Flushes};
 
 /// Neo: the target types discovery reports. Tabs are `page` targets; without the filter, every
 /// extension worker and browser UI target would cross the run's event ring too.
-fn page_filter() -> Value {
-    json!([{ "type": "page" }])
+fn page_filter() -> Vec<target::FilterEntry> {
+    vec![target::FilterEntry {
+        r#type: Some("page".to_string()),
+        exclude: None,
+    }]
 }
 
 /// Neo: target discovery as a setting the `Runtime`'s runs share (`browser_connection_settings.rs`): on for page
 /// targets while any run listens for new pages, off once the last lets go.
-pub(crate) static DISCOVERY: Setting = Setting {
-    method: "Target.setDiscoverTargets",
-    params: discovery_params,
-};
+pub(crate) struct Discovery;
 
-fn discovery_params(on: bool, _scope: Option<&str>) -> Value {
-    if on {
-        json!({ "discover": true, "filter": page_filter() })
-    } else {
-        json!({ "discover": false })
+impl Setting for Discovery {
+    type Command = target::SetDiscoverTargets;
+
+    fn command(on: bool, _scope: Option<&str>) -> Self::Command {
+        target::SetDiscoverTargets {
+            discover: on,
+            filter: on.then(page_filter),
+        }
     }
 }
 
-/// What `Target.targetCreated`, `Target.targetInfoChanged` and `Target.getTargets` report of a
-/// target.
+/// Neo's record of a page target: what discovery reports and `tabs.rs` keeps. Read from
+/// `Target.getTargets`' JSON for the baseline, and from a target event's generated `TargetInfo`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TargetInfo {
@@ -76,16 +78,16 @@ pub(crate) struct TargetInfo {
     pub(crate) browser_context_id: Option<String>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetEvent {
-    target_info: TargetInfo,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetDestroyed {
-    target_id: String,
+impl From<target::TargetInfo> for TargetInfo {
+    fn from(info: target::TargetInfo) -> Self {
+        Self {
+            target_id: info.target_id,
+            kind: info.r#type,
+            url: info.url,
+            opener_id: info.opener_id,
+            browser_context_id: info.browser_context_id,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -102,21 +104,20 @@ pub(crate) fn is_initial_empty(url: &str) -> bool {
 
 /// Turns the run's discovery on and watches it until the run's events end. Runs on the run's
 /// task tracker, so `Dispatcher::finish` waits for the lease's release.
-pub(crate) async fn run(tabs: Tabs, discovery: Switch) {
+pub(crate) async fn run(tabs: Tabs, discovery: Switch<Discovery>) {
     let hub = tabs.events().clone();
-    let cdp = tabs.cdp().clone();
+    let browser = tabs.cdp().clone();
     // Subscribed first: every target event from here on reaches this receiver, the replay too.
-    let events = cdp.events();
+    let events = browser.events();
     let flushes = hub.watcher();
     let started = async {
-        let baseline: TargetInfos = cdp
-            .send_typed(
-                "Target.getTargets",
-                json!({ "filter": page_filter() }),
-                None,
-            )
+        let baseline = browser
+            .send(target::GetTargets {
+                filter: Some(page_filter()),
+            })
             .await?;
-        let lease = discovery.acquire(&cdp, None).await?;
+        let baseline: TargetInfos = serde_json::from_value(baseline)?;
+        let lease = discovery.acquire(&browser, None).await?;
         Ok::<_, CdpError>((baseline, lease))
     };
     let started = started.await;
@@ -144,7 +145,7 @@ pub(crate) async fn run(tabs: Tabs, discovery: Switch) {
 }
 
 async fn watch(
-    mut events: broadcast::Receiver<CdpEvent>,
+    mut events: cdp::Events,
     mut flushes: Flushes,
     tabs: &Tabs,
     hub: &EventHub,
@@ -223,34 +224,35 @@ impl Targets {
     /// The report one browser-level target event makes, if any: a page target's first non-empty
     /// URL (its first commit), or its end while still on its initial empty document. Each target
     /// reports at most once.
-    fn on(&mut self, event: &CdpEvent) -> Option<Report> {
-        if event.session_id.is_some() {
+    fn on(&mut self, event: &cdp::Raw) -> Option<Report> {
+        if event.session().is_some() {
             return None;
         }
-        match event.method.as_str() {
-            "Target.targetCreated" | "Target.targetInfoChanged" => {
-                let TargetEvent { target_info: info } =
-                    serde_json::from_value::<TargetEvent>(event.params.clone()).ok()?;
-                if info.kind != "page" || self.known.contains(&info.target_id) {
-                    return None;
-                }
-                if is_initial_empty(&info.url) {
-                    self.pending.insert(info.target_id.clone(), info);
-                    return None;
-                }
-                self.pending.remove(&info.target_id);
-                self.known.insert(info.target_id.clone());
-                Some((info, false))
+        if event.is::<target::TargetCreated>() || event.is::<target::TargetInfoChanged>() {
+            let info: TargetInfo = event
+                .decode::<target::TargetCreated>()
+                .map(|created| created.target_info)
+                .or_else(|| {
+                    event
+                        .decode::<target::TargetInfoChanged>()
+                        .map(|changed| changed.target_info)
+                })?
+                .into();
+            if info.kind != "page" || self.known.contains(&info.target_id) {
+                return None;
             }
-            "Target.targetDestroyed" => {
-                let TargetDestroyed { target_id } =
-                    serde_json::from_value::<TargetDestroyed>(event.params.clone()).ok()?;
-                let info = self.pending.remove(&target_id)?;
-                self.known.insert(target_id);
-                Some((info, true))
+            if is_initial_empty(&info.url) {
+                self.pending.insert(info.target_id.clone(), info);
+                return None;
             }
-            _ => None,
+            self.pending.remove(&info.target_id);
+            self.known.insert(info.target_id.clone());
+            return Some((info, false));
         }
+        let target::TargetDestroyed { target_id } = event.decode()?;
+        let info = self.pending.remove(&target_id)?;
+        self.known.insert(target_id);
+        Some((info, true))
     }
 
     /// Every pending page, known from now on.
@@ -264,6 +266,7 @@ impl Targets {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Value, json};
     use tokio_util::task::TaskTracker;
 
     use super::*;
@@ -279,13 +282,18 @@ mod tests {
 
     #[test]
     fn tests_that_target_events_decode_what_browseros_sends() {
-        let event: TargetEvent = serde_json::from_value(json!({
-            "targetInfo": {
-                "targetId": "POPUP", "type": "page", "url": "", "openerId": "OPENER",
-                "canAccessOpener": false, "openerFrameId": "OPENER", "attached": false,
-                "browserContextId": "CONTEXT",
-            }
-        }))
+        let event = cdp::Raw::fixture(
+            "Target.targetCreated",
+            None,
+            json!({
+                "targetInfo": {
+                    "targetId": "POPUP", "type": "page", "title": "", "url": "", "openerId": "OPENER",
+                    "canAccessOpener": false, "openerFrameId": "OPENER", "attached": false,
+                    "browserContextId": "CONTEXT",
+                }
+            }),
+        )
+        .decode::<target::TargetCreated>()
         .unwrap();
         assert_eq!(event.target_info.target_id, "POPUP");
         assert_eq!(event.target_info.opener_id.as_deref(), Some("OPENER"));
@@ -311,27 +319,37 @@ mod tests {
         assert!(targets.pending.contains_key("OPENING"));
     }
 
-    fn target_event(method: &str, target: &str, kind: &str, url: &str) -> CdpEvent {
-        CdpEvent {
-            method: method.to_string(),
-            params: json!({ "targetInfo": {
-                "targetId": target, "type": kind, "url": url, "openerId": "OPENER",
-                "browserContextId": "CONTEXT",
-            }}),
-            session_id: None,
-        }
+    fn target_event(method: &str, target: &str, kind: &str, url: &str) -> cdp::Raw {
+        on_session(method, None, target, kind, url)
     }
 
-    fn destroyed(target: &str) -> CdpEvent {
-        CdpEvent {
-            method: "Target.targetDestroyed".to_string(),
-            params: json!({ "targetId": target }),
-            session_id: None,
-        }
+    fn on_session(
+        method: &str,
+        session: Option<&str>,
+        target: &str,
+        kind: &str,
+        url: &str,
+    ) -> cdp::Raw {
+        cdp::Raw::fixture(
+            method,
+            session,
+            json!({ "targetInfo": {
+                "targetId": target, "type": kind, "title": "", "url": url, "attached": false,
+                "openerId": "OPENER", "canAccessOpener": false, "browserContextId": "CONTEXT",
+            }}),
+        )
+    }
+
+    fn destroyed(target: &str) -> cdp::Raw {
+        cdp::Raw::fixture(
+            "Target.targetDestroyed",
+            None,
+            json!({ "targetId": target }),
+        )
     }
 
     /// What each event of a sequence reports: `Some((target, closed))` or `None`.
-    fn reports(targets: &mut Targets, events: &[CdpEvent]) -> Vec<Option<(String, bool)>> {
+    fn reports(targets: &mut Targets, events: &[cdp::Raw]) -> Vec<Option<(String, bool)>> {
         events
             .iter()
             .map(|event| {
@@ -397,8 +415,13 @@ mod tests {
     #[test]
     fn tests_that_a_session_event_and_a_lag_are_handled_as_the_watcher_needs() {
         let mut targets = Targets::default();
-        let mut attached = target_event("Target.targetInfoChanged", "S", "page", "https://a/");
-        attached.session_id = Some(browseros_cdp::SessionId::from("session"));
+        let attached = on_session(
+            "Target.targetInfoChanged",
+            Some("session"),
+            "S",
+            "page",
+            "https://a/",
+        );
         assert!(
             targets.on(&attached).is_none(),
             "a session's own target events"
@@ -417,8 +440,8 @@ mod tests {
     #[tokio::test]
     async fn tests_that_discovery_is_on_while_any_run_holds_it() {
         let browser = FakeBrowser::start(Replies::default()).await;
-        let cdp = browser.cdp().await;
-        let discovery = Switch::new(&DISCOVERY, TaskTracker::new());
+        let cdp = cdp::Browser::new(browser.cdp().await);
+        let discovery = Switch::<Discovery>::new(TaskTracker::new());
         let first = discovery.acquire(&cdp, None).await.unwrap();
         let second = discovery.acquire(&cdp, None).await.unwrap();
         assert_eq!(discovery.holders().await, 2);

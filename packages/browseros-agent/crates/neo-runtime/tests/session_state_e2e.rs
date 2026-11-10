@@ -3,6 +3,10 @@
 //! same tab finds none of it; a cookie it adds is browser data and stays; a permission it grants
 //! is reset once it ends, back to what the profile had before, and one run's clearing, even
 //! cancelled halfway, never takes another run's grants.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[expect(
     dead_code,

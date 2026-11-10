@@ -33,15 +33,12 @@ use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Mutex;
 
-use browseros_cdp::CdpEvent;
 use neo_runtime_spec::serve::{
     ArtifactCall, ArtifactFailureParams, ArtifactFailureResult, ArtifactPathAfterFinishedParams,
     ArtifactPathAfterFinishedResult,
 };
-use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::fs;
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::watch;
 use tracing::{debug, warn};
@@ -49,6 +46,7 @@ use tracing::{debug, warn};
 use crate::artifacts::Artifacts;
 use crate::browser_representations::tabs::{self, Tabs};
 use crate::chromium_bridge::browser_connection_settings::{Setting, Switches};
+use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::discovery::{self, TargetInfo};
 use crate::events::{CONTEXT_GUID, Flushes};
 use crate::method_router::encode_result;
@@ -64,20 +62,19 @@ pub(crate) const DOWNLOAD_PREFIX: &str = "download@";
 /// the user's browser, so Neo leaves the saving to it (`default`: where, and under which name, the
 /// user's settings say) and only turns the reports on. Off is `default` without reports: CDP has
 /// no read of the behavior to restore, and `default` is the browser's own.
-pub(crate) static DOWNLOAD_EVENTS: Setting = Setting {
-    method: "Browser.setDownloadBehavior",
-    params: download_behavior,
-};
+pub(crate) struct DownloadEvents;
 
-fn download_behavior(on: bool, context: Option<&str>) -> Value {
-    let mut params = json!({ "behavior": "default" });
-    if on {
-        params["eventsEnabled"] = json!(true);
+impl Setting for DownloadEvents {
+    type Command = cdp::browser::SetDownloadBehavior;
+
+    fn command(on: bool, context: Option<&str>) -> Self::Command {
+        cdp::browser::SetDownloadBehavior {
+            behavior: "default".to_string(),
+            browser_context_id: context.map(str::to_string),
+            download_path: None,
+            events_enabled: on.then_some(true),
+        }
     }
-    if let Some(context) = context {
-        params["browserContextId"] = json!(context);
-    }
-    params
 }
 
 /// Neo: how many downloads a run keeps for their `Download` objects. Past it the oldest goes,
@@ -94,25 +91,7 @@ const CANCELED: &str = "canceled";
 /// file (CDP marks `filePath` experimental; BrowserOS neo 155 named it every time, measured).
 const NO_FILE_PATH: &str = "the browser reported the download complete without naming its file";
 
-/// CDP's `Browser.downloadWillBegin` params.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DownloadWillBegin {
-    frame_id: String,
-    guid: String,
-    url: String,
-    suggested_filename: String,
-}
-
-/// CDP's `Browser.downloadProgress` params.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DownloadProgress {
-    guid: String,
-    state: String,
-    #[serde(default)]
-    file_path: Option<String>,
-}
+use crate::chromium_bridge::cdp::browser::{DownloadProgress, DownloadWillBegin};
 
 /// How a download ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -241,15 +220,18 @@ impl Downloads {
 /// The watcher also holds target discovery, for the tabs that open and close around a download
 /// ([`Opened`]); without it the run still hears every other download.
 pub(crate) async fn run(tabs: Tabs, switches: Switches) {
-    let cdp = tabs.cdp().clone();
+    let browser = tabs.cdp().clone();
     // Subscribed first: every report from the switches on reaches this receiver.
-    let events = cdp.events();
+    let events = browser.events();
     let flushes = tabs.events().watcher();
-    let discovery = switches.discovery.acquire(&cdp, None).await;
+    let discovery = switches.discovery.acquire(&browser, None).await;
     if let Err(error) = &discovery {
         debug!(%error, "the download watcher cannot see new tabs; a new window's download is lost");
     }
-    let hold = switches.downloads.acquire(&cdp, tabs.context_id()).await;
+    let hold = switches
+        .downloads
+        .acquire(&browser, tabs.context_id())
+        .await;
     tabs.downloads_ready();
     match hold {
         Ok(hold) => {
@@ -268,7 +250,7 @@ pub(crate) async fn run(tabs: Tabs, switches: Switches) {
     }
 }
 
-async fn watch(mut events: broadcast::Receiver<CdpEvent>, mut flushes: Flushes, tabs: &Tabs) {
+async fn watch(mut events: cdp::Events, mut flushes: Flushes, tabs: &Tabs) {
     let ended = tabs.events().ended();
     let mut opened = Openings::default();
     loop {
@@ -316,24 +298,18 @@ struct Openings {
     tabs: HashMap<String, Opened>,
 }
 
-/// `Target.targetCreated` and `Target.targetInfoChanged` params.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetReport {
-    target_info: TargetInfo,
-}
-
 impl Openings {
     /// One browser-level target report: a tab's opener, and its first commit.
-    fn on(&mut self, event: &CdpEvent) {
-        if !matches!(
-            event.method.as_str(),
-            "Target.targetCreated" | "Target.targetInfoChanged"
-        ) {
-            return;
-        }
-        let Ok(TargetReport { target_info: info }) =
-            serde_json::from_value::<TargetReport>(event.params.clone())
+    fn on(&mut self, event: &cdp::Raw) {
+        let Some(info) = event
+            .decode::<cdp::target::TargetCreated>()
+            .map(|created| created.target_info)
+            .or_else(|| {
+                event
+                    .decode::<cdp::target::TargetInfoChanged>()
+                    .map(|changed| changed.target_info)
+            })
+            .map(TargetInfo::from)
         else {
             return;
         };
@@ -370,27 +346,17 @@ fn lost(tabs: &Tabs, skipped: u64) {
     ));
 }
 
-async fn on_event(event: &CdpEvent, tabs: &Tabs, opened: &mut Openings) {
-    if event.session_id.is_some() {
+async fn on_event(event: &cdp::Raw, tabs: &Tabs, opened: &mut Openings) {
+    if event.session().is_some() {
         return;
     }
-    match event.method.as_str() {
-        "Browser.downloadWillBegin" => {
-            match serde_json::from_value::<DownloadWillBegin>(event.params.clone()) {
-                Ok(began) => {
-                    let opening = opened.get(&began.frame_id).cloned();
-                    began_on(tabs, began, opening.as_ref()).await;
-                }
-                Err(error) => debug!(%error, "a download's start did not decode"),
-            }
-        }
-        "Browser.downloadProgress" => {
-            match serde_json::from_value::<DownloadProgress>(event.params.clone()) {
-                Ok(progress) => tabs.downloads().progressed(progress),
-                Err(error) => debug!(%error, "a download's progress did not decode"),
-            }
-        }
-        _ => opened.on(event),
+    if let Some(began) = event.decode::<DownloadWillBegin>() {
+        let opening = opened.get(&began.frame_id).cloned();
+        began_on(tabs, began, opening.as_ref()).await;
+    } else if let Some(progress) = event.decode::<DownloadProgress>() {
+        tabs.downloads().progressed(progress);
+    } else {
+        opened.on(event);
     }
 }
 
@@ -451,12 +417,12 @@ pub(crate) async fn serve(
         }
         ArtifactCall::Cancel(_) => {
             let (context, _) = downloads.get(guid)?;
-            let mut params = json!({ "guid": guid });
-            if let Some(context) = context {
-                params["browserContextId"] = json!(context);
-            }
+            let cancel = cdp::browser::CancelDownload {
+                guid: guid.to_string(),
+                browser_context_id: context,
+            };
             progress
-                .race(tabs.cdp().send("Browser.cancelDownload", params, None))
+                .race(tabs.cdp().send(cancel))
                 .await?
                 .map_err(|error| tabs::cdp_error(&error))?;
             Ok(None)
@@ -544,19 +510,20 @@ mod tests {
             guid: guid.to_string(),
             state: state.to_string(),
             file_path: file_path.map(str::to_string),
+            ..DownloadProgress::default()
         }
     }
 
     #[test]
     fn tests_that_reports_switch_on_with_events_and_off_to_the_browsers_own_behavior() {
+        let params = |on, context| {
+            serde_json::to_value(DownloadEvents::command(on, context)).expect("params serialize")
+        };
         assert_eq!(
-            download_behavior(true, Some("CONTEXT")),
+            params(true, Some("CONTEXT")),
             json!({ "behavior": "default", "eventsEnabled": true, "browserContextId": "CONTEXT" })
         );
-        assert_eq!(
-            download_behavior(false, None),
-            json!({ "behavior": "default" })
-        );
+        assert_eq!(params(false, None), json!({ "behavior": "default" }));
     }
 
     #[test]
@@ -613,14 +580,15 @@ mod tests {
         kind: &str,
         url: &str,
         opener: Option<&str>,
-    ) -> CdpEvent {
-        CdpEvent {
-            method: method.to_string(),
-            params: json!({ "targetInfo": {
-                "targetId": target, "type": kind, "url": url, "openerId": opener, "attached": false,
+    ) -> cdp::Raw {
+        cdp::Raw::fixture(
+            method,
+            None,
+            json!({ "targetInfo": {
+                "targetId": target, "type": kind, "title": "", "url": url, "attached": false,
+                "openerId": opener, "canAccessOpener": false,
             }}),
-            session_id: None,
-        }
+        )
     }
 
     #[test]
@@ -641,11 +609,11 @@ mod tests {
             }),
             "a new window on its initial empty document"
         );
-        opened.on(&CdpEvent {
-            method: "Target.targetDestroyed".to_string(),
-            params: json!({ "targetId": "NEW" }),
-            session_id: None,
-        });
+        opened.on(&cdp::Raw::fixture(
+            "Target.targetDestroyed",
+            None,
+            json!({ "targetId": "NEW" }),
+        ));
         assert!(opened.get("NEW").is_some(), "kept past its end");
         opened.on(&target_event(
             "Target.targetCreated",
@@ -717,7 +685,7 @@ mod tests {
     async fn tests_that_save_as_copies_a_finished_download_into_the_artifact_directory() {
         let browser = FakeBrowser::start(Replies::default()).await;
         let (tabs, _) = Tabs::open(
-            browser.cdp().await,
+            cdp::Browser::new(browser.cdp().await),
             Handle::current(),
             TabInputs::default(),
             TabScreenshots::default(),
@@ -739,6 +707,7 @@ mod tests {
             guid: "DONE".to_string(),
             state: "completed".to_string(),
             file_path: Some(source.display().to_string()),
+            ..DownloadProgress::default()
         });
         let saved = save_as(
             &tabs,
@@ -787,6 +756,7 @@ mod tests {
             guid: "CANCELED".to_string(),
             state: "canceled".to_string(),
             file_path: None,
+            ..DownloadProgress::default()
         });
         let refused = save_as(&tabs, "CANCELED", &artifacts, "c.csv", &call_progress()).await;
         assert!(refused.is_err_and(|error| message(error) == CANCELED));

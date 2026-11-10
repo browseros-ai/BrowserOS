@@ -144,10 +144,18 @@ async fn tests_that_a_listed_page_forced_click_waits_for_another_runs_trial() {
         ..Replies::default()
     })
     .await;
-    browser.page.lock().unwrap().tabs.push(json!({
-        "targetId":"other", "url":fake_browser::PAGE_URL, "windowId":1,
-        "liveBrowserContextId":"profile", "isActive":false,
-    }));
+    browser
+        .page
+        .lock()
+        .unwrap()
+        .tabs
+        .push(fake_browser::tab_record(
+            "other",
+            fake_browser::PAGE_URL,
+            1,
+            Some("profile"),
+            false,
+        ));
     let runtime = browser.runtime().await;
     let trial = tokio::spawn({
         let runtime = runtime.clone();

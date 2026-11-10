@@ -1,6 +1,10 @@
 //! The run's `Browser` on a real BrowserOS neo (`src/playwright_methods/browser_methods.rs`, `src/browser_representations/emulation.rs`):
 //! contexts a run creates go with it, also when it times out; its emulation lasts for the run
 //! and no longer; a created context's pages are tabs of their own, routed apart from the run's.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test drives an independent CDP session as the browser oracle"
+)]
 
 #[path = "support/browser.rs"]
 #[expect(

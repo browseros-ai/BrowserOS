@@ -31,6 +31,7 @@ use serde_json::Value;
 use crate::artifacts::{self, ArtifactPath, Artifacts};
 use crate::browser_representations::page::{FrameTab, PageSession};
 use crate::browser_representations::tabs::{PageEntry, Tabs};
+use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::playwright_injected_methods;
 use crate::method_router::encode_result;
@@ -270,17 +271,19 @@ async fn session(
     progress
         .race(page.prepare())
         .await?
-        .map_err(|error| protocol_error("Page.enable", &error))?;
+        .map_err(|error| protocol_error(cdp::page::Enable::METHOD, &error))?;
     Ok(page)
 }
 
-/// Playwright's wording for a failed CDP command; a closed tab is `TargetClosedError`.
+/// Playwright's wording for a failed CDP command; a closed tab is `TargetClosedError`, and an
+/// answer the door could not decode as the protocol declares it is [`malformed`].
 /// Playwright: `server/protocolError.ts` `ProtocolError.setMessage`
 pub(crate) fn protocol_error(method: &str, error: &CdpError) -> CallError {
     match error {
         CdpError::Protocol { message, .. } => {
             PlaywrightError::error(format!("Protocol error ({method}): {message}")).into()
         }
+        CdpError::Json(message) => malformed(method, message),
         error if playwright_injected_methods::classify(error) == PageError::Closed => {
             PlaywrightError::target_closed().into()
         }
