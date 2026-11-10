@@ -202,6 +202,7 @@ pub enum Verdict {
     Fail,
     Unsupported,
     BridgeLimit,
+    CleanupBlur,
     Skip,
     NotApplicable,
     ReferenceFailure,

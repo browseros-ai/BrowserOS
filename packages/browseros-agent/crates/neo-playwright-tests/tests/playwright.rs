@@ -148,6 +148,7 @@ fn run() -> Result<(), String> {
                     Verdict::Pass => Ok(Completion::Completed),
                     Verdict::Unsupported
                     | Verdict::BridgeLimit
+                    | Verdict::CleanupBlur
                     | Verdict::Skip
                     | Verdict::NotApplicable => Ok(Completion::Ignored {
                         reason: Some(format!("{:?}: {cli_reason}", record.verdict)),
@@ -274,11 +275,12 @@ fn print_totals(label: &str, totals: &report::Totals) {
         totals.coverage.denominator
     );
     println!(
-        "    Pass {}, Fail {}; excluded: Unsupported {}, BridgeLimit {}, ReferenceFailure {}, HarnessError {}, Skip {}, NotApplicable {}",
+        "    Pass {}, Fail {}; excluded: Unsupported {}, BridgeLimit {}, CleanupBlur {}, ReferenceFailure {}, HarnessError {}, Skip {}, NotApplicable {}",
         totals.counts[&Verdict::Pass],
         totals.counts[&Verdict::Fail],
         totals.counts[&Verdict::Unsupported],
         totals.counts[&Verdict::BridgeLimit],
+        totals.counts[&Verdict::CleanupBlur],
         totals.counts[&Verdict::ReferenceFailure],
         totals.counts[&Verdict::HarnessError],
         totals.counts[&Verdict::Skip],

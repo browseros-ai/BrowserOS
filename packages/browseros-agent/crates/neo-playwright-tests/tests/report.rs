@@ -1455,16 +1455,23 @@ fn tests_that_trailing_native_window_blurs_are_counted_without_changing_evidence
     let pair: Pair = serde_json::from_value(value).expect("valid observed events");
     let original = pair.phases["neo"].observation.clone();
     let result = report::classify(&pair);
+    let record = serde_json::to_value(&result).expect("record");
     assert_eq!(
-        result.verdict,
-        Verdict::Pass,
-        "cleanup blur is not browser behavior"
+        record["verdict"], "CleanupBlur",
+        "cleanup blur has its own verdict rather than establishing a pass"
+    );
+    assert_eq!(
+        record["reason"],
+        "only difference: trailing Neo window blur after the run ended"
+    );
+    assert!(
+        !result.comparable,
+        "cleanup blur is excluded from fully comparable results"
     );
     assert_eq!(
         pair.phases["neo"].observation, original,
         "raw evidence is unchanged"
     );
-    let record = serde_json::to_value(&result).expect("record");
     assert_eq!(
         record["cleanupBlurNotes"].as_array().map(Vec::len),
         Some(2),
@@ -1585,4 +1592,32 @@ fn tests_that_timestamp_type_errors_and_other_numeric_returns_still_fail() {
         Verdict::Fail,
         "other method values still compare exactly"
     );
+}
+
+#[test]
+fn tests_that_cleanup_blur_keeps_other_differences_and_evidence_gaps() {
+    for defect in ["return", "witness"] {
+        let mut value = fixture();
+        projection(
+            &mut value,
+            "neo",
+            "events",
+            &json!([{"type":"blur","target":null}]),
+        );
+        let expected = if defect == "return" {
+            value["phases"]["neo"]["journal"]["calls"][0]["value"] =
+                json!({"tag":"boolean","value":true});
+            Verdict::Fail
+        } else {
+            value["phases"]["neo"]["journal"]["nativeOutcome"]["pages"] = json!([]);
+            Verdict::HarnessError
+        };
+        let result = classify(value).expect("cleanup with independent defect");
+        assert_eq!(result.verdict, expected, "cleanup does not hide {defect}");
+        assert_eq!(
+            result.cleanup_blur_notes.len(),
+            1,
+            "the cleanup observation remains recorded"
+        );
+    }
 }
