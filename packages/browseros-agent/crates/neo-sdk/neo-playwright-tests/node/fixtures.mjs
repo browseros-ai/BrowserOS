@@ -357,9 +357,9 @@ const clawTest = sdkTest.extend({
     { scope: 'worker' },
   ],
   playwright: [
-    async ({}, use) => {
-      // v1 has no Playwright namespace. Missing members remain undefined.
-      await use({})
+    async ({ __claw }, use) => {
+      // v1 gives agents this real class; only its namespace location is adapted.
+      await use({ errors: { TimeoutError: __claw.params.TimeoutError } })
     },
     { scope: 'worker' },
   ],

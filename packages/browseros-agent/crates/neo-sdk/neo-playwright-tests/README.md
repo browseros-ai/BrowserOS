@@ -46,8 +46,9 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
 - Reference uses vanilla `chromium.connectOverCDP` and upstream contexts.
 - `__claw` opens one real v1 run per worker with a 24-hour deadline. Playwright
   owns test deadlines. `finish()` writes `worker-*/outcome.json`.
-- `browser` and `context` are v1's real objects. `playwright` is `{}` because v1
-  has no namespace; missing namespace members count as lacks.
+- `browser` and `context` are v1's real objects. `playwright.errors.TimeoutError`
+  is v1's real agent parameter class, placed where upstream checks expect it.
+  No other Playwright namespace members are supplied; those count as lacks.
 - `_contextFactory` lends the worker's one context on its first call without
   explicit options. Only verified implicit Playwright defaults are omitted.
   Explicit options—even default-valued ones—and second calls reach the real

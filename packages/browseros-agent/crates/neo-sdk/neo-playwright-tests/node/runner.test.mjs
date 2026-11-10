@@ -75,6 +75,17 @@ test('headless ownership and the JSON report cannot be overridden', () => {
   assert.equal(runnerOptions(['--debug-build', '--release']).debugBuild, false)
 })
 
+test('tests that filters after the runner separator remain Playwright test filters', () => {
+  const files = [
+    'tests/page/page-click.spec.ts',
+    'tests/page/page-goto.spec.ts',
+  ]
+  const parsed = runnerOptions(['--', ...files]).args
+  assert.equal(parsed.includes('--'), false)
+  assert.deepEqual(parsed.slice(-files.length), files)
+  assert.throws(() => runnerOptions(['--', '--headed']), /filter/)
+})
+
 test('only implicit offline and download defaults are omitted', () => {
   const combined = { offline: false, acceptDownloads: true, locale: 'en-US' }
   const implicit = new Set(['offline', 'acceptDownloads'])

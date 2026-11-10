@@ -279,10 +279,10 @@ function observedGap(error, row, engine = 'neo') {
   const read = line.match(
     /Cannot read properties of undefined \(reading '([\w$]+)'\)/,
   )
-  if (engine === 'claw' && read) {
+  if (engine === 'claw' && /Cannot read properties of undefined/.test(line)) {
     const evidence = `${error.snippet || ''}\n${error.message || ''}`
     const namespace = evidence.match(
-      /\b(playwright\.(?:chromium|firefox|webkit|request|selectors)|browserType)(?:\.|\[)/,
+      /\b(playwright\.(?:chromium|firefox|webkit|request|selectors|devices)|browserType)(?:\.|\[)/,
     )
     if (namespace) return { key: namespace[1], missing: true }
   }
