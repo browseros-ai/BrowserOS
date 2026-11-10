@@ -124,7 +124,7 @@ jobs:
           read -r -a pin_tokens <<< "$normalized"
           for pin in "${pin_tokens[@]}"; do
             if [[ ! "$pin" =~ ^[a-z][a-z0-9_-]*=[0-9]+([.][0-9]+){0,3}$ ]]; then
-              echo "::error::Invalid pin '$pin'; expected name=version (for example, agent=0.0.119)" >&2
+              echo "::error::Invalid pin '$pin'; expected name=version (for example, browserclaw=0.1.10.0)" >&2
               exit 1
             fi
             base_args+=(--set "$pin")

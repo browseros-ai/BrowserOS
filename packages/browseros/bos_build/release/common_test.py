@@ -14,7 +14,6 @@ from .common import (
     generate_appcast_item,
     get_download_path_mapping,
     list_all_versions,
-    list_legacy_versions,
     validate_release_metadata,
 )
 
@@ -282,23 +281,6 @@ class ReleaseContractTest(unittest.TestCase):
 
 # Golden copy of the pre-productization DOWNLOAD_PATH_MAPPING constant —
 # get_download_path_mapping(browseros) must stay byte-identical to it.
-BROWSEROS_DOWNLOAD_GOLDEN = {
-    "macos": {
-        "arm64": "download/BrowserOS-arm64.dmg",
-        "x64": "download/BrowserOS-x86_64.dmg",
-        "universal": "download/BrowserOS.dmg",
-    },
-    "win": {
-        "x64_installer": "download/BrowserOS_installer.exe",
-    },
-    "linux": {
-        "x64_appimage": "download/BrowserOS.AppImage",
-        "x64_deb": "download/BrowserOS.deb",
-        "arm64_appimage": "download/BrowserOS-arm64.AppImage",
-        "arm64_deb": "download/BrowserOS-arm64.deb",
-    },
-}
-
 BROWSERCLAW_DOWNLOAD_GOLDEN = {
     "macos": {
         "arm64": "download/BrowserOS_neo-arm64.dmg",
@@ -318,14 +300,9 @@ BROWSERCLAW_DOWNLOAD_GOLDEN = {
 
 
 class DownloadPathMappingTest(unittest.TestCase):
-    def test_browseros_mapping_matches_golden_constant(self):
-        self.assertEqual(
-            get_download_path_mapping(get_product_descriptor("browseros")),
-            BROWSEROS_DOWNLOAD_GOLDEN,
-        )
-
-    def test_default_product_mapping_is_browseros(self):
-        self.assertEqual(get_download_path_mapping(), BROWSEROS_DOWNLOAD_GOLDEN)
+    def test_default_product_mapping_is_browserclaw(self):
+        # The bare download/BrowserOS* aliases belong to browseros-human.
+        self.assertEqual(get_download_path_mapping(), BROWSERCLAW_DOWNLOAD_GOLDEN)
 
     def test_browserclaw_mapping_fully_prefixed(self):
         self.assertEqual(
@@ -402,35 +379,6 @@ class ListAllVersionsTest(unittest.TestCase):
 
     def test_returns_empty_without_r2_config(self):
         self.assertEqual(list_all_versions("browseros", _env(configured=False)), [])
-
-
-class ListLegacyVersionsTest(unittest.TestCase):
-    def test_keeps_only_version_shaped_prefixes(self):
-        client = _FakeR2Client(
-            {
-                "releases/": [
-                    _page("releases/", ["browseros", "browserclaw", "0.28.4", "0.29.0"])
-                ]
-            }
-        )
-
-        with mock.patch.object(common, "get_r2_client", return_value=client):
-            versions = list_legacy_versions(_env())
-
-        self.assertEqual(versions, ["0.29.0", "0.28.4"])
-
-    def test_rejects_decorated_version_names(self):
-        client = _FakeR2Client(
-            {"releases/": [_page("releases/", ["v0.31.0", "0.31.0-beta", "1.2.3.4"])]}
-        )
-
-        with mock.patch.object(common, "get_r2_client", return_value=client):
-            versions = list_legacy_versions(_env())
-
-        self.assertEqual(versions, ["1.2.3.4"])
-
-    def test_returns_empty_without_r2_config(self):
-        self.assertEqual(list_legacy_versions(_env(configured=False)), [])
 
 
 if __name__ == "__main__":

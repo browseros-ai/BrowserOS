@@ -28,10 +28,6 @@ func init() {
 
 // runDevSetup prepares the repo for local development. Dependency install always
 // runs because Bun is fast and this keeps watch resilient after branch changes.
-//
-// It used to generate the extension's GraphQL code as well, which is what the
-// --if-needed flag skipped when the output was already there. There is no
-// generated code left to skip.
 func runDevSetup(ctx context.Context, root string) error {
 	proc.LogMsg(proc.TagSetup, "Installing dependencies...")
 	if err := proc.RunBlocking(ctx, root, proc.TagSetup, "bun", "install", "--frozen-lockfile"); err != nil {

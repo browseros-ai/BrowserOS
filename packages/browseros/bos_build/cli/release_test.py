@@ -88,7 +88,7 @@ class ReleaseListInvocationTest(unittest.TestCase):
         self.assertIsNone(module.limit)
         self.assertEqual(
             [product.id for product in module.products],
-            ["browseros", "browserclaw"],
+            ["browserclaw"],
         )
 
     def test_limit_and_product_filter(self):
@@ -158,13 +158,13 @@ class FeedPublisherCliTest(unittest.TestCase):
             result = invoke(
                 "feeds",
                 "publish-local",
-                "appcast.xml",
+                "appcast-claw.xml",
                 "extensions/bundled-manifest.xml",
             )
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
         publisher.return_value.publish_staged.assert_called_once_with(
-            ["appcast.xml", "extensions/bundled-manifest.xml"],
+            ["appcast-claw.xml", "extensions/bundled-manifest.xml"],
             publish=False,
             allow_downgrade=False,
             repair_invalid_live=False,
@@ -180,14 +180,14 @@ class FeedPublisherCliTest(unittest.TestCase):
             result = invoke(
                 "feeds",
                 "publish-local",
-                "appcast.xml",
+                "appcast-claw.xml",
                 "--publish",
                 "--allow-downgrade",
             )
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
         publisher.return_value.publish_staged.assert_called_once_with(
-            ["appcast.xml"],
+            ["appcast-claw.xml"],
             publish=True,
             allow_downgrade=True,
             repair_invalid_live=False,
@@ -203,13 +203,13 @@ class FeedPublisherCliTest(unittest.TestCase):
             result = invoke(
                 "feeds",
                 "publish-local",
-                "appcast-server.xml",
+                "appcast-claw-server.xml",
                 "--repair-invalid-live",
             )
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
         publisher.return_value.publish_staged.assert_called_once_with(
-            ["appcast-server.xml"],
+            ["appcast-claw-server.xml"],
             publish=False,
             allow_downgrade=False,
             repair_invalid_live=True,
@@ -225,14 +225,14 @@ class FeedPublisherCliTest(unittest.TestCase):
             result = invoke(
                 "feeds",
                 "publish-local",
-                "appcast-server.xml",
+                "appcast-claw-server.xml",
                 "--repair-invalid-live",
                 "--publish",
             )
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
         publisher.return_value.publish_staged.assert_called_once_with(
-            ["appcast-server.xml"],
+            ["appcast-claw-server.xml"],
             publish=True,
             allow_downgrade=False,
             repair_invalid_live=True,
@@ -266,7 +266,7 @@ class FeedPublisherCliTest(unittest.TestCase):
 
             result = subprocess.run(
                 ["bash", str(upload_script)],
-                input="13,15\nn\n",
+                input="7,9\nn\n",
                 text=True,
                 capture_output=True,
                 cwd=tmp_path,
@@ -296,7 +296,6 @@ class FeedPublisherCliTest(unittest.TestCase):
         )
         repo_root = Path(__file__).resolve().parents[4]
         for workflow in (
-            "release-browseros.yml",
             "release-browserclaw.yml",
         ):
             self.assertNotIn(
@@ -312,10 +311,10 @@ class CreateReleaseContextTest(unittest.TestCase):
         self.assertEqual(ctx.product.id, "browserclaw")
         self.assertEqual(ctx.release_version, "1.0.0")
 
-    def test_defaults_to_browseros(self):
+    def test_defaults_to_browserclaw(self):
         ctx = release_cli.create_release_context("1.0.0")
 
-        self.assertEqual(ctx.product.id, "browseros")
+        self.assertEqual(ctx.product.id, "browserclaw")
 
 
 def _configured_r2_env():

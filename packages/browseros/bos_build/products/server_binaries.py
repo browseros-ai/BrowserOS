@@ -35,7 +35,7 @@ class ServerBundle:
     windows_bundle_resources_root: Path
     macos_binaries: Dict[str, SignSpec]
     windows_binaries: Tuple[str, ...]
-    source_builder: Literal["bun", "cargo"]
+    source_builder: Literal["cargo"]
     source_component: str
     runtime_binary_name: str
     required_in_chromium_output: bool = True
@@ -107,7 +107,6 @@ def expected_windows_bundle_binary_paths(
 
 
 def _browser_build_server_bundles() -> Tuple[ServerBundle, ...]:
-    from .browseros.product import BROWSEROS_SERVER_BUNDLE
     from .browserclaw.product import BROWSERCLAW_SERVER_BUNDLE
 
-    return (BROWSEROS_SERVER_BUNDLE, BROWSERCLAW_SERVER_BUNDLE)
+    return (BROWSERCLAW_SERVER_BUNDLE,)

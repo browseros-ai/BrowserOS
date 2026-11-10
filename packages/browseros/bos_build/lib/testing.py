@@ -85,7 +85,7 @@ class MockChromium:
         return path
 
     def with_out_dir(
-        self, arch: str, args_gn: Optional[str] = None, product: str = "browseros"
+        self, arch: str, args_gn: Optional[str] = None, product: str = "browserclaw"
     ) -> Path:
         """Create out/Default_{arch}/, optionally with an args.gn file."""
         out_dir = self.src / "out" / f"Default_{product}_{arch}"
@@ -213,7 +213,7 @@ class MockBrowserOSRoot:
         return path
 
     def add_replacement_file(
-        self, relative_path: str, content: str, product: str = "browseros"
+        self, relative_path: str, content: str, product: str = "browserclaw"
     ) -> Path:
         """Create a replacement file under chromium_files/ and return its path."""
         root = (
@@ -268,7 +268,7 @@ def make_context(
     root: MockBrowserOSRoot,
     architecture: str = "x64",
     build_type: str = "release",
-    product: str = "browseros",
+    product: str = "browserclaw",
 ) -> Context:
     """Build a real Context wired to the mock trees.
 

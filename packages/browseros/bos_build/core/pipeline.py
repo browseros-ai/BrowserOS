@@ -73,5 +73,5 @@ def show_available_modules(available_modules: Dict[str, Type[Step]]) -> None:
     log_info("=" * 70)
     log_info("  browseros build --modules clean,git_setup,configure,compile")
     log_info("  browseros build --modules compile,sign_macos,package_macos")
-    log_info("  browseros build --preset release --product browseros --arch arm64")
+    log_info("  browseros build --preset release --product browserclaw --arch arm64")
     log_info("=" * 70 + "\n")

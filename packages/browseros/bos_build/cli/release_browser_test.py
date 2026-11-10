@@ -22,9 +22,9 @@ from bos_build.release.lane import (
 PARENT_SHA = "1" * 40
 CANDIDATE_SHA = "2" * 40
 COMPONENTS = {
-    "server": "0.0.128",
-    "agent": "0.0.101.0",
-    "app-onboard": "0.0.12",
+    "claw-server-rust": "0.0.128",
+    "browserclaw": "0.0.101.0",
+    "claw-onboard": "0.0.12",
 }
 runner = CliRunner()
 

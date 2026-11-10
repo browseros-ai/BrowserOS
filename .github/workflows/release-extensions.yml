@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Explicit version; agent and BrowserOS neo allocate one when omitted"
+        description: "Explicit version; BrowserOS neo allocates one when omitted"
         required: false
         type: string
         default: ""
@@ -14,7 +14,6 @@ on:
         type: choice
         options:
           - all
-          - agent
           - controller
           - bugreporter
           - browserclaw
@@ -45,12 +44,12 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Explicit version; agent and BrowserOS neo allocate one when omitted"
+        description: "Explicit version; BrowserOS neo allocates one when omitted"
         required: false
         type: string
         default: ""
       extension:
-        description: "Extension to release: all, agent, controller, bugreporter, or browserclaw"
+        description: "Extension to release: all, controller, bugreporter, or browserclaw"
         required: false
         type: string
         default: "browserclaw"
@@ -102,8 +101,6 @@ on:
         required: true
       RELEASE_REFLECT_TOKEN:
         required: false
-      BROWSEROS_AGENT_V2_KEY:
-        required: false
       BROWSEROS_CONTROLLER_KEY:
         required: false
       BUGREPORTER_KEY:
@@ -111,18 +108,6 @@ on:
       BROWSERCLAW_KEY:
         required: false
       POSTHOG_API_KEY:
-        required: false
-      VITE_PUBLIC_SENTRY_DSN:
-        required: false
-      SENTRY_AUTH_TOKEN:
-        required: false
-      SENTRY_ORG:
-        required: false
-      SENTRY_PROJECT:
-        required: false
-      VITE_PUBLIC_POSTHOG_KEY:
-        required: false
-      VITE_PUBLIC_POSTHOG_HOST:
         required: false
       VITE_CLAW_POSTHOG_KEY:
         required: true
@@ -179,7 +164,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$EXTENSION" in
-            all|agent|controller|bugreporter|browserclaw) ;;
+            all|controller|bugreporter|browserclaw) ;;
             *)
               echo "::error::Unknown extension '$EXTENSION'"
               exit 1
@@ -206,7 +191,7 @@ jobs:
               exit 1
             fi
           fi
-          if [ -z "$VERSION" ] && [ "$EXTENSION" != "agent" ] && [ "$EXTENSION" != "browserclaw" ]; then
+          if [ -z "$VERSION" ] && [ "$EXTENSION" != "browserclaw" ]; then
             echo "::error::$EXTENSION requires an explicit version"
             exit 1
           fi
@@ -228,7 +213,7 @@ jobs:
         run: |
           set -euo pipefail
           release_sha="$(git rev-parse HEAD)"
-          if [ "$EXTENSION" = "agent" ] || [ "$EXTENSION" = "browserclaw" ]; then
+          if [ "$EXTENSION" = "browserclaw" ]; then
             args=(
               --component "$EXTENSION"
               --event-name "$EVENT_NAME"
@@ -274,10 +259,6 @@ jobs:
             TAG="ext-${NAME}/v${VERSION}"
             notes="${RUNNER_TEMP}/extension-${NAME}-notes.md"
             case "$NAME" in
-              agent)
-                TITLE="BrowserOS Agent Extension - v$VERSION"
-                SCOPE="packages/browseros-agent/apps/app"
-                ;;
               browserclaw)
                 TITLE="BrowserOS neo Extension - v$VERSION"
                 SCOPE="packages/browseros-agent/apps/claw-app"
@@ -394,7 +375,7 @@ jobs:
           bun-version-file: packages/browseros-agent/package.json
 
       - name: Stamp in-repository extension version
-        if: ${{ inputs.extension == 'agent' || inputs.extension == 'browserclaw' }}
+        if: ${{ inputs.extension == 'browserclaw' }}
         working-directory: packages/browseros
         run: uv run browseros release component stamp --component "$EXTENSION" --version "$VERSION"
 
@@ -410,20 +391,12 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          BROWSEROS_AGENT_V2_KEY: ${{ secrets.BROWSEROS_AGENT_V2_KEY }}
           BROWSEROS_CONTROLLER_KEY: ${{ secrets.BROWSEROS_CONTROLLER_KEY }}
           BUGREPORTER_KEY: ${{ secrets.BUGREPORTER_KEY }}
           BROWSERCLAW_KEY: ${{ secrets.BROWSERCLAW_KEY }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-          VITE_PUBLIC_SENTRY_DSN: ${{ secrets.VITE_PUBLIC_SENTRY_DSN }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-          VITE_PUBLIC_POSTHOG_KEY: ${{ secrets.VITE_PUBLIC_POSTHOG_KEY }}
-          VITE_PUBLIC_POSTHOG_HOST: ${{ secrets.VITE_PUBLIC_POSTHOG_HOST }}
           VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
           VITE_CLAW_POSTHOG_HOST: ${{ secrets.VITE_CLAW_POSTHOG_HOST }}
-          VITE_PUBLIC_BROWSEROS_API: https://api.browseros.com
           NODE_ENV: production
         run: |
           set -euo pipefail
@@ -538,7 +511,7 @@ jobs:
           pin_count=0
           for NAME in $NAMES; do
             case "$NAME" in
-              agent|bugreporter|browserclaw)
+              bugreporter|browserclaw)
                 args+=(--set "$NAME=$VERSION")
                 pin_count=$((pin_count + 1))
                 ;;
@@ -649,7 +622,6 @@ jobs:
               continue
             fi
             case "$NAME" in
-              agent) TITLE="BrowserOS Agent Extension - v$VERSION" ;;
               browserclaw) TITLE="BrowserOS neo Extension - v$VERSION" ;;
               controller) TITLE="BrowserOS Controller Extension - v$VERSION" ;;
               bugreporter) TITLE="BrowserOS Bug Reporter Extension - v$VERSION" ;;
@@ -714,7 +686,7 @@ jobs:
           args=(--channel alpha --baseline-root "$GITHUB_WORKSPACE/updates")
           for NAME in $NAMES; do
             case "$NAME" in
-              agent|bugreporter|browserclaw) args+=(--set "$NAME=$VERSION") ;;
+              bugreporter|browserclaw) args+=(--set "$NAME=$VERSION") ;;
             esac
           done
           uv run browseros release extensions "${args[@]}"
@@ -802,7 +774,6 @@ jobs:
           paths=()
           for name in $NAMES; do
             case "$name" in
-              agent) manifest="packages/browseros-agent/apps/app/package.json" ;;
               browserclaw) manifest="packages/browseros-agent/apps/claw-app/package.json" ;;
               *) continue ;;
             esac

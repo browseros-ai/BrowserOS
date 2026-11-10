@@ -59,7 +59,7 @@ class FakeOperations:
 
 def _request(**overrides) -> StandaloneReleaseRequest:
     values = {
-        "component": "server",
+        "component": "claw-server-rust",
         "event_name": "workflow_dispatch",
         "default_branch": "main",
         "release_ref": "HEAD",
@@ -75,7 +75,7 @@ class StandaloneReleaseTest(unittest.TestCase):
         record = resolve_standalone_release(_request(), operations)
 
         self.assertEqual(record.version, "0.0.127")
-        self.assertEqual(record.tag, "agent-server/v0.0.127")
+        self.assertEqual(record.tag, "claw-server/v0.0.127")
         self.assertEqual(record.release_sha, SOURCE_SHA)
         self.assertEqual(record.reservation, "create")
         self.assertEqual(operations.synced, ["main"])
@@ -86,21 +86,21 @@ class StandaloneReleaseTest(unittest.TestCase):
         record = resolve_standalone_release(_request(event_name="schedule"), operations)
 
         self.assertEqual(record.release_sha, SOURCE_SHA)
-        self.assertEqual(record.tag, "agent-server/v0.0.127")
+        self.assertEqual(record.tag, "claw-server/v0.0.127")
 
     def test_skips_tags_and_open_candidate_reservations(self) -> None:
         operations = FakeOperations()
         operations.records = [
             AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.127",
                 kind="tag",
                 source_sha="2" * 40,
-                reference="agent-server/v0.0.127",
+                reference="claw-server/v0.0.127",
                 public=True,
             ),
             AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.128",
                 kind="candidate",
                 candidate_id="bot/release-browseros",
@@ -111,17 +111,17 @@ class StandaloneReleaseTest(unittest.TestCase):
         record = resolve_standalone_release(_request(), operations)
 
         self.assertEqual(record.version, "0.0.129")
-        self.assertEqual(record.previous_tag, "agent-server/v0.0.127")
+        self.assertEqual(record.previous_tag, "claw-server/v0.0.127")
 
     def test_reuses_source_bound_draft(self) -> None:
         operations = FakeOperations()
         operations.records = [
             AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.128",
                 kind="release",
                 source_sha=SOURCE_SHA,
-                reference="agent-server/v0.0.128",
+                reference="claw-server/v0.0.128",
                 reusable=True,
             )
         ]
@@ -135,26 +135,26 @@ class StandaloneReleaseTest(unittest.TestCase):
         operations = FakeOperations()
         operations.records = [
             AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.128",
                 kind="release",
                 source_sha=SOURCE_SHA,
-                reference="agent-server/v0.0.128",
+                reference="claw-server/v0.0.128",
                 reusable=True,
             )
         ]
         operations.resource_records = {
             "0.0.128": AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.128",
                 kind="resource",
-                reference="r2://browseros/artifacts/server/0.0.128",
+                reference="r2://browseros/claw-server-rust/prod-resources/0.0.128",
             ),
             "0.0.129": AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.129",
                 kind="resource",
-                reference="r2://browseros/artifacts/server/0.0.129",
+                reference="r2://browseros/claw-server-rust/prod-resources/0.0.129",
             ),
         }
 
@@ -164,9 +164,9 @@ class StandaloneReleaseTest(unittest.TestCase):
         self.assertEqual(
             operations.resource_probes,
             [
-                ("server", "0.0.128", SOURCE_SHA),
-                ("server", "0.0.129", SOURCE_SHA),
-                ("server", "0.0.130", SOURCE_SHA),
+                ("claw-server-rust", "0.0.128", SOURCE_SHA),
+                ("claw-server-rust", "0.0.129", SOURCE_SHA),
+                ("claw-server-rust", "0.0.130", SOURCE_SHA),
             ],
         )
 
@@ -174,21 +174,21 @@ class StandaloneReleaseTest(unittest.TestCase):
         operations = FakeOperations()
         operations.records = [
             AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.128",
                 kind="release",
                 source_sha=SOURCE_SHA,
-                reference="agent-server/v0.0.128",
+                reference="claw-server/v0.0.128",
                 reusable=True,
             )
         ]
         operations.resource_records = {
             "0.0.128": AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.128",
                 kind="resource",
                 source_sha=SOURCE_SHA,
-                reference="agent-server/v0.0.128",
+                reference="claw-server/v0.0.128",
                 reusable=True,
             )
         }
@@ -199,17 +199,17 @@ class StandaloneReleaseTest(unittest.TestCase):
         self.assertEqual(record.reservation, "reuse")
         self.assertEqual(
             operations.resource_probes,
-            [("server", "0.0.128", SOURCE_SHA)],
+            [("claw-server-rust", "0.0.128", SOURCE_SHA)],
         )
 
     def test_explicit_version_rejects_conflicting_resource_binding(self) -> None:
         operations = FakeOperations()
         operations.resource_records = {
             "0.0.129": AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.129",
                 kind="resource",
-                reference="r2://browseros/artifacts/server/0.0.129",
+                reference="r2://browseros/claw-server-rust/prod-resources/0.0.129",
             )
         }
 
@@ -220,16 +220,16 @@ class StandaloneReleaseTest(unittest.TestCase):
 
         self.assertEqual(
             operations.resource_probes,
-            [("server", "0.0.129", SOURCE_SHA)],
+            [("claw-server-rust", "0.0.129", SOURCE_SHA)],
         )
 
     def test_tag_push_requires_annotated_source_bound_tag(self) -> None:
         operations = FakeOperations()
-        tag = "agent-server/v0.0.127"
+        tag = "claw-server/v0.0.127"
         operations.tags[tag] = TagState(SOURCE_SHA, True)
         operations.records = [
             AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.127",
                 kind="tag",
                 source_sha=SOURCE_SHA,
@@ -260,7 +260,7 @@ class StandaloneReleaseTest(unittest.TestCase):
         operations.ancestor = True
         operations.records = [
             AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.129",
                 kind="candidate",
                 source_sha="2" * 40,
@@ -277,7 +277,7 @@ class StandaloneReleaseTest(unittest.TestCase):
         operations = FakeOperations()
         operations.version = "0.0.127.0"
         feed = AllocationRecord(
-            component="agent",
+            component="browserclaw",
             version="0.0.127.0",
             kind="release",
             reference="appcast",
@@ -285,7 +285,7 @@ class StandaloneReleaseTest(unittest.TestCase):
         )
 
         record = resolve_standalone_release(
-            _request(component="agent"), operations, (feed,)
+            _request(component="browserclaw"), operations, (feed,)
         )
 
         self.assertEqual(record.version, "0.0.128.0")
@@ -300,12 +300,12 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
             with mock.patch.object(
                 operations, "_git", return_value='{"version":"0.0.126+7"}'
             ):
-                version = operations.read_version("agent", "origin/main")
+                version = operations.read_version("browserclaw", "origin/main")
 
         self.assertEqual(version, "0.0.126.7")
 
     def test_r2_retry_uses_requested_source_with_older_release_history(self) -> None:
-        key = "artifacts/server/0.0.130/browseros-server-resources-linux-x64.zip"
+        key = "claw-server-rust/prod-resources/0.0.130/browseros-claw-server-rust-resources-linux-x64.zip"
         client = mock.MagicMock()
         client.list_objects_v2.return_value = {
             "Contents": [{"Key": key}],
@@ -313,7 +313,7 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
         }
         client.head_object.return_value = {
             "Metadata": {
-                "component": "artifacts/server",
+                "component": "claw-server-rust/prod-resources",
                 "release-sha": SOURCE_SHA,
                 "sha256": "a" * 64,
                 "target": "linux-x64",
@@ -322,12 +322,12 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
         }
         releases = [
             {
-                "tagName": "agent-server/v0.0.130",
+                "tagName": "claw-server/v0.0.130",
                 "isDraft": True,
                 "targetCommitish": SOURCE_SHA,
             },
             {
-                "tagName": "agent-server/v0.0.129",
+                "tagName": "claw-server/v0.0.129",
                 "isDraft": False,
                 "targetCommitish": "2" * 40,
             },
@@ -356,9 +356,9 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
                     return_value=releases,
                 ),
             ):
-                operations.allocations("server")
+                operations.allocations("claw-server-rust")
                 resource = operations.resource_allocation(
-                    "server", "0.0.130", SOURCE_SHA
+                    "claw-server-rust", "0.0.130", SOURCE_SHA
                 )
 
         self.assertIsNotNone(resource)
@@ -369,16 +369,16 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
 
     def test_open_browser_candidate_is_discovered_as_a_reservation(self) -> None:
         candidate = CandidateRecord(
-            product="browseros",
+            product="browserclaw",
             parent_sha="2" * 40,
             candidate_sha="3" * 40,
             default_branch="main",
-            branch=f"bot/release-browseros-{'2' * 12}",
+            branch=f"bot/release-browserclaw-{'2' * 12}",
             browser_version="0.31.0",
             component_versions={
-                "server": "0.0.128",
-                "agent": "0.0.101.0",
-                "app-onboard": "0.0.12",
+                "claw-server-rust": "0.0.128",
+                "browserclaw": "0.0.101.0",
+                "claw-onboard": "0.0.12",
             },
             pull_request_number=42,
             pull_request_url="https://github.com/browseros-ai/BrowserOS/pull/42",
@@ -423,7 +423,7 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
                     "bos_build.release.component_release.GitHubCandidateBackend.validate_candidate"
                 ) as validate_candidate,
             ):
-                allocations = operations.allocations("server")
+                allocations = operations.allocations("claw-server-rust")
 
         self.assertEqual(len(allocations), 1)
         self.assertEqual(allocations[0].kind, "candidate")
@@ -474,29 +474,32 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
                     ),
                 ),
             ):
-                allocations = operations.allocations("server")
+                allocations = operations.allocations("claw-server-rust")
 
         self.assertEqual(len(allocations), 1)
         self.assertEqual(allocations[0].kind, "candidate")
-        self.assertEqual(allocations[0].version, suite.component_versions["server"])
+        self.assertEqual(allocations[0].version, suite.component_versions["claw-server-rust"])
         self.assertEqual(allocations[0].candidate_id, suite.branch)
         self.assertEqual(allocations[0].source_sha, suite.source_sha)
-        self.assertEqual(allocations[0].reference, "agent-server/v0.0.147")
+        self.assertEqual(
+            allocations[0].reference,
+            "claw-server/v" + suite.component_versions["claw-server-rust"],
+        )
         self.assertTrue(allocations[0].reusable)
 
         release_operations = FakeOperations()
         release_operations.records = allocations
         release = resolve_standalone_release(
             StandaloneReleaseRequest(
-                component="server",
+                component="claw-server-rust",
                 event_name="workflow_call",
                 default_branch="main",
-                requested_version=suite.component_versions["server"],
+                requested_version=suite.component_versions["claw-server-rust"],
                 release_ref=suite.source_sha,
             ),
             release_operations,
         )
-        self.assertEqual(release.version, suite.component_versions["server"])
+        self.assertEqual(release.version, suite.component_versions["claw-server-rust"])
 
     def test_closed_family_suite_without_branch_blocks_standalone_reuse(self) -> None:
         suite = suite_record(state="closed", state_sha=STATE_SHA)
@@ -539,7 +542,7 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
                     return_value=(),
                 ),
             ):
-                allocations = operations.allocations("server")
+                allocations = operations.allocations("claw-server-rust")
 
         list_prs.assert_called_once_with("browseros-ai/BrowserOS", state="all")
         self.assertEqual(len(allocations), 1)
@@ -550,10 +553,10 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already allocated"):
             resolve_standalone_release(
                 StandaloneReleaseRequest(
-                    component="server",
+                    component="claw-server-rust",
                     event_name="workflow_call",
                     default_branch="main",
-                    requested_version=suite.component_versions["server"],
+                    requested_version=suite.component_versions["claw-server-rust"],
                     release_ref=suite.source_sha,
                 ),
                 release_operations,
@@ -564,19 +567,19 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
         release_operations = FakeOperations()
         release_operations.records = (
             AllocationRecord(
-                component="server",
-                version=suite.component_versions["server"],
+                component="claw-server-rust",
+                version=suite.component_versions["claw-server-rust"],
                 kind="release",
                 source_sha=suite.source_sha,
-                reference="agent-server/v0.0.147",
+                reference="claw-server/v" + suite.component_versions["claw-server-rust"],
                 reusable=True,
             ),
             AllocationRecord(
-                component="server",
-                version=suite.component_versions["server"],
+                component="claw-server-rust",
+                version=suite.component_versions["claw-server-rust"],
                 kind="candidate",
                 source_sha=suite.source_sha,
-                reference="agent-server/v0.0.147",
+                reference="claw-server/v" + suite.component_versions["claw-server-rust"],
                 reuse_forbidden=True,
             ),
         )
@@ -584,10 +587,10 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already allocated"):
             resolve_standalone_release(
                 StandaloneReleaseRequest(
-                    component="server",
+                    component="claw-server-rust",
                     event_name="workflow_call",
                     default_branch="main",
-                    requested_version=suite.component_versions["server"],
+                    requested_version=suite.component_versions["claw-server-rust"],
                     release_ref=suite.source_sha,
                 ),
                 release_operations,

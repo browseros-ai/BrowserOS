@@ -20,14 +20,11 @@ var pullCmd = &cobra.Command{
 	Short:   "Refresh the configured checkout",
 	GroupID: groupRun,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, cfg, err := loadSelectedTargetConfig()
+		cfg, err := loadConfig()
 		if err != nil {
 			return err
 		}
 		runner := pipeline.ExecRunner{}
-		if err := pipeline.WriteProductionEnvFile(cfg.AgentRoot(), cfg); err != nil {
-			return err
-		}
 		branch := pipeline.Branch(cfg.RepoPath, runner)
 		head, _ := pipeline.Head(cfg.RepoPath, runner)
 		fmt.Printf("%s %s %s %s\n", labelStyle.Sprint("Repo:"), pathStyle.Sprint(cfg.RepoPath), commandStyle.Sprint(branch), dimStyle.Sprint(head))

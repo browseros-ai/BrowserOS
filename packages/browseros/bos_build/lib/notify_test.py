@@ -50,7 +50,7 @@ class _RaisingNotifier:
         raise RuntimeError("notify exploded")
 
 
-def _ctx(product="browseros", arch="arm64", release_version="", semantic_version="1.2.3"):
+def _ctx(product="browserclaw", arch="arm64", release_version="", semantic_version="1.2.3"):
     return SimpleNamespace(
         product=get_product_descriptor(product),
         architecture=arch,
@@ -202,7 +202,7 @@ class SlackRunSubscriberTest(unittest.TestCase):
         self.assertEqual(len(fake.messages), 2)
         terminal = fake.messages[-1]
         self.assertIn("❌ Build FAILED at 'compile' (Build phase)", terminal["title"])
-        self.assertIn("BrowserOS v1.2.3", terminal["title"])
+        self.assertIn("BrowserOS neo v1.2.3", terminal["title"])
         self.assertEqual(terminal["body"], "Terminated after 1m 24s")
         self.assertEqual(terminal["details"], {"Error": "ninja failed"})
         self.assertEqual(terminal["color"], COLOR_RED)

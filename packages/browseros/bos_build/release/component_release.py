@@ -304,13 +304,13 @@ class GitComponentReleaseOperations:
 
         spec = component_by_id(component)
         allocations = []
-        prefixes = (spec.tag_prefix, *spec.legacy_tag_prefixes)
         for tag in self._git("tag", "--list").splitlines():
-            prefix = next((value for value in prefixes if tag.startswith(value)), "")
-            if not prefix:
+            if not tag.startswith(spec.tag_prefix):
                 continue
             try:
-                version = normalize_component_version(component, tag[len(prefix) :])
+                version = normalize_component_version(
+                    component, tag[len(spec.tag_prefix) :]
+                )
             except ValueError:
                 continue
             state = self.tag_state(tag)
@@ -323,7 +323,7 @@ class GitComponentReleaseOperations:
                     kind="tag",
                     source_sha=state.target_sha,
                     reference=tag,
-                    reusable=state.annotated and prefix == spec.tag_prefix,
+                    reusable=state.annotated,
                     public=state.annotated,
                 )
             )

@@ -74,11 +74,6 @@ class EnvConfig:
         return os.environ.get("PYTHONPATH")
 
     @property
-    def browseros_server_resource_version(self) -> Optional[str]:
-        """Exact BrowserOS server resource version for release builds."""
-        return os.environ.get("BROWSEROS_SERVER_RESOURCE_VERSION")
-
-    @property
     def browserclaw_server_resource_version(self) -> Optional[str]:
         """Exact BrowserClaw server resource version for release builds."""
         return os.environ.get("BROWSERCLAW_SERVER_RESOURCE_VERSION")
@@ -122,11 +117,6 @@ class EnvConfig:
     def macos_notarization_password(self) -> Optional[str]:
         """App-specific password for macOS notarization"""
         return os.environ.get("PROD_MACOS_NOTARIZATION_PWD")
-
-    @property
-    def macos_browseros_passkey_profile_path(self) -> Optional[str]:
-        """Developer ID profile authorizing BrowserOS platform passkeys."""
-        return os.environ.get("PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH")
 
     @property
     def macos_browserclaw_passkey_profile_path(self) -> Optional[str]:

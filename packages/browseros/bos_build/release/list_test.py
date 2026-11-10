@@ -50,26 +50,15 @@ class ApplyListLimitTest(unittest.TestCase):
 
 
 class CollectProductRowsTest(unittest.TestCase):
-    def test_legacy_versions_attach_to_default_product_only(self):
+    def test_bare_pre_product_releases_are_not_attributed_to_neo(self):
         env = _env()
-        with (
-            mock.patch.object(
-                list_module, "list_all_versions", return_value=["0.31.0"]
-            ),
-            mock.patch.object(
-                list_module, "list_legacy_versions", return_value=["0.29.0"]
-            ) as legacy,
-        ):
-            browseros_rows = collect_product_rows(
-                get_product_descriptor("browseros"), env
-            )
-            claw_rows = collect_product_rows(
-                get_product_descriptor("browserclaw"), env
-            )
+        with mock.patch.object(
+            list_module, "list_all_versions", return_value=["0.31.0"]
+        ) as productized:
+            rows = collect_product_rows(get_product_descriptor("browserclaw"), env)
 
-        self.assertIn(("0.29.0", True), browseros_rows)
-        self.assertEqual(claw_rows, [("0.31.0", False)])
-        legacy.assert_called_once()
+        productized.assert_called_once_with("browserclaw", env)
+        self.assertEqual(rows, [("0.31.0", False)])
 
 
 class PrintProductSectionTest(unittest.TestCase):
@@ -88,14 +77,14 @@ class PrintProductSectionTest(unittest.TestCase):
     def test_truncation_hint_names_all_flag(self):
         rows = [(f"0.{i}.0", False) for i in range(9, 0, -1)]
 
-        lines = self._render(ListModule(limit=5), "browseros", rows)
+        lines = self._render(ListModule(limit=5), "browserclaw", rows)
 
         self.assertTrue(any("4 more" in line and "--all" in line for line in lines))
         self.assertTrue(any(line.strip() == "0.5.0" for line in lines))
         self.assertFalse(any(line.strip() == "0.4.0" for line in lines))
 
     def test_legacy_rows_are_tagged(self):
-        lines = self._render(ListModule(), "browseros", [("0.29.0", True)])
+        lines = self._render(ListModule(), "browserclaw", [("0.29.0", True)])
 
         self.assertTrue(any(line.strip() == "0.29.0 (legacy)" for line in lines))
 

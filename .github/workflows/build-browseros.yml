@@ -2,7 +2,7 @@ name: "Reusable: Chromium Browser Build"
 
 # Reusable WarpBuild job for one Chromium browser build. The Chromium checkout
 # cache is product-independent on purpose: it is captured immediately after
-# gclient sync, before BrowserOS/BrowserClaw patches or build outputs touch it.
+# gclient sync, before product patches or build outputs touch it.
 
 on:
   workflow_call:
@@ -16,7 +16,7 @@ on:
         required: true
         type: string
       product:
-        description: "Product to build: browseros or browserclaw"
+        description: "Product to build: browserclaw"
         required: true
         type: string
       runner:
@@ -100,12 +100,6 @@ on:
         required: false
       R2_BUCKET:
         required: false
-      BROWSEROS_CONFIG_URL:
-        required: false
-      POSTHOG_API_KEY:
-        required: false
-      SENTRY_DSN:
-        required: false
       CLAW_POSTHOG_KEY:
         required: false
       ESIGNER_USERNAME:
@@ -161,9 +155,9 @@ jobs:
               ;;
           esac
           case "$PRODUCT" in
-            browseros|browserclaw) ;;
+            browserclaw) ;;
             *)
-              echo "::error::product must be one of: browseros, browserclaw"
+              echo "::error::product must be browserclaw"
               exit 1
               ;;
           esac
@@ -235,17 +229,6 @@ jobs:
       # v8.x.y releases exist but astral-sh publishes no floating `v8`
       # major tag - `@v8` is unresolvable and kills the job in Set up job.
       - uses: astral-sh/setup-uv@v8.3.2
-
-      - name: Setup Bun
-        if: inputs.resource-mode == 'source' && inputs.product == 'browseros'
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: packages/browseros-agent/package.json
-
-      - name: Install BrowserOS server dependencies
-        if: inputs.resource-mode == 'source' && inputs.product == 'browseros'
-        working-directory: packages/browseros-agent
-        run: bun ci
 
       - name: Setup BrowserOS neo server toolchain
         if: inputs.resource-mode == 'source' && inputs.product == 'browserclaw'
@@ -395,7 +378,6 @@ jobs:
         working-directory: packages/browseros
         env:
           BROWSEROS_BUILD_SOURCE_SHA: ${{ steps.source.outputs.sha }}
-          BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browseros' && inputs.server-version || '' }}
           BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browserclaw' && inputs.server-version || '' }}
           ONBOARDING_RESOURCE_VERSION: ${{ inputs.onboarding-version }}
           BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.extension-version && format('{0}/updates/extensions/bundled-manifest.xml', github.workspace) || '' }}
@@ -404,9 +386,6 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          BROWSEROS_CONFIG_URL: ${{ inputs.product == 'browseros' && secrets.BROWSEROS_CONFIG_URL || '' }}
-          POSTHOG_API_KEY: ${{ inputs.product == 'browseros' && secrets.POSTHOG_API_KEY || '' }}
-          SENTRY_DSN: ${{ inputs.product == 'browseros' && secrets.SENTRY_DSN || '' }}
           CLAW_POSTHOG_KEY: ${{ inputs.product == 'browserclaw' && secrets.CLAW_POSTHOG_KEY || '' }}
           ESIGNER_USERNAME: ${{ inputs.platform == 'windows' && secrets.ESIGNER_USERNAME || '' }}
           ESIGNER_PASSWORD: ${{ inputs.platform == 'windows' && secrets.ESIGNER_PASSWORD || '' }}
@@ -486,14 +465,11 @@ jobs:
         run: |
           set -euo pipefail
           case "$PRODUCT" in
-            browseros)
-              echo "value=BrowserOS" >> "$GITHUB_OUTPUT"
-              ;;
             browserclaw)
               echo "value=BrowserOS_neo" >> "$GITHUB_OUTPUT"
               ;;
             *)
-              echo "::error::product must be one of: browseros, browserclaw"
+              echo "::error::product must be browserclaw"
               exit 1
               ;;
           esac

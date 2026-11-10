@@ -1,20 +1,9 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": [
-    "apps/server/src/index.ts",
-    "apps/server/src/compiled-bootstrap.ts",
     "apps/claw-onboard/src/main.tsx",
-    "apps/app-onboard/src/main.tsx",
-    "apps/app/entrypoints/app/main.tsx",
-    "apps/app/entrypoints/sidepanel/main.tsx",
-    "apps/app/entrypoints/background/index.ts",
-    "apps/app/entrypoints/content.ts",
-    "apps/app/entrypoints/auth.content/index.ts",
-    "apps/app/entrypoints/glow.content/index.ts",
-    "apps/app/entrypoints/selection.content.ts",
     "scripts/run-bun-test.ts",
     "scripts/dev/inspect-ui.ts",
-    "scripts/patch-windows-exe.ts",
     "packages/agent-cursor/src/index.ts",
     "packages/agent-cursor/scripts/classic-entry.ts"
   ],
@@ -38,11 +27,6 @@
     "**/coverage/**",
     "**/tmp/**",
     ".scripts/**",
-    "apps/app/schema/**",
-    "apps/app/assets/**",
-    "apps/app/generated/**",
-    "apps/app/public/**",
-    "apps/server/src/lib/db/migrations/**",
     "packages/cdp-protocol/src/generated/**",
     ".agents/skills/**",
     ".claude/skills/**",
@@ -83,19 +67,6 @@
       "rules": {
         "unused-exports": "off",
         "unused-files": "off"
-      }
-    },
-    {
-      "files": [
-        "apps/app/components/ui/**",
-        "apps/app/components/ai-elements/**",
-        "apps/app-onboard/src/components/ui/**"
-      ],
-      "rules": {
-        "unused-exports": "off",
-        "unused-files": "off",
-        "unused-types": "off",
-        "private-type-leaks": "off"
       }
     }
   ]

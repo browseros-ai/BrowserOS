@@ -24,8 +24,8 @@ from bos_build.steps.package.linux_packaging.system import SubprocessLinuxToolch
 
 def _packaging_context(dist_dir: Path) -> SimpleNamespace:
     names = {
-        "appimage": "BrowserOS_v1.2.3_x64.AppImage",
-        "deb": "BrowserOS_v1.2.3_amd64.deb",
+        "appimage": "BrowserOS_neo_v1.2.3_x64.AppImage",
+        "deb": "BrowserOS_neo_v1.2.3_amd64.deb",
     }
     return SimpleNamespace(
         architecture="x64",
@@ -42,13 +42,13 @@ def _write_artifact(path: Path, content: bytes = b"package") -> None:
 
 
 def _build_context(root: Path) -> SimpleNamespace:
-    product = get_product_descriptor("browseros")
+    product = get_product_descriptor("browserclaw")
     chromium_src = root / "chromium"
-    out_dir = Path("out/Default_browseros_x64")
+    out_dir = Path("out/Default_browserclaw_x64")
     dist_dir = root / "releases/1.2.3"
     names = {
-        "appimage": "BrowserOS_v1.2.3_x64.AppImage",
-        "deb": "BrowserOS_v1.2.3_amd64.deb",
+        "appimage": "BrowserOS_neo_v1.2.3_x64.AppImage",
+        "deb": "BrowserOS_neo_v1.2.3_amd64.deb",
     }
     return SimpleNamespace(
         root_dir=root,
@@ -162,8 +162,8 @@ class _FakeLinuxToolchain:
         storage.mkdir(parents=True, exist_ok=True)
         self._appimage_tree = storage / f"fake-appimage-tree-{self._appimage_builds}"
         shutil.copytree(appdir, self._appimage_tree)
-        runtime = self._appimage_tree / "opt/browseros"
-        self.appimage_runtime = (runtime / "browseros").read_bytes()
+        runtime = self._appimage_tree / "opt/browserclaw"
+        self.appimage_runtime = (runtime / "browserclaw").read_bytes()
         self.appimage_sandbox_mode = (
             runtime / "chrome_sandbox"
         ).stat().st_mode & 0o7777
@@ -178,7 +178,7 @@ class _FakeLinuxToolchain:
         assert self._appimage_tree is not None
         shutil.copytree(self._appimage_tree, destination)
         if self.corrupt_next_appimage_extract_with_symlink:
-            browser = destination / "opt/browseros/browseros"
+            browser = destination / "opt/browserclaw/browserclaw"
             browser.unlink()
             browser.symlink_to("chrome_crashpad_handler")
             self.corrupt_next_appimage_extract_with_symlink = False
@@ -191,8 +191,8 @@ class _FakeLinuxToolchain:
         storage.mkdir(parents=True, exist_ok=True)
         self._deb_tree = storage / f"fake-deb-tree-{self._deb_builds}"
         shutil.copytree(root, self._deb_tree)
-        runtime = self._deb_tree / "usr/lib/browseros"
-        self.deb_runtime = (runtime / "browseros").read_bytes()
+        runtime = self._deb_tree / "usr/lib/browserclaw"
+        self.deb_runtime = (runtime / "browserclaw").read_bytes()
         self.deb_sandbox_mode = (runtime / "chrome_sandbox").stat().st_mode & 0o7777
         self.debian_control = (self._deb_tree / "DEBIAN/control").read_text()
         output.write_bytes(b"!<arch>\nfake-deb")
@@ -217,7 +217,7 @@ class _FakeLinuxToolchain:
             else:
                 shutil.copy2(source, target)
         if self.omit_extracted_desktop:
-            (destination / "usr/share/applications/browseros.desktop").unlink(
+            (destination / "usr/share/applications/browserclaw.desktop").unlink(
                 missing_ok=True
             )
 
@@ -409,7 +409,8 @@ class LinuxArtifactBuildTest(unittest.TestCase):
         self.assertIn("libEGL.so", message)
         self.assertIn("browseros_extensions/", message)
         self.assertIn("locales/", message)
-        self.assertIn("BrowserOSServer/", message)
+        # The neo server bundle is optional in Chromium output.
+        self.assertNotIn("BrowserClawServer/", message)
         self.assertIn("product icon", message)
 
     def test_build_rejects_unresolved_same_host_libraries_before_packaging(
@@ -489,11 +490,11 @@ class LinuxArtifactBuildTest(unittest.TestCase):
             self.assertEqual(second_pair, pair)
             self.assertEqual(downloader.urls, [pin.url])
             self.assertEqual(cached_tool.read_bytes(), tool_bytes)
-            self.assertEqual(toolchain.appimage_runtime, b"contents:browseros")
-            self.assertEqual(toolchain.deb_runtime, b"contents:browseros")
+            self.assertEqual(toolchain.appimage_runtime, b"contents:browserclaw")
+            self.assertEqual(toolchain.deb_runtime, b"contents:browserclaw")
             self.assertEqual(toolchain.appimage_sandbox_mode, 0o4755)
             self.assertEqual(toolchain.deb_sandbox_mode, 0o755)
-            self.assertIn("Package: browseros", toolchain.debian_control)
+            self.assertIn("Package: browserclaw", toolchain.debian_control)
             self.assertIn("Architecture: amd64", toolchain.debian_control)
             self.assertTrue(pair.appimage.stat().st_mode & 0o111)
             self.assertFalse(pair.deb.stat().st_mode & 0o111)
@@ -729,7 +730,7 @@ class LinuxArtifactBuildTest(unittest.TestCase):
             self.assertFalse((cache / pin.filename).exists())
             self.assertEqual(list(cache.glob("*.part")), [])
             self.assertEqual(
-                list(ctx.get_dist_dir().glob("BrowserOS_v1.2.3_*")),
+                list(ctx.get_dist_dir().glob("BrowserOS_neo_v1.2.3_*")),
                 [],
             )
 
@@ -845,7 +846,7 @@ class LinuxArtifactBuildTest(unittest.TestCase):
             ):
                 built = build_linux_artifacts(ctx)
                 ctx.artifact_registry = ArtifactRegistry()
-                stale = ctx.get_dist_dir() / "BrowserOS_v1.2.3_stale.AppImage"
+                stale = ctx.get_dist_dir() / "BrowserOS_neo_v1.2.3_stale.AppImage"
                 stale.write_bytes(b"stale")
                 recovered = require_linux_artifacts(ctx)
 
@@ -950,13 +951,13 @@ class LinuxArtifactBuildTest(unittest.TestCase):
             extracted = root / "real-deb-inspection"
             toolchain._real.extract_deb_data(pair.deb, extracted)
             metainfo = (
-                extracted / "usr/share/metainfo/browseros.metainfo.xml"
+                extracted / "usr/share/metainfo/browserclaw.metainfo.xml"
             ).read_text(encoding="utf-8")
 
         self.assertEqual(
             fields,
             {
-                "Package": "browseros",
+                "Package": "browserclaw",
                 "Version": "136.0.0.0.1",
                 "Architecture": "amd64",
             },

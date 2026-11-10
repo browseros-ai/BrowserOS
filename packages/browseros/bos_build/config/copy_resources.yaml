@@ -4,60 +4,6 @@ copy_operations:
     destination: "chrome/BROWSEROS_VERSION"
     type: "file"
 
-  - name: "BrowserOS Product Logo Icons"
-    source: "resources/browseros/icons/*.png"
-    destination: "chrome/app/theme/chromium/"
-    type: "files"
-    product: "browseros"
-
-  - name: "BrowserOS Product Logo AI Files"
-    source: "resources/browseros/icons/*.ai"
-    destination: "chrome/app/theme/chromium/"
-    type: "files"
-    product: "browseros"
-
-  - name: "BrowserOS Product Logo SVG Files"
-    source: "resources/browseros/icons/*.svg"
-    destination: "chrome/app/theme/chromium/"
-    type: "files"
-    product: "browseros"
-
-  - name: "BrowserOS ChromeOS Icons"
-    source: "resources/browseros/icons/chromeos"
-    destination: "chrome/app/theme/chromium/chromeos"
-    type: "directory"
-    product: "browseros"
-
-  - name: "BrowserOS Linux Icons"
-    source: "resources/browseros/icons/linux"
-    destination: "chrome/app/theme/chromium/linux"
-    type: "directory"
-    product: "browseros"
-
-  - name: "BrowserOS Mac Icons"
-    source: "resources/browseros/icons/mac"
-    destination: "chrome/app/theme/chromium/mac"
-    type: "directory"
-    product: "browseros"
-
-  - name: "BrowserOS Windows Icons"
-    source: "resources/browseros/icons/win"
-    destination: "chrome/app/theme/chromium/win"
-    type: "directory"
-    product: "browseros"
-
-  - name: "BrowserOS DPI 100% Icons"
-    source: "resources/browseros/icons/default_100_percent"
-    destination: "chrome/app/theme/default_100_percent/chromium"
-    type: "directory"
-    product: "browseros"
-
-  - name: "BrowserOS DPI 200% Icons"
-    source: "resources/browseros/icons/default_200_percent"
-    destination: "chrome/app/theme/default_200_percent/chromium"
-    type: "directory"
-    product: "browseros"
-
   - name: "BrowserClaw Product Logo Icons"
     source: "resources/browserclaw/icons/*.png"
     destination: "chrome/app/theme/chromium/"
@@ -111,61 +57,6 @@ copy_operations:
     destination: "chrome/app/theme/default_200_percent/chromium"
     type: "directory"
     product: "browserclaw"
-
-  - name: "BrowserOS Server Resources - macOS ARM64"
-    source: "resources/binaries/browseros_server/darwin-arm64/resources"
-    destination: "chrome/browser/browseros/server/resources"
-    type: "directory"
-    product: "browseros"
-    managed: true
-    required: true
-    clear_destination: true
-    os: ["macos"]
-    arch: ["arm64"]
-
-  - name: "BrowserOS Server Resources - macOS x64"
-    source: "resources/binaries/browseros_server/darwin-x64/resources"
-    destination: "chrome/browser/browseros/server/resources"
-    type: "directory"
-    product: "browseros"
-    managed: true
-    required: true
-    clear_destination: true
-    os: ["macos"]
-    arch: ["x64"]
-
-  - name: "BrowserOS Server Resources - Linux ARM64"
-    source: "resources/binaries/browseros_server/linux-arm64/resources"
-    destination: "chrome/browser/browseros/server/resources"
-    type: "directory"
-    product: "browseros"
-    managed: true
-    required: true
-    clear_destination: true
-    os: ["linux"]
-    arch: ["arm64"]
-
-  - name: "BrowserOS Server Resources - Linux x64"
-    source: "resources/binaries/browseros_server/linux-x64/resources"
-    destination: "chrome/browser/browseros/server/resources"
-    type: "directory"
-    product: "browseros"
-    managed: true
-    required: true
-    clear_destination: true
-    os: ["linux"]
-    arch: ["x64"]
-
-  - name: "BrowserOS Server Resources - Windows x64"
-    source: "resources/binaries/browseros_server/windows-x64/resources"
-    destination: "chrome/browser/browseros/server/resources"
-    type: "directory"
-    product: "browseros"
-    managed: true
-    required: true
-    clear_destination: true
-    os: ["windows"]
-    arch: ["x64"]
 
   # BrowserOS Claw Server resources - Rust ships by default. The optional
   # rename keeps current CDN artifacts that still use the old -rs filename
@@ -245,9 +136,9 @@ copy_operations:
     os: ["windows"]
     arch: ["x64"]
 
-  # Product selection happens while building or downloading the archive. Both
-  # apps implement the same Chromium WebUI contract, so the copy layer consumes
-  # one normalized directory and never requires the non-selected app.
+  # Product selection happens while building or downloading the archive. The
+  # onboarding app implements a product-neutral Chromium WebUI contract, so the
+  # copy layer consumes one normalized directory.
   - name: "Browser Onboarding Resources"
     source: "resources/binaries/browseros_onboarding/resources"
     destination: "chrome/browser/browseros/onboarding/resources"

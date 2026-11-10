@@ -15,9 +15,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const (
-	limaVMName = "browseros-vm"
-)
+// limaVMName is the VM that older BrowserOS server builds created under <state root>/lima for
+// their container runtime. Nothing in this repo creates it now, but it can still sit inside
+// the ~/.browseros-dev and ~/.browseros roots where claw-server writes tool output. Reset
+// stops and deletes the VM before it offers to delete a root, so deleting a root never
+// removes a running VM's disk.
+const limaVMName = "browseros-vm"
 
 var resetCmd = &cobra.Command{
 	Use:   "reset",
@@ -43,17 +46,15 @@ type podmanMachineEntry struct {
 }
 
 var (
-	resetTargetName         string
-	resetBrowserOSDir       string
-	resetPortsValue         string
-	resetBrowserUserDataDir string
+	resetTargetName   string
+	resetBrowserOSDir string
+	resetPortsValue   string
 )
 
 func init() {
-	resetCmd.Flags().StringVar(&resetTargetName, "target", targetDev, "Reset target: dev, dogfood, or prod")
+	resetCmd.Flags().StringVar(&resetTargetName, "target", targetDev, "Reset target: dev or prod")
 	resetCmd.Flags().StringVar(&resetBrowserOSDir, "browseros-dir", "", "Override target BrowserOS state directory")
 	resetCmd.Flags().StringVar(&resetPortsValue, "ports", "", "Override ports as cdp,server,extension")
-	resetCmd.Flags().StringVar(&resetBrowserUserDataDir, "browser-user-data-dir", "", "Override BrowserOS user-data dir to stop")
 	rootCmd.AddCommand(resetCmd)
 }
 
@@ -66,20 +67,15 @@ func runReset(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	target, err := resolveResetTarget(root, resetTargetOptions{
-		Target:             resetTargetName,
-		BrowserOSDir:       resetBrowserOSDir,
-		Ports:              resetPortsValue,
-		BrowserUserDataDir: resetBrowserUserDataDir,
+		Target:       resetTargetName,
+		BrowserOSDir: resetBrowserOSDir,
+		Ports:        resetPortsValue,
 	})
 	if err != nil {
 		return err
 	}
 
 	printResetOverview(out, target)
-
-	if err := ensureTargetStopped(out, target); err != nil {
-		return err
-	}
 
 	if ok, err := confirmYesNo(out, reader, resetPrompt{
 		Title:  "Run safe cleanup first?",

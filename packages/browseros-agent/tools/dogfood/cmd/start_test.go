@@ -8,14 +8,6 @@ import (
 	"browseros-dogfood/config"
 )
 
-func TestServerCommandDoesNotWatchFiles(t *testing.T) {
-	got := serverCommand("/tmp/server-config.json")
-	want := []string{"bun", "--env-file=../../.env.development", "src/index.ts", "--config", "/tmp/server-config.json"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("server command got %#v want %#v", got, want)
-	}
-}
-
 func TestClawCommandsUseStandaloneWXTAndRustServer(t *testing.T) {
 	app := clawAppCommand()
 	wantApp := []string{"bun", "--env-file=../../.env.development", "wxt"}
@@ -72,48 +64,15 @@ func TestClawRuntimeEnvWiresBrowserAndAPISettings(t *testing.T) {
 	}
 }
 
-func TestFormatPortsForClawOmitsExtensionPort(t *testing.T) {
-	got := formatPortsForTarget(config.Config{
-		Target: config.TargetClaw,
-		Ports:  config.Ports{CDP: 49337, Server: 9200, Extension: 9315},
-	})
+func TestFormatPortsLabelsTheServerPortAPI(t *testing.T) {
+	got := formatPorts(config.Ports{CDP: 49337, Server: 9200})
 	if got != "CDP=49337 API=9200" {
 		t.Fatalf("got %q", got)
 	}
 }
 
-func TestServerRuntimeEnvSetsBrowserOSDir(t *testing.T) {
-	got := serverRuntimeEnv([]string{"PATH=/bin"}, config.Config{
-		BrowserOSDir: "/tmp/browseros-dogfood",
-		Ports:        config.Ports{CDP: 9015, Server: 9115, Extension: 9315},
-	})
-
-	assertEnvContains(t, got, "BROWSEROS_DIR=/tmp/browseros-dogfood")
-	assertEnvMissingPrefix(t, got, "BROWSEROS_CDP_PORT=")
-	assertEnvMissingPrefix(t, got, "BROWSEROS_SERVER_PORT=")
-	assertEnvMissingPrefix(t, got, "BROWSEROS_EXTENSION_PORT=")
-}
-
-func TestServerRuntimeEnvOverridesInheritedBrowserOSDir(t *testing.T) {
-	got := serverRuntimeEnv([]string{
-		"BROWSEROS_DIR=/tmp/wrong",
-		"PATH=/bin",
-	}, config.Config{
-		BrowserOSDir: "/tmp/browseros-dogfood",
-		Ports:        config.Ports{CDP: 9015, Server: 9115, Extension: 9315},
-	})
-
-	if strings.Contains(strings.Join(got, "\n"), "BROWSEROS_DIR=/tmp/wrong") {
-		t.Fatalf("inherited BrowserOS dir was not overridden: %#v", got)
-	}
-	assertEnvContains(t, got, "BROWSEROS_DIR=/tmp/browseros-dogfood")
-}
-
 func TestResolveConfiguredBrowserAppUsesClawDefaultAtStart(t *testing.T) {
-	cfg := config.Config{
-		Target:           config.TargetClaw,
-		BrowserOSAppPath: config.DefaultBrowserOSAppPath,
-	}
+	cfg := config.Config{BrowserOSAppPath: config.DefaultBrowserOSAppPath}
 
 	resolution := resolveConfiguredBrowserApp(&cfg, func(path string) bool {
 		return path == config.DefaultBrowserClawAppPath
@@ -128,10 +87,7 @@ func TestResolveConfiguredBrowserAppUsesClawDefaultAtStart(t *testing.T) {
 }
 
 func TestResolveConfiguredBrowserAppFallsBackWhenCustomPathIsMissing(t *testing.T) {
-	cfg := config.Config{
-		Target:           config.TargetClaw,
-		BrowserOSAppPath: "/missing/custom-browser",
-	}
+	cfg := config.Config{BrowserOSAppPath: "/missing/custom-browser"}
 
 	resolution := resolveConfiguredBrowserApp(&cfg, func(path string) bool {
 		return path == config.DefaultBrowserClawAppPath

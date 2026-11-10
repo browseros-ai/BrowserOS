@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import patch
 
 from bos_build.release.candidate import (
     CandidateRecord,
@@ -26,19 +26,12 @@ CANDIDATE_SHA = "2" * 40
 
 
 def candidate_record(
-    state: str = "open", *, product: str = "browseros"
+    state: str = "open", *, product: str = "browserclaw"
 ) -> CandidateRecord:
     component_versions = {
-        "browseros": {
-            "server": "0.0.128",
-            "agent": "0.0.101.0",
-            "app-onboard": "0.0.0",
-        },
-        "browserclaw": {
-            "claw-server-rust": "0.0.46",
-            "browserclaw": "0.0.83.0",
-            "claw-onboard": "0.0.15",
-        },
+        "claw-server-rust": "0.0.128",
+        "browserclaw": "0.0.101.0",
+        "claw-onboard": "0.0.0",
     }
     return CandidateRecord(
         product=product,
@@ -47,7 +40,7 @@ def candidate_record(
         default_branch="main",
         branch=f"bot/release-{product}-{PARENT_SHA[:12]}",
         browser_version="0.31.0",
-        component_versions=component_versions[product],
+        component_versions=component_versions,
         pull_request_number=42,
         pull_request_url="https://github.com/browseros-ai/BrowserOS/pull/42",
         state=state,
@@ -66,7 +59,7 @@ class FakeBackend:
             url="https://github.com/browseros-ai/BrowserOS/pull/42",
             state="open",
             head_sha=CANDIDATE_SHA,
-            head_branch=f"bot/release-browseros-{PARENT_SHA[:12]}",
+            head_branch=f"bot/release-browserclaw-{PARENT_SHA[:12]}",
             base_branch="main",
             mergeable=True,
         )
@@ -86,19 +79,11 @@ class FakeBackend:
         return self.allocations
 
     def read_committed_versions(self, product: str):
-        return (
-            {
-                "server": "0.0.127",
-                "agent": "0.0.100",
-                "app-onboard": "0.0.0",
-            }
-            if product == "browseros"
-            else {
-                "claw-server-rust": "0.0.45",
-                "browserclaw": "0.0.82.0",
-                "claw-onboard": "0.0.15",
-            }
-        )
+        return {
+            "claw-server-rust": "0.0.127",
+            "browserclaw": "0.0.100",
+            "claw-onboard": "0.0.0",
+        }
 
     def read_browser_version(self) -> str:
         return "0.31.0"
@@ -127,7 +112,7 @@ class CandidateEnsureTest(unittest.TestCase):
     def setUp(self) -> None:
         self.backend = FakeBackend()
         self.request = CandidateRequest(
-            product="browseros",
+            product="browserclaw",
             parent_sha=PARENT_SHA,
             default_branch="main",
             dispatch_ref="main",
@@ -137,7 +122,7 @@ class CandidateEnsureTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "default branch"):
             ensure_candidate(
                 CandidateRequest(
-                    product="browseros",
+                    product="browserclaw",
                     parent_sha=PARENT_SHA,
                     default_branch="main",
                     dispatch_ref="feature",
@@ -160,31 +145,16 @@ class CandidateEnsureTest(unittest.TestCase):
         self.assertEqual(record, candidate_record())
         self.assertEqual(len(self.backend.created), 1)
         _, branch, versions, browser_version = self.backend.created[0]
-        self.assertEqual(branch, f"bot/release-browseros-{PARENT_SHA[:12]}")
+        self.assertEqual(branch, f"bot/release-browserclaw-{PARENT_SHA[:12]}")
         self.assertEqual(
             versions,
             {
-                "server": "0.0.128",
-                "agent": "0.0.101.0",
-                "app-onboard": "0.0.0",
+                "claw-server-rust": "0.0.128",
+                "browserclaw": "0.0.101.0",
+                "claw-onboard": "0.0.0",
             },
         )
         self.assertEqual(browser_version, "0.31.0")
-
-    def test_creates_browserclaw_candidate_with_claw_onboarding(self) -> None:
-        request = replace(self.request, product="browserclaw")
-
-        record = ensure_candidate(request, self.backend)
-
-        self.assertEqual(record, candidate_record(product="browserclaw"))
-        self.assertEqual(
-            self.backend.created[0][2],
-            {
-                "claw-server-rust": "0.0.46",
-                "browserclaw": "0.0.83.0",
-                "claw-onboard": "0.0.15",
-            },
-        )
 
     def test_recovers_existing_candidate_without_allocating_or_mutating(self) -> None:
         self.backend.existing = candidate_record()
@@ -197,13 +167,13 @@ class CandidateEnsureTest(unittest.TestCase):
     def test_new_candidate_skips_open_reservations(self) -> None:
         self.backend.allocations = (
             AllocationRecord(
-                component="server",
+                component="claw-server-rust",
                 version="0.0.128",
                 kind="candidate",
                 candidate_id="other",
             ),
             AllocationRecord(
-                component="agent",
+                component="browserclaw",
                 version="0.0.101.0",
                 kind="candidate",
                 candidate_id="other",
@@ -215,9 +185,9 @@ class CandidateEnsureTest(unittest.TestCase):
         self.assertEqual(
             self.backend.created[0][2],
             {
-                "server": "0.0.129",
-                "agent": "0.0.102.0",
-                "app-onboard": "0.0.0",
+                "claw-server-rust": "0.0.129",
+                "browserclaw": "0.0.102.0",
+                "claw-onboard": "0.0.0",
             },
         )
 
@@ -227,9 +197,9 @@ class CandidateEnsureTest(unittest.TestCase):
         self.backend.existing = replace(
             candidate_record(),
             component_versions={
-                "server": "0.0.128",
-                "agent": "0.0.101.0",
-                "claw-onboard": "0.0.15",
+                "claw-server-rust": "0.0.128",
+                "browserclaw": "0.0.101.0",
+                "app-onboard": "0.0.0",
             },
         )
 
@@ -253,9 +223,6 @@ class CandidateEnsureTest(unittest.TestCase):
 
     def test_github_backend_reads_product_owned_onboarding_version(self) -> None:
         versions = {
-            "server": "0.0.128",
-            "agent": "0.0.101.0",
-            "app-onboard": "0.0.0",
             "claw-server-rust": "0.0.46",
             "browserclaw": "0.0.83.0",
             "claw-onboard": "0.0.15",
@@ -265,16 +232,10 @@ class CandidateEnsureTest(unittest.TestCase):
         with patch(
             "bos_build.release.candidate.read_component_version",
             side_effect=lambda _root, component: versions[component],
-        ) as read_version:
-            browseros = backend.read_committed_versions("browseros")
-            browserclaw = backend.read_committed_versions("browserclaw")
+        ):
+            committed = backend.read_committed_versions("browserclaw")
 
-        self.assertEqual(browseros["app-onboard"], "0.0.0")
-        self.assertNotIn("claw-onboard", browseros)
-        self.assertEqual(browserclaw["claw-onboard"], "0.0.15")
-        self.assertNotIn("app-onboard", browserclaw)
-        self.assertIn(call(Path("/repo"), "app-onboard"), read_version.call_args_list)
-        self.assertIn(call(Path("/repo"), "claw-onboard"), read_version.call_args_list)
+        self.assertEqual(committed, versions)
 
     def test_accepts_only_same_repository_canonical_candidate_pull_requests(
         self,
@@ -347,7 +308,7 @@ class CandidateBranchRecoveryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo, parent = self._repo(Path(temp_dir))
             remote_candidate = self._commit(repo, parent, "candidate\n", "remote")
-            branch = "bot/release-browseros-retry"
+            branch = "bot/release-browserclaw-retry"
             self._git(repo, "push", "origin", f"HEAD:refs/heads/{branch}")
             local_candidate = self._commit(repo, parent, "candidate\n", "local")
             backend = GitHubCandidateBackend(repo, "owner/repo", "main")
@@ -366,7 +327,7 @@ class CandidateBranchRecoveryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo, parent = self._repo(Path(temp_dir))
             self._commit(repo, parent, "unexpected\n", "remote")
-            branch = "bot/release-browseros-conflict"
+            branch = "bot/release-browserclaw-conflict"
             self._git(repo, "push", "origin", f"HEAD:refs/heads/{branch}")
             local_candidate = self._commit(repo, parent, "candidate\n", "local")
             backend = GitHubCandidateBackend(repo, "owner/repo", "main")
@@ -390,7 +351,7 @@ class CandidateBackendVersionGuardTest(unittest.TestCase):
 
         def version_at_ref(component: str, ref: str) -> str:
             observed.append(component)
-            if component == "app-onboard" and ref == "origin/main":
+            if component == "claw-onboard" and ref == "origin/main":
                 return "0.0.13"
             return self.record.component_versions[component]
 
@@ -404,7 +365,7 @@ class CandidateBackendVersionGuardTest(unittest.TestCase):
         ):
             self.assertFalse(self.backend.default_branch_contains_versions(self.record))
 
-        self.assertNotIn("app-onboard", observed)
+        self.assertNotIn("claw-onboard", observed)
 
     def test_merged_candidate_retry_ignores_independent_onboarding_release(
         self,
@@ -413,7 +374,7 @@ class CandidateBackendVersionGuardTest(unittest.TestCase):
 
         def version_at_ref(component: str, ref: str) -> str:
             observed.append(component)
-            if component == "app-onboard":
+            if component == "claw-onboard":
                 return "0.0.13"
             return self.record.component_versions[component]
 
@@ -436,7 +397,7 @@ class CandidateBackendVersionGuardTest(unittest.TestCase):
                 )
             )
 
-        self.assertNotIn("app-onboard", observed)
+        self.assertNotIn("claw-onboard", observed)
 
     def test_merged_candidate_retry_decodes_chrome_package_version(self) -> None:
         for package_version, release_version in (
@@ -448,12 +409,12 @@ class CandidateBackendVersionGuardTest(unittest.TestCase):
                     self.record,
                     component_versions={
                         **self.record.component_versions,
-                        "agent": release_version,
+                        "browserclaw": release_version,
                     },
                 )
 
                 def version_at_ref(component: str, ref: str) -> str:
-                    if component == "agent":
+                    if component == "browserclaw":
                         return package_version
                     return record.component_versions[component]
 
@@ -505,13 +466,13 @@ class CandidateBackendVersionGuardTest(unittest.TestCase):
                 ),
             ),
         ):
-            allocations = self.backend.discover_allocations("browseros")
+            allocations = self.backend.discover_allocations("browserclaw")
 
         self.assertEqual(
             {(item.component, item.version) for item in allocations},
             {
-                ("server", suite.component_versions["server"]),
-                ("agent", suite.component_versions["agent"]),
+                ("claw-server-rust", suite.component_versions["claw-server-rust"]),
+                ("browserclaw", suite.component_versions["browserclaw"]),
             },
         )
         self.assertTrue(all(item.candidate_id == suite.branch for item in allocations))
@@ -533,49 +494,39 @@ class CandidateBackendVersionGuardTest(unittest.TestCase):
             "mergedAt": None,
             "mergeCommit": None,
         }
-        expected = {
-            "browseros": {"server": "0.0.148", "agent": "0.0.122.0"},
-            "browserclaw": {
-                "claw-server-rust": "0.0.47",
-                "browserclaw": "0.0.84.0",
-            },
-        }
+        expected = {"claw-server-rust": "0.0.47", "browserclaw": "0.0.84.0"}
         committed = {
-            "server": "0.0.146",
-            "agent": "0.0.120.0",
             "claw-server-rust": "0.0.45",
             "browserclaw": "0.0.82.0",
             "claw-onboard": "0.0.15",
         }
-        for product in ("browseros", "browserclaw"):
-            with (
-                self.subTest(product=product),
-                patch.object(self.backend, "_git", return_value=""),
-                patch(
-                    "bos_build.release.candidate.list_github_releases",
-                    return_value=[],
-                ),
-                patch(
-                    "bos_build.release.candidate.list_pull_requests",
-                    return_value=[pull_request],
-                ) as list_prs,
-                patch(
-                    "bos_build.release.suite.GitHubSuiteBackend.discover_branch_reservations",
-                    return_value=(),
-                ),
-            ):
-                allocations = self.backend.discover_allocations(product)
-            self.assertTrue(allocations)
-            self.assertTrue(all(not item.reusable for item in allocations))
-            list_prs.assert_called_once_with("owner/repo", state="all")
-            later = resolve_candidate_versions(
-                product_id=product,
-                committed_versions=committed,
-                allocations=allocations,
-                candidate_id=f"bot/release-{product}-later",
-            )
-            for component, version in expected[product].items():
-                self.assertEqual(later[component], version)
+        with (
+            patch.object(self.backend, "_git", return_value=""),
+            patch(
+                "bos_build.release.candidate.list_github_releases",
+                return_value=[],
+            ),
+            patch(
+                "bos_build.release.candidate.list_pull_requests",
+                return_value=[pull_request],
+            ) as list_prs,
+            patch(
+                "bos_build.release.suite.GitHubSuiteBackend.discover_branch_reservations",
+                return_value=(),
+            ),
+        ):
+            allocations = self.backend.discover_allocations("browserclaw")
+        self.assertTrue(allocations)
+        self.assertTrue(all(not item.reusable for item in allocations))
+        list_prs.assert_called_once_with("owner/repo", state="all")
+        later = resolve_candidate_versions(
+            product_id="browserclaw",
+            committed_versions=committed,
+            allocations=allocations,
+            candidate_id="bot/release-browserclaw-later",
+        )
+        for component, version in expected.items():
+            self.assertEqual(later[component], version)
 
 
 class CandidateMergeTest(unittest.TestCase):
@@ -634,10 +585,10 @@ class CandidateMergeTest(unittest.TestCase):
 
     def test_rejects_gate_identity_skew(self) -> None:
         for field, value in (
-            ("product", "browserclaw"),
+            ("product", "browseros"),
             ("parent_sha", "9" * 40),
             ("browser_version", "0.32.0"),
-            ("component_versions", {"server": "0.0.999"}),
+            ("component_versions", {"claw-server-rust": "0.0.999"}),
         ):
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
                 merge_candidate(self.record, {**self.gate, field: value}, self.backend)

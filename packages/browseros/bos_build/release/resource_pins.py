@@ -62,18 +62,6 @@ class ResourcePin:
 
 RESOURCE_FAMILIES = (
     ResourceFamily(
-        name="browseros_server",
-        component="artifacts/server",
-        archive_base="browseros-server-resources",
-        targets=(
-            "darwin-arm64",
-            "darwin-x64",
-            "linux-arm64",
-            "linux-x64",
-            "windows-x64",
-        ),
-    ),
-    ResourceFamily(
         name="browserclaw_server",
         component="claw-server-rust/prod-resources",
         archive_base="browseros-claw-server-rust-resources",
@@ -91,19 +79,11 @@ RESOURCE_FAMILIES = (
         archive_base="browseros-claw-onboard-resources",
         targets=("universal",),
     ),
-    ResourceFamily(
-        name="browseros_onboard",
-        component="app-onboard/prod-resources",
-        archive_base="browseros-app-onboard-resources",
-        targets=("universal",),
-    ),
 )
 
 COMPONENT_RESOURCE_FAMILY = {
-    "browseros-server": "browseros_server",
     "browserclaw-server": "browserclaw_server",
     "browserclaw-onboard": "browserclaw_onboard",
-    "browseros-onboard": "browseros_onboard",
 }
 
 

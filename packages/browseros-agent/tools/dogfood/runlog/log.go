@@ -170,21 +170,19 @@ func reopenIfReplaced(path string, current *os.File) (*os.File, bool, error) {
 }
 
 func Format(entry Entry) string {
-	return fmt.Sprintf("%s [%s] %s", entry.Time.Format("15:04:05"), displayTag(entry.Tag), entry.Line)
+	return fmt.Sprintf("%s [%s] %s", entry.Time.Format("15:04:05"), entry.Tag, entry.Line)
 }
 
 func NormalizeFilter(filter string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(filter)) {
 	case "", "all":
 		return "", nil
-	case "browser", "chromium":
-		return "browser", nil
 	case "server":
 		return "server", nil
 	case "daemon":
 		return "daemon", nil
 	default:
-		return "", fmt.Errorf("unknown log filter %q; use daemon, chromium, or server", filter)
+		return "", fmt.Errorf("unknown log filter %q; use daemon or server", filter)
 	}
 }
 
@@ -200,11 +198,4 @@ func parseLine(line string, filter string) (Entry, bool) {
 		return Entry{}, false
 	}
 	return entry, true
-}
-
-func displayTag(tag string) string {
-	if tag == "browser" {
-		return "chromium"
-	}
-	return tag
 }

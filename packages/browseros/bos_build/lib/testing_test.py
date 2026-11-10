@@ -51,7 +51,7 @@ class MockChromiumTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             m = MockChromium(Path(tmp))
             out = m.with_out_dir("arm64", args_gn="is_debug = false\n")
-            self.assertEqual(out, m.src / "out" / "Default_browseros_arm64")
+            self.assertEqual(out, m.src / "out" / "Default_browserclaw_arm64")
             self.assertTrue(out.is_dir())
             self.assertEqual((out / "args.gn").read_text(), "is_debug = false\n")
 
@@ -149,7 +149,7 @@ class MockBrowserOSRootTest(unittest.TestCase):
                 r.root
                 / "chromium_files"
                 / "products"
-                / "browseros"
+                / "browserclaw"
                 / "chrome"
                 / "bar.h",
             )

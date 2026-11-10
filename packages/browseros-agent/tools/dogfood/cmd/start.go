@@ -24,22 +24,17 @@ import (
 )
 
 var startRefreshProfile bool
-var startHeadless bool
 var startBackgroundRefreshProfile bool
-var startBackgroundHeadless bool
 
 const (
-	serverLogName     = "server.log"
-	chromiumLogName   = "chromium.log"
+	productLabel      = "BrowserOS neo"
 	clawAppLogName    = "claw-app.log"
 	clawServerLogName = "claw-server.log"
 )
 
 func init() {
 	startCmd.Flags().BoolVar(&startRefreshProfile, "refresh-profile", false, "Refresh copied BrowserOS profile before launch")
-	startCmd.Flags().BoolVar(&startHeadless, "headless", false, "Run BrowserOS headless")
 	startBackgroundCmd.Flags().BoolVar(&startBackgroundRefreshProfile, "refresh-profile", false, "Refresh copied BrowserOS profile before launch")
-	startBackgroundCmd.Flags().BoolVar(&startBackgroundHeadless, "headless", false, "Run BrowserOS headless")
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(startBackgroundCmd)
 }
@@ -49,14 +44,14 @@ var startCmd = &cobra.Command{
 	Short:   "Start dogfooding environment",
 	GroupID: groupRun,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		target, cfg, err := loadSelectedTargetConfig()
+		cfg, err := loadConfig()
 		if err != nil {
 			return err
 		}
 		if err := promptIfSourceProfileInUse(cmd.OutOrStdout(), bufio.NewReader(os.Stdin), cfg, startRefreshProfile); err != nil {
 			return err
 		}
-		paths, err := defaultTargetRunPaths(target)
+		paths, err := defaultRunPaths()
 		if err != nil {
 			return err
 		}
@@ -68,8 +63,6 @@ var startCmd = &cobra.Command{
 		defer dogfoodruntime.CleanupStaleRunFiles(paths.State)
 		return runEnvironment(cfg, environmentOptions{
 			RefreshProfile: startRefreshProfile,
-			Headless:       startHeadless,
-			RestartBrowser: false,
 			Runner:         pipeline.ExecRunner{},
 		})
 	},
@@ -80,14 +73,14 @@ var startBackgroundCmd = &cobra.Command{
 	Short:   "Start dogfooding environment in the background",
 	GroupID: groupRun,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		target, cfg, err := loadSelectedTargetConfig()
+		cfg, err := loadConfig()
 		if err != nil {
 			return err
 		}
 		if err := promptIfSourceProfileInUse(cmd.OutOrStdout(), bufio.NewReader(os.Stdin), cfg, startBackgroundRefreshProfile); err != nil {
 			return err
 		}
-		paths, err := defaultTargetRunPaths(target)
+		paths, err := defaultRunPaths()
 		if err != nil {
 			return err
 		}
@@ -101,14 +94,12 @@ var startBackgroundCmd = &cobra.Command{
 		} else {
 			return err
 		}
-		return startBackgroundProcess(paths, target, startBackgroundHeadless, startBackgroundRefreshProfile)
+		return startBackgroundProcess(paths, startBackgroundRefreshProfile)
 	},
 }
 
 type environmentOptions struct {
 	RefreshProfile bool
-	Headless       bool
-	RestartBrowser bool
 	LineHandler    proc.LineHandler
 	Progress       func(string)
 	Runner         pipeline.Runner
@@ -159,7 +150,8 @@ func runEnvironment(cfg config.Config, opts environmentOptions) error {
 	return nil
 }
 
-// buildAndStartEnvironment prepares the selected target and starts its supervised processes.
+// buildAndStartEnvironment prepares the checkout, profile, ports and dependencies, then
+// starts the BrowserOS neo WXT app and claw-server under supervision.
 func buildAndStartEnvironment(ctx context.Context, cfg config.Config, opts environmentOptions) (*environment, error) {
 	if opts.Runner == nil {
 		opts.Runner = pipeline.ExecRunner{}
@@ -171,34 +163,11 @@ func buildAndStartEnvironment(ctx context.Context, cfg config.Config, opts envir
 	} else if dirty {
 		fmt.Fprintln(os.Stderr, warnStyle.Sprint("warning: checkout has uncommitted changes; start will use current files"))
 	}
-	switch cfg.Target {
-	case config.TargetBrowserOS:
-		return buildAndStartBrowserOSEnvironment(ctx, cfg, agentRoot, opts)
-	case config.TargetClaw:
-		return buildAndStartClawEnvironment(ctx, cfg, agentRoot, opts)
-	default:
-		return nil, fmt.Errorf("unknown dogfood target %q", cfg.Target)
-	}
-}
-
-func buildAndStartBrowserOSEnvironment(ctx context.Context, cfg config.Config, agentRoot string, opts environmentOptions) (*environment, error) {
 	reportProgress(opts, "preparing profile")
-	if err := prepareBrowserOSEnvironment(&cfg, agentRoot, opts); err != nil {
+	if err := prepareProfile(&cfg, opts); err != nil {
 		return nil, err
 	}
-	if err := resolveStartBrowserApp(&cfg); err != nil {
-		return nil, err
-	}
-	reportProgress(opts, "building agent")
-	if err := pipeline.Build(ctx, agentRoot, opts.Runner); err != nil {
-		return nil, err
-	}
-	return startBrowserOSEnvironment(ctx, cfg, agentRoot, opts)
-}
-
-func buildAndStartClawEnvironment(ctx context.Context, cfg config.Config, agentRoot string, opts environmentOptions) (*environment, error) {
-	reportProgress(opts, "preparing profile")
-	if err := prepareClawEnvironment(&cfg, opts); err != nil {
+	if err := resolveEnvironmentPorts(&cfg); err != nil {
 		return nil, err
 	}
 	if err := resolveStartBrowserApp(&cfg); err != nil {
@@ -219,7 +188,7 @@ func prepareStartCheckout(ctx context.Context, cfg config.Config, runner pipelin
 	}
 	if !dirty {
 		if err := pipeline.EnsureBranch(ctx, cfg.RepoPath, cfg.Branch, runner, false); err != nil {
-			return false, fmt.Errorf("switch to configured branch %s failed; run `browseros-dogfood %s pull` first if the branch is not available locally: %w", cfg.Branch, targetFlagOrDefault(cfg.Target), err)
+			return false, fmt.Errorf("switch to configured branch %s failed; run `browseros-dogfood pull` first if the branch is not available locally: %w", cfg.Branch, err)
 		}
 		return false, nil
 	}
@@ -246,25 +215,10 @@ func prepareProfile(cfg *config.Config, opts environmentOptions) error {
 	return nil
 }
 
-func prepareBrowserOSEnvironment(cfg *config.Config, agentRoot string, opts environmentOptions) error {
-	if err := prepareProfile(cfg, opts); err != nil {
-		return err
-	}
-	if err := pipeline.WriteProductionEnvFile(agentRoot, *cfg); err != nil {
-		return err
-	}
-	return resolveEnvironmentPorts(cfg, true)
-}
-
-func prepareClawEnvironment(cfg *config.Config, opts environmentOptions) error {
-	if err := prepareProfile(cfg, opts); err != nil {
-		return err
-	}
-	return resolveEnvironmentPorts(cfg, false)
-}
-
-func resolveEnvironmentPorts(cfg *config.Config, includeExtension bool) error {
-	resolvedPorts, changed, err := proc.ResolveTargetPorts(cfg.Ports, includeExtension)
+// resolveEnvironmentPorts moves busy ports to free ones and saves the moved ports, so the
+// next start and the background daemon reuse them.
+func resolveEnvironmentPorts(cfg *config.Config) error {
+	resolvedPorts, changed, err := proc.ResolvePorts(cfg.Ports)
 	if err != nil {
 		return err
 	}
@@ -277,9 +231,9 @@ func resolveEnvironmentPorts(cfg *config.Config, includeExtension bool) error {
 		if err := config.Save(path, *cfg); err != nil {
 			return err
 		}
-		proc.LogMsgf(proc.TagInfo, "Busy ports detected; using %s", formatPortsForTarget(*cfg))
+		proc.LogMsgf(proc.TagInfo, "Busy ports detected; using %s", formatPorts(cfg.Ports))
 	} else {
-		proc.LogMsgf(proc.TagInfo, "Using ports %s", formatPortsForTarget(*cfg))
+		proc.LogMsgf(proc.TagInfo, "Using ports %s", formatPorts(cfg.Ports))
 	}
 	return nil
 }
@@ -288,56 +242,6 @@ func reportProgress(opts environmentOptions, message string) {
 	if opts.Progress != nil {
 		opts.Progress(message)
 	}
-}
-
-func startBrowserOSEnvironment(parent context.Context, cfg config.Config, agentRoot string, opts environmentOptions) (*environment, error) {
-	ctx, cancel := context.WithCancel(parent)
-	e := &environment{cancel: cancel, cfg: cfg}
-	reportProgress(opts, "launching Chromium")
-	e.managed = append(e.managed, proc.StartManaged(ctx, &e.wg, proc.ProcConfig{
-		Tag:     proc.TagBrowser,
-		Dir:     agentRoot,
-		Restart: opts.RestartBrowser,
-		LogPath: cfg.LogPath(chromiumLogName),
-		Cmd: browser.BuildArgs(browser.ArgsConfig{
-			Binary:      cfg.BrowserOSAppPath,
-			AgentRoot:   agentRoot,
-			UserDataDir: cfg.DevUserDataDir,
-			ProfileDir:  cfg.DevProfileDir,
-			Ports:       cfg.Ports,
-			Headless:    opts.Headless,
-		}),
-		LineHandler: opts.LineHandler,
-	}))
-	reportProgress(opts, "waiting for CDP")
-	proc.LogMsg(proc.TagServer, "Waiting for CDP...")
-	if browser.WaitForCDP(ctx, cfg.Ports.CDP, 60) {
-		reportProgress(opts, "CDP ready")
-		proc.LogMsg(proc.TagServer, "CDP ready")
-	} else {
-		reportProgress(opts, "CDP not available, starting server anyway")
-		proc.LogMsg(proc.TagServer, proc.WarnColor.Sprint("CDP not available, starting server anyway"))
-	}
-	runtimeEnv := serverRuntimeEnv(os.Environ(), cfg)
-	serverDir := filepath.Join(agentRoot, "apps/server")
-	sidecarPath := dogfoodSidecarConfigPath(cfg)
-	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, filepath.Join(agentRoot, "resources")); err != nil {
-		e.Stop()
-		e.Wait()
-		return nil, fmt.Errorf("write server config: %w", err)
-	}
-	reportProgress(opts, "starting server")
-	e.managed = append(e.managed, proc.StartManaged(ctx, &e.wg, proc.ProcConfig{
-		Tag:         proc.TagServer,
-		Dir:         serverDir,
-		Env:         runtimeEnv,
-		Restart:     true,
-		LogPath:     cfg.LogPath(serverLogName),
-		Cmd:         serverCommand(sidecarPath),
-		LineHandler: opts.LineHandler,
-	}))
-	printSummary(cfg, agentRoot)
-	return e, nil
 }
 
 func startClawEnvironment(parent context.Context, cfg config.Config, agentRoot string, opts environmentOptions) (*environment, error) {
@@ -412,30 +316,12 @@ func (e *environment) ForceKill() {
 	}
 }
 
-func serverCommand(configPath string) []string {
-	return []string{"bun", "--env-file=../../.env.development", "src/index.ts", "--config", configPath}
-}
-
 func clawAppCommand() []string {
 	return []string{"bun", "--env-file=../../.env.development", "wxt"}
 }
 
 func clawServerCommand(configPath string) []string {
 	return []string{"cargo", "run", "-p", "claw-server", "--", "--config", configPath}
-}
-
-func serverRuntimeEnv(base []string, cfg config.Config) []string {
-	env := make([]string, 0, len(base)+2)
-	for _, entry := range base {
-		if strings.HasPrefix(entry, "BROWSEROS_DIR=") {
-			continue
-		}
-		env = append(env, entry)
-	}
-	return append(env,
-		"NODE_ENV=development",
-		fmt.Sprintf("BROWSEROS_DIR=%s", cfg.BrowserOSDir),
-	)
 }
 
 // clawRuntimeEnv wires the WXT app and standalone Claw server to the same BrowserClaw state.
@@ -482,7 +368,7 @@ func resolveStartBrowserApp(cfg *config.Config) error {
 }
 
 func resolveConfiguredBrowserApp(cfg *config.Config, exists func(string) bool) config.BrowserAppResolution {
-	resolution := config.ResolveBrowserAppPath(cfg.Target, cfg.BrowserOSAppPath, exists)
+	resolution := config.ResolveBrowserAppPath(cfg.BrowserOSAppPath, exists)
 	cfg.BrowserOSAppPath = resolution.Path
 	return resolution
 }
@@ -505,36 +391,18 @@ func validateBrowserAppExecutable(path string) error {
 
 func printSummary(cfg config.Config, agentRoot string) {
 	fmt.Println()
-	proc.LogMsgf(proc.TagInfo, "Target: %s", targetLabel(cfg.Target))
+	proc.LogMsgf(proc.TagInfo, "Target: %s", productLabel)
 	proc.LogMsgf(proc.TagInfo, "App: %s", cfg.BrowserOSAppPath)
 	proc.LogMsgf(proc.TagInfo, "Repo: %s", cfg.RepoPath)
 	proc.LogMsgf(proc.TagInfo, "Agent root: %s", agentRoot)
 	proc.LogMsgf(proc.TagInfo, "Profile: %s", cfg.DevUserDataDir)
-	proc.LogMsgf(proc.TagInfo, "%s: %s", stateDirLabel(cfg.Target), cfg.BrowserOSDir)
+	proc.LogMsgf(proc.TagInfo, "Claw state: %s", cfg.BrowserOSDir)
 	proc.LogMsgf(proc.TagInfo, "Logs: %s", cfg.LogDir())
-	proc.LogMsgf(proc.TagInfo, "Ports: %s", formatPortsForTarget(cfg))
+	proc.LogMsgf(proc.TagInfo, "Ports: %s", formatPorts(cfg.Ports))
 	fmt.Println()
 }
 
-func targetLabel(target config.Target) string {
-	switch target {
-	case config.TargetClaw:
-		return "BrowserOS neo"
-	default:
-		return "BrowserOS"
-	}
-}
-
-func stateDirLabel(target config.Target) string {
-	if target == config.TargetClaw {
-		return "Claw state"
-	}
-	return "BrowserOS dir"
-}
-
-func formatPortsForTarget(cfg config.Config) string {
-	if cfg.Target == config.TargetClaw {
-		return fmt.Sprintf("CDP=%d API=%d", cfg.Ports.CDP, cfg.Ports.Server)
-	}
-	return fmt.Sprintf("CDP=%d Server=%d Extension=%d", cfg.Ports.CDP, cfg.Ports.Server, cfg.Ports.Extension)
+// formatPorts labels the server port API because claw-server serves the claw-app API on it.
+func formatPorts(ports config.Ports) string {
+	return fmt.Sprintf("CDP=%d API=%d", ports.CDP, ports.Server)
 }

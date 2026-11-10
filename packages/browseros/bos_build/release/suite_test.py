@@ -2,6 +2,7 @@
 """Family release transaction lifecycle tests."""
 
 import hashlib
+import json
 import shutil
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ from bos_build.release.suite import (
     GitHubSuiteBackend,
     SUITE_COMPONENTS,
     SUITE_ONBOARDING_COMPONENTS,
+    SUITE_PRODUCTS,
     SUITE_RELEASE_COMPONENTS,
     SUITE_STATE_PATHS,
     SuitePullRequest,
@@ -28,6 +30,7 @@ from bos_build.release.suite import (
     merge_suite_component_allocations,
     merge_transaction,
     reconcile_transaction,
+    suite_allocation_record_from_pull_request,
     suite_record_from_pull_request,
     transaction_branch,
     transaction_id,
@@ -58,11 +61,8 @@ def suite_record(
         browser_version="0.50.1",
         build_offset=401,
         component_versions={
-            "server": "0.0.147",
-            "agent": "0.0.121.0",
             "claw-server-rust": "0.0.46",
             "browserclaw": "0.0.83.0",
-            "app-onboard": "0.0.0",
             "claw-onboard": "0.0.15",
         },
         pull_request_number=77,
@@ -74,7 +74,6 @@ def suite_record(
             "updates/extensions/extensions.alpha.json": "b" * 64,
             "updates/extensions/update-manifest.alpha.xml": "c" * 64,
             "updates/server/appcast-claw-server.alpha.xml": "d" * 64,
-            "updates/server/appcast-server.alpha.xml": "e" * 64,
         },
     )
 
@@ -120,11 +119,8 @@ class FakeBackend:
 
     def read_committed_versions(self, product=""):
         versions = {
-            "server": "0.0.146",
-            "agent": "0.0.120.0",
             "claw-server-rust": "0.0.45",
             "browserclaw": "0.0.82.0",
-            "app-onboard": "0.0.0",
             "claw-onboard": "0.0.15",
         }
 
@@ -298,15 +294,76 @@ class SuiteIdentityTest(unittest.TestCase):
             ):
                 backend.discover_browser_allocations()
 
+    def test_pre_split_family_reservation_is_ignored_not_rejected(self) -> None:
+        # PR #2534's marker, saved before the original BrowserOS product moved
+        # to browseros-human. It pins components this repo no longer owns.
+        marker = {
+            "branch": "bot/release-nightly-704e7328df92",
+            "browser_version": "0.50.2",
+            "build_offset": 239,
+            "component_versions": {
+                "agent": "0.0.147.0",
+                "app-onboard": "0.0.1",
+                "browserclaw": "0.2.20.0",
+                "claw-onboard": "0.0.15",
+                "claw-server-rust": "0.0.51",
+                "server": "0.0.153",
+            },
+            "default_branch": "main",
+            "mode": "nightly",
+            "reservation_sha": "e9ca5b1caf7aecfc57b2a16c2353d019211d010e",
+            "schema": "browseros-release-suite-v1",
+            "source_sha": "704e7328df92520f5741a1b2b520f03577418073",
+            "transaction_id": "nightly-704e7328df92520f5741a1b2b520f03577418073",
+        }
+        retired = {
+            "body": "<!-- browseros-release-suite-v1\n"
+            + json.dumps(marker, sort_keys=True)
+            + "\n-->",
+            "baseRefName": "main",
+            "headRefName": marker["branch"],
+            "headRefOid": marker["reservation_sha"],
+            "headRepository": {"nameWithOwner": "browseros-ai/BrowserOS"},
+            "isCrossRepository": False,
+            "number": 2534,
+            "url": "https://github.com/browseros-ai/BrowserOS/pull/2534",
+            "state": "OPEN",
+            "mergedAt": None,
+            "mergeCommit": None,
+        }
+        remote_heads = f"{marker['reservation_sha']}\trefs/heads/{marker['branch']}"
+
+        def git(*args, **_kwargs):
+            self.assertEqual(args[0], "ls-remote", "retired branch must not be fetched")
+            return remote_heads
+
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = GitHubSuiteBackend(Path(tmp), "browseros-ai/BrowserOS", "main")
+            with (
+                mock.patch.object(backend, "_git", side_effect=git),
+                mock.patch(
+                    "bos_build.release.suite.list_pull_requests",
+                    return_value=[retired],
+                ),
+            ):
+                self.assertEqual(backend.discover_branch_reservations(), ())
+                self.assertEqual(backend.discover_browser_allocations(), ())
+
+        # The same unreadable marker on any live canonical branch still fails
+        # closed, so the exemption cannot hide a corrupted neo reservation.
+        live = {**retired, "headRefName": f"bot/release-nightly-{'5' * 12}"}
+        with self.assertRaisesRegex(ValueError, "invalid allocation metadata"):
+            suite_allocation_record_from_pull_request(live, "browseros-ai/BrowserOS")
+
     def test_branch_and_pr_component_allocations_must_be_identical(self) -> None:
         record = suite_record()
         allocation = AllocationRecord(
-            component="server",
-            version=record.component_versions["server"],
+            component="claw-server-rust",
+            version=record.component_versions["claw-server-rust"],
             kind="candidate",
             source_sha=record.source_sha,
             candidate_id=record.branch,
-            reference="agent-server/v" + record.component_versions["server"],
+            reference="claw-server/v" + record.component_versions["claw-server-rust"],
             reusable=True,
         )
 
@@ -314,7 +371,7 @@ class SuiteIdentityTest(unittest.TestCase):
             merge_suite_component_allocations(
                 (allocation,),
                 (replace(record, pull_request_number=0, pull_request_url=""),),
-                ("server",),
+                ("claw-server-rust",),
             ),
             (allocation,),
         )
@@ -330,7 +387,7 @@ class SuiteIdentityTest(unittest.TestCase):
                         state="open",
                     ),
                 ),
-                ("server",),
+                ("claw-server-rust",),
             ),
             (closed_allocation,),
         )
@@ -338,32 +395,32 @@ class SuiteIdentityTest(unittest.TestCase):
             merge_suite_component_allocations(
                 (replace(allocation, source_sha="9" * 40),),
                 (replace(record, pull_request_number=0, pull_request_url=""),),
-                ("server",),
+                ("claw-server-rust",),
             )
 
     def test_open_and_closed_prs_for_one_branch_cannot_mask_reuse_veto(self) -> None:
         draft = AllocationRecord(
-            component="server",
+            component="claw-server-rust",
             version="0.0.147",
             kind="release",
             source_sha=SOURCE_SHA,
-            reference="agent-server/v0.0.147",
+            reference="claw-server/v0.0.147",
             reusable=True,
         )
         open_pr = AllocationRecord(
-            component="server",
+            component="claw-server-rust",
             version="0.0.147",
             kind="candidate",
             source_sha=SOURCE_SHA,
             candidate_id=suite_record().branch,
-            reference="agent-server/v0.0.147",
+            reference="claw-server/v0.0.147",
             reusable=True,
         )
         closed_pr = replace(open_pr, reusable=False, reuse_forbidden=True)
 
         with self.assertRaisesRegex(ValueError, "Multiple pull requests"):
             merge_suite_component_allocations(
-                (draft, open_pr, closed_pr), (), ("server",)
+                (draft, open_pr, closed_pr), (), ("claw-server-rust",)
             )
 
 
@@ -397,8 +454,6 @@ class SuiteReconcileTest(unittest.TestCase):
                 candidate_id="other-transaction",
             )
             for component, version in {
-                "server": "0.0.147",
-                "agent": "0.0.121.0",
                 "claw-server-rust": "0.0.46",
                 "browserclaw": "0.0.83.0",
             }.items()
@@ -418,11 +473,8 @@ class SuiteReconcileTest(unittest.TestCase):
         self.assertEqual(
             created[2],
             {
-                "server": "0.0.148",
-                "agent": "0.0.122.0",
                 "claw-server-rust": "0.0.47",
                 "browserclaw": "0.0.84.0",
-                "app-onboard": "0.0.0",
                 "claw-onboard": "0.0.15",
             },
         )
@@ -505,7 +557,6 @@ class SuiteReconcileTest(unittest.TestCase):
             "updates/extensions/extensions.alpha.json",
             "updates/extensions/update-manifest.alpha.xml",
             "updates/server/appcast-claw-server.alpha.xml",
-            "updates/server/appcast-server.alpha.xml",
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -564,7 +615,7 @@ class SuiteInspectAndMergeTest(unittest.TestCase):
             "browser_version": record.browser_version,
             "component_versions": dict(record.component_versions),
             "state_checksums": dict(record.state_checksums),
-            "products": ["browseros", "browserclaw"],
+            "products": ["browserclaw"],
         }
 
         merged = merge_transaction(record, gate, self.backend)
@@ -589,7 +640,7 @@ class SuiteInspectAndMergeTest(unittest.TestCase):
             "browser_version": record.browser_version,
             "component_versions": dict(record.component_versions),
             "state_checksums": dict(record.state_checksums),
-            "products": ["browseros", "browserclaw"],
+            "products": ["browserclaw"],
         }
 
         merged = merge_transaction(record, gate, self.backend)
@@ -617,7 +668,7 @@ class SuiteInspectAndMergeTest(unittest.TestCase):
             "browser_version": record.browser_version,
             "component_versions": dict(record.component_versions),
             "state_checksums": dict(record.state_checksums),
-            "products": ["browseros", "browserclaw"],
+            "products": ["browserclaw"],
         }
 
         with self.assertRaisesRegex(ValueError, "merge commit"):
@@ -639,7 +690,7 @@ class SuiteInspectAndMergeTest(unittest.TestCase):
             "browser_version": record.browser_version,
             "component_versions": dict(record.component_versions),
             "state_checksums": dict(record.state_checksums),
-            "products": ["browseros", "browserclaw"],
+            "products": ["browserclaw"],
         }
         with self.assertRaisesRegex(ValueError, "head"):
             merge_transaction(record, gate, self.backend)
@@ -671,7 +722,7 @@ class SuiteInspectAndMergeTest(unittest.TestCase):
                     "browser_version": record.browser_version,
                     "component_versions": dict(record.component_versions),
                     "state_checksums": dict(record.state_checksums),
-                    "products": ["browseros", "browserclaw"],
+                    "products": ["browserclaw"],
                 },
                 self.backend,
             ).merge_sha,
@@ -690,7 +741,7 @@ class SuiteInspectAndMergeTest(unittest.TestCase):
                     "browser_version": record.browser_version,
                     "component_versions": dict(record.component_versions),
                     "state_checksums": dict(record.state_checksums),
-                    "products": ["browseros", "browserclaw"],
+                    "products": ["browserclaw"],
                 },
                 self.backend,
             )
@@ -720,11 +771,8 @@ class GitHubSuiteBackendTest(unittest.TestCase):
         paths = {
             "packages/browseros/resources/BROWSEROS_VERSION",
             "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET",
-            "packages/browseros-agent/apps/server/package.json",
-            "packages/browseros-agent/apps/app/package.json",
             "packages/browseros-agent/apps/claw-server/Cargo.toml",
             "packages/browseros-agent/apps/claw-app/package.json",
-            "packages/browseros-agent/apps/app-onboard/package.json",
             "packages/browseros-agent/apps/claw-onboard/package.json",
             "packages/browseros-agent/bun.lock",
             "packages/browseros-agent/Cargo.lock",
@@ -1216,14 +1264,10 @@ def product_record(product: str, **changes) -> SuiteRecord:
 
 
 class ProductSuiteTest(unittest.TestCase):
-    def test_same_source_has_three_distinct_retry_identities(self):
-        records = [
-            suite_record(),
-            product_record("browseros"),
-            product_record("browserclaw"),
-        ]
-        self.assertEqual(len({record.transaction_id for record in records}), 3)
-        self.assertEqual(len({record.branch for record in records}), 3)
+    def test_same_source_has_distinct_family_and_product_retry_identities(self):
+        records = [suite_record(), product_record("browserclaw")]
+        self.assertEqual(len({record.transaction_id for record in records}), 2)
+        self.assertEqual(len({record.branch for record in records}), 2)
         for record in records:
             self.assertEqual(SuiteRecord.from_dict(record.to_dict()), record)
             parsed = suite_record_from_body(record.pull_request_body())
@@ -1232,29 +1276,28 @@ class ProductSuiteTest(unittest.TestCase):
         legacy = suite_record().to_dict()
         legacy.pop("product")
         legacy.pop("state_base_sha")
-        self.assertEqual(
-            SuiteRecord.from_dict(legacy).products, ("browseros", "browserclaw")
-        )
+        self.assertEqual(SuiteRecord.from_dict(legacy).products, ("browserclaw",))
 
     def test_merged_publication_recovery_requires_the_committed_transaction(self):
         backend = FakeBackend()
         backend.existing = product_record(
-            "browseros", state="merged", merge_sha=MERGE_SHA
+            "browserclaw", state="merged", merge_sha=MERGE_SHA
         )
-        request = SuiteRequest("nightly", SOURCE_SHA, "main", "main", "browseros")
+        request = SuiteRequest("nightly", SOURCE_SHA, "main", "main", "browserclaw")
         self.assertEqual(inspect_transaction(request, backend).state, "merged")
         backend.merge_matches = False
         with self.assertRaisesRegex(ValueError, "merge commit does not match"):
             inspect_transaction(request, backend)
 
     def test_only_selected_product_is_allocated_and_gated(self):
-        for product in ("browseros", "browserclaw"):
+        for product in SUITE_PRODUCTS:
             with self.subTest(product=product):
                 backend = FakeBackend()
-                sibling = "browserclaw" if product == "browseros" else "browseros"
+                # The family transaction from the same source already holds
+                # the next browser version; the product must allocate above it.
                 backend.browser_allocations = (
                     BrowserAllocation(
-                        transaction_id("nightly", SOURCE_SHA, sibling), "0.50.1", 401
+                        transaction_id("nightly", SOURCE_SHA), "0.50.1", 401
                     ),
                 )
                 expected = product_record(
@@ -1295,7 +1338,7 @@ class ProductSuiteTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "products"):
                     merge_transaction(
                         record,
-                        {**gate, "products": ["browseros", "browserclaw"]},
+                        {**gate, "products": ["browseros", product]},
                         backend,
                     )
 
@@ -1304,102 +1347,70 @@ class ProductSuiteGitTest(unittest.TestCase):
     _git = GitHubSuiteBackendTest._git
     _repository = GitHubSuiteBackendTest._repository
 
-    def test_products_can_merge_in_either_order_from_the_same_source(self):
-        for order in (("browseros", "browserclaw"), ("browserclaw", "browseros")):
-            with self.subTest(order=order), tempfile.TemporaryDirectory() as temp_dir:
-                root = Path(temp_dir)
-                repo, remote, source = self._repository(root)
-                backend = GitHubSuiteBackend(repo, "browseros-ai/BrowserOS", "main")
-                original_version = backend.read_browser_version()
-                original_offset = backend.read_build_offset()
-                records = {}
-                from bos_build.release.suite import _next_browser_version
+    def test_product_transaction_merges_its_exact_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo, remote, source = self._repository(root)
+            backend = GitHubSuiteBackend(repo, "browseros-ai/BrowserOS", "main")
+            from bos_build.release.suite import _next_browser_version
 
-                browser_version = original_version
-                for index, product in enumerate(("browseros", "browserclaw"), 1):
-                    browser_version = _next_browser_version(browser_version)
-                    versions = {
-                        component: (
-                            increment_component_version(component, value)
-                            if component in suite_components(product, release_only=True)
-                            else value
-                        )
-                        for component, value in backend.read_committed_versions().items()
-                        if component in suite_components(product)
-                    }
-                    request = SuiteRequest("nightly", source, "main", "main", product)
-                    with mock.patch(
-                        "bos_build.release.suite.create_pull_request",
-                        return_value=f"https://github.com/browseros-ai/BrowserOS/pull/{100 + index}",
-                    ):
-                        records[product] = backend.create_transaction(
-                            request,
-                            transaction_branch("nightly", source, product),
-                            versions,
-                            browser_version,
-                            original_offset + index,
-                        )
-                discovered = backend.discover_branch_reservations()
-                self.assertEqual(
-                    {record.product for record in discovered},
-                    {"browseros", "browserclaw"},
+            product = "browserclaw"
+            original_offset = backend.read_build_offset()
+            versions = {
+                component: (
+                    increment_component_version(component, value)
+                    if component in suite_components(product, release_only=True)
+                    else value
                 )
-                self.assertEqual(len({item.transaction_id for item in discovered}), 2)
-
-                for product in order:
-                    record = records[product]
-                    base = self._git(repo, "rev-parse", "main")
-                    snapshots = root / ("snapshots-" + product)
-                    for relative in record.state_paths:
-                        path = snapshots / relative
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        content = self._git(repo, "show", f"{base}:{relative}")
-                        path.write_text(content + f"\n<!-- {product} complete -->\n")
-                    state = backend.reconcile_product_state(record, snapshots, base)
-                    self.assertFalse(backend.default_branch_contains_transaction(state))
-                    self.assertEqual(
-                        backend.reconcile_product_state(
-                            state, snapshots, base
-                        ).state_sha,
-                        state.state_sha,
-                    )
-                    backend._validate_state_history(state, state.state_sha)
-                    # A squash merge advances main while preserving reservation
-                    # ancestry only through the product PR, just like GitHub.
-                    self._git(repo, "read-tree", "--reset", "-u", state.state_sha)
-                    self._git(repo, "commit", "-m", f"merge {product}")
-                    self._git(repo, "push", "origin", "main")
-                    merged = self._git(repo, "rev-parse", "main")
-                    self.assertTrue(
-                        backend.merge_commit_matches_transaction(state, merged)
-                    )
-                    self.assertEqual(
-                        backend._component_version_at_ref(
-                            "server" if product == "browseros" else "claw-server-rust",
-                            "main",
-                        ),
-                        record.component_versions[
-                            "server" if product == "browseros" else "claw-server-rust"
-                        ],
-                    )
-                for record in records.values():
-                    for component in record.release_components:
-                        self.assertEqual(
-                            backend._component_version_at_ref(component, "main"),
-                            record.component_versions[component],
-                        )
-                self.assertEqual(
-                    backend.read_browser_version(),
-                    records["browserclaw"].browser_version,
+                for component, value in backend.read_committed_versions(product).items()
+            }
+            request = SuiteRequest("nightly", source, "main", "main", product)
+            with mock.patch(
+                "bos_build.release.suite.create_pull_request",
+                return_value="https://github.com/browseros-ai/BrowserOS/pull/101",
+            ):
+                record = backend.create_transaction(
+                    request,
+                    transaction_branch("nightly", source, product),
+                    versions,
+                    _next_browser_version(backend.read_browser_version()),
+                    original_offset + 1,
                 )
-                self.assertEqual(backend.read_build_offset(), original_offset + 2)
-                bundled = (repo / SUITE_STATE_PATHS[0]).read_text()
-                self.assertIn("browseros complete", bundled)
-                self.assertIn("browserclaw complete", bundled)
+            discovered = backend.discover_branch_reservations()
+            self.assertEqual([item.transaction_id for item in discovered], [record.transaction_id])
 
-                # A later sibling merge must not invalidate an already-merged
-                # product's immutable state/history on a fresh allocator.
-                self.assertEqual(len(backend.discover_branch_reservations()), 2)
+            base = self._git(repo, "rev-parse", "main")
+            snapshots = root / "snapshots"
+            for relative in record.state_paths:
+                path = snapshots / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                content = self._git(repo, "show", f"{base}:{relative}")
+                path.write_text(content + f"\n<!-- {product} complete -->\n")
+            state = backend.reconcile_product_state(record, snapshots, base)
+            self.assertFalse(backend.default_branch_contains_transaction(state))
+            self.assertEqual(
+                backend.reconcile_product_state(state, snapshots, base).state_sha,
+                state.state_sha,
+            )
+            backend._validate_state_history(state, state.state_sha)
+            # A squash merge advances main while preserving reservation
+            # ancestry only through the product PR, just like GitHub.
+            self._git(repo, "read-tree", "--reset", "-u", state.state_sha)
+            self._git(repo, "commit", "-m", f"merge {product}")
+            self._git(repo, "push", "origin", "main")
+            merged = self._git(repo, "rev-parse", "main")
+            self.assertTrue(backend.merge_commit_matches_transaction(state, merged))
+            for component in record.release_components:
+                self.assertEqual(
+                    backend._component_version_at_ref(component, "main"),
+                    record.component_versions[component],
+                )
+            self.assertEqual(backend.read_browser_version(), record.browser_version)
+            self.assertEqual(backend.read_build_offset(), original_offset + 1)
+            bundled = (repo / SUITE_STATE_PATHS[0]).read_text()
+            self.assertIn(f"{product} complete", bundled)
+            # The merged transaction stays valid history for a fresh allocator.
+            self.assertEqual(len(backend.discover_branch_reservations()), 1)
 
     def test_interrupted_ready_state_can_be_recomposed_without_losing_main(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1408,7 +1419,7 @@ class ProductSuiteGitTest(unittest.TestCase):
             backend = GitHubSuiteBackend(repo, "browseros-ai/BrowserOS", "main")
             from bos_build.release.suite import _next_browser_version
 
-            product = "browseros"
+            product = "browserclaw"
             versions = {
                 component: (
                     increment_component_version(component, value)
@@ -1440,8 +1451,6 @@ class ProductSuiteGitTest(unittest.TestCase):
             ready = replace(first, draft=False)
             readme = repo / "README.md"
             readme.write_text("New main code must survive the release.")
-            sibling = repo / "updates/server/appcast-claw-server.alpha.xml"
-            sibling.write_text(sibling.read_text() + "\n<!-- sibling publication -->\n")
             bundled = repo / SUITE_STATE_PATHS[0]
             bundled.write_text(bundled.read_text() + "\n<!-- sibling extension -->\n")
             self._git(repo, "add", ".")
@@ -1460,17 +1469,9 @@ class ProductSuiteGitTest(unittest.TestCase):
                 self._git(repo, "show", f"{second.state_sha}:README.md"),
                 readme.read_text(),
             )
-            self.assertIn(
-                "sibling publication",
-                self._git(
-                    repo,
-                    "show",
-                    f"{second.state_sha}:updates/server/appcast-claw-server.alpha.xml",
-                ),
-            )
             self.assertFalse(backend.default_branch_contains_transaction(second))
 
-            server_path = repo / "updates/server/appcast-server.alpha.xml"
+            server_path = repo / "updates/server/appcast-claw-server.alpha.xml"
             original_snapshot = server_path.read_text()
             from bos_build.release.feeds.render import extract_appcast_version
 

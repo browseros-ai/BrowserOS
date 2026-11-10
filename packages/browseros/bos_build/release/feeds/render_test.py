@@ -25,15 +25,15 @@ from .render import (
 from .spec import feed_by_key, server_feed
 
 MAC_ARTIFACT = {
-    "filename": "BrowserOS_v0.47.0.2_arm64.dmg",
-    "url": "https://cdn.browseros.com/releases/browseros/0.47.0.2/macos/BrowserOS_v0.47.0.2_arm64.dmg",
+    "filename": "BrowserOS_neo_v0.47.0.2_arm64.dmg",
+    "url": "https://cdn.browseros.com/releases/browserclaw/0.47.0.2/macos/BrowserOS_neo_v0.47.0.2_arm64.dmg",
     "sparkle_signature": "MACSIG==",
     "sparkle_length": 265462841,
 }
 
 WIN_ARTIFACT = {
-    "filename": "BrowserOS_v0.47.0.2_x64_installer.exe",
-    "url": "https://cdn.browseros.com/releases/browseros/0.47.0.2/win/BrowserOS_v0.47.0.2_x64_installer.exe",
+    "filename": "BrowserOS_neo_v0.47.0.2_x64_installer.exe",
+    "url": "https://cdn.browseros.com/releases/browserclaw/0.47.0.2/win/BrowserOS_neo_v0.47.0.2_x64_installer.exe",
     "sparkle_signature": "WINSIG==",
     "sparkle_length": 190943800,
 }
@@ -42,13 +42,13 @@ GOLDEN_MAC_APPCAST = """\
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>BrowserOS</title>
-    <link>https://cdn.browseros.com/appcast.xml</link>
+    <title>BrowserOS neo</title>
+    <link>https://cdn.browseros.com/appcast-claw.xml</link>
     <description>Most recent changes with links to updates.</description>
     <language>en</language>
 
     <item>
-      <title>BrowserOS - 0.47.0.2</title>
+      <title>BrowserOS neo - 0.47.0.2</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>10000.0.47.0.2</sparkle:version>
@@ -56,7 +56,7 @@ GOLDEN_MAC_APPCAST = """\
       <pubDate>Fri, 19 Jun 2026 06:41:33 +0000</pubDate>
       <link>https://www.browseros.com/</link>
       <enclosure
-        url="https://cdn.browseros.com/releases/browseros/0.47.0.2/macos/BrowserOS_v0.47.0.2_arm64.dmg"
+        url="https://cdn.browseros.com/releases/browserclaw/0.47.0.2/macos/BrowserOS_neo_v0.47.0.2_arm64.dmg"
         sparkle:edSignature="MACSIG=="
         length="265462841"
         type="application/octet-stream" />
@@ -71,13 +71,13 @@ GOLDEN_WIN_APPCAST = """\
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>BrowserOS Windows Updates</title>
-    <link>https://cdn.browseros.com/appcast-win.xml</link>
+    <title>BrowserOS neo Windows Updates</title>
+    <link>https://cdn.browseros.com/appcast-claw-win.xml</link>
     <description>Most recent changes with links to updates.</description>
     <language>en</language>
 
     <item>
-      <title>BrowserOS - 0.47.0.2</title>
+      <title>BrowserOS neo - 0.47.0.2</title>
       <description sparkle:format="plain-text">
       </description>
       <sparkle:version>10000.0.47.0.2</sparkle:version>
@@ -85,7 +85,7 @@ GOLDEN_WIN_APPCAST = """\
       <pubDate>Fri, 19 Jun 2026 06:41:33 +0000</pubDate>
       <link>https://www.browseros.com/</link>
       <enclosure
-        url="https://cdn.browseros.com/releases/browseros/0.47.0.2/win/BrowserOS_v0.47.0.2_x64_installer.exe"
+        url="https://cdn.browseros.com/releases/browserclaw/0.47.0.2/win/BrowserOS_neo_v0.47.0.2_x64_installer.exe"
         sparkle:os="windows"
         sparkle:edSignature="WINSIG=="
         length="190943800"
@@ -155,7 +155,7 @@ GOLDEN_EXTENSIONS_JSON = """\
 class BrowserAppcastRenderTest(unittest.TestCase):
     def test_golden_mac_appcast(self):
         content = render_browser_appcast(
-            feed_by_key("appcast.xml"),
+            feed_by_key("appcast-claw.xml"),
             MAC_ARTIFACT,
             "0.47.0.2",
             "10000.0.47.0.2",
@@ -165,7 +165,7 @@ class BrowserAppcastRenderTest(unittest.TestCase):
 
     def test_golden_win_appcast(self):
         content = render_browser_appcast(
-            feed_by_key("appcast-win.xml"),
+            feed_by_key("appcast-claw-win.xml"),
             WIN_ARTIFACT,
             "0.47.0.2",
             "10000.0.47.0.2",
@@ -177,7 +177,7 @@ class BrowserAppcastRenderTest(unittest.TestCase):
         artifact = {k: v for k, v in MAC_ARTIFACT.items() if k != "sparkle_signature"}
         with self.assertRaisesRegex(ValueError, "sparkle_signature"):
             render_browser_appcast(
-                feed_by_key("appcast.xml"),
+                feed_by_key("appcast-claw.xml"),
                 artifact,
                 "0.47.0.2",
                 "10000.0.47.0.2",
@@ -190,7 +190,7 @@ class BrowserAppcastRenderTest(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "sparkle_length"):
             render_browser_appcast(
-                feed_by_key("appcast.xml"),
+                feed_by_key("appcast-claw.xml"),
                 artifact,
                 "0.47.0.2",
                 "10000.0.47.0.2",
@@ -200,7 +200,7 @@ class BrowserAppcastRenderTest(unittest.TestCase):
     def test_missing_sparkle_version_raises(self):
         with self.assertRaisesRegex(ValueError, "sparkle_version"):
             render_browser_appcast(
-                feed_by_key("appcast.xml"),
+                feed_by_key("appcast-claw.xml"),
                 MAC_ARTIFACT,
                 "0.47.0.2",
                 "",
@@ -230,7 +230,7 @@ class ServerAppcastRenderTest(unittest.TestCase):
         self.assertEqual(content, GOLDEN_CLAW_SERVER_APPCAST)
 
     def test_same_version_merge_keeps_pub_date_and_other_platforms(self):
-        spec = server_feed("browseros-server", "alpha")
+        spec = server_feed("browserclaw-server", "alpha")
         existing_artifact = SignedArtifact(
             platform="darwin_arm64",
             zip_path=Path("browseros_server_0.0.9_darwin_arm64.zip"),
@@ -258,7 +258,7 @@ class ServerAppcastRenderTest(unittest.TestCase):
         self.assertIn("Thu, 16 Apr 2026 18:58:59 +0000", content)
         self.assertIn("OLDSIG==", content)
         self.assertIn("NEWSIG==", content)
-        self.assertIn("BrowserOS Server (Alpha)", content)
+        self.assertIn("BrowserOS Claw Server (Alpha)", content)
 
     def test_parse_server_appcast_content_round_trips(self):
         parsed = parse_server_appcast_content(GOLDEN_CLAW_SERVER_APPCAST)
@@ -440,7 +440,7 @@ class VersionHelpersTest(unittest.TestCase):
         self.assertEqual(
             extract_enclosure_urls(GOLDEN_MAC_APPCAST),
             [
-                "https://cdn.browseros.com/releases/browseros/0.47.0.2/macos/BrowserOS_v0.47.0.2_arm64.dmg"
+                "https://cdn.browseros.com/releases/browserclaw/0.47.0.2/macos/BrowserOS_neo_v0.47.0.2_arm64.dmg"
             ],
         )
         self.assertEqual(
@@ -454,7 +454,7 @@ class VersionHelpersTest(unittest.TestCase):
     def test_extract_channel_metadata(self):
         self.assertEqual(
             extract_channel_metadata(GOLDEN_WIN_APPCAST),
-            ("BrowserOS Windows Updates", "https://cdn.browseros.com/appcast-win.xml"),
+            ("BrowserOS neo Windows Updates", "https://cdn.browseros.com/appcast-claw-win.xml"),
         )
 
 

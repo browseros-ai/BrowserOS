@@ -7,17 +7,13 @@ on:
         description: "Tracked appcast to validate against live R2"
         required: true
         type: choice
+        # Mirrors feeds/spec.py FEEDS. The original BrowserOS appcasts belong
+        # to browseros-human, so this repo never repairs them.
         options:
-          - appcast.xml
-          - appcast-x86_64.xml
-          - appcast-win.xml
-          - appcast-win-arm64.xml
           - appcast-claw.xml
           - appcast-claw-x86_64.xml
           - appcast-claw-win.xml
           - appcast-claw-win-arm64.xml
-          - appcast-server.xml
-          - appcast-server.alpha.xml
           - appcast-claw-server.xml
           - appcast-claw-server.alpha.xml
       publish:

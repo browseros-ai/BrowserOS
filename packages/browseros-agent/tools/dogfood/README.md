@@ -1,28 +1,25 @@
 # browseros-dogfood
 
-Internal BrowserOS dogfooding CLI for running BrowserOS or BrowserOS neo against a copied BrowserOS profile.
+Internal CLI for running BrowserOS neo from an alpha checkout against a copy of your BrowserOS profile.
 
-## What It Does
+## What it does
 
-`browseros-dogfood` makes it easy for the team to alpha test the latest dev branch with the smallest possible effort.
-
-High level:
+`browseros-dogfood` lets the team alpha test the latest dev branch of BrowserOS neo with the least possible setup.
 
 - You point it at a BrowserOS repo clone used for alpha dogfooding.
 - It tracks a configured branch for that clone and switches to it before builds and update commands.
-- It imports your normal BrowserOS profile into a target-specific dogfood profile.
-- It keeps BrowserOS and BrowserOS neo state separate from your normal app state and from each other.
-- For BrowserOS, it builds the local extension, starts the local server, and launches the installed BrowserOS app with the alpha Dock icon against them.
-- For BrowserOS neo, it starts the BrowserOS neo WXT app and standalone Claw server against the installed BrowserOS neo app, falling back to BrowserOS when BrowserOS neo is not installed.
-- It does not auto-pull on `start`; you choose when to update the checkout.
+- It imports your normal BrowserOS profile into a separate dogfood profile.
+- It keeps dogfood state separate from your normal app state.
+- It starts the BrowserOS neo WXT app and claw-server against the installed BrowserOS neo app. If BrowserOS neo is not installed, it uses the BrowserOS app instead.
+- It does not pull on `start`. You choose when to update the checkout.
 
 ## Requirements
 
 - macOS.
 - Go.
 - Bun.
-- Rust/Cargo for the BrowserClaw server.
-- BrowserOS installed at `/Applications/BrowserOS.app`; BrowserOS neo optionally installed at `/Applications/BrowserOS neo.app`.
+- Rust and Cargo, to build claw-server.
+- BrowserOS neo installed at `/Applications/BrowserOS neo.app`, or BrowserOS at `/Applications/BrowserOS.app` as the fallback.
 - A separate BrowserOS monorepo checkout for alpha dogfood.
 
 ## Install
@@ -42,80 +39,74 @@ Check the binary:
 browseros-dogfood --help
 ```
 
-## First-Time Setup
+## First-time setup
 
-Run one or both target setup commands:
+Run:
 
 ```bash
-browseros-dogfood --browseros init
-browseros-dogfood --claw init
+browseros-dogfood init
 ```
 
 `init` asks for:
 
 - `Repo path`: the full path to the root BrowserOS git repo clone.
 - `Branch`: the branch dogfood should track. It defaults to the selected repo's current branch, or `main`.
-- `BrowserOS binary`: defaults to `/Applications/BrowserOS.app/Contents/MacOS/BrowserOS`; Claw start resolves to BrowserOS neo at launch time when available.
+- `BrowserOS binary`: defaults to `/Applications/BrowserOS.app/Contents/MacOS/BrowserOS`. With that default, `start` launches BrowserOS neo when it is installed.
 - `Source profile`: your main installed BrowserOS profile.
 
-Use a separate clone for the repo path. This clone is what `browseros-dogfood` uses to run alpha dogfood builds, so ideally it is not the same checkout you use for actual dev work. Give the full root repo path, for example `/Users/you/code/browseros-alpha`.
+Use a separate clone for the repo path. `browseros-dogfood` runs alpha dogfood builds from this clone, so ideally it is not the checkout you use for everyday dev work. Give the full root repo path, for example `/Users/you/code/browseros-alpha`.
 
-If you have multiple BrowserOS profiles, `init` reads them and shows their real names. Pick your main profile, the one with your data, so alpha dogfood starts with the right imported profile.
+If you have more than one BrowserOS profile, `init` reads them and shows their real names. Pick your main profile, the one with your data, so alpha dogfood starts with the right imported profile.
 
-## Daily Use
+## Daily use
 
 ```bash
-browseros-dogfood --browseros start
-browseros-dogfood --claw start
+browseros-dogfood start
 ```
 
-`start` is sync: it runs in your terminal. Press `Ctrl+C` to cancel and stop the selected target environment.
+`start` runs in your terminal. Press `Ctrl+C` to stop the environment.
 
-For async mode:
+To run it in the background instead:
 
 ```bash
-browseros-dogfood --browseros start-background
-browseros-dogfood --claw start-background
+browseros-dogfood start-background
 ```
 
 `start-background` keeps running after the command returns. Use the CLI to manage it:
 
 ```bash
-browseros-dogfood --claw status
-browseros-dogfood --claw pull
-browseros-dogfood --claw restart
-browseros-dogfood --claw restart --pull
-browseros-dogfood --claw logs
-browseros-dogfood --claw logs tail
-browseros-dogfood --claw stop
+browseros-dogfood status
+browseros-dogfood pull
+browseros-dogfood restart
+browseros-dogfood restart --pull
+browseros-dogfood logs
+browseros-dogfood logs tail
+browseros-dogfood stop
 ```
 
-- `start` switches a clean checkout to the configured branch before building. It still does not pull.
-- `pull` switches to the configured branch and updates the configured repo for the next sync start.
+- `start` switches a clean checkout to the configured branch before building. It does not pull.
+- `pull` switches to the configured branch and updates the configured repo for the next `start`.
 - `restart --pull` switches to the configured branch, updates the configured repo, rebuilds, and restarts when new changes land upstream.
-- `logs` prints log file paths; `logs tail` follows background dogfood, browser/app, and server logs.
-- BrowserOS and BrowserOS neo use separate locks, sockets, state files, profiles, and logs.
+- `logs` prints the log file paths. `logs tail` follows the background daemon, claw-app, and claw-server logs.
+- `--claw` (`-c`) is still accepted and does nothing, so older commands such as `browseros-dogfood --claw start` keep working.
 
-## State And Profile Safety
+## State and profile safety
 
-`browseros-dogfood` keeps alpha dogfood separate from normal BrowserOS:
+`browseros-dogfood` keeps alpha dogfood separate from your normal BrowserOS setup:
 
-- BrowserOS state, including the local server state and VM data, lives under `~/.browseros-dogfood`.
-- BrowserOS neo state lives under `~/.browseros-claw-dogfood`.
-- The imported BrowserOS dogfood profile lives under `~/.config/browseros-dogfood/browseros/profile`.
-- The imported BrowserOS neo dogfood profile lives under `~/.config/browseros-dogfood/claw/profile`.
-- Your installed BrowserOS profile is only used as the source import. It is not where alpha dogfood runs.
-- Installed extensions, extension-specific settings/state, and extension-owned IndexedDB data are copied so dogfood sessions keep extension setup close to your normal profile.
+- Dogfood state lives under `~/.browseros-claw-dogfood`.
+- The imported dogfood profile lives under `~/.config/browseros-dogfood/claw/profile`.
+- Your installed BrowserOS profile is only the source of the import. Alpha dogfood does not run in it.
+- Installed extensions, extension-specific settings and state, and extension-owned IndexedDB data are copied, so dogfood sessions keep an extension setup close to your normal profile.
 - Cache and broad site storage directories are not copied.
 
 To re-import your main profile:
 
 ```bash
-browseros-dogfood --browseros start --refresh-profile
-browseros-dogfood --claw start --refresh-profile
+browseros-dogfood start --refresh-profile
 ```
 
-If BrowserOS appears to be using the source profile during import, the CLI asks you to quit BrowserOS and press Enter before copying. You can type `continue` if the lock files are stale and you want to import anyway.
+If BrowserOS appears to be using the source profile during import, the CLI asks you to quit BrowserOS and press Enter before it copies. Type `continue` instead if the lock files are stale and you want to import anyway.
 
 ## Config
 
@@ -123,6 +114,6 @@ If BrowserOS appears to be using the source profile during import, the CLI asks 
 browseros-dogfood config edit
 ```
 
-Config lives at `~/.config/browseros-dogfood/config.yaml`. Most people should only need to edit it when changing the alpha repo clone, tracked branch, ports, or env values.
+The config lives at `~/.config/browseros-dogfood/config.yaml`. Most people only edit it to change the alpha repo clone, the tracked branch, or the ports.
 
-Browser launch passes `--browseros-dock-icon=alpha` so dogfood sessions are visually distinct in the Dock.
+The claw-app launcher passes `--browseros-dock-icon=dev` to the browser, so dogfood sessions show the dev Dock icon.

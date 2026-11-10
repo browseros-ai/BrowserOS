@@ -12,7 +12,6 @@ from unittest import mock
 
 from ...lib.env import EnvConfig
 from ...products.browserclaw.product import BROWSERCLAW_SERVER_BUNDLE
-from ...products.browseros.product import BROWSEROS_SERVER_BUNDLE
 from ...steps.sign import windows as windows_signing
 from . import sign_binary
 
@@ -49,11 +48,6 @@ class SignServerBundleWindowsTest(unittest.TestCase):
 
             self.assertEqual(signed, [binary_name])
 
-    def test_signs_browseros_descriptor_binary(self):
-        self._assert_signs_bundle_binary(
-            BROWSEROS_SERVER_BUNDLE, "browseros_server.exe"
-        )
-
     def test_signs_browserclaw_descriptor_binary(self):
         self._assert_signs_bundle_binary(
             BROWSERCLAW_SERVER_BUNDLE, "browseros-claw-server.exe"
@@ -62,7 +56,7 @@ class SignServerBundleWindowsTest(unittest.TestCase):
     def test_fails_when_browserclaw_descriptor_binary_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             resources = Path(tmp) / "resources"
-            _write_exe(resources / "bin" / "browseros_server.exe")
+            _write_exe(resources / "bin" / "unrelated.exe")
 
             with mock.patch.object(sign_binary, "sign_windows_binary") as signer:
                 self.assertFalse(
@@ -105,7 +99,7 @@ class SignWindowsBinaryTest(unittest.TestCase):
         self.java = self.tool_dir / "jdk-11.0.2" / "bin" / "java.exe"
         self.jar = self.tool_dir / "jar" / "code_sign_tool-1.3.2.jar"
         self.resources = root / "staged resources"
-        self.binary = self.resources / "bin" / "browseros_server.exe"
+        self.binary = self.resources / "bin" / "browseros-claw-server.exe"
         for path in (
             self.java, self.jar, self.tool_dir / "CodeSignTool.bat", self.binary
         ):
@@ -143,7 +137,7 @@ class SignWindowsBinaryTest(unittest.TestCase):
         ) as run:
             self.assertTrue(
                 sign_binary.sign_server_bundle_windows(
-                    self.resources, self.env, BROWSEROS_SERVER_BUNDLE
+                    self.resources, self.env, BROWSERCLAW_SERVER_BUNDLE
                 )
             )
 

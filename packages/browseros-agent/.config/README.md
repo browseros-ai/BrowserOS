@@ -22,7 +22,7 @@ wt config shell install
 
 ## What happens on `wt switch -c`
 
-1. Creates new worktree at `../browseros-server.feat-name/`
+1. Creates new worktree at `../<repo-dir>.feat-name/`
 2. Runs `bun install`
 3. Copies root `.env.development` and `.env.production` files from main worktree when present
 

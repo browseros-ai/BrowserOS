@@ -1,19 +1,17 @@
 import type {
-  BuildProductDescriptor,
   BuildTarget,
   R2Config,
+  ResourceBuildProductDescriptor,
   TargetId,
 } from '../src'
 
 export function testProduct(
-  overrides: Partial<BuildProductDescriptor> = {},
-): BuildProductDescriptor {
+  overrides: Partial<ResourceBuildProductDescriptor> = {},
+): ResourceBuildProductDescriptor {
   return {
     label: 'Test server',
     packageDir: 'apps/test-server',
-    entrypoint: 'apps/test-server/src/main.ts',
     distRoot: 'dist/prod/test-server',
-    rawBinaryBaseName: 'test-server',
     stagedBinaryBaseName: 'test_server',
     archiveBaseName: 'test-server-resources',
     defaultManifestPath: 'scripts/build/config/test-server-resources.json',

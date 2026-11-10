@@ -32,12 +32,11 @@ type LogFile struct {
 type LineHandler func(tag Tag, stream string, line string)
 
 var (
-	TagBuild   = Tag{"build", color.New(color.FgYellow)}
-	TagAgent   = Tag{"agent", color.New(color.FgMagenta)}
-	TagServer  = Tag{"server", color.New(color.FgCyan)}
-	TagBrowser = Tag{"browser", color.New(color.FgBlue)}
-	TagInfo    = Tag{"info", color.New(color.FgGreen)}
-	TagTest    = Tag{"test", color.New(color.FgWhite)}
+	TagBuild  = Tag{"build", color.New(color.FgYellow)}
+	TagAgent  = Tag{"agent", color.New(color.FgMagenta)}
+	TagServer = Tag{"server", color.New(color.FgCyan)}
+	TagInfo   = Tag{"info", color.New(color.FgGreen)}
+	TagTest   = Tag{"test", color.New(color.FgWhite)}
 
 	ErrorColor = color.New(color.FgRed)
 	WarnColor  = color.New(color.FgYellow)

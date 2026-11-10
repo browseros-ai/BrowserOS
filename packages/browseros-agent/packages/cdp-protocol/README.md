@@ -2,7 +2,7 @@
 
 Type-safe Chrome DevTools Protocol bindings for BrowserOS.
 
-> **Internal package** — auto-generated TypeScript types and API wrappers for all CDP domains. Used by `@browseros/server` to communicate with Chromium.
+> **Internal package** — auto-generated TypeScript types and API wrappers for all CDP domains, regenerated with `bun run gen:cdp`.
 
 ## Profile identities
 

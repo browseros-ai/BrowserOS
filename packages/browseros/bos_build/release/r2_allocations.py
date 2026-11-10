@@ -15,12 +15,10 @@ from .resource_pins import RESOURCE_FAMILIES, ResourceFamily
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _RESOURCE_FAMILY_NAMES = {
-    "server": "browseros_server",
     "claw-server-rust": "browserclaw_server",
     "claw-onboard": "browserclaw_onboard",
-    "app-onboard": "browseros_onboard",
 }
-_EXTENSION_COMPONENTS = frozenset({"agent", "browserclaw"})
+_EXTENSION_COMPONENTS = frozenset({"browserclaw"})
 
 
 @dataclass(frozen=True)

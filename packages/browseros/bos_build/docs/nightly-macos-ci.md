@@ -1,16 +1,15 @@
 # Nightly macOS CI
 
-The two manual entry workflows complete and publish one product each:
+The manual entry workflow completes and publishes BrowserOS neo. The original
+BrowserOS nightly runs from `browseros-human`.
 
 | Workflow | Display name | Rolling prerelease |
 | --- | --- | --- |
-| `.github/workflows/nightly-macos-browseros.yml` | Nightly: BrowserOS (macOS arm64) | `nightly-browseros` |
 | `.github/workflows/nightly-macos-browserclaw.yml` | Nightly: BrowserOS neo (macOS arm64) | `nightly-browserclaw` |
 
-Dispatch either entry from `main`; neither has a schedule or release-shape inputs.
+Dispatch it from `main`; it has no schedule or release-shape inputs.
 
 ```bash
-gh workflow run nightly-macos-browseros.yml --ref main
 gh workflow run nightly-macos-browserclaw.yml --ref main
 ```
 
@@ -21,9 +20,8 @@ R2 upload, and unconditional Chromium-workspace and signing-keychain cleanup.
 
 ## Product transaction
 
-Each entry freezes one source SHA, reserves a browser version and its own server
-and extension versions, then prepares those two exact components. BrowserOS pins
-`server`, `agent`, and the existing `app-onboard` version. BrowserOS neo pins
+The entry freezes one source SHA, reserves a browser version and its own server
+and extension versions, then prepares those two exact components. It pins
 `claw-server-rust`, `browserclaw`, and the existing `claw-onboard` version.
 Onboarding bundles continue to release independently.
 
@@ -40,9 +38,8 @@ manual dispatch from main
   -> publish current committed feeds and reconcile its rolling prerelease
 ```
 
-A sibling build or finalizer is never a dependency. Component callers pass
-`state_owner: suite` and disable standalone feed publication, leaving the product
-transaction as the owner of its tracked state.
+Component callers pass `state_owner: suite` and disable standalone feed
+publication, leaving the product transaction as the owner of its tracked state.
 
 The retry identity is `nightly-<product>-<source-sha>` and the reservation branch
 is `bot/release-nightly-<product>-<12-source-chars>`. Different products therefore
@@ -61,7 +58,7 @@ version already used by immutable uploads.
 Builders always check out the Reservation SHA. The state and merge commits are
 never build inputs. After branch deletion, `refs/pull/<PR_NUMBER>/head` keeps the
 validated reservation reachable for recovery. Shared browser version and build
-offset allocation remains monotonic across both products and saved family records.
+offset allocation remains monotonic across product and saved family records.
 
 ## Shared feeds and publication recovery
 
@@ -100,17 +97,20 @@ same source before cleanup or replacement is allowed.
 
 The old `.github/workflows/nightly.yml` dispatch entry and
 `nightly-macos-product.yml` helper are removed from current main. Historical runs
-retain their saved workflow definitions, including that helper. Both new entries
-retain the historical top-level `release-suite` concurrency group with
+retain their saved workflow definitions, including that helper. The entry
+retains the historical top-level `release-suite` concurrency group with
 `cancel-in-progress: false` and `queue: max`. This conservatively serializes whole
 nightly runs during cutover: an active or rerun family transaction cannot overlap
-a product transaction, while each new graph can succeed independently.
+a product transaction, while the product graph still succeeds on its own.
 
-Legacy records without a product field remain family records with identity
-`nightly-<source-sha>`. Inspect or recover those with the legacy CLI by omitting
-`--product`, or rerun failed jobs on the original family run. Their draft PRs,
-closed records, and pre-PR reservation branches remain allocation history. No
-automatic cancellation, closure, or migration of those records occurs.
+Legacy records without a product field were family records with identity
+`nightly-<source-sha>` that also reserved original BrowserOS components. Those
+components left with that product, so this repo can no longer inspect or recover
+them: omitting `--product` now resolves a neo-only family that rejects such
+records as incomplete. Their draft PRs, closed records, and pre-PR reservation
+branches remain allocation history; the one open family branch is listed in
+`_RETIRED_TRANSACTION_BRANCHES` in `release/suite.py`. No automatic
+cancellation, closure, or migration of those records occurs.
 
 Historical standalone extension-feed runs saved before this change do not have
 the shared publication lock; finish those runs before starting new nightlies.
@@ -126,7 +126,7 @@ shares `macos-build` with full releases. Component allocation retains
 The profile keeps `resource_mode: published` and executes:
 
 ```bash
-uv run browseros build --profile nightly-macos --product <browseros-or-browserclaw> \
+uv run browseros build --profile nightly-macos --product browserclaw \
   --arch arm64 --resource-mode published --chromium-src "$CHROMIUM_SRC"
 ```
 
@@ -138,7 +138,7 @@ The Chromium helper fetches the exact pin and syncs the CI base before copying i
 under the same checkout lock into a product-qualified APFS workspace;
 both workspace and signing-keychain cleanup run under `if: always()`.
 
-The optional `PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64` and
-`PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64` secrets remain product-specific.
-Missing profiles leave normal signing available without platform passkeys;
-configured invalid profiles fail before the long build.
+The optional `PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64` secret holds neo's
+passkey provisioning profile. A missing profile leaves normal signing available
+without platform passkeys; a configured invalid profile fails before the long
+build.

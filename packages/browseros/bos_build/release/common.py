@@ -176,7 +176,7 @@ def get_download_path_mapping(
 
 
 def fetch_all_release_metadata(
-    version: str, env: Optional[EnvConfig] = None, product_id: str = "browseros"
+    version: str, env: Optional[EnvConfig] = None, product_id: str = "browserclaw"
 ) -> Dict[str, Dict]:
     """Fetch release.json from all platforms for a version"""
     if env is None:
@@ -266,19 +266,6 @@ def list_all_versions(
     versions = _list_common_prefixes(
         client, env.r2_bucket, f"releases/{release_prefix}/"
     )
-    versions.sort(key=version_sort_key, reverse=True)
-    return versions
-
-
-def list_legacy_versions(env: Optional[EnvConfig] = None) -> List[str]:
-    """List pre-product bare releases/<version>/ entries, newest first."""
-    resolved = _r2_listing_client(env)
-    if not resolved:
-        return []
-    client, env = resolved
-
-    names = _list_common_prefixes(client, env.r2_bucket, "releases/")
-    versions = [name for name in names if _VERSION_NAME_RE.fullmatch(name)]
     versions.sort(key=version_sort_key, reverse=True)
     return versions
 

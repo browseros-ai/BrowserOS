@@ -26,7 +26,7 @@ class AppcastModule(Step):
 
     def __init__(
         self,
-        product_id: str = "browseros",
+        product_id: str = "browserclaw",
         publish: bool = False,
         allow_downgrade: bool = False,
         platforms: str | None = None,

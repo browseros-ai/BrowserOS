@@ -30,7 +30,6 @@ class FakeR2Client:
 class R2AllocationDiscoveryTest(unittest.TestCase):
     def test_each_supported_component_probes_only_the_requested_version(self) -> None:
         cases = {
-            "server": ("0.0.130", "artifacts/server/0.0.130/"),
             "claw-server-rust": (
                 "0.0.30",
                 "claw-server-rust/prod-resources/0.0.30/",
@@ -39,7 +38,6 @@ class R2AllocationDiscoveryTest(unittest.TestCase):
                 "0.0.20",
                 "claw-onboard/prod-resources/0.0.20/",
             ),
-            "agent": ("0.0.42.0", "extensions/agent-0.0.42.0.crx"),
             "browserclaw": (
                 "0.0.9.0",
                 "extensions/browserclaw-0.0.9.0.crx",
@@ -56,13 +54,21 @@ class R2AllocationDiscoveryTest(unittest.TestCase):
                     client.list_calls,
                     [{"Bucket": "browseros", "Prefix": prefix}],
                 )
+        for retired in ("server", "agent", "app-onboard"):
+            client = FakeR2Client({None: {"Contents": [], "IsTruncated": False}}, {})
+            with self.subTest(component=retired):
+                with self.assertRaisesRegex(ValueError, "Unknown component"):
+                    discover_r2_component_allocation(
+                        client, "browseros", retired, "0.0.1", SOURCE_SHA
+                    )
+                self.assertEqual(client.list_calls, [])
 
     def test_server_probe_ignores_out_of_band_versions_and_blocks_mismatch(
         self,
     ) -> None:
-        stale_key = "artifacts/server/0.0.129/browseros-server-resources-linux-x64.zip"
+        stale_key = "claw-server-rust/prod-resources/0.0.129/browseros-claw-server-rust-resources-linux-x64.zip"
         out_of_band_key = (
-            "artifacts/server/99.0.0/browseros-server-resources-linux-x64.zip"
+            "claw-server-rust/prod-resources/99.0.0/browseros-claw-server-rust-resources-linux-x64.zip"
         )
         client = FakeR2Client(
             {
@@ -83,7 +89,7 @@ class R2AllocationDiscoveryTest(unittest.TestCase):
         )
 
         allocation = discover_r2_component_allocation(
-            client, "browseros", "server", "0.0.129", SOURCE_SHA
+            client, "browseros", "claw-server-rust", "0.0.129", SOURCE_SHA
         )
 
         self.assertIsNotNone(allocation)
@@ -94,16 +100,16 @@ class R2AllocationDiscoveryTest(unittest.TestCase):
         self.assertEqual(client.head_calls, [("browseros", stale_key)])
         self.assertEqual(
             client.list_calls,
-            [{"Bucket": "browseros", "Prefix": "artifacts/server/0.0.129/"}],
+            [{"Bucket": "browseros", "Prefix": "claw-server-rust/prod-resources/0.0.129/"}],
         )
 
     def test_partial_server_retry_reuses_exact_source_binding(self) -> None:
-        key = "artifacts/server/0.0.130/browseros-server-resources-darwin-arm64.zip"
+        key = "claw-server-rust/prod-resources/0.0.130/browseros-claw-server-rust-resources-darwin-arm64.zip"
         client = FakeR2Client(
             {None: {"Contents": [{"Key": key}], "IsTruncated": False}},
             {
                 key: {
-                    "component": "artifacts/server",
+                    "component": "claw-server-rust/prod-resources",
                     "release-sha": SOURCE_SHA,
                     "sha256": SHA256,
                     "target": "darwin-arm64",
@@ -113,17 +119,17 @@ class R2AllocationDiscoveryTest(unittest.TestCase):
         )
 
         allocation = discover_r2_component_allocation(
-            client, "browseros", "server", "0.0.130", SOURCE_SHA
+            client, "browseros", "claw-server-rust", "0.0.130", SOURCE_SHA
         )
 
         self.assertIsNotNone(allocation)
         assert allocation is not None
         self.assertTrue(allocation.reusable)
         self.assertEqual(allocation.source_sha, SOURCE_SHA)
-        self.assertEqual(allocation.reference, "agent-server/v0.0.130")
+        self.assertEqual(allocation.reference, "claw-server/v0.0.130")
 
     def test_extension_probe_paginates_and_validates_source_binding(self) -> None:
-        key = "extensions/agent-0.0.42.0.crx"
+        key = "extensions/browserclaw-0.0.42.0.crx"
         client = FakeR2Client(
             {
                 None: {
@@ -139,7 +145,7 @@ class R2AllocationDiscoveryTest(unittest.TestCase):
             {
                 key: {
                     "binding-schema": "browseros-extension-crx-v1",
-                    "extension": "agent",
+                    "extension": "browserclaw",
                     "source-sha": SOURCE_SHA,
                     "sha256": SHA256,
                     "version": "0.0.42.0",
@@ -148,7 +154,7 @@ class R2AllocationDiscoveryTest(unittest.TestCase):
         )
 
         allocation = discover_r2_component_allocation(
-            client, "browseros", "agent", "0.0.42.0", SOURCE_SHA
+            client, "browseros", "browserclaw", "0.0.42.0", SOURCE_SHA
         )
 
         self.assertIsNotNone(allocation)

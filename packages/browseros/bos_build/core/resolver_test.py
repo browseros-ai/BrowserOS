@@ -32,7 +32,7 @@ class ResolveConfigDirectModeTest(unittest.TestCase):
             self.assertEqual(contexts[0].chromium_src, m.src)
             self.assertEqual(contexts[0].architecture, "arm64")
             self.assertEqual(contexts[0].build_type, "release")
-            self.assertEqual(contexts[0].product.id, "browseros")
+            self.assertEqual(contexts[0].product.id, "browserclaw")
 
     def test_external_patch_package_reaches_direct_context(self):
         with tempfile.TemporaryDirectory() as tmp:

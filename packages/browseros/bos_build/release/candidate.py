@@ -563,13 +563,9 @@ class GitHubCandidateBackend:
         allocations: list[AllocationRecord] = []
         for tag in self._git("tag", "--list").splitlines():
             for spec in specs:
-                prefixes = (spec.tag_prefix, *spec.legacy_tag_prefixes)
-                prefix = next(
-                    (value for value in prefixes if tag.startswith(value)), ""
-                )
-                if not prefix:
+                if not tag.startswith(spec.tag_prefix):
                     continue
-                version = tag[len(prefix) :]
+                version = tag[len(spec.tag_prefix) :]
                 try:
                     target = self._git("rev-list", "-n", "1", tag)
                     tag_type = self._git("cat-file", "-t", f"refs/tags/{tag}")
@@ -580,7 +576,7 @@ class GitHubCandidateBackend:
                             kind="tag",
                             source_sha=target,
                             reference=tag,
-                            reusable=tag_type == "tag" and prefix == spec.tag_prefix,
+                            reusable=tag_type == "tag",
                             public=tag_type == "tag",
                         )
                     )

@@ -25,13 +25,6 @@ var initCmd = &cobra.Command{
 	Short:   "Create or update dogfood config",
 	GroupID: groupSetup,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		target, ok, err := selectedTarget()
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return fmt.Errorf("choose a dogfood target with --browseros or --claw")
-		}
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return err
@@ -40,7 +33,7 @@ var initCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		cfg, err := loadInitConfig(home, path, target)
+		cfg, err := loadInitConfig(home, path)
 		if err != nil {
 			return err
 		}
@@ -69,34 +62,28 @@ var initCmd = &cobra.Command{
 		if err := config.Save(path, cfg); err != nil {
 			return err
 		}
-		if err := pipeline.WriteProductionEnvFile(cfg.AgentRoot(), cfg); err != nil {
-			return err
-		}
-		printInitNextSteps(cmd.OutOrStdout(), path, target)
+		printInitNextSteps(cmd.OutOrStdout(), path)
 		return nil
 	},
 }
 
-// loadInitConfig preserves existing target settings while allowing first-run defaults.
-func loadInitConfig(home string, path string, target config.Target) (config.Config, error) {
+// loadInitConfig starts from the existing config, so init only changes what it prompts for,
+// and from defaults on a first run.
+func loadInitConfig(home string, path string) (config.Config, error) {
 	cfg := config.Defaults(home)
 	if existing, err := config.Load(path); err == nil {
 		cfg = existing
 	} else if !os.IsNotExist(err) {
 		return config.Config{}, fmt.Errorf("load existing config: %w", err)
 	}
-	if err := cfg.ApplyTarget(target); err != nil {
-		return config.Config{}, err
-	}
 	return cfg, nil
 }
 
-func printInitNextSteps(out io.Writer, path string, target config.Target) {
-	targetFlag, _ := selectedTargetFlag(target)
+func printInitNextSteps(out io.Writer, path string) {
 	fmt.Fprintf(out, "%s %s\n", successStyle.Sprint("Config written:"), pathStyle.Sprint(path))
-	fmt.Fprintf(out, "%s %s\n", labelStyle.Sprint("Start dogfood:"), targetLabel(target))
-	fmt.Fprintf(out, "  %s     %s\n", labelStyle.Sprint("Inline:"), commandStyle.Sprintf("browseros-dogfood %s start", targetFlag))
-	fmt.Fprintf(out, "  %s %s\n", labelStyle.Sprint("Background:"), commandStyle.Sprintf("browseros-dogfood %s start-background", targetFlag))
+	fmt.Fprintf(out, "%s %s\n", labelStyle.Sprint("Start dogfood:"), productLabel)
+	fmt.Fprintf(out, "  %s     %s\n", labelStyle.Sprint("Inline:"), commandStyle.Sprint("browseros-dogfood start"))
+	fmt.Fprintf(out, "  %s %s\n", labelStyle.Sprint("Background:"), commandStyle.Sprint("browseros-dogfood start-background"))
 }
 
 func printRepoPathHelp(out io.Writer) {

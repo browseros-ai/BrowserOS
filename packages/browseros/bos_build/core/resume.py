@@ -353,13 +353,8 @@ def _resource_identity(ctx: Context) -> dict[str, Any]:
         return identity
 
     source = source_resources_for_product(ctx.product.id)
-    server_version = (
-        ctx.env.browseros_server_resource_version
-        if ctx.product.id == "browseros"
-        else ctx.env.browserclaw_server_resource_version
-    )
     components = {
-        source.server_component: server_version,
+        source.server_component: ctx.env.browserclaw_server_resource_version,
         source.extension_component: ctx.env.bundled_product_extension_version,
         source.onboarding_component: ctx.env.onboarding_resource_version,
     }
