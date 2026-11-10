@@ -6,6 +6,7 @@ export function runnerOptions(argv) {
     skipBuild: false,
     debugBuild: false,
     expectLoop: true,
+    curation: true,
     workers: 4,
     args: [],
   }
@@ -18,6 +19,7 @@ export function runnerOptions(argv) {
       break
     }
     if (arg === '--reference') options.reference = true
+    else if (arg === '--no-curation') options.curation = false
     else if (arg === '--skip-build') options.skipBuild = true
     else if (arg === '--debug-build') options.debugBuild = true
     else if (arg === '--no-expect-loop') options.expectLoop = false

@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { agent, sha256, source } from '../js/prepare.mjs'
 import { cleanupWorkers } from './browser.mjs'
+import { curationArgs } from './curation.mjs'
 import { runnerOptions } from './options.mjs'
 import { materialize } from './overlay.mjs'
 
@@ -101,6 +102,7 @@ try {
   const overlay = path.join(output, 'upstream')
   const manifest = materialize(overlay, { ...options, output })
   run.specsVerified = true
+  run.curation = manifest.curation
   run.contextOptionOmissions = manifest.contextOptionOmissions
   run.headlessWaivers = manifest.edits.filter((edit) =>
     edit.reason.startsWith('owner-approved'),
@@ -141,7 +143,7 @@ try {
       'test',
       '--config',
       manifest.configPath,
-      ...options.args,
+      ...(options.curation ? curationArgs(options.args, output) : options.args),
     ],
     {
       cwd: overlay,
@@ -151,6 +153,9 @@ try {
         NEO_NODE_OUTPUT: output,
         NEO_NODE_MODE: run.mode,
         NEO_NODE_EXPECT_LOOP: options.expectLoop ? '1' : '0',
+        NEO_NODE_CURATION: options.curation
+          ? path.join(output, 'curation.json')
+          : '',
         NEO_NODE_LAUNCHER_PID: String(process.pid),
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
         PWTEST_UNDER_TEST: '1',

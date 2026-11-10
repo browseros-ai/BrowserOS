@@ -3,10 +3,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { corpus, sha256, source, verifySource } from '../js/prepare.mjs'
+import { prepareCuration } from './curation.mjs'
 
 export function materialize(
   root,
-  { reference, output, workers = 4, expectLoop = true },
+  { reference, output, workers = 4, expectLoop = true, curation = true },
 ) {
   const stamp = verifySource()
   fs.mkdirSync(root, { recursive: true })
@@ -174,5 +175,9 @@ export function materialize(
     configPath,
     `export default ${JSON.stringify(config, null, 2)};\n`,
   )
-  return { configPath, ...manifest }
+  return {
+    configPath,
+    ...manifest,
+    curation: prepareCuration(root, configPath, output, curation),
+  }
 }
