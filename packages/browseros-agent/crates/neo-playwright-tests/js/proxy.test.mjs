@@ -320,6 +320,34 @@ test(
 )
 
 test(
+  'tests that stored reference console messages have identities without prior console events',
+  pinned,
+  async (t) => {
+    const { proxy, first } = reference(t)
+    first._channel = {
+      consoleMessages: async () => ({
+        messages: [
+          {
+            type: 'log',
+            text: 'stored message',
+            args: [],
+            location: { url: 'upstream', lineNumber: 1, columnNumber: 2 },
+            timestamp: 1,
+          },
+        ],
+      }),
+    }
+    const messages = await proxy.wrap(first).consoleMessages()
+    assert.equal(proxy.identify(messages[0])?.family, 'ConsoleMessage')
+    assert.equal(messages[0].text(), 'stored message')
+    assert.equal(messages[0].page(), proxy.wrap(first))
+    assert.ok(proxy.requirements.has('ConsoleMessage.text'))
+    assert.equal(proxy.calls[0].state, 'returned')
+    assert.deepEqual(proxy.censusGaps, [])
+  },
+)
+
+test(
   'native errors retain pinned public classes, builtins and exact native stacks',
   pinned,
   async (t) => {
