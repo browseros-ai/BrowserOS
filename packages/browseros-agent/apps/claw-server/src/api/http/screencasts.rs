@@ -18,10 +18,7 @@
 //! Frames are `low` quality. Only claw-app (or a native client) may connect: `request_context`
 //! checks the origin before the upgrade.
 
-use crate::{
-    AppState,
-    services::capture::{Frame, Quality, Watch, Watcher},
-};
+use crate::AppState;
 use axum::{
     extract::{
         State,
@@ -35,6 +32,7 @@ use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
+use neo_capture::{Frame, Quality, Watch, Watcher};
 use std::time::Duration;
 use tokio::sync::watch;
 

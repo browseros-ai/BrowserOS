@@ -1,4 +1,4 @@
-//! Splits Chromium's fragmented MP4 recording into the pieces a live viewer needs.
+//! Neo: Splits Chromium's fragmented MP4 recording into the pieces a live viewer needs.
 //!
 //! `Page.startScreenRecording` writes one growing MP4 file to a CDP IO stream: an
 //! initialization segment (`ftyp` + `moov`), then a `moof` + `mdat` fragment for every
@@ -84,14 +84,19 @@ pub(super) enum Mp4Error {
 #[cfg(test)]
 mod tests {
     use super::{Mp4Part, Mp4Splitter};
+    use std::iter;
 
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "preserve the original fixture interface"
+    )]
     fn mp4_box(kind: &[u8; 4], body_len: usize) -> Vec<u8> {
         let mut out = u32::try_from(8 + body_len)
             .unwrap_or(u32::MAX)
             .to_be_bytes()
             .to_vec();
         out.extend_from_slice(kind);
-        out.extend(std::iter::repeat_n(kind[0], body_len));
+        out.extend(iter::repeat_n(kind[0], body_len));
         out
     }
 
@@ -166,7 +171,7 @@ mod tests {
         let mut large_mdat = 1u32.to_be_bytes().to_vec();
         large_mdat.extend_from_slice(b"mdat");
         large_mdat.extend_from_slice(&(16u64 + 10).to_be_bytes());
-        large_mdat.extend(std::iter::repeat_n(0u8, 10));
+        large_mdat.extend(iter::repeat_n(0u8, 10));
         let fragment = concat(&[mp4_box(b"moof", 8), large_mdat]);
         let mut splitter = Mp4Splitter::default();
 

@@ -1,43 +1,46 @@
-//! One running capture of one tab, shared by every viewer of that (tab, kind, quality).
+//! Neo: One running capture of one tab, shared by every viewer of that (tab, kind, quality).
 //!
 //! The first viewer creates it and starts its worker; viewers hold a [`Lease`]. When the last
 //! lease drops, the capture lingers for [`STOP_GRACE`] so a reconnecting viewer or a follow
 //! switch back does not restart the browser side, then stops. The worker also ends it on its
 //! own when the tab closes or the capture connection breaks.
 
-use super::{
-    link::{Attached, Link},
-    mp4::{Mp4Part, Mp4Splitter},
-    presets::{Preset, Quality},
-};
-use crate::{clock::now_epoch_ms, error::AppResult};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use std::sync::MutexGuard;
+use tokio::runtime::Handle;
+use tokio::time;
+
+use super::link::{Attached, Link};
+use super::mp4::{Mp4Part, Mp4Splitter};
+use super::presets::{Preset, Quality};
+use crate::clock::now_epoch_ms;
+use crate::{CaptureFailure, CaptureResult};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
 use serde_json::{Value, json};
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
-use tokio::{
-    sync::{broadcast, watch},
-    time::Instant,
-};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::{broadcast, watch};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 /// How long a capture outlives its last viewer.
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 pub(super) const STOP_GRACE: Duration = Duration::from_secs(5);
 /// How often a recording's IO stream is drained. Chromium writes a fragment per keyframe
 /// interval (about 2 s), so this only bounds how late a finished fragment is forwarded.
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 const RECORDING_READ_INTERVAL: Duration = Duration::from_millis(250);
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 const RECORDING_READ_SIZE: u64 = 1 << 20;
 /// Reads that may fail before the recording's first bytes exist. Chromium creates the stream
 /// file on its first write and answers earlier reads with "Read failed".
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 const EARLY_READ_FAILURES: u32 = 20;
 /// Fragments a slow video viewer may fall behind before it skips ahead.
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 const FRAGMENT_BACKLOG: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -62,6 +65,7 @@ pub(super) struct RawFrame {
     pub(super) captured_at: i64,
 }
 
+/// Shared capture state. Viewer leases own its lifetime; its worker owns browser operations.
 pub(super) struct Capture {
     pub(super) key: CaptureKey,
     /// Changed only under the registry lock, so the grace stop and a new viewer never race.
@@ -71,6 +75,9 @@ pub(super) struct Capture {
     departures: AtomicU64,
     stop: CancellationToken,
     pub(super) ended: CancellationToken,
+    /// Socket loss invalidates this capture before its worker's best-effort cleanup can finish.
+    /// Keep this separate from `ended`, which preserves legacy worker/follow lifecycle behavior.
+    pub(super) generation: CancellationToken,
     ready: watch::Sender<Option<Result<(), String>>>,
     /// The newest screencast frame: a viewer that joins, or falls behind, gets this one.
     frames: watch::Sender<Option<Arc<RawFrame>>>,
@@ -80,18 +87,23 @@ pub(super) struct Capture {
 }
 
 impl Capture {
-    fn new(key: CaptureKey) -> Arc<Self> {
+    fn new(key: CaptureKey, generation: CancellationToken) -> Arc<Self> {
         Arc::new(Self {
             key,
             viewers: AtomicUsize::new(0),
             departures: AtomicU64::new(0),
             stop: CancellationToken::new(),
             ended: CancellationToken::new(),
+            generation,
             ready: watch::channel(None).0,
             frames: watch::channel(None).0,
             init: watch::channel(None).0,
             fragments: broadcast::channel(FRAGMENT_BACKLOG).0,
         })
+    }
+
+    fn reusable(&self) -> bool {
+        !self.ended.is_cancelled() && !self.generation.is_cancelled()
     }
 }
 
@@ -141,7 +153,10 @@ impl Lease {
 impl Drop for Lease {
     fn drop(&mut self) {
         let departure = {
-            let mut captures = lock(&self.registry);
+            let Some(mut captures) = lock(&self.registry) else {
+                self.capture.stop.cancel();
+                return;
+            };
             if self.capture.viewers.fetch_sub(1, Ordering::SeqCst) != 1 {
                 return;
             }
@@ -151,11 +166,11 @@ impl Drop for Lease {
             }
             self.capture.departures.fetch_add(1, Ordering::SeqCst) + 1
         };
-        match tokio::runtime::Handle::try_current() {
+        match Handle::try_current() {
             Ok(runtime) => {
                 runtime.spawn(stop_after_grace(
-                    self.registry.clone(),
-                    self.capture.clone(),
+                    Arc::clone(&self.registry),
+                    Arc::clone(&self.capture),
                     departure,
                 ));
             }
@@ -166,14 +181,12 @@ impl Drop for Lease {
 
 /// Joins the running capture for `key`, if there is one.
 pub(super) fn join(registry: &Registry, key: &CaptureKey) -> Option<Lease> {
-    let captures = lock(registry);
-    let capture = captures
-        .get(key)
-        .filter(|capture| !capture.ended.is_cancelled())?;
+    let captures = lock(registry)?;
+    let capture = captures.get(key).filter(|capture| capture.reusable())?;
     capture.viewers.fetch_add(1, Ordering::SeqCst);
     Some(Lease {
-        capture: capture.clone(),
-        registry: registry.clone(),
+        capture: Arc::clone(capture),
+        registry: Arc::clone(registry),
         stop_on_release: false,
     })
 }
@@ -189,36 +202,54 @@ pub(super) fn join_or_start(
     if let Some(lease) = join(registry, &key) {
         return lease;
     }
-    let mut captures = lock(registry);
-    if let Some(capture) = captures
-        .get(&key)
-        .filter(|capture| !capture.ended.is_cancelled())
-    {
+    let Some(mut captures) = lock(registry) else {
+        let capture = Capture::new(key, link.broken.child_token());
+        capture.viewers.store(1, Ordering::SeqCst);
+        capture
+            .ready
+            .send_replace(Some(Err("capture registry lock poisoned".into())));
+        capture.stop.cancel();
+        capture.ended.cancel();
+        return Lease {
+            capture,
+            registry: Arc::clone(registry),
+            stop_on_release: false,
+        };
+    };
+    if let Some(capture) = captures.get(&key).filter(|capture| capture.reusable()) {
         capture.viewers.fetch_add(1, Ordering::SeqCst);
         return Lease {
-            capture: capture.clone(),
-            registry: registry.clone(),
+            capture: Arc::clone(capture),
+            registry: Arc::clone(registry),
             stop_on_release: false,
         };
     }
-    let capture = Capture::new(key.clone());
+    let capture = Capture::new(key.clone(), link.broken.child_token());
     capture.viewers.store(1, Ordering::SeqCst);
-    captures.insert(key, capture.clone());
+    captures.insert(key, Arc::clone(&capture));
     drop(captures);
-    tokio::spawn(run(link, capture.clone(), registry.clone(), preset));
+    tokio::spawn(run(
+        link,
+        Arc::clone(&capture),
+        Arc::clone(registry),
+        preset,
+    ));
     Lease {
         capture,
-        registry: registry.clone(),
+        registry: Arc::clone(registry),
         stop_on_release: false,
     }
 }
 
 async fn stop_after_grace(registry: Registry, capture: Arc<Capture>, departure: u64) {
     tokio::select! {
-        () = tokio::time::sleep(STOP_GRACE) => {}
+        () = time::sleep(STOP_GRACE) => {}
         () = capture.ended.cancelled() => return,
     }
-    let mut captures = lock(&registry);
+    let Some(mut captures) = lock(&registry) else {
+        capture.stop.cancel();
+        return;
+    };
     // Someone is watching again, or left again later and owns a newer grace period.
     if capture.viewers.load(Ordering::SeqCst) > 0
         || capture.departures.load(Ordering::SeqCst) != departure
@@ -263,7 +294,10 @@ async fn run(link: Arc<Link>, capture: Arc<Capture>, registry: Registry, preset:
         });
     }
     capture.ended.cancel();
-    let mut captures = lock(&registry);
+    let Some(mut captures) = lock(&registry) else {
+        capture.stop.cancel();
+        return;
+    };
     if captures
         .get(&capture.key)
         .is_some_and(|current| Arc::ptr_eq(current, &capture))
@@ -286,7 +320,7 @@ async fn screencast(
     session: &Attached,
     capture: &Capture,
     preset: Preset,
-) -> AppResult<()> {
+) -> CaptureResult<()> {
     let mut frames = link.frames(session);
     link.send(
         "Page.startScreencast",
@@ -318,7 +352,7 @@ async fn screencast(
         if let Some(last) = last_ack {
             tokio::select! {
                 () = stopped(link, session, capture) => break,
-                () = tokio::time::sleep_until(last + interval) => {}
+                () = time::sleep_until(last + interval) => {}
             }
         }
         let ack = json!({ "sessionId": params.get("sessionId").cloned().unwrap_or(Value::Null) });
@@ -341,7 +375,7 @@ fn decode_frame(params: &Value) -> Option<RawFrame> {
     let captured_at = params
         .pointer("/metadata/timestamp")
         .and_then(Value::as_f64)
-        .map_or_else(now_epoch_ms, |seconds| (seconds * 1000.0) as i64);
+        .map_or_else(now_epoch_ms, timestamp_ms);
     Some(RawFrame {
         jpeg: Bytes::from(jpeg),
         captured_at,
@@ -353,7 +387,7 @@ async fn video(
     session: &Attached,
     capture: &Capture,
     preset: Preset,
-) -> AppResult<()> {
+) -> CaptureResult<()> {
     let reply = link
         .send(
             "Page.startScreenRecording",
@@ -368,9 +402,7 @@ async fn video(
     let handle = reply
         .get("stream")
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            crate::error::AppError::Internal("startScreenRecording returned no stream".into())
-        })?
+        .ok_or_else(|| CaptureFailure::new("startScreenRecording returned no stream"))?
         .to_string();
     capture.ready.send_replace(Some(Ok(())));
     let result = drain_recording(link, session, capture, &handle).await;
@@ -388,9 +420,9 @@ async fn drain_recording(
     session: &Attached,
     capture: &Capture,
     handle: &str,
-) -> AppResult<()> {
+) -> CaptureResult<()> {
     let mut splitter = Mp4Splitter::default();
-    let mut tick = tokio::time::interval(RECORDING_READ_INTERVAL);
+    let mut tick = time::interval(RECORDING_READ_INTERVAL);
     tick.reset();
     let mut early_failures = 0;
     let mut written = false;
@@ -421,9 +453,9 @@ async fn drain_recording(
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let bytes = if chunk.get("base64Encoded").and_then(Value::as_bool) == Some(true) {
-                BASE64.decode(data).map_err(|error| {
-                    crate::error::AppError::Internal(format!("recording chunk: {error}"))
-                })?
+                BASE64
+                    .decode(data)
+                    .map_err(|error| CaptureFailure::new(format!("recording chunk: {error}")))?
             } else {
                 data.as_bytes().to_vec()
             };
@@ -433,7 +465,7 @@ async fn drain_recording(
             written = true;
             let parts = splitter
                 .push(&bytes)
-                .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+                .map_err(|error| CaptureFailure::new(error.to_string()))?;
             for part in parts {
                 match part {
                     Mp4Part::Init(init) => {
@@ -448,8 +480,25 @@ async fn drain_recording(
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+fn lock<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    // A poisoned registry offers no captures. Existing workers end rather than trust it.
+    mutex.lock().ok()
+}
+
+// Platform: CDP reports seconds as a float. Preserve the old truncating, saturating conversion
+// without a lossy integer cast. Normal timestamps fit; invalid magnitudes retain Rust's limits.
+fn timestamp_ms(seconds: f64) -> i64 {
+    let millis = seconds * 1000.0;
+    if millis.is_nan() {
+        return 0;
+    }
+    format!("{:.0}", millis.trunc())
+        .parse()
+        .unwrap_or_else(|_| {
+            if millis.is_sign_negative() {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        })
 }

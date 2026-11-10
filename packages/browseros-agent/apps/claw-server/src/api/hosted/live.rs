@@ -1,15 +1,12 @@
 //! The live-view routes, `/screencast` (MJPEG) and `/video` (fragmented MP4). Both are thin:
 //! parse `quality` and `tab`, open the stream from [`CaptureHub`], and frame it for HTTP. What
-//! is captured, shared, followed and when it stops is decided in `services::capture`.
+//! is captured, shared, followed and when it stops is decided in `neo_capture`.
 //!
-//! [`CaptureHub`]: crate::services::capture::CaptureHub
+//! [`CaptureHub`]: neo_capture::CaptureHub
 
 use super::{HostedError, integer};
-use crate::{
-    AppState,
-    error::RequestId,
-    services::capture::{CaptureError, Frame, Quality},
-};
+use crate::error::AppError;
+use crate::{AppState, error::RequestId};
 use axum::{
     Extension,
     body::Body,
@@ -17,12 +14,9 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     response::Response,
 };
-use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::StreamExt;
+use neo_capture::{CaptureError, Quality, mjpeg};
 use std::{collections::HashMap, convert::Infallible};
-
-/// The multipart boundary between frames; `<img>` and MJPEG clients read it from the header.
-const BOUNDARY: &str = "frame";
 
 pub(super) async fn screencast(
     Extension(request_id): Extension<RequestId>,
@@ -36,11 +30,8 @@ pub(super) async fn screencast(
         .screencast(&session_id, quality, tab)
         .await
         .map_err(|error| HostedError::capture(&request_id, error))?;
-    let body = Body::from_stream(frames.map(|frame| Ok::<_, Infallible>(multipart_part(&frame))));
-    Ok(streaming(
-        &format!("multipart/x-mixed-replace; boundary={BOUNDARY}"),
-        body,
-    ))
+    let body = Body::from_stream(frames.map(|frame| Ok::<_, Infallible>(mjpeg::part(&frame))));
+    Ok(streaming(mjpeg::CONTENT_TYPE, body))
 }
 
 pub(super) async fn video(
@@ -86,36 +77,6 @@ fn streaming(content_type: &str, body: Body) -> Response {
     response
 }
 
-/// One MJPEG part: the boundary, the part headers the spec documents, the JPEG.
-fn multipart_part(frame: &Frame) -> Bytes {
-    let head = format!(
-        "--{BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nX-Tab-Id: {}\r\nX-Url: {}\r\nX-Frame-At: {}\r\n\r\n",
-        frame.jpeg.len(),
-        frame.tab_id,
-        header_safe(&frame.url),
-        frame.captured_at,
-    );
-    let mut part = BytesMut::with_capacity(head.len() + frame.jpeg.len() + 2);
-    part.put_slice(head.as_bytes());
-    part.put_slice(&frame.jpeg);
-    part.put_slice(b"\r\n");
-    part.freeze()
-}
-
-/// A URL as a part-header value: printable ASCII kept, anything else percent-encoded, so a
-/// page URL can never end the header early or break a client's parser.
-fn header_safe(url: &str) -> String {
-    let mut out = String::with_capacity(url.len());
-    for byte in url.bytes() {
-        if byte.is_ascii_graphic() {
-            out.push(char::from(byte));
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
 impl HostedError {
     fn capture(request_id: &RequestId, error: CaptureError) -> Self {
         match error {
@@ -138,35 +99,9 @@ impl HostedError {
                 "no_open_tab",
                 "session has no open tab",
             ),
-            CaptureError::Browser(source) => Self::internal(request_id, source),
+            CaptureError::Browser(source) => {
+                Self::internal(request_id, AppError::Internal(source.to_string()))
+            }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Frame, header_safe, multipart_part};
-
-    #[test]
-    fn a_part_carries_the_documented_headers_around_the_jpeg() {
-        let part = multipart_part(&Frame {
-            jpeg: b"JPEG"[..].into(),
-            tab_id: 42,
-            url: "https://example.com/a b\r\nX-Evil: 1".to_string(),
-            captured_at: 1_800_000_000_123,
-        });
-
-        assert_eq!(
-            part.as_ref(),
-            &b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\nX-Tab-Id: 42\r\nX-Url: https://example.com/a%20b%0D%0AX-Evil:%201\r\nX-Frame-At: 1800000000123\r\n\r\nJPEG\r\n"[..]
-        );
-    }
-
-    #[test]
-    fn non_ascii_urls_are_percent_encoded() {
-        assert_eq!(
-            header_safe("https://例.com/é"),
-            "https://%E4%BE%8B.com/%C3%A9"
-        );
     }
 }

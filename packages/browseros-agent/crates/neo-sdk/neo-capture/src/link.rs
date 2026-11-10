@@ -1,26 +1,28 @@
-//! The capture connection: one CDP websocket shared by every running capture, separate from the
+//! Neo: The capture connection: one CDP websocket shared by every running capture, separate from the
 //! agent's. It attaches its own flat session per capture (CDP session ids belong to one socket)
 //! and routes screencast frames to their capture by that session id.
 
-use crate::error::{AppError, AppResult};
+use std::sync::MutexGuard;
+use tokio::time;
+
+use crate::{CaptureConnection, CaptureFailure, CaptureResult};
 use browseros_cdp::{CdpEvent, SessionId};
-use browseros_core::CdpConnection;
 use serde_json::{Value, json};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::ports::CaptureTransport;
 
 /// How often the link checks that its socket is still the one its sessions were attached on.
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 const WATCHDOG_INTERVAL: Duration = Duration::from_secs(1);
 
-pub(super) struct Link {
-    cdp: Arc<dyn CdpConnection>,
+/// One capture-owned connection generation and its target-session routing.
+pub struct Link {
+    cdp: Arc<dyn CaptureConnection>,
     /// Flat session ids are valid only on the socket generation they were attached on.
     epoch: u64,
     frames: Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>,
@@ -31,17 +33,21 @@ pub(super) struct Link {
 }
 
 /// A capture's own CDP session on one tab.
-pub(super) struct Attached {
+pub struct Attached {
     pub(super) id: SessionId,
     /// Cancelled when the browser detaches the session, which is how a closed tab shows up.
     pub(super) detached: CancellationToken,
 }
 
 impl Link {
-    pub(super) async fn open(
+    /// Opens a generation and starts its routing watchers.
+    ///
+    /// # Errors
+    /// Returns the transport failure if the owned socket cannot connect.
+    pub async fn open(
         transport: &dyn CaptureTransport,
         shutdown: CancellationToken,
-    ) -> AppResult<Arc<Self>> {
+    ) -> CaptureResult<Arc<Self>> {
         let cdp = transport.connect().await?;
         // Frames bypass the client's broadcast ring: at several per second and up to ~100 KB
         // each, that ring would copy them once per subscriber and hold hundreds of them.
@@ -54,15 +60,19 @@ impl Link {
             detached: Mutex::new(HashMap::new()),
             broken: shutdown.child_token(),
         });
-        tokio::spawn(route_frames(link.clone(), frames));
-        tokio::spawn(watch_detaches(link.clone(), events));
-        tokio::spawn(watchdog(link.clone()));
+        tokio::spawn(route_frames(Arc::clone(&link), frames));
+        tokio::spawn(watch_detaches(Arc::clone(&link), events));
+        tokio::spawn(watchdog(Arc::clone(&link)));
         Ok(link)
     }
 
-    pub(super) async fn attach(&self, target_id: &str) -> AppResult<Attached> {
+    /// Attaches a flat target session on this generation.
+    ///
+    /// # Errors
+    /// Returns protocol failures or missing session ids; poisoned routing ends the link.
+    pub async fn attach(&self, target_id: &str) -> CaptureResult<Attached> {
         let reply = self
-            .call(
+            .dispatch(
                 "Target.attachToTarget",
                 json!({ "targetId": target_id, "flatten": true }),
                 None,
@@ -71,9 +81,10 @@ impl Link {
         let id = reply
             .get("sessionId")
             .and_then(Value::as_str)
-            .ok_or_else(|| AppError::Internal("attachToTarget returned no sessionId".into()))?;
+            .ok_or_else(|| CaptureFailure::new("attachToTarget returned no sessionId"))?;
         let detached = self.broken.child_token();
-        lock(&self.detached).insert(id.to_string(), detached.clone());
+        self.lock(&self.detached)?
+            .insert(id.to_string(), detached.clone());
         Ok(Attached {
             id: SessionId::from(id),
             detached,
@@ -83,25 +94,35 @@ impl Link {
     /// Screencast frames for one attached session. Register before starting the screencast.
     pub(super) fn frames(&self, session: &Attached) -> mpsc::UnboundedReceiver<Value> {
         let (tx, rx) = mpsc::unbounded_channel();
-        lock(&self.frames).insert(session.id.0.clone(), tx);
+        if let Ok(mut frames) = self.lock(&self.frames) {
+            frames.insert(session.id.0.clone(), tx);
+        }
         rx
     }
 
-    pub(super) async fn send(
+    /// Sends a command on an attached session.
+    ///
+    /// # Errors
+    /// Returns the browser or transport failure for this command.
+    pub async fn send(
         &self,
         method: &str,
         params: Value,
         session: &Attached,
-    ) -> AppResult<Value> {
-        self.call(method, params, Some(&session.id)).await
+    ) -> CaptureResult<Value> {
+        self.dispatch(method, params, Some(&session.id)).await
     }
 
     /// Forgets the session and detaches it; best effort, the tab may already be gone.
-    pub(super) async fn release(&self, session: &Attached) {
-        lock(&self.frames).remove(&session.id.0);
-        lock(&self.detached).remove(&session.id.0);
+    pub async fn release(&self, session: &Attached) {
+        if let Ok(mut frames) = self.lock(&self.frames) {
+            frames.remove(&session.id.0);
+        }
+        if let Ok(mut detached) = self.lock(&self.detached) {
+            detached.remove(&session.id.0);
+        }
         let _ = self
-            .call(
+            .dispatch(
                 "Target.detachFromTarget",
                 json!({ "sessionId": session.id.0 }),
                 None,
@@ -109,16 +130,36 @@ impl Link {
             .await;
     }
 
-    async fn call(
+    /// Sends a browser-level command on this generation, without a target session.
+    /// # Errors
+    /// Returns the browser or transport failure for this command.
+    pub async fn call(&self, method: &str, params: Value) -> CaptureResult<Value> {
+        self.dispatch(method, params, None).await
+    }
+
+    #[must_use]
+    pub fn broken(&self) -> &CancellationToken {
+        &self.broken
+    }
+
+    /// A panic invalidates routing state. End the generation rather than reading poisoned data.
+    fn lock<'a, T>(&self, mutex: &'a Mutex<T>) -> CaptureResult<MutexGuard<'a, T>> {
+        mutex.lock().map_err(|_| {
+            self.broken.cancel();
+            CaptureFailure::new("capture routing lock poisoned")
+        })
+    }
+
+    async fn dispatch(
         &self,
         method: &str,
         params: Value,
         session: Option<&SessionId>,
-    ) -> AppResult<Value> {
+    ) -> CaptureResult<Value> {
         self.cdp
             .send(method, params, session)
             .await
-            .map_err(|error| AppError::Internal(format!("{method}: {error}")))
+            .map_err(|error| CaptureFailure::new(format!("{method}: {error}")))
     }
 }
 
@@ -135,7 +176,10 @@ async fn route_frames(link: Arc<Link>, mut frames: mpsc::UnboundedReceiver<CdpEv
         let Some(session_id) = event.session_id else {
             continue;
         };
-        if let Some(tx) = lock(&link.frames).get(&session_id.0) {
+        let Ok(frames) = link.lock(&link.frames) else {
+            return;
+        };
+        if let Some(tx) = frames.get(&session_id.0) {
             let _ = tx.send(event.params);
         }
     }
@@ -150,7 +194,10 @@ async fn watch_detaches(link: Arc<Link>, mut events: broadcast::Receiver<CdpEven
         match event {
             Ok(event) if event.method == "Target.detachedFromTarget" => {
                 let session_id = event.params.get("sessionId").and_then(Value::as_str);
-                if let Some(token) = session_id.and_then(|id| lock(&link.detached).remove(id)) {
+                let Ok(mut detached) = link.lock(&link.detached) else {
+                    return;
+                };
+                if let Some(token) = session_id.and_then(|id| detached.remove(id)) {
                     token.cancel();
                 }
             }
@@ -164,7 +211,7 @@ async fn watch_detaches(link: Arc<Link>, mut events: broadcast::Receiver<CdpEven
 }
 
 async fn watchdog(link: Arc<Link>) {
-    let mut tick = tokio::time::interval(WATCHDOG_INTERVAL);
+    let mut tick = time::interval(WATCHDOG_INTERVAL);
     loop {
         tokio::select! {
             () = link.broken.cancelled() => return,
@@ -177,9 +224,13 @@ async fn watchdog(link: Arc<Link>) {
     }
 }
 
-/// A poisoned map only means another task panicked mid-insert; the map itself is still usable.
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+impl Attached {
+    #[must_use]
+    pub fn id(&self) -> &SessionId {
+        &self.id
+    }
+    #[must_use]
+    pub fn detached(&self) -> &CancellationToken {
+        &self.detached
+    }
 }

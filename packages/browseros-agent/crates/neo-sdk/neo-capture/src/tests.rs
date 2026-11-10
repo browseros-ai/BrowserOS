@@ -1,14 +1,15 @@
-//! `CaptureHub` through its interface: a scripted browser stands in for Chromium and a static
+//! Neo: `CaptureHub` through its interface: a scripted browser stands in for Chromium and a static
 //! table for the session's tabs.
 
-use super::{
-    CaptureError, CaptureHub, CaptureTab, Frame, Quality, SessionView, Watch, Watcher,
-    tab_capture::STOP_GRACE,
-    testing::{ScriptedCdp, ScriptedTransport, StaticSessionTabs},
-};
+use tokio::time;
+
+use super::tab_capture::STOP_GRACE;
+use super::testing::{ScriptedCdp, ScriptedTransport, StaticSessionTabs};
+use super::{CaptureError, CaptureHub, CaptureTab, Frame, Quality, SessionView, Watch, Watcher};
 use futures_util::StreamExt;
 use serde_json::json;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 struct Harness {
@@ -23,8 +24,8 @@ fn harness() -> Harness {
     let tabs = Arc::new(StaticSessionTabs::default());
     let shutdown = CancellationToken::new();
     let hub = CaptureHub::new(
-        tabs.clone(),
-        Arc::new(ScriptedTransport(browser.clone())),
+        Arc::<StaticSessionTabs>::clone(&tabs),
+        Arc::new(ScriptedTransport(Arc::clone(&browser))),
         shutdown.clone(),
     );
     Harness {
@@ -53,9 +54,9 @@ fn live(tabs: &[i64]) -> SessionView {
 /// The stream's next item, or `None` once it has ended. A stream that neither yields nor ends
 /// within 5 s fails the test, so `None` always means "ended", never "stalled".
 async fn next<S: futures_util::Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
-    match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
+    match time::timeout(Duration::from_secs(5), stream.next()).await {
         Ok(item) => item,
-        Err(_) => panic!("stream neither yielded nor ended within 5 s"),
+        Err(error) => panic!("stream neither yielded nor ended within 5 s: {error}"),
     }
 }
 
@@ -209,14 +210,14 @@ async fn acks_are_paced_to_the_quality_frame_rate() {
     h.browser.emit_frame("capture-1", b"one", 1.0);
     assert!(next(&mut frames).await.is_some());
     h.browser.wait_for("Page.screencastFrameAck", 1).await;
-    let first_ack = tokio::time::Instant::now();
+    let first_ack = time::Instant::now();
 
     h.browser.emit_frame("capture-1", b"two", 2.0);
     assert!(next(&mut frames).await.is_some());
     h.browser.wait_for("Page.screencastFrameAck", 2).await;
 
     // `low` is 4 fps: the second ack waits a quarter second after the first.
-    assert!(tokio::time::Instant::now() - first_ack >= Duration::from_millis(250));
+    assert!(time::Instant::now() - first_ack >= Duration::from_millis(250));
 }
 
 #[tokio::test(start_paused = true)]
@@ -231,7 +232,7 @@ async fn the_capture_stops_a_grace_period_after_its_last_viewer_leaves() {
     h.browser.wait_for("Page.startScreencast", 1).await;
 
     drop(frames);
-    tokio::time::sleep(STOP_GRACE / 2).await;
+    time::sleep(STOP_GRACE / 2).await;
     assert!(h.browser.sent("Page.stopScreencast").is_empty());
     // Coming back within the grace period reuses the running capture.
     let again = h
@@ -242,7 +243,7 @@ async fn the_capture_stops_a_grace_period_after_its_last_viewer_leaves() {
     assert_eq!(h.browser.sent("Page.startScreencast").len(), 1);
 
     drop(again);
-    tokio::time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
     assert_eq!(h.browser.wait_for("Page.stopScreencast", 1).await.len(), 1);
     assert_eq!(
         h.browser.wait_for("Target.detachFromTarget", 1).await.len(),
@@ -280,7 +281,7 @@ async fn screencast_follows_the_session_to_its_new_current_tab() {
     );
 
     // Nobody watches tab 1 any more, so its capture stops after the grace period.
-    tokio::time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
     let stops = h.browser.wait_for("Page.stopScreencast", 1).await;
     assert_eq!(stops[0].session.as_deref(), Some("capture-1"));
 }
@@ -347,6 +348,10 @@ async fn shutdown_ends_open_streams() {
     assert!(next(&mut frames).await.is_none());
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "preserve the original fixture interface"
+)]
 fn mp4_box(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
     let mut out = u32::try_from(8 + body.len())
         .unwrap_or(u32::MAX)
@@ -443,7 +448,7 @@ fn quality_parses_only_the_published_presets() {
 
 /// Whether `stream` is still open with nothing to deliver for `wait`.
 async fn still_open<S: futures_util::Stream + Unpin>(stream: &mut S, wait: Duration) -> bool {
-    tokio::time::timeout(wait, stream.next()).await.is_err()
+    time::timeout(wait, stream.next()).await.is_err()
 }
 
 #[tokio::test(start_paused = true)]
@@ -469,11 +474,11 @@ async fn a_viewer_that_stops_reading_does_not_keep_an_ended_session_capturing() 
     // Neither viewer reads anything while the browser keeps producing.
     for n in 0..6 {
         h.browser.emit_frame("capture-1", &[n], f64::from(n));
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     }
     h.browser
         .push_recording("capture-2", &[init, fragments.concat()].concat());
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    time::sleep(Duration::from_secs(1)).await;
 
     h.tabs.set(
         "s",
@@ -482,7 +487,7 @@ async fn a_viewer_that_stops_reading_does_not_keep_an_ended_session_capturing() 
             tabs: Vec::new(),
         },
     );
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    time::sleep(Duration::from_secs(3)).await;
 
     assert_eq!(h.browser.sent("Page.stopScreencast").len(), 1);
     assert_eq!(h.browser.sent("Page.stopScreenRecording").len(), 1);
@@ -508,7 +513,7 @@ async fn ending_the_session_stops_its_capture_without_the_grace_period() {
         },
     );
     assert!(next(&mut frames).await.is_none());
-    tokio::time::sleep(STOP_GRACE / 4).await;
+    time::sleep(STOP_GRACE / 4).await;
 
     assert_eq!(h.browser.sent("Page.stopScreencast").len(), 1);
 }
@@ -550,18 +555,18 @@ async fn an_earlier_grace_timer_does_not_cut_a_later_grace_period_short() {
     h.browser.wait_for("Page.startScreencast", 1).await;
 
     drop(first); // t=0: the first grace period starts
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
     let second = h
         .hub
         .screencast("s", Quality::High, None)
         .await
         .unwrap_or_else(|e| panic!("{e}"));
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
     drop(second); // t=4: a new grace period, ending at t=9
 
-    tokio::time::sleep(Duration::from_millis(1500)).await; // t=5.5
+    time::sleep(Duration::from_millis(1500)).await; // t=5.5
     assert!(h.browser.sent("Page.stopScreencast").is_empty());
-    tokio::time::sleep(STOP_GRACE).await;
+    time::sleep(STOP_GRACE).await;
     assert_eq!(h.browser.sent("Page.stopScreencast").len(), 1);
     assert_eq!(h.browser.sent("Page.startScreencast").len(), 1);
 }
@@ -578,14 +583,14 @@ async fn a_slow_tab_switch_does_not_keep_a_departed_viewer_capturing() {
     h.browser.wait_for("Page.startScreencast", 1).await;
 
     // The agent moves to tab 2 while the browser is slow to attach.
-    h.browser.delay_attaches(Duration::from_secs(60));
+    h.browser.delay_attaches(Duration::from_mins(1));
     h.tabs.set("s", live(&[2, 1]));
     h.browser.wait_for("Target.attachToTarget", 2).await;
     drop(frames);
 
     // The viewer left mid-switch, so tab 1's capture stops after its grace period, not after
     // the browser finally answers.
-    tokio::time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
     let stops = h.browser.sent("Page.stopScreencast");
     assert_eq!(
         stops.first().and_then(|stop| stop.session.as_deref()),
@@ -602,9 +607,9 @@ fn watch(session_id: &str, tab: Option<i64>) -> Watch {
 
 /// The watcher's next frame. A watcher that yields nothing within 5 s fails the test.
 async fn next_watched(watcher: &mut Watcher) -> Option<(Watch, Frame)> {
-    match tokio::time::timeout(Duration::from_secs(5), watcher.next()).await {
+    match time::timeout(Duration::from_secs(5), watcher.next()).await {
         Ok(item) => item,
-        Err(_) => panic!("watcher yielded nothing within 5 s"),
+        Err(error) => panic!("watcher yielded nothing within 5 s: {error}"),
     }
 }
 
@@ -646,9 +651,9 @@ async fn a_watch_with_nothing_to_show_yet_streams_once_the_session_has_a_tab() {
 
     // Watched before the server knows the session, then while it has no tab.
     watcher.set([watch("s", None)]);
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    time::sleep(Duration::from_secs(3)).await;
     h.tabs.set("s", live(&[]));
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    time::sleep(Duration::from_secs(3)).await;
     assert!(h.browser.sent("Target.attachToTarget").is_empty());
 
     h.tabs.set("s", live(&[1]));
@@ -681,7 +686,7 @@ async fn a_watch_left_out_of_the_set_releases_its_capture() {
         Some(watch("b", None))
     );
 
-    tokio::time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
     let stops = h.browser.sent("Page.stopScreencast");
     assert_eq!(
         stops
@@ -705,11 +710,15 @@ async fn a_slow_reader_gets_only_the_newest_frame_of_each_watch() {
 
     // Nothing reads while each tab paints twice.
     for (n, jpeg) in [b"a-old", b"a-new"].into_iter().enumerate() {
-        h.browser.emit_frame("capture-1", jpeg, n as f64);
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        h.browser.emit_frame(
+            "capture-1",
+            jpeg,
+            f64::from(u32::try_from(n).unwrap_or_default()),
+        );
+        time::sleep(Duration::from_secs(1)).await;
     }
     h.browser.emit_frame("capture-2", b"b-only", 1.0);
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    time::sleep(Duration::from_secs(1)).await;
 
     let mut read = Vec::new();
     for _ in 0..2 {
@@ -724,7 +733,7 @@ async fn a_slow_reader_gets_only_the_newest_frame_of_each_watch() {
         [Some(b"a-new"[..].into()), Some(b"b-only"[..].into())]
     );
     assert!(
-        tokio::time::timeout(Duration::from_secs(1), watcher.next())
+        time::timeout(Duration::from_secs(1), watcher.next())
             .await
             .is_err()
     );
@@ -742,7 +751,7 @@ async fn dropping_a_watcher_releases_every_capture_it_held() {
     h.browser.wait_for("Page.startScreencast", 2).await;
 
     drop(watcher);
-    tokio::time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
 
     assert_eq!(h.browser.sent("Page.stopScreencast").len(), 2);
 }
@@ -758,4 +767,43 @@ async fn a_watcher_ends_at_shutdown() {
     h.shutdown.cancel();
 
     assert!(next_watched(&mut watcher).await.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn legacy_stream_retries_after_its_initial_capture_generation_ends() {
+    let h = harness();
+    h.tabs.set("s1", live(&[1]));
+    let mut frames = h.hub.screencast("s1", Quality::Low, None).await.unwrap();
+    let initial_generation = frames.generation_ended();
+    let first = h.browser.sent("Page.startScreencast")[0]
+        .session
+        .clone()
+        .unwrap();
+    h.browser.emit_frame(&first, b"old", 1.0);
+    assert_eq!(
+        next(&mut frames).await.unwrap().jpeg,
+        b"old"[..],
+        "initial generation delivers frames"
+    );
+
+    h.browser.reconnect();
+    time::advance(Duration::from_secs(1)).await;
+    let starts = h.browser.wait_for("Page.startScreencast", 2).await;
+    assert!(
+        initial_generation.is_cancelled(),
+        "opt-in signal retains the initial generation"
+    );
+    let current = starts.last().unwrap().session.as_ref().unwrap();
+    assert_ne!(current, &first, "legacy follow attaches a fresh capture");
+    h.browser.emit_frame(current, b"new", 2.0);
+    assert_eq!(
+        next(&mut frames).await.unwrap().jpeg,
+        b"new"[..],
+        "legacy stream continues after reconnect"
+    );
+    h.shutdown.cancel();
+    assert!(
+        next(&mut frames).await.is_none(),
+        "legacy shutdown behavior remains intact"
+    );
 }

@@ -9,7 +9,7 @@
 //! This module is the HTTP adapter. It parses query parameters, calls [`SessionRecords`] (the
 //! stored record) or the capture hub (the live view, in `live`), and maps failures into the
 //! spec's `Error` body. What a session record contains, and when it is complete, is decided in
-//! `records`; live views are decided in `services::capture`.
+//! `records`; live views are decided in `neo_capture`.
 
 mod live;
 mod records;

@@ -1,0 +1,55 @@
+[package]
+name = "neo-service"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+browseros-cdp.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+base64.workspace = true
+neo-capture.workspace = true
+axum.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tower.workspace = true
+tempfile.workspace = true
+reqwest.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# A crate's own table cannot be combined with `workspace = true`, so the workspace lints are
+# restated first. The rest is Google Rust style: pedantic plus the lints mapped from its rules.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+print_stdout = "warn"
+print_stderr = "warn"
+dbg_macro = "warn"
+pedantic = { level = "warn", priority = -1 }
+wildcard_imports = "warn"
+enum_glob_use = "warn"
+absolute_paths = "warn"
+ref_option = "warn"
+redundant_clone = "warn"
+implicit_clone = "warn"
+clone_on_ref_ptr = "warn"
+fn_params_excessive_bools = "warn"
+must_use_candidate = "warn"
+missing_assert_message = "warn"
+needless_for_each = "warn"
+string_add = "warn"
+mod_module_files = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+disallowed_methods = "warn"

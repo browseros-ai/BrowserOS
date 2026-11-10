@@ -12,7 +12,7 @@ use crate::{
         agent_settings::AgentSettingsStore,
         audit::AuditWorker,
         browser::{BrowserService, TabRegistry},
-        capture::{CaptureHub, CdpPortTransport, LiveSessionTabs},
+        capture::LiveSessionTabs,
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
         harness_skills::load_browserclaw_skill,
@@ -28,6 +28,7 @@ use crate::{
     storage::JsonStore,
 };
 use axum::{Router, middleware};
+use neo_capture::{CaptureHub, CdpPortTransport};
 use std::{env, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
 #[derive(Clone)]

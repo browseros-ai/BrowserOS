@@ -5,12 +5,12 @@
 use claw_server::{
     AppState, build_router,
     config::{Config, ServerMode},
-    services::capture::{
-        CaptureHub, CaptureTab, SessionView,
-        testing::{ScriptedCdp, ScriptedTransport, StaticSessionTabs},
-    },
 };
 use futures_util::{SinkExt, StreamExt};
+use neo_capture::{
+    CaptureHub, CaptureTab, SessionView,
+    testing::{ScriptedCdp, ScriptedTransport, StaticSessionTabs},
+};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tempfile::TempDir;

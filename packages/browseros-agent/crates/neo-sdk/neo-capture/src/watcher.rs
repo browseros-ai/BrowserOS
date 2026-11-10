@@ -1,16 +1,19 @@
-//! One viewer's live view of several sessions at once, for a client that shows many of them
+//! Neo: One viewer's live view of several sessions at once, for a client that shows many of them
 //! over one connection (the cockpit's `/api/v1/screencasts` socket).
+
+use tokio::time;
 
 use super::{CaptureHub, Frame, Quality};
 use futures_util::StreamExt;
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-use tokio::{sync::Notify, task::JoinHandle};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 /// How long a watch that has nothing to show waits before trying again.
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 const WATCH_RETRY: Duration = Duration::from_secs(1);
 
 /// What a live view shows: a session's current tab, or one tab of it.
@@ -59,10 +62,10 @@ impl Watcher {
         for watch in wanted {
             if !self.tasks.contains_key(&watch) {
                 let task = tokio::spawn(forward(
-                    self.hub.clone(),
+                    Arc::clone(&self.hub),
                     watch.clone(),
                     self.quality,
-                    self.pending.clone(),
+                    Arc::clone(&self.pending),
                 ));
                 self.tasks.insert(watch, task);
             }
@@ -81,6 +84,7 @@ impl Watcher {
                 Some(item) => return Some(item),
                 None => tokio::select! {
                     () = self.hub.shutdown.cancelled() => return None,
+                    () = self.pending.ended.cancelled() => return None,
                     () = changed => {}
                 },
             }
@@ -107,12 +111,12 @@ async fn forward(hub: Arc<CaptureHub>, watch: Watch, quality: Quality, pending: 
                 }
             }
             Err(error) => {
-                tracing::trace!(session_id = %watch.session_id, %error, "watch not showable yet")
+                tracing::trace!(session_id = %watch.session_id, %error, "watch not showable yet");
             }
         }
         tokio::select! {
             () = hub.shutdown.cancelled() => return,
-            () = tokio::time::sleep(WATCH_RETRY) => {}
+            () = time::sleep(WATCH_RETRY) => {}
         }
     }
 }
@@ -123,6 +127,7 @@ async fn forward(hub: Arc<CaptureHub>, watch: Watch, quality: Quality, pending: 
 struct Pending {
     queue: Mutex<PendingQueue>,
     changed: Notify,
+    ended: CancellationToken,
 }
 
 #[derive(Default)]
@@ -133,7 +138,10 @@ struct PendingQueue {
 
 impl Pending {
     fn put(&self, watch: Watch, frame: Frame) {
-        let mut queue = lock(&self.queue);
+        let Ok(mut queue) = self.queue.lock() else {
+            self.ended.cancel();
+            return;
+        };
         if queue.frames.insert(watch.clone(), frame).is_none() {
             queue.order.push_back(watch);
         }
@@ -142,15 +150,12 @@ impl Pending {
     }
 
     fn take(&self) -> Option<(Watch, Frame)> {
-        let mut queue = lock(&self.queue);
+        let Ok(mut queue) = self.queue.lock() else {
+            self.ended.cancel();
+            return None;
+        };
         let watch = queue.order.pop_front()?;
         let frame = queue.frames.remove(&watch)?;
         Some((watch, frame))
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

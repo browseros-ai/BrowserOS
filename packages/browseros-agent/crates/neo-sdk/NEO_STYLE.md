@@ -8,6 +8,8 @@ The `crates/neo-sdk/` directory owns the runtime, its injected JavaScript packag
 
 | Crate | Language | Role |
 | --- | --- | --- |
+| `neo-capture` | Rust | Shared capture hub, own CDP sockets, MJPEG and AV1 fMP4 |
+| `neo-service` | Rust | Neo page capture HTTP routes and page presence |
 | `neo-playwright-tests` | Rust, JavaScript | Pinned upstream compatibility harness for the runtime |
 | `neo-runtime-spec` | Rust, generated TS | Neo's cross-language contracts, translated from Playwright's protocol |
 | `neo-trace` | Rust | Correlates live code and call logs; depends on neo-runtime, never the reverse |
@@ -18,7 +20,7 @@ The `crates/neo-sdk/` directory owns the runtime, its injected JavaScript packag
 
 Renamed in November 2026: `neo-quickjs-injected` was `neo-sdk`, and `neo-playwright-injected` was `neo-runtime-injected`.
 
-Dependencies point one way: `neo-quickjs-injected` and `neo-playwright-injected` are embedded by `neo-runtime`, which talks to the browser through `browseros-cdp` and may use `neo-runtime-spec`. `neo-quickjs-injected` and `neo-playwright-injected` never import each other; both take types from `neo-runtime-spec`'s TypeScript. Rust neo crates depend on those plus ordinary crates (tokio, serde, rquickjs, thiserror, tracing).
+`neo-service` depends on `neo-capture`; claw-server depends on both. Dependencies point one way: `neo-quickjs-injected` and `neo-playwright-injected` are embedded by `neo-runtime`, which talks to the browser through `browseros-cdp` and may use `neo-runtime-spec`. `neo-quickjs-injected` and `neo-playwright-injected` never import each other; both take types from `neo-runtime-spec`'s TypeScript. Rust neo crates depend on those plus ordinary crates (tokio, serde, rquickjs, thiserror, tracing).
 
 ## Page objects
 

@@ -10,12 +10,12 @@ use axum::{
 use claw_server::{
     AppState, build_router,
     config::{Config, ServerMode},
-    services::capture::{
-        CaptureHub, CaptureTab, SessionView,
-        testing::{ScriptedCdp, ScriptedTransport, StaticSessionTabs},
-    },
 };
 use futures_util::StreamExt;
+use neo_capture::{
+    CaptureHub, CaptureTab, SessionView,
+    testing::{ScriptedCdp, ScriptedTransport, StaticSessionTabs},
+};
 use serde_json::Value;
 use std::{sync::Arc, time::Duration};
 use tempfile::TempDir;
@@ -239,5 +239,25 @@ async fn live_views_report_what_there_is_to_watch() -> anyhow::Result<()> {
         }
     }
     assert!(app.browser.sent("Target.attachToTarget").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_capture_failures_keep_the_legacy_internal_error_mapping() -> anyhow::Result<()> {
+    let app = app().await?;
+    app.tabs.set("s1", live(&[5]));
+    app.browser.set_reply(
+        "Target.attachToTarget",
+        Err(browseros_cdp::CdpError::Transport(
+            "capture unavailable".into(),
+        )),
+    );
+    for route in ["screencast", "video"] {
+        let response = open(&app.router, &format!("/v1/sessions/s1/{route}")).await?;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await?;
+        let value: Value = serde_json::from_slice(&body)?;
+        assert_eq!(value["code"], "internal_error");
+    }
     Ok(())
 }

@@ -1,21 +1,24 @@
-//! Live views of the tabs an agent session is working in, behind the hosted `/v1/sessions/{id}`
-//! `/screencast` (MJPEG) and `/video` (fragmented AV1 MP4) endpoints, and the cockpit's
-//! `/api/v1/screencasts` socket, which watches many sessions at once through a [`Watcher`].
+//! Neo: shared live capture of browser tabs on a capture-owned CDP connection.
+//!
+//! `SessionTabs` adapts host identity and eligibility. Legacy claw-server supplies claimed
+//! session tabs; neo-service supplies one page and owns its persistent rendering presence.
+//! The hub shares one capture per target, kind and quality, follows eligible tabs, and releases
+//! captures after the last viewer's grace period. Capture sessions never enable emulation.
 //!
 //! ```text
-//!  viewer ─┐                      ┌─ Capture(tab A, screencast, high) ── Page.startScreencast ──────┐
-//!  viewer ─┼─ CaptureHub ─────────┤                                                                ├─ Link ─ Chromium
-//!  viewer ─┘  validate, follow,   └─ Capture(tab A, video, high) ─────── Page.startScreenRecording ─┘  (own CDP websocket)
-//!             end with the session
+//! viewer -> CaptureHub -> capture lease -> target session -> Link -> browser
+//!                 ^                           own socket       ^
+//!             SessionTabs                             CaptureTransport
 //! ```
-//!
-//! Capture runs only while someone watches: the first viewer of a (tab, kind, quality) starts it,
-//! later viewers share it, and it stops a few seconds after the last one leaves. Only the
-//! session's own open tabs are offered. Those are the tabs Chromium keeps rendering in the
-//! background (the agent turns on focus emulation for them), so they produce frames even when
-//! they are not the window's active tab.
 
+mod clock;
+mod connection;
+mod failure;
 mod link;
+pub mod mjpeg;
+pub use connection::CaptureConnection;
+pub use failure::{CaptureFailure, CaptureResult};
+pub use link::{Attached, Link};
 mod mp4;
 mod ports;
 mod presets;
@@ -24,34 +27,33 @@ mod tab_capture;
 pub mod testing;
 mod watcher;
 
-pub use ports::{
-    CaptureTab, CaptureTransport, CdpPortTransport, LiveSessionTabs, SessionTabs, SessionView,
-};
+pub use ports::{CaptureTab, CaptureTransport, CdpPortTransport, SessionTabs, SessionView};
 pub use presets::Quality;
 pub use watcher::{Watch, Watcher};
 
-use crate::error::AppError;
 use bytes::Bytes;
-use futures_util::Stream;
-use link::Link;
-use std::{
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Duration,
-};
+use futures_util::{Stream, stream};
+use std::future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
 use tab_capture::{CaptureKey, Kind, Lease, RawFrame, Registry};
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc, watch};
+use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 /// How often an open stream re-reads its session: to follow the current tab, to notice a closed
 /// tab or an ended session, and to refresh the URL it reports.
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// How long a followed screencast waits for the browser to start capturing its new tab before
 /// it re-checks the session and tries again.
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 const SWITCH_TIMEOUT: Duration = Duration::from_secs(5);
 /// Video fragments queued for one viewer. One that falls further behind skips whole fragments,
 /// so a viewer that stops reading never holds up its stream's shutdown or session checks.
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 const VIDEO_QUEUE: usize = 4;
 
 /// Why a live view could not be opened.
@@ -66,7 +68,7 @@ pub enum CaptureError {
     #[error("tab is not open in this session")]
     TabNotFound,
     #[error(transparent)]
-    Browser(#[from] AppError),
+    Browser(#[from] CaptureFailure),
 }
 
 /// One screencast frame as a viewer receives it.
@@ -83,13 +85,15 @@ pub struct Frame {
 /// A live screencast; it ends when the session ends, its pinned tab closes, or the server shuts
 /// down. It holds only the newest frame: a slow reader gets the latest one when it reads,
 /// skipping those it missed, so the stream behind it never waits on it.
-pub struct Frames(Pin<Box<dyn Stream<Item = Frame> + Send>>);
+pub struct Frames {
+    stream: Pin<Box<dyn Stream<Item = Frame> + Send>>,
+    generation: CancellationToken,
+}
 
 impl Frames {
-    fn new(latest: watch::Receiver<Option<Frame>>) -> Self {
-        Self(Box::pin(futures_util::stream::unfold(
-            latest,
-            |mut latest| async move {
+    fn new(latest: watch::Receiver<Option<Frame>>, generation: CancellationToken) -> Self {
+        Self {
+            stream: Box::pin(stream::unfold(latest, |mut latest| async move {
                 loop {
                     latest.changed().await.ok()?;
                     let frame = latest.borrow_and_update().clone();
@@ -97,15 +101,24 @@ impl Frames {
                         return Some((frame, latest));
                     }
                 }
-            },
-        )))
+            })),
+            generation,
+        }
+    }
+
+    /// Ends when the initial capture connection generation breaks. The stream itself keeps
+    /// following/retrying for legacy consumers; HTTP responses that must reconnect opt into
+    /// this signal. A child token cannot cancel the shared connection or other viewers.
+    #[must_use = "observe this signal to end a generation-bound response"]
+    pub fn generation_ended(&self) -> CancellationToken {
+        self.generation.child_token()
     }
 }
 
 impl Stream for Frames {
     type Item = Frame;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Frame>> {
-        self.0.as_mut().poll_next(cx)
+        self.stream.as_mut().poll_next(cx)
     }
 }
 
@@ -120,11 +133,12 @@ impl Stream for VideoChunks {
     }
 }
 
+/// Owns capture sharing, tab following and viewer lifecycle on an independent CDP socket.
 pub struct CaptureHub {
     tabs: Arc<dyn SessionTabs>,
     transport: Arc<dyn CaptureTransport>,
     shutdown: CancellationToken,
-    link: tokio::sync::Mutex<Option<Arc<Link>>>,
+    link: AsyncMutex<Option<Arc<Link>>>,
     captures: Registry,
 }
 
@@ -140,7 +154,7 @@ impl CaptureHub {
             tabs,
             transport,
             shutdown,
-            link: tokio::sync::Mutex::new(None),
+            link: AsyncMutex::new(None),
             captures: Registry::default(),
         })
     }
@@ -148,6 +162,9 @@ impl CaptureHub {
     /// Streams JPEG frames of the session's current tab, following it as the agent moves to
     /// another tab, or of `tab` alone when given. Frames come only when the page changes, at
     /// most at the quality's frame rate; a new viewer first gets the newest frame already seen.
+    ///
+    /// # Errors
+    /// Returns an unavailable session/tab or a browser failure while starting the capture.
     pub async fn screencast(
         self: &Arc<Self>,
         session_id: &str,
@@ -157,8 +174,9 @@ impl CaptureHub {
         let view = self.live_view(session_id).await?;
         let current = pick(&view, tab)?;
         let lease = self.lease(&current, Kind::Screencast, quality).await?;
+        let generation = lease.capture.generation.clone();
         let (latest, frames) = watch::channel(None);
-        tokio::spawn(self.clone().follow(
+        tokio::spawn(Arc::clone(self).follow(
             session_id.to_string(),
             quality,
             tab,
@@ -166,18 +184,21 @@ impl CaptureHub {
             lease,
             latest,
         ));
-        Ok(Frames::new(frames))
+        Ok(Frames::new(frames, generation))
     }
 
     /// One viewer's live view of any number of sessions, all at `quality`: the cockpit shows
     /// every running session over one socket rather than a stream per card.
     #[must_use]
     pub fn watcher(self: &Arc<Self>, quality: Quality) -> Watcher {
-        Watcher::new(self.clone(), quality)
+        Watcher::new(Arc::clone(self), quality)
     }
 
     /// Streams `tab`, or the session's current tab, as fragmented AV1 MP4. The video stays on
     /// that tab: switching tabs would mean restarting the viewer's decoder.
+    ///
+    /// # Errors
+    /// Returns an unavailable session/tab or a browser failure while starting the capture.
     pub async fn video(
         self: &Arc<Self>,
         session_id: &str,
@@ -188,7 +209,7 @@ impl CaptureHub {
         let target = pick(&view, tab)?;
         let lease = self.lease(&target, Kind::Video, quality).await?;
         let (tx, rx) = mpsc::channel(VIDEO_QUEUE);
-        tokio::spawn(self.clone().play(session_id.to_string(), target, lease, tx));
+        tokio::spawn(Arc::clone(self).play(session_id.to_string(), target, lease, tx));
         Ok(VideoChunks(rx))
     }
 
@@ -213,17 +234,16 @@ impl CaptureHub {
             kind,
             quality,
         };
-        let lease = match tab_capture::join(&self.captures, &key) {
-            Some(lease) => lease,
-            None => {
-                let link = self.link().await?;
-                tab_capture::join_or_start(&self.captures, key, link, presets::preset(quality))
-            }
+        let lease = if let Some(lease) = tab_capture::join(&self.captures, &key) {
+            lease
+        } else {
+            let link = self.link().await?;
+            tab_capture::join_or_start(&self.captures, key, link, presets::preset(quality))
         };
         lease
             .ready()
             .await
-            .map_err(|error| CaptureError::Browser(AppError::Internal(error)))?;
+            .map_err(|error| CaptureError::Browser(CaptureFailure::new(error)))?;
         Ok(lease)
     }
 
@@ -231,10 +251,10 @@ impl CaptureHub {
     async fn link(&self) -> Result<Arc<Link>, CaptureError> {
         let mut link = self.link.lock().await;
         if let Some(current) = link.as_ref().filter(|link| !link.broken.is_cancelled()) {
-            return Ok(current.clone());
+            return Ok(Arc::clone(current));
         }
         let opened = Link::open(self.transport.as_ref(), self.shutdown.clone()).await?;
-        *link = Some(opened.clone());
+        *link = Some(Arc::clone(&opened));
         Ok(opened)
     }
 
@@ -252,7 +272,7 @@ impl CaptureHub {
         latest: watch::Sender<Option<Frame>>,
     ) {
         let mut showing = Some(Showing::new(tab, lease));
-        let mut check = tokio::time::interval(SESSION_CHECK_INTERVAL);
+        let mut check = time::interval(SESSION_CHECK_INTERVAL);
         check.reset();
         loop {
             enum Next {
@@ -306,7 +326,7 @@ impl CaptureHub {
                         let switched = tokio::select! {
                             () = self.shutdown.cancelled() => return,
                             () = latest.closed() => return,
-                            switched = tokio::time::timeout(
+                            switched = time::timeout(
                                 SWITCH_TIMEOUT,
                                 self.lease(&next_tab, Kind::Screencast, quality),
                             ) => switched,
@@ -344,7 +364,7 @@ impl CaptureHub {
         tx: mpsc::Sender<Bytes>,
     ) {
         let (mut init, mut fragments) = lease.video();
-        let mut check = tokio::time::interval(SESSION_CHECK_INTERVAL);
+        let mut check = time::interval(SESSION_CHECK_INTERVAL);
         check.reset();
         let mut started = false;
         loop {
@@ -365,7 +385,7 @@ impl CaptureHub {
                 _ = check.tick() => Next::Check,
             };
             match next {
-                Next::Stop => return,
+                Next::Stop | Next::Fragment(Err(broadcast::error::RecvError::Closed)) => return,
                 Next::Init => {
                     let Some(segment) = init.borrow_and_update().clone() else {
                         continue;
@@ -381,7 +401,6 @@ impl CaptureHub {
                     Err(mpsc::error::TrySendError::Closed(_)) => return,
                 },
                 Next::Fragment(Err(broadcast::error::RecvError::Lagged(_))) => {}
-                Next::Fragment(Err(broadcast::error::RecvError::Closed)) => return,
                 Next::Check => {
                     if matches!(
                         self.resolve(&session_id, Some(tab.tab_id)).await,
@@ -466,7 +485,7 @@ enum Activity {
 /// shown or once its end was seen; the next check then replaces or drops it.
 async fn activity(showing: Option<&mut Showing>) -> Activity {
     let Some(showing) = showing.filter(|showing| !showing.ended()) else {
-        return std::future::pending().await;
+        return future::pending().await;
     };
     tokio::select! {
         () = showing.lease.capture.ended.cancelled() => Activity::Ended,

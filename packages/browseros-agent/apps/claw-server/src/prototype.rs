@@ -17,6 +17,7 @@ use claw_api::models::{
     UpdateAgentSettingsRequest,
 };
 use neo_sdk_server::{Config as NeoConfig, NeoSdkServer};
+use neo_service::NeoCapture;
 use rmcp::{serve_server, transport::stdio};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -79,6 +80,9 @@ pub async fn serve(
         service: service.clone(),
         shutdown: shutdown.clone(),
     };
+    // Capture owns independent CDP sockets and is HTTP-only. Its presence sessions
+    // outlive requests and close after the MCP runtime drains below.
+    let capture = NeoCapture::start(config.cdp_port, shutdown.child_token());
     let app = Router::new()
         .route("/system/health", get(health))
         .route("/system/ready", get(ready))
@@ -88,7 +92,8 @@ pub async fn serve(
         // handshake honest: effects stay disabled and enabling one is refused.
         .route("/api/v1/settings/agent", get(settings).put(update_settings))
         .with_state(state)
-        .merge(service.router());
+        .merge(service.router())
+        .merge(capture.router());
     let runtime_url = config.proxy_port.map_or_else(
         || format!("http://{bound}"),
         |port| format!("http://127.0.0.1:{port}"),
@@ -115,6 +120,8 @@ pub async fn serve(
         .await;
     shutdown.cancel();
     service.shutdown().await;
+    // Runs have drained. Only now may presence detach clear page focus.
+    capture.close().await;
     skill_task
         .await
         .context("prototype skill installer task failed")?;

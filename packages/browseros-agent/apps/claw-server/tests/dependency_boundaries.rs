@@ -144,13 +144,13 @@ fn tab_cleanup_to_browser_is_an_allowed_service_edge() {
 fn capture_reads_session_tabs_through_cockpit_and_sessions() {
     assert!(
         violations(
-            "services/capture/ports.rs",
+            "services/capture.rs",
             "use crate::services::{cockpit::SessionVisualService, sessions::Sessions};"
         )
         .is_empty()
     );
     let errors = violations(
-        "services/capture/ports.rs",
+        "services/capture.rs",
         "use crate::services::harness::HarnessService;",
     );
     assert!(

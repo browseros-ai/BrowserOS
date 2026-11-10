@@ -1,4 +1,4 @@
-//! The quality presets behind `?quality=`. Every capture reads its numbers from this table, so
+//! Neo: The quality presets behind `?quality=`. Every capture reads its numbers from this table, so
 //! tuning a value here is not an API change: the spec names the presets, not their numbers.
 //!
 //! The frame rates are ceilings. Chromium sends a screencast frame only when the page changes,
@@ -38,6 +38,7 @@ pub(super) struct Preset {
     pub(super) jpeg_quality: u32,
 }
 
+/// Neo: retained capture timing, buffering or wire-format policy from the shared hub.
 pub(super) const fn preset(quality: Quality) -> Preset {
     match quality {
         Quality::Low => Preset {

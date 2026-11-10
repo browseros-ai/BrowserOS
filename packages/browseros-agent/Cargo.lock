@@ -547,8 +547,10 @@ dependencies = [
  "hosted-api",
  "image",
  "imagesize",
+ "neo-capture",
  "neo-runtime",
  "neo-sdk-server",
+ "neo-service",
  "os_info",
  "posthog-rs",
  "pulldown-cmark",
@@ -1913,6 +1915,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "neo-capture"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "browseros-cdp",
+ "bytes",
+ "futures-util",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "neo-playwright-tests"
 version = "0.1.0"
 dependencies = [
@@ -1988,6 +2005,26 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "neo-service"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "browseros-cdp",
+ "bytes",
+ "futures-util",
+ "neo-capture",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
 ]
 
 [[package]]
