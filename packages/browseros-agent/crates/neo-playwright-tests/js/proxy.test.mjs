@@ -163,9 +163,16 @@ class WireWorker extends EventEmitter {
   }
 }
 
-async function native(t, errorTypes) {
+async function native(t, errorTypes, harnessLimitations = []) {
   const worker = new WireWorker()
-  const proxy = new NativeProxy({}, { errorTypes, workerFactory: () => worker })
+  const proxy = new NativeProxy(
+    {},
+    {
+      errorTypes,
+      harnessLimitations,
+      workerFactory: () => worker,
+    },
+  )
   await proxy.ready
   t.after(() => proxy.abort())
   return { proxy, worker }
@@ -271,6 +278,114 @@ test('native finish waits for the I/O owner to reap before allowing it to exit',
     /Neo does not serve Selectors.register/,
   )
   assert.ok(proxy.missing.has('Selectors.register'))
+})
+
+test('only evaluation source slots carry functions to the native run', async (t) => {
+  const { proxy, worker } = await native(t)
+  const fn = (node) => node.textContent
+  for (const member of [
+    'evaluate',
+    'evaluateHandle',
+    'evaluateAll',
+    '$eval',
+    '$$eval',
+    'waitForFunction',
+    'addInitScript',
+  ]) {
+    const args = member.includes('$') ? ['div', fn] : [fn]
+    proxy.page[member](...args)
+    const decoded = codec.decode(worker.invocations.at(-1).args)
+    assert.equal(String(decoded.at(-1)), Function.prototype.toString.call(fn))
+    assert.throws(() => decoded.at(-1)(), /cannot execute in the harness realm/)
+  }
+  const invoked = worker.invocations.length
+  for (const args of [
+    [fn, fn],
+    [fn, { nested: fn }],
+  ])
+    assert.throws(() => proxy.page.evaluate(...args), {
+      name: 'HarnessLimitation',
+    })
+  assert.equal(worker.invocations.length, invoked)
+  assert.ok(
+    proxy.harnessLimitations.every((reason) =>
+      reason.startsWith('bridge limit: untransportable'),
+    ),
+  )
+})
+
+test('host callbacks are journaled bridge limits before invoking Neo', async (t) => {
+  const harnessLimitations = []
+  const { proxy, worker } = await native(t, undefined, harnessLimitations)
+  const fn = () => {
+    throw new Error('must not execute')
+  }
+  const callbacks = [
+    ['on', ['console', fn]],
+    ['once', ['console', fn]],
+    ['off', ['console', fn]],
+    ['addListener', ['console', fn]],
+    ['removeListener', ['console', fn]],
+    ['prependListener', ['console', fn]],
+    ['route', ['**/*', fn]],
+    ['unroute', ['**/*', fn]],
+    ['routeWebSocket', ['**/*', fn]],
+    ['exposeFunction', ['name', fn]],
+    ['exposeBinding', ['name', fn]],
+    ['waitForEvent', ['console', fn]],
+    ['waitForEvent', ['console', { predicate: fn }]],
+    ['waitForRequest', [fn]],
+    ['waitForResponse', [fn]],
+    ['addLocatorHandler', [proxy.page, fn]],
+  ]
+  for (const [member, args] of callbacks) {
+    const reason = `bridge limit: host callback Page.${member}`
+    assert.throws(() => proxy.page[member](...args), {
+      name: 'HarnessLimitation',
+      message: reason,
+    })
+    assert.equal(proxy.harnessLimitations.at(-1), reason)
+    assert.equal(proxy.calls.at(-1).state, 'untransportable')
+    assert.equal(proxy.calls.at(-1).transportError, reason)
+    assert.equal(proxy.calls.at(-1).error, undefined)
+  }
+  assert.equal(worker.invocations.length, 0)
+  assert.deepEqual(proxy.transportErrors, [])
+  // The engine fixture passes this same array to NativeProxy and publishes it in
+  // journal.json; run-case.mjs retains that journal unchanged in pair.json.
+  assert.equal(proxy.harnessLimitations, harnessLimitations)
+  const journal = JSON.parse(
+    JSON.stringify({ calls: proxy.calls, harnessLimitations }),
+  )
+  assert.equal(journal.harnessLimitations.length, callbacks.length)
+  assert.ok(journal.calls.every((call) => call.state === 'untransportable'))
+})
+
+test('untransportable arguments and sync or async returns remain bridge evidence', async (t) => {
+  const { proxy, worker } = await native(t)
+  assert.throws(() => proxy.page.evaluate('1', new Date()), {
+    name: 'HarnessLimitation',
+  })
+  assert.match(
+    proxy.harnessLimitations.at(-1),
+    /^bridge limit: untransportable argument .*Page.evaluate/,
+  )
+  const reason =
+    'bridge limit: untransportable return object Response from Page.goto'
+  worker.result = { kind: 'transportError', message: reason }
+  assert.throws(() => proxy.page.goto('about:blank'), {
+    name: 'HarnessLimitation',
+    message: reason,
+  })
+  assert.equal(proxy.calls.at(-1).state, 'untransportable')
+  worker.result = { kind: 'promise', id: 99 }
+  const promise = proxy.page.goto('about:blank')
+  worker.emit('message', { event: 'transportError', id: 99, message: reason })
+  await assert.rejects(promise, { name: 'HarnessLimitation', message: reason })
+  assert.equal(proxy.calls.at(-1).state, 'untransportable')
+  assert.equal(proxy.pending.size, 0)
+  assert.ok(proxy.harnessLimitations.includes(reason))
+  assert.deepEqual(proxy.transportErrors, [])
 })
 
 test('native finish failure still asks its I/O owner to reap', async (t) => {
@@ -566,4 +681,108 @@ test('native receive loop reports codec errors separately and Finish does not jo
   assert.equal(replies[0].roots.mainFrame.ref.family, 'Frame')
   assert.equal(context.timeout, 0)
   assert.equal(page.navigationTimeout, 0)
+})
+
+test('native receive loop preserves source and labels untransportable returns', async () => {
+  class Frame {}
+  class Locator {}
+  class Context {
+    setDefaultTimeout() {}
+    setDefaultNavigationTimeout() {}
+  }
+  class Page extends Context {
+    mainFrame() {
+      return frame
+    }
+    locator() {
+      return locator
+    }
+    evaluate(fn) {
+      return [typeof fn, String(fn)]
+    }
+    badSync() {
+      return new Date()
+    }
+    async badAsync() {
+      return new Date()
+    }
+    functionReturn() {
+      return () => 1
+    }
+    get badProperty() {
+      return new Date()
+    }
+  }
+  const frame = new Frame()
+  const locator = new Locator()
+  const replies = []
+  const commands = []
+  const fn = {
+    method() {
+      return '🦊'
+    },
+  }.method
+  const object = { epoch: 'loop', id: 1, family: 'Page' }
+  for (const [index, name] of [
+    'evaluate',
+    'badSync',
+    'badAsync',
+    'functionReturn',
+  ].entries()) {
+    commands.push({
+      id: index * 2 + 1,
+      op: 'get',
+      object,
+      member: codec.units(name),
+    })
+    commands.push({
+      id: index * 2 + 2,
+      op: 'invoke',
+      object,
+      function: index + 1,
+      member: codec.units(name),
+      args: codec.encode(index === 0 ? [fn] : []),
+    })
+  }
+  commands.push({
+    id: 9,
+    op: 'get',
+    object,
+    member: codec.units('badProperty'),
+  })
+  commands.push({ id: 10, op: 'finish' })
+  await vm.runInContext(
+    `(${nativeLoop.toString()})(${codecFactory.toString()}, "loop")`,
+    vm.createContext({
+      page: new Page(),
+      context: new Context(),
+      __neo_test_host: {
+        reply: (text) => replies.push(JSON.parse(text)),
+        receive: () => Promise.resolve(JSON.stringify(commands.shift())),
+      },
+    }),
+  )
+  assert.deepEqual(
+    codec.decode(replies.find((reply) => reply.id === 2).value),
+    ['function', String(fn)],
+  )
+  for (const [id, member] of [
+    [4, 'badSync'],
+    [6, 'badAsync'],
+    [8, 'functionReturn'],
+    [9, 'badProperty'],
+  ]) {
+    const reply = replies.find(
+      (reply) =>
+        reply.id === id &&
+        (reply.kind === 'transportError' || reply.event === 'transportError'),
+    )
+    assert.ok(reply, `transport error for ${member}`)
+    assert.match(reply.message, /^bridge limit: untransportable return /)
+    assert.ok(reply.message.endsWith(`from Page.${member}`))
+  }
+  assert.equal(
+    replies.some((reply) => reply.kind === 'throw'),
+    false,
+  )
 })

@@ -46,7 +46,10 @@ async function engine() {
     },
   }
   if (settings.kind === 'neo') {
-    const native = new NativeProxy(settings, { errorTypes: playwright.errors })
+    const native = new NativeProxy(settings, {
+      errorTypes: playwright.errors,
+      harnessLimitations,
+    })
     await native.ready
     native.browser = native.absent('Browser')
     native.browserType = native.absent('BrowserType')

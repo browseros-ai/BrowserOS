@@ -51,10 +51,75 @@ test('holes, undefined entries and own __proto__ cannot collapse or mutate the d
   assert.equal({}.polluted, undefined)
 })
 
-test('functions, cycles, custom objects and foreign refs fail visibly', () => {
+test('function source survives exactly without executing in the harness realm', () => {
+  class Methods {
+    method(value) {
+      return value
+    }
+    async methodAsync(value) {
+      return value
+    }
+  }
+  const methods = {
+    shorthand(value) {
+      return value
+    },
+    async shorthandAsync(value) {
+      return value
+    },
+  }
+  const functions = [
+    (value) => value + 1,
+    async (value) => value + 1,
+    function ordinary(value) {
+      return value
+    },
+    methods.shorthand,
+    methods.shorthandAsync,
+    Methods.prototype.method,
+    Methods.prototype.methodAsync,
+    function unicode() {
+      return '你好 🦊 \ud800'
+    },
+    // Include a literal unpaired surrogate, not just an ASCII escape in the source.
+    Function('return "\ud800"'),
+    () => {
+      throw new Error('user code must never run here')
+    },
+  ]
+  for (const fn of functions) {
+    const source = Function.prototype.toString.call(fn)
+    fn.toString = () => 'overridden'
+    const encoded = codec.encode(fn)
+    assert.equal(encoded.tag, 'function')
+    assert.deepEqual(encoded.sourceUnits, codec.units(source))
+    const rebuilt = roundtrip(fn)
+    assert.equal(typeof rebuilt, 'function')
+    assert.equal(String(rebuilt), source)
+    assert.throws(() => rebuilt(), /cannot execute in the harness realm/)
+    assert.throws(() => new rebuilt(), /cannot execute in the harness realm/)
+  }
+  assert.throws(
+    () => codec.decode({ tag: 'function', sourceUnits: [65536] }),
+    /UTF-16/,
+  )
+})
+
+test('return-value codecs reject functions instead of inventing callable return values', () => {
+  const returns = codecFactory({
+    identify: () => undefined,
+    allowFunctions: false,
+  })
+  assert.throws(
+    () => returns.encode({ nested: () => {} }),
+    /Untransportable function/,
+  )
+})
+
+test('symbols, cycles, custom objects and foreign refs fail visibly', () => {
   const cycle = {}
   cycle.self = cycle
-  for (const value of [() => {}, Symbol('x'), cycle, new Date()])
+  for (const value of [Symbol('x'), cycle, new Date()])
     assert.throws(() => codec.encode(value))
   assert.throws(
     () =>
