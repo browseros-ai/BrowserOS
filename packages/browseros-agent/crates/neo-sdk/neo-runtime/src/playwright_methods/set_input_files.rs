@@ -37,7 +37,9 @@ use crate::browser_representations::page::{FrameTab, GroupGuard, ResolvedElement
 use crate::chromium_bridge::cdp;
 use crate::chromium_bridge::frames::FrameContext;
 use crate::mime;
-use crate::playwright_methods::click::{self, ActionResult, ElementAction, PageError, Stop, Tab};
+
+use crate::playwright_methods::retry::{self, ActionResult, ElementAction, PreChecks};
+use crate::playwright_methods::tab::{PageError, Stop, Tab};
 use crate::progress::{CallError, DeliveryCell, InputTicket, PlaywrightError, Progress};
 
 /// Playwright: `server/fileUploadUtils.ts` `prepareFilesForUpload`: `mimeType: payload.mimeType || mime.getType(payload.name) || 'application/octet-stream',`
@@ -242,11 +244,11 @@ pub(crate) async fn set_input_files<T: FilesTab>(
         ))
         .await??;
     // Playwright: `server/frames.ts` `Frame.setInputFiles`: `return dom.assertDone(await this._retryWithProgressIfNotConnected(progress, target, { waitForFrameVisible: false }, (progress, handle, box) => handle._setInputFiles(progress, inputFileItems, box)));`
-    click::retry_with_progress_if_not_connected(
+    retry::retry_with_progress_if_not_connected(
         tab,
         &selector,
         strict.unwrap_or(false),
-        false,
+        PreChecks::Run,
         progress,
         &SetInputFiles {
             files: &files,
@@ -558,7 +560,7 @@ pub(crate) mod tests {
     use std::future;
 
     use super::*;
-    use crate::playwright_methods::click::tests::FakeTab;
+    use crate::playwright_methods::tab::fake::FakeTab;
     use crate::progress::ErrorName;
     use crate::run::Delivery;
 
@@ -648,11 +650,11 @@ pub(crate) mod tests {
         let tab = FakeTab::ready();
         let progress = Progress::for_test(2_000.0);
         let delivery = progress.delivery().expect("an input call");
-        let result = click::retry_with_progress_if_not_connected(
+        let result = retry::retry_with_progress_if_not_connected(
             &tab,
             "#file",
             true,
-            false,
+            PreChecks::Run,
             &progress,
             &SetInputFiles {
                 files: &files,

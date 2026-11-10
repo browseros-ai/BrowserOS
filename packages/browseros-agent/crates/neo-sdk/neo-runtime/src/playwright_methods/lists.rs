@@ -11,8 +11,8 @@ use neo_runtime_spec::serve::FrameQueryCountResult;
 
 use crate::browser_representations::page::FrameTab;
 use crate::chromium_bridge::frame_selector;
-use crate::playwright_methods::click::PageError;
 use crate::playwright_methods::reads::SelectorTab;
+use crate::playwright_methods::tab::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// Collection page reads; futures are cancel-safe, losing only their answer when dropped.
@@ -93,7 +93,7 @@ mod tests {
     use tokio::time;
 
     use super::*;
-    use crate::playwright_methods::click::SelectorFacts;
+    use crate::playwright_methods::tab::SelectorFacts;
     use crate::progress::ErrorName;
 
     const SELECTOR: &str = ".item";

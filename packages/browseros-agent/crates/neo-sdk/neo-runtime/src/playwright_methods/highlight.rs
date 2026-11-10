@@ -28,7 +28,7 @@ use neo_runtime_spec::serve::{FrameHideHighlightParams, FrameHighlightParams};
 use crate::browser_representations::page::{FrameTab, PageSession};
 use crate::chromium_bridge::frame_selector;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
-use crate::playwright_methods::click::{PageError, Tab};
+use crate::playwright_methods::tab::{PageError, Tab};
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// Neo: one `Frame.highlight` or `Frame.hideHighlight`.

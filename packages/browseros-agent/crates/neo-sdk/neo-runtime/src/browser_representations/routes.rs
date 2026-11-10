@@ -43,7 +43,7 @@ use crate::browser_representations::page::PageSession;
 use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::cdp::{self, Command, fetch};
 use crate::chromium_bridge::playwright_injected_methods;
-use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::tab::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::url_match::{self, SerializedUrlMatch, UrlMatcher};
 

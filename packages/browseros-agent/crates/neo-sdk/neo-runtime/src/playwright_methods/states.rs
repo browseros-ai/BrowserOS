@@ -22,8 +22,9 @@ use neo_runtime_spec::injected::{
 
 use crate::browser_representations::page::FrameTab;
 use crate::chromium_bridge::frame_selector;
-use crate::playwright_methods::click::{LoopAWaits, PageError, SelectorFacts, Stop};
 use crate::playwright_methods::reads::{self, Matched, SelectorTab};
+use crate::playwright_methods::retry::LoopAWaits;
+use crate::playwright_methods::tab::{PageError, SelectorFacts, Stop};
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// A state read's selector and Playwright's strict matching option.

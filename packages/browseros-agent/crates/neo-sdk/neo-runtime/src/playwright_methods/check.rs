@@ -9,44 +9,37 @@ use neo_runtime_spec::serve::{
     FrameCheckParams, FrameCheckParamsScroll, FrameUncheckParams, FrameUncheckParamsScroll,
 };
 
+use crate::chromium_bridge::mouse_and_touch_input::{MouseButton, MouseClick};
 use crate::playwright_methods::click::{
-    self, ActionResult, ElementAction, MouseButton, MouseClick, PageError, PointerAction,
-    PointerOptions, Stop, WaitAfter,
+    self, HeldModifiers, PointerAction, PointerCall, PointerTarget, WaitAfter,
 };
 use crate::playwright_methods::forms::{CheckedState, FormTab};
+use crate::playwright_methods::retry::{self, ActionResult, ElementAction, PreChecks};
+use crate::playwright_methods::tab::{PageError, Stop};
 use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
 use crate::run::Delivery;
 
+/// Checked-state policy owns verification around a single left click on this target.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CheckOptions {
     pub(crate) checked: bool,
-    pub(crate) click: PointerOptions,
+    pub(crate) target: PointerTarget,
 }
 
 impl CheckOptions {
     pub(crate) fn from_check(params: FrameCheckParams) -> Self {
         Self {
             checked: true,
-            click: PointerOptions {
+            target: PointerTarget {
                 selector: params.selector,
                 strict: params.strict.unwrap_or(false),
                 force: params.force.unwrap_or(false),
                 scroll: params.scroll != Some(FrameCheckParamsScroll::None),
-                wait_after: true,
                 position: params.position.map(|point| Point {
                     x: point.x,
                     y: point.y,
                 }),
-                action: PointerAction::Click(MouseClick {
-                    button: MouseButton::Left,
-                    click_count: 1,
-                    delay: None,
-                }),
                 trial: params.trial.unwrap_or(false),
-                // Playwright's check and uncheck take no modifiers, and move in one step.
-                modifiers: None,
-                steps: 1,
-                platform: None,
             },
         }
     }
@@ -54,26 +47,16 @@ impl CheckOptions {
     pub(crate) fn from_uncheck(params: FrameUncheckParams) -> Self {
         Self {
             checked: false,
-            click: PointerOptions {
+            target: PointerTarget {
                 selector: params.selector,
                 strict: params.strict.unwrap_or(false),
                 force: params.force.unwrap_or(false),
                 scroll: params.scroll != Some(FrameUncheckParamsScroll::None),
-                wait_after: true,
                 position: params.position.map(|point| Point {
                     x: point.x,
                     y: point.y,
                 }),
-                action: PointerAction::Click(MouseClick {
-                    button: MouseButton::Left,
-                    click_count: 1,
-                    delay: None,
-                }),
                 trial: params.trial.unwrap_or(false),
-                // Playwright's check and uncheck take no modifiers, and move in one step.
-                modifiers: None,
-                steps: 1,
-                platform: None,
             },
         }
     }
@@ -87,11 +70,11 @@ pub(crate) async fn set_checked<T: FormTab>(
     let delivery = progress.delivery().ok_or_else(|| {
         PlaywrightError::error("neo-runtime: a checked-state action has no delivery cell")
     })?;
-    click::retry_with_progress_if_not_connected(
+    retry::retry_with_progress_if_not_connected(
         tab,
-        &options.click.selector,
-        options.click.strict,
-        options.click.force,
+        &options.target.selector,
+        options.target.strict,
+        PreChecks::unless_forced(options.target.force),
         progress,
         &CheckAction { options, delivery },
     )
@@ -131,17 +114,29 @@ impl<T: FormTab> ElementAction<T> for CheckAction<'_> {
         match click::retry_pointer_action(
             tab,
             element,
-            &self.options.click,
-            WaitAfter::Disabled,
-            progress,
+            &PointerCall {
+                target: &self.options.target,
+                // Playwright: `server/dom.ts` `ElementHandle._setChecked`: `const result = await this._click(progress, options, 'disabled', frameVisible);`
+                action: PointerAction::Click {
+                    click: MouseClick {
+                        button: MouseButton::Left,
+                        click_count: 1,
+                        delay: None,
+                    },
+                    steps: 1,
+                    wait_after: WaitAfter::Disabled,
+                },
+            },
+            HeldModifiers::Keep,
             self.delivery,
+            progress,
         )
         .await?
         {
             ActionResult::NotConnected => return Ok(ActionResult::NotConnected),
             ActionResult::Done(()) => {}
         }
-        if self.options.click.trial {
+        if self.options.target.trial {
             return Ok(ActionResult::Done(()));
         }
         let Some(state) = read_state(tab, element, progress).await? else {
@@ -181,9 +176,9 @@ mod tests {
     use neo_runtime_spec::injected::ElementState;
 
     use super::*;
-    use crate::playwright_methods::click::tests::{ArmAnswer, FakeTab, Step, Writes};
-    use crate::playwright_methods::click::{PageError, StatesCheck, Verdict};
     use crate::playwright_methods::forms::CheckedState;
+    use crate::playwright_methods::tab::fake::{ArmAnswer, FakeTab, Step, Writes};
+    use crate::playwright_methods::tab::{PageError, StatesCheck, Verdict};
     use crate::progress::ErrorName;
     use crate::run::Delivery;
 
@@ -361,7 +356,7 @@ mod tests {
             ],
         );
         let mut options = options(true);
-        options.click.trial = true;
+        options.target.trial = true;
         let progress = Progress::for_test(1000.0);
         assert_eq!(set_checked(&tab, &options, &progress).await, Ok(()));
         assert_eq!(
@@ -441,7 +436,7 @@ mod tests {
             Err(PageError::Threw("force must skip state checks".into())),
         );
         let mut options = options(true);
-        options.click.force = true;
+        options.target.force = true;
         let progress = Progress::for_test(1000.0);
         assert_eq!(set_checked(&tab, &options, &progress).await, Ok(()));
         assert_eq!(tab.count("check_states"), 0);

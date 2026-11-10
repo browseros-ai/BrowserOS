@@ -16,7 +16,10 @@
 //!                  ├─ browser_methods    the run's Browser: created contexts, close, disposal
 //!                  ├─ debugger           context.debugger: holds a call before it starts
 //!                  └─ Tabs::session      one lazy session for the call's page
-//!                       ├─ click::click  click.rs: policy over the Tab seam
+//!                       ├─ click         typed click/dblclick/hover/tap; check and drag compose it
+//!                       │    ├─ retry    selector resolution and shared attempt pre-checks
+//!                       │    └─ aim      actionability, geometry, input turn and hit-target arming
+//!                       ├─ drop_on       page-function input; shares retry and aim
 //!                       ├─ navigate      navigate.rs: goto (commits, lifecycle, response) and title
 //!                       ├─ responses     responses.rs: Request/Response commands on goto's answer
 //!                       ├─ reads         reads.rs: textContent, innerText, getAttribute,

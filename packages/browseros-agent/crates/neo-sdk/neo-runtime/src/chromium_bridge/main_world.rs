@@ -50,8 +50,8 @@ use tokio::sync::{Mutex, OnceCell};
 use crate::chromium_bridge::cdp::{self, Command, dom, page, runtime};
 use crate::chromium_bridge::frames::FrameContext;
 use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup};
-use crate::playwright_methods::click::PageError;
 use crate::playwright_methods::evaluate::js_string;
+use crate::playwright_methods::tab::PageError;
 
 /// `() => new UtilityScript(globalThis, false)`.
 /// Playwright: `server/javascript.ts` `ExecutionContext._utilityScript`

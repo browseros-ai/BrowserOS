@@ -25,9 +25,55 @@ use neo_runtime_spec::serve::{
 };
 
 use crate::chromium_bridge::keyboard_input::{self, KeyboardTab, Platform};
-use crate::chromium_bridge::mouse_and_touch_input::{self, Devices, EffectSink, Plan};
-use crate::playwright_methods::click::{self, MouseButton, MouseClick, PageError, PressReport};
+use crate::chromium_bridge::mouse_and_touch_input::{
+    self, Devices, EffectSink, MouseButton, MouseClick, Plan,
+};
+
+use crate::playwright_methods::tab::{PageError, PressReport};
 use crate::progress::{CallError, PlaywrightError, Progress};
+
+/// Deviation: `server/input.ts` `Mouse.click`: `for (let cc = 1; cc <= clickCount; ++cc) {` Playwright has no cap; every click is two events Neo plans before writing, so a script's `clickCount: 1e9` must not take the server's memory with it.
+pub(crate) const MAX_CLICK_COUNT: u32 = 1000;
+/// Deviation: `server/input.ts` `Mouse.move`: `for (let i = 1; i <= steps; i++) {` Playwright has no cap; every step is one event Neo plans before writing, so `steps: 1e9` must not take the server's memory with it.
+pub(crate) const MAX_STEPS: u32 = 1000;
+
+/// Playwright's `steps`, default 1: no steps or fewer moves the pointer without an event, as
+/// Playwright's loop does; more than [`MAX_STEPS`] is refused before any work.
+/// Playwright: `server/input.ts` `Mouse.move`: `const { steps = 1 } = options;`
+pub(crate) fn steps_of(steps: Option<i64>) -> Result<u32, PlaywrightError> {
+    // Playwright: `server/input.ts` `Mouse.move`: `const { steps = 1 } = options;`
+    let steps = u32::try_from(steps.unwrap_or(1).max(0)).unwrap_or(u32::MAX);
+    if steps > MAX_STEPS {
+        // Deviation: `server/input.ts` `Mouse.move`: `for (let i = 1; i <= steps; i++) {` Neo caps planned events to keep an unbounded steps value from exhausting the runtime's memory.
+        return Err(PlaywrightError::error(format!(
+            "Neo does not support steps above {MAX_STEPS}"
+        )));
+    }
+    Ok(steps)
+}
+
+/// A click's `clickCount`, default 1: JS's `Math.max(0, n)` loop bound, so zero or fewer clicks
+/// write only the move; more than [`MAX_CLICK_COUNT`] is refused before any work.
+/// Playwright: `server/input.ts` `Mouse.click`: `const { delay = null, clickCount = 1, steps } = options;`
+pub(crate) fn click_count_of(click_count: Option<i64>) -> Result<u32, PlaywrightError> {
+    let click_count = u32::try_from(click_count.unwrap_or(1).max(0)).unwrap_or(u32::MAX);
+    if click_count > MAX_CLICK_COUNT {
+        // Deviation: `server/input.ts` `Mouse.click`: `for (let cc = 1; cc <= clickCount; ++cc) {` Neo caps planned events to keep an unbounded clickCount from exhausting the runtime's memory.
+        return Err(PlaywrightError::error(format!(
+            "Neo does not support a clickCount above {MAX_CLICK_COUNT}"
+        )));
+    }
+    Ok(click_count)
+}
+
+/// `if (delay)`: zero takes the pipelined path; any other number the sequential one, sleeping
+/// zero for a negative delay, as `setTimeout` treats it.
+/// Playwright: `server/input.ts` `Mouse.click`: `if (delay) {`
+pub(crate) fn click_delay(delay: Option<f64>) -> Option<Duration> {
+    delay
+        .filter(|delay| *delay != 0.0)
+        .map(|delay| Duration::try_from_secs_f64(delay.max(0.0) / 1000.0).unwrap_or(Duration::MAX))
+}
 
 /// One device call, decoded from its Page command.
 #[derive(Debug, Clone, PartialEq)]
@@ -80,7 +126,7 @@ pub(crate) enum DeviceCall {
 /// Neo: decoding a device call from its Page command.
 impl DeviceCall {
     /// The device call `call` names, or `call` back for every other Page command. A click count
-    /// above `click::MAX_CLICK_COUNT` and steps above `click::MAX_STEPS` are refused before any
+    /// above `self::MAX_CLICK_COUNT` and steps above `self::MAX_STEPS` are refused before any
     /// work, as the pointer actions refuse them.
     ///
     /// # Errors
@@ -98,17 +144,17 @@ impl DeviceCall {
             PageCall::KeyboardUp(params) => Ok(Self::KeyboardUp { key: params.key }),
             PageCall::KeyboardPress(params) => Ok(Self::KeyboardPress {
                 key: params.key,
-                delay: click::click_delay(params.delay),
+                delay: self::click_delay(params.delay),
             }),
             PageCall::KeyboardType(params) => Ok(Self::KeyboardType {
                 text: params.text,
-                delay: click::click_delay(params.delay),
+                delay: self::click_delay(params.delay),
             }),
             PageCall::KeyboardInsertText(params) => {
                 Ok(Self::KeyboardInsertText { text: params.text })
             }
             PageCall::MouseMove(params) => {
-                click::steps_of(params.steps).map(|steps| Self::MouseMove {
+                self::steps_of(params.steps).map(|steps| Self::MouseMove {
                     x: params.x,
                     y: params.y,
                     steps,
@@ -133,7 +179,7 @@ impl DeviceCall {
                 click_count: params.click_count.unwrap_or(1),
             }),
             PageCall::MouseClick(params) => {
-                click::click_count_of(params.click_count).map(|click_count| Self::MouseClick {
+                self::click_count_of(params.click_count).map(|click_count| Self::MouseClick {
                     x: params.x,
                     y: params.y,
                     click: MouseClick {
@@ -143,7 +189,7 @@ impl DeviceCall {
                             PageMouseClickParamsButton::Middle => MouseButton::Middle,
                         },
                         click_count,
-                        delay: click::click_delay(params.delay),
+                        delay: self::click_delay(params.delay),
                     },
                 })
             }
@@ -345,7 +391,7 @@ mod tests {
 
     use super::*;
     use crate::chromium_bridge::mouse_and_touch_input::{InputDevices, KeyboardState, MouseState};
-    use crate::playwright_methods::click::tests::{FakeTab, fake_owner};
+    use crate::playwright_methods::tab::fake::{FakeTab, fake_owner};
     use crate::progress::ErrorName;
     use crate::run::Delivery;
 

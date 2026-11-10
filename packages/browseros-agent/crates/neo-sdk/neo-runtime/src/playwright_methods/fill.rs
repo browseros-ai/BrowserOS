@@ -9,11 +9,12 @@ use neo_runtime_spec::serve::{FrameFillParams, FrameInputValueParams, FrameSelec
 
 use crate::chromium_bridge::keyboard_input::{self, KeyboardTab, Platform};
 use crate::chromium_bridge::mouse_and_touch_input::{Devices, Plan};
-use crate::playwright_methods::click::{
-    self, ActionResult, ElementAction, LoopAWaits, NotReady, PageError, PressReport, Stop, Tab,
-};
 use crate::playwright_methods::evaluate::HandleEntry;
 use crate::playwright_methods::forms::{FillOutcome, FormTab, SelectOption, SelectOutcome};
+use crate::playwright_methods::retry::{
+    self, ActionResult, ElementAction, LoopAWaits, PreChecks, RetryAction,
+};
+use crate::playwright_methods::tab::{NotReady, PageError, PressReport, Stop};
 use crate::progress::{CallError, DeliveryCell, InputTicket, PlaywrightError, Progress};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,11 +98,11 @@ pub(crate) async fn fill<T: FormTab + KeyboardTab>(
     progress: &Progress,
 ) -> Result<(), CallError> {
     let delivery = delivery(progress)?;
-    click::retry_with_progress_if_not_connected(
+    retry::retry_with_progress_if_not_connected(
         tab,
         &options.selector,
         options.strict,
-        options.force,
+        PreChecks::unless_forced(options.force),
         progress,
         &FillAction {
             options,
@@ -125,11 +126,11 @@ pub(crate) async fn select_option<T: FormTab>(
         .enumerate()
         .map(|(index, guid)| progress.handles().select_element(index, guid))
         .collect::<Result<Vec<_>, _>>()?;
-    click::retry_with_progress_if_not_connected(
+    retry::retry_with_progress_if_not_connected(
         tab,
         &options.selector,
         options.strict,
-        options.force,
+        PreChecks::unless_forced(options.force),
         progress,
         &SelectAction {
             options,
@@ -201,7 +202,9 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
         progress.log(format!("  fill(\"{}\")", options.value));
         let mut retry = RetryAction::new("fill");
         loop {
-            retry.before(tab, options.force, progress).await?;
+            retry
+                .before(tab, PreChecks::unless_forced(options.force), progress)
+                .await?;
             if !options.force {
                 progress.log("  waiting for element to be visible, enabled and editable");
             }
@@ -331,7 +334,9 @@ impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
         let options = self.options;
         let mut retry = RetryAction::new("select option");
         loop {
-            retry.before(tab, options.force, progress).await?;
+            retry
+                .before(tab, PreChecks::unless_forced(options.force), progress)
+                .await?;
             if !options.force {
                 progress.log("  waiting for element to be visible and enabled");
             }
@@ -372,41 +377,6 @@ impl<T: FormTab> ElementAction<T> for SelectAction<'_> {
     }
 }
 
-/// `_retryAction`'s log, wait and pre-check before each form attempt. Waits never hold input.
-struct RetryAction {
-    name: &'static str,
-    retry: usize,
-}
-
-impl RetryAction {
-    fn new(name: &'static str) -> Self {
-        Self { name, retry: 0 }
-    }
-
-    async fn before<T: Tab>(
-        &mut self,
-        tab: &T,
-        force: bool,
-        progress: &Progress,
-    ) -> Result<(), Stop> {
-        if self.retry == 0 {
-            progress.log(format!("attempting {} action", self.name));
-        } else {
-            progress.log(format!("retrying {} action", self.name));
-            let wait = click::loop_b_wait(self.retry);
-            if !wait.is_zero() {
-                progress.log(format!("  waiting {}ms", wait.as_millis()));
-                progress.wait(wait).await?;
-            }
-        }
-        self.retry += 1;
-        if !force {
-            click::wait_out_pending_navigation(tab, progress).await?;
-        }
-        Ok(())
-    }
-}
-
 fn delivery(progress: &Progress) -> Result<&Arc<DeliveryCell>, CallError> {
     progress.delivery().ok_or_else(|| {
         PlaywrightError::error("neo-runtime: a form input call has no delivery cell").into()
@@ -430,7 +400,7 @@ fn mutation_error(error: PageError) -> Stop {
 }
 
 fn log_missing(progress: &Progress, state: ElementState) {
-    if let Some(line) = click::not_ready_line(&NotReady::Missing(state)) {
+    if let Some(line) = retry::not_ready_line(&NotReady::Missing(state)) {
         progress.log(line);
     }
 }
@@ -449,8 +419,9 @@ mod tests {
 
     use super::*;
     use crate::deadline::Deadline;
-    use crate::playwright_methods::click::tests::{FakeTab, Step, Writes};
     use crate::playwright_methods::forms::InputValueMatch;
+    use crate::playwright_methods::tab::Tab;
+    use crate::playwright_methods::tab::fake::{FakeTab, Step, Writes};
     use crate::progress::{CallEntry, CallStart, ErrorName, RunScope, Trace};
     use crate::run::{Delivery, RunEnd};
 

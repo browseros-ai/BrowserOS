@@ -52,10 +52,10 @@ use crate::browser_representations::page::FrameTab;
 use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::playwright_injected_methods;
-use crate::playwright_methods::click::PageError;
 use crate::playwright_methods::navigate::{
     self, Lifecycle, Navigation, NavigationTab, Observation,
 };
+use crate::playwright_methods::tab::PageError;
 use crate::playwright_methods::waits::{self, WaitObservation, WaitTab};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};

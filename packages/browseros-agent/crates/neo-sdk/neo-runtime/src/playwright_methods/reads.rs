@@ -8,7 +8,7 @@
 //!
 //! ```text
 //!  text_content / inner_text / inner_html / get_attribute   log: waiting for <locator>
-//!   wait_for_function_on_selector  waits 0,20,50,100,100,500…  (click's LoopAWaits)
+//!   wait_for_function_on_selector  waits 0,20,50,100,100,500…  (retry's LoopAWaits)
 //!   │ prepare the tab
 //!   │ first time only: describe → name the locator │ invalid selector → Error, at once
 //!   │ glue textContent / innerText / innerHTML / getAttribute {selector, strict, name?}:
@@ -32,7 +32,7 @@
 //! ```
 //!
 //! The seam is two traits of their own, [`SelectorTab`] and [`ReadTab`], so the reads never grow
-//! click's `Tab`; `FrameTab` implements both at the bottom of this file, over click's own
+//! the shared `Tab`; `FrameTab` implements both at the bottom of this file, over its
 //! `prepare` and `describe` and the selected frame's utility world. [`wait_for_function_on_selector`]
 //! takes the page call as a closure shared by text reads and default locator snapshots.
 //! The tests drive both loops against a scripted tab under paused time.
@@ -63,6 +63,8 @@
 //! the call's timeout (on BrowserOS neo, 30 nested lists snapshot and 31 time out; GitHub, Hacker
 //! News, Wikipedia and MDN pages measured 11 to 16 levels).
 
+use crate::playwright_methods::retry;
+use crate::playwright_methods::tab;
 use std::collections::HashMap;
 use std::future::{self, Future};
 use std::time::Duration;
@@ -84,7 +86,9 @@ use neo_runtime_spec::serve::{
 use crate::browser_representations::page::FrameTab;
 use crate::chromium_bridge::frame_selector::{self, FrameOwner};
 use crate::playwright_methods::aria_yaml;
-use crate::playwright_methods::click::{self, LoopAWaits, PageError, SelectorFacts};
+
+use crate::playwright_methods::retry::LoopAWaits;
+use crate::playwright_methods::tab::{PageError, SelectorFacts};
 use crate::progress::{CallError, ErrorName, PlaywrightError, Progress};
 
 /// The selector Playwright snapshots a frame's document by when the caller gave none
@@ -106,7 +110,7 @@ const SNAPSHOT_WAITS_MS: [u64; 5] = [0, 1000, 2000, 4000, 8000];
 /// What every read of a selector's first match needs from a tab. Each future is cancel-safe:
 /// [`Progress::race`] may drop it, losing only the answer.
 pub(crate) trait SelectorTab: Send + Sync {
-    /// Makes the tab ready for page steps, as click's `Tab::prepare` does: the run's first
+    /// Makes the tab ready for page steps, as the shared `Tab::prepare` does: the run's first
     /// browser call enables the page's domains and starts its watcher, which is also what tells
     /// a call that the tab closed.
     fn prepare(&self) -> impl Future<Output = Result<(), PageError>> + Send;
@@ -122,7 +126,7 @@ pub(crate) trait SelectorTab: Send + Sync {
     fn action_pre_checks(
         &self,
         progress: &Progress,
-    ) -> impl Future<Output = Result<(), click::Stop>> + Send {
+    ) -> impl Future<Output = Result<(), tab::Stop>> + Send {
         let _ = progress;
         future::ready(Ok(()))
     }
@@ -487,8 +491,8 @@ where
         tab.action_pre_checks(progress)
             .await
             .map_err(|stop| match stop {
-                click::Stop::Retry => Stop::Again,
-                click::Stop::End(error) => Stop::End(error),
+                tab::Stop::Retry => Stop::Again,
+                tab::Stop::End(error) => Stop::End(error),
             })?;
     }
     if !*named {
@@ -939,18 +943,18 @@ fn child_nodes(node: &mut AriaNode) -> impl Iterator<Item = &mut AriaNode> {
 /// The same steps click takes, so a read and a click prepare the tab and name a selector alike.
 impl SelectorTab for FrameTab {
     fn prepare(&self) -> impl Future<Output = Result<(), PageError>> + Send {
-        click::Tab::prepare(self)
+        tab::Tab::prepare(self)
     }
 
     fn describe(
         &self,
         selector: &str,
     ) -> impl Future<Output = Result<SelectorFacts, PageError>> + Send {
-        click::Tab::describe(self, selector)
+        tab::Tab::describe(self, selector)
     }
 
-    async fn action_pre_checks(&self, progress: &Progress) -> Result<(), click::Stop> {
-        click::wait_out_pending_navigation(self, progress).await
+    async fn action_pre_checks(&self, progress: &Progress) -> Result<(), tab::Stop> {
+        retry::wait_out_pending_navigation(self, progress).await
     }
 }
 

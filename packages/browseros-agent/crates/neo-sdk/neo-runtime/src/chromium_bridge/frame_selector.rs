@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::browser_representations::page::{FrameTab, GroupGuard};
 use crate::chromium_bridge::cdp::dom;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
-use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::tab::PageError;
 
 use crate::progress;
 

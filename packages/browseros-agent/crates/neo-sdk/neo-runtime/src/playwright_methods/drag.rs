@@ -19,59 +19,45 @@
 //! A drag stopped between its halves leaves the left button held, as Playwright's does; the
 //! run's end releases it (cancelling a drag that runs).
 
+use crate::playwright_methods::devices;
 use neo_runtime_spec::serve::{FrameDragAndDropParams, FrameDragAndDropParamsScroll, Point};
 
 use crate::chromium_bridge::keyboard_input::KeyboardTab;
-use crate::playwright_methods::click::{self, PointerAction, PointerOptions};
+use crate::playwright_methods::click::{self, PointerAction, PointerCall, PointerTarget};
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// `Frame.dragAndDrop`'s options, as its two pointer actions.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DragOptions {
-    pub(crate) source: PointerOptions,
-    pub(crate) target: PointerOptions,
+    pub(crate) source: PointerTarget,
+    pub(crate) target: PointerTarget,
+    pub(crate) steps: u32,
 }
 
 /// Neo: decoding `Frame.dragAndDrop`'s params into its two pointer actions.
 impl DragOptions {
-    /// Reads `Frame.dragAndDrop`'s params. `steps` above `click::MAX_STEPS` is refused before
+    /// Reads `Frame.dragAndDrop`'s params. `steps` above `devices::MAX_STEPS` is refused before
     /// any work, as every pointer action refuses it.
     ///
     /// # Errors
     ///
     /// The refusal of `steps`.
     pub(crate) fn from_params(params: FrameDragAndDropParams) -> Result<Self, PlaywrightError> {
-        let steps = click::steps_of(params.steps)?;
-        let half = |selector: String, position: Option<&Point>, action| PointerOptions {
+        let steps = devices::steps_of(params.steps)?;
+        let half = |selector: String, position: Option<&Point>| PointerTarget {
             selector,
             strict: params.strict.unwrap_or(false),
             force: params.force.unwrap_or(false),
             scroll: params.scroll != Some(FrameDragAndDropParamsScroll::None),
-            wait_after: false,
             position: position.map(click::point),
-            action,
             trial: params.trial.unwrap_or(false),
-            modifiers: None,
-            steps,
-            platform: None,
         };
         Ok(Self {
             // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `}, { ...options, position: options.sourcePosition }, frameVisible);`
-            source: PointerOptions {
-                // Its move is Playwright's default single step.
-                steps: 1,
-                ..half(
-                    params.source,
-                    params.source_position.as_ref(),
-                    PointerAction::MoveAndDown,
-                )
-            },
+            source: half(params.source, params.source_position.as_ref()),
             // Playwright: `server/frames.ts` `Frame.dragAndDrop`: `}, { ...options, position: options.targetPosition }, frameVisible);`
-            target: half(
-                params.target,
-                params.target_position.as_ref(),
-                PointerAction::MoveAndUp,
-            ),
+            target: half(params.target, params.target_position.as_ref()),
+            steps,
         })
     }
 }
@@ -90,8 +76,28 @@ pub(crate) async fn drag_and_drop<T: KeyboardTab>(
         // call gave up on it, completes only that half: `Done` waits for the drop.
         delivery.expect_more();
     }
-    click::pointer_action(tab, &options.source, progress).await?;
-    click::pointer_action(tab, &options.target, progress).await
+    click::perform(
+        tab,
+        &PointerCall {
+            target: &options.source,
+            action: PointerAction::MoveAndDown,
+        },
+        None,
+        progress,
+    )
+    .await?;
+    click::perform(
+        tab,
+        &PointerCall {
+            target: &options.target,
+            action: PointerAction::MoveAndUp {
+                steps: options.steps,
+            },
+        },
+        None,
+        progress,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -99,7 +105,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::playwright_methods::click::tests::FakeTab;
+    use crate::playwright_methods::tab::fake::FakeTab;
     use crate::run::Delivery;
     use neo_runtime_spec::injected::Point;
 
@@ -116,19 +122,15 @@ mod tests {
         }))
         .expect("served");
         let (source, target) = (&options.source, &options.target);
-        assert_eq!(source.action, PointerAction::MoveAndDown);
-        assert_eq!(target.action, PointerAction::MoveAndUp);
         assert_eq!(
             (source.selector.as_str(), target.selector.as_str()),
             ("#a", "#b")
         );
-        assert_eq!(source.steps, 1, "the press's move is one step");
-        assert_eq!(target.steps, 4, "`steps` is the release's move");
+        assert_eq!(options.steps, 4, "`steps` is the release's move");
         assert_eq!(source.position, Some(Point { x: 1.0, y: 2.0 }));
         assert_eq!(target.position, Some(Point { x: 3.0, y: 4.0 }));
         for half in [source, target] {
-            assert!(half.strict && half.force && half.trial && !half.scroll && !half.wait_after);
-            assert_eq!(half.modifiers, None);
+            assert!(half.strict && half.force && half.trial && !half.scroll);
         }
         assert_eq!(
             decode(&json!({ "source": "#a", "target": "#b", "steps": 1001 })),
@@ -195,9 +197,17 @@ mod tests {
         let delivery = progress.delivery().expect("an input call");
         delivery.expect_more();
         *tab.pending.lock().expect("pending") = Some("http://localhost/first".to_string());
-        click::pointer_action(&tab, &options.source, &progress)
-            .await
-            .expect("the press");
+        click::perform(
+            &tab,
+            &PointerCall {
+                target: &options.source,
+                action: PointerAction::MoveAndDown,
+            },
+            None,
+            &progress,
+        )
+        .await
+        .expect("the press");
         assert_eq!(
             tab.count("navigation_settled"),
             1,
@@ -211,9 +221,19 @@ mod tests {
         );
 
         *tab.pending.lock().expect("pending") = Some("http://localhost/second".to_string());
-        click::pointer_action(&tab, &options.target, &progress)
-            .await
-            .expect("the drop");
+        click::perform(
+            &tab,
+            &PointerCall {
+                target: &options.target,
+                action: PointerAction::MoveAndUp {
+                    steps: options.steps,
+                },
+            },
+            None,
+            &progress,
+        )
+        .await
+        .expect("the drop");
         assert_eq!(
             *tab.checkpoints.lock().expect("checkpoints"),
             [0, 0],
@@ -242,9 +262,17 @@ mod tests {
         let progress = Progress::for_test(30_000.0);
         let delivery = progress.delivery().expect("an input call");
         delivery.expect_more();
-        click::pointer_action(&tab, &options.source, &progress)
-            .await
-            .expect("the press");
+        click::perform(
+            &tab,
+            &PointerCall {
+                target: &options.source,
+                action: PointerAction::MoveAndDown,
+            },
+            None,
+            &progress,
+        )
+        .await
+        .expect("the press");
         assert_eq!(
             delivery.delivery(),
             Delivery::Unknown,

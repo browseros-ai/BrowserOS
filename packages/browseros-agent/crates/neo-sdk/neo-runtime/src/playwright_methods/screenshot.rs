@@ -21,6 +21,7 @@
 //! still restores the page, removes its masks and resets the background (Playwright sends the
 //! same steps without waiting for them when a screenshot fails).
 
+use crate::playwright_methods::retry;
 use std::collections::HashMap;
 use std::mem;
 use std::sync::{Arc, Weak};
@@ -49,8 +50,9 @@ use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frame_selector;
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
 use crate::playwright_methods::capture;
-use crate::playwright_methods::click::{self, NotReady, PageError, Scroll, StatesCheck, Tab};
+
 use crate::playwright_methods::evaluate::HandleEntry;
+use crate::playwright_methods::tab::{NotReady, PageError, Scroll, StatesCheck, Tab};
 use crate::playwright_methods::waits::{self, WaitForSelectorOptions};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::run::PageId;
@@ -460,7 +462,7 @@ async fn original_viewport_size(tab: &FrameTab, progress: &Progress) -> Result<S
 /// Playwright: `server/screenshotter.ts` `Screenshotter._fullPageSize`
 /// Neo: it polls on loop A's backoff rather than on animation frames.
 async fn full_page_size(tab: &FrameTab, progress: &Progress) -> Result<Size, CallError> {
-    let mut backoff = click::LoopAWaits::new(progress.timeout_ms());
+    let mut backoff = retry::LoopAWaits::new(progress.timeout_ms());
     loop {
         progress.wait(backoff.next_wait()).await?;
         let read = progress
@@ -497,7 +499,7 @@ async fn wait_and_scroll_into_view(
             progress.log("attempting scroll into view action");
         } else {
             progress.log("retrying scroll into view action");
-            let wait = click::loop_b_wait(retry);
+            let wait = retry::loop_b_wait(retry);
             if !wait.is_zero() {
                 progress.log(format!("  waiting {}ms", wait.as_millis()));
                 progress.wait(wait).await?;
@@ -536,7 +538,7 @@ async fn wait_and_scroll_into_view(
             Ok(StatesCheck::NotConnected) => NotReady::NotConnected,
             Err(error) => return Err(element_error(error)),
         };
-        match click::not_ready_line(&not_ready) {
+        match retry::not_ready_line(&not_ready) {
             Some(line) => progress.log(line),
             // Playwright: `server/dom.ts` `throwElementIsNotAttached`: `throw new Error('Element is not attached to the DOM');`
             None => return Err(PlaywrightError::error("Element is not attached to the DOM").into()),

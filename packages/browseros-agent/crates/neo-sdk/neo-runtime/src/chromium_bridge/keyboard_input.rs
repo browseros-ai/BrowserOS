@@ -38,7 +38,7 @@ use crate::chromium_bridge::mouse_and_touch_input::{
     self, DragStep, Effect, InputDevices, KeyboardState, Owner, Plan, Planned,
 };
 use crate::chromium_bridge::playwright_injected_methods;
-use crate::playwright_methods::click::{PageError, PressReport, Tab};
+use crate::playwright_methods::tab::{PageError, PressReport, Tab};
 use crate::progress::InputTicket;
 
 // ---------------------------------------------------------------------------------------------
@@ -1213,7 +1213,7 @@ mod tests {
     use crate::chromium_bridge::mouse_and_touch_input::{
         Devices, EffectSink, InputSender, Pen, PlannedInput,
     };
-    use crate::playwright_methods::click::tests::{FakeInput, FakeTab, Step, Writes, fake_owner};
+    use crate::playwright_methods::tab::fake::{FakeInput, FakeTab, Step, Writes, fake_owner};
     use crate::progress::DeliveryCell;
     use crate::run::Delivery;
 

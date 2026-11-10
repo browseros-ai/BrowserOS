@@ -22,7 +22,7 @@ use serde_json::Value;
 use crate::browser_representations::page::{DialogAnswer, PageSession};
 use crate::chromium_bridge::cdp::{Command, page};
 use crate::chromium_bridge::playwright_injected_methods;
-use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::tab::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// Neo: the `dialog@` guid prefix; the rest is `<targetId>:<n>`, minted by the run.

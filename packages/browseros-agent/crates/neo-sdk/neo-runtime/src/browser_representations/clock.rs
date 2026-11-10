@@ -31,8 +31,8 @@ use crate::browser_representations::tabs::Tabs;
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::main_world::BuiltExpression;
 use crate::debugger::DEFAULT_CONTEXT;
-use crate::playwright_methods::click::PageError;
 use crate::playwright_methods::evaluate;
+use crate::playwright_methods::tab::PageError;
 use crate::progress::PlaywrightError;
 
 /// Neo: the browser name Playwright's server hands the clock (`browser.options.name`): Neo's

@@ -35,9 +35,9 @@ use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frames::FrameScope;
 use crate::chromium_bridge::playwright_injected_methods;
 use crate::method_router::encode_result;
-use crate::playwright_methods::click::PageError;
 use crate::playwright_methods::pdf;
 use crate::playwright_methods::screenshot::{self, Mask, ScreenshotOptions, ScreenshotParams};
+use crate::playwright_methods::tab::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// `locator.screenshot`'s call, with Playwright's `ElementHandle.screenshot` title.

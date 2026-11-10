@@ -25,8 +25,8 @@ use crate::browser_representations::page::{
     FrameTab, GroupGuard, InputPermit, PageSession, ResolvedElement,
 };
 use crate::chromium_bridge::frame_selector;
-use crate::playwright_methods::click::{PageError, Tab};
 use crate::playwright_methods::evaluate::{self, HandleEntry};
+use crate::playwright_methods::tab::{PageError, Tab};
 use crate::progress::InputTicket;
 
 /// The result of the one fill evaluation. `NeedsInput` retains the original ticket for the
@@ -52,7 +52,7 @@ pub(crate) enum SelectOutcome {
     Unadoptable,
 }
 
-/// One method per forms page evaluation. Returned futures are cancel-safe, as in `click::Tab`.
+/// One method per forms page evaluation. Returned futures are cancel-safe, as in `tab::Tab`.
 /// Mutating methods start a detached page task eagerly, retaining input and element ownership
 /// until the answer. Callers check Progress before handing off a ticket, as click's writer does.
 pub(crate) trait FormTab: Tab {
@@ -410,7 +410,7 @@ pub(crate) mod tests {
     use tokio::time;
 
     use super::*;
-    use crate::playwright_methods::click::tests::{FakeTab, Step};
+    use crate::playwright_methods::tab::fake::{FakeTab, Step};
     use crate::progress::DeliveryCell;
     use crate::run::Delivery;
 

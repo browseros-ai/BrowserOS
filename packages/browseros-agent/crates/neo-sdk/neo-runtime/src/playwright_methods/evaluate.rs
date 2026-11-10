@@ -22,6 +22,7 @@
 //! run's random token, so a guid a script kept from an earlier run, in this process or another,
 //! never names a handle of this one.
 
+use crate::playwright_methods::tab;
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::future::Future;
@@ -52,8 +53,9 @@ use crate::chromium_bridge::main_world::{
     self, BuiltExpression, Called, ContextPin, DocumentId, Installed, MainFunction,
 };
 use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup};
-use crate::playwright_methods::click::{self, LoopAWaits, PageError};
 use crate::playwright_methods::reads::SelectorTab;
+use crate::playwright_methods::retry::LoopAWaits;
+use crate::playwright_methods::tab::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress, js_number};
 
 /// Neo: the guid prefix of a run's handles (`handle@<run>.<n>`), opaque to the SDK.
@@ -2945,7 +2947,7 @@ pub(crate) fn adopted_element_handle(
 }
 
 /// Neo: starts the page's watcher before the caller's page JS runs, once per run, as every action
-/// and read does first (`click::Tab::prepare`), so a navigation that JS requests
+/// and read does first (`tab::Tab::prepare`), so a navigation that JS requests
 /// (`location.href = …`) is followed from its request on. Playwright, listening since it
 /// connected, sees it too, and the next action's `performActionPreChecks` waits it out.
 /// This only arms tracking; it never runs action prechecks or waits for navigation or dialogs.
@@ -2953,7 +2955,7 @@ pub(crate) fn adopted_element_handle(
 /// lifecycle, and cleanup callers of the main-world helpers must not start page tracking.
 async fn prepare_page(tab: &FrameTab, progress: &Progress) -> Result<(), CallError> {
     progress
-        .race(click::Tab::prepare(tab))
+        .race(tab::Tab::prepare(tab))
         .await?
         .map_err(|error| page_error(error).into())
 }

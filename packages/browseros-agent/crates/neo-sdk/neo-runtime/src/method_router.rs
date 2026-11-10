@@ -97,7 +97,9 @@ use crate::playwright_methods::capture::{
     NeoScreenshotParams,
 };
 use crate::playwright_methods::check::{self, CheckOptions};
-use crate::playwright_methods::click::{self, PointerOptions};
+use crate::playwright_methods::click::{
+    self, ClickOptions, DblclickOptions, HoverOptions, TapOptions,
+};
 use crate::playwright_methods::content::{self, SetContentOptions, WriteOrder, WriteTurn};
 use crate::playwright_methods::devices::{self, DeviceCall};
 use crate::playwright_methods::drag::{self, DragOptions};
@@ -512,7 +514,10 @@ enum ObjectCall {
 )]
 enum Route {
     /// `Frame.click`, `dblclick`, `hover` and `tap`: one policy (`click.rs`).
-    FramePointer(PointerOptions),
+    FrameClick(ClickOptions),
+    FrameDblclick(DblclickOptions),
+    FrameHover(HoverOptions),
+    FrameTap(TapOptions),
     FrameGoto(GotoOptions),
     FrameTitle,
     FrameTextContent(ReadOptions),
@@ -1526,12 +1531,12 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
             params.selector,
             params.strict,
         ))),
-        FrameCall::Click(params) => PointerOptions::from_click(params).map(Route::FramePointer),
+        FrameCall::Click(params) => ClickOptions::from_params(params).map(Route::FrameClick),
         FrameCall::Dblclick(params) => {
-            PointerOptions::from_dblclick(params).map(Route::FramePointer)
+            DblclickOptions::from_params(params).map(Route::FrameDblclick)
         }
-        FrameCall::Hover(params) => Ok(Route::FramePointer(PointerOptions::from_hover(params))),
-        FrameCall::Tap(params) => Ok(Route::FramePointer(PointerOptions::from_tap(params))),
+        FrameCall::Hover(params) => Ok(Route::FrameHover(HoverOptions::from_params(params))),
+        FrameCall::Tap(params) => Ok(Route::FrameTap(TapOptions::from_params(params))),
         FrameCall::Goto(params) => Ok(Route::FrameGoto(GotoOptions::from_params(params))),
         FrameCall::Title(_) => Ok(Route::FrameTitle),
         FrameCall::TextContent(params) => {
@@ -2120,16 +2125,19 @@ async fn finish_reply(result: Result<Option<Value>, CallError>, target: CallRepl
     let _sent = reply.send((text, events.seq()));
 }
 
-/// The typed handler dispatch, also used by the skeleton's tests with click's existing fake.
+/// The typed handler dispatch, also exercised with the shared scripted tab.
 async fn serve_route<T: FormTab + KeyboardTab>(
     tab: &T,
     route: Route,
     progress: &Progress,
 ) -> Result<Option<Value>, CallError> {
     match route {
-        Route::FramePointer(options) => click::pointer_action(tab, &options, progress)
+        Route::FrameClick(options) => click::click(tab, &options, progress).await.map(|()| None),
+        Route::FrameDblclick(options) => click::dblclick(tab, &options, progress)
             .await
             .map(|()| None),
+        Route::FrameHover(options) => click::hover(tab, &options, progress).await.map(|()| None),
+        Route::FrameTap(options) => click::tap(tab, &options, progress).await.map(|()| None),
         Route::FrameFill(options) => fill::fill(tab, &options, progress)
             .await
             .and_then(|()| encode_result::<FrameFillParams>(&FrameFillResult {})),
@@ -2408,9 +2416,9 @@ mod tests {
     use crate::chromium_bridge::cdp;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies, tab_record};
-    use crate::playwright_methods::click::tests::FakeTab;
     use crate::playwright_methods::forms::SelectOption;
     use crate::playwright_methods::screenshot::TabScreenshots;
+    use crate::playwright_methods::tab::fake::FakeTab;
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
     use crate::run::{PageId, StartPage};
@@ -2707,10 +2715,10 @@ mod tests {
             }
             Route::FrameSetChecked(options) => {
                 assert_eq!(options.checked, method == "check");
-                assert_eq!(options.click.selector, "input");
-                assert!(options.click.strict && options.click.force && options.click.trial);
-                assert!(!options.click.scroll);
-                assert_eq!(options.click.position, Some(Point { x: 2.0, y: 3.0 }));
+                assert_eq!(options.target.selector, "input");
+                assert!(options.target.strict && options.target.force && options.target.trial);
+                assert!(!options.target.scroll);
+                assert_eq!(options.target.position, Some(Point { x: 2.0, y: 3.0 }));
             }
             Route::FrameSelectOption(options) => {
                 assert!(options.strict && options.force);
@@ -2827,10 +2835,13 @@ mod tests {
     fn a_frame_click_routes_with_its_options_and_title() {
         let routed = route_frame("click", json!({ "selector": "#go", "strict": true }));
         assert_eq!(routed.meta.and_then(|meta| meta.title), Some("Click"));
-        let Ok(ObjectCall::Frame(Route::FramePointer(options))) = routed.route else {
+        let Ok(ObjectCall::Frame(Route::FrameClick(options))) = routed.route else {
             panic!("a click on the run's frame routes to Frame.click");
         };
-        assert_eq!((options.selector.as_str(), options.strict), ("#go", true));
+        assert_eq!(
+            (options.target.selector.as_str(), options.target.strict),
+            ("#go", true)
+        );
     }
 
     #[test]
@@ -2895,10 +2906,10 @@ mod tests {
 
     #[test]
     fn tests_that_dblclick_hover_and_tap_route_to_the_pointer_policy() {
-        for (method, title, name) in [
-            ("dblclick", "Double click", "dblclick"),
-            ("hover", "Hover", "hover"),
-            ("tap", "Tap", "tap"),
+        for (method, title) in [
+            ("dblclick", "Double click"),
+            ("hover", "Hover"),
+            ("tap", "Tap"),
         ] {
             let routed = route_frame(method, json!({ "selector": "#go", "noWaitAfter": true }));
             assert_eq!(routed.meta.and_then(|meta| meta.title), Some(title));
@@ -2906,11 +2917,13 @@ mod tests {
                 routed.meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
                 "{method} is an input method with a delivery cell"
             );
-            let Ok(ObjectCall::Frame(Route::FramePointer(options))) = routed.route else {
-                panic!("{method} routes to the pointer policy");
-            };
-            assert_eq!(options.action.name(), name);
-            assert!(!options.wait_after, "{method} waits for no navigation");
+            let expected = matches!(
+                (method, routed.route),
+                ("dblclick", Ok(ObjectCall::Frame(Route::FrameDblclick(_))))
+                    | ("hover", Ok(ObjectCall::Frame(Route::FrameHover(_))))
+                    | ("tap", Ok(ObjectCall::Frame(Route::FrameTap(_))))
+            );
+            assert!(expected, "{method} routes to its typed entry point");
         }
     }
 

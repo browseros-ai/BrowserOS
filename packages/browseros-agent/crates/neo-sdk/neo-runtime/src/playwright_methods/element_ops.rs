@@ -5,7 +5,7 @@
 //! have yet. Rust keeps each whole wait, as for `neo:waitForURL`.
 //!
 //! ```text
-//!  focus / blur           loop A (`click::retry_with_progress_if_not_connected`)
+//!  focus / blur           loop A (`retry::retry_with_progress_if_not_connected`)
 //!    resolve → the tab's input turn → focusElement / blurElement glue
 //!      detached → resolve again
 //!  dispatchEvent          eval's main-world element callback (`evaluate::call_on_element_main`)
@@ -29,7 +29,6 @@
 
 use browseros_cdp::CdpError;
 use std::future::Future;
-use std::time::Duration;
 
 use neo_runtime_spec::injected::{
     ElementState, InjectedBlurElementParams, InjectedSelectTextParams,
@@ -44,15 +43,16 @@ use tokio::sync::oneshot;
 use crate::browser_representations::page::{FrameTab, GroupGuard, InputPermit, ResolvedElement};
 use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frame_selector;
-use crate::playwright_methods::click::{
-    self, ActionResult, ElementAction, NotReady, PageError, Resolved, Scroll, StatesCheck, Stop,
-    Tab,
-};
+
 use crate::playwright_methods::evaluate::{
     self, CreatedHandle, EvalCall, MainCallback, SerializedArgument,
 };
 use crate::playwright_methods::forms::{FocusOutcome, FormTab};
 use crate::playwright_methods::reads::SelectorTab;
+use crate::playwright_methods::retry::{self, ActionResult, ElementAction, PreChecks, RetryAction};
+use crate::playwright_methods::tab::{
+    NotReady, PageError, Resolved, Scroll, StatesCheck, Stop, Tab,
+};
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 // ---------------------------------------------------------------------------------------------
@@ -209,11 +209,11 @@ pub(crate) async fn focus<T: ElementOpsTab>(
     target: &ElementTarget,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    click::retry_with_progress_if_not_connected(
+    retry::retry_with_progress_if_not_connected(
         tab,
         &target.selector,
         target.strict,
-        false,
+        PreChecks::Run,
         progress,
         &Focus::Focus,
     )
@@ -228,11 +228,11 @@ pub(crate) async fn blur<T: ElementOpsTab>(
     target: &ElementTarget,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    click::retry_with_progress_if_not_connected(
+    retry::retry_with_progress_if_not_connected(
         tab,
         &target.selector,
         target.strict,
-        false,
+        PreChecks::Run,
         progress,
         &Focus::Blur,
     )
@@ -350,7 +350,7 @@ async fn dispatch_on_aria_ref(
     // Playwright names the locator before any page call; Neo learns its text from the page.
     progress.name_locator(&options.selector);
     let mut locator = None;
-    let mut waits = click::LoopAWaits::new(progress.timeout_ms());
+    let mut waits = retry::LoopAWaits::new(progress.timeout_ms());
     let (element, owner) = loop {
         let wait = waits.next_wait();
         if !wait.is_zero() {
@@ -555,7 +555,7 @@ async fn attached<T: ElementOpsTab>(
 ) -> Result<Resolved<T::Element>, CallError> {
     progress.name_locator(&target.selector);
     let mut named = false;
-    let mut waits = click::LoopAWaits::new(progress.timeout_ms());
+    let mut waits = retry::LoopAWaits::new(progress.timeout_ms());
     loop {
         let wait = waits.next_wait();
         if !wait.is_zero() {
@@ -563,7 +563,7 @@ async fn attached<T: ElementOpsTab>(
         }
         let attempt: Result<Option<Resolved<T::Element>>, Stop> = async {
             progress.race(Tab::prepare(tab)).await??;
-            click::wait_out_pending_navigation(tab, progress).await?;
+            retry::wait_out_pending_navigation(tab, progress).await?;
             if !named {
                 let facts = progress
                     .race(Tab::describe(tab, &target.selector))
@@ -600,9 +600,6 @@ enum Attempt {
     Missing(ElementState),
 }
 
-/// Playwright: `server/dom.ts` `ElementHandle._retryAction`: `const waitTime = [0, 20, 100, 100, 500];`
-const RETRY_WAITS_MS: [u64; 5] = [0, 20, 100, 100, 500];
-
 /// Playwright: `server/dom.ts` `throwElementIsNotAttached`: `'Element is not attached to the DOM'`
 const ELEMENT_NOT_ATTACHED: &str = "Element is not attached to the DOM";
 
@@ -617,7 +614,7 @@ const ELEMENT_NOT_VISIBLE: &str = "Element is not visible";
 async fn retry_action<T, F, Fut>(
     tab: &T,
     progress: &Progress,
-    action_name: &str,
+    action_name: &'static str,
     force: bool,
     mut attempt: F,
 ) -> Result<(), CallError>
@@ -626,28 +623,16 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<Attempt, CallError>>,
 {
-    let mut retry: usize = 0;
+    let mut retry = RetryAction::new(action_name);
     loop {
-        if retry == 0 {
-            progress.log(format!("attempting {action_name} action"));
-        } else {
-            progress.log(format!("retrying {action_name} action"));
-            let wait = RETRY_WAITS_MS[(retry - 1).min(RETRY_WAITS_MS.len() - 1)];
-            if wait > 0 {
-                progress.log(format!("  waiting {wait}ms"));
-                progress.wait(Duration::from_millis(wait)).await?;
-            }
-        }
-        if !force {
-            click::wait_out_pending_navigation(tab, progress)
-                .await
-                .map_err(|stop| match stop {
-                    Stop::End(error) => error,
-                    Stop::Retry => PlaywrightError::error(ELEMENT_NOT_ATTACHED).into(),
-                })?;
-        }
+        retry
+            .before(tab, PreChecks::unless_forced(force), progress)
+            .await
+            .map_err(|stop| match stop {
+                Stop::End(error) => error,
+                Stop::Retry => PlaywrightError::error(ELEMENT_NOT_ATTACHED).into(),
+            })?;
         let result = attempt().await?;
-        retry = retry.saturating_add(1);
         match result {
             Attempt::Done => return Ok(()),
             Attempt::NotConnected => {

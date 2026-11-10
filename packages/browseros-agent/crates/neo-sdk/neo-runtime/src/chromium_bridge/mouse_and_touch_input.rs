@@ -41,8 +41,27 @@ use crate::chromium_bridge::cdp::input::{self, DispatchMouseEvent};
 use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::keyboard_input::TextTail;
 use crate::chromium_bridge::playwright_injected_methods;
-use crate::playwright_methods::click::{MouseButton, MouseClick, PageError, PressReport};
+use crate::playwright_methods::tab::{PageError, PressReport};
 use crate::progress::InputTicket;
+
+/// A click's mouse events, decided before any is sent.
+/// Playwright: `server/input.ts` `Mouse.click`: `const { delay = null, clickCount = 1, steps } = options;`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MouseClick {
+    pub(crate) button: MouseButton,
+    pub(crate) click_count: u32,
+    /// Playwright's `delay` when truthy: the sequential path, sleeping between press and
+    /// release (zero for a negative delay, as `setTimeout` treats it).
+    pub(crate) delay: Option<Duration>,
+}
+
+/// Neo: the three mouse buttons accepted by the typed input plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
 
 /// The run that pressed a key or a button: its own CDP session on the tab, since every run
 /// attaches a session of its own.

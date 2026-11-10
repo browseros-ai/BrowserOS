@@ -1,7 +1,7 @@
 //! One handed-out tab as the server side of a browser call sees it (Playwright's `server/page.ts`
 //! with `chromium/crPage.ts` and `crInput.ts`): this tab's CDP session,
 //! the domains a browser call needs, one watcher task that answers dialogs and tracks
-//! navigations, the tab's input turns and devices ([`TabInputs`]), and the `click::Tab`
+//! navigations, the tab's input turns and devices ([`TabInputs`]), and the `tab::Tab`
 //! implementation over all of it and the utility world (`playwright_injected_methods.rs`).
 //!
 //! This file is mechanism; `click.rs` and `navigate.rs` own policy. Nothing here writes a
@@ -86,15 +86,15 @@ use crate::chromium_bridge::playwright_injected_methods::{
     self, ObjectGroup, TestIdAttribute, World,
 };
 use crate::events::{EventHub, Flushes};
-use crate::playwright_methods::click::{
-    Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
-    StatesCheck, Stop, Tab, Verdict,
-};
 use crate::playwright_methods::highlight::Highlights;
 use crate::playwright_methods::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
 use crate::playwright_methods::network_idle::{IdleChange, SharedIdle};
+use crate::playwright_methods::tab::{
+    Arming, Geometry, NotReady, PageError, PressReport, Resolved, Scroll, SelectorFacts,
+    StatesCheck, Stop, Tab, Verdict,
+};
 use crate::progress::{InputTicket, PlaywrightError, Progress};
 use crate::run::PageId;
 
@@ -2542,7 +2542,7 @@ impl Drop for PageSession {
     }
 }
 
-/// `click::Tab::Element` for the real tab: one element and the group of the resolution that
+/// `tab::Tab::Element` for the real tab: one element and the group of the resolution that
 /// produced it. The handle dies with the group.
 #[derive(Clone)]
 pub(crate) struct ResolvedElement {
@@ -2578,7 +2578,7 @@ impl ResolvedElement {
     }
 }
 
-/// `click::Tab::Armed` for the real tab. The interceptor handle lives in its own object group,
+/// `tab::Tab::Armed` for the real tab. The interceptor handle lives in its own object group,
 /// separate from the element's, so its stop never races the element group's release: the
 /// interceptor's JS closure keeps its own reference to the element.
 ///
@@ -2586,7 +2586,7 @@ impl ResolvedElement {
 /// shared with the user and with later runs, until a stop names it or another setup replaces
 /// it. So this value is the only way to stop it, and it exists from the setup's answer on,
 /// whether or not the click still waits (`arm_interceptor` on the run's tracker). Its owner
-/// follows the input (`click::Tab::Armed`), and its `Drop` sends the stop.
+/// follows the input (`tab::Tab::Armed`), and its `Drop` sends the stop.
 pub(crate) struct ArmedInterceptor {
     handle: Handle<HitTargetInterceptor>,
     group: Option<GroupGuard>,
@@ -5308,7 +5308,7 @@ mod tests {
 
         fn plan(self, plan: &mut Plan, simulated: &mut InputDevices, owner: &Owner) {
             use crate::chromium_bridge::keyboard_input::Platform;
-            use crate::playwright_methods::click::MouseButton;
+            use crate::chromium_bridge::mouse_and_touch_input::MouseButton;
             let linux = Platform::Linux;
             match self {
                 Self::Down(key) => {

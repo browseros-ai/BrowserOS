@@ -33,11 +33,11 @@ use crate::chromium_bridge::frames::FrameScope;
 use crate::debugger::DEFAULT_CONTEXT;
 use crate::method_router::encode_result;
 use crate::playwright_methods::browser_methods;
-use crate::playwright_methods::click::PageError;
 use crate::playwright_methods::content::WriteTurn;
 use crate::playwright_methods::highlight;
 use crate::playwright_methods::history::{self, HistoryOptions};
 use crate::playwright_methods::navigate;
+use crate::playwright_methods::tab::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::quickjs_bridge;
 

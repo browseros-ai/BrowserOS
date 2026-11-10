@@ -21,8 +21,8 @@ use neo_runtime_spec::{MethodGroup, MethodMeta};
 use crate::browser_representations::page::FrameTab;
 use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frames::{FrameContext, FrameScope};
-use crate::playwright_methods::click::PageError;
 use crate::playwright_methods::evaluate::{self, CreatedHandle};
+use crate::playwright_methods::tab::PageError;
 use crate::progress::{CallError, PlaywrightError, Progress};
 
 /// Playwright: `server/chromium/crPage.ts` `CRPage.getFrameElement`: `throw new Error('Frame has been detached.');`

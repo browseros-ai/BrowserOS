@@ -45,7 +45,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::chromium_bridge::cdp::{self, Command, dom, page, runtime};
-use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::tab::PageError;
 
 /// Neo's isolated world. Distinct from BrowserOS core's `browseros` and Playwright's
 /// `__playwright_utility_world_<guid>`: worlds are shared by name across every client of the

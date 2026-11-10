@@ -43,11 +43,12 @@ use crate::browser_representations::page::{
 use crate::chromium_bridge::frame_selector;
 use crate::chromium_bridge::frames::{FrameScope, Host};
 use crate::chromium_bridge::playwright_injected_methods;
-use crate::playwright_methods::click::{LoopAWaits, PageError, SelectorFacts, Tab};
 use crate::playwright_methods::evaluate::{self, CreatedHandle, Handles};
 use crate::playwright_methods::navigate::{
     Lifecycle, Navigation, NavigationState, NavigationTab, Observation,
 };
+use crate::playwright_methods::retry::LoopAWaits;
+use crate::playwright_methods::tab::{PageError, SelectorFacts, Tab};
 use crate::progress::{CallError, PlaywrightError, Progress};
 use crate::url_match::{SerializedUrlMatch, UrlMatcher};
 

@@ -80,6 +80,7 @@ neo-runtime/src/chromium_bridge/page_events.rs
 neo-runtime/src/debugger.rs
 neo-runtime/src/events.rs
 neo-runtime/src/mime.rs
+neo-runtime/src/playwright_methods/aim.rs
 neo-runtime/src/playwright_methods/browser_methods.rs
 neo-runtime/src/playwright_methods/capture.rs
 neo-runtime/src/playwright_methods/content.rs
@@ -93,5 +94,6 @@ neo-runtime/src/playwright_methods/highlight.rs
 neo-runtime/src/playwright_methods/history.rs
 neo-runtime/src/playwright_methods/network_idle.rs
 neo-runtime/src/playwright_methods/pdf.rs
+neo-runtime/src/playwright_methods/retry.rs
 neo-runtime/src/playwright_methods/screenshot.rs
 neo-runtime/src/playwright_methods/set_input_files.rs

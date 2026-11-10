@@ -1,7 +1,7 @@
 //! Playwright: `server/frames.ts` `Frame.drop`
 //! Neo: `Locator.drop`: files and data dropped on an element at its point. The files are
 //! `set_input_files.rs`'s preparation, local files read into payloads; then loop A
-//! (`click.rs`) around loop B for the `drop` pointer action, whose input is Playwright's page
+//! (`retry.rs`) around loop B for the `drop` pointer action, whose input is Playwright's page
 //! function (a `DataTransfer` and three drag events), not device input.
 //!
 //! ```text
@@ -22,8 +22,8 @@ use std::sync::Arc;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use neo_runtime_spec::injected::{
-    DropData, DropOutcome, ElementState, HitTargetAction, InjectedDropOnParams,
-    InjectedDropOnResult, Point, UploadFile,
+    DropData, DropOutcome, HitTargetAction, InjectedDropOnParams, InjectedDropOnResult, Point,
+    UploadFile,
 };
 use neo_runtime_spec::serve::FrameDropParams;
 use tokio::fs;
@@ -32,10 +32,10 @@ use tokio::sync::oneshot;
 use crate::artifacts::{Artifacts, ExistingPath};
 use crate::browser_representations::page::{FrameTab, InputPermit, ResolvedElement};
 use crate::mime;
-use crate::playwright_methods::click::{
-    self, ActionResult, Arming, ElementAction, NotReady, PageError, StatesCheck, Stop, Tab, Verdict,
-};
+use crate::playwright_methods::aim::{self, Actionability, Aim, Readiness};
+use crate::playwright_methods::retry::{self, ActionResult, ElementAction, PreChecks, RetryAction};
 use crate::playwright_methods::set_input_files::{self, LocalFiles, WirePayload};
+use crate::playwright_methods::tab::{NotReady, PageError, Stop, Tab, Verdict};
 use crate::progress::{CallError, DeliveryCell, InputTicket, PlaywrightError, Progress};
 
 /// Playwright: `server/frames.ts` `Frame.drop`: `throw new Error('At least one of "files" or "data" must be provided.');`
@@ -129,13 +129,16 @@ pub(crate) async fn drop_on<T: DropTab>(
         Vec::new()
     };
     let items = Arc::new(DropItems { payloads, data });
-    let position = position.as_ref().map(click::point);
+    let position = position.map(|point| Point {
+        x: point.x,
+        y: point.y,
+    });
     // Playwright: `server/frames.ts` `Frame.drop`: `dom.assertDone(await this._retryWithProgressIfNotConnected(progress, target, { waitForFrameVisible: true }, (progress, handle, box, frameVisible) => handle._drop(progress, inputFileItems, data, params, frameVisible)));`
-    click::retry_with_progress_if_not_connected(
+    retry::retry_with_progress_if_not_connected(
         tab,
         &selector,
         strict.unwrap_or(false),
-        false,
+        PreChecks::Run,
         progress,
         &DropAction {
             items: &items,
@@ -237,26 +240,15 @@ impl<T: DropTab> ElementAction<T> for DropAction<'_> {
         element: &T::Element,
         progress: &Progress,
     ) -> Result<ActionResult<()>, Stop> {
-        let mut retry = 0;
+        let mut retries = RetryAction::new("drop");
         loop {
-            if retry == 0 {
-                progress.log("attempting drop action");
-            } else {
-                progress.log("retrying drop action");
-                let wait = click::loop_b_wait(retry);
-                if !wait.is_zero() {
-                    progress.log(format!("  waiting {}ms", wait.as_millis()));
-                    progress.wait(wait).await?;
-                }
-            }
-            click::wait_out_pending_navigation(tab, progress).await?;
+            let retry = retries.before(tab, PreChecks::Run, progress).await?;
             let reason = match self.attempt(tab, element, retry, progress).await? {
                 None => return Ok(ActionResult::Done(())),
                 Some(NotReady::NotConnected) => return Ok(ActionResult::NotConnected),
                 Some(reason) => reason,
             };
-            retry += 1;
-            if let Some(line) = click::not_ready_line(&reason) {
+            if let Some(line) = retry::not_ready_line(&reason) {
                 progress.log(line);
             }
         }
@@ -275,48 +267,27 @@ impl DropAction<'_> {
         retry: usize,
         progress: &Progress,
     ) -> Result<Option<NotReady>, Stop> {
-        progress.log("  waiting for element to be visible and stable");
-        match progress
-            .race(tab.check_states(element, &DROP_STATES, true))
-            .await??
+        let (point, input, armed) = match aim::ready_to_perform(
+            tab,
+            element,
+            &Aim {
+                actionability: Actionability::Stable,
+                hit_target: HitTargetAction::Mouse,
+                position: self.position,
+                scroll: true,
+                force: false,
+            },
+            retry,
+            progress,
+        )
+        .await?
         {
-            StatesCheck::Ready => {}
-            StatesCheck::NotConnected => return Ok(Some(NotReady::NotConnected)),
-            StatesCheck::Missing(state) => return Ok(Some(NotReady::Missing(state))),
-        }
-        progress.log("  element is visible and stable");
-        progress.log("  scrolling into view if needed");
-        let scroll = click::SCROLLS[retry % click::SCROLLS.len()];
-        if let Some(reason) = progress
-            .race(tab.scroll(element, scroll, self.position))
-            .await??
-        {
-            return Ok(Some(reason));
-        }
-        progress.log("  done scrolling");
-        let geometry = progress
-            .race(tab.geometry(element, self.position, false))
-            .await??;
-        let point = match click::click_point(&geometry, self.position) {
-            Ok(point) => click::round_point(&point),
-            Err(reason) => return Ok(Some(reason)),
-        };
-        // The hit check and the drop run inside the tab's input turn, as every pointer action's
-        // input does, so another call's interceptor never judges this drop.
-        let input = progress.race(tab.input()).await?;
-        // Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `const actionType = action.name === 'move and up' ? 'drag' : ((action.name === 'hover' || action.name === 'tap') ? action.name : 'mouse');`
-        let armed = match progress
-            .race(tab.arm(
-                element,
-                point.clone(),
-                HitTargetAction::Mouse,
-                input.clone(),
-            ))
-            .await??
-        {
-            Arming::Armed(armed) => armed,
-            Arming::NotConnected => return Ok(Some(NotReady::NotConnected)),
-            Arming::Intercepted(target) => return Ok(Some(NotReady::Intercepted(target))),
+            Readiness::NotReady(reason) => return Ok(Some(reason)),
+            Readiness::Ready {
+                point,
+                input,
+                armed,
+            } => (point, input, armed),
         };
         // The last chance to stop before the page sees the drop.
         progress.check()?;
@@ -341,7 +312,9 @@ impl DropAction<'_> {
             return Err(PlaywrightError::error(NOT_ACCEPTED).into());
         }
         // Deviation: `server/dom.ts` `ElementHandle._performPointerAction`: `if (hitTargetResult !== 'done')` The drop's own events are untrusted, which the interceptor lets through, so only a trusted press during the drop can block; Playwright then drops again, while Neo, which never delivers input twice, ends the drop done.
-        let _verdict: Verdict = progress.race(tab.verdict(armed)).await?;
+        if let Some(armed) = armed {
+            let _verdict: Verdict = progress.race(tab.verdict(armed)).await?;
+        }
         drop(input);
         // Playwright's perform ignores a node gone by then: the action is done.
         progress.log("  drop action done");
@@ -350,10 +323,6 @@ impl DropAction<'_> {
         Ok(None)
     }
 }
-
-/// Playwright: `server/dom.ts` `ElementHandle._performPointerAction`: `['visible', 'stable']`
-/// (the drop's `waitForEnabled: false`).
-const DROP_STATES: [ElementState; 2] = click::HOVER_STATES;
 
 /// What a drop needs from a tab beyond loop B's pointer steps.
 pub(crate) trait DropTab: Tab {
@@ -435,7 +404,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::playwright_methods::click::tests::FakeTab;
+    use crate::playwright_methods::tab::fake::FakeTab;
     use crate::run::Delivery;
 
     thread_local! {

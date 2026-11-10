@@ -24,7 +24,7 @@ use crate::browser_representations::page::PageState;
 use crate::browser_representations::tabs::{PageEntry, Tabs};
 use crate::chromium_bridge::cdp::{self, Command};
 use crate::chromium_bridge::frames::{FrameInfo, FrameScope, Host};
-use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::tab::PageError;
 use crate::progress::PlaywrightError;
 use crate::quickjs_bridge;
 use crate::run::PageId;

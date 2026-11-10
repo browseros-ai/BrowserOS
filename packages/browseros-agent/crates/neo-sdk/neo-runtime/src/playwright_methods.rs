@@ -1,5 +1,10 @@
 //! Playwright's methods: what each call a script makes (`click`, `fill`, `goto`, `textContent`, ...) does.
+//!
+//! `tab` owns the browser seam, `retry` the shared retry policy, and `aim` element preparation.
+//! Typed pointer entry points live in `click`; check and drag compose them, while non-pointer
+//! families use the neutral owners directly. The tab/input bridge shares plans and answers.
 
+pub(crate) mod aim;
 pub(crate) mod aria_yaml;
 pub(crate) mod browser_methods;
 pub(crate) mod capture;
@@ -24,7 +29,9 @@ pub(crate) mod page_and_context_methods;
 pub(crate) mod pdf;
 pub(crate) mod press;
 pub(crate) mod reads;
+pub(crate) mod retry;
 pub(crate) mod screenshot;
 pub(crate) mod set_input_files;
 pub(crate) mod states;
+pub(crate) mod tab;
 pub(crate) mod waits;

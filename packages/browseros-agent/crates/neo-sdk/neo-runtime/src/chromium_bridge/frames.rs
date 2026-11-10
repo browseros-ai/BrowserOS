@@ -19,7 +19,7 @@ use crate::browser_representations::page::Session;
 use crate::chromium_bridge::cdp::{self, Command, dom, page, target};
 use crate::chromium_bridge::main_world::MainWorld;
 use crate::chromium_bridge::playwright_injected_methods::{self, ObjectGroup, World};
-use crate::playwright_methods::click::PageError;
+use crate::playwright_methods::tab::PageError;
 use crate::run::PageId;
 
 /// The document from which a call starts resolving selectors.

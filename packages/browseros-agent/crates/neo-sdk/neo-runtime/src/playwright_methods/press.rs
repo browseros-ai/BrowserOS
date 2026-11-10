@@ -33,10 +33,10 @@ use neo_runtime_spec::serve::{FramePressParams, FrameTypeParams};
 
 use crate::chromium_bridge::keyboard_input::{self, KeyboardTab, Platform};
 use crate::chromium_bridge::mouse_and_touch_input::{Devices, Plan};
-use crate::playwright_methods::click::{
-    self, ActionResult, ElementAction, PageError, PressReport, Stop,
-};
+
 use crate::playwright_methods::forms::{FocusOutcome, FormTab};
+use crate::playwright_methods::retry::{self, ActionResult, ElementAction, PreChecks};
+use crate::playwright_methods::tab::{PageError, PressReport, Stop};
 use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
 
 /// What the call types into its element: one press, or a text.
@@ -115,11 +115,11 @@ pub(crate) async fn press<T: FormTab + KeyboardTab>(
         delivery,
         platform: OnceLock::new(),
     };
-    click::retry_with_progress_if_not_connected(
+    retry::retry_with_progress_if_not_connected(
         tab,
         &options.selector,
         options.strict,
-        false,
+        PreChecks::Run,
         progress,
         &action,
     )
@@ -245,8 +245,8 @@ mod tests {
     use tokio::time;
 
     use super::*;
-    use crate::playwright_methods::click::tests::{FakeTab, Step, Writes};
     use crate::playwright_methods::forms::tests::FormSteps;
+    use crate::playwright_methods::tab::fake::{FakeTab, Step, Writes};
     use crate::progress::ErrorName;
     use crate::run::Delivery;
 

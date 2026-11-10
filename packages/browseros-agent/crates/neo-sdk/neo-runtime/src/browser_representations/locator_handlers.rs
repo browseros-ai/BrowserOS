@@ -25,9 +25,9 @@ use tokio::sync::watch;
 
 use crate::browser_representations::page::{FrameTab, PageSession};
 use crate::chromium_bridge::frames::FrameScope;
-use crate::playwright_methods::click::{SelectorFacts, Tab};
 use crate::playwright_methods::evaluate::CreatedHandle;
 use crate::playwright_methods::states::{self, StateOptions};
+use crate::playwright_methods::tab::{SelectorFacts, Tab};
 use crate::playwright_methods::waits::{self, WaitForSelectorOptions};
 use crate::progress::{CallError, PlaywrightError, Progress};
 
