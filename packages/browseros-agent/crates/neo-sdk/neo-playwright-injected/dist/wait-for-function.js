@@ -4,15 +4,15 @@
 function waitForFunction(utilityScript, expression, isFunction, polling, arg) {
   let evaledExpression;
   const predicate = () => {
-    let result2 = evaledExpression ?? globalThis.eval(expression);
+    let result = evaledExpression ?? globalThis.eval(expression);
     if (isFunction === true) {
-      evaledExpression = result2;
-      result2 = result2(arg);
-    } else if (isFunction === false) {} else if (typeof result2 === "function") {
-      evaledExpression = result2;
-      result2 = result2(arg);
+      evaledExpression = result;
+      result = result(arg);
+    } else if (isFunction === false) {} else if (typeof result === "function") {
+      evaledExpression = result;
+      result = result(arg);
     }
-    return result2;
+    return result;
   };
   let fulfill = () => {};
   let reject = () => {};

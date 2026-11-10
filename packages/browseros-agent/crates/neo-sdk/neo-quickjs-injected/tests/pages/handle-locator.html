@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- tests/assets/input/handle-locator.html at Playwright 26137face, its timer through the page's setTimeout. -->
-<html>
+<html lang="en">
   <head>
     <title>Interstitial test</title>
   </head>
@@ -35,11 +35,11 @@
         margin: 50px;
       }
     </style>
-    <div><button id="target">Click me</button></div>
+    <div><button id="target" type="button">Click me</button></div>
     <div id="aside">A place on the side to hover</div>
     <div id="interstitial">
       <div>This interstitial covers the button</div>
-      <button id="close">Close the interstitial</button>
+      <button id="close" type="button">Close the interstitial</button>
     </div>
     <script>
       const target = document.querySelector('#target');
@@ -64,6 +64,7 @@
       });
 
       let timesToShow = 0;
+      // biome-ignore lint/correctness/noUnusedVariables: Parity scripts call this fixture API through window.setupAnnoyingInterstitial.
       function setupAnnoyingInterstitial(event, times, capture) {
         timesToShow = times;
         const listener = () => {

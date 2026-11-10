@@ -4,11 +4,11 @@
      the dragged id, drop moves that element into the target), a wheel target, and a same-origin
      child frame whose drop listener records into this page. `window.__facts()` reads it all. -->
 <title>dispatch</title>
-<button id="button">button</button>
+<button id="button" type="button">button</button>
 <div id="source" draggable="true">source</div>
 <div id="target">target</div>
 <div id="wheel">wheel</div>
-<iframe name="child" srcdoc="<div id=c>child</div><script>document.querySelector('#c').addEventListener('drop', (e) => parent.__record(e, 'child'))</script>"></iframe>
+<iframe name="child" title="child frame" srcdoc="<div id=c>child</div><script>document.querySelector('#c').addEventListener('drop', (e) => parent.__record(e, 'child'))</script>"></iframe>
 <script>
 // BrowserOS neo's takeover bar is not the page's (frame-top.html explains); remove it on sight.
 new MutationObserver(() => document.querySelector('browseros-neo-takeover')?.remove()).observe(

@@ -796,10 +796,10 @@ function tokenize(str1) {
     column = 0;
   };
   const locStart = { line, column };
-  const codepoint = function(i2) {
-    if (i2 >= str.length)
+  const codepoint = function(i) {
+    if (i >= str.length)
       return -1;
-    return str[i2];
+    return str[i];
   };
   const next = function(num) {
     if (num === undefined)
@@ -831,10 +831,10 @@ function tokenize(str1) {
     locStart.column = column;
     return true;
   };
-  const eof = function(codepoint2) {
-    if (codepoint2 === undefined)
-      codepoint2 = code;
-    return codepoint2 === -1;
+  const eof = function(codepoint) {
+    if (codepoint === undefined)
+      codepoint = code;
+    return codepoint === -1;
   };
   const donothing = function() {};
   const parseerror = function() {};
@@ -1013,22 +1013,22 @@ function tokenize(str1) {
     }
   };
   const consumeAnIdentlikeToken = function() {
-    const str2 = consumeAName();
-    if (str2.toLowerCase() === "url" && next() === 40) {
+    const str = consumeAName();
+    if (str.toLowerCase() === "url" && next() === 40) {
       consume();
       while (whitespace(next(1)) && whitespace(next(2)))
         consume();
       if (next() === 34 || next() === 39)
-        return new FunctionToken(str2);
+        return new FunctionToken(str);
       else if (whitespace(next()) && (next(2) === 34 || next(2) === 39))
-        return new FunctionToken(str2);
+        return new FunctionToken(str);
       else
         return consumeAURLToken();
     } else if (next() === 40) {
       consume();
-      return new FunctionToken(str2);
+      return new FunctionToken(str);
     } else {
-      return new IdentToken(str2);
+      return new IdentToken(str);
     }
   };
   const consumeAStringToken = function(endingCodePoint) {
@@ -1719,15 +1719,15 @@ function parseCSS(selector, customNames) {
     return isComma(p) || isCloseParen(p) || isEOF(p) || isClauseCombinator(p) || tokens[p] instanceof WhitespaceToken;
   }
   function consumeFunctionArguments() {
-    const result2 = [consumeArgument()];
+    const result = [consumeArgument()];
     while (true) {
       skipWhitespace();
       if (!isComma())
         break;
       pos++;
-      result2.push(consumeArgument());
+      result.push(consumeArgument());
     }
-    return result2;
+    return result;
   }
   function consumeArgument() {
     skipWhitespace();
@@ -1738,24 +1738,24 @@ function parseCSS(selector, customNames) {
     return consumeComplexSelector();
   }
   function consumeComplexSelector() {
-    const result2 = { simples: [] };
+    const result = { simples: [] };
     skipWhitespace();
     if (isClauseCombinator()) {
-      result2.simples.push({ selector: { functions: [{ name: "scope", args: [] }] }, combinator: "" });
+      result.simples.push({ selector: { functions: [{ name: "scope", args: [] }] }, combinator: "" });
     } else {
-      result2.simples.push({ selector: consumeSimpleSelector(), combinator: "" });
+      result.simples.push({ selector: consumeSimpleSelector(), combinator: "" });
     }
     while (true) {
       skipWhitespace();
       if (isClauseCombinator()) {
-        result2.simples[result2.simples.length - 1].combinator = tokens[pos++].value;
+        result.simples[result.simples.length - 1].combinator = tokens[pos++].value;
         skipWhitespace();
       } else if (isSelectorClauseEnd()) {
         break;
       }
-      result2.simples.push({ combinator: "", selector: consumeSimpleSelector() });
+      result.simples.push({ combinator: "", selector: consumeSimpleSelector() });
     }
-    return result2;
+    return result;
   }
   function consumeSimpleSelector() {
     let rawCSSString = "";
@@ -1871,7 +1871,7 @@ function parseSelector(selector) {
         throw new InvalidSelectorError(`Malformed selector: ${part.name}=` + part.body);
       }
       const nested = { name: part.name, source: part.body, body: { parsed: parseSelector(innerSelector), distance } };
-      const lastFrame = [...nested.body.parsed.parts].reverse().find((part2) => part2.name === "internal:control" && part2.body === "enter-frame");
+      const lastFrame = [...nested.body.parsed.parts].reverse().find((part) => part.name === "internal:control" && part.body === "enter-frame");
       const lastFrameIndex = lastFrame ? nested.body.parsed.parts.indexOf(lastFrame) : -1;
       const outerParts = parts[0]?.name === "internal:control" && parts[0].body === "any-frame" ? parts.slice(1) : parts;
       if (lastFrameIndex !== -1 && selectorPartsEqual(nested.body.parsed.parts.slice(0, lastFrameIndex + 1), outerParts.slice(0, lastFrameIndex + 1))) {
@@ -1913,8 +1913,8 @@ function stringifySelector(selector, forceEngineName) {
   }).join(" >> ");
 }
 function visitAllSelectorParts(selector, visitor) {
-  const visit = (selector2, nested) => {
-    for (const part of selector2.parts) {
+  const visit = (selector, nested) => {
+    for (const part of selector.parts) {
       visitor(part, nested);
       if (kNestedSelectorNames.has(part.name))
         visit(part.body.parsed, true);
@@ -1996,10 +1996,10 @@ function parseAttributeSelector(selector, allowUnquotedStrings) {
   let EOL = selector.length === 0;
   const next = () => selector[wp] || "";
   const eat1 = () => {
-    const result2 = next();
+    const result = next();
     ++wp;
     EOL = wp >= selector.length;
-    return result2;
+    return result;
   };
   const syntaxError = (stage) => {
     if (EOL)
@@ -2014,25 +2014,25 @@ function parseAttributeSelector(selector, allowUnquotedStrings) {
     return char >= "" || char >= "0" && char <= "9" || char >= "A" && char <= "Z" || char >= "a" && char <= "z" || char >= "0" && char <= "9" || char === "_" || char === "-";
   }
   function readIdentifier() {
-    let result2 = "";
+    let result = "";
     skipSpaces();
     while (!EOL && isCSSNameChar(next()))
-      result2 += eat1();
-    return result2;
+      result += eat1();
+    return result;
   }
   function readQuotedString(quote) {
-    let result2 = eat1();
-    if (result2 !== quote)
+    let result = eat1();
+    if (result !== quote)
       syntaxError("parsing quoted string");
     while (!EOL && next() !== quote) {
       if (next() === "\\")
         eat1();
-      result2 += eat1();
+      result += eat1();
     }
     if (next() !== quote)
       syntaxError("parsing quoted string");
-    result2 += eat1();
-    return result2;
+    result += eat1();
+    return result;
   }
   function readRegularExpression() {
     if (eat1() !== "/")
@@ -2326,8 +2326,8 @@ function innerAsLocators(factory, parsed, isFrameLocator = false, maxOutputSize 
     }
     let locatorPartWithEngine;
     if (["xpath", "css"].includes(part.name)) {
-      const selectorPart2 = stringifySelector({ parts: [part] }, true);
-      locatorPartWithEngine = factory.generateLocator(base, "default", selectorPart2);
+      const selectorPart = stringifySelector({ parts: [part] }, true);
+      locatorPartWithEngine = factory.generateLocator(base, "default", selectorPart);
     }
     tokens.push([locatorPart, locatorPartWithEngine].filter(Boolean));
   }
@@ -5737,9 +5737,9 @@ function getElementLabels(textCache, element, options) {
     return [{ full: ariaLabel, normalized: normalizeWhiteSpace(ariaLabel), immediate: [ariaLabel] }];
   const isNonHiddenInput = element.nodeName === "INPUT" && element.type !== "hidden";
   if (["BUTTON", "METER", "OUTPUT", "PROGRESS", "SELECT", "TEXTAREA"].includes(element.nodeName) || isNonHiddenInput) {
-    const labels2 = element.labels;
-    if (labels2)
-      return [...labels2].map((label) => elementText(textCache, label));
+    const labels = element.labels;
+    if (labels)
+      return [...labels].map((label) => elementText(textCache, label));
   }
   return [];
 }
@@ -5749,7 +5749,7 @@ var kSupportedAttributes = ["selected", "checked", "pressed", "expanded", "level
 kSupportedAttributes.sort();
 function validateSupportedRole(attr, roles, role) {
   if (!roles.includes(role))
-    throw new Error(`"${attr}" attribute is only supported for roles: ${roles.slice().sort().map((role2) => `"${role2}"`).join(", ")}`);
+    throw new Error(`"${attr}" attribute is only supported for roles: ${roles.slice().sort().map((role) => `"${role}"`).join(", ")}`);
 }
 function validateSupportedValues(attr, values) {
   if (attr.op !== "<truthy>" && !values.includes(attr.value))
@@ -6291,7 +6291,7 @@ var textEngine = {
     if (args.length !== 1 || typeof args[0] !== "string")
       throw new Error(`"text" engine expects a single string`);
     const text = normalizeWhiteSpace(args[0]).toLowerCase();
-    const matcher = (elementText2) => elementText2.normalized.toLowerCase().includes(text);
+    const matcher = (elementText) => elementText.normalized.toLowerCase().includes(text);
     return elementMatchesText(evaluator._cacheText, element, matcher) === "self";
   }
 };
@@ -6300,10 +6300,10 @@ var textIsEngine = {
     if (args.length !== 1 || typeof args[0] !== "string")
       throw new Error(`"text-is" engine expects a single string`);
     const text = normalizeWhiteSpace(args[0]);
-    const matcher = (elementText2) => {
-      if (!text && !elementText2.immediate.length)
+    const matcher = (elementText) => {
+      if (!text && !elementText.immediate.length)
         return true;
-      return elementText2.immediate.some((s) => normalizeWhiteSpace(s) === text);
+      return elementText.immediate.some((s) => normalizeWhiteSpace(s) === text);
     };
     return elementMatchesText(evaluator._cacheText, element, matcher) !== "none";
   }
@@ -6313,9 +6313,9 @@ var textMatchesEngine = {
     if (args.length === 0 || typeof args[0] !== "string" || args.length > 2 || args.length === 2 && typeof args[1] !== "string")
       throw new Error(`"text-matches" engine expects a regexp body and optional regexp flags`);
     const re = new RegExp(args[0], args.length === 2 ? args[1] : undefined);
-    const matcher = (elementText2) => {
+    const matcher = (elementText) => {
       re.lastIndex = 0;
-      return re.test(elementText2.full);
+      return re.test(elementText.full);
     };
     return elementMatchesText(evaluator._cacheText, element, matcher) === "self";
   }
@@ -6327,7 +6327,7 @@ var hasTextEngine = {
     if (shouldSkipForTextMatching(element))
       return false;
     const text = normalizeWhiteSpace(args[0]).toLowerCase();
-    const matcher = (elementText2) => elementText2.normalized.toLowerCase().includes(text);
+    const matcher = (elementText) => elementText.normalized.toLowerCase().includes(text);
     return matcher(elementText(evaluator._cacheText, element));
   }
 };
@@ -6893,17 +6893,17 @@ class Locator {
     }
     const selectorBase = selector;
     const self = this;
-    self.locator = (selector2, options2) => {
-      return new Locator(injectedScript, selectorBase ? selectorBase + " >> " + selector2 : selector2, options2);
+    self.locator = (selector, options) => {
+      return new Locator(injectedScript, selectorBase ? selectorBase + " >> " + selector : selector, options);
     };
     self.getByTestId = (testId) => self.locator(getByTestIdSelector(injectedScript.testIdAttributeNameForStrictErrorAndConsoleCodegen(), testId));
-    self.getByAltText = (text, options2) => self.locator(getByAltTextSelector(text, options2));
-    self.getByLabel = (text, options2) => self.locator(getByLabelSelector(text, options2));
-    self.getByPlaceholder = (text, options2) => self.locator(getByPlaceholderSelector(text, options2));
-    self.getByText = (text, options2) => self.locator(getByTextSelector(text, options2));
-    self.getByTitle = (text, options2) => self.locator(getByTitleSelector(text, options2));
-    self.getByRole = (role, options2 = {}) => self.locator(getByRoleSelector(role, options2));
-    self.filter = (options2) => new Locator(injectedScript, selector, options2);
+    self.getByAltText = (text, options) => self.locator(getByAltTextSelector(text, options));
+    self.getByLabel = (text, options) => self.locator(getByLabelSelector(text, options));
+    self.getByPlaceholder = (text, options) => self.locator(getByPlaceholderSelector(text, options));
+    self.getByText = (text, options) => self.locator(getByTextSelector(text, options));
+    self.getByTitle = (text, options) => self.locator(getByTitleSelector(text, options));
+    self.getByRole = (role, options = {}) => self.locator(getByRoleSelector(role, options));
+    self.filter = (options) => new Locator(injectedScript, selector, options);
     self.visible = () => new Locator(injectedScript, selector, { visible: true });
     self.first = () => self.locator("nth=0");
     self.last = () => self.locator("nth=-1");
@@ -7211,8 +7211,8 @@ ${value.stack}`;
   if (visitorInfo.extendedSerialization) {
     if (isMap(value)) {
       const m = [];
-      const id2 = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id2);
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
       const iterator = value.entries();
       const next = new Map().entries().next;
       while (true) {
@@ -7221,12 +7221,12 @@ ${value.stack}`;
           break;
         m.push({ k: serialize(entry.value[0], handleSerializer, visitorInfo), v: serialize(entry.value[1], handleSerializer, visitorInfo) });
       }
-      return { m, id: id2 };
+      return { m, id };
     }
     if (isSet(value)) {
       const s = [];
-      const id2 = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id2);
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
       const iterator = value.values();
       const next = new Set().values().next;
       while (true) {
@@ -7235,21 +7235,21 @@ ${value.stack}`;
           break;
         s.push(serialize(entry.value, handleSerializer, visitorInfo));
       }
-      return { s, id: id2 };
+      return { s, id };
     }
   }
   if (Array.isArray(value)) {
     const a = [];
-    const id2 = ++visitorInfo.lastId;
-    visitorInfo.visited.set(value, id2);
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id);
     for (let i = 0;i < value.length; ++i)
       a.push(serialize(value[i], handleSerializer, visitorInfo));
-    return { a, id: id2 };
+    return { a, id };
   }
   if (typeof value === "object") {
     const o = [];
-    const id2 = ++visitorInfo.lastId;
-    visitorInfo.visited.set(value, id2);
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id);
     for (const name of Object.keys(value)) {
       let item;
       try {
@@ -7269,7 +7269,7 @@ ${value.stack}`;
     } catch (e) {}
     if (jsonWrapper)
       return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);
-    return { o, id: id2 };
+    return { o, id };
   }
   if (typeof value === "function" && value.name.startsWith(kFunctionBindingPrefix))
     return { fn: value.name };
@@ -7331,7 +7331,7 @@ class UtilityScript {
   jsonValue(returnByValue, value) {
     if (value === undefined)
       return;
-    return serializeAsCallArgument(value, (value2) => ({ fallThrough: value2 }));
+    return serializeAsCallArgument(value, (value) => ({ fallThrough: value }));
   }
   _jsonValueNoThrow(value) {
     try {
@@ -7624,8 +7624,8 @@ class InjectedScript {
           roots = this._queryLayoutSelector(roots, part, root);
         } else {
           const next = new Set;
-          for (const root2 of roots) {
-            const all = this._queryEngineAll(part, root2);
+          for (const root of roots) {
+            const all = this._queryEngineAll(part, root);
             for (const one of all)
               next.add(one);
           }
@@ -8720,21 +8720,21 @@ class InjectedScript {
   expectArray(elements, options) {
     const expression = options.expression;
     if (expression === "to.have.count") {
-      const received2 = elements.length;
-      const matches2 = received2 === options.expectedNumber;
-      return { received: received2, matches: matches2 };
+      const received = elements.length;
+      const matches = received === options.expectedNumber;
+      return { received, matches };
     }
     if (!options.expectedText)
       throw this.createStacklessError("Expected text is not provided for " + expression);
     if (["to.have.class.array", "to.contain.class.array"].includes(expression)) {
       const receivedClassLists = elements.map((e) => e.classList);
-      const received2 = receivedClassLists.map(String);
+      const received = receivedClassLists.map(String);
       if (receivedClassLists.length !== options.expectedText.length)
-        return { received: received2, matches: false };
-      const matches2 = this._matchSequentially(options.expectedText, receivedClassLists, (matcher, r) => matcher.matchesClassList(this, r, expression === "to.contain.class.array"));
+        return { received, matches: false };
+      const matches = this._matchSequentially(options.expectedText, receivedClassLists, (matcher, r) => matcher.matchesClassList(this, r, expression === "to.contain.class.array"));
       return {
-        received: received2,
-        matches: matches2
+        received,
+        matches
       };
     }
     if (!["to.contain.text.array", "to.have.text.array"].includes(expression))
@@ -8792,9 +8792,9 @@ function createTextMatcher(selector, internal) {
   if (selector[0] === "/" && selector.lastIndexOf("/") > 0) {
     const lastSlash = selector.lastIndexOf("/");
     const re = new RegExp(selector.substring(1, lastSlash), selector.substring(lastSlash + 1));
-    const matcher = (elementText2) => {
+    const matcher = (elementText) => {
       re.lastIndex = 0;
-      return re.test(elementText2.full);
+      return re.test(elementText.full);
     };
     return { matcher, kind: "regex" };
   }
@@ -8816,16 +8816,16 @@ function createTextMatcher(selector, internal) {
   selector = normalizeWhiteSpace(selector);
   if (strict) {
     if (internal)
-      return { kind: "strict", matcher: (elementText2) => elementText2.normalized === selector };
-    const strictTextNodeMatcher = (elementText2) => {
-      if (!selector && !elementText2.immediate.length)
+      return { kind: "strict", matcher: (elementText) => elementText.normalized === selector };
+    const strictTextNodeMatcher = (elementText) => {
+      if (!selector && !elementText.immediate.length)
         return true;
-      return elementText2.immediate.some((s) => normalizeWhiteSpace(s) === selector);
+      return elementText.immediate.some((s) => normalizeWhiteSpace(s) === selector);
     };
     return { matcher: strictTextNodeMatcher, kind: "strict" };
   }
   selector = selector.toLowerCase();
-  return { kind: "lax", matcher: (elementText2) => elementText2.normalized.toLowerCase().includes(selector) };
+  return { kind: "lax", matcher: (elementText) => elementText.normalized.toLowerCase().includes(selector) };
 }
 
 class ExpectedTextMatcher {

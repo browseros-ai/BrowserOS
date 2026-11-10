@@ -242,16 +242,16 @@ class ClockController {
     this._duringTick = true;
     try {
       if (typeof timer.func !== "function") {
-        let error2;
+        let error;
         try {
           (() => {
             globalThis.eval(timer.func);
           })();
         } catch (e) {
-          error2 = e;
+          error = e;
         }
         await new Promise((f) => this._embedder.postTask(f));
-        return { timerFound: true, error: error2 };
+        return { timerFound: true, error };
       }
       let args = timer.args;
       if (timer.type === "AnimationFrame" /* AnimationFrame */)

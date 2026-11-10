@@ -4,8 +4,8 @@
      link downloads /attachment; #cross is a cross-site frame (localhost at the fixture server's
      port, another site than the page's 127.0.0.1) whose #cross-link downloads /attachment. -->
 <a id="blank" target="_blank" href="/attachment">New window</a>
-<iframe id="same" src="/owner-outer.html"></iframe>
-<iframe id="cross"></iframe>
+<iframe id="same" title="same-origin download frame" src="/owner-outer.html"></iframe>
+<iframe id="cross" title="cross-origin download frame"></iframe>
 <script>
 document.getElementById('cross').src = `http://localhost:${location.port}/owner-cross.html`;
 </script>

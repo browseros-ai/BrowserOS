@@ -235,8 +235,8 @@ ${value.stack}`;
   if (visitorInfo.extendedSerialization) {
     if (isMap(value)) {
       const m = [];
-      const id2 = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id2);
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
       const iterator = value.entries();
       const next = new Map().entries().next;
       while (true) {
@@ -245,12 +245,12 @@ ${value.stack}`;
           break;
         m.push({ k: serialize(entry.value[0], handleSerializer, visitorInfo), v: serialize(entry.value[1], handleSerializer, visitorInfo) });
       }
-      return { m, id: id2 };
+      return { m, id };
     }
     if (isSet(value)) {
       const s = [];
-      const id2 = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id2);
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
       const iterator = value.values();
       const next = new Set().values().next;
       while (true) {
@@ -259,21 +259,21 @@ ${value.stack}`;
           break;
         s.push(serialize(entry.value, handleSerializer, visitorInfo));
       }
-      return { s, id: id2 };
+      return { s, id };
     }
   }
   if (Array.isArray(value)) {
     const a = [];
-    const id2 = ++visitorInfo.lastId;
-    visitorInfo.visited.set(value, id2);
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id);
     for (let i = 0;i < value.length; ++i)
       a.push(serialize(value[i], handleSerializer, visitorInfo));
-    return { a, id: id2 };
+    return { a, id };
   }
   if (typeof value === "object") {
     const o = [];
-    const id2 = ++visitorInfo.lastId;
-    visitorInfo.visited.set(value, id2);
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id);
     for (const name of Object.keys(value)) {
       let item;
       try {
@@ -293,7 +293,7 @@ ${value.stack}`;
     } catch (e) {}
     if (jsonWrapper)
       return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);
-    return { o, id: id2 };
+    return { o, id };
   }
   if (typeof value === "function" && value.name.startsWith(kFunctionBindingPrefix))
     return { fn: value.name };

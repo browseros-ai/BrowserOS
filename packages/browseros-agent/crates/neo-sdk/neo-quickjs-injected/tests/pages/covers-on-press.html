@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <title>Covers on press</title>
@@ -10,9 +10,9 @@
 </style>
 </head>
 <body>
-<button id="choose">Choose</button>
-<button id="dismiss">Dismiss</button>
-<div id="list" role="listbox" aria-label="Options"><div role="option">Option</div></div>
+<button id="choose" type="button">Choose</button>
+<button id="dismiss" type="button">Dismiss</button>
+<div id="list" role="listbox" aria-label="Options"><!-- biome-ignore lint/a11y/useFocusableInteractive: This pointer-release overlay deliberately keeps its option non-focusable. --><div role="option">Option</div></div>
 <script>
   // Two buttons that act on their own `mousedown`, as a select or a menu item does: `Choose`
   // opens a listbox over the whole page, so its release lands on the listbox; `Dismiss` hides

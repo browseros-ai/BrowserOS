@@ -973,8 +973,8 @@ ${value.stack}`;
   if (visitorInfo.extendedSerialization) {
     if (isMap(value)) {
       const m = [];
-      const id2 = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id2);
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
       const iterator = value.entries();
       const next = new Map().entries().next;
       while (true) {
@@ -983,12 +983,12 @@ ${value.stack}`;
           break;
         m.push({ k: serialize(entry.value[0], handleSerializer, visitorInfo), v: serialize(entry.value[1], handleSerializer, visitorInfo) });
       }
-      return { m, id: id2 };
+      return { m, id };
     }
     if (isSet(value)) {
       const s = [];
-      const id2 = ++visitorInfo.lastId;
-      visitorInfo.visited.set(value, id2);
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
       const iterator = value.values();
       const next = new Set().values().next;
       while (true) {
@@ -997,21 +997,21 @@ ${value.stack}`;
           break;
         s.push(serialize(entry.value, handleSerializer, visitorInfo));
       }
-      return { s, id: id2 };
+      return { s, id };
     }
   }
   if (Array.isArray(value)) {
     const a = [];
-    const id2 = ++visitorInfo.lastId;
-    visitorInfo.visited.set(value, id2);
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id);
     for (let i = 0;i < value.length; ++i)
       a.push(serialize(value[i], handleSerializer, visitorInfo));
-    return { a, id: id2 };
+    return { a, id };
   }
   if (typeof value === "object") {
     const o = [];
-    const id2 = ++visitorInfo.lastId;
-    visitorInfo.visited.set(value, id2);
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id);
     for (const name of Object.keys(value)) {
       let item;
       try {
@@ -1031,7 +1031,7 @@ ${value.stack}`;
     } catch (e) {}
     if (jsonWrapper)
       return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);
-    return { o, id: id2 };
+    return { o, id };
   }
   if (typeof value === "function" && value.name.startsWith(kFunctionBindingPrefix))
     return { fn: value.name };
@@ -1155,19 +1155,19 @@ function innerSerializeValue(value, handleSerializer, visitorInfo, accessChain) 
     return { ref: id };
   if (Array.isArray(value)) {
     const a = [];
-    const id2 = ++visitorInfo.lastId;
-    visitorInfo.visited.set(value, id2);
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id);
     for (let i = 0;i < value.length; ++i)
       a.push(innerSerializeValue(value[i], handleSerializer, visitorInfo, [...accessChain, i]));
-    return { a, id: id2 };
+    return { a, id };
   }
   if (typeof value === "object") {
     const o = [];
-    const id2 = ++visitorInfo.lastId;
-    visitorInfo.visited.set(value, id2);
+    const id = ++visitorInfo.lastId;
+    visitorInfo.visited.set(value, id);
     for (const name of Object.keys(value))
       o.push({ k: name, v: innerSerializeValue(value[name], handleSerializer, visitorInfo, [...accessChain, name]) });
-    return { o, id: id2 };
+    return { o, id };
   }
   throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
 }
@@ -1532,23 +1532,23 @@ function evaluateParams(apiName, pageFunction, arg, options) {
 }
 function serializeArgument(arg) {
   const channels = [];
-  const protocolValue = serializeValue(arg, (value2) => {
-    if (value2 instanceof JSHandle)
-      return { h: channels.push(value2) - 1 };
-    return { fallThrough: value2 };
+  const protocolValue = serializeValue(arg, (value) => {
+    if (value instanceof JSHandle)
+      return { h: channels.push(value) - 1 };
+    return { fallThrough: value };
   });
   const live = parseSerializedValue(protocolValue, channels.map((handle) => new HandleRef(handle._guid)));
   const handles = [];
-  const value = serializeAsCallArgument(live, (value2) => {
-    if (value2 instanceof HandleRef)
-      return { h: handles.push(value2.guid) - 1 };
-    return { fallThrough: value2 };
+  const value = serializeAsCallArgument(live, (value) => {
+    if (value instanceof HandleRef)
+      return { h: handles.push(value.guid) - 1 };
+    return { fallThrough: value };
   });
   return { value, handles };
 }
 function parseResult(value) {
   const live = parseEvaluationResultValue(value);
-  const wire = serializeValue(live, (value2) => ({ fallThrough: value2 }));
+  const wire = serializeValue(live, (value) => ({ fallThrough: value }));
   return parseSerializedValue(wire, undefined);
 }
 function assertMaxArguments(count, max) {
@@ -3820,10 +3820,10 @@ function tokenize(str1) {
     column = 0;
   };
   const locStart = { line, column };
-  const codepoint = function(i2) {
-    if (i2 >= str.length)
+  const codepoint = function(i) {
+    if (i >= str.length)
       return -1;
-    return str[i2];
+    return str[i];
   };
   const next = function(num) {
     if (num === undefined)
@@ -3855,10 +3855,10 @@ function tokenize(str1) {
     locStart.column = column;
     return true;
   };
-  const eof = function(codepoint2) {
-    if (codepoint2 === undefined)
-      codepoint2 = code;
-    return codepoint2 === -1;
+  const eof = function(codepoint) {
+    if (codepoint === undefined)
+      codepoint = code;
+    return codepoint === -1;
   };
   const donothing = function() {};
   const parseerror = function() {};
@@ -4037,22 +4037,22 @@ function tokenize(str1) {
     }
   };
   const consumeAnIdentlikeToken = function() {
-    const str2 = consumeAName();
-    if (str2.toLowerCase() === "url" && next() === 40) {
+    const str = consumeAName();
+    if (str.toLowerCase() === "url" && next() === 40) {
       consume();
       while (whitespace(next(1)) && whitespace(next(2)))
         consume();
       if (next() === 34 || next() === 39)
-        return new FunctionToken(str2);
+        return new FunctionToken(str);
       else if (whitespace(next()) && (next(2) === 34 || next(2) === 39))
-        return new FunctionToken(str2);
+        return new FunctionToken(str);
       else
         return consumeAURLToken();
     } else if (next() === 40) {
       consume();
-      return new FunctionToken(str2);
+      return new FunctionToken(str);
     } else {
-      return new IdentToken(str2);
+      return new IdentToken(str);
     }
   };
   const consumeAStringToken = function(endingCodePoint) {
@@ -4712,7 +4712,7 @@ function parseCSS(selector, customNames) {
   function isIdent(p = pos) {
     return tokens[p] instanceof IdentToken;
   }
-  function isString2(p = pos) {
+  function isString(p = pos) {
     return tokens[p] instanceof StringToken;
   }
   function isNumber(p = pos) {
@@ -4743,43 +4743,43 @@ function parseCSS(selector, customNames) {
     return isComma(p) || isCloseParen(p) || isEOF(p) || isClauseCombinator(p) || tokens[p] instanceof WhitespaceToken;
   }
   function consumeFunctionArguments() {
-    const result2 = [consumeArgument()];
+    const result = [consumeArgument()];
     while (true) {
       skipWhitespace();
       if (!isComma())
         break;
       pos++;
-      result2.push(consumeArgument());
+      result.push(consumeArgument());
     }
-    return result2;
+    return result;
   }
   function consumeArgument() {
     skipWhitespace();
     if (isNumber())
       return tokens[pos++].value;
-    if (isString2())
+    if (isString())
       return tokens[pos++].value;
     return consumeComplexSelector();
   }
   function consumeComplexSelector() {
-    const result2 = { simples: [] };
+    const result = { simples: [] };
     skipWhitespace();
     if (isClauseCombinator()) {
-      result2.simples.push({ selector: { functions: [{ name: "scope", args: [] }] }, combinator: "" });
+      result.simples.push({ selector: { functions: [{ name: "scope", args: [] }] }, combinator: "" });
     } else {
-      result2.simples.push({ selector: consumeSimpleSelector(), combinator: "" });
+      result.simples.push({ selector: consumeSimpleSelector(), combinator: "" });
     }
     while (true) {
       skipWhitespace();
       if (isClauseCombinator()) {
-        result2.simples[result2.simples.length - 1].combinator = tokens[pos++].value;
+        result.simples[result.simples.length - 1].combinator = tokens[pos++].value;
         skipWhitespace();
       } else if (isSelectorClauseEnd()) {
         break;
       }
-      result2.simples.push({ combinator: "", selector: consumeSimpleSelector() });
+      result.simples.push({ combinator: "", selector: consumeSimpleSelector() });
     }
-    return result2;
+    return result;
   }
   function consumeSimpleSelector() {
     let rawCSSString = "";
@@ -4895,7 +4895,7 @@ function parseSelector(selector) {
         throw new InvalidSelectorError(`Malformed selector: ${part.name}=` + part.body);
       }
       const nested = { name: part.name, source: part.body, body: { parsed: parseSelector(innerSelector), distance } };
-      const lastFrame = [...nested.body.parsed.parts].reverse().find((part2) => part2.name === "internal:control" && part2.body === "enter-frame");
+      const lastFrame = [...nested.body.parsed.parts].reverse().find((part) => part.name === "internal:control" && part.body === "enter-frame");
       const lastFrameIndex = lastFrame ? nested.body.parsed.parts.indexOf(lastFrame) : -1;
       const outerParts = parts[0]?.name === "internal:control" && parts[0].body === "any-frame" ? parts.slice(1) : parts;
       if (lastFrameIndex !== -1 && selectorPartsEqual(nested.body.parsed.parts.slice(0, lastFrameIndex + 1), outerParts.slice(0, lastFrameIndex + 1))) {
@@ -5010,10 +5010,10 @@ function parseAttributeSelector(selector, allowUnquotedStrings) {
   let EOL = selector.length === 0;
   const next = () => selector[wp] || "";
   const eat1 = () => {
-    const result2 = next();
+    const result = next();
     ++wp;
     EOL = wp >= selector.length;
-    return result2;
+    return result;
   };
   const syntaxError = (stage) => {
     if (EOL)
@@ -5028,25 +5028,25 @@ function parseAttributeSelector(selector, allowUnquotedStrings) {
     return char >= "" || char >= "0" && char <= "9" || char >= "A" && char <= "Z" || char >= "a" && char <= "z" || char >= "0" && char <= "9" || char === "_" || char === "-";
   }
   function readIdentifier() {
-    let result2 = "";
+    let result = "";
     skipSpaces();
     while (!EOL && isCSSNameChar(next()))
-      result2 += eat1();
-    return result2;
+      result += eat1();
+    return result;
   }
   function readQuotedString(quote) {
-    let result2 = eat1();
-    if (result2 !== quote)
+    let result = eat1();
+    if (result !== quote)
       syntaxError("parsing quoted string");
     while (!EOL && next() !== quote) {
       if (next() === "\\")
         eat1();
-      result2 += eat1();
+      result += eat1();
     }
     if (next() !== quote)
       syntaxError("parsing quoted string");
-    result2 += eat1();
-    return result2;
+    result += eat1();
+    return result;
   }
   function readRegularExpression() {
     if (eat1() !== "/")
@@ -5176,25 +5176,25 @@ function parseAttributeSelector(selector, allowUnquotedStrings) {
 // vendor/playwright/isomorphic/locatorGenerators.ts
 function asLocatorDescription(lang, selector) {
   try {
-    const parsed2 = parseSelector(selector);
-    const customDescription = parseCustomDescription(parsed2);
+    const parsed = parseSelector(selector);
+    const customDescription = parseCustomDescription(parsed);
     if (customDescription)
       return customDescription;
-    return innerAsLocators(new generators[lang], parsed2, false, 1)[0];
+    return innerAsLocators(new generators[lang], parsed, false, 1)[0];
   } catch (e) {
     return selector;
   }
 }
 function locatorCustomDescription(selector) {
   try {
-    const parsed2 = parseSelector(selector);
-    return parseCustomDescription(parsed2);
+    const parsed = parseSelector(selector);
+    return parseCustomDescription(parsed);
   } catch (e) {
     return;
   }
 }
-function parseCustomDescription(parsed2) {
-  const lastPart = parsed2.parts[parsed2.parts.length - 1];
+function parseCustomDescription(parsed) {
+  const lastPart = parsed.parts[parsed.parts.length - 1];
   if (lastPart?.name === "internal:describe") {
     const description = JSON.parse(lastPart.body);
     if (typeof description === "string")
@@ -5202,8 +5202,8 @@ function parseCustomDescription(parsed2) {
   }
   return;
 }
-function innerAsLocators(factory, parsed2, isFrameLocator = false, maxOutputSize = 20) {
-  const parts = [...parsed2.parts];
+function innerAsLocators(factory, parsed, isFrameLocator = false, maxOutputSize = 20) {
+  const parts = [...parsed.parts];
   const tokens = [];
   let nextBase = isFrameLocator ? "frame-locator" : "page";
   for (let index = 0;index < parts.length; index++) {
@@ -5358,8 +5358,8 @@ function innerAsLocators(factory, parsed2, isFrameLocator = false, maxOutputSize
     }
     let locatorPartWithEngine;
     if (["xpath", "css"].includes(part.name)) {
-      const selectorPart2 = stringifySelector({ parts: [part] }, true);
-      locatorPartWithEngine = factory.generateLocator(base, "default", selectorPart2);
+      const selectorPart = stringifySelector({ parts: [part] }, true);
+      locatorPartWithEngine = factory.generateLocator(base, "default", selectorPart);
     }
     tokens.push([locatorPart, locatorPartWithEngine].filter(Boolean));
   }
@@ -6534,8 +6534,8 @@ class Frame {
       const current = urlFor(this.url());
       if (current && url(current))
         return await this._waitForLoadState(apiName, waitOptions.waitUntil, waitOptions);
-      const waitUntil2 = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
-      await this._navigationMatching(apiName, url, waitUntil2, this._page._timeoutSettings.navigationTimeout(waitOptions, apiName), false);
+      const waitUntil = verifyWaitState(apiName, "waitUntil", waitOptions.waitUntil === undefined ? "load" : waitOptions.waitUntil);
+      await this._navigationMatching(apiName, url, waitUntil, this._page._timeoutSettings.navigationTimeout(waitOptions, apiName), false);
       return;
     }
     const serialized = serializeUrlMatch(apiName, url);
@@ -6570,9 +6570,9 @@ class Frame {
       return result;
     };
     const next = () => {
-      const call2 = this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, { timeout: left(), signal });
-      call2.catch(() => {});
-      return call2;
+      const call = this._connection.sendNeo(apiName, this._guid, "neo:nextNavigation", cursor === undefined ? { response: respond } : { cursor, response: respond }, { timeout: left(), signal });
+      call.catch(() => {});
+      return call;
     };
     let timer;
     const expired = new Promise((_, reject) => {
@@ -6595,12 +6595,12 @@ class Frame {
           if (index === undefined || url === undefined)
             throw new Error("neo-quickjs-injected: neo-runtime ended this navigation wait under it");
           waiting = next();
-          const parsed2 = urlFor(url);
-          if (!parsed2)
+          const parsed = urlFor(url);
+          if (!parsed)
             continue;
           let verdict;
           try {
-            verdict = predicate(parsed2);
+            verdict = predicate(parsed);
           } catch (error) {
             throw prefixed2(apiName, error);
           }
@@ -6975,13 +6975,13 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
-  async type(selector, text2, options = {}) {
-    return await this._type("frame.type", selector, text2, options);
+  async type(selector, text, options = {}) {
+    return await this._type("frame.type", selector, text, options);
   }
-  async _type(apiName, selector, text2, options) {
+  async _type(apiName, selector, text, options) {
     await this._connection.send(apiName, this._guid, "type", pickParams(FRAME_TYPE_KEYS, {
       selector,
-      text: text2,
+      text,
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}, apiName));
   }
@@ -7185,20 +7185,20 @@ class Frame {
   getByTestId(testId) {
     return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
   }
-  getByAltText(text2, options) {
-    return this.locator(getByAltTextSelector(text2, options));
+  getByAltText(text, options) {
+    return this.locator(getByAltTextSelector(text, options));
   }
-  getByLabel(text2, options) {
-    return this.locator(getByLabelSelector(text2, options));
+  getByLabel(text, options) {
+    return this.locator(getByLabelSelector(text, options));
   }
-  getByPlaceholder(text2, options) {
-    return this.locator(getByPlaceholderSelector(text2, options));
+  getByPlaceholder(text, options) {
+    return this.locator(getByPlaceholderSelector(text, options));
   }
-  getByText(text2, options) {
-    return this.locator(getByTextSelector(text2, options));
+  getByText(text, options) {
+    return this.locator(getByTextSelector(text, options));
   }
-  getByTitle(text2, options) {
-    return this.locator(getByTitleSelector(text2, options));
+  getByTitle(text, options) {
+    return this.locator(getByTitleSelector(text, options));
   }
   getByRole(role, options = {}) {
     return this.locator(getByRoleSelector(role, options));
@@ -7231,14 +7231,14 @@ class Keyboard {
   async up(key) {
     await this.#page._sendInput("keyboard.up", "keyboardUp", pickParams(PAGE_KEYBOARD_UP_KEYS, { key }));
   }
-  async insertText(text2) {
+  async insertText(text) {
     await this.#page._sendInput("keyboard.insertText", "keyboardInsertText", pickParams(PAGE_KEYBOARD_INSERT_TEXT_KEYS, {
-      text: text2
+      text
     }));
   }
-  async type(text2, options = {}) {
+  async type(text, options = {}) {
     await this.#page._sendInput("keyboard.type", "keyboardType", pickParams(PAGE_KEYBOARD_TYPE_KEYS, {
-      text: text2,
+      text,
       ...options
     }));
   }
@@ -8022,13 +8022,13 @@ class Page extends ChannelOwner {
       this.#onRouteEvent(params);
   }
   async _onBinding(record) {
-    const call2 = new BindingCall(this.#connection, record, this._frameForGuid(record.frame.guid));
+    const call = new BindingCall(this.#connection, record, this._frameForGuid(record.frame.guid));
     const func = this._bindings.get(record.name);
     if (func) {
-      await call2.call(func);
+      await call.call(func);
       return;
     }
-    await this.#context._onBinding(call2);
+    await this.#context._onBinding(call);
   }
   #locatorHandlers = new Map;
   async addLocatorHandler(locator, handler, options = {}) {
@@ -8480,8 +8480,8 @@ class Page extends ChannelOwner {
   async dragAndDrop(source, target, options = {}) {
     return await this.#mainFrame._dragAndDrop("page.dragAndDrop", source, target, options);
   }
-  async type(selector, text2, options = {}) {
-    return await this.#mainFrame._type("page.type", selector, text2, options);
+  async type(selector, text, options = {}) {
+    return await this.#mainFrame._type("page.type", selector, text, options);
   }
   async inputValue(selector, options = {}) {
     return await this.#mainFrame._inputValue("page.inputValue", selector, options);
@@ -8534,20 +8534,20 @@ class Page extends ChannelOwner {
   getByTestId(testId) {
     return this.mainFrame().getByTestId(testId);
   }
-  getByAltText(text2, options) {
-    return this.mainFrame().getByAltText(text2, options);
+  getByAltText(text, options) {
+    return this.mainFrame().getByAltText(text, options);
   }
-  getByLabel(text2, options) {
-    return this.mainFrame().getByLabel(text2, options);
+  getByLabel(text, options) {
+    return this.mainFrame().getByLabel(text, options);
   }
-  getByPlaceholder(text2, options) {
-    return this.mainFrame().getByPlaceholder(text2, options);
+  getByPlaceholder(text, options) {
+    return this.mainFrame().getByPlaceholder(text, options);
   }
-  getByText(text2, options) {
-    return this.mainFrame().getByText(text2, options);
+  getByText(text, options) {
+    return this.mainFrame().getByText(text, options);
   }
-  getByTitle(text2, options) {
-    return this.mainFrame().getByTitle(text2, options);
+  getByTitle(text, options) {
+    return this.mainFrame().getByTitle(text, options);
   }
   getByRole(role, options = {}) {
     return this.mainFrame().getByRole(role, options);
@@ -8797,11 +8797,11 @@ class BrowserContext extends ChannelOwner {
     const frame = page._frameForGuid(record.frame.guid);
     await this._onBinding(new BindingCall(this.#connection, record, frame));
   }
-  async _onBinding(call2) {
-    const func = this._bindings.get(call2.name);
+  async _onBinding(call) {
+    const func = this._bindings.get(call.name);
     if (!func)
       return;
-    await call2.call(func);
+    await call.call(func);
   }
   #onRequest({ request, page }) {
     const pageObject = this.#pageFor(page.guid);
@@ -9296,9 +9296,9 @@ function clone(value, memory) {
   const seen = memory.get(value);
   if (seen !== undefined)
     return seen;
-  const remember = (copy2) => {
-    memory.set(value, copy2);
-    return copy2;
+  const remember = (copy) => {
+    memory.set(value, copy);
+    return copy;
   };
   if (value instanceof Boolean)
     return remember(Object(value.valueOf()));
@@ -9323,27 +9323,27 @@ function clone(value, memory) {
     return remember(new kind(buffer, value.byteOffset, length));
   }
   if (value instanceof Map) {
-    const copy2 = remember(new Map);
+    const copy = remember(new Map);
     for (const [key, entry] of value)
-      copy2.set(clone(key, memory), clone(entry, memory));
-    return copy2;
+      copy.set(clone(key, memory), clone(entry, memory));
+    return copy;
   }
   if (value instanceof Set) {
-    const copy2 = remember(new Set);
+    const copy = remember(new Set);
     for (const entry of value)
-      copy2.add(clone(entry, memory));
-    return copy2;
+      copy.add(clone(entry, memory));
+    return copy;
   }
   if (value instanceof Error) {
     const kind = ERRORS[value.name] ?? Error;
-    const copy2 = remember(new kind(value.message));
+    const copy = remember(new kind(value.message));
     if (value.stack !== undefined)
-      Object.defineProperty(copy2, "stack", {
+      Object.defineProperty(copy, "stack", {
         value: value.stack,
         writable: true,
         configurable: true
       });
-    return copy2;
+    return copy;
   }
   if (value instanceof Promise || value instanceof WeakMap || value instanceof WeakSet || value instanceof WeakRef || value instanceof URL || value instanceof URLSearchParams)
     throw cannotClone(`${Object.prototype.toString.call(value)} could not be cloned.`);
@@ -9382,11 +9382,11 @@ class TextEncoder {
     return encodeUtf8(String(input));
   }
   encodeInto(source, destination) {
-    const text2 = String(source);
+    const text = String(source);
     let read = 0;
     let written = 0;
-    while (read < text2.length) {
-      let code = text2.codePointAt(read);
+    while (read < text.length) {
+      let code = text.codePointAt(read);
       const units = code > 65535 ? 2 : 1;
       if (code >= 55296 && code <= 57343)
         code = 65533;
@@ -9447,14 +9447,14 @@ class TextDecoder {
       this.#reset();
       throw new TypeError("The encoded data was not valid for encoding utf-8");
     }
-    let text2 = decodeUtf8(whole);
-    if (!this.#started && !this.#ignoreBOM && text2.startsWith("\uFEFF"))
-      text2 = text2.slice(1);
+    let text = decodeUtf8(whole);
+    if (!this.#started && !this.#ignoreBOM && text.startsWith("\uFEFF"))
+      text = text.slice(1);
     if (whole.length > 0)
       this.#started = true;
     if (!stream)
       this.#reset();
-    return text2;
+    return text;
   }
   get [Symbol.toStringTag]() {
     return "TextDecoder";

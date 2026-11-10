@@ -4,8 +4,8 @@
 // cross-site one, loaded from localhost at the fixture server's port (another site than the
 // page's 127.0.0.1, so Chromium runs it out of process), holding /chooser-input.html's input.
 </script></head><body>
-<iframe id="same" srcdoc="<input type=file id=inner>"></iframe>
-<iframe id="cross"></iframe>
+<iframe id="same" title="same-origin chooser frame" srcdoc="<input type=file id=inner>"></iframe>
+<iframe id="cross" title="cross-origin chooser frame"></iframe>
 <script>
 document.getElementById('cross').src = `http://localhost:${location.port}/chooser-input.html`;
 </script>
