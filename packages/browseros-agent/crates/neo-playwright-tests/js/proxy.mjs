@@ -909,6 +909,12 @@ export class ReferenceProxy extends CallJournal {
 
   returnedOrigin(value, family, member, args) {
     if (member === 'waitForEvent') this.eventOrigin(value, family, args[0])
+    if (
+      family === 'Page' &&
+      member === 'consoleMessages' &&
+      Array.isArray(value)
+    )
+      for (const message of value) this.seed(message, 'ConsoleMessage')
     if (family === 'Page' && member === 'video') this.seed(value, 'Video')
     if (family === 'Locator' && member === 'highlight')
       this.seed(value, 'DisposableStub')
