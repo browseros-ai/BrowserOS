@@ -1,5 +1,5 @@
 /**
- * The page half of pointer actions (crates/browseros-playwright/src/action/pointer.rs).
+ * The page half of pointer actions (crates/browseros-playwright/src/action/pointer_action.rs).
  *
  *   act            resolve or reuse a pin, check states, scroll, measure; frame-local pixels
  *   act { arm }    re-measure; while the rect still equals Rust's baseline, hit-test and arm
@@ -224,9 +224,9 @@ function describedAgain(world: World, stopped: Stopped): Hit {
 /**
  * How many trusted pointer moves the browser delivered to this document. The browser picks the
  * frame for each event by its own copy of the layout, which can trail a scroll in another
- * process by a frame or more (pointer.rs, Runner::route), so Rust presses only once this grew
- * past its count from before the approach. It reads no interceptor: a forced action, which
- * arms none, checks its route the same way.
+ * process by a frame or more (pointer_action.rs, PointerRunner::route), so Rust presses only
+ * once this grew past its count from before the approach. It reads no interceptor: a forced
+ * action, which arms none, checks its route the same way.
  */
 export function moves(_world: World, _request: MovesRequest): ReplyTo<'moves'> {
   return { kind: 'moves', moves: trustedMoves }

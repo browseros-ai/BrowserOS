@@ -1,5 +1,5 @@
 //! What each pointer action waits for before it sends input (design D6), as one table, so the
-//! runner has no per-action branches for waiting. Checked against upstream's
+//! `PointerRunner` has no per-action branches for waiting. Checked against upstream's
 //! `_performPointerAction` and its callers in server/dom.ts and server/frames.ts at v1.64.1; a
 //! difference is fixed in this table and nowhere else.
 

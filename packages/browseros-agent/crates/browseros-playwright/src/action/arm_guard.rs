@@ -21,7 +21,7 @@ use crate::{PlaywrightError, resolve};
 /// - an error, a timeout or a dropped future spawns a `disarm` from `Drop`;
 /// - the next arming request in the same world stops a stale one first;
 /// - the probe stops one whose verdict never came by its expiry, which Rust sets 3 s past the
-///   op's timeout (`pointer.rs`, `arm_expiry`), once no event of the op can still come; a
+///   op's timeout (`pointer_action.rs`, `arm_expiry`), once no event of the op can still come; a
 ///   verdict asked after that fails instead of vouching for the events it no longer saw.
 ///
 /// The spawned disarm first takes the tab's input lock. An interceptor is live only while its

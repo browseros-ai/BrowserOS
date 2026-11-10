@@ -2,6 +2,26 @@
 //! actionability checks run in the element's sealed world, and the input is trusted CDP input
 //! on the page's root session, sent only after `OpScope::send_effect`.
 //!
+//! Each action family has a runner in its `*_action.rs`. A runner finds the element, waits
+//! until it is ready, retries, and plans the input. `PageInput` sends trusted device input;
+//! form and element actions also use edits in the page's sealed world.
+//!
+//! ```text
+//!  ops                                what to do     runner           sent by
+//!  click dblclick hover check uncheck PointerAction  PointerRunner    PageInput (mouse)
+//!  dragTo                             DragPhases     PointerRunner    PageInput (mouse)
+//!  press pressSequentially            Keys           KeyRunner        PageInput (keys)
+//!  fill selectOption selectText       FormEdit       FormRunner       page edit (+ PageInput)
+//!  focus blur dispatchEvent           Edit           ElementRunner    page edit
+//!  scrollIntoViewIfNeeded             (none)         ElementRunner    page scroll
+//!  setInputFiles                      FilesInput     set_input_files  CDP or page edit
+//! ```
+//!
+//! A fill uses `PageInput` only when the page asks for typing. `setInputFiles` uses
+//! `DOM.setFileInputFiles` or a sealed-world edit.
+//!
+//! Pointer actions follow this path:
+//!
 //! ```text
 //!  outer loop  (re-resolve; waits 0, 20, 50, 100, 100, 500, then 500 ms)
 //!    resolve ─ Missing: wait │ strict: fail │ stale ref: fail at once │ hidden frame: wait
@@ -38,7 +58,7 @@ mod form_action;
 mod frame_projection;
 mod input_files;
 mod key_action;
-mod pointer;
+mod pointer_action;
 mod requested_navigations;
 mod subject;
 

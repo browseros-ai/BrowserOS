@@ -9,7 +9,7 @@ use crate::action::focus_lease::lease;
 use crate::action::form_action::{FormEdit, FormRunner};
 use crate::action::input_files::set_input_files;
 use crate::action::key_action::{KeyRunner, Keys};
-use crate::action::pointer::{DragPhases, Perform, PointerAction, Runner, WaitAfter};
+use crate::action::pointer_action::{DragPhases, Perform, PointerAction, PointerRunner, WaitAfter};
 use crate::input::{ClickOptions, MouseButton, Typed, millis};
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
@@ -354,7 +354,7 @@ async fn run(
             let action = pointer_action(op, &input.options);
             let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
             let _lease = lease(scope, &page).await?;
-            Runner::new(pw, scope, &page, &input.target, input.strict)
+            PointerRunner::new(pw, scope, &page, &input.target, input.strict)
                 .run(&action)
                 .await?;
         }
@@ -363,7 +363,7 @@ async fn run(
             let action = pointer_action(op, &input.options);
             let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
             let _lease = lease(scope, &page).await?;
-            Runner::new(pw, scope, &page, &input.target, input.strict)
+            PointerRunner::new(pw, scope, &page, &input.target, input.strict)
                 .set_checked(op == ActionOp::Check, &action)
                 .await?;
         }
@@ -379,7 +379,7 @@ async fn run(
             }
             let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
             let _lease = lease(scope, &page).await?;
-            Runner::new(pw, scope, &page, &input.target, input.strict)
+            PointerRunner::new(pw, scope, &page, &input.target, input.strict)
                 .drag_to(&input.to, &drag_phases(&input.options))
                 .await?;
         }

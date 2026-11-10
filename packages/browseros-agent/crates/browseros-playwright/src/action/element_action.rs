@@ -27,7 +27,8 @@ use crate::{ErrorCode, PlaywrightError, input};
 /// Two measurements this far apart with the same rect make a scrolled element stable.
 const STABLE_GAP: Duration = Duration::from_millis(16);
 
-/// One element action's run over one locator or element handle.
+/// Runs one element action on one locator or element handle; the page applies it, and no device
+/// input is sent.
 pub(crate) struct ElementRunner<'a> {
     scope: &'a OpScope<'a>,
     page: &'a OpPage<'a>,

@@ -80,7 +80,8 @@ enum Called {
     Gone,
 }
 
-/// One press or typing run over one locator or element handle.
+/// Runs one press or typing on one locator or element handle: focuses the element and plans
+/// the keys. `PageInput` sends them.
 pub(crate) struct KeyRunner<'a> {
     pw: &'a Playwright,
     scope: &'a OpScope<'a>,

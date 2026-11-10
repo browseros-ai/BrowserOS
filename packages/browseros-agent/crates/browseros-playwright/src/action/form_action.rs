@@ -145,7 +145,8 @@ enum Called {
     Gone,
 }
 
-/// One form edit's run over one locator or element handle.
+/// Runs one form edit on one locator or element handle; the page applies the edit, and a fill
+/// that needs typing sends it through `PageInput`.
 pub(crate) struct FormRunner<'a> {
     scope: &'a OpScope<'a>,
     page: &'a OpPage<'a>,

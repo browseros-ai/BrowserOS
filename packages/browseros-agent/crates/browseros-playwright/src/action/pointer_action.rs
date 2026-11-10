@@ -2,18 +2,18 @@
 //! loop, server/frames.ts) around `_retryPointerAction` and `_performPointerAction` (the inner
 //! loop, server/dom.ts) at v1.64.1, with their call-log lines. `action.rs` has the diagram.
 //!
-//! Two invariants carry the design:
+//! Three invariants carry the design:
 //! - **Input after `Sent`.** Each attempt calls `OpScope::send_effect` right before its first
 //!   input event and never earlier, so the host re-runs its policies before every attempt
-//!   that sends, and a refused recheck sends nothing. Only [`PageInput::send`] dispatches, and
-//!   it takes the `Sent`.
+//!   that sends, and a refused recheck sends nothing. Only [`PageInput`] dispatches, and each
+//!   of its sends takes the `Sent`.
 //! - **Nothing left behind.** The interceptor is disarmed by its [`ArmGuard`] and held keys
 //!   and buttons are released by [`PageInput`] on every exit, the host dropping the future
 //!   included; `dragTo`'s button, held between its halves, by its [`Drag`]; the focus lease is
 //!   restored by its guard in `action_op.rs`.
 //! - **No button before the route.** In an out-of-process frame no button goes down until the
-//!   frame saw the attempt's move arrive ([`Runner::route`]), `force` or not. The browser routes
-//!   root-session input by its own copy of the layout, which trails a scroll in another
+//!   frame saw the attempt's move arrive ([`PointerRunner::route`]), `force` or not. The browser
+//!   routes root-session input by its own copy of the layout, which trails a scroll in another
 //!   process.
 //!
 //! The page text an attempt reports, a strict violation's previews and the element a hit test
@@ -81,7 +81,7 @@ const SCROLL_ROTATION: [ScrollPlan; 4] = [
     ScrollPlan::Start,
 ];
 
-/// One pointer action: which of upstream's actions it is and what it sends.
+/// One pointer action: which of upstream's actions it is and the input it plans.
 #[derive(Clone, Debug)]
 pub(crate) struct PointerAction {
     pub(crate) kind: PointerKind,
@@ -189,8 +189,9 @@ impl Drop for Drag {
     }
 }
 
-/// One pointer action's run over one locator or element handle.
-pub(crate) struct Runner<'a> {
+/// Runs one pointer action on one locator or element handle: finds the element, waits until it
+/// is ready, retries, and plans the mouse input. [`PageInput`] sends it.
+pub(crate) struct PointerRunner<'a> {
     pw: &'a Playwright,
     scope: &'a OpScope<'a>,
     page: &'a OpPage<'a>,
@@ -200,7 +201,7 @@ pub(crate) struct Runner<'a> {
     matched: bool,
 }
 
-impl<'a> Runner<'a> {
+impl<'a> PointerRunner<'a> {
     pub(crate) fn new(
         pw: &'a Playwright,
         scope: &'a OpScope<'a>,
@@ -235,13 +236,13 @@ impl<'a> Runner<'a> {
             trial_press: None,
         };
         self.run_holding(&phases.down, Some(&mut drag)).await?;
-        Runner::new(self.pw, self.scope, self.page, to, self.strictness)
+        PointerRunner::new(self.pw, self.scope, self.page, to, self.strictness)
             .run_holding(&phases.up, Some(&mut drag))
             .await
     }
 
-    /// [`Runner::run`], every attempt under `drag`'s hold of the tab's input when there is one,
-    /// and under a lock of its own otherwise.
+    /// [`PointerRunner::run`], every attempt under `drag`'s hold of the tab's input when there
+    /// is one, and under a lock of its own otherwise.
     async fn run_holding(
         &mut self,
         action: &PointerAction,
@@ -438,7 +439,7 @@ impl<'a> Runner<'a> {
                 ScrollPlan::None
             };
             let target = pin.map_or_else(|| self.subject.first_target(), ProbeTarget::Pin);
-            let measure = self.act(located, action, &req, target, scroll, None);
+            let measure = self.act_request(located, action, &req, target, scroll, None);
             let measured = match self.call(located, &measure).await? {
                 Called::Reply(ProbeReply::Measured {
                     pin: pinned,
@@ -521,7 +522,7 @@ impl<'a> Runner<'a> {
                     expiry_ms: arm_expiry(self.scope.timeout(), &burst),
                     expect_rect: Some(measured.rect),
                 };
-                let arm = self.act(
+                let arm = self.act_request(
                     located,
                     action,
                     &req,
@@ -760,8 +761,8 @@ impl<'a> Runner<'a> {
         }
     }
 
-    /// The `act` request for this action's row.
-    fn act(
+    /// Builds the `act` request for this action's row.
+    fn act_request(
         &self,
         located: &Resolved,
         action: &PointerAction,
