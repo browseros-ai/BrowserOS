@@ -56,12 +56,20 @@ async fn open_invoke_finish_records_the_real_run() -> Result<(), Box<dyn Error>>
         Some(1),
         "init includes the owner's launch tab"
     );
+    assert!(
+        init["observed"]["seq"].is_u64(),
+        "init carries the observation that orders its listing against later replies: {init}"
+    );
     let opened: Value = serde_json::from_str(
         &run.invoke("context.newPage".to_owned(), "{}", "run:1:1")
             .await,
     )?;
     let page = opened["ok"]["page"].clone();
     assert_eq!(page["$neo"], "page", "the product returns a page brand");
+    assert!(
+        page["tab"].is_u64() && page.get("id").is_none(),
+        "a page brand names its tab only: {page}"
+    );
     let input = json!({ "page": page }).to_string();
     let closed: Value =
         serde_json::from_str(&run.invoke("page.close".to_owned(), &input, "").await)?;

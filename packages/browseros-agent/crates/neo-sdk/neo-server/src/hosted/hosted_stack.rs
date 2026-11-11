@@ -17,7 +17,7 @@ use crate::builtins::{
     self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor,
 };
 use crate::config::Defaults;
-use crate::dispatch::{Dispatcher, RegistryBuilder};
+use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
 use crate::host::TakeoverLock;
 use crate::run::{RunService, RunServiceParts};
 
@@ -93,6 +93,7 @@ impl HostedStack {
             hooks.typed(),
             Arc::clone(&browser),
             Arc::clone(&tabs),
+            Observer::new(Arc::clone(&playwright) as _),
         ));
         let shutdown = CancellationToken::new();
         let service = RunService::new(RunServiceParts {
@@ -154,7 +155,8 @@ impl HostedStack {
             completions.push(run.completion());
             run
         };
-        run.initialize(&self.service).await;
+        run.initialize(&self.service, &self.browser, &self.tabs)
+            .await;
         Ok(run)
     }
 

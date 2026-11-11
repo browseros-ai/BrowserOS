@@ -15,14 +15,23 @@ async function fixture(
   combined = clawDefaults,
   implicit = new Set(Object.keys(clawDefaults)),
 ) {
-  let nextPage = 8
+  let nextTab = 1008
+  let observation = 0
   const runtime = loadPrelude({
     seed: SEED,
-    answer: ({ name }) => {
+    answer: ({ name, input }) => {
       if (name === 'context.newPage')
         return {
-          page: { $neo: 'page', id: nextPage, tab: 1000 + nextPage++ },
+          page: { $neo: 'page', tab: nextTab++ },
           url: 'about:blank',
+        }
+      // v1 marks a page closed from the host's fact for its tab, as the door replies, never
+      // from the close reply alone.
+      if (name === 'page.close')
+        return {
+          ok: null,
+          pages: [{ tab: input.page.tab, closed: true }],
+          observed: { seq: ++observation, events: 0 },
         }
       if (name === 'page.frames') return { frames: [] }
       return null

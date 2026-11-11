@@ -66,10 +66,8 @@ impl HostedRun {
             .checked_add(timeout)
             .ok_or_else(|| HostedError("the run timeout is too large".to_owned()))?;
         // RunService::default_page(None, ..) is exactly this lookup: no task history to read.
+        // `initialize` touches it, as `RunService::execute` does, once it can ask core.
         let page = tabs.default_page(None);
-        if let Some(page) = &page {
-            tabs.touched(page, None);
-        }
         let (context, guard) = RunCtx::start(
             &dispatcher,
             RunStart {
@@ -105,9 +103,29 @@ impl HostedRun {
         })
     }
 
-    pub(super) async fn initialize(&mut self, service: &RunService) {
-        let pages = service.hosted_open_pages(&self.context).await;
-        self.init = json!({ "page": self.initial_page, "pages": pages }).to_string();
+    /// The async half of `RunService::execute`'s run start. The default page is touched only
+    /// once core confirms it is open, under a liveness ticket taken just before asking, so the
+    /// idle-tab janitor leaves it alone without a closed tab being revived. The init carries the
+    /// same masked listing and observation `run_script` hands QuickJS.
+    pub(super) async fn initialize(
+        &mut self,
+        service: &RunService,
+        browser: &BrowserLink,
+        tabs: &TabRegistry,
+    ) {
+        if let Some(page) = &self.initial_page {
+            let seen = tabs.seen();
+            if browser.page(page.tab).await.is_some() {
+                tabs.touched(page, seen, None);
+            }
+        }
+        let facts = service.hosted_open_pages(&self.context).await;
+        self.init = json!({
+            "page": self.initial_page,
+            "pages": facts.pages,
+            "observed": facts.observed,
+        })
+        .to_string();
     }
 
     /// The run's trace identity.
