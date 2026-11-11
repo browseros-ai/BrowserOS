@@ -573,6 +573,8 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
         format!("the hang fixture did not become unresponsive within 10 s: {elapsed}")
     })??;
 
+    assert_metadata_remains_bounded(&live, &page).await?;
+
     let started = Instant::now();
     let snapshot = live
         .invoke("page.ariaSnapshot", page_snapshot(&page, "ai"))
@@ -614,6 +616,28 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
     let names: Vec<&str> = FRAMES.iter().map(|(_, name)| *name).collect();
     assert_refs_read(&live, &page, &frames, &names).await?;
     live.close(&page).await
+}
+
+/// The prelude refreshes optional frame metadata between agent calls. A busy child must
+/// preserve the last complete tree instead of stalling that handoff or looking detached.
+async fn assert_metadata_remains_bounded(live: &LiveBrowser, page: &TestPage) -> TestResult {
+    let metadata = time::timeout(
+        Duration::from_millis(1_500),
+        live.invoke(
+            "page.frames",
+            json!({ "call": { "api": "page.frames", "timeoutMs": 0 }, "page": page.brand() }),
+        ),
+    )
+    .await
+    .map_err(|elapsed| {
+        format!("optional frame metadata blocked on the hung child: {elapsed}")
+    })???;
+    assert!(
+        metadata.get("frames").is_none(),
+        "a busy tree leaves its cache intact: {metadata}"
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
