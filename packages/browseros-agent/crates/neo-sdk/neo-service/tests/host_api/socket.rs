@@ -24,6 +24,7 @@ async fn the_host_socket_serves_only_requests_with_the_header_token() -> TestRes
 
     let refused = [
         ("/v1/runs".to_string(), None),
+        ("/v1/tabs".to_string(), None),
         (format!("/v1/runs?token={TOKEN}"), None),
         (format!("/v1/runs?access_token={TOKEN}"), None),
         (
@@ -43,6 +44,7 @@ async fn the_host_socket_serves_only_requests_with_the_header_token() -> TestRes
         assert_eq!(status(&socket, &uri, Some(TOKEN)).await?, 401, "{uri}");
     }
     assert_eq!(status(&socket, "/v1/runs", Some(TOKEN)).await?, 200);
+    assert_eq!(status(&socket, "/v1/tabs", Some(TOKEN)).await?, 200);
     assert_eq!(
         status(&socket, "/v1/no-such-route", Some(TOKEN)).await?,
         404
