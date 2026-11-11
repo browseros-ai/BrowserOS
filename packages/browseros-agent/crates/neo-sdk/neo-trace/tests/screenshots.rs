@@ -6,12 +6,10 @@ use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
     OperationKind, OperationStarted, Outcome, RedactionLimits, Redactor, RetentionPolicy, RunEnded,
-    RunId, RunStarted, RunStatus, SecretSet, SecretSetConfig, Shot, ShotJob, ShotJobs, ShotRead,
-    ShotState, TraceRecordEvent, TraceSink, TraceStore, WriterConfig, screenshot_queue,
-    spawn_writer,
+    RunId, RunStarted, RunStatus, Shot, ShotJob, ShotJobs, ShotRead, ShotState, TraceRecordEvent,
+    TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
 };
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 
@@ -38,10 +36,7 @@ async fn harness() -> Result<Harness, Box<dyn std::error::Error>> {
 }
 
 fn redactor() -> Redactor {
-    Redactor::new(
-        Arc::new(SecretSet::new(SecretSetConfig::default())),
-        RedactionLimits::default(),
-    )
+    Redactor::new(RedactionLimits::default())
 }
 
 fn at(millis: i64) -> EpochMillis {
@@ -58,7 +53,6 @@ fn start_run(sink: &TraceSink, millis: i64) -> RunId {
         request_id: None,
         task_id: None,
         host_data: None,
-        also_mask: None,
         at: at(millis),
     });
     run
@@ -71,7 +65,6 @@ fn end_run(sink: &TraceSink, run: RunId, millis: i64) {
         error: None,
         result: None,
         replay: None,
-        also_mask: None,
         at: at(millis),
     });
 }
@@ -92,7 +85,6 @@ fn operation(
         effect,
         tab: tab.map(TabId),
         args: serde_json::Value::Null,
-        also_mask: None,
         at: at(i64::from(id.seq)),
     });
     sink.op_ended(OperationEnded {
@@ -114,7 +106,6 @@ fn operation(
             operation_id: None,
         }),
         page_after: None,
-        also_mask: None,
         at: at(i64::from(id.seq) + 1),
     });
 }

@@ -620,6 +620,29 @@ export class Locator {
     )
   }
 
+  /**
+   * upstream's `Locator.waitForFunction`: `pageFunction(element, arg)` until it is truthy, the
+   * locator matched afresh on every try and strict, within the call's timeout. The argument is
+   * serialized now, as upstream's client does; Rust tries the predicate in the page. Resolves
+   * to nothing.
+   */
+  async waitForFunction(
+    pageFunction: unknown,
+    arg?: unknown,
+    options?: TimeoutOption & SignalOption,
+  ): Promise<void> {
+    const api = 'locator.waitForFunction'
+    const script = pageCall(api, 'query', pageFunction, arg)
+    await this._frame._selectorOp(
+      'locator.waitForFunction',
+      api,
+      this._selector,
+      true,
+      this._frame._wait(api, options ?? {}),
+      { script },
+    )
+  }
+
   /** upstream's `frame.$$eval` on this locator's selector, which counts its own arguments. */
   async evaluateAll(pageFunction: unknown, arg?: unknown): Promise<unknown> {
     const api = 'locator.evaluateAll'

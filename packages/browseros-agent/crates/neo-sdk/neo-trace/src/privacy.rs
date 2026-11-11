@@ -29,7 +29,7 @@
 //! land after a newer flag and erase it, and after a restart Neo would capture a tab that
 //! memory had kept private.
 
-use crate::{EpochMillis, SecretSet, TraceError};
+use crate::{EpochMillis, TraceError};
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use std::collections::HashMap;
@@ -141,9 +141,8 @@ impl State {
     }
 }
 
-/// Pixel privacy for the whole process, and the door to the secret set.
+/// Durable tab flags and capture epochs for the process.
 pub struct Privacy {
-    secrets: Arc<SecretSet>,
     store: Arc<dyn PrivacyStore>,
     state: Mutex<State>,
 }
@@ -151,13 +150,8 @@ pub struct Privacy {
 impl Privacy {
     /// Starts from the flags the store loaded, so a restart keeps every private tab private.
     #[must_use]
-    pub fn new(
-        secrets: Arc<SecretSet>,
-        store: Arc<dyn PrivacyStore>,
-        loaded: HashMap<TabId, PrivacyRecord>,
-    ) -> Arc<Self> {
+    pub fn new(store: Arc<dyn PrivacyStore>, loaded: HashMap<TabId, PrivacyRecord>) -> Arc<Self> {
         Arc::new(Self {
-            secrets,
             store,
             state: Mutex::new(State {
                 private: loaded
@@ -173,12 +167,6 @@ impl Privacy {
                 ..State::default()
             }),
         })
-    }
-
-    /// The process-wide secret set this privacy masks text with.
-    #[must_use]
-    pub fn secrets(&self) -> &Arc<SecretSet> {
-        &self.secrets
     }
 
     /// Makes `tab` private, durably. Returns only once the flag is on disk, so a caller that
@@ -377,7 +365,7 @@ impl Drop for ControlDisplay {
 #[cfg(test)]
 mod tests {
     use super::{Privacy, PrivacyRecord, PrivacyStore, PrivateReason};
-    use crate::{EpochMillis, SecretSet, SecretSetConfig, TraceError};
+    use crate::{EpochMillis, TraceError};
     use browseros_core::TabId;
     use futures_util::future::BoxFuture;
     use std::collections::HashMap;
@@ -456,21 +444,13 @@ mod tests {
 
     fn with_store(store: Store) -> (Arc<Privacy>, Arc<Store>) {
         let store = Arc::new(store);
-        let privacy = Privacy::new(
-            Arc::new(SecretSet::new(SecretSetConfig::default())),
-            store.clone(),
-            store.rows(),
-        );
+        let privacy = Privacy::new(store.clone(), store.rows());
         (privacy, store)
     }
 
     /// What a Neo restart over the same store would start with.
     fn restarted(store: &Arc<Store>) -> Arc<Privacy> {
-        Privacy::new(
-            Arc::new(SecretSet::new(SecretSetConfig::default())),
-            store.clone(),
-            store.rows(),
-        )
+        Privacy::new(store.clone(), store.rows())
     }
 
     const AT: EpochMillis = EpochMillis::from_millis(1_000);

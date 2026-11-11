@@ -338,6 +338,11 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'locator.waitForFunction': {
+    effect: 'write',
+    target: 'target',
+    lifetime: 'operation',
+  },
   'page.screenshot': {
     effect: 'read',
     target: 'page',

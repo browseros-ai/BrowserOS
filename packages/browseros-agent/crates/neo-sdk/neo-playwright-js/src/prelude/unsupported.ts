@@ -176,8 +176,6 @@ export const UNSUPPORTED = {
     hideHighlight: NO_INSPECTOR,
     highlight: NO_INSPECTOR,
     tap: NO_TOUCH,
-    waitForFunction:
-      'poll with expect(locator).toPass() or page.waitForFunction()',
   },
   FrameLocator: {},
   Keyboard: {},

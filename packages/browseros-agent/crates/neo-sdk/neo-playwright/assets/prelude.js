@@ -344,6 +344,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "locator.waitForFunction": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
     "page.screenshot": {
       effect: "read",
       target: "page",
@@ -869,6 +874,7 @@
   var SCREENSHOT_KEYS = [
     "type",
     "quality",
+    "omitBackground",
     "fullPage",
     "clip",
     "animations",
@@ -6817,6 +6823,11 @@ ${value.stack}`;
       const script = pageCall(api, "locator", pageFunction, arg, options);
       return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
     }
+    async waitForFunction(pageFunction, arg, options) {
+      const api = "locator.waitForFunction";
+      const script = pageCall(api, "query", pageFunction, arg);
+      await this._frame._selectorOp("locator.waitForFunction", api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
+    }
     async evaluateAll(pageFunction, arg) {
       const api = "locator.evaluateAll";
       return await this._frame._evaluateAll(api, this._selector, pageCall(api, "query", pageFunction, arg));
@@ -7375,11 +7386,12 @@ ${value.stack}`;
     }
     async _evaluate(api, pageFunction, arg, options) {
       const script = pageCall(api, "frame", pageFunction, arg, options);
-      const value = await invoke("page.evaluate", this._call(api, 0), {
+      const { value: result, observed } = await invokeObserved("page.evaluate", this._call(api, 0), {
         ...await this._frameArgs(api),
         script
       });
-      return fromPageValue(api, value);
+      this._page._evaluated(result.frames, observed);
+      return fromPageValue(api, result.value);
     }
     async _waitForFunction(api, pageFunction, arg, options = {}) {
       if (typeof options.polling === "string" && options.polling !== "raf")
@@ -7416,8 +7428,6 @@ ${value.stack}`;
   function refusedScreenshotOption(options) {
     if (options.mask !== undefined && options.mask.length > 0)
       return "Neo cannot mask elements in a screenshot; omit mask";
-    if (options.omitBackground)
-      return "Neo cannot capture a transparent background; omit omitBackground";
     return;
   }
   var HELD_VALUE = "Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()";
@@ -8282,7 +8292,7 @@ ${value.stack}`;
     }
     async close(options = {}) {
       const api = "page.close";
-      if (this._tab === null) {
+      if (this._closed || this._tab === null) {
         this.#close();
         return;
       }
@@ -8293,7 +8303,7 @@ ${value.stack}`;
           ...options.runBeforeUnload ? { runBeforeUnload: true } : {}
         });
       } catch (error) {
-        if (Reflect.get(Object(error), "code") !== "target_closed" || options.runBeforeUnload)
+        if (!["target_closed", "page_closed"].includes(String(Reflect.get(Object(error), "code"))) || options.runBeforeUnload)
           throw error;
       }
     }
@@ -8338,6 +8348,10 @@ ${value.stack}`;
       } finally {
         this._navigationsInFlight--;
       }
+    }
+    _evaluated(frames, at) {
+      if (this.#payloadCurrent(at) && Array.isArray(frames))
+        this._applyFrames(frames);
     }
     async _navigated(api, frame, result, at) {
       if (this.#payloadCurrent(at)) {
@@ -9502,8 +9516,7 @@ Timeout: ${timeout}ms`);
       evaluateHandle: NO_HANDLES,
       hideHighlight: NO_INSPECTOR,
       highlight: NO_INSPECTOR,
-      tap: NO_TOUCH,
-      waitForFunction: "poll with expect(locator).toPass() or page.waitForFunction()"
+      tap: NO_TOUCH
     },
     FrameLocator: {},
     Keyboard: {},

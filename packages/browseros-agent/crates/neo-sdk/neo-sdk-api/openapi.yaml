@@ -918,19 +918,19 @@ components:
           type: object
           description: >-
             The host data the run was started with (`_meta["com.browseros.neo/run"].hostData`), if
-            any; masked. Present once the run has ended: Neo masks it with what the run's end
-            knows, so a running run, or one cut short by a restart, has none.
+            any; bounded for storage. Present once the run has ended, so a running run, or one
+            cut short by a restart, has none.
         code:
           type: string
           description: >-
-            The script, masked. Stored when the run ends, so it is absent while the run is
+            The script, bounded for storage. Stored when the run ends, so it is absent while the run is
             `running`. Older runs may also have no stored code.
         codeWithheld:
           type: string
           description: Neo stopped before the run ended, so its code was never stored.
           x-extensible-enum: [unavailable]
         result:
-          description: The script's return value, masked and bounded.
+          description: The script's return value, bounded for storage.
         resultTruncated:
           type: boolean
         unknown:
@@ -994,14 +994,14 @@ components:
           $ref: '#/components/schemas/PageRef'
         args:
           description: >-
-            Arguments, masked and bounded. Target field kinds do not redact them. Page and locator
+            Original arguments, bounded for storage. Page and locator
             handles appear as their branded JSON, e.g. `{"$neo":"locator","page":3,"selector":"…"}`.
-            Present once the operation has ended: Neo masks them with what the operation's end
-            knows, so an operation still running, or one whose end Neo never recorded, has none.
+            Present once the operation has ended, so an operation still running, or one whose end Neo
+            never recorded, has none.
         argsTruncated:
           type: boolean
         result:
-          description: Safe result, masked and bounded.
+          description: Result, bounded for storage.
         resultTruncated:
           type: boolean
         outcome:
@@ -1020,8 +1020,7 @@ components:
         notes:
           type: array
           description: >-
-            Its call-log lines, oldest first, e.g. `waiting for getByRole('button')`. Masked and
-            bounded: a long line ends in `…[+N bytes]`, and lines past the limit are counted in one
+            Its call-log lines, oldest first, e.g. `waiting for getByRole('button')`. Bounded: a long line ends in `…[+N bytes]`, and lines past the limit are counted in one
             last `…[+N lines]` line. They are stored with the operation's end, so the field is
             absent while it runs and when it noted nothing.
           items:

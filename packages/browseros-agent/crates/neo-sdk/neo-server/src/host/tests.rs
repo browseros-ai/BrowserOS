@@ -10,8 +10,7 @@ use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
 use neo_trace::{
-    Effect, OperationId, Privacy, RedactionLimits, Redactor, RunId, SecretSet, SecretSetConfig,
-    TraceStore, WriterConfig,
+    Effect, OperationId, Privacy, RedactionLimits, Redactor, RunId, TraceStore, WriterConfig,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -71,11 +70,10 @@ impl Host {
             move || future::ready(connect.connect()),
         );
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
+        let redactor = Redactor::new(RedactionLimits::default());
         let (shots, screenshots) = neo_trace::screenshot_queue();
         let sink = neo_trace::spawn_writer(&store, redactor, WriterConfig::default(), Some(shots));
-        let privacy = Privacy::new(secrets, Arc::new(sink.clone()), HashMap::new());
+        let privacy = Privacy::new(Arc::new(sink.clone()), HashMap::new());
         let token_file = match token {
             Some(token) => {
                 let path = dir.path().join("token");

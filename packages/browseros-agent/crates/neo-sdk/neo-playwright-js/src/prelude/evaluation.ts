@@ -116,6 +116,7 @@ const fallThrough = (value: unknown) => ({ fallThrough: value })
  * | locator | after wait    | after wait      | locator.evaluate                           |
  * | handle  | now           | now             | elementHandle.evaluate                     |
  * | query   | none          | now             | $eval, $$eval, evaluateAll, the handle ones |
+ * |         |               |                 | and locator.waitForFunction                 |
  *
  * "now" throws before any op, unprefixed for the client's own checks and prefixed for the
  * channel validator's. `locator.evaluate` defers everything: `_withElement` runs the handle's

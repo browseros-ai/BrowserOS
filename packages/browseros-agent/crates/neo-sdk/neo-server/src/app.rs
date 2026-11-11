@@ -12,8 +12,8 @@ use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_trace::{
-    EpochMillis, Privacy, RedactionLimits, Redactor, RetentionPolicy, SecretSet, SecretSetConfig,
-    TraceError, TraceSink, TraceStore, WriterConfig,
+    EpochMillis, Privacy, RedactionLimits, Redactor, RetentionPolicy, TraceError, TraceSink,
+    TraceStore, WriterConfig,
 };
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
@@ -40,7 +40,7 @@ use crate::test_support::FakeCdp;
 /// long-lived part built.
 ///
 /// ```text
-///  start ─ bind the agent port (taken: exit 2) ─ trace store + SecretSet + writer (with the
+///  start ─ bind the agent port (taken: exit 2) ─ trace store + writer (with the
 ///          screenshot queue) + Privacy ─ host socket (with a usable token; bind failure: exit 1)
 ///        ─ TabRegistry + BrowserLink (connects in the background) ─ PlaywrightFacade (built on
 ///          the link's first connect) ─ CaptchaSolver (with a provider key) ─ Registry
@@ -93,15 +93,14 @@ impl App {
         open_trace(directory).await
     }
 
-    /// The same janitor, secret expiration and retention schedule, owned by the hosted runtime.
+    /// The same idle-tab janitor and retention schedule, owned by the hosted runtime.
     #[cfg(feature = "hosted-run")]
     pub(crate) async fn hosted_housekeeping(
         janitor: TabJanitor,
-        secrets: Arc<SecretSet>,
         trace: TraceSink,
         shutdown: CancellationToken,
     ) {
-        housekeeping(janitor, secrets, trace, shutdown).await;
+        housekeeping(janitor, trace, shutdown).await;
     }
 
     /// The tokio runtime Neo runs on: multi-thread, with `Defaults::WORKER_STACK_BYTES` worker
@@ -160,10 +159,7 @@ impl App {
         log_startup(&config, address);
 
         let store = open_trace(&config.env.trace_dir()).await?;
-        // neo-trace's writer still takes a secret set to mask records with. Neo hands it one that
-        // nothing registers into, so the trace keeps what each op produced, as the script got it.
-        let unmasked = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let redactor = Redactor::new(unmasked, RedactionLimits::default());
+        let redactor = Redactor::new(RedactionLimits::default());
         let writer = WriterConfig {
             replay_window: Defaults::REPLAY_WINDOW,
             ..WriterConfig::default()
@@ -172,16 +168,9 @@ impl App {
         // once the browser links.
         let (shots, screenshots) = neo_trace::screenshot_queue();
         let trace = neo_trace::spawn_writer(&store, redactor, writer, Some(shots));
-        // The host API's secret set, which it reads from `Privacy` (`/v1/secrets`, the takeover
-        // journal). Neither the door nor the trace masks with it; housekeeping expires it.
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
         // neo-service still requires Privacy while its own private-tab API is being removed.
         // Supply an empty compatibility value: the server never restores persisted flags.
-        let privacy = Privacy::new(
-            Arc::clone(&secrets),
-            Arc::new(trace.clone()),
-            HashMap::new(),
-        );
+        let privacy = Privacy::new(Arc::new(trace.clone()), HashMap::new());
         let host = HostApi::bind(
             &config.env.host_api,
             HostInputs {
@@ -242,7 +231,6 @@ impl App {
         ));
         tokio::spawn(housekeeping(
             TabJanitor::new(dispatcher, Arc::clone(&browser), tabs, takeover),
-            secrets,
             trace.clone(),
             shutdown.clone(),
         ));
@@ -307,19 +295,14 @@ impl fmt::Debug for App {
 }
 
 /// Neo's periodic upkeep, one task until `shutdown`: every [`Defaults::HOUSEKEEPING_EVERY`] the
-/// janitor closes idle agent tabs and the secret set drops expired values; every
+/// janitor closes idle agent tabs; every
 /// [`Defaults::TRACE_SWEEP_EVERY`] the trace writer deletes records past retention.
 ///
 /// Both intervals fire once at start, so a Neo that restarts often still sweeps. A step that
 /// fails is logged and tried again on its next tick: none of them may take the process down,
 /// and none blocks a run. A sweep in progress at SIGTERM is dropped with the runtime; the
 /// store marks its run `interrupted` at the next start.
-async fn housekeeping(
-    janitor: TabJanitor,
-    secrets: Arc<SecretSet>,
-    trace: TraceSink,
-    shutdown: CancellationToken,
-) {
+async fn housekeeping(janitor: TabJanitor, trace: TraceSink, shutdown: CancellationToken) {
     let mut upkeep = time::interval(Defaults::HOUSEKEEPING_EVERY);
     let mut retention = time::interval(Defaults::TRACE_SWEEP_EVERY);
     // A tick missed while a sweep waited on the browser is not worth catching up on.
@@ -332,10 +315,6 @@ async fn housekeeping(
                 let now = time::Instant::now();
                 if let Some(run) = janitor.sweep(now).await {
                     debug!(%run, "idle-tab sweep recorded");
-                }
-                let expired = secrets.expire(now.into_std());
-                if expired > 0 {
-                    debug!(expired, "secret values expired");
                 }
             }
             _ = retention.tick() => {
