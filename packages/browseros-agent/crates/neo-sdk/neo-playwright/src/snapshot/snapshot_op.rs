@@ -37,7 +37,7 @@ use crate::probe::{
 };
 use crate::resolve::{self, Hopped, Landed, Resolver};
 use crate::target::{Chunk, PageRef, Strictness, Target};
-use crate::wire::{Describe, OpWire, Route, Run, command, options};
+use crate::wire::{self, Describe, OpWire, Route, Run, options};
 use crate::world::{Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -76,8 +76,8 @@ impl SnapshotOp {
 /// `Describe` walk these same rows; the policy in `spec()` remains independent of the shapes.
 fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
     match op {
-        SnapshotOp::Page => r.op(command("Frame.ariaSnapshot"), page_snapshot),
-        SnapshotOp::Locator => r.op(command("Frame.ariaSnapshot"), locator_snapshot),
+        SnapshotOp::Page => r.op(wire::command("Frame.ariaSnapshot"), page_snapshot),
+        SnapshotOp::Locator => r.op(wire::command("Frame.ariaSnapshot"), locator_snapshot),
     }
 }
 
