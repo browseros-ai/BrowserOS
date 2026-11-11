@@ -70,7 +70,6 @@ mod test_support;
     expect(
         dead_code,
         unused_imports,
-        unused_macros,
         reason = "the families move onto route rows one at a time; until each does, only the \
                   machinery's own tests walk a route"
     )

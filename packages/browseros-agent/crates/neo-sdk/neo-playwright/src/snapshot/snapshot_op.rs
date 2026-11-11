@@ -23,6 +23,7 @@ use futures_util::future::{self, BoxFuture};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::time;
+use ts_rs::TS;
 
 use super::aria_snapshot::{self, AriaNode, ChildFrame, FrameSnapshot, PartialFrame};
 use crate::backoff::Backoff;
@@ -36,6 +37,7 @@ use crate::probe::{
 };
 use crate::resolve::{self, Hopped, Landed, Resolver};
 use crate::target::{Chunk, PageRef, Strictness, Target};
+use crate::wire::{Describe, OpWire, Route, Run, command, options};
 use crate::world::{Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -48,6 +50,11 @@ listed_enum! {
 }
 
 impl SnapshotOp {
+    /// Describes the same input and result types the runtime route decodes and encodes.
+    pub(crate) fn wire(self) -> OpWire {
+        route(self, Describe)
+    }
+
     /// This op's registration metadata.
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
@@ -65,6 +72,15 @@ impl SnapshotOp {
     }
 }
 
+/// One exhaustive table binds each snapshot's handler to the upstream command. `Run` and
+/// `Describe` walk these same rows; the policy in `spec()` remains independent of the shapes.
+fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
+    match op {
+        SnapshotOp::Page => r.op(command("Frame.ariaSnapshot"), page_snapshot),
+        SnapshotOp::Locator => r.op(command("Frame.ariaSnapshot"), locator_snapshot),
+    }
+}
+
 /// How long one child frame's own calls may take: the hop into it, its world's install and its
 /// snapshot (decisions.md). A frame that misses it is reported partial and
 /// the rest of the page is returned; upstream instead waits on a hung frame until the whole call
@@ -73,30 +89,42 @@ impl SnapshotOp {
 const FRAME_BUDGET: Duration = Duration::from_secs(2);
 
 /// `page.ariaSnapshot`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "PageSnapshotInput")]
 struct PageInput {
     page: PageRef,
+    #[ts(type = "import('../../../probe/protocol').SnapshotMode")]
     mode: SnapshotMode,
     #[serde(default)]
+    #[ts(optional)]
     depth: Option<i64>,
     /// Upstream's `boxes`: every node's box in its own frame's viewport.
     #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
     boxes: bool,
 }
+// Snapshots have always sent flat fields, not a nested `options` bag. Keep that wire shape;
+// there is no options bag for the generator's option-key probe to describe.
+options!(PageInput);
 
 /// `locator.ariaSnapshot`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "LocatorSnapshotInput")]
 struct LocatorInput {
     target: Target,
     strict: Strictness,
+    #[ts(type = "import('../../../probe/protocol').SnapshotMode")]
     mode: SnapshotMode,
     #[serde(default)]
+    #[ts(optional)]
     depth: Option<i64>,
     #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
     boxes: bool,
 }
+options!(LocatorInput);
 
 /// Runs one snapshot op; its output is `aria_snapshot::SnapshotResult`, `{ json, partial }`.
 pub(crate) async fn invoke(
@@ -105,16 +133,7 @@ pub(crate) async fn invoke(
     op: SnapshotOp,
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
-    let result = match op {
-        SnapshotOp::Page => page_snapshot(pw, scope, args.decode(scope)?).await?,
-        SnapshotOp::Locator => locator_snapshot(pw, scope, args.decode(scope)?).await?,
-    };
-    serde_json::to_value(result).map_err(|error| {
-        scope.fail(
-            ErrorCode::Internal,
-            &format!("the snapshot did not encode: {error}"),
-        )
-    })
+    route(op, Run { pw, scope, args }).await
 }
 
 /// The page's snapshot from the main frame's body. The main frame is the op: while its

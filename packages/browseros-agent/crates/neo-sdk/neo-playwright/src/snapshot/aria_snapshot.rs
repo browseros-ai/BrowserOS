@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
 use super::snapshot_rules;
 
@@ -108,7 +109,7 @@ pub(crate) enum ChildFrame {
 
 /// A frame the snapshot could not read. The prelude prints
 /// `# partial: <frame> not read (<reason>)` under its iframe's line.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, TS)]
 pub(crate) struct PartialFrame {
     /// The iframe node's ref in its parent frame.
     pub(crate) r#ref: String,
@@ -134,8 +135,11 @@ pub(crate) struct PartialFrame {
 /// applied. The prelude renders it with the vendored `renderAriaSnapshotAsYaml`
 /// and adds a `# partial` line under each partial iframe. `tests/data/snapshot-output.json` is
 /// one recorded from real frames.
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Debug, PartialEq, Serialize, TS)]
 pub(crate) struct SnapshotResult {
+    // The probe and the renderer already share upstream's recursive node format, pinned by
+    // snapshot-output.json. Name that type instead of deriving the nodes' opaque JSON fields.
+    #[ts(type = "import('../../vendored').AriaSnapshotJSON")]
     pub(crate) json: Vec<AriaNode>,
     pub(crate) partial: Vec<PartialFrame>,
 }

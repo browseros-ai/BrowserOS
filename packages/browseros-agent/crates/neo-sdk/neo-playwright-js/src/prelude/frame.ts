@@ -27,6 +27,7 @@ import {
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
 import { dropFiles, inputFiles, withClientErrors } from './files'
+import { send } from './generated'
 import type { OpName } from './generated/ops'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import {
@@ -1295,32 +1296,38 @@ export class Frame extends EventEmitter {
   ): Promise<SnapshotResult> {
     const site = captureSite()
     const mode = options.mode ?? 'default'
-    const shape = pick({ mode, depth: options.depth, boxes: options.boxes }, [
-      'mode',
-      'depth',
-      'boxes',
-    ] satisfies KeyList<PickOptions['page.ariaSnapshot']>)
+    // Capture options before resolving a locator's page, which can await opening its tab.
+    const { depth, boxes } = options
     const wait = this._wait(api, options)
-    if (selector !== null)
-      return await this._selectorOp(
-        'locator.ariaSnapshot',
+    if (selector !== null) {
+      const target = await this._locatorBrand(api, selector)
+      return await send['locator.ariaSnapshot'](
         site,
-        api,
-        selector,
-        true,
-        wait,
-        shape,
+        this._call(api, wait.timeout),
+        {
+          target,
+          strict: 'strict',
+          mode,
+          depth,
+          boxes,
+        },
+        wait.signal,
       )
+    }
     if (this._id !== null)
       throw unsupportedError(
         api,
         "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()",
       )
-    return await invoke(
-      'page.ariaSnapshot',
+    return await send['page.ariaSnapshot'](
       site,
       this._call(api, wait.timeout),
-      { page: await this._page._brand(api), ...shape },
+      {
+        page: await this._page._brand(api),
+        mode,
+        depth,
+        boxes,
+      },
       wait.signal,
     )
   }

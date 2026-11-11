@@ -2,12 +2,15 @@
 
 use browseros_core::TabId;
 use serde::Serialize;
+use ts_rs::TS;
 
 /// A tab-only output brand. The prelude caches one `Page` per tab, so popup events,
 /// `context.pages()` and `page.opener()` agree on object identity.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+#[ts(rename = "PageBrand")]
 pub(crate) struct PageHandle {
     #[serde(rename = "$neo")]
+    #[ts(type = "'page'")]
     brand: Brand,
     tab: TabId,
 }

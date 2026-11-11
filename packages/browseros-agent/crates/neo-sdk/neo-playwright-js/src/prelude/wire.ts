@@ -26,62 +26,31 @@ import type {
 } from '../probe/protocol'
 import type { GeneratedInputs, GeneratedOutputs } from './generated'
 import type { OpName } from './generated/ops'
-import type { AriaSnapshotJSON, ParsedSelector } from './vendored'
 
+// Rust owns these shared shapes now. LocatorBrand is a projection of the tagged Target
+// union, so its fields are never repeated in TypeScript.
+export type {
+  ElementBrand,
+  PageBrand,
+  PageHandle,
+  PartialFrame,
+  SnapshotResult,
+  Strictness,
+  Target,
+} from './generated'
 /** Playwright's in-page serialized value (`utilityScriptSerializers.ts`), as JSON. */
 export type { SerializedValue }
 
-/** A tab-only page brand. The door checks this tab's policies before the crate admits it. */
-export type PageBrand = { $neo: 'page'; tab: number }
+import type {
+  ElementBrand,
+  PageBrand,
+  PageHandle,
+  Strictness,
+  Target,
+} from './generated'
 
-/**
- * `{"$neo":"page","tab":null}`: the run's own page before any op opened its tab (claw-sdk's
- * lazy default page). The door opens the tab for the first op whose target names it, hands
- * Rust that tab's brand in its place, and the reply's `defaultPage` names it to the prelude.
- * Rust never sees it.
- */
-export type UnopenedPageBrand = { $neo: 'page'; tab: null }
-
-/** How an op names its page when the door resolves it: at `page` or at `target.page`. */
-export type PageHandle = PageBrand | UnopenedPageBrand
-
-/**
- * A locator, re-resolved by Rust on every attempt. `chunks` is the vendored
- * `splitSelectorByFrame` output, one parsed selector per frame, so Rust never parses selector
- * syntax and nested selectors keep the frame-prefix handling only a whole-selector parse does.
- * `display` is `asLocator('javascript', selector)`, which Rust prints in messages and call logs.
- */
-export type LocatorBrand = {
-  $neo: 'locator'
-  page: PageHandle
-  /** The frame the locator was built from (`frame.locator()`); null is the main frame. */
-  frame: string | null
-  chunks: ParsedSelector[]
-  display: string
-  /**
-   * The handle a query is rooted at (`elementHandle.$()`, `elementHandle.$$()`): the first
-   * chunk runs from that node in its own document, and `frame` plays no part. Left out
-   * otherwise.
-   */
-  root?: ElementBrand
-}
-
-/**
- * One element pinned in one document (`ElementHandle`); detached for good once it goes. Rust
- * makes it, with the page brand of the op that found the element.
- */
-export type ElementBrand = {
-  $neo: 'element'
-  page: PageBrand
-  seq: number
-  node: number
-  display: string
-}
-
-export type Target = LocatorBrand | ElementBrand
-
-/** Locator methods are strict; page and frame shortcuts take the first match. */
-export type Strictness = 'strict' | 'firstMatch'
+export type LocatorBrand = Extract<Target, { $neo: 'locator' }>
+export type UnopenedPageBrand = PageHandle & { tab: null }
 
 /**
  * Opens every op input. `api` is the method the script called (`page.click` for the
@@ -166,11 +135,6 @@ export type PageEntry = { page: PageBrand; url: string }
  * are spelled out per op: changing this alias would misdescribe existing run-record payloads.
  */
 export type Done = Record<string, never>
-
-/** A frame Rust could not read within its budget; it keeps its iframe line and gets a comment. */
-export type PartialFrame = { ref: string; frame: string; reason: string }
-/** A stitched aria snapshot. The prelude renders it as YAML. */
-export type SnapshotResult = { json: AriaSnapshotJSON; partial: PartialFrame[] }
 
 /** The Playwright events Neo reports. `page` is the context's; the rest are a page's. */
 export type EventName =
@@ -498,16 +462,6 @@ export type HandInputs = {
   /** `noWait` is `page.$`: the first match now, or null, instead of waiting for one. */
   'locator.elementHandle': TargetArgs & { noWait?: true }
   'locator.elementHandles': EveryMatchArgs
-  'page.ariaSnapshot': PageArgs & {
-    mode: 'ai' | 'default'
-    depth?: number
-    boxes?: boolean
-  }
-  'locator.ariaSnapshot': TargetArgs & {
-    mode: 'ai' | 'default'
-    depth?: number
-    boxes?: boolean
-  }
   'expect.locator': { target: Target } & ExpectArgs
   'expect.page': PageArgs & ExpectArgs
   'keyboard.down': PageArgs & { key: string }
@@ -716,8 +670,6 @@ export type HandOutputs = {
   'locator.waitFor': ElementBrand | null
   'locator.elementHandle': ElementBrand | null
   'locator.elementHandles': ElementBrand[]
-  'page.ariaSnapshot': SnapshotResult
-  'locator.ariaSnapshot': SnapshotResult
   'expect.locator': null
   'expect.page': null
   'keyboard.down': null
