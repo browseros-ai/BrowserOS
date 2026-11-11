@@ -18,6 +18,9 @@ use crate::{ErrorCode, PlaywrightError};
 
 const MAX_STRIP_HEIGHT: u32 = 16_000;
 const MAX_STRIP_PIXELS: f64 = 8_000_000.0;
+// Device metrics pass through float32 in Chromium. This absorbs that roundoff when finding
+// small rational density/zoom ratios, without accepting a visibly fractional raster row.
+const RASTER_ALIGNMENT_EPSILON: f64 = 1e-4;
 
 /// One encoded strip and its expected image height. Native captures must not silently crop.
 struct Tile {
@@ -28,6 +31,19 @@ struct Tile {
 
 pub(super) fn needs_tiles(geometry: &ScreenshotGeometry) -> bool {
     geometry.clip.height * geometry.raster_scale > f64::from(MAX_STRIP_HEIGHT)
+        && row_alignment(geometry.raster_scale).is_some()
+}
+
+// Ending a strip between raster rows changes gradient edge pixels. Use an integral CSS and
+// raster grid; unusual densities without a bounded grid retain the native single capture.
+fn row_alignment(scale: f64) -> Option<u32> {
+    (1..=256).find(|css| {
+        let rows = f64::from(*css) * scale;
+        rows.is_finite()
+            && rows >= 1.0
+            && rows <= f64::from(MAX_STRIP_HEIGHT)
+            && (rows - rows.round()).abs() < RASTER_ALIGNMENT_EPSILON
+    })
 }
 
 pub(super) async fn capture(
@@ -64,24 +80,29 @@ async fn produce(
     scope: &OpScope<'_>,
 ) -> Result<(), PlaywrightError> {
     let scale = geometry.raster_scale;
+    let alignment = row_alignment(scale)
+        .ok_or_else(|| scope.fail(ErrorCode::Internal, "PNG raster grid is not aligned"))?;
+    let alignment = f64::from(alignment);
     let max_css_height = (MAX_STRIP_PIXELS / (geometry.clip.width * scale * scale))
         .min(f64::from(MAX_STRIP_HEIGHT) / scale)
-        .floor()
-        .max(1.0);
+        / alignment;
+    let max_css_height = max_css_height.floor().max(1.0) * alignment;
     let mut top = 0;
-    while top < height {
-        // Chromium truncates clip dimensions to CSS integers before scaling its output.
-        // Origins remain fractional: advance by actual raster rows to keep the pixel phase.
-        let css_height = (f64::from(height - top) / scale).ceil().min(max_css_height);
-        let encoded_height = pixels(css_height * scale)
+    let mut top_css = 0.0;
+    let css_height = geometry.clip.height.floor();
+    while top_css < css_height {
+        // Chromium truncates CSS dimensions before scaling. Keep origins on the same grid
+        // too; the final strip retains the original rectangle's exact bottom edge.
+        let strip_height = (css_height - top_css).min(max_css_height);
+        let encoded_height = pixels(strip_height * scale)
             .ok_or_else(|| scope.fail(ErrorCode::InvalidInput, "Invalid PNG strip dimensions"))?;
         let rows = encoded_height.min(height - top);
         let clip = geometry.clip;
         params.insert(
             "clip".to_owned(),
             json!({
-                "x": clip.x, "y": clip.y + f64::from(top) / scale,
-                "width": clip.width, "height": css_height, "scale": clip.scale,
+                "x": clip.x, "y": clip.y + top_css,
+                "width": clip.width, "height": strip_height, "scale": clip.scale,
             }),
         );
         let data = capture
@@ -101,6 +122,7 @@ async fn produce(
             break;
         }
         top += rows;
+        top_css += strip_height;
     }
     Ok(())
 }

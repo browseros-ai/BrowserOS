@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 
 /// Browser fixture: compare joined rows with small native captures of a changing row pattern.
 const TALL_PNG_PROGRAM: &str = r#"
-                await page.setContent('<style>html,body{margin:0;background:transparent}</style><div style="height:10000px;background:red"></div><div style="width:2px;height:12000px;background:blue"></div><div style="position:absolute;left:200px;top:0;width:2px;height:22000px;background:repeating-linear-gradient(red 0px,red 1px,blue 1px,blue 2px)"></div>');
+                await page.setContent('<style>html,body{margin:0;background:transparent}</style><div style="height:10000px;background:red"></div><div style="width:2px;height:12000px;background:blue"></div><div style="position:absolute;left:200px;top:0;width:2px;height:22000px;background:repeating-linear-gradient(red 0px,blue 20px,red 40px)"></div>');
                 const viewport = await page.evaluate(() => [innerWidth,innerHeight,devicePixelRatio,scrollX,scrollY]);
                 async function sample(scale, ys, joins) {
                     const bytes = await page.screenshot({ fullPage: true, omitBackground: true, scale, timeout: 60000 });
@@ -33,8 +33,11 @@ const TALL_PNG_PROGRAM: &str = r#"
                     const density = scale === 'css' ? 1 : viewport[2];
                     const native = [];
                     for (const join of joins) {
-                        const bytes = await page.screenshot({fullPage:true,omitBackground:true,scale,clip:{x:200,y:(join-3)/density,width:2,height:4},timeout:60000});
-                        native.push({join,url:'data:image/png;base64,'+Buffer.from(bytes).toString('base64')});
+                        // Keep the reference on an integer CSS/raster grid and sample inside
+                        // its bounds; fractional clip origins can change gradient rasterization.
+                        const y=Math.floor((join-3)/(density*4))*4;
+                        const bytes = await page.screenshot({fullPage:true,omitBackground:true,scale,clip:{x:200,y,width:4,height:16},timeout:60000});
+                        native.push({join,startRow:Math.round(y*density),url:'data:image/png;base64,'+Buffer.from(bytes).toString('base64')});
                     }
                     return await page.evaluate(async ({url, ys, native, density}) => {
                         const image = new Image();
@@ -52,21 +55,25 @@ const TALL_PNG_PROGRAM: &str = r#"
                             context.drawImage(source,x,y,1,1,0,0,1,1);
                             return Array.from(context.getImageData(0,0,1,1).data);
                         };
-                        let checkedRows=0, joinsMatch=true;
-                        for (const {url,join} of native) {
+                        let checkedRows=0, joinsMatch=true; const mismatches=[];
+                        for (const {url,join,startRow} of native) {
                             const reference = new Image();
                             await new Promise((resolve,reject) => { reference.onload=resolve;reference.onerror=reject;reference.src=url; });
                             for (let row=0;row<6;row++) {
                                 const joined=point(image,Math.round(200*density)+1,join-3+row);
-                                const expected=point(reference,1,row);
-                                joinsMatch &&= joined.every((value,index) => value===expected[index]);
+                                const expected=point(reference,1,join-3+row-startRow);
+                                // Independent paints can round a gradient channel by one level. Adjacent
+                                // rows in this ramp differ by at least six levels at these joins.
+                                const same=joined.every((value,index) => index===3 ? value===expected[index] : Math.abs(value-expected[index])<=1);
+                                if (!same && mismatches.length<6) mismatches.push({join,row,joined,expected});
+                                joinsMatch &&= same;
                                 checkedRows++;
                             }
                         }
-                        return { size: [image.width,image.height], pixels, checkedRows, joinsMatch };
+                        return { size: [image.width,image.height], pixels, checkedRows, joinsMatch, mismatches };
                     }, {url,ys,native,density});
                 }
-                const device = await sample('device', [3123,3124,10415,10416,14999,15000,19999,20000,22000*viewport[2]-1], viewport[2] === 1.5 ? [10376,20752,31128] : [3124,6248,9372]);
+                const device = await sample('device', [3123,3124,10415,10416,14999,15000,19999,20000,22000*viewport[2]-1], viewport[2] === 1.5 ? [10374,20748,31122] : [3124,6248,9372]);
                 const css = await sample('css', [9999,10000,15624,15625,21999], viewport[2] === 1.5 ? [15564] : [6250,12500,18750]);
                 return { device,css,viewport,after: await page.evaluate(() => [innerWidth,innerHeight,devicePixelRatio,scrollX,scrollY]) };
             "#;
@@ -241,8 +248,8 @@ async fn tall_pngs_preserve_rows_without_activating_or_resizing_the_tab() -> Tes
             .collect();
             let density_value = if density < 2.0 { json!(1.5) } else { json!(2) };
             json!({
-                "device": { "size": [device_width,device_height], "pixels": pixels, "checkedRows": 18, "joinsMatch": true },
-                "css": { "size": [width,22000], "pixels": [red,blue,blue,blue,blue], "checkedRows": if density < 2.0 {6} else {18}, "joinsMatch": true },
+                "device": { "size": [device_width,device_height], "pixels": pixels, "checkedRows": 18, "joinsMatch": true, "mismatches": [] },
+                "css": { "size": [width,22000], "pixels": [red,blue,blue,blue,blue], "checkedRows": if density < 2.0 {6} else {18}, "joinsMatch": true, "mismatches": [] },
                 "viewport": [width,600,density_value,0,0], "after": [width,600,density_value,0,0],
             })
         },
