@@ -5,7 +5,7 @@
 
 use browseros_core::FrameId;
 use serde::Deserialize;
-use serde_json::Value;
+use ts_rs::TS;
 
 use crate::op_scope::OpScope;
 use crate::page::evaluate_guard::{self, DocumentWrite, TreeFrame};
@@ -14,29 +14,34 @@ use crate::page::{LoadState, OpPage};
 use crate::probe::{self, DocumentPart, ProbeReply, ProbeRequest};
 use crate::resolve::failed;
 use crate::target::PageRef;
+use crate::wire::{Nothing, options};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// `page.title()` and `page.content()`: `{ page, frame? }`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DocumentInput {
     page: PageRef,
     /// A child frame, for `frame.title()`; absent is the main frame.
     #[serde(default)]
+    #[ts(optional)]
     frame: Option<FrameId>,
 }
+options!(DocumentInput);
 
 /// `page.setContent(html, { waitUntil })`: `{ page, frame?, html, waitUntil? }`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct SetContentInput {
     page: PageRef,
     #[serde(default)]
+    #[ts(optional)]
     frame: Option<FrameId>,
     html: String,
     #[serde(default)]
     wait_until: LoadState,
 }
+options!(SetContentInput);
 
 /// Reads `part` of the frame's document.
 pub(crate) async fn read(
@@ -44,7 +49,7 @@ pub(crate) async fn read(
     scope: &OpScope<'_>,
     input: DocumentInput,
     part: DocumentPart,
-) -> Result<Value, PlaywrightError> {
+) -> Result<String, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &input.page).await?;
     let world = match world_call::frame_world(&page, scope, input.frame.as_ref()).await {
         Ok(world) => world,
@@ -55,22 +60,21 @@ pub(crate) async fn read(
                 && input.frame.is_some()
                 && error.error_code() == Some(ErrorCode::TargetClosed) =>
         {
-            return Ok(Value::String(String::new()));
+            return Ok(String::new());
         }
         Err(error) => return Err(error),
     };
     let TreeFrame { endpoint, place } =
         evaluate_guard::frame_endpoint(&page, world.session(), world.frame().clone());
     let request = &ProbeRequest::Document { part };
-    let text = with_world(&page, &endpoint, &place, |world| async move {
+    with_world(&page, &endpoint, &place, |world| async move {
         match probe::call(&world, request).await? {
             ProbeReply::DocumentText { text } => Ok(text),
             other => Err(unexpected("document", other)),
         }
     })
     .await
-    .map_err(|failure| failed(scope, failure))?;
-    Ok(Value::String(text))
+    .map_err(|failure| failed(scope, failure))
 }
 
 /// The body's aria snapshot in `frame`'s isolated world (the main frame for `None`), as upstream's
@@ -111,7 +115,7 @@ pub(crate) async fn set_content(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: SetContentInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     // Measured: Chromium never fires `networkIdle` again for a written document, so this wait
     // could only time out.
     if input.wait_until == LoadState::NetworkIdle {
@@ -129,8 +133,7 @@ pub(crate) async fn set_content(
     DocumentWrite::open(pw, scope, &input.page, input.frame.as_ref())
         .await?
         .write(scope, &input.html, input.wait_until)
-        .await?;
-    Ok(Value::Null)
+        .await
 }
 
 #[cfg(test)]

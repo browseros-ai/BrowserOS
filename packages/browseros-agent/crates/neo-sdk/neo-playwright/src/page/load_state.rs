@@ -3,6 +3,7 @@
 use std::fmt;
 
 use serde::Deserialize;
+use ts_rs::TS;
 
 /// How far a document has loaded, as Playwright names it in `waitUntil` and
 /// `waitForLoadState`. Each state is reported per document by `Page.lifecycleEvent` (and the
@@ -12,7 +13,7 @@ use serde::Deserialize;
 /// Upstream counts `networkidle` itself, from the requests of the frame's whole subtree. Neo
 /// waits for Chromium's own `networkIdle` lifecycle event in each current subtree document,
 /// then checks the topology stayed stable, without enabling the Network domain.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum LoadState {
     /// The document committed: its response arrived and it replaced the previous one.
