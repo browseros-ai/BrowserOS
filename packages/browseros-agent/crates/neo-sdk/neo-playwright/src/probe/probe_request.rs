@@ -141,6 +141,9 @@ pub(crate) enum ProbeRequest {
         /// negative, and the engine reads those differently from no depth.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         depth: Option<i64>,
+        /// Upstream's `boxes`: each node's box in this frame's own viewport.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        boxes: bool,
     },
     /// One poll of one retrying matcher; Rust's loop owns the timing, `.not` and the failure.
     Expect {

@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../neo-playwright/third_party/playwri
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 15
+export const PROTOCOL = 16
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -248,6 +248,11 @@ export type SnapshotRequest = {
   root: ProbeTarget
   mode: SnapshotMode
   depth?: number
+  /**
+   * Each node's box (`{ x, y, width, height }`, rounded) in this frame's own viewport, as
+   * upstream's `boxes` option gives it: a child frame's boxes are not offset into the page.
+   */
+  boxes?: boolean
 }
 /**
  * One poll of one retrying matcher. Rust's loop owns the timing, `.not` and the failure, so a
