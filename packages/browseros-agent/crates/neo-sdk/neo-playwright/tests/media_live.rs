@@ -21,7 +21,14 @@ use serde_json::{Value, json};
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn media_reaches_existing_and_replacement_frame_renderers() -> TestResult {
-    let server = FixtureServer::start(nest_pages()).await?;
+    let mut pages = nest_pages();
+    let startup = "<script>window.mediaStartup = [matchMedia('print').matches, matchMedia('(prefers-color-scheme: dark)').matches, matchMedia('(prefers-reduced-motion: reduce)').matches, matchMedia('(forced-colors: active)').matches, matchMedia('(prefers-contrast: more)').matches]</script>";
+    for page in pages.values_mut() {
+        if page.content_type.starts_with("text/html") {
+            page.body = page.body.replacen("<head>", &format!("<head>{startup}"), 1);
+        }
+    }
+    let server = FixtureServer::start(pages).await?;
     let host: Arc<dyn OpHost> = Arc::new(LiveRun::connect().await?);
     let script = format!(
         r"
@@ -43,14 +50,16 @@ async fn media_reaches_existing_and_replacement_frame_renderers() -> TestResult 
         const before = await read();
         await page.goto({second});
         const after = await read();
-        return {{before,after}};
+        const startup = [];
+        for (const frame of page.frames()) startup.push(await frame.locator('body').evaluate(() => window.mediaStartup));
+        return {{before,after,startup}};
       }} finally {{ await page.close(); }}
     ",
         first = json!(server.url("127.0.0.1", "/nest/top.html")),
         second = json!(server.url("localhost", "/nest/top.html"))
     );
     let answer = js_runner::run_script(&host, &json!({"page":null,"pages":[]}), &script).await?;
-    for phase in ["before", "after"] {
+    for phase in ["before", "after", "startup"] {
         let values = answer
             .get(phase)
             .and_then(Value::as_array)

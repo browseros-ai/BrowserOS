@@ -1,185 +1,275 @@
-//! Replays a page's committed media preferences when CDP attaches another iframe renderer.
-//! This owns only session bindings; `PageState` owns preferences across runs. Existing renderer
-//! discovery and frame-world setup also register endpoints, covering attachments before startup.
+//! Page media at the browser's renderer-initialization seam. Core pauses new OOPIFs, invokes
+//! this lease before resume, and asks it to rediscover ancestry after event lag. Bindings belong
+//! to one CDP epoch; the actual preferences stay on `PageState` across runs and reconnects.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use browseros_core::{BrowserSession, CoreError, ProtocolSession, SessionId};
-use serde::Deserialize;
+use browseros_core::frames::FrameInitializer;
+use browseros_core::{BrowserSession, CoreError, PageId, ProtocolSession, SessionId};
+use futures_util::future::BoxFuture;
+
+use crate::page::frame_tree;
+use crate::page::media_emulation::{self, MediaState};
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::sync::broadcast::error::RecvError;
-use tokio::task::JoinHandle;
 
-use crate::page::media_emulation::MediaState;
-
+/// One renderer's inherited page state and whether its initial configuration has completed.
+#[derive(Clone)]
 struct Binding {
     session: ProtocolSession,
     state: Arc<AsyncMutex<MediaState>>,
     ready: Arc<AtomicBool>,
 }
 
-/// The facade owns the watch task, so dropping Playwright drops subscriptions and stops replay.
-/// The task owns the shared binding map rather than this wrapper, avoiding a reference cycle.
-pub(crate) struct MediaSessions {
-    bindings: Arc<Mutex<HashMap<SessionId, Binding>>>,
-    task: JoinHandle<()>,
+#[derive(Clone)]
+struct Root {
+    page: PageId,
+    state: Arc<AsyncMutex<MediaState>>,
 }
 
-impl Drop for MediaSessions {
-    fn drop(&mut self) {
-        self.task.abort();
+#[derive(Default)]
+struct Bindings {
+    sessions: HashMap<SessionId, Binding>,
+    roots: HashMap<PageId, Root>,
+}
+
+/// Weak browser ownership avoids a cycle through core's initializer registry. Losing the
+/// transport epoch discards endpoint identities while retaining `PageState`'s preferences.
+struct MediaBindings {
+    browser: Weak<BrowserSession>,
+    epoch: AtomicU64,
+    bindings: Mutex<Bindings>,
+}
+
+impl MediaBindings {
+    fn current(&self) -> MutexGuard<'_, Bindings> {
+        let mut bindings = self.bindings.lock().unwrap_or_else(PoisonError::into_inner);
+        let epoch = self
+            .browser
+            .upgrade()
+            .map_or(0, |browser| browser.connection().connection_epoch());
+        if self.epoch.swap(epoch, Ordering::Relaxed) != epoch {
+            bindings.sessions.clear();
+            // Core page identities survive reconnects; retain their preferences for root reattachment.
+        }
+        bindings
     }
+
+    fn remember(&self, session: &ProtocolSession, state: Arc<AsyncMutex<MediaState>>) -> Binding {
+        let mut bindings = self.current();
+        let Some(id) = session.session_id() else {
+            return Binding {
+                session: session.at_connection_epoch(),
+                state,
+                ready: Arc::new(AtomicBool::new(false)),
+            };
+        };
+        if let Some(binding) = bindings.sessions.get(id)
+            && Arc::ptr_eq(&binding.state, &state)
+        {
+            return binding.clone();
+        }
+        let binding = Binding {
+            session: session.at_connection_epoch(),
+            state,
+            ready: Arc::new(AtomicBool::new(false)),
+        };
+        bindings.sessions.insert(id.clone(), binding.clone());
+        binding
+    }
+
+    async fn ensure(
+        &self,
+        session: &ProtocolSession,
+        state: &Arc<AsyncMutex<MediaState>>,
+    ) -> Result<(), CoreError> {
+        let session = session.at_connection_epoch();
+        let binding = self.remember(&session, Arc::clone(state));
+        let guard = Arc::clone(state).lock_owned().await;
+        if !binding.ready.load(Ordering::Acquire) {
+            if guard.is_emulated() {
+                if let Some(browser) = self.browser.upgrade() {
+                    browser.frames().enable_initialization(&session).await?;
+                }
+                guard.replay(&session).await?;
+            }
+            binding.ready.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+}
+
+/// The facade owns this lease. Core keeps only a weak initializer, so dropping Playwright
+/// releases all media bindings without leaving a browser task or a strong ownership cycle.
+pub(crate) struct MediaSessions {
+    inner: Arc<MediaBindings>,
+    _initializer: Arc<dyn FrameInitializer>,
+}
+
+struct MediaInitializer {
+    inner: Weak<MediaBindings>,
 }
 
 impl MediaSessions {
-    pub(crate) fn new(browser: Arc<BrowserSession>) -> Self {
-        let bindings = Arc::new(Mutex::new(HashMap::<SessionId, Binding>::new()));
-        let recorded = Arc::clone(&bindings);
-        // These lifecycle events also feed core and TargetWatcher through the broadcast ring.
-        // Taking a targeted subscription would remove them from that ring and starve those
-        // readers. Missed replay is repaired before a frame's first operation below.
-        let mut events = browser.cdp_events();
-        let task = tokio::spawn(async move {
-            loop {
-                let event = match events.recv().await {
-                    Ok(event) => event,
-                    Err(RecvError::Lagged(_)) => {
-                        // Lost detaches could leave dead endpoints. Admission and frame setup
-                        // rediscover live sessions against the page's retained settings.
-                        recorded
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .clear();
-                        continue;
-                    }
-                    Err(RecvError::Closed) => break,
-                };
-                match event.method.as_str() {
-                    "Target.attachedToTarget" => {
-                        let Ok(attached) = serde_json::from_value::<Attached>(event.params) else {
-                            continue;
-                        };
-                        // Popups are separate pages and must not inherit their opener's overrides.
-                        if attached.target_info.r#type != "iframe" {
-                            continue;
-                        }
-                        let state = {
-                            let mut known = recorded.lock().unwrap_or_else(PoisonError::into_inner);
-                            let state = event
-                                .session_id
-                                .as_ref()
-                                .and_then(|parent| known.get(parent))
-                                .map(|binding| Arc::clone(&binding.state));
-                            state.map(|state| {
-                                let ready = Arc::new(AtomicBool::new(false));
-                                let session = browser.protocol_session(attached.session_id.clone());
-                                known.insert(
-                                    attached.session_id.clone(),
-                                    Binding {
-                                        session,
-                                        state: Arc::clone(&state),
-                                        ready: Arc::clone(&ready),
-                                    },
-                                );
-                                (state, ready)
-                            })
-                        };
-                        if let Some((state, ready)) = state {
-                            let session = browser.protocol_session(attached.session_id);
-                            // Replay is the already-authorized page setting, not a new agent call.
-                            // A detached target needs no restoration; frame setup retries a missed replay.
-                            let guard = Arc::clone(&state).lock_owned().await;
-                            if guard.replay(&session).await.is_ok() {
-                                ready.store(true, Ordering::Release);
-                            }
-                        }
-                    }
-                    "Target.detachedFromTarget" => {
-                        if let Ok(detached) = serde_json::from_value::<Detached>(event.params) {
-                            recorded
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner)
-                                .remove(&detached.session_id);
-                        }
-                    }
-                    _ => {}
-                }
-            }
+    pub(crate) fn new(browser: &Arc<BrowserSession>) -> Self {
+        let inner = Arc::new(MediaBindings {
+            browser: Arc::downgrade(browser),
+            epoch: AtomicU64::new(browser.connection().connection_epoch()),
+            bindings: Mutex::default(),
         });
-        Self { bindings, task }
+        let initializer: Arc<dyn FrameInitializer> = Arc::new(MediaInitializer {
+            inner: Arc::downgrade(&inner),
+        });
+        browser.frames().register_initializer(&initializer);
+        Self {
+            inner,
+            _initializer: initializer,
+        }
     }
 
-    /// Register a known descendant without holding the std mutex across a browser await.
-    pub(crate) fn remember(
+    /// Root identities are retained for proactive recovery of a missed attach, including
+    /// between runs when no caller is reading the frame tree.
+    pub(crate) async fn ensure_root(
         &self,
+        page: &PageId,
         session: &ProtocolSession,
-        state: Arc<AsyncMutex<MediaState>>,
-    ) -> Arc<AtomicBool> {
-        let mut bindings = self.bindings.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(id) = session.session_id() else {
-            return Arc::new(AtomicBool::new(false));
-        };
-        if let Some(binding) = bindings.get(id)
-            && Arc::ptr_eq(&binding.state, &state)
-        {
-            return Arc::clone(&binding.ready);
-        }
-        let ready = Arc::new(AtomicBool::new(false));
-        bindings.insert(
-            id.clone(),
-            Binding {
-                session: session.clone(),
-                state,
-                ready: Arc::clone(&ready),
+        state: &Arc<AsyncMutex<MediaState>>,
+    ) -> Result<(), CoreError> {
+        self.inner.current().roots.insert(
+            page.clone(),
+            Root {
+                page: page.clone(),
+                state: Arc::clone(state),
             },
         );
-        ready
+        self.ensure(session, state).await
     }
 
-    /// A world can be discovered before the attachment watcher runs. Initialize its renderer
-    /// synchronously before evaluating there, so the first frame read sees the page preference.
+    pub(crate) fn remember(&self, session: &ProtocolSession, state: Arc<AsyncMutex<MediaState>>) {
+        self.inner.remember(session, state);
+    }
+
     pub(crate) async fn ensure(
         &self,
         session: &ProtocolSession,
         state: &Arc<AsyncMutex<MediaState>>,
     ) -> Result<(), CoreError> {
-        let ready = self.remember(session, Arc::clone(state));
-        // Synchronize with in-flight page changes and with a watcher that registered this
-        // session but has not replayed it yet. A failed replay stays unready for the next call.
-        let guard = Arc::clone(state).lock_owned().await;
-        if !ready.load(Ordering::Acquire) {
-            guard.replay(session).await?;
-            ready.store(true, Ordering::Release);
-        }
-        Ok(())
+        self.inner.ensure(session, state).await
     }
 
-    /// Every renderer currently bound to this page; session ids deduplicate same-process frames.
+    /// Include renderers initialized while discovery ran. Holding the page lock at this point
+    /// orders this snapshot against initialization, so a new child gets this update or replays
+    /// the committed value before resume. Epoch pruning excludes endpoints from old sockets.
     pub(crate) fn sessions(&self, state: &Arc<AsyncMutex<MediaState>>) -> Vec<ProtocolSession> {
-        self.bindings
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.inner
+            .current()
+            .sessions
             .values()
             .filter(|binding| Arc::ptr_eq(&binding.state, state))
             .map(|binding| binding.session.clone())
             .collect()
     }
+
+    pub(crate) fn forget(&self, session: &ProtocolSession) {
+        if let Some(id) = session.session_id() {
+            self.inner.current().sessions.remove(id);
+        }
+    }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Attached {
-    session_id: SessionId,
-    target_info: TargetInfo,
-}
-#[derive(Deserialize)]
-struct TargetInfo {
-    r#type: String,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Detached {
-    session_id: SessionId,
+impl FrameInitializer for MediaInitializer {
+    fn initialize<'a>(
+        &'a self,
+        session: &'a ProtocolSession,
+        parent: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<(), CoreError>> {
+        Box::pin(async move {
+            let Some(inner) = self.inner.upgrade() else {
+                return Ok(());
+            };
+            let inherited = {
+                let bindings = inner.current();
+                parent
+                    .and_then(|parent| bindings.sessions.get(parent))
+                    .cloned()
+                    .or_else(|| {
+                        session
+                            .session_id()
+                            .and_then(|id| bindings.sessions.get(id))
+                            .cloned()
+                    })
+            };
+            if let Some(binding) = inherited {
+                let binding = inner.remember(session, binding.state);
+                // Core has already armed recursive attachment. The same page lock serializes
+                // initialization with media changes and cancellation restoration before resume.
+                let guard = Arc::clone(&binding.state).lock_owned().await;
+                guard.replay(session).await?;
+                binding.ready.store(true, Ordering::Release);
+            }
+            Ok(())
+        })
+    }
+
+    fn page_attached<'a>(
+        &'a self,
+        session: &'a ProtocolSession,
+        page: &'a PageId,
+    ) -> BoxFuture<'a, Result<(), CoreError>> {
+        Box::pin(async move {
+            let Some(inner) = self.inner.upgrade() else {
+                return Ok(());
+            };
+            let saved = inner.current().roots.get(page).cloned();
+            if let Some(root) = saved {
+                let binding = inner.remember(session, Arc::clone(&root.state));
+                let guard = root.state.lock_owned().await;
+                guard.replay(session).await?;
+                binding.ready.store(true, Ordering::Release);
+            }
+            Ok(())
+        })
+    }
+
+    fn recover(&self) -> BoxFuture<'_, Result<(), CoreError>> {
+        Box::pin(async move {
+            let Some(inner) = self.inner.upgrade() else {
+                return Ok(());
+            };
+            let Some(browser) = inner.browser.upgrade() else {
+                return Ok(());
+            };
+            let roots: Vec<_> = inner.current().roots.values().cloned().collect();
+            let mut failure = None;
+            for root in roots {
+                let session = match browser.pages.get_session(root.page.clone()).await {
+                    Ok(attached) => attached.session.at_connection_epoch(),
+                    Err(error) => {
+                        failure = Some(error);
+                        continue;
+                    }
+                };
+                match frame_tree::read(&browser, &root.page, &session).await {
+                    Ok(tree) => {
+                        for frame in tree.ids() {
+                            if let Some(session) = tree.endpoint(frame)
+                                && let Err(error) = inner.ensure(session, &root.state).await
+                                && !media_emulation::child_closed(&error)
+                            {
+                                failure = Some(error);
+                            }
+                        }
+                    }
+                    Err(error) if media_emulation::child_closed(&error) => {
+                        inner.current().roots.remove(&root.page);
+                    }
+                    Err(error) => {
+                        failure = Some(error);
+                    }
+                }
+            }
+            failure.map_or(Ok(()), Err)
+        })
+    }
 }

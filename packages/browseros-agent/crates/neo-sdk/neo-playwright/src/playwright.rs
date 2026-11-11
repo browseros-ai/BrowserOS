@@ -64,7 +64,7 @@ impl Playwright {
         drop(tokio::spawn(async move {
             registry.note_open_tabs(&reader).await;
         }));
-        let media = MediaSessions::new(Arc::clone(&browser));
+        let media = MediaSessions::new(&browser);
         Arc::new(Self {
             browser,
             events,

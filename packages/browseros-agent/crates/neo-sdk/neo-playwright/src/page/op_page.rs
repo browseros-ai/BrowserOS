@@ -106,7 +106,7 @@ impl<'op> OpPage<'op> {
             .browser()
             .protocol_session(admitted.session.session_id.clone());
         pw.media()
-            .ensure(&session, state.media())
+            .ensure_root(&admitted.core_page, &session, state.media())
             .await
             .map_err(|error| scope.core_error(&error))?;
         Ok(Self {

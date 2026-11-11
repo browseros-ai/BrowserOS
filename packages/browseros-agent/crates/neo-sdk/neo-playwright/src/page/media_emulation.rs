@@ -2,9 +2,11 @@
 //! CDP snapshot to every renderer of the admitted page. The page owns this state across runs;
 //! session attachment replays it into new OOPIFs without changing another tab's preferences.
 
+use std::collections::HashSet;
 use std::mem;
 use std::sync::Arc;
 
+use browseros_cdp::CdpError;
 use browseros_core::{CoreError, ProtocolSession};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -98,6 +100,13 @@ impl MediaInput {
     }
 }
 
+/// A page-wide write tolerates a definitively closed child while the page itself stays live.
+#[derive(Debug, PartialEq, Eq)]
+enum RendererDelivery {
+    Applied,
+    ClosedChild,
+}
+
 impl MediaSettings {
     fn patched(mut self, input: MediaInput) -> Self {
         for (supplied, saved) in [
@@ -116,6 +125,20 @@ impl MediaSettings {
             }
         }
         self
+    }
+
+    async fn send_in_page(
+        &self,
+        root: &ProtocolSession,
+        session: &ProtocolSession,
+    ) -> Result<RendererDelivery, CoreError> {
+        match self.send(session).await {
+            Ok(()) => Ok(RendererDelivery::Applied),
+            Err(error) if !session.same_session(root) && child_closed(&error) => {
+                Ok(RendererDelivery::ClosedChild)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Send all features together: CDP replaces the feature list, so a partial payload would
@@ -140,6 +163,10 @@ impl MediaSettings {
 }
 
 impl MediaState {
+    pub(super) fn is_emulated(&self) -> bool {
+        self.settings.is_some()
+    }
+
     /// Session setup and page updates use the same lock: a newly attached renderer must get
     /// the latest complete setting, even if attachment races an emulateMedia call.
     pub(crate) async fn replay(&self, session: &ProtocolSession) -> Result<(), CoreError> {
@@ -152,6 +179,7 @@ impl MediaState {
 
 /// Owns a pending setting change and its renderer endpoints. Cancellation rolls back in a
 /// spawned cleanup while retaining the per-page lock, so later calls cannot overtake cleanup.
+#[must_use = "owns the page lock and restores a cancelled media update"]
 struct MediaUpdate {
     state: Option<OwnedMutexGuard<MediaState>>,
     previous: Option<MediaSettings>,
@@ -203,12 +231,20 @@ pub(crate) async fn emulate(
     let page_ref = input.page.clone();
     let page = OpPage::admit_handle(pw, scope, &page_ref).await?;
     let state = Arc::clone(page.state().media());
-    let guard = state.lock_owned().await;
-    let next = guard.settings.clone().unwrap_or_default().patched(input);
     let root = page.root_session();
     let tree = frame_tree::read(pw.browser(), page.core_page(), &root)
         .await
         .map_err(|error| scope.core_error(&error))?;
+    pw.browser()
+        .frames()
+        .enable_initialization(&root.at_connection_epoch())
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    // Discovery may initialize a previously missed paused renderer. Do that before taking
+    // the page lock, which its initializer also needs. Merge the live binding set under the
+    // lock afterwards so frames attached during discovery cannot miss this update.
+    let guard = state.lock_owned().await;
+    let next = guard.settings.clone().unwrap_or_default().patched(input);
     pw.media().remember(&root, Arc::clone(page.state().media()));
     for frame in tree.ids() {
         if let Some(session) = tree.endpoint(frame) {
@@ -216,7 +252,27 @@ pub(crate) async fn emulate(
                 .remember(session, Arc::clone(page.state().media()));
         }
     }
-    let sessions = pw.media().sessions(page.state().media());
+    let mut sessions = vec![root.at_connection_epoch()];
+    let mut seen = HashSet::new();
+    if let Some(id) = root.session_id() {
+        seen.insert(id.clone());
+    }
+    for session in pw.media().sessions(page.state().media()) {
+        if let Some(id) = session.session_id()
+            && seen.insert(id.clone())
+        {
+            // Existing renderers may predate this facade. Arm their nested attachment before
+            // sending the preference; only a definitively closed child is harmless here.
+            if let Err(error) = pw.browser().frames().enable_initialization(&session).await {
+                if child_closed(&error) {
+                    pw.media().forget(&session);
+                    continue;
+                }
+                return Err(scope.core_error(&error));
+            }
+            sessions.push(session);
+        }
+    }
     let previous = guard.settings.clone();
     let mut update = MediaUpdate {
         state: Some(guard),
@@ -227,12 +283,84 @@ pub(crate) async fn emulate(
     for session in &update.sessions {
         let _sent = scope.send_effect()?;
         update.sent = true;
-        next.send(session)
-            .await
-            .map_err(|error| scope.core_error(&error))?;
+        match next.send_in_page(&root, session).await {
+            Ok(RendererDelivery::Applied) => {}
+            Ok(RendererDelivery::ClosedChild) => pw.media().forget(session),
+            Err(error) => return Err(scope.core_error(&error)),
+        }
     }
     if let Some(mut state) = update.state.take() {
         state.settings = Some(next);
     }
     Ok(Value::Null)
+}
+
+/// Only definitive iframe closure is a no-op for a page-wide broadcast. A root failure,
+/// transport loss, timeout or another protocol error still fails and restores the update.
+pub(super) fn child_closed(error: &CoreError) -> bool {
+    match error {
+        CoreError::Cdp(CdpError::SessionGone) => true,
+        CoreError::Cdp(CdpError::Protocol { code, message }) => matches!(
+            CdpError::from_protocol(*code, message.clone()),
+            CdpError::SessionGone
+        ),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MediaSettings, RendererDelivery};
+    use browseros_core::testing::{TestConnection, cdp_error};
+    use browseros_core::{CdpConnection, ProtocolSession, SessionId};
+    use serde_json::json;
+    use std::error::Error;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn page_broadcast_skips_a_closed_child_but_preserves_root_and_other_failures()
+    -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([
+            ("Emulation.setEmulatedMedia", json!({})),
+            (
+                "Emulation.setEmulatedMedia",
+                cdp_error("No session with given id"),
+            ),
+            ("Emulation.setEmulatedMedia", json!({})),
+            (
+                "Emulation.setEmulatedMedia",
+                cdp_error("No session with given id"),
+            ),
+            (
+                "Emulation.setEmulatedMedia",
+                cdp_error("Unexpected renderer failure"),
+            ),
+        ]);
+        let transport: Arc<dyn CdpConnection> = connection;
+        let root = ProtocolSession::for_session(Arc::clone(&transport), SessionId::from("root"));
+        let child = ProtocolSession::for_session(transport, SessionId::from("child"));
+        let settings = MediaSettings::default();
+        assert_eq!(
+            settings.send_in_page(&root, &root).await?,
+            RendererDelivery::Applied
+        );
+        assert_eq!(
+            settings.send_in_page(&root, &child).await?,
+            RendererDelivery::ClosedChild
+        );
+        assert_eq!(
+            settings.send_in_page(&root, &child).await?,
+            RendererDelivery::Applied,
+            "a detached sibling must not stop updating another live child"
+        );
+        assert!(
+            settings.send_in_page(&root, &root).await.is_err(),
+            "a closed root always fails the page operation"
+        );
+        assert!(
+            settings.send_in_page(&root, &child).await.is_err(),
+            "other child protocol failures must remain visible"
+        );
+        Ok(())
+    }
 }
