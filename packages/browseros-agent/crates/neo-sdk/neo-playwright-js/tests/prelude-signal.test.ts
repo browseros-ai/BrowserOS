@@ -122,6 +122,73 @@ describe('signal', () => {
     ])
   })
 
+  it('tests that a signal aborted right after the call still finds it in flight, as upstream does (CL-091)', async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: abortedWhenAsked('locator.click'),
+    })
+    const outcome = json(
+      await runtime.run(`${SIGNAL}
+        const pending = page.locator('button').click({ signal, timeout: 0 })
+        abort('aborted by user')
+        const error = await pending.catch((e) => e)
+        return [error.name, error.message.split('\\n')[0], error.cause]
+      `),
+    )
+    expect(outcome).toEqual([
+      'AbortError',
+      'locator.click: aborted by user',
+      'aborted by user',
+    ])
+    expect(runtime.sent('locator.click')).toHaveLength(1)
+    expect(runtime.aborts.map((sent) => sent.reason)).toEqual([
+      'aborted by user',
+    ])
+  })
+
+  it('tests that waitForLoadState and waitForURL abort as upstream Waiter does, stopping the op in flight', async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: async (call: Call) =>
+        call.abort === undefined
+          ? null
+          : aborted(call.name, await call.abort.aborted),
+    })
+    const outcome = json(
+      await runtime.run(`${SIGNAL}
+        const reason = new Error('stop')
+        const load = page.waitForLoadState('load', { signal }).catch((e) => e)
+        const url = page.waitForURL('**/never', { signal }).catch((e) => e)
+        await tick()
+        abort(reason)
+        return [await load, await url].map((error) =>
+          [error.name, error.message, error.cause === reason])
+      `),
+    )
+    expect(outcome).toEqual([
+      ['AbortError', 'page.waitForLoadState: The operation was aborted', true],
+      ['AbortError', 'page.waitForURL: The operation was aborted', true],
+    ])
+    expect(runtime.aborts.map((sent) => sent.reason)).toEqual(['stop', 'stop'])
+  })
+
+  it('tests that a screenshot with an aborted signal sends nothing', async () => {
+    const runtime = loadPrelude({ seed: SEED })
+    const outcome = json(
+      await runtime.run(`${SIGNAL}
+        abort('no picture')
+        const error = await page.screenshot({ signal }).catch((e) => e)
+        return [error.name, error.message, error.cause]
+      `),
+    )
+    expect(outcome).toEqual([
+      'AbortError',
+      'page.screenshot: The operation was aborted',
+      'no picture',
+    ])
+    expect(runtime.sent('page.screenshot')).toEqual([])
+  })
+
   it('tests that a signal firing after the op answered sends no abort', async () => {
     const runtime = loadPrelude({ seed: SEED })
     const outcome = json(

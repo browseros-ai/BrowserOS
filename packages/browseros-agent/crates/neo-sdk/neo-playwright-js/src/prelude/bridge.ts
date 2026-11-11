@@ -27,12 +27,7 @@
  * the bundle names no host identifier, which tests/prelude-globals.test.ts checks, and
  * claw-sdk's runtime/tests.rs pins that a run's realm gains only `__neo` and its natives.
  */
-import {
-  abortedError,
-  shapeBridgeError,
-  unsupportedError,
-  withAbortCause,
-} from './errors'
+import { shapeBridgeError, unsupportedError, withAbortCause } from './errors'
 import { host, refuser } from './host'
 import type { OpName } from './ops.generated'
 import type { SignalLike } from './signal'
@@ -71,7 +66,8 @@ export type Reply = {
  * Runs one op. Inputs are plain JSON built by the classes (never class instances, which the
  * bootstrap's codec refuses), and the result is trusted as `OpOutputs` declares: Rust decoded
  * the input and owns the result's shape. Every failure is shaped once, here. A `signal` aborts
- * the op (signal.ts); one already aborted sends nothing, checked with no await before the send.
+ * the op (signal.ts). The method checked it when the script called it; one that fired since is
+ * the call in flight, which the bootstrap aborts as soon as it is sent.
  */
 export async function invoke<Op extends OpName>(
   op: Op,
@@ -79,7 +75,6 @@ export async function invoke<Op extends OpName>(
   args: OpInputs[Op],
   signal?: SignalLike,
 ): Promise<OpOutputs[Op]> {
-  if (signal?.aborted) throw abortedError(call.api, signal)
   try {
     return (await host().invoke(
       op,
@@ -102,7 +97,6 @@ export async function invokeObserved<Op extends OpName>(
   onResult?: (value: OpOutputs[Op], observed: Observation | null) => void,
   signal?: SignalLike,
 ): Promise<{ value: OpOutputs[Op]; observed: Observation | null }> {
-  if (signal?.aborted) throw abortedError(call.api, signal)
   try {
     const reply = await host().invoke(
       op,

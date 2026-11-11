@@ -171,8 +171,6 @@
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/bridge.ts
   async function invoke(op, call, args, signal) {
-    if (signal?.aborted)
-      throw abortedError(call.api, signal);
     try {
       return await host().invoke(op, { call, ...args }, signal === undefined ? undefined : { signal });
     } catch (thrown) {
@@ -180,8 +178,6 @@
     }
   }
   async function invokeObserved(op, call, args, onResult, signal) {
-    if (signal?.aborted)
-      throw abortedError(call.api, signal);
     try {
       const reply = await host().invoke(op, { call, ...args }, {
         observed: true,
@@ -1374,6 +1370,8 @@
       return;
     if (typeof signal !== "object" || signal === null || typeof Reflect.get(signal, "aborted") !== "boolean" || typeof Reflect.get(signal, "addEventListener") !== "function" || typeof Reflect.get(signal, "removeEventListener") !== "function")
       throw clientError(api, "signal: expected an AbortSignal");
+    if (signal.aborted)
+      throw abortedError(api, signal);
     return signal;
   }
   async function untilAborted(signal, aborted, work) {
@@ -6792,45 +6790,42 @@ ${value.stack}`;
       if (refused !== undefined)
         throw unsupportedError(api, refused);
       const wire = pick(options, SCREENSHOT_KEYS);
+      const { timeout, signal } = this._wait(api, options);
       const page = await this._page._brand(api);
-      const timeout = this._timeout(options);
       if (selector === null)
-        return await invoke("page.screenshot", this._call(api, timeout), {
-          page,
-          ...wire
-        });
+        return await invoke("page.screenshot", this._call(api, timeout), { page, ...wire }, signal);
       const target = await this._locatorBrand(api, selector);
-      return await invoke("page.screenshot", this._call(api, timeout), {
-        page,
-        target,
-        strict: "strict",
-        ...wire
-      });
+      return await invoke("page.screenshot", this._call(api, timeout), { page, target, strict: "strict", ...wire }, signal);
     }
     async _goto(api, url, options = {}) {
       if (typeof url !== "string")
         throw clientError(api, `url: expected string, got ${typeof url}`);
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
+      const signal = signalOf(api, options);
       const args = await this._frameArgs(api);
       const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
         ...args,
         url,
         waitUntil,
         ...pick(options, ["referer"])
-      }, undefined, signalOf(api, options));
+      }, undefined, signal);
       return await this._page._navigated(api, this, result, observed);
     }
     async _waitForLoadState(api, state, options = {}) {
       const verified = loadState(api, "state", state ?? "load");
-      const { value: result, observed } = await invokeObserved("page.waitForLoadState", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified }, undefined, signalOf(api, options));
-      await this._page._navigated(api, this, result, observed);
+      const signal = signalOf(api, options);
+      await untilAborted(signal, () => abortedError(api, signal), async () => {
+        const { value: result, observed } = await invokeObserved("page.waitForLoadState", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified }, undefined, signal);
+        await this._page._navigated(api, this, result, observed);
+      });
     }
     async _content(api) {
       return await invoke("page.content", this._call(api, 0), await this._frameArgs(api));
     }
     async _setContent(api, html, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
-      const { value: result, observed } = await invokeObserved("page.setContent", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil }, undefined, signalOf(api, options));
+      const signal = signalOf(api, options);
+      const { value: result, observed } = await invokeObserved("page.setContent", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil }, undefined, signal);
       await this._page._navigated(api, this, result, observed);
     }
     async _evaluate(api, pageFunction, arg, options) {
@@ -7929,6 +7924,9 @@ ${value.stack}`;
         throw clientError(api, loadStateError("waitUntil"));
       const timeout = frame._navigationTimeout(options);
       const signal = signalOf(api, options);
+      await untilAborted(signal, () => abortedError(api, signal), () => this.#waitForURL(api, frame, url, waitUntil, timeout, signal));
+    }
+    async#waitForURL(api, frame, url, waitUntil, timeout, signal) {
       const args = await frame._frameArgs(api);
       if (typeof url !== "function") {
         const pattern = typeof url === "string" ? { glob: url } : url instanceof RegExp ? { regexSource: url.source, regexFlags: url.flags } : undefined;
@@ -7973,7 +7971,8 @@ ${value.stack}`;
     }
     async#history(api, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
-      const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil }, undefined, signalOf(api, options));
+      const signal = signalOf(api, options);
+      const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil }, undefined, signal);
       return await this._navigated(api, this._mainFrame, result, observed);
     }
   }

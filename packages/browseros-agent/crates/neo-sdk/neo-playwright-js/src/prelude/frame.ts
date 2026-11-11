@@ -11,7 +11,12 @@
 import { invoke, invokeObserved, sleep } from './bridge'
 import type { ElementHandle } from './element-handle'
 import { EventEmitter } from './emitter'
-import { clientError, plainError, unsupportedError } from './errors'
+import {
+  abortedError,
+  clientError,
+  plainError,
+  unsupportedError,
+} from './errors'
 import {
   assertMaxArguments,
   type EvaluateOptions,
@@ -41,7 +46,12 @@ import {
   locatorBrand,
   withLocatorOptions,
 } from './selectors'
-import { type SignalLike, type SignalOption, signalOf } from './signal'
+import {
+  type SignalLike,
+  type SignalOption,
+  signalOf,
+  untilAborted,
+} from './signal'
 import { renderSnapshot } from './snapshot'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import { globMatches } from './url'
@@ -1128,20 +1138,22 @@ export class Frame extends EventEmitter {
     const refused = refusedScreenshotOption(options)
     if (refused !== undefined) throw unsupportedError(api, refused)
     const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
+    const { timeout, signal } = this._wait(api, options)
     const page = await this._page._brand(api)
-    const timeout = this._timeout(options)
     if (selector === null)
-      return await invoke('page.screenshot', this._call(api, timeout), {
-        page,
-        ...wire,
-      })
+      return await invoke(
+        'page.screenshot',
+        this._call(api, timeout),
+        { page, ...wire },
+        signal,
+      )
     const target = await this._locatorBrand(api, selector)
-    return await invoke('page.screenshot', this._call(api, timeout), {
-      page,
-      target,
-      strict: 'strict',
-      ...wire,
-    })
+    return await invoke(
+      'page.screenshot',
+      this._call(api, timeout),
+      { page, target, strict: 'strict', ...wire },
+      signal,
+    )
   }
 
   async _goto(
@@ -1152,6 +1164,7 @@ export class Frame extends EventEmitter {
     if (typeof url !== 'string')
       throw clientError(api, `url: expected string, got ${typeof url}`)
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
+    const signal = signalOf(api, options)
     const args = await this._frameArgs(api)
     const { value: result, observed } = await invokeObserved(
       'page.goto',
@@ -1163,7 +1176,7 @@ export class Frame extends EventEmitter {
         ...pick(options, ['referer']),
       },
       undefined,
-      signalOf(api, options),
+      signal,
     )
     return await this._page._navigated(api, this, result, observed)
   }
@@ -1174,14 +1187,22 @@ export class Frame extends EventEmitter {
     options: TimeoutOption & SignalOption = {},
   ): Promise<void> {
     const verified = loadState(api, 'state', state ?? 'load')
-    const { value: result, observed } = await invokeObserved(
-      'page.waitForLoadState',
-      this._call(api, this._navigationTimeout(options)),
-      { ...(await this._frameArgs(api)), state: verified },
-      undefined,
-      signalOf(api, options),
+    // upstream waits for a load state with a Waiter, whose abort rejects the whole wait.
+    const signal = signalOf(api, options)
+    await untilAborted(
+      signal,
+      () => abortedError(api, signal as SignalLike),
+      async () => {
+        const { value: result, observed } = await invokeObserved(
+          'page.waitForLoadState',
+          this._call(api, this._navigationTimeout(options)),
+          { ...(await this._frameArgs(api)), state: verified },
+          undefined,
+          signal,
+        )
+        await this._page._navigated(api, this, result, observed)
+      },
     )
-    await this._page._navigated(api, this, result, observed)
   }
 
   async _content(api: string): Promise<string> {
@@ -1198,12 +1219,13 @@ export class Frame extends EventEmitter {
     options: NavigateOptions = {},
   ): Promise<void> {
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
+    const signal = signalOf(api, options)
     const { value: result, observed } = await invokeObserved(
       'page.setContent',
       this._call(api, this._navigationTimeout(options)),
       { ...(await this._frameArgs(api)), html, waitUntil },
       undefined,
-      signalOf(api, options),
+      signal,
     )
     await this._page._navigated(api, this, result, observed)
   }
@@ -1274,6 +1296,7 @@ export function frameMatches(
 }
 
 export type ScreenshotOptionsInput = TimeoutOption &
+  SignalOption &
   ScreenshotOptions & {
     path?: string
     mask?: Locator[]
