@@ -16,6 +16,7 @@ import {
   displayClose,
   type LiveStatus,
   type LiveTakeover,
+  type ScreenSize,
 } from '../../shared/live-screen'
 
 export type ScreenMode = 'follow' | 'control'
@@ -46,6 +47,8 @@ export interface LiveScreenState {
   busy: boolean
   /** Why the owner's last Take over or Give back failed. */
   actionError: string | null
+  /** Neo's screen size, from the last display that opened; a takeover fits its tab to it. */
+  screen: ScreenSize | null
 }
 
 export type LiveScreenAction =
@@ -55,7 +58,7 @@ export type LiveScreenAction =
   | { type: 'taken'; takeover: LiveTakeover }
   | { type: 'given-back' }
   | { type: 'action-failed'; message: string }
-  | { type: 'connected' }
+  | { type: 'connected'; screen: ScreenSize | null }
   | { type: 'closed'; code: number; reason: string }
   | { type: 'retry' }
 
@@ -68,6 +71,7 @@ export const initialLiveScreen: LiveScreenState = {
   failures: 0,
   busy: false,
   actionError: null,
+  screen: null,
 }
 
 /** 0.5 s, 1 s, 2 s, 4 s, then every 5 s: quick after a blip, calm while a container is down. */
@@ -124,7 +128,12 @@ export function liveScreenReducer(
     case 'action-failed':
       return { ...state, busy: false, actionError: action.message }
     case 'connected':
-      return { ...state, connection: { kind: 'live' }, failures: 0 }
+      return {
+        ...state,
+        connection: { kind: 'live' },
+        failures: 0,
+        screen: action.screen ?? state.screen,
+      }
     case 'closed':
       return closed(state, action.code, action.reason)
     case 'retry':

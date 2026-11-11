@@ -11,6 +11,8 @@ import {
   type LiveError,
   type LiveStatus,
   liveRoutes,
+  type ScreenSize,
+  type TakeoverRequest,
   type TakeoverResponse,
 } from '../../shared/live-screen'
 import {
@@ -33,8 +35,8 @@ export interface LiveScreenController {
   setMode(mode: ScreenMode): void
   takeOver(): void
   giveBack(): void
-  /** From the screen: the display is showing. */
-  connected(): void
+  /** From the screen: the display is showing Neo's screen of this size. */
+  connected(screen: ScreenSize | null): void
   /** From the screen: the display's socket closed by itself, with this code and reason. */
   closed(code: number, reason: string): void
 }
@@ -85,17 +87,22 @@ export function useLiveScreen(task: string | null): LiveScreenController {
   }, [connection])
 
   const takeoverId = state.takeover?.id ?? null
+  const { screen } = state
   const takeOver = useCallback(() => {
     if (!task) return
     dispatch({ type: 'busy' })
-    void post<TakeoverResponse>(liveRoutes.takeovers, { task }).then((answer) =>
+    // Neo's own screen size: its fit brings the tab to the front and leaves the screen as is.
+    const request: TakeoverRequest = screen
+      ? { task, viewer: screen }
+      : { task }
+    void post<TakeoverResponse>(liveRoutes.takeovers, request).then((answer) =>
       dispatch(
         'error' in answer
           ? { type: 'action-failed', message: answer.error.message }
           : { type: 'taken', takeover: answer.takeover },
       ),
     )
-  }, [task])
+  }, [task, screen])
 
   const giveBack = useCallback(() => {
     if (!takeoverId) return
@@ -121,7 +128,10 @@ export function useLiveScreen(task: string | null): LiveScreenController {
     (mode: ScreenMode) => dispatch({ type: 'mode', mode }),
     [],
   )
-  const connected = useCallback(() => dispatch({ type: 'connected' }), [])
+  const connected = useCallback(
+    (screen: ScreenSize | null) => dispatch({ type: 'connected', screen }),
+    [],
+  )
   const closed = useCallback(
     (code: number, reason: string) =>
       dispatch({ type: 'closed', code, reason }),

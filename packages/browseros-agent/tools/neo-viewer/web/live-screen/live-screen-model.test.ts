@@ -48,7 +48,10 @@ test('follow watches the task’s tab; control and a takeover open control displ
 })
 
 test('each new display is a new attempt', () => {
-  const control = run({ type: 'connected' }, { type: 'mode', mode: 'control' })
+  const control = run(
+    { type: 'connected', screen: null },
+    { type: 'mode', mode: 'control' },
+  )
   expect(control.attempt).toBe(1)
   expect(control.connection).toEqual({ kind: 'connecting' })
   // Choosing the mode already shown opens nothing new.
@@ -127,7 +130,7 @@ test('a failed display backs off and says what is wrong', () => {
   expect(screenNotice(refused)?.headline).toBe('No display')
 
   const lost = run(
-    { type: 'connected' },
+    { type: 'connected', screen: null },
     { type: 'closed', code: displayClose.displayLost, reason: '' },
   )
   expect(screenNotice(lost)).toMatchObject({
@@ -139,7 +142,9 @@ test('a failed display backs off and says what is wrong', () => {
   const retried = liveScreenReducer(lost, { type: 'retry' })
   expect(retried.attempt).toBe(lost.attempt + 1)
   expect(retried.failures).toBe(1)
-  expect(liveScreenReducer(retried, { type: 'connected' }).failures).toBe(0)
+  expect(
+    liveScreenReducer(retried, { type: 'connected', screen: null }).failures,
+  ).toBe(0)
   expect([1, 2, 3, 4, 5, 9].map(retryDelayMs)).toEqual([
     500, 1000, 2000, 4000, 5000, 5000,
   ])
@@ -155,7 +160,7 @@ test('no container shows even before a display has failed', () => {
     },
   })
   expect(screenNotice(state)?.headline).toBe('No container')
-  expect(screenNotice(run({ type: 'connected' }))).toBeNull()
+  expect(screenNotice(run({ type: 'connected', screen: null }))).toBeNull()
 })
 
 test('take over is offered only for a task with an open tab', () => {
@@ -184,4 +189,14 @@ test('take over is offered only for a task with an open tab', () => {
     message: 'This task has no open tab yet: nothing to take over.',
   })
   expect(failed).toMatchObject({ busy: false, actionError: expect.any(String) })
+})
+
+test('the screen size from the last display is kept for the takeover’s fit', () => {
+  const size = { width: 1600, height: 1000 }
+  const state = run({ type: 'connected', screen: size })
+  expect(state.screen).toEqual(size)
+  // A display that could not read it keeps the size already known.
+  expect(
+    liveScreenReducer(state, { type: 'connected', screen: null }).screen,
+  ).toEqual(size)
 })

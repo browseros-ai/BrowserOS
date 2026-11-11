@@ -60,7 +60,7 @@ function text(markup: string): string {
 }
 
 test('docked, following: the screen follows the task’s tab', () => {
-  const live = controller('t1', STATUS_UP, { type: 'connected' })
+  const live = controller('t1', STATUS_UP, { type: 'connected', screen: null })
   const html = renderToStaticMarkup(
     <LiveScreen live={live} size="docked" onPopOut={() => {}} />,
   )

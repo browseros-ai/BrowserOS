@@ -9,7 +9,8 @@
  *
  * Takeovers: `POST /v1/takeovers` locks the agent out of one tab until the takeover is released
  * or its TTL (20 min) runs out. The viewer remembers the takeovers it started, so a reloaded
- * page finds the one it holds, and gives them all back when the viewer stops.
+ * page finds the one it holds, and gives them all back when the viewer stops, including one
+ * whose start is still on its way to Neo.
  */
 
 import type { Server } from 'bun'
@@ -22,6 +23,7 @@ import {
   type LiveTakeover,
   liveRoutes,
   parseDisplayQuery,
+  type ScreenSize,
   type TakeoverRequest,
   type TakeoverResponse,
 } from '../../shared/live-screen'
@@ -31,7 +33,16 @@ import type { LiveHost } from './live-host'
 import type { SocketSession } from './socket-session'
 
 /** Operations read back from the task's trace to find the tab it is on. */
-const TRACE_TAIL = 100
+const TRACE_TAIL = 200
+/**
+ * Operations that only subscribe, so they make no tab the task's: Neo's own list
+ * (`neo-trace` `SUBSCRIPTIONS`), which its `followTask` skips too.
+ */
+const SUBSCRIPTIONS = new Set([
+  'events.listen',
+  'events.interceptFileChooser',
+  'events.next',
+])
 /** How long stopping the viewer waits for Neo to give back each held takeover. */
 const RELEASE_ON_STOP_MS = 3_000
 
@@ -45,6 +56,9 @@ export type LiveScreen = ReturnType<typeof liveScreen>
 
 export function liveScreen(host: LiveHost) {
   const held = new Map<string, LiveTakeover>()
+  // Takeover starts on their way to Neo, which `stop` waits for before it gives back.
+  const starting = new Set<Promise<Response>>()
+  let stopping = false
 
   const routes = {
     [liveRoutes.display]: guarded({ sameOrigin: true }, (req, server) => {
@@ -76,31 +90,25 @@ export function liveScreen(host: LiveHost) {
         const body = (await req
           .json()
           .catch(() => null)) as Partial<TakeoverRequest> | null
-        if (!body || typeof body.task !== 'string' || body.task === '')
+        if (
+          !body ||
+          typeof body.task !== 'string' ||
+          body.task === '' ||
+          (body.viewer !== undefined && !isScreenSize(body.viewer))
+        )
           return failure(
             400,
             'invalid_request',
-            'expected {"task": "<neoTaskId>"}',
+            'expected {"task": "<neoTaskId>", "viewer"?: {"width", "height"}}',
           )
-        const tabs = await readTabs(host)
-        if ('error' in tabs) return tabs.error
-        const tab = await currentTab(host, body.task, tabs.items)
-        if (!tab)
-          return failure(
-            409,
-            'no_tab',
-            'This task has no open tab yet: nothing to take over.',
-          )
-        const started = await neoJson<LiveTakeover>(host, '/v1/takeovers', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ tabId: tab.tabId }),
-        })
-        if ('error' in started) return started.error
-        held.set(started.value.id, started.value)
-        return Response.json({
-          takeover: started.value,
-        } satisfies TakeoverResponse)
+        if (stopping) return failure(503, 'stopping', 'The viewer is stopping.')
+        const start = takeOver(body.task, body.viewer)
+        starting.add(start)
+        try {
+          return await start
+        } finally {
+          starting.delete(start)
+        }
       }),
     },
 
@@ -124,10 +132,45 @@ export function liveScreen(host: LiveHost) {
     },
   }
 
+  async function takeOver(
+    task: string,
+    viewer: ScreenSize | undefined,
+  ): Promise<Response> {
+    const tabs = await readTabs(host)
+    if ('error' in tabs) return tabs.error
+    const tab = await currentTab(host, task, tabs.items)
+    if (!tab)
+      return failure(
+        409,
+        'no_tab',
+        'This task has no open tab yet: nothing to take over.',
+      )
+    const started = await neoJson<LiveTakeover>(host, '/v1/takeovers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(
+        viewer ? { tabId: tab.tabId, viewer } : { tabId: tab.tabId },
+      ),
+    })
+    if ('error' in started) return started.error
+    if (stopping) {
+      // `stop` has begun: give this one back now rather than leave the agent locked out.
+      await release(host, started.value.id)
+      return failure(503, 'stopping', 'The viewer is stopping.')
+    }
+    held.set(started.value.id, started.value)
+    return Response.json({ takeover: started.value } satisfies TakeoverResponse)
+  }
+
   return {
     routes,
     /** Gives back every takeover this viewer still holds, so the agent is not left locked out. */
     async stop() {
+      stopping = true
+      await Promise.race([
+        Promise.allSettled([...starting]),
+        Bun.sleep(RELEASE_ON_STOP_MS),
+      ])
       const ids = [...held.keys()]
       held.clear()
       await Promise.all(
@@ -174,24 +217,59 @@ async function status(
 }
 
 /**
- * The tab the task is on: the one its latest operation targeted, which is also the tab Neo's
- * `followTask` keeps in front. Null when that tab has closed or the task has used none.
+ * The tab the task is on, the one Neo's `followTask` keeps in front. Null when that tab has
+ * closed or the task has used none.
  */
 async function currentTab(
   host: LiveHost,
   task: string,
   open: LiveTab[],
 ): Promise<LiveTab | null> {
-  const trace = await neoJson<{ operations: Array<{ tabId?: number }> }>(
+  const trace = await neoJson<{ operations: TraceOperation[] }>(
     host,
     `/v1/trace?taskId=${encodeURIComponent(task)}&tail=${TRACE_TAIL}`,
   )
   if ('error' in trace) return null
-  for (const operation of [...trace.value.operations].reverse()) {
-    if (operation.tabId === undefined) continue
-    return open.find((tab) => tab.tabId === operation.tabId) ?? null
+  const tabId = taskLastTab(trace.value.operations)
+  return open.find((tab) => tab.tabId === tabId) ?? null
+}
+
+/** The fields of Neo's `Operation` that place a task on a tab. */
+export interface TraceOperation {
+  /** `<runId>.<seq>`; run ids are UUIDv7, so they sort by creation. */
+  id: string
+  name: string
+  /** The tab it targeted, when it had one. */
+  tabId?: number
+  /** The page after it ended. */
+  page?: { tabId?: number }
+  startedAt: number
+}
+
+/**
+ * Neo's own rule for a task's current tab (`TraceStore::task_last_act`), over its trace: the
+ * latest operation by start, skipping subscriptions, counts with its target tab; one without a
+ * target counts with the tab of the page it ended on, which is how `context.newPage` makes its
+ * new tab the task's.
+ */
+export function taskLastTab(operations: TraceOperation[]): number | null {
+  let latest: { op: TraceOperation; tab: number } | null = null
+  for (const op of operations) {
+    if (SUBSCRIPTIONS.has(op.name)) continue
+    const tab = op.tabId ?? op.page?.tabId
+    if (tab === undefined) continue
+    if (!latest || startsAfter(op, latest.op)) latest = { op, tab }
   }
-  return null
+  return latest?.tab ?? null
+}
+
+/** Neo's order: start time, then run id, then sequence within the run. */
+function startsAfter(a: TraceOperation, b: TraceOperation): boolean {
+  if (a.startedAt !== b.startedAt) return a.startedAt > b.startedAt
+  const [runA = '', seqA = '0'] = a.id.split('.')
+  const [runB = '', seqB = '0'] = b.id.split('.')
+  if (runA !== runB) return runA > runB
+  return Number(seqA) > Number(seqB)
 }
 
 async function readTabs(
@@ -254,6 +332,18 @@ async function neoJson<T>(
     error: failure(response.ok ? 502 : response.status, code, message),
     state: { state: 'refused', code, message },
   }
+}
+
+/** Neo's `ViewerSize`: whole pixels from 100 to 4096 each way. */
+function isScreenSize(value: unknown): value is ScreenSize {
+  const size = value as Partial<ScreenSize> | null
+  return [size?.width, size?.height].every(
+    (side) =>
+      typeof side === 'number' &&
+      Number.isInteger(side) &&
+      side >= 100 &&
+      side <= 4096,
+  )
 }
 
 function failure(status: number, code: string, message: string): Response {

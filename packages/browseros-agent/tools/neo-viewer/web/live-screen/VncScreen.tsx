@@ -24,6 +24,7 @@ import {
   type DisplayRequest,
   displayQuery,
   liveRoutes,
+  type ScreenSize,
 } from '../../shared/live-screen'
 
 /** Long enough to outlast a mount that is undone at once, short enough not to be noticed. */
@@ -37,7 +38,7 @@ export function VncScreen({
 }: {
   display: DisplayRequest
   attempt: number
-  onConnected: () => void
+  onConnected: (screen: ScreenSize | null) => void
   onClosed: (code: number, reason: string) => void
 }) {
   const target = useRef<HTMLDivElement>(null)
@@ -75,7 +76,13 @@ export function VncScreen({
       rfb.resizeSession = false
       rfb.background = '#F8F9FB'
       rfb.addEventListener('connect', () => {
-        if (live) report.current.onConnected()
+        // noVNC sizes its canvas to the framebuffer from the server's init, before `connect`.
+        const canvas = element.querySelector('canvas')
+        const screen =
+          canvas && canvas.width > 0 && canvas.height > 0
+            ? { width: canvas.width, height: canvas.height }
+            : null
+        if (live) report.current.onConnected(screen)
       })
     }, OPEN_DELAY_MS)
     return () => {

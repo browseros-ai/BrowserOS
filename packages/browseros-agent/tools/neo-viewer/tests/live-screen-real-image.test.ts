@@ -246,7 +246,8 @@ describeReal('the live screen on a real image', () => {
     })
 
     // Take over: the agent's calls on the tab fail; the owner's display still works.
-    const taken = await post(liveRoutes.takeovers, { task })
+    // As the panel does: Neo's own screen size, so Neo fits and brings the tab forward.
+    const taken = await post(liveRoutes.takeovers, { task, viewer: screen })
     expect(taken.status).toBe(200)
     const { takeover } = (await taken.json()) as TakeoverResponse
     expect(takeover.tabId).toBe(status.tab?.tabId as number)

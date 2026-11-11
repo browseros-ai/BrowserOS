@@ -13,7 +13,7 @@
  * Routes:
  *   GET  /api/live/display?<DisplayRequest>      WebSocket: RFB 3.8 both ways, relayed to Neo
  *   GET  /api/live/status?task=<neoTaskId>       LiveStatus
- *   POST /api/live/takeovers {task}              TakeoverResponse | LiveError
+ *   POST /api/live/takeovers {task, viewer?}     TakeoverResponse | LiveError
  *   POST /api/live/takeovers/:id/release         TakeoverResponse | LiveError
  *
  * `task` is always Neo's task id (`TaskSummary.neoTaskId`), the one Neo's runs carry.
@@ -141,8 +141,21 @@ export interface LiveStatus {
   takeover: LiveTakeover | null
 }
 
+/** Neo's screen in pixels, as its RFB server announced it (Neo's `ViewerSize`, 100 to 4096). */
+export interface ScreenSize {
+  width: number
+  height: number
+}
+
 export interface TakeoverRequest {
   task: string
+  /**
+   * Neo's own screen size, as the panel shows it. Sent on as the takeover's `viewer`, so Neo
+   * fits the tab, and a fit brings the tab to the front: without one, a takeover locks the tab
+   * where it is, maybe behind the tab the owner sees. The same size keeps the screen as it is
+   * (a desktop fit: maximized window, no emulation); Neo puts the window back on release.
+   */
+  viewer?: ScreenSize
 }
 
 export interface TakeoverResponse {
