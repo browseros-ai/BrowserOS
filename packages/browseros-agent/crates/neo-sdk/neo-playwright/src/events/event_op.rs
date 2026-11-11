@@ -379,7 +379,9 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
             read_up_to.push((subscription, read.head));
         }
         run.events.advance(&read_up_to);
-        events.extend(run.events.take_calls().into_iter().map(binding_call));
+        let (calls, dropped) = run.events.take_calls();
+        events.extend(calls.into_iter().map(binding_call));
+        lost += dropped;
         if !events.is_empty() || lost > 0 {
             events.sort_by_key(Delivered::order);
             // After the sort, so a run's download index is the order its script receives them.

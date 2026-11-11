@@ -53,7 +53,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use browseros_core::{BrowserSession, CoreError, ProtocolSession, SessionId, TabId};
+use browseros_core::{BrowserSession, CoreError, ProtocolSession, SessionId, TabId, TargetId};
 use futures_util::future;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -105,6 +105,9 @@ struct Registry {
     /// The event hub binding calls are recorded in, kept by the first `exposeBinding`, for a
     /// context binding a later write op adds, whose admission has no `Playwright` at hand.
     hub: Option<Arc<EventHub>>,
+    /// The binding names each disposable id holds on each tab ([`EventHub::claim_binding`]),
+    /// released when it is disposed so its calls stop reaching the run.
+    claims: HashMap<u64, Vec<(TargetId, String)>>,
 }
 
 /// A context script on one tab's page session.
@@ -352,6 +355,12 @@ pub(crate) async fn expose_on_page(
     };
     let registration = expose(scope, &hub, admitted, &session, &binding, &sent).await?;
     let id = scripts.keep(registration);
+    scripts
+        .lock()
+        .claims
+        .entry(id)
+        .or_default()
+        .push((admitted.session.target_id.clone(), binding.name));
     to_output(scope, &Registered { id })
 }
 
@@ -400,8 +409,15 @@ pub(crate) async fn dispose(
     input: DisposeInput,
 ) -> Result<Value, PlaywrightError> {
     let _sent = scope.send_effect()?;
+    let run = scope.run_state();
     let (removed, in_flight) = {
-        let mut registry = scope.run_state().init_scripts.lock();
+        let mut registry = run.init_scripts.lock();
+        if let (Some(hub), Some(claims)) = (registry.hub.clone(), registry.claims.remove(&input.id))
+        {
+            for (target, name) in claims {
+                hub.release_binding(&target, &name, run);
+            }
+        }
         registry.context.retain(|script| script.id != input.id);
         let in_flight: Vec<Arc<OnceCell<()>>> = registry
             .adding
@@ -517,6 +533,8 @@ impl InitScripts {
             registry.context.clear();
             registry.adding.clear();
             registry.plumbed.clear();
+            // The run is ending: its claims go with its state, unread calls with its queue.
+            registry.claims.clear();
             mem::take(&mut registry.added)
         };
         future::join_all(added.into_iter().map(|added| added.registration.remove())).await;
@@ -585,6 +603,13 @@ impl InitScripts {
                             id: adding.id,
                             registration,
                         });
+                        if let Reach::Binding(binding) = &reach {
+                            registry
+                                .claims
+                                .entry(adding.id)
+                                .or_default()
+                                .push((admitted.session.target_id.clone(), binding.name.clone()));
+                        }
                         None
                     } else {
                         Some(registration)

@@ -7541,17 +7541,33 @@ ${value.stack}`;
   }
   async function withExposedFunctions(owner, script, arg) {
     const exposing = [];
-    const serialized = serializeAsCallArgument(arg, (value) => {
-      if (typeof value === "function") {
-        const name = kFunctionBindingPrefix + guid();
-        exposing.push(owner.expose(name, (_source, ...args) => Reflect.apply(value, undefined, args)));
-        return { fn: name };
-      }
-      return { fallThrough: value };
-    });
-    const bindings = await Promise.all(exposing);
-    const source = `(${String(script)})(globalThis['${kBindingsControllerProperty}'].parseInitScriptArg(${JSON.stringify(serialized)}))`;
-    const init = registration(await owner.register({ source }));
+    const undo = async (error) => {
+      const settled = await Promise.allSettled(exposing);
+      await Promise.all(settled.map((outcome) => outcome.status === "fulfilled" ? outcome.value.dispose().catch(() => {}) : undefined));
+      throw error;
+    };
+    let serialized;
+    try {
+      serialized = serializeAsCallArgument(arg, (value) => {
+        if (typeof value === "function") {
+          const name = kFunctionBindingPrefix + guid();
+          exposing.push(owner.expose(name, (_source, ...args) => Reflect.apply(value, undefined, args)));
+          return { fn: name };
+        }
+        return { fallThrough: value };
+      });
+    } catch (error) {
+      return await undo(error);
+    }
+    let bindings;
+    let init;
+    try {
+      bindings = await Promise.all(exposing);
+      const source = `(${String(script)})(globalThis['${kBindingsControllerProperty}'].parseInitScriptArg(${JSON.stringify(serialized)}))`;
+      init = registration(await owner.register({ source }));
+    } catch (error) {
+      return await undo(error);
+    }
     let disposed = false;
     return new Disposable(async () => {
       if (disposed)
@@ -7621,7 +7637,7 @@ ${value.stack}`;
       throw clientError(api, `Function "${name}" has been already registered`);
     if (page._context._exposed.has(name))
       throw clientError(api, `Function "${name}" has been already registered in the browser context`);
-    page._exposed.set(name, callback);
+    page._exposed.set(name, (source, ...args) => callback(source, ...args));
     const events = page._context._events;
     events.bindingAdded();
     const forget = once(() => {
@@ -7645,7 +7661,7 @@ ${value.stack}`;
       throw clientError(api, `Function "${name}" has been already registered`);
     if (context.pages().some((page) => page._exposed.has(name)))
       throw clientError(api, `Function "${name}" has been already registered in one of the pages`);
-    context._exposed.set(name, callback);
+    context._exposed.set(name, (source, ...args) => callback(source, ...args));
     context._events.bindingAdded();
     const forget = once(() => {
       context._exposed.delete(name);
@@ -7692,6 +7708,8 @@ ${value.stack}`;
     } catch (error) {
       answer = { name, seq, error };
     }
+    if ((page._exposed.get(name) ?? page._context._exposed.get(name)) !== callback)
+      return;
     let arg;
     try {
       arg = inPageArgument(answer);

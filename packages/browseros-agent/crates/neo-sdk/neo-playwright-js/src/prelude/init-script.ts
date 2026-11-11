@@ -67,21 +67,45 @@ async function withExposedFunctions(
   arg: unknown,
 ): Promise<Disposable> {
   const exposing: Promise<Disposable>[] = []
-  const serialized = serializeAsCallArgument(arg, (value: unknown) => {
-    if (typeof value === 'function') {
-      const name = kFunctionBindingPrefix + guid()
-      exposing.push(
-        owner.expose(name, (_source, ...args) =>
-          Reflect.apply(value, undefined, args),
-        ),
-      )
-      return { fn: name }
-    }
-    return { fallThrough: value }
-  })
-  const bindings = await Promise.all(exposing)
-  const source = `(${String(script)})(globalThis['${kBindingsControllerProperty}'].parseInitScriptArg(${JSON.stringify(serialized)}))`
-  const init = registration(await owner.register({ source }))
+  const undo = async (error: unknown): Promise<never> => {
+    // A failure part way (a refused tab, a duplicate name) leaves nothing behind: every
+    // binding that went in is disposed before the call rejects.
+    const settled = await Promise.allSettled(exposing)
+    await Promise.all(
+      settled.map((outcome) =>
+        outcome.status === 'fulfilled'
+          ? outcome.value.dispose().catch(() => {})
+          : undefined,
+      ),
+    )
+    throw error
+  }
+  let serialized: unknown
+  try {
+    serialized = serializeAsCallArgument(arg, (value: unknown) => {
+      if (typeof value === 'function') {
+        const name = kFunctionBindingPrefix + guid()
+        exposing.push(
+          owner.expose(name, (_source, ...args) =>
+            Reflect.apply(value, undefined, args),
+          ),
+        )
+        return { fn: name }
+      }
+      return { fallThrough: value }
+    })
+  } catch (error) {
+    return await undo(error)
+  }
+  let bindings: Disposable[]
+  let init: Disposable
+  try {
+    bindings = await Promise.all(exposing)
+    const source = `(${String(script)})(globalThis['${kBindingsControllerProperty}'].parseInitScriptArg(${JSON.stringify(serialized)}))`
+    init = registration(await owner.register({ source }))
+  } catch (error) {
+    return await undo(error)
+  }
   let disposed = false
   return new Disposable(async () => {
     if (disposed) return

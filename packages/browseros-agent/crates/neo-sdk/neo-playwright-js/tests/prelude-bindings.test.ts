@@ -178,3 +178,50 @@ it('tests that disposing twice does not remove the same name exposed again since
   await settle()
   expect(run.sent('bindingCall.resolve')).toHaveLength(1)
 })
+
+it('tests that an answer from a registration disposed meanwhile goes nowhere', async () => {
+  const run = runtime([call('slow', [])])
+  await run.run(`
+    let release
+    const pending = new Promise((resolve) => { release = resolve })
+    const first = await page.exposeFunction('slow', () => pending)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await first.dispose()
+    await page.exposeFunction('slow', () => 2)
+    release(1)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  `)
+  await settle()
+  expect(run.sent('bindingCall.resolve')).toEqual([])
+})
+
+it('tests that a failed exposeFunctions setup disposes the bindings it made', async () => {
+  let registered = 0
+  const run = loadPrelude({
+    seed: SEED,
+    answer: (sent: Call) => {
+      if (sent.name === 'events.next') return never
+      if (sent.name === 'page.exposeBinding') return { id: ++registered }
+      if (sent.name === 'page.addInitScript')
+        return {
+          err: { code: 'owner_has_control', owner: 'host', message: 'held' },
+        }
+      return {}
+    },
+  })
+  const failed = await run.run(`
+    try {
+      await page.addInitScript(({ a, b }) => a(b()), { a: () => 1, b: () => 2 }, { exposeFunctions: true })
+      return null
+    } catch (error) {
+      return error.code
+    }
+  `)
+  expect(failed).toBe('owner_has_control')
+  expect(
+    run
+      .sent('disposable.dispose')
+      .map((sent) => sent.input.id)
+      .sort(),
+  ).toEqual([1, 2])
+})

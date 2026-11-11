@@ -55,7 +55,9 @@ export async function exposeOnPage(
       api,
       `Function "${name}" has been already registered in the browser context`,
     )
-  page._exposed.set(name, callback)
+  // A fresh function per registration: its identity tells a call's answer whether the
+  // registration that took the call is still the one exposed (`answerBindingCall`).
+  page._exposed.set(name, (source, ...args) => callback(source, ...args))
   const events = page._context._events
   events.bindingAdded()
   const forget = once(() => {
@@ -94,7 +96,7 @@ export async function exposeOnContext(
       api,
       `Function "${name}" has been already registered in one of the pages`,
     )
-  context._exposed.set(name, callback)
+  context._exposed.set(name, (source, ...args) => callback(source, ...args))
   context._events.bindingAdded()
   const forget = once(() => {
     context._exposed.delete(name)
@@ -163,6 +165,13 @@ export async function answerBindingCall(
   } catch (error) {
     answer = { name, seq, error }
   }
+  // Disposed, or disposed and exposed again, while the callback ran: the page's controller
+  // dropped this call, and a new registration numbers its calls from 1 again, so this answer
+  // could settle a newer call of the same seq. It goes nowhere.
+  if (
+    (page._exposed.get(name) ?? page._context._exposed.get(name)) !== callback
+  )
+    return
   let arg: string
   try {
     arg = inPageArgument(answer)

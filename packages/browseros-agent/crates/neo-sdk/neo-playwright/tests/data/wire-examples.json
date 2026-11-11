@@ -12,7 +12,7 @@
           "tab": 1007
         },
         "context": 3,
-        "arg": "{\"o\":[{\"k\":\"name\",\"v\":\"add\"},{\"k\":\"seq\",\"v\":1},{\"k\":\"result\",\"v\":\"[object Object][object Object]\"}],\"id\":1}"
+        "arg": "{\"o\":[{\"k\":\"name\",\"v\":\"add\"},{\"k\":\"seq\",\"v\":1},{\"k\":\"result\",\"v\":3}],\"id\":1}"
       }
     ],
     "context.addInitScript": [

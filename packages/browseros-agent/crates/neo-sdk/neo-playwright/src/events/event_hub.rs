@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use browseros_core::TargetId;
 use neo_trace::EpochMillis;
+use serde::Deserialize;
 use tokio::sync::Notify;
 use tokio::sync::futures::Notified;
 
@@ -166,8 +167,9 @@ impl EventHub {
     }
 
     /// Claims binding `name` on the tab whose target is `target` for `run`: false when another
-    /// live run holds it there. A run may claim its own name again (it disposed and exposes it
-    /// anew); a name stays claimed until the run that holds it ends.
+    /// live run holds it there. A run may claim its own name again; a name stays claimed until
+    /// its binding is disposed ([`EventHub::release_binding`]) or the run that holds it ends.
+    /// The claim is also the route: a call of the name reaches its holder alone.
     pub(crate) fn claim_binding(&self, target: &TargetId, name: &str, run: &Arc<RunState>) -> bool {
         let mut owners = self.bindings.lock().unwrap_or_else(PoisonError::into_inner);
         owners.retain(|_, owner| owner.strong_count() > 0);
@@ -177,6 +179,16 @@ impl EventHub {
         }
         owners.insert(key, Arc::downgrade(run));
         true
+    }
+
+    /// Lets go of `name` on the tab whose target is `target`, if `run` holds it: its binding
+    /// was disposed, so its calls go nowhere and another run may expose the name there.
+    pub(crate) fn release_binding(&self, target: &TargetId, name: &str, run: &Arc<RunState>) {
+        let mut owners = self.bindings.lock().unwrap_or_else(PoisonError::into_inner);
+        let key = (target.clone(), name.to_owned());
+        if owners.get(&key).is_some_and(|owner| ptr_eq(owner, run)) {
+            owners.remove(&key);
+        }
     }
 
     /// Whether a live run needs lifecycle observation for all of the context's tabs.
@@ -289,26 +301,39 @@ impl EventWriter {
         seq
     }
 
-    /// Hands a binding call to every live run that exposes a binding on its tab, into that run's
-    /// own queue rather than the bounded log: a call is a request the page may await, so it must
-    /// reach the run however many records follow it before the pump reads. Numbered with the
-    /// log's head, so the pump orders it after the records that came before it.
+    /// Hands a binding call to the run that holds its name on its tab
+    /// ([`EventHub::claim_binding`]), into that run's own queue rather than the bounded log: a
+    /// call is a request the page may await, so it must reach the run however many records
+    /// follow it before the pump reads. Only the holder gets it, so no other run on the tab
+    /// answers it too; a name nobody holds (disposed, or the page's own call of the raw binding)
+    /// goes nowhere. Numbered with the log's head, so the pump orders it after the records that
+    /// came before it.
     pub(crate) fn deliver_binding(&mut self, call: &BindingCalled) {
-        let seq = self.hub.head();
-        let at_ms = now_ms();
-        for run in self.hub.listeners(&call.target, PageEventKind::Binding) {
-            if let Some(run) = run.upgrade()
-                && let Some(tab) = run.events.binding_tab(&call.target)
-            {
-                run.events.queue_call(QueuedCall {
-                    seq,
-                    at_ms,
-                    tab,
-                    call: call.clone(),
-                });
-            }
+        #[derive(Deserialize)]
+        struct Named {
+            name: String,
         }
-        self.hub.changed.notify_waiters();
+        let Ok(Named { name }) = serde_json::from_str::<Named>(&call.payload) else {
+            return;
+        };
+        let owner = self
+            .hub
+            .bindings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&(call.target.clone(), name))
+            .and_then(Weak::upgrade);
+        if let Some(run) = owner
+            && let Some(tab) = run.events.binding_tab(&call.target)
+        {
+            run.events.queue_call(QueuedCall {
+                seq: self.hub.head(),
+                at_ms: now_ms(),
+                tab,
+                call: call.clone(),
+            });
+            self.hub.changed.notify_waiters();
+        }
     }
 
     /// Records that the navigation recorded as `seq` was `tab`'s main frame's. The watcher calls
@@ -355,6 +380,7 @@ mod tests {
     use crate::RunState;
     use crate::events::navigation_event::NavigationEvent;
     use crate::events::page_event::{BindingCalled, PageEvent};
+    use crate::events::run_events::QUEUED_CALLS;
     use crate::events::{PageEventKind, Subscription};
 
     fn closed(target: &str) -> PageEvent {
@@ -468,47 +494,70 @@ mod tests {
         assert!(hub.listeners(&target, PageEventKind::Console).is_empty());
     }
 
-    /// A binding call goes to the queue of each run that exposes a binding on its tab, whatever
-    /// the log holds after it, and never into the log: a flood of records cannot evict it.
+    /// A binding call goes to the queue of the run holding its name on its tab, whatever the log
+    /// holds after it, and never into the log, so a flood of records cannot evict it. Another run
+    /// listening for that tab's calls gets none; a released name routes nowhere; past
+    /// `QUEUED_CALLS` waiting calls the rest are counted lost.
     #[test]
-    fn tests_that_a_binding_call_waits_in_its_runs_queue_past_any_number_of_records() {
+    fn tests_that_a_binding_call_reaches_its_names_holder_past_any_number_of_records() {
         let (hub, mut writer) = EventHub::new();
         let target = TargetId("T".to_owned());
-        let exposing = Arc::new(RunState::default());
+        let holder = Arc::new(RunState::default());
         let other = Arc::new(RunState::default());
-        hub.bind(&exposing);
-        hub.bind(&other);
-        exposing.events.listen(
-            Subscription::Page {
-                tab: TabId(7),
-                target: target.clone(),
-                event: PageEventKind::Binding,
-            },
-            0,
-            0,
-        );
-        writer.deliver_binding(&BindingCalled {
+        for run in [&holder, &other] {
+            hub.bind(run);
+            run.events.listen(
+                Subscription::Page {
+                    tab: TabId(7),
+                    target: target.clone(),
+                    event: PageEventKind::Binding,
+                },
+                0,
+                0,
+            );
+        }
+        assert!(hub.claim_binding(&target, "f", &holder));
+        let call = BindingCalled {
             target: target.clone(),
             context: 3,
             frame: None,
-            payload: "{}".to_owned(),
-        });
+            payload: r#"{"name":"f","seq":1,"serializedArgs":[]}"#.to_owned(),
+        };
+        writer.deliver_binding(&call);
         for _ in 0..=LOG_CAPACITY {
             writer.record(closed("U"));
         }
-        let queued = exposing.events.take_calls();
-        assert_eq!(queued.len(), 1, "the call outlived the ring");
-        assert_eq!((queued[0].tab, queued[0].seq), (TabId(7), 0));
-        assert!(
-            other.events.take_calls().is_empty(),
-            "only the exposing run"
+        let (queued, dropped) = holder.events.take_calls();
+        assert_eq!(
+            (queued.len(), dropped),
+            (1, 0),
+            "the call outlived the ring"
         );
+        assert_eq!((queued[0].tab, queued[0].seq), (TabId(7), 0));
+        assert!(other.events.take_calls().0.is_empty(), "only the holder");
         assert!(
             hub.read_after(0)
                 .records
                 .iter()
                 .all(|record| matches!(record.event, PageEvent::Closed(_))),
             "the log holds no call"
+        );
+
+        for _ in 0..QUEUED_CALLS + 2 {
+            writer.deliver_binding(&call);
+        }
+        let (queued, dropped) = holder.events.take_calls();
+        assert_eq!(
+            (queued.len(), dropped),
+            (QUEUED_CALLS, 2),
+            "a flood is counted lost"
+        );
+
+        hub.release_binding(&target, "f", &holder);
+        writer.deliver_binding(&call);
+        assert!(
+            holder.events.take_calls().0.is_empty(),
+            "a released name goes nowhere"
         );
     }
 

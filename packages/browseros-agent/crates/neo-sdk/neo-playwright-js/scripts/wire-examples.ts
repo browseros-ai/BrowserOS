@@ -48,7 +48,7 @@ const BINDING_CALL = {
   payload: JSON.stringify({
     name: 'add',
     seq: 1,
-    serializedArgs: [{ n: 1 }, { n: 2 }],
+    serializedArgs: [1, 2],
   }),
 }
 /** The main frame and one child, so the script can drive the frame forms of page ops. */
