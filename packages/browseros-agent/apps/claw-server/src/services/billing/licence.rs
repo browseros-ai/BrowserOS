@@ -35,6 +35,15 @@ pub struct SignedLicence {
     pub kid: String,
 }
 
+impl SignedLicence {
+    /// The licence as a bearer credential for services that verify it offline with the gateway's
+    /// public key. Carries no install secret and no licence key.
+    #[must_use]
+    pub fn bearer(&self) -> String {
+        format!("{}.{}.{}", self.licence, self.signature, self.kid)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     None,

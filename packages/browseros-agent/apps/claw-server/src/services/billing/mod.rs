@@ -173,6 +173,14 @@ impl Billing {
         }
     }
 
+    /// The licence as the gateway signed it, read fresh so a refreshed one is used straight away.
+    pub async fn signed_licence(&self) -> Option<SignedLicence> {
+        match &self.inner {
+            Some(inner) => inner.state.read().await.signed.clone(),
+            None => None,
+        }
+    }
+
     /// Whether the plan turns `feature` on right now.
     pub async fn has_feature(&self, feature: &str) -> bool {
         self.plan()

@@ -565,6 +565,8 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
             | ("skills", "harness")
             // SKILL.md is rendered from the prose a skill's ultrafast flow is numbered against.
             | ("skills", "flow")
+            // The decisions worker is reached with the licence billing holds.
+            | ("decisions", "billing")
     )
 }
 

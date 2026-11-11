@@ -7,6 +7,7 @@ pub mod captcha;
 pub mod capture;
 pub mod claude_desktop;
 pub mod cockpit;
+pub mod decisions;
 pub mod error_reporting;
 pub mod feedback_cohort;
 pub mod first_run;

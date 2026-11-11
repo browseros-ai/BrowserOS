@@ -83,6 +83,8 @@ pub struct AppState {
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
     /// ultrafast. Without a billing gateway in this build it reads as no plan and refuses the rest.
     pub billing: Arc<crate::services::billing::Billing>,
+    /// The decisions worker pursue reaches the decision model and the writer through.
+    pub decisions: Arc<crate::services::decisions::Decisions>,
     pub shutdown: ShutdownHandle,
     /// How the data this server opened compares to the schema this build knows, published on
     /// `/system/info` so the app can prompt an update when the database is ahead of the server.
@@ -257,6 +259,10 @@ impl AppState {
             )
             .await,
         );
+        let decisions = Arc::new(crate::services::decisions::Decisions::for_build(
+            config.dev_mode,
+            config.mode.is_hosted(),
+        ));
         Ok(Self {
             config,
             audit_log,
@@ -294,6 +300,7 @@ impl AppState {
             claude_desktop,
             extension_updates: Arc::default(),
             billing,
+            decisions,
             shutdown,
             migration,
         })
