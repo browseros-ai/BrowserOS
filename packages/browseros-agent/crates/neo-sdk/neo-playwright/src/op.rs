@@ -247,6 +247,7 @@ mod tests {
             ("page.saveScreenshot", &[], true),
             ("page.pdf", &[], true),
             ("page.setViewportSize", &[], true),
+            ("page.requestGC", &[], true),
             ("page.addInitScript", &[MainWorld, HostFiles], true),
             ("page.exposeBinding", &[MainWorld], true),
             ("bindingCall.resolve", &[MainWorld], true),

@@ -156,7 +156,7 @@ export function resolve(
     return { kind: 'notFrame', preview: world.injected.previewNode(element) }
   return {
     kind: 'frame',
-    pin: world.pins.add(element),
+    pin: world.pins.addFrame(element),
     key: world.refs.frameKey(element),
     visible: world.injected.utils.isElementVisible(element),
     src,
