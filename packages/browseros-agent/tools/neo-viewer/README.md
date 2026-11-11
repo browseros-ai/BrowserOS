@@ -175,6 +175,12 @@ container restarts. The display and both POSTs take only requests whose `Origin`
 page: a WebSocket is not covered by the same-origin policy. The viewer gives back the takeovers it
 holds when it stops.
 
+Docked, the screen is as wide as the sidebar and as tall as Neo's screen ratio makes it (the
+framebuffer size its RFB server reports; 1600×1000 until then), so dragging the sidebar wider zooms
+in, live while dragging. It is never taller than the sidebar's visible height less the panel's
+header row; only then does the picture letterbox. "What the model read" sits below it and the
+sidebar scrolls (`web/live-screen/screen-fit.ts`).
+
 The components are self-contained, for the designed screen to dock and pop out:
 `useLiveScreen(taskId | null)` makes the controller (null: no task to follow); `<LiveScreen size="docked" | "large">`,
 `<LiveScreenPopup>` and `<TakeOverButton>` take it (`web/live-screen/`).
