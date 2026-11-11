@@ -13,7 +13,7 @@ import { openClaw } from './claw-loader.mjs'
 test('navigation waits retain events, document identity and their deadline', {
   skip: !process.env.NEO_E2E_BROWSER,
   timeout: 120_000,
-}, async () => {
+}, async (t) => {
   const output = fs.mkdtempSync(
     path.join(
       process.env.NEO_NODE_OUTPUT_DIR || os.tmpdir(),
@@ -42,12 +42,21 @@ test('navigation waits retain events, document identity and their deadline', {
   let browser
   let sdk
   const passed = []
+  t.diagnostic(`Evidence: ${output}`)
+  const record = (label) => {
+    passed.push(label)
+    fs.writeFileSync(
+      path.join(output, 'proof.json'),
+      JSON.stringify({ passed }, null, 2),
+    )
+  }
   try {
-    browser = await launchBrowser(executable, output + '/worker-0', {
+    browser = await launchBrowser(executable, path.join(output, 'worker-0'), {
       launcherPid: process.pid,
     })
     sdk = await openClaw(browser.port, {
       timeoutMs: 60000,
+      stateDir: path.join(output, 'sdk-state'),
       browserosVersion: browserVersion(executable),
     })
     const page = await sdk.context.newPage()
@@ -57,14 +66,14 @@ test('navigation waits retain events, document identity and their deadline', {
       (e) =>
         e.name === 'TimeoutError' && /Timeout 100ms exceeded/.test(e.message),
     )
-    passed.push('existing URL does not satisfy navigation wait')
+    record('existing URL does not satisfy navigation wait')
     const [response] = await Promise.all([
       page.waitForNavigation({ timeout: 3000 }),
       page.reload(),
     ])
     assert.equal(response.url(), url)
     assert.equal(response.status(), 200)
-    passed.push('same URL reload returns its response')
+    record('same URL reload returns its response')
     const [history] = await Promise.all([
       page.waitForNavigation({
         url: (u) => u.pathname === '/target',
@@ -78,7 +87,9 @@ test('navigation waits retain events, document identity and their deadline', {
     ])
     assert.equal(history, null)
     assert.match(page.url(), /\/last$/)
-    passed.push('predicate sees transient URL in synchronous pushState burst')
+    await page.title()
+    assert.match(page.url(), /\/last$/)
+    record('predicate sees transient URL and later reads retain its fresh URL')
     const [timed] = await Promise.all([
       page
         .waitForNavigation({ url: () => new Promise(() => {}), timeout: 100 })
@@ -87,7 +98,7 @@ test('navigation waits retain events, document identity and their deadline', {
     ])
     assert.equal(timed.name, 'TimeoutError')
     assert.match(timed.message, /Timeout 100ms exceeded/)
-    passed.push('pending predicate shares the navigation deadline')
+    record('pending predicate shares the navigation deadline')
     await page.setContent('<iframe src="about:blank"></iframe>')
     const frame = page.frames()[1]
     const [detached] = await Promise.all([
@@ -95,7 +106,7 @@ test('navigation waits retain events, document identity and their deadline', {
       page.evaluate(() => document.querySelector('iframe').remove()),
     ])
     assert.match(detached.message, /frame was detached/i)
-    passed.push('detached child rejects navigation wait')
+    record('detached child rejects navigation wait')
     const adopted = sdk.context
       .pages()
       .find((candidate) => candidate !== page && !candidate.isClosed())
@@ -104,7 +115,7 @@ test('navigation waits retain events, document identity and their deadline', {
     await adopted.setContent(`<iframe src="${url}/child"></iframe>`)
     await adopted.frames()[1].waitForLoadState()
     const child = adopted.frames()[1]
-    const cross = url.replace('127.0.0.1', 'localhost') + '/cross'
+    const cross = `${url.replace('127.0.0.1', 'localhost')}/cross`
     const [childResponse] = await Promise.all([
       child.waitForNavigation({ timeout: 5000 }),
       adopted.evaluate(
@@ -114,7 +125,7 @@ test('navigation waits retain events, document identity and their deadline', {
     ])
     assert.equal(childResponse.frame(), child)
     assert.equal(childResponse.url(), cross)
-    passed.push(
+    record(
       'adopted tab child crossing renderers keeps its navigation and response',
     )
     await adopted.close()
@@ -130,7 +141,7 @@ test('navigation waits retain events, document identity and their deadline', {
         (selectedResponse.url().endsWith('/rapid-a') &&
           selectedResponse.status() === 201),
     )
-    passed.push(
+    record(
       'rapid replacement never lends a later document response to an earlier match',
     )
     await page.close()

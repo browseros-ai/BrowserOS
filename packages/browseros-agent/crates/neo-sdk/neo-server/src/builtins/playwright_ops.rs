@@ -409,7 +409,12 @@ impl PageEffect {
         match name {
             "context.newPage" => Self::Opens,
             "page.opener" => Self::Links,
-            "page.goto" | "page.goBack" | "page.goForward" => Self::Navigates,
+            // A successful navigation wait observes a URL change started by another op or
+            // the page. Refresh core's cache too, so a later ordinary reply cannot restore
+            // the pre-navigation URL over the wait's fresh frame facts.
+            "page.goto" | "page.goBack" | "page.goForward" | "page.waitForNavigation" => {
+                Self::Navigates
+            }
             "page.reload" => Self::Reloads,
             "page.close" => Self::Closes,
             _ => Self::Untracked,

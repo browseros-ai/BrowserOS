@@ -1049,17 +1049,21 @@ export class Page extends EventEmitter {
       throw deadline.named(error)
     }
     for (;;) {
-      const { value: result, observed } = await invokeObserved(
-        'page.waitForNavigation',
-        frame._call(api, deadline.left()),
-        {
-          ...args,
-          since,
-          after,
-          ...(url ? { url } : {}),
-          waitUntil: predicate ? 'commit' : waitUntil,
-        },
-      ).catch(rethrow)
+      const { value: result, observed } = await deadline
+        .race(
+          invokeObserved(
+            'page.waitForNavigation',
+            frame._call(api, deadline.left()),
+            {
+              ...args,
+              since,
+              after,
+              ...(url ? { url } : {}),
+              waitUntil: predicate ? 'commit' : waitUntil,
+            },
+          ),
+        )
+        .catch(rethrow)
       const response = await deadline.race(
         this._navigated(api, frame, result, observed),
       )

@@ -74,3 +74,19 @@ it('keeps a post-navigation frame refresh inside the navigation deadline', async
     message: 'page.waitForNavigation: Timeout 50ms exceeded.',
   })
 })
+
+it('bounds a native reply that stalls after its browser-side navigation wait', async () => {
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: ({ name }) =>
+      name === 'page.waitForNavigation' ? new Promise(() => {}) : null,
+  })
+  const error = json(
+    await runtime.run(`return await page.waitForNavigation({ timeout: 50 })
+    .catch(error => ({ name: error.name, message: error.message }))`),
+  )
+  expect(error).toEqual({
+    name: 'TimeoutError',
+    message: 'page.waitForNavigation: Timeout 50ms exceeded.',
+  })
+})
