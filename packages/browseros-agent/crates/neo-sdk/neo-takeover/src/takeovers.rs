@@ -5,37 +5,32 @@
 //!
 //! ```text
 //!  start:    private(tab) ─▶ lock(tab, reads, ttl), its TTL release scheduled
-//!            ─▶ hold the screen ─▶ arm the journal ─▶ fit(tab, viewer)? ─▶ active
-//!            (still arming or fitting when the TTL release is due ─▶ given back as a release
+//!            ─▶ hold the screen ─▶ fit(tab, viewer)? ─▶ active
+//!            (still fitting when the TTL release is due ─▶ given back as a release
 //!            is ─▶ released(expired), never active)
-//!  release:  close its displays (one that took input sweeps every open tab) ─▶ sweep(tab)
-//!            ─▶ disarm the journal ─▶ restore(fit) ─▶ let the screen go ─▶ unlock
+//!  release:  close its displays ─▶ restore(fit) ─▶ let the screen go ─▶ unlock
 //!            ─▶ released(reason): by the host, 10 s before the lock's deadline (expired),
-//!            or when the tab closes (tab_closed, without the sweep and the restore)
+//!            or when the tab closes (tab_closed, without the restore)
 //! ```
 //!
 //! **The order is the safety argument.** At start, the tab is private, durably, before anything
 //! else happens, so no capture taken from then on keeps a pixel of what the owner does; a flag
 //! that cannot be committed refuses the start with nothing else done. The agent is locked out
 //! before the owner can reach the tab, spectators and the agent's moves of the front are held
-//! off before the owner's display can open, and the journal is armed before the owner's first
-//! key. Release goes the other way. The owner's input stops first. What they typed reaches the
-//! known secrets list (the closing display's sweep, the tab's sweep, the journal's last values)
-//! before the tab is put back. The agent's lock lifts last, so the agent never acts on a
-//! half-restored tab or reads a value nobody registered. The 10 s early TTL release is the same
-//! argument: a release that waited for the lock's own deadline would sweep and restore with the
-//! agent already let back in.
+//! off before the owner's display can open. Release stops the owner's input before restoring
+//! the fit and giving back the screen. The agent's lock lifts last, so the agent never acts on
+//! a half-restored tab. The TTL release starts 10 s before the lock's deadline so the same
+//! ordering holds when the owner leaves the takeover open.
 //!
 //! **A start cannot outrun its TTL release.** The release is scheduled as the lock is taken, and
-//! the start waits for the journal's arming, a walk of every frame of the tab, and for the fit
-//! only until the release is due. A start that is not done by then is never published. It gives
-//! back what it took, in release order and under the lock, is recorded and announced as released
-//! (`expired`), and is the start's error. Arming and fitting each run in a task of their own, so
-//! the one still running is not cut short. The give-back waits for it within its budget like any
-//! step, and one that takes longer is given back in the background once it is done.
+//! the start waits for the fit only until the release is due. A start that is not done by then
+//! is never published. It gives back what it took, in release order and under the lock, is
+//! recorded and announced as released (`expired`), and is the start's error. Fitting runs in a
+//! task of its own, so it is not cut short. The give-back waits for it within its budget like
+//! any step, and one that takes longer is given back in the background once it is done.
 //!
 //! **No state of its own beyond what it took.** A takeover keeps the ids of its lock and fit,
-//! its display binding, the screen hold, the armed journal and its state. The parts own the rest,
+//! its display binding, the screen hold and its state. The parts own the rest,
 //! which is what lets the owner change this flow without touching them.
 //!
 //! **Idempotent.** Starts run one at a time, and a start on a tab with an active takeover returns
@@ -54,8 +49,8 @@
 
 use crate::limits::{GIVE_BACK, KEEP_RELEASED_TAKEOVER, MIN_TAKEOVER_TTL, TAKEOVER_CHANGES};
 use crate::{
-    ArmedJournal, BrowserTabs, DisplayBinding, Displays, FitId, Fits, Journal, LockBinding, LockId,
-    LockTtl, Locks, PartError, Reads, ScreenHold, ScreenSize, TakeoverId, sweep,
+    BrowserTabs, DisplayBinding, Displays, FitId, Fits, LockBinding, LockId, LockTtl, Locks,
+    PartError, Reads, ScreenHold, ScreenSize, TakeoverId,
 };
 use browseros_core::TabId;
 use futures_util::future::{self, BoxFuture, FutureExt};
@@ -180,20 +175,17 @@ struct Held {
     binding: DisplayBinding,
     /// Keeps view displays and the agent's moves off the screen.
     screen: ScreenHold,
-    /// Registers what the owner types into the tab's sensitive fields.
-    journal: ArmedJournal,
     /// Stops the TTL release once the takeover's give-back has begun.
     timer: DropGuard,
 }
 
 /// What a give-back returns to the parts. A published takeover holds them all. A start that ran
-/// out of time may still be taking its journal or its fit. The give-back waits for that part
+/// out of time may still be taking its fit. The give-back waits for that part
 /// within its budget, as for any step, and gives it back once it is taken.
 struct Parts {
     /// Ties the owner's control displays to the takeover. None is bound to an unpublished one.
     binding: DisplayBinding,
     screen: ScreenHold,
-    journal: BoxFuture<'static, ArmedJournal>,
     fit: BoxFuture<'static, Option<FitId>>,
     /// Stops the TTL release once the give-back has begun.
     timer: DropGuard,
@@ -205,13 +197,11 @@ impl Parts {
         let Held {
             binding,
             screen,
-            journal,
             timer,
         } = held;
         Self {
             binding,
             screen,
-            journal: future::ready(journal).boxed(),
             fit: future::ready(fit).boxed(),
             timer,
         }
@@ -225,7 +215,6 @@ pub struct Takeovers {
     locks: Arc<Locks>,
     fits: Arc<Fits>,
     displays: Arc<Displays>,
-    journal: Journal,
     browser: BrowserTabs,
     /// Held by a start from its first look at the table to its end, so two starts on one tab
     /// cannot both find none there. A tab close waits on it too, so a takeover started on a tab
@@ -236,16 +225,15 @@ pub struct Takeovers {
 }
 
 impl Takeovers {
-    /// No takeovers. The flow uses the same parts the host's own routes do: `privacy`'s flags
-    /// and secret set, `locks`, `fits`, `displays` (the screen hold and the display binding),
-    /// `journal`, and `browser` to check the tab and to sweep it.
+    /// No takeovers. The flow uses the same parts the host's own routes do: `privacy`'s flags,
+    /// `locks`, `fits`, `displays` (the screen hold and the display binding),
+    /// and `browser` to check the tab.
     #[must_use]
     pub fn new(
         privacy: Arc<Privacy>,
         locks: Arc<Locks>,
         fits: Arc<Fits>,
         displays: Arc<Displays>,
-        journal: Journal,
         browser: BrowserTabs,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -253,7 +241,6 @@ impl Takeovers {
             locks,
             fits,
             displays,
-            journal,
             browser,
             starting: tokio::sync::Mutex::default(),
             table: Mutex::default(),
@@ -262,7 +249,7 @@ impl Takeovers {
     }
 
     /// Starts a takeover of the tab, in the order the module doc argues for: private, locked
-    /// with its TTL release scheduled, the screen held, journal armed, then fitted when a viewer
+    /// with its TTL release scheduled, the screen held, then fitted when a viewer
     /// is given. A tab that has an active takeover gets it back as it is. A failed fit gives
     /// back what was taken, in release order, and is the error; the tab stays private, which
     /// only over-protects it. A start not done when its TTL release is due gives back what it
@@ -274,8 +261,8 @@ impl Takeovers {
     ///
     /// # Errors
     /// `TabNotFound`; `Privacy` when the flag is not committed, before anything else is done;
-    /// the fit's `Screen`, `Browser`, `TimedOut` or `UnusableViewer`; `TimedOut` when the journal
-    /// and the fit were not done 10 s before the lock's deadline.
+    /// the fit's `Screen`, `Browser`, `TimedOut` or `UnusableViewer`; `TimedOut` when the fit
+    /// was not done 10 s before the lock's deadline.
     pub async fn start(self: &Arc<Self>, request: TakeoverRequest) -> Result<Takeover, PartError> {
         let takeovers = Arc::clone(self);
         to_the_end(async move { takeovers.begin(request).await }).await
@@ -325,20 +312,6 @@ impl Takeovers {
             created_at: lock.created_at,
             expires_at: lock.expires_at,
         };
-        let journal = self.journal.clone();
-        let journal = match done_by(release_at, async move { journal.arm(&[tab]).await }).await {
-            Ok(journal) => journal,
-            Err(arming) => {
-                let parts = Parts {
-                    binding: DisplayBinding::new(),
-                    screen,
-                    journal: arming,
-                    fit: future::ready(None).boxed(),
-                    timer,
-                };
-                return Err(self.overdue(takeover, parts).await);
-            }
-        };
         if let Some(viewer) = viewer {
             let fits = Arc::clone(&self.fits);
             match done_by(release_at, async move { fits.fit(tab, viewer).await }).await {
@@ -350,7 +323,6 @@ impl Takeovers {
                         %error,
                         "a takeover did not start: its fit failed"
                     );
-                    journal.disarm().await;
                     drop(screen);
                     self.unlock(id, lock.id);
                     return Err(error);
@@ -359,7 +331,6 @@ impl Takeovers {
                     let parts = Parts {
                         binding: DisplayBinding::new(),
                         screen,
-                        journal: future::ready(journal).boxed(),
                         // A fit that failed holds nothing to restore.
                         fit: fitting.map(|fit| fit.ok().map(|fit| fit.id)).boxed(),
                         timer,
@@ -371,7 +342,6 @@ impl Takeovers {
         let held = Held {
             binding: DisplayBinding::new(),
             screen,
-            journal,
             timer,
         };
         // Published only before the TTL release is due, decided under the table's mutex, which
@@ -463,37 +433,15 @@ impl Takeovers {
         let Parts {
             binding,
             screen,
-            journal,
             fit,
             timer,
         } = parts;
         drop(timer);
         let budget = Instant::now() + GIVE_BACK;
-        let (id, tab) = (takeover.id, takeover.tab);
+        let id = takeover.id;
         let tab_open = reason != ReleaseReason::TabClosed;
         give_back_step(budget, id, "closing its displays", async move {
             binding.close().await;
-            Ok(())
-        })
-        .await;
-        if tab_open {
-            let browser = self.browser.clone();
-            let secrets = Arc::clone(self.privacy.secrets());
-            give_back_step(budget, id, "sweeping its tab", async move {
-                let swept = sweep(&browser, &secrets, tab).await?;
-                tracing::info!(
-                    takeover = %id,
-                    tab = tab.0,
-                    registered = swept.registered,
-                    refused = swept.refused,
-                    "a takeover swept its tab as it gave it back"
-                );
-                Ok(())
-            })
-            .await;
-        }
-        give_back_step(budget, id, "disarming its journal", async move {
-            journal.await.disarm().await;
             Ok(())
         })
         .await;
@@ -536,7 +484,7 @@ impl Takeovers {
             }
             self.announce(&released);
         }
-        tracing::info!(takeover = %id, tab = tab.0, ?reason, "a takeover was released");
+        tracing::info!(takeover = %id, tab = takeover.tab.0, ?reason, "a takeover was released");
         released
     }
 
@@ -572,8 +520,8 @@ impl Takeovers {
         }
     }
 
-    /// Releases the takeover on a tab that closed (`TabClosed`). Its steps that need the tab, the
-    /// sweep and the restore, are skipped: the fits restore a closed tab's fit themselves. A
+    /// Releases the takeover on a tab that closed (`TabClosed`). The restore step needs the tab and
+    /// is skipped: the fits restore a closed tab's fit themselves. A
     /// start that is running finishes first, so a takeover it makes on the tab is released too.
     pub async fn tab_closed(self: &Arc<Self>, tab: TabId) {
         self.release_closed(|on| on == tab).await;

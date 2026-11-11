@@ -387,18 +387,17 @@ async fn a_text_frame_or_a_message_the_filter_refuses_closes_the_display() -> Te
 }
 
 #[tokio::test]
-async fn a_display_is_refused_with_503_while_the_browser_cannot_list_its_tabs() -> TestResult {
+async fn only_a_view_is_refused_with_503_while_the_browser_cannot_list_its_tabs() -> TestResult {
     let h = harness().await?;
     h.browser.open_tab(12);
     let socket = serve(&h)?;
     h.browser.become_unreachable();
-    for query in ["mode=view", "mode=control"] {
-        assert_eq!(
-            refused(&socket.path, Open::new(query)).await?,
-            (503, "browser_unavailable".to_owned()),
-            "{query}"
-        );
-    }
+    assert_eq!(
+        refused(&socket.path, Open::new("mode=view")).await?,
+        (503, "browser_unavailable".to_owned())
+    );
+    let (mut control, _) = handshake(&socket.path, Open::new("mode=control")).await?;
+    control.close(None).await?;
     Ok(())
 }
 

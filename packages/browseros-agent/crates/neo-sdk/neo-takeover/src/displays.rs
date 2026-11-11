@@ -5,14 +5,11 @@
 //! ```text
 //!  admit ─ a view while the owner has control: DisplayPaused (409)
 //!        ─ register ─ a view while a private tab is in front: DisplayPaused (409)
-//!        ─ dial Xvnc (503) ─ control: Privacy::control_display_opened,
-//!                                     the journal armed on every open tab
+//!        ─ dial Xvnc (503) ─ control: Privacy::control_display_opened
 //!  serve ─ viewer bytes ─▶ ClientFramer ─▶ verdict(mode) ─▶ Xvnc
 //!        ◀─ Xvnc bytes, untouched ─────────────────────────────┘
 //!          view: follow runs beside it (follow.rs), and the front-tab watch closes it when a
 //!                private tab is in front (front_tab.rs)
-//!          control: each key-down and paste sent on counts as the owner's press (Journal),
-//!                   and at its end, the close sweep of every open tab, then the journal disarms
 //! ```
 //!
 //! **Admission comes before the WebSocket upgrade**, so the host gets a refusal as an HTTP
@@ -32,9 +29,6 @@
 //! never a tab that is not private. Later inputs go at once. While an input waits, the display
 //! still sees its viewer leave and Xvnc close, and ends with the input dropped, so a commit that
 //! never returns cannot keep it, and the views it shut out, waiting.
-//!
-//! **A control display needs its journal.** One whose open tabs cannot be listed is refused
-//! before the upgrade, as the journal could not be armed on them.
 //!
 //! **Views close; they do not pause** (decision 22). Holding Xvnc's bytes back would break the
 //! Tight encoding's zlib state, which spans rectangles. And noVNC asks for continuous updates,
@@ -59,35 +53,15 @@
 //! Admission refuses a view, and every open view closes when such a tab comes to the front or
 //! the tab in front goes private (front_tab.rs). A private tab stays private until it closes, so
 //! after control ends, views come back only once a tab that is not private is in front.
-//!
-//! **Every control display arms the control journal on every open tab**, and on each tab that
-//! opens while it is open ([`Displays::tab_opened`]); while it is open, `Privacy` starts each new
-//! tab private (decision 31). **One that took input sweeps every open tab when it ends**, however
-//! it ends: the viewer left, Xvnc dropped it, or its binding closed it. Over the one screen the
-//! owner can reach any tab, and a value can reach a field without an `input` event the journal
-//! sees. A takeover's release waits for this sweep ([`DisplayBinding::close`]) before it sweeps
-//! its own tab.
-//!
-//! **A control display counts the owner's presses** (sdk-traces decision 54). Each key-down, as
-//! either key message, and each paste that it sends on to Xvnc as the owner's input adds one to
-//! the [`Journal`]'s press count, before the bytes go. Neo counts them here, outside the browser,
-//! so neither a page nor a CDP client can add to the count. A view's input is dropped and counts
-//! nothing, and neither does an input that a failed commit drops. Each press gives every armed
-//! journal one credit, and a trusted journal entry is the owner's only if its journal has a
-//! credit to spend, so the owner values a journal makes never outnumber what the owner pressed
-//! (journal.rs).
 
 use crate::browser_tabs::ScreenHoldGuard;
 use crate::follow::Follower;
-use crate::limits::{CLOSE_SWEEP, MAX_HELD_INPUT, SERVER_CHUNK, XVNC_DIAL};
+use crate::limits::{MAX_HELD_INPUT, SERVER_CHUNK, XVNC_DIAL};
 use crate::rfb_client::{ClientFramer, DisplayMode, Verdict, verdict};
-use crate::{
-    ArmedJournal, BrowserTabs, Front, Journal, Locks, PartError, ScreenHolder, follow, front_tab,
-    screen_rule, sweep,
-};
+use crate::{BrowserTabs, Front, Locks, PartError, ScreenHolder, follow, front_tab, screen_rule};
 use browseros_core::TabId;
 use bytes::{Bytes, BytesMut};
-use futures_util::future::{BoxFuture, join_all};
+use futures_util::future::BoxFuture;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use neo_trace::{ControlDisplay, EpochMillis, Privacy, TaskId, TraceSink, TraceStore};
 use std::collections::HashMap;
@@ -149,7 +123,7 @@ pub enum DisplayEnd {
 pub struct DisplayBinding {
     /// Cancelled once, by [`DisplayBinding::close`].
     released: CancellationToken,
-    /// Each bound display while it serves, its close sweep included.
+    /// Each bound display while it forwards RFB bytes.
     live: TaskTracker,
 }
 
@@ -160,9 +134,8 @@ impl DisplayBinding {
         Self::default()
     }
 
-    /// Ends every display bound to this one, and returns once each has stopped forwarding and
-    /// finished its end: the close sweep of every open tab (at most 5 s), then its journal's
-    /// disarm. A display bound after this ends at once, so a release leaves no moment in which
+    /// Ends every display bound to this one, and returns once each has stopped forwarding.
+    /// A display bound after this ends at once, so a release leaves no moment in which
     /// a display that just bound could take input.
     pub async fn close(&self) {
         self.released.cancel();
@@ -231,7 +204,6 @@ pub struct Displays {
     pub(crate) privacy: Arc<Privacy>,
     /// A control display's first input stamps here every tab it makes private, before it commits.
     stamps: Arc<dyn TaintStamps>,
-    journal: Journal,
     /// Follow pauses while a lock holds the tab it follows.
     pub(crate) locks: Arc<Locks>,
     /// A followed task's operations, as the trace writer commits them.
@@ -260,8 +232,6 @@ struct Table {
 struct ControlEntry {
     /// The owner's input began on this display. Views stay closed until it ends.
     input: bool,
-    /// Its journal once armed, so [`Displays::tab_opened`] can arm a new tab with it.
-    journal: Option<Arc<ArmedJournal>>,
     /// The display's hold on the screen, from its registration to its end.
     _held: ScreenHoldGuard,
 }
@@ -299,19 +269,14 @@ impl Table {
 
 impl Displays {
     /// No displays yet. `xvnc` is Xvnc's RFB address. Control displays stamp the tabs they make
-    /// private through `stamps`, then commit privacy through `privacy`, and arm `journal`; follow
+    /// private through `stamps`, then commit privacy through `privacy`; follow
     /// reads `locks`, `sink`'s events and `store`.
     #[must_use]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each part has a type of its own, so a swapped argument does not compile"
-    )]
     pub fn new(
         xvnc: SocketAddr,
         browser: BrowserTabs,
         privacy: Arc<Privacy>,
         stamps: Arc<dyn TaintStamps>,
-        journal: Journal,
         locks: Arc<Locks>,
         sink: TraceSink,
         store: TraceStore,
@@ -321,7 +286,6 @@ impl Displays {
             browser,
             privacy,
             stamps,
-            journal,
             locks,
             sink,
             store,
@@ -333,9 +297,7 @@ impl Displays {
     /// control, and while a private tab is in front; a view that follows a tab first starts its
     /// follower, which brings that tab forward when it would (`follow::admit`). Then the display is
     /// registered and gets its own connection to Xvnc. A control display also opens `Privacy`'s
-    /// control display, so tabs that open from now on start private, and arms the journal on
-    /// every open tab before it returns, so the owner's first key cannot reach a tab the journal
-    /// has not been armed on.
+    /// control display, so tabs that open from now on start private.
     ///
     /// A view is registered before the tab in front is read and Xvnc is dialed, so a tab that
     /// goes private or comes to the front after the read, and the owner's input during the
@@ -343,8 +305,8 @@ impl Displays {
     ///
     /// # Errors
     /// `DisplayPaused` for a view while the owner has control or a private tab is in front;
-    /// `Browser` when the browser cannot list its tabs, as a view cannot tell what is in front
-    /// and a control display cannot arm the journal on them; `Screen` when Xvnc cannot be
+    /// `Browser` when the browser cannot list its tabs for a view to check the front;
+    /// `Screen` when Xvnc cannot be
     /// reached.
     pub async fn admit(self: &Arc<Self>, request: DisplayRequest) -> Result<Admitted, PartError> {
         let (registration, role) = match request {
@@ -393,7 +355,6 @@ impl Displays {
                     let id = table.next_id();
                     let entry = ControlEntry {
                         input: false,
-                        journal: None,
                         _held: held,
                     };
                     table.controls.insert(id, entry);
@@ -409,10 +370,6 @@ impl Displays {
             }
         };
         let server = self.dial().await?;
-        if matches!(role, Role::Control { .. }) {
-            // A refusal drops the registration, and the journal in it disarms.
-            self.arm_journal(registration.id).await?;
-        }
         Ok(Admitted {
             registration,
             role,
@@ -448,21 +405,6 @@ impl Displays {
         table.close_views();
         SwitchHold {
             displays: Arc::clone(self),
-        }
-    }
-
-    /// A tab opened: every open control display arms its journal on it, since the owner can
-    /// bring it to the front and type there (decision 31). Returns once each has; a tab that
-    /// cannot be armed is logged, and a close sweep still reads it.
-    pub async fn tab_opened(&self, tab: TabId) {
-        let journals = self
-            .table()
-            .controls
-            .values()
-            .filter_map(|control| control.journal.clone())
-            .collect::<Vec<_>>();
-        for journal in journals {
-            arm_tabs(&journal, &[tab]).await;
         }
     }
 
@@ -508,26 +450,6 @@ impl Displays {
         Ok(server)
     }
 
-    /// Arms a journal for control display `id` on every open tab. The journal goes into the table
-    /// before the tabs are listed: a tab that opens before the listing is in it, and one that
-    /// opens after finds the journal through [`Displays::tab_opened`]. Arming a tab twice is
-    /// harmless.
-    ///
-    /// # Errors
-    /// `Browser` when the open tabs cannot be listed, and the display is refused. With no journal
-    /// on them, a password the owner typed and submitted would be gone from its field before the
-    /// close sweep could read it. A single tab that fails to arm is logged instead, and the sweep
-    /// still reads it.
-    async fn arm_journal(&self, id: u64) -> Result<(), PartError> {
-        let journal = Arc::new(self.journal.arm(&[]).await);
-        if let Some(control) = self.table().controls.get_mut(&id) {
-            control.journal = Some(Arc::clone(&journal));
-        }
-        let tabs = self.browser.open_tabs().await?;
-        arm_tabs(&journal, &tabs).await;
-        Ok(())
-    }
-
     /// Marks the owner's input as begun on control display `id` and closes every view.
     fn input_began(&self, id: u64) {
         let mut table = self.table();
@@ -537,86 +459,10 @@ impl Displays {
         table.close_views();
     }
 
-    /// The end of a control display that took input. Every open tab is swept at once, within
-    /// 5 s. A tab that cannot be swept is logged; what the others hold is registered either way.
-    /// The summary counts what the secret set refused, which is masked nowhere.
-    async fn sweep_open_tabs(&self) {
-        let secrets = self.privacy.secrets();
-        let swept = tokio::time::timeout(CLOSE_SWEEP, async {
-            let tabs = self.browser.open_tabs().await?;
-            Ok::<_, PartError>(
-                join_all(
-                    tabs.iter()
-                        .map(|&tab| async move { (tab, sweep(&self.browser, secrets, tab).await) }),
-                )
-                .await,
-            )
-        })
-        .await;
-        match swept {
-            Err(_) => {
-                tracing::warn!("a control display's close sweep ran out of its {CLOSE_SWEEP:?}")
-            }
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "a control display's close sweep could not list the tabs");
-            }
-            Ok(Ok(swept)) => {
-                let (mut registered, mut refused) = (0, 0);
-                for (tab, result) in &swept {
-                    match result {
-                        Ok(tab_swept) => {
-                            registered += tab_swept.registered;
-                            refused += tab_swept.refused;
-                        }
-                        Err(error) => tracing::warn!(
-                            tab = tab.0,
-                            %error,
-                            "a control display's close sweep skipped a tab"
-                        ),
-                    }
-                }
-                tracing::info!(
-                    tabs = swept.len(),
-                    registered,
-                    refused,
-                    "a control display that took input swept every open tab at its end"
-                );
-            }
-        }
-    }
-
-    /// Disarms control display `id`'s journal: what it holds is registered, then its scripts go.
-    async fn disarm_journal(&self, id: u64) {
-        let journal = self
-            .table()
-            .controls
-            .get_mut(&id)
-            .and_then(|control| control.journal.take());
-        let Some(journal) = journal else {
-            return;
-        };
-        match Arc::try_unwrap(journal) {
-            Ok(journal) => journal.disarm().await,
-            // A `tab_opened` is arming a tab with it right now. Dropping the last handle disarms
-            // it in the background, in the same order.
-            Err(arming) => drop(arming),
-        }
-    }
-
     /// Never held across an await.
     fn table(&self) -> MutexGuard<'_, Table> {
         self.table.lock().unwrap_or_else(PoisonError::into_inner)
     }
-}
-
-/// Arms `journal` on each of `tabs` at once.
-async fn arm_tabs(journal: &ArmedJournal, tabs: &[TabId]) {
-    join_all(tabs.iter().map(|&tab| async move {
-        if let Err(error) = journal.arm_tab(tab).await {
-            tracing::warn!(tab = tab.0, %error, "the control journal could not arm a tab");
-        }
-    }))
-    .await;
 }
 
 /// A display's place in the table, held for its whole life. Dropping it takes the display out,
@@ -639,7 +485,7 @@ impl Drop for Registration {
             }
             table.controls.remove(&self.id)
         };
-        // Outside the lock: dropping a journal that was never disarmed starts its disarm.
+        // Drop the screen hold outside the table lock so other front movers can read it.
         drop(control);
     }
 }
@@ -673,7 +519,7 @@ impl Admitted {
     /// WebSocket frames and puts them back in.
     ///
     /// A bound display runs inside its binding's tracker, so [`DisplayBinding::close`] waits for
-    /// all of it, the close sweep included.
+    /// its forwarding to stop before the takeover restores the fit.
     pub async fn serve<I, O>(self, from_viewer: I, to_viewer: O) -> DisplayEnd
     where
         I: Stream<Item = Bytes> + Send,
@@ -715,15 +561,15 @@ impl Admitted {
                 let proxy =
                     Proxy::new(displays, id, None).run(server, from_viewer, to_viewer, &closing);
                 match follower {
-                    None => proxy.await.0,
+                    None => proxy.await,
                     Some(follower) => {
                         let mut proxy = pin!(proxy);
                         // Biased toward the proxy: a view whose close already fired ends before
                         // its follower gets a pass, which could send one activation for it.
                         tokio::select! {
                             biased;
-                            (end, _) = &mut proxy => end,
-                            () = follow::run(follower, displays) => proxy.await.0,
+                            end = &mut proxy => end,
+                            () = follow::run(follower, displays) => proxy.await,
                         }
                     }
                 }
@@ -732,14 +578,9 @@ impl Admitted {
                 let closing = binding.map_or(Closing::Never, |binding| {
                     Closing::Released(binding.released)
                 });
-                let (end, forwarded) = Proxy::new(displays, id, Some(&privacy))
+                Proxy::new(displays, id, Some(&privacy))
                     .run(server, from_viewer, to_viewer, &closing)
-                    .await;
-                if forwarded {
-                    displays.sweep_open_tabs().await;
-                }
-                displays.disarm_journal(id).await;
-                end
+                    .await
             }
         };
         tracing::info!(display = id, ?end, "a display ended");
@@ -795,8 +636,6 @@ struct Proxy<'a> {
     framer: ClientFramer,
     /// Every open tab was made private, durably, for this display's input.
     tainted: bool,
-    /// Input reached Xvnc, so the display's end sweeps.
-    forwarded: bool,
 }
 
 impl<'a> Proxy<'a> {
@@ -807,12 +646,10 @@ impl<'a> Proxy<'a> {
             control,
             framer: ClientFramer::default(),
             tainted: false,
-            forwarded: false,
         }
     }
 
-    /// Runs until one side ends, the viewer is refused, or `closing` fires. Returns why, and
-    /// whether any input reached Xvnc.
+    /// Runs until one side ends, the viewer is refused, or `closing` fires.
     ///
     /// The two directions never wait on each other, and `closing` races both: a viewer that
     /// stopped reading, a stuck Xvnc or a held commit never keeps a display that must close
@@ -824,19 +661,18 @@ impl<'a> Proxy<'a> {
         from_viewer: I,
         to_viewer: O,
         closing: &Closing,
-    ) -> (DisplayEnd, bool)
+    ) -> DisplayEnd
     where
         I: Stream<Item = Bytes>,
         O: Sink<Bytes>,
     {
         let (from_server, to_server) = server.into_split();
-        let end = tokio::select! {
+        tokio::select! {
             biased;
             end = closing.closed() => end,
             end = screen_to_viewer(from_server, to_viewer, closing) => end,
             end = self.viewer_to_screen(from_viewer, to_server) => end,
-        };
-        (end, self.forwarded)
+        }
     }
 
     /// The viewer's bytes as they come, through the framer and the verdict table, to Xvnc.
@@ -881,17 +717,10 @@ impl<'a> Proxy<'a> {
             if input && !self.taint(from_viewer).await? {
                 continue;
             }
-            // Counted before the bytes go, so a journal entry they cause can never reach a
-            // listener before its credit. A write that fails ends the display, so at most one
-            // press is counted that Xvnc never got.
-            if input && message.is_press() {
-                self.displays.journal.owner_pressed();
-            }
             to_server
                 .write_all(&bytes)
                 .await
                 .map_err(|_| DisplayEnd::ScreenClosed)?;
-            self.forwarded |= input;
         }
         Ok(())
     }

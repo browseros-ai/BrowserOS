@@ -24,30 +24,6 @@ pub(crate) const KEEP_ENDED_LOCK: Duration = Duration::from_secs(60 * 60);
 /// them at once; one that falls this far behind gets `stream.reset` instead.
 pub(crate) const LOCK_CHANGES: usize = 256;
 
-/// How long one CDP step on a frame, or on the target that hosts it, may take before the
-/// sealed-world work skips it (design D13), so one stuck iframe cannot hide the rest of a tab.
-pub(crate) const FRAME_BUDGET: Duration = Duration::from_secs(2);
-
-/// How long the control journal waits after its last entry before it registers what it holds
-/// (decision 32). A second with no entry is taken as the owner done with the field: its value is
-/// registered, and the prefixes typed on the way to it are not.
-pub(crate) const JOURNAL_QUIET: Duration = Duration::from_secs(1);
-
-/// The most values the control journal holds unregistered. A page can raise `input` events on
-/// its own fields, so past this the value typed longest ago is registered at once, and each entry
-/// is checked against a bounded set.
-pub(crate) const MAX_JOURNAL_PENDING: usize = 64;
-
-/// The most owner credits one armed journal banks (sdk-traces decision 54). Each key-down or
-/// paste that a control display sends on gives every armed journal one credit, and each owner
-/// entry spends one. A credit only has to last from a press to the entry it causes, so a few
-/// cover typing at full speed. The presses that type nothing, such as arrows, modifiers, Enter
-/// and a clipboard sync, stop banking here. Unbounded, they would build a reserve that keys the
-/// display never sent, such as an agent's typed over CDP, could spend as owner values. If the
-/// browser falls more than this many presses behind the owner's keys, the entries past the cap
-/// are page values, which stay masked until a flood of page values pushes them out.
-pub(crate) const MAX_OWNER_CREDITS: u64 = 32;
-
 /// A screen side under this gets no fit at all: Xvnc can report one, and no viewport is that
 /// small (core's `viewport::MIN_SIZE`).
 pub(crate) const MIN_SIDE: u16 = 100;
@@ -151,10 +127,6 @@ pub(crate) const XVNC_DIAL: Duration = Duration::from_secs(2);
 /// The most Xvnc bytes one read takes before they go to the viewer as one frame.
 pub(crate) const SERVER_CHUNK: usize = 64 * 1024;
 
-/// How long a control display that took input may sweep the open tabs when it ends (decision
-/// 31). A takeover's release waits for it, inside its own 10 s budget.
-pub(crate) const CLOSE_SWEEP: Duration = Duration::from_secs(5);
-
 /// How often a follower re-checks its pause and its tab, besides each operation the followed
 /// task starts. It also covers a trace event stream that lagged.
 pub(crate) const FOLLOW_TICK: Duration = Duration::from_secs(1);
@@ -162,7 +134,7 @@ pub(crate) const FOLLOW_TICK: Duration = Duration::from_secs(1);
 /// The give-back's budget: a takeover's release steps together, from closing the owner's display
 /// to restoring the fit. The unlock does not wait longer than this. The TTL release also starts
 /// this long before the lock's deadline, so a give-back that takes all of it still finishes
-/// while the agent is locked out, and a start waits for its journal and its fit only until then.
+/// while the agent is locked out, and a start waits for its fit only until then.
 pub(crate) const GIVE_BACK: Duration = Duration::from_secs(10);
 
 /// The shortest takeover (decision 6). Its TTL release comes 10 s before the end, so a much

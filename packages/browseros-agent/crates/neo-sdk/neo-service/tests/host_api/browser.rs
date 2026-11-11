@@ -1,8 +1,6 @@
 //! A scripted browser for the camera and the tab checks: the tabs a test opens, and how captures
 //! answer. It speaks the CDP the capture path sends (`Browser.getTabs`, `Browser.getTabInfo`,
-//! `Target.attachToTarget`, `Page.captureScreenshot`), what a sweep of a one-frame tab sends
-//! (`Page.getFrameTree`, the sealed world, the seal's field values), the control journal's script,
-//! the fit's window calls, with one window whose state `setWindowBounds` changes, and
+//! `Target.attachToTarget`, `Page.captureScreenshot`), the fit's window calls, with one window whose state `setWindowBounds` changes, and
 //! `Browser.activateTab`, which brings a tab to the front; every other command answers `{}`.
 //!
 //! It is not core's scripted `TestConnection`: captures that a test holds and releases need a
@@ -12,7 +10,6 @@ use crate::support::BoxError;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpError, CdpEvent, SessionId, TargetedEvents};
-use browseros_core::sensitive_fields::{SEALED_WORLD, seal_source};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -53,8 +50,6 @@ pub(crate) struct ScriptedBrowser {
     tabs: Mutex<Vec<i64>>,
     /// The tab in front. Until a tab is brought there, every tab reports itself active.
     front: Mutex<Option<i64>>,
-    /// What every tab's password, card and code fields hold, as the seal reports it to a sweep.
-    fields: Mutex<Vec<String>>,
     /// URLs a test set; any other tab is on `https://example.test/<tab>`.
     urls: Mutex<HashMap<i64, String>>,
     /// `Browser.getTabs` fails, as when the browser is gone.
@@ -74,7 +69,6 @@ impl ScriptedBrowser {
         Arc::new(Self {
             tabs: Mutex::default(),
             front: Mutex::default(),
-            fields: Mutex::default(),
             urls: Mutex::default(),
             unreachable: AtomicBool::new(false),
             captures: watch::channel(Captures::Answer).0,
@@ -119,12 +113,6 @@ impl ScriptedBrowser {
     /// The tab a test or a `Browser.activateTab` last brought to the front.
     pub(crate) fn front(&self) -> Option<i64> {
         *self.front.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The owner typed these into sensitive fields.
-    pub(crate) fn type_into_fields(&self, values: &[&str]) {
-        *self.fields.lock().unwrap_or_else(PoisonError::into_inner) =
-            values.iter().map(|value| (*value).to_owned()).collect();
     }
 
     /// The tab navigated: the browser reports `url` for it from now on.
@@ -264,21 +252,6 @@ impl ScriptedBrowser {
                 Ok(json!({ "sessionId": format!("scripted-session-{session}") }))
             }
             "Page.captureScreenshot" => self.capture().await,
-            // The control journal's new-document script, which a control display adds per tab.
-            "Page.addScriptToEvaluateOnNewDocument" => {
-                Ok(json!({ "identifier": "scripted-journal" }))
-            }
-            "Page.getFrameTree" => Ok(json!({ "frameTree": { "frame": { "id": "main" } } })),
-            "Page.createIsolatedWorld" if params["worldName"] == SEALED_WORLD => {
-                Ok(json!({ "executionContextId": 1 }))
-            }
-            "Runtime.evaluate" if params["expression"] == seal_source() => {
-                Ok(json!({ "result": { "type": "number", "value": 1 } }))
-            }
-            "Runtime.evaluate" if params["expression"] == "__clawSeal.sensitiveValues()" => {
-                let fields = self.fields.lock().unwrap_or_else(PoisonError::into_inner);
-                Ok(json!({ "result": { "type": "object", "value": *fields } }))
-            }
             "Browser.getWindowForTarget" => {
                 Ok(json!({ "windowId": 1, "bounds": { "windowState": self.window() } }))
             }
