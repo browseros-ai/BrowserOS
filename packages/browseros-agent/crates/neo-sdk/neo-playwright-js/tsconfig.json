@@ -4,8 +4,9 @@
   // InjectedScript are checked too. This package imports vendored modules by relative path;
   // the vendored sources themselves need:
   // - upstream's @isomorphic alias, as in upstream's tsconfig;
+  // - upstream's @protocol alias for the vendored generated declarations;
   // - the modules they import but that are not vendored: highlight and consoleApi (the build's
-  //   stand-ins) and the type-only selectorEngine and @protocol/structs. rootDirs lets the
+  //   stand-ins) and the type-only selectorEngine. rootDirs lets the
   //   vendored files' relative imports find them in src/stubs, with no upstream file edited;
   // - Temporal (ESNext lib), and no noImplicitReturns, which upstream does not use.
   // The project is not composite: nothing references it, and its files span two packages.
@@ -28,7 +29,9 @@
       "@isomorphic/*": [
         "../neo-playwright/third_party/playwright/packages/isomorphic/*"
       ],
-      "@protocol/*": ["./src/stubs/protocol/*"]
+      "@protocol/*": [
+        "../neo-playwright/third_party/playwright/packages/protocol/src/*"
+      ]
     },
     "rootDirs": [
       "../neo-playwright/third_party/playwright/packages/injected/src",
