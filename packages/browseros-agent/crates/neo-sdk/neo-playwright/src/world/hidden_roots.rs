@@ -1,17 +1,14 @@
 //! The shadow roots of a frame document that the seal cannot find by itself, found by a pierced
 //! scan of the DOM so that the seal watches them (sdk-privacy D4, closed shadow roots).
 //!
-//! The seal sweeps fields from `document` down through open shadow roots, and journals input
-//! from listeners on the document. A closed root is invisible from outside it: its host's
-//! `shadowRoot` is null, and an `input` that starts inside it reaches the document retargeted to
-//! the host, or not at all when the page dispatches it (a page's own events are not composed).
-//! So Neo finds those roots with `DOM.describeNode { pierce }`, which lists closed roots, and
-//! hands each to `__clawSeal.watch(root)`. From then on the seal sweeps and journals that root
-//! as it does the document.
+//! The seal sweeps fields from `document` down through open shadow roots. A closed root is
+//! invisible from outside it: its host's `shadowRoot` is null. Neo finds those roots with
+//! `DOM.describeNode { pierce }`, which lists closed roots, and hands each to
+//! `__clawSeal.watch(root)` so subsequent sweeps include its fields.
 //!
 //! ```text
 //!  SealedWorld::install, and every sweep before it reads (evaluate_guard::sweep_world)
-//!    └─ SealedWorld::watch_hidden_roots(Scan::Document)    under the WatchedRoots lock
+//!    └─ SealedWorld::watch_hidden_roots()    under the WatchedRoots lock
 //!         ├─ HiddenRoots::scan   DOM.describeNode { the world's document, depth 30, pierce },
 //!         │                      then again from each node the depth cut off, until none is
 //!         ├─ each host the seal reported: __clawSeal.takeHost(), then HiddenRoots::scan of it
@@ -20,9 +17,6 @@
 //!         └─ the roots this world does not watch yet
 //!              └─ SealedWorld::watch_roots   DOM.resolveNode each into the world, then one
 //!                                            Runtime.callFunctionOn: __clawSeal.watch(root)
-//!  the journal hears HIDDEN_ROOT_REPORT (evaluate_guard::sweep_reported)
-//!    └─ SealedWorld::watch_hidden_roots(Scan::Reported)    the reported hosts only
-//!         └─ then the world's sweep, whose values go to the host (values_swept)
 //! ```
 //!
 //! **Hidden** is a closed root, or any root inside one: the seal's own walk to open roots
@@ -41,14 +35,9 @@
 //!   less depth would silence it;
 //! - `DOMSnapshot.captureSnapshot` costs the same and lists no shadow root nodes at all.
 //!
-//! **And a report for the roots no scan can find.** A page can attach a closed root, have the
-//! user type into it and remove its host again between two sweeps. The seal hears the typed
-//! `input` reach the document retargeted to the host, holds the host and reports it through the
-//! journal binding (`HIDDEN_ROOT_REPORT`). Rust takes the host, scans it, watches its root and
-//! sweeps the world while the field still exists in the removed tree. A value the page sets and
-//! removes with no composed event before any sweep leaves no trace, and stays a residual. The
-//! takes and watches of one document run one at a time, under [`WatchedRoots`]'s lock, so a
-//! sweep that waited for the lock reads every root whose host another watch had taken.
+//! Operation scans also drain host references already retained by the seal and inspect
+//! detached trees. Takes and watches of one document run under [`WatchedRoots`]'s lock,
+//! so a sweep that waited reads every root whose host another watch had taken.
 //!
 //! `describeNode` binds nothing in the DOM agent, so it disturbs no one. A scan costs about
 //! 3.9 µs per element of the document, almost all of it Chromium's walk (a release build of
@@ -63,7 +52,6 @@
 
 use std::collections::HashSet;
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use browseros_cdp::CdpError;
 use browseros_core::{CoreError, ProtocolSession};
@@ -103,9 +91,6 @@ pub(crate) struct WatchedRoots {
     /// seal hands a host out once, so a sweep must not read while another watch holds a host
     /// whose root it has not watched yet.
     watched: Mutex<HashSet<BackendNodeId>>,
-    /// A journal report of this document waits for its sweep. Later reports join it, so a page
-    /// that floods the journal starts one sweep at a time, not one per report.
-    report_queued: AtomicBool,
 }
 
 /// A node a describe cut off, to be described again from itself.
@@ -176,7 +161,6 @@ impl WatchedRoots {
         Self {
             document,
             watched: Mutex::default(),
-            report_queued: AtomicBool::new(false),
         }
     }
 
@@ -189,18 +173,6 @@ impl WatchedRoots {
     /// seal confirmed it: a sweep that finds a root here must have been sent after the watch.
     pub(crate) async fn lock(&self) -> MutexGuard<'_, HashSet<BackendNodeId>> {
         self.watched.lock().await
-    }
-
-    /// Queues a journal report's sweep; `false` when one is queued already and will take this
-    /// report's host with its own.
-    pub(crate) fn queue_report(&self) -> bool {
-        !self.report_queued.swap(true, Ordering::AcqRel)
-    }
-
-    /// No report's sweep waits any more: a watch is about to take the reported hosts, or the
-    /// queued sweep gave up before it could. A report from now on needs a sweep of its own.
-    pub(crate) fn unqueue_report(&self) {
-        self.report_queued.store(false, Ordering::Release);
     }
 }
 

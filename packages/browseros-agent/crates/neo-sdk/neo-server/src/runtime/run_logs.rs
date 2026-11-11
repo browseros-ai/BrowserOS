@@ -1,14 +1,12 @@
 //! A run's console output, bounded.
 
-use neo_trace::SecretSet;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Defaults;
 
 /// What a script logged, kept within `Defaults::MAX_LOG_LINES` and `Defaults::MAX_LOG_BYTES`.
 /// A line past either limit is counted, not kept, so a script that logs in a loop cannot grow
-/// its run's reply (or Neo's memory) without bound. Each kept line is masked whole before it is
-/// cut: a cut through a known secret would leave a prefix no later mask recognizes.
+/// its run's reply (or Neo's memory) without bound.
 #[derive(Debug, Default)]
 pub(crate) struct RunLogs {
     lines: Vec<LogLine>,
@@ -16,8 +14,8 @@ pub(crate) struct RunLogs {
     dropped: usize,
 }
 
-/// One console line. A plain data bag. The run's reply carries it, masked, and so does its
-/// stored replay.
+/// One console line. A plain data bag. The run's reply carries it, and so does its stored
+/// replay.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LogLine {
     /// The console method that wrote it.
@@ -43,15 +41,13 @@ pub(crate) enum LogLevel {
 }
 
 impl RunLogs {
-    /// Keeps one line, masked and then cut to the bytes left, or counts it once a limit is
-    /// reached.
-    pub(crate) fn push(&mut self, level: LogLevel, mut text: String, secrets: &SecretSet) {
+    /// Keeps one line, cut to the bytes left, or counts it once a limit is reached.
+    pub(crate) fn push(&mut self, level: LogLevel, text: String) {
         let room = Defaults::MAX_LOG_BYTES.saturating_sub(self.bytes);
         if self.lines.len() >= Defaults::MAX_LOG_LINES || room == 0 {
             self.dropped += 1;
             return;
         }
-        secrets.mask_str(&mut text);
         let text = cut_to(text, room);
         self.bytes += text.len();
         self.lines.push(LogLine { level, text });
@@ -92,17 +88,14 @@ fn cut_to(mut text: String, room: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use neo_trace::{SecretSet, SecretSetConfig};
-
     use super::{LogLevel, RunLogs};
     use crate::config::Defaults;
 
     #[test]
     fn lines_past_the_line_limit_are_counted_not_kept() {
-        let secrets = SecretSet::new(SecretSetConfig::default());
         let mut logs = RunLogs::default();
         for index in 0..Defaults::MAX_LOG_LINES + 5 {
-            logs.push(LogLevel::Log, format!("line {index}"), &secrets);
+            logs.push(LogLevel::Log, format!("line {index}"));
         }
         let (lines, dropped) = logs.into_parts();
         assert_eq!(lines.len(), Defaults::MAX_LOG_LINES, "the first lines stay");
@@ -112,15 +105,10 @@ mod tests {
 
     #[test]
     fn text_past_the_byte_limit_is_cut_at_a_character() {
-        let secrets = SecretSet::new(SecretSetConfig::default());
         let mut logs = RunLogs::default();
-        logs.push(LogLevel::Log, "x".to_owned(), &secrets);
-        logs.push(
-            LogLevel::Warn,
-            "é".repeat(Defaults::MAX_LOG_BYTES),
-            &secrets,
-        );
-        logs.push(LogLevel::Log, "past the limit".to_owned(), &secrets);
+        logs.push(LogLevel::Log, "x".to_owned());
+        logs.push(LogLevel::Warn, "é".repeat(Defaults::MAX_LOG_BYTES));
+        logs.push(LogLevel::Log, "past the limit".to_owned());
         let (lines, dropped) = logs.into_parts();
         let cut = lines.get(1).map_or("", |line| line.text.as_str());
         assert_eq!(

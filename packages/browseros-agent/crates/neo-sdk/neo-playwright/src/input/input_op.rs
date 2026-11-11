@@ -363,8 +363,6 @@ async fn burst(
         }
     }
     let sent = scope.send_effect()?;
-    // Keys are the agent's own typing: the journal must not report them as the page's.
-    let _typing = (device != Device::Mouse).then(|| page.state().typing(&sent));
     input
         .send_planned(&sent, scope, planned, steps)
         .await

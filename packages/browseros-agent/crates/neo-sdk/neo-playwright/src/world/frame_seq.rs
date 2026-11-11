@@ -37,8 +37,7 @@ pub(crate) struct FrameSeq(pub(crate) u32);
 pub(crate) struct BackendNodeId(pub(crate) i64);
 
 /// CDP's `Runtime.ExecutionContextId`: a small per-renderer counter, so it may name another
-/// context once its document is gone. Only `DOM.resolveNode` gets one (`SealedWorld`), and the
-/// journal looks up the world of a binding call by it (`FrameWorlds::by_context`).
+/// context once its document is gone. Only `DOM.resolveNode` gets one (`SealedWorld`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ContextId(pub(crate) i64);
 

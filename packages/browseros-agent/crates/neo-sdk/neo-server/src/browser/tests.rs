@@ -137,7 +137,6 @@ async fn a_tab_closed_by_someone_else_drops_its_slots() -> Result<(), Box<dyn Er
     let slot = tabs
         .slot::<Marker>(&page)
         .ok_or("a touched tab has slots")?;
-    let mut closes = tabs.subscribe_closed();
 
     assert!(fake.close_tab(owners_tab), "the fake had the tab");
     eventually(Duration::from_secs(5), || !tabs.is_open(page.tab)).await?;
@@ -145,11 +144,6 @@ async fn a_tab_closed_by_someone_else_drops_its_slots() -> Result<(), Box<dyn Er
         Arc::strong_count(&slot),
         1,
         "the registry dropped the closed tab's slot"
-    );
-    assert_eq!(
-        closes.try_recv()?,
-        owners_tab,
-        "subscribers hear which tab closed"
     );
     assert!(
         link.page(page.tab).await.is_none(),

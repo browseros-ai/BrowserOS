@@ -9,14 +9,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
 use browseros_core::{NativeCapabilities, TabId, TargetId};
 use futures_util::future::{self, Either};
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig};
 use neo_playwright::{
     ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, PlaywrightHooks, Refusal, RunState,
-    TypedBy,
 };
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
 use neo_trace::{
@@ -124,7 +122,6 @@ impl Harness {
             Arc::clone(&tabs),
             FlagRecovery::none(),
             secret_files,
-            Defaults::TYPED_QUIET,
         ));
         let playwright = PlaywrightFacade::start(Arc::clone(&link), Arc::clone(&hooks) as _);
         let mut registry = RegistryBuilder::default();
@@ -137,9 +134,7 @@ impl Harness {
         let dispatcher = Arc::new(Dispatcher::new(
             registry.build(),
             super::door_rules(&takeover, &hooks, &claims),
-            secrets,
             sink.clone(),
-            hooks.typed(),
             Arc::clone(&link),
             Arc::clone(&tabs),
             Observer::new(Arc::clone(&playwright) as _),
@@ -255,9 +250,7 @@ impl Harness {
         Ok(Arc::new(Dispatcher::new(
             registry.build(),
             rules,
-            Arc::new(SecretSet::new(SecretSetConfig::default())),
             self.sink.clone(),
-            self.hooks.typed(),
             Arc::clone(&self.link),
             Arc::clone(&self.tabs),
             Observer::new(Arc::clone(&self.playwright) as _),
@@ -346,14 +339,6 @@ fn page_of(entry: &Value) -> Result<PageRef, Box<dyn Error>> {
         .as_i64()
         .ok_or("a page brand has a tab")?;
     Ok(PageRef { tab: TabId(tab) })
-}
-
-/// One keystroke as the seal's journal reports it: the field's whole value.
-fn keystroke(value: &str) -> JournalEntry {
-    JournalEntry {
-        kind: SensitiveKind::Password,
-        value: value.to_owned().into(),
-    }
 }
 
 /// `work`, or an error after 10 s: a deadlock fails the test instead of hanging it.
@@ -1363,7 +1348,6 @@ async fn no_tab_is_captured_until_neo_made_up_for_lost_private_flags() -> Result
         Arc::clone(&harness.tabs),
         Arc::clone(&recovery),
         SecretFiles::Named(Vec::new()),
-        Defaults::TYPED_QUIET,
     );
     assert_eq!(
         hooks
@@ -3064,138 +3048,6 @@ async fn a_rule_that_refuses_the_crates_own_recheck_is_what_the_script_sees()
 }
 
 #[tokio::test]
-async fn a_field_typed_a_key_at_a_time_masks_its_final_value_and_no_prefix()
--> Result<(), Box<dyn Error>> {
-    let harness = Harness::new().await?;
-    // The owner's tab shows a prefix and the whole value, and every read's page facts come back
-    // through the door's mask.
-    let tab = harness
-        .fake
-        .open_tab("https://bank.example/", "hunte or hunter2?");
-    let page = harness.listed(tab).await?;
-    for value in ["h", "hu", "hun", "hunt", "hunte", "hunter", "hunter2"] {
-        harness
-            .hooks
-            .field_entered(page.tab, keystroke(value), TypedBy::NotAgent);
-    }
-    time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
-    // Read by a run that begins now. A run going while the field was typed holds each prefix it
-    // may have read, and its realm sees none of them (decision 35b), so only a later run shows
-    // what the process's set learned.
-    let (run, _guard) = harness.run()?;
-    let reply = harness
-        .submit(&run, "page.opener", json!({ "page": handle(&page) }))
-        .await;
-    assert_eq!(
-        reply.pages.first().and_then(|fact| fact.title.clone()),
-        Some("hunte or [private]?".to_owned()),
-        "once the field went quiet its value is a secret, and `hunte`, a prefix, is still text"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_read_between_two_keystrokes_registers_no_prefix() -> Result<(), Box<dyn Error>> {
-    let harness = Harness::new().await?;
-    let tab = harness
-        .fake
-        .open_tab("https://bank.example/", "hunt, hunte or hunter2?");
-    let page = harness.listed(tab).await?;
-    harness
-        .hooks
-        .field_entered(page.tab, keystroke("hunt"), TypedBy::NotAgent);
-    // A read sweeps the field before the journal reports the next key. The read masked what it
-    // found out of its own result already.
-    harness
-        .hooks
-        .values_swept(page.tab, &FieldValues::new(["hunte".to_owned().into()]));
-    for value in ["hunter", "hunter2"] {
-        harness
-            .hooks
-            .field_entered(page.tab, keystroke(value), TypedBy::NotAgent);
-    }
-    time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
-    // A run that begins after the field went quiet holds none of its prefixes, so its read shows
-    // what the process's set learned.
-    let (run, _guard) = harness.run()?;
-    let reply = harness
-        .submit(&run, "page.opener", json!({ "page": handle(&page) }))
-        .await;
-    assert_eq!(
-        reply.pages.first().and_then(|fact| fact.title.clone()),
-        Some("hunt, hunte or [private]?".to_owned()),
-        "once the field went quiet its value is a secret, and the prefix the read saw is not"
-    );
-    Ok(())
-}
-
-/// A read the page's script echoes into its title and URL sweeps the field while its op runs:
-/// after the op's start record went out, before the op settles. That op's page facts must come
-/// back masked with the run's held set, in the reply its realm gets and in the `page_after` its
-/// end record stores, since the process's set learns the value only once its field goes quiet
-/// (decision 35p, claw-sdk's half). The crate's own sweeps run in a sealed world the fake browser
-/// does not have, so the test sweeps through the crate's hook while the op's one CDP call waits.
-#[tokio::test]
-async fn a_value_swept_while_an_op_runs_masks_that_ops_page_facts_in_its_reply_and_its_record()
--> Result<(), Box<dyn Error>> {
-    let harness = Harness::new().await?;
-    let value = "swept-mid-op-7Qx";
-    let tab = harness.fake.open_tab(
-        &format!("https://bank.example/?echo={value}"),
-        &format!("Welcome {value}"),
-    );
-    let page = harness.listed(tab).await?;
-    let (run, _guard) = harness.run()?;
-    let asked = harness.fake.count("Target.getTargetInfo");
-    harness.fake.hold_next("Target.getTargetInfo");
-    let pending = harness.dispatcher.submit(
-        &run,
-        Call::script(
-            "page.opener".to_owned(),
-            json!({ "page": handle(&page) }),
-            None,
-        ),
-    );
-    let operation = pending.operation();
-    within(async {
-        while harness.fake.count("Target.getTargetInfo") == asked {
-            time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await?;
-    harness
-        .hooks
-        .values_swept(page.tab, &FieldValues::new([value.to_owned().into()]));
-    harness.fake.release_held();
-    let reply = pending.wait().await;
-    let masked = (
-        Some("https://bank.example/?echo=[private]"),
-        Some("Welcome [private]"),
-    );
-    let fact = reply
-        .pages
-        .first()
-        .ok_or("the reply reports the op's page")?;
-    assert_eq!(
-        (fact.url.as_deref(), fact.title.as_deref()),
-        masked,
-        "the realm gets the op's page facts masked with what its run held as the op settled"
-    );
-    let row = harness.row(operation).await?;
-    assert_eq!(
-        (row.page.url.as_deref(), row.page.title.as_deref()),
-        masked,
-        "the end record's `page_after` is masked with the held set the record carries"
-    );
-    let mut learned = value.to_owned();
-    assert!(
-        !harness.privacy.secrets().mask_str(&mut learned),
-        "the value is still held, so the run's held set masked both, not the process's set"
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn opener_facts_name_the_linked_tab_without_acquiring_it() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let opener = harness.owner_tab("https://opener.example/").await?;
@@ -3280,9 +3132,7 @@ async fn a_delivered_close_has_a_closed_fact_while_core_still_lists_its_target()
     let door = Arc::new(Dispatcher::new(
         registry.build(),
         Vec::new(),
-        Arc::new(SecretSet::new(SecretSetConfig::default())),
         harness.sink.clone(),
-        harness.hooks.typed(),
         Arc::clone(&harness.link),
         Arc::clone(&harness.tabs),
         Observer::new(Arc::new(RecordedClose(target))),
@@ -3768,9 +3618,7 @@ async fn a_pump_keeps_all_target_claims_after_eviction_in_either_report_order()
         let door = Arc::new(Dispatcher::new(
             registry.build(),
             Vec::new(),
-            Arc::new(SecretSet::new(SecretSetConfig::default())),
             harness.sink.clone(),
-            harness.hooks.typed(),
             Arc::clone(&harness.link),
             Arc::clone(&harness.tabs),
             Observer::new(Arc::new(EvictedCloses)),

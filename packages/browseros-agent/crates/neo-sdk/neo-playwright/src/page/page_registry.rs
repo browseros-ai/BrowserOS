@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
-use crate::TypedBy;
 use crate::input::Platform;
 use crate::op_scope::AdmittedPage;
 use crate::page::PageState;
@@ -125,12 +124,6 @@ impl PageRegistry {
     /// The state of `page`, if an op has acted on it.
     pub(crate) fn get(&self, page: TabId) -> Option<Arc<PageState>> {
         self.lock().get(&page).map(Arc::clone)
-    }
-
-    /// Who typed a value the journal saw on `page` just now.
-    pub(crate) fn typed_by(&self, page: TabId) -> TypedBy {
-        self.get(page)
-            .map_or(TypedBy::NotAgent, |state| state.typed_by())
     }
 
     /// Upstream's `CRBrowser._platform()`, from the user agent. A browser that does not answer

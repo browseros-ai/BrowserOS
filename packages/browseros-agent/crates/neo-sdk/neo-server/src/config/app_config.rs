@@ -86,9 +86,7 @@ mod tests {
     use neo_captcha::config::CaptchaConfig;
 
     use super::AppConfig;
-    use crate::config::{
-        Defaults, EnvConfig, HostApiConfig, HostedMode, LaunchConfig, SecretFiles,
-    };
+    use crate::config::{EnvConfig, HostApiConfig, HostedMode, LaunchConfig, SecretFiles};
     use crate::test_support::CLOSED_XVNC;
 
     fn config(launch_version: Option<&str>, env_version: Option<&str>) -> AppConfig {
@@ -114,7 +112,6 @@ mod tests {
                     tcp: None,
                 },
                 xvnc: CLOSED_XVNC,
-                typed_quiet: Defaults::TYPED_QUIET,
             },
             captcha: CaptchaConfig::default(),
             secret_files: SecretFiles::Named(Vec::new()),
