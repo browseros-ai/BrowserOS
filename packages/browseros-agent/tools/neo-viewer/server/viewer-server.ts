@@ -6,6 +6,7 @@
 import type { ViewerInfo } from '../shared/api'
 import { apiRouteTable, isLocalRequest } from './api/api-routes'
 import type { ViewerConfig } from './config'
+import { configureHostApi } from './hostApi'
 import { TaskStore } from './log/task-store'
 import { containerUp, runCommand } from './neo-container'
 import { buildPage, type PageFile } from './page'
@@ -41,6 +42,7 @@ export async function startViewer(
   const [store, page] = await Promise.all([
     TaskStore.open(config.dataDir, rule),
     buildPage(),
+    configureHostApi(config.hostApi ?? null),
   ])
   // The proxy needs the bound port (for the process lookup) before the first request.
   let proxy: McpProxyDeps | null = null
