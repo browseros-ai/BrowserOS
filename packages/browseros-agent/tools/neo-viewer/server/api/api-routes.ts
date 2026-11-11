@@ -19,9 +19,14 @@ const EVENT_KEEP_ALIVE_MS = 15_000
 
 type RouteRequest<P extends string> = Request & { params: Record<P, string> }
 
-export function apiRouteTable(store: TaskStore, info: ViewerInfo) {
+export function apiRouteTable(
+  store: TaskStore,
+  info: () => Promise<ViewerInfo>,
+) {
   return {
-    [apiRoutes.info]: local(() => Response.json(info satisfies ViewerInfo)),
+    [apiRoutes.info]: local(async () =>
+      Response.json((await info()) satisfies ViewerInfo),
+    ),
     [apiRoutes.tasks]: local(() =>
       Response.json({
         tasks: store.listTasks(),
@@ -57,8 +62,8 @@ export function isLocalRequest(req: Request): boolean {
 }
 
 function local<R extends Request>(
-  handler: (req: R) => Response,
-): (req: R) => Response {
+  handler: (req: R) => Response | Promise<Response>,
+): (req: R) => Response | Promise<Response> {
   return (req) =>
     isLocalRequest(req)
       ? handler(req)

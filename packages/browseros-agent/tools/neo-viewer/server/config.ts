@@ -4,34 +4,60 @@
  */
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 
 /** The port the agent's MCP URL and the UI use (the build contract's `:7310`). */
 const DEFAULT_PORT = 7310
-/** The Neo SDK image's MCP endpoint, published on 127.0.0.1 as its README shows. */
-const DEFAULT_UPSTREAM = 'http://127.0.0.1:9010/mcp'
 
+/** What the running viewer serves from. */
 export interface ViewerConfig {
   /** 0 picks a free port (tests). */
   port: number
+  /** Neo's `/mcp`. */
   upstream: URL
   dataDir: string
+  /** The container `bun run neo:viewer` started, shown read-only on the page; null with `--upstream`. */
+  container?: { name: string; image: string } | null
 }
 
-const USAGE = `usage: bun server/main.ts [--port 7310] [--upstream http://127.0.0.1:9010/mcp] [--data-dir DIR]
+/** What `bun run neo:viewer` was asked to do. */
+export interface LaunchOptions {
+  port: number
+  dataDir: string
+  /** Forward to this Neo and start no container. */
+  upstream: URL | null
+  /** Keep the browser profile and the run history between starts. */
+  keepData: boolean
+  /** False: use the newest neo-sdk image on the machine instead of this checkout's. */
+  build: boolean
+  /** Run this image; nothing is built. */
+  image: string | null
+}
+
+const USAGE = `usage: bun run neo:viewer [-- options]   (from packages/browseros-agent)
+  Builds this checkout's Neo SDK image if needed, starts it fresh, and serves the viewer.
+  --keep-data       keep the browser profile and the run history between starts
+  --no-build        use the newest neo-sdk image on this machine
+  --image TAG       use this image
+  --upstream URL    forward to this Neo MCP endpoint and start no container
+  --port PORT       the viewer's port (7310)
+  --data-dir DIR    the viewer's state (~/.local/state/neo-viewer)
   env: NEO_VIEWER_PORT, NEO_VIEWER_UPSTREAM, NEO_VIEWER_DATA_DIR`
 
-export function configFrom(
+export function launchOptionsFrom(
   argv: string[],
   env: Record<string, string | undefined>,
-): ViewerConfig {
+): LaunchOptions {
   const { values } = parseArgs({
     args: argv,
     options: {
       port: { type: 'string' },
       upstream: { type: 'string' },
       'data-dir': { type: 'string' },
+      'keep-data': { type: 'boolean' },
+      'no-build': { type: 'boolean' },
+      image: { type: 'string' },
       help: { type: 'boolean' },
     },
   })
@@ -40,15 +66,20 @@ export function configFrom(
     process.exit(0)
   }
   const port = Number(values.port ?? env.NEO_VIEWER_PORT ?? DEFAULT_PORT)
-  if (!Number.isInteger(port) || port < 0 || port > 65535)
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`bad port: ${port}\n${USAGE}`)
+  }
+  const upstream = values.upstream ?? env.NEO_VIEWER_UPSTREAM
   return {
     port,
-    upstream: new URL(
-      values.upstream ?? env.NEO_VIEWER_UPSTREAM ?? DEFAULT_UPSTREAM,
-    ),
-    dataDir:
+    // Absolute: the token file inside it is bind-mounted into the container by path.
+    dataDir: resolve(
       values['data-dir'] ?? env.NEO_VIEWER_DATA_DIR ?? defaultDataDir(env),
+    ),
+    upstream: upstream ? new URL(upstream) : null,
+    keepData: values['keep-data'] ?? false,
+    build: !values['no-build'],
+    image: values.image ?? null,
   }
 }
 

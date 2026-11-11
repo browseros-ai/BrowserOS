@@ -11,6 +11,7 @@ import { type LiveHost, viewerHost } from './live-screen/live-host'
 import { liveScreen } from './live-screen/live-routes'
 import { socketSessions } from './live-screen/socket-session'
 import { TaskStore } from './log/task-store'
+import { containerUp, runCommand } from './neo-container'
 import { buildPage, type PageFile } from './page'
 import { handleMcp, type McpProxyDeps } from './proxy/mcp-proxy'
 import { ClientNames } from './tasks/client-names'
@@ -52,12 +53,19 @@ export async function startViewer(
   const live = liveScreen(seams.liveHost ?? viewerHost)
   // The proxy needs the bound port (for the process lookup) before the first request.
   let proxy: McpProxyDeps | null = null
-  const info: ViewerInfo = {
+  const info: Omit<ViewerInfo, 'container'> = {
     mcpUrl: '',
     upstreamUrl: config.upstream.href,
     dataDir: config.dataDir,
     startedAt: new Date(now()).toISOString(),
   }
+  const container = config.container ?? null
+  const currentInfo = async (): Promise<ViewerInfo> => ({
+    ...info,
+    container: container
+      ? { ...container, up: await containerUp(runCommand) }
+      : null,
+  })
 
   const server = Bun.serve({
     hostname: '127.0.0.1',
@@ -66,7 +74,7 @@ export async function startViewer(
     idleTimeout: 0,
     routes: {
       ...pageRoutes(page),
-      ...apiRouteTable(store, info),
+      ...apiRouteTable(store, currentInfo),
       ...live.routes,
     },
     // Each upgraded socket carries its own session (the live screen's display relay).
