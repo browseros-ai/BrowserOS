@@ -812,6 +812,41 @@ fn bytes_cross_the_bridge_both_ways() -> Result<(), TestError> {
 }
 
 #[test]
+fn image_bytes_have_buffer_identity_and_header_reads_in_quickjs() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            const { image } = await __neo.invoke('test.echo', {
+              image: Buffer.from([9, 0x89, 0x50, 0x4e, 0x47, 8])
+            });
+            const header = image.subarray(1, 5);
+            return [Buffer.isBuffer(image), image instanceof Buffer,
+              header instanceof Buffer, header.readUInt32BE(), header.readUInt32LE(),
+              header.readInt32BE(),
+              header.readUInt16BE(), header.readUInt16LE(), header.readUInt8(),
+              header.equals(Buffer.from('89504e47', 'hex')), header.toString('base64')];"#;
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([
+                true,
+                true,
+                true,
+                0x8950_4e47_u32,
+                0x474e_5089_u32,
+                -1_991_225_785,
+                0x8950,
+                0x5089,
+                0x89,
+                true,
+                "iVBORw=="
+            ]),
+            "the bytes reviver supplies the run's Buffer, with unsigned reads on its view"
+        );
+        Ok(())
+    })
+}
+
+#[test]
 fn input_the_codec_refuses_is_refused_and_recorded_by_the_door() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;

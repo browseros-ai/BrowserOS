@@ -468,6 +468,60 @@ export class Buffer extends Uint8Array {
     return this.every((byte, index) => byte === other[index])
   }
 
+  /** Unsigned image-header fields: PNG uses big endian, RIFF/WebP uses little endian. */
+  readUInt8(offset: unknown = 0): number {
+    return this.#readUnsigned(offset, 1, 'be')
+  }
+
+  readUInt16BE(offset: unknown = 0): number {
+    return this.#readUnsigned(offset, 2, 'be')
+  }
+
+  readUInt16LE(offset: unknown = 0): number {
+    return this.#readUnsigned(offset, 2, 'le')
+  }
+
+  readUInt32BE(offset: unknown = 0): number {
+    return this.#readUnsigned(offset, 4, 'be')
+  }
+
+  readUInt32LE(offset: unknown = 0): number {
+    return this.#readUnsigned(offset, 4, 'le')
+  }
+
+  /** PNG compares its CRC as a signed 32-bit value. */
+  readInt32BE(offset: unknown = 0): number {
+    return this.readUInt32BE(offset) | 0
+  }
+
+  #readUnsigned(offset: unknown, width: number, order: 'be' | 'le'): number {
+    if (typeof offset !== 'number')
+      throw nodeError(
+        TypeError,
+        'ERR_INVALID_ARG_TYPE',
+        `The "offset" argument must be of type number. ${received(offset)}`,
+      )
+    if (Math.floor(offset) !== offset)
+      throw outOfRange('offset', 'an integer', offset)
+    const last = this.length - width
+    if (last < 0)
+      throw nodeError(
+        RangeError,
+        'ERR_BUFFER_OUT_OF_BOUNDS',
+        'Attempt to access memory outside buffer bounds',
+      )
+    if (offset < 0 || offset > last)
+      throw outOfRange('offset', `>= 0 and <= ${last}`, offset)
+    // Index this view, not its ArrayBuffer: a sliced screenshot may start after byte zero.
+    // Multiplication keeps high-bit 32-bit fields unsigned instead of JS bitwise signed ints.
+    let value = 0
+    for (let index = 0; index < width; index++) {
+      const at = order === 'be' ? offset + index : offset + width - index - 1
+      value = value * 256 + (this[at] ?? 0)
+    }
+    return value
+  }
+
   /** Node's `slice`, which shares memory as `subarray` does, unlike Uint8Array's copy. */
   override slice(start?: number, end?: number): Buffer {
     return this.subarray(start, end)
