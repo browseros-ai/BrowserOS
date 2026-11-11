@@ -7,8 +7,8 @@ use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
     OperationKind, OperationStarted, Outcome, RedactionLimits, Redactor, RetentionPolicy, RunEnded,
     RunId, RunStarted, RunStatus, SecretSet, SecretSetConfig, Shot, ShotJob, ShotJobs, ShotRead,
-    ShotState, TargetSensitivity, TraceRecordEvent, TraceSink, TraceStore, WriterConfig,
-    screenshot_queue, spawn_writer,
+    ShotState, TraceRecordEvent, TraceSink, TraceStore, WriterConfig, screenshot_queue,
+    spawn_writer,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -92,7 +92,6 @@ fn operation(
         effect,
         tab: tab.map(TabId),
         args: serde_json::Value::Null,
-        policy: Arc::default(),
         also_mask: None,
         at: at(i64::from(id.seq)),
     });
@@ -115,7 +114,6 @@ fn operation(
             operation_id: None,
         }),
         page_after: None,
-        target: TargetSensitivity::Ordinary,
         also_mask: None,
         at: at(i64::from(id.seq) + 1),
     });

@@ -6,7 +6,7 @@ use std::thread;
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, PageState, RedactionPolicy, TargetSensitivity, TraceSink,
+    Outcome, PageState, TraceSink,
 };
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -52,8 +52,7 @@ pub(super) struct OpStart {
     /// writer clips it.
     pub(super) name: String,
     pub(super) spec: MethodSpec,
-    pub(super) redaction: Arc<RedactionPolicy>,
-    /// The raw input. The trace writer redacts it.
+    /// The raw input. The trace writer masks and bounds it at the operation's end.
     pub(super) args: Value,
     /// The tab the call named, before the door checks it.
     pub(super) tab: StartTab,
@@ -68,9 +67,8 @@ struct Unsent {
     parent: Option<OperationId>,
     name: String,
     effect: Effect,
-    /// The raw input. The trace writer redacts it.
+    /// The raw input. The trace writer masks and bounds it at the operation's end.
     args: Value,
-    policy: Arc<RedactionPolicy>,
     /// When the door opened the op, however late its record is sent.
     at: EpochMillis,
 }
@@ -196,7 +194,6 @@ impl OperationGuard {
             state,
             name,
             spec,
-            redaction,
             args,
             tab,
             site,
@@ -208,7 +205,6 @@ impl OperationGuard {
             name,
             effect: spec.effect,
             args,
-            policy: redaction,
             at: EpochMillis::now(),
         };
         let unsent = match tab {
@@ -316,11 +312,6 @@ fn settle(
         result,
         error,
         page_after,
-        target: if state.is_sensitive() {
-            TargetSensitivity::Sensitive
-        } else {
-            TargetSensitivity::Ordinary
-        },
         also_mask: None,
         at: EpochMillis::now(),
     });
@@ -373,7 +364,6 @@ impl Unsent {
             name,
             effect,
             args,
-            policy,
             at,
         } = self;
         OperationStarted {
@@ -384,7 +374,6 @@ impl Unsent {
             effect,
             tab,
             args,
-            policy,
             also_mask: None,
             at,
         }

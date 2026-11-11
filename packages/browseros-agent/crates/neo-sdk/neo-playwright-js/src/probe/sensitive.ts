@@ -45,9 +45,9 @@ function isClawSeal(value: unknown): value is ClawSeal {
  * The seal's kind of the field an edit of `element` changes: the element, or the control its
  * label names (upstream's `retarget(element, 'follow-label')`, which fill, selectOptions,
  * setInputFiles and the `editable` state go through). Keys pressed on a label land there too,
- * because Chromium hands a label's focus to its control. Rust marks the op's target sensitive
- * on this answer before it logs or sends the value, so classifying the label itself would
- * print a password typed through it into the call log and the trace.
+ * because Chromium hands a label's focus to its control. Rust uses this answer to mask the
+ * value in the call log, so classifying the label itself would print a password typed through
+ * it into the log.
  */
 export function editedKind(
   world: World,

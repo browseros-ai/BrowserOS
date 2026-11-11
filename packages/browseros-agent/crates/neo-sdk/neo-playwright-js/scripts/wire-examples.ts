@@ -94,6 +94,7 @@ const EVERY_OP = `
   await page.goto('https://a.example/'); await page.reload(); await page.goBack(); await page.goForward()
   const pay = page.frame('pay')
   await pay.goto('https://pay.example/'); await pay.waitForLoadState('domcontentloaded'); await pay.locator('#card').count()
+  await page.waitForNavigation(); await pay.waitForNavigation({ url: '**/pay' });
   await page.waitForURL('**/a'); await page.waitForLoadState(); await page.title(); await page.content()
   await page.setContent('<p>hi</p>'); await page.opener(); await page.evaluate(() => 1)
   await l.evaluate((e) => e.id); await l.evaluateAll((es) => es.length); await page.waitForFunction(() => true)
@@ -102,6 +103,9 @@ const EVERY_OP = `
   await page.screenshot(); await l.screenshot(); await page.pdf()
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})
+  const chooserListener = () => {}
+  page.on('filechooser', chooserListener)
+  page.off('filechooser', chooserListener)
   const dialog = await page.waitForEvent('dialog'); await dialog.accept(); await dialog.dismiss()
   const download = await page.waitForEvent('download'); await download.path(); await download.saveAs('/out/f.csv')
   await tab.close()

@@ -6,7 +6,7 @@
 //!    `target.page` ─ the door resolves it to one tab and runs its rules on that tab
 //!      ─ PlaywrightOp::call: the resolved page written back into the input
 //!          ─ Playwright::invoke(OpCtxEnv, op, json), raced with the run's stop
-//!              ├─ recheck, recheck_reach, mark_sent, mark_sensitive_target, note ─▶ OpCtx
+//!              ├─ recheck, recheck_reach, mark_sent, note ─▶ OpCtx
 //!              └─ PlaywrightError ─ leaf_error ─▶ LeafError: owner, code, timeout, answer
 //!          ─ opened, navigated and closed pages reported to the door
 //!          ─ an event pull's events: each one's tabs through the rules (event_release.rs)
@@ -410,7 +410,12 @@ impl PageEffect {
         match name {
             "context.newPage" => Self::Opens,
             "page.opener" => Self::Links,
-            "page.goto" | "page.goBack" | "page.goForward" => Self::Navigates,
+            // A successful navigation wait observes a URL change started by another op or
+            // the page. Refresh core's cache too, so a later ordinary reply cannot restore
+            // the pre-navigation URL over the wait's fresh frame facts.
+            "page.goto" | "page.goBack" | "page.goForward" | "page.waitForNavigation" => {
+                Self::Navigates
+            }
             "page.reload" => Self::Reloads,
             "page.close" => Self::Closes,
             _ => Self::Untracked,
@@ -546,10 +551,6 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
 
     fn mark_sent(&self) {
         self.op.mark_sent();
-    }
-
-    fn mark_sensitive_target(&self) {
-        self.op.mark_sensitive_target();
     }
 
     fn note(&self, line: String) {

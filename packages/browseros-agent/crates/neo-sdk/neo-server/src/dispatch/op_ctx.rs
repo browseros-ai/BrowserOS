@@ -3,7 +3,6 @@
 use std::future::{self, Future};
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_cdp::CdpError;
@@ -90,7 +89,6 @@ pub(super) struct OpState {
     /// When the op, or one of its children, marked itself sent. Write-once: the first mark
     /// wins, and nothing unsets it.
     sent_at: OnceLock<EpochMillis>,
-    sensitive: AtomicBool,
     /// The latest `recheck` or `recheck_reach` refusal, until a later check clears it
     /// ([`StandingRefusal`]). However the method then ends, a value included, this is the op's
     /// error, so a refusal survives a crate's own error mapping (sdk-playwright returns its own
@@ -301,12 +299,6 @@ impl<M> OpCtx<M> {
         self.core.state.mark_sent(EpochMillis::now());
     }
 
-    /// The target turned out to be a password, card or one-time-code field: the trace redacts
-    /// the method's sensitive input fields.
-    pub(crate) fn mark_sensitive_target(&self) {
-        self.core.state.sensitive.store(true, Ordering::Relaxed);
-    }
-
     /// One call-log line for the op's record. The first lines are kept; a runaway method
     /// cannot grow its op without bound.
     pub(crate) fn note(&self, line: String) {
@@ -497,7 +489,6 @@ impl OpState {
             parent,
             abort,
             sent_at: OnceLock::new(),
-            sensitive: AtomicBool::new(false),
             refusal: Mutex::new(None),
             notes: Mutex::new(Vec::new()),
             reports: Mutex::new(Vec::new()),
@@ -522,10 +513,6 @@ impl OpState {
     /// When the op, or one of its children, marked itself sent.
     pub(super) fn sent_at(&self) -> Option<EpochMillis> {
         self.sent_at.get().copied()
-    }
-
-    pub(super) fn is_sensitive(&self) -> bool {
-        self.sensitive.load(Ordering::Relaxed)
     }
 
     /// The refusal standing as the op's error, if any.

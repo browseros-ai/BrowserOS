@@ -17,7 +17,8 @@ use crate::backoff::Backoff;
 use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{
-    Edit, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Rect, Retarget, ScrollPlan, Want,
+    Edit, ElementState, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Rect, Retarget,
+    ScrollPlan, Want,
 };
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
@@ -112,6 +113,15 @@ impl<'a> ElementRunner<'a> {
     /// the element has a box and holds still. Scrolling inside a frame scrolls every frame
     /// above it too, cross-site ones included (measured).
     pub(crate) async fn scroll_into_view(&self) -> Result<(), PlaywrightError> {
+        self.scroll(&[]).await
+    }
+
+    /// Screenshot handles must be visible as well as stable before their box is captured.
+    pub(crate) async fn scroll_for_screenshot(&self) -> Result<(), PlaywrightError> {
+        self.scroll(&[ElementState::Visible]).await
+    }
+
+    async fn scroll(&self, required_states: &[ElementState]) -> Result<(), PlaywrightError> {
         self.subject.log_waiting();
         let outer = Backoff::outer(self.scope.timeout());
         let mut matched = false;
@@ -146,7 +156,10 @@ impl<'a> ElementRunner<'a> {
                 }
                 self.scope
                     .log("  waiting for element to be stable".to_owned());
-                let (pin, rect) = match self.measure(&located, target.clone(), true).await? {
+                let (pin, rect) = match self
+                    .measure(&located, target.clone(), true, required_states)
+                    .await?
+                {
                     Measured::Rect(pin, rect) => (pin, rect),
                     Measured::Hidden => {
                         matched = true;
@@ -163,7 +176,10 @@ impl<'a> ElementRunner<'a> {
                 if self.scope.sleep(STABLE_GAP).await.is_err() {
                     return Err(timed_out(matched));
                 }
-                match self.measure(&located, target.clone(), false).await? {
+                match self
+                    .measure(&located, target.clone(), false, required_states)
+                    .await?
+                {
                     Measured::Rect(_, again) if again == rect => return Ok(()),
                     Measured::Rect(..) => {
                         self.scope.log("  element is not stable".to_owned());
@@ -179,18 +195,20 @@ impl<'a> ElementRunner<'a> {
         Err(timed_out(matched))
     }
 
-    /// One `act` with no states: the element's rect after an optional scroll.
+    /// One measurement after optional scrolling. Screenshot callers additionally require
+    /// visibility; ordinary scrollIntoViewIfNeeded waits only for layout and stability.
     async fn measure(
         &self,
         located: &Resolved,
         target: ProbeTarget,
         scroll: bool,
+        required_states: &[ElementState],
     ) -> Result<Measured, PlaywrightError> {
         let request = ProbeRequest::Act {
             target,
             strictness: self.strictness,
             retarget: Retarget::None,
-            states: Vec::new(),
+            states: required_states.to_vec(),
             frame_visible: located.frame_visible(),
             scroll: if scroll {
                 ScrollPlan::IfNeeded

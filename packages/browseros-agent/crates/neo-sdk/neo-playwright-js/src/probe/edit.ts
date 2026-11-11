@@ -80,7 +80,12 @@ function selectSensitiveText(world: World, element: Element): void {
 }
 
 export function edit(world: World, request: EditRequest): ReplyTo<'edit'> {
-  const element = world.pins.live(request.pin)
+  // File selection operates on the held input even when its chooser came from a
+  // detached node. Other edits retain their actionability requirement.
+  const element =
+    request.edit.kind === 'setFiles'
+      ? world.pins.held(request.pin)
+      : world.pins.live(request.pin)
   if (!element) return { kind: 'detached' }
   const edited = apply(world, request.edit, element)
   return edited === 'error:notconnected' ? { kind: 'detached' } : edited

@@ -38,6 +38,7 @@ mod events;
 mod expect;
 mod input;
 mod listed_enum;
+mod object_group;
 mod op;
 mod op_env;
 mod op_input;

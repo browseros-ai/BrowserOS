@@ -20,6 +20,7 @@
 //!                              frame's site (site_sweep, which every read and snapshot uses)
 //!  page.setContent ─ document_op: the same gateway for a write from the sealed world, a new
 //!                    seq and the load state, because the HTML's scripts run in the main world
+//!  page.waitForNavigation ─ journal cursor ─ URL match ─ DocumentWatch lifecycle ─ timing entry
 //!  page.waitForURL ─ wait_for_url: each navigation matched in the sealed world, the load state
 //! ```
 
@@ -40,11 +41,13 @@ mod page_state;
 mod page_value;
 mod pdf;
 mod screenshot;
+mod screenshot_geometry;
 mod screenshot_preparation;
 pub(crate) mod site_sweep;
 mod sweep_scope;
+mod wait_for_navigation;
 mod wait_for_url;
-mod world_call;
+pub(crate) mod world_call;
 
 pub(crate) use context_op::ContextOp;
 pub(crate) use evaluate_guard::FRAME_BUDGET;

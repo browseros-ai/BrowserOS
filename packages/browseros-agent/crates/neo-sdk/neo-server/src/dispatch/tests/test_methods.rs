@@ -585,12 +585,9 @@ struct FillInput {
     value: String,
     #[expect(dead_code, reason = "only the trace reads it, from the raw input")]
     secret: String,
-    /// Whether the field turned out to be a password, card or code field.
-    sensitive: bool,
 }
 
-/// Types into a field, as a fill would: `secret` is always redacted in the trace, `value` only
-/// when the field turns out sensitive.
+/// Types into a field; the trace receives the full input independently of its field names.
 struct Fill;
 
 impl Method for Fill {
@@ -598,11 +595,7 @@ impl Method for Fill {
     type Output = Value;
 
     fn spec(&self) -> MethodSpec {
-        MethodSpec {
-            secret_args: &["/secret"],
-            sensitive_args: &["/value"],
-            ..MethodSpec::new("test.fill", Effect::Write)
-        }
+        MethodSpec::new("test.fill", Effect::Write)
     }
 
     fn target(input: &FillInput) -> Option<&PageTarget> {
@@ -612,11 +605,8 @@ impl Method for Fill {
     fn call(
         &self,
         op: &OpCtx<Self>,
-        input: FillInput,
+        _input: FillInput,
     ) -> impl Future<Output = Result<Value, LeafError>> + Send {
-        if input.sensitive {
-            op.mark_sensitive_target();
-        }
         future::ready(send(op).map(|()| json!({})))
     }
 }

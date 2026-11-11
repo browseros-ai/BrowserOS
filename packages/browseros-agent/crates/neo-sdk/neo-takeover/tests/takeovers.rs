@@ -1,6 +1,6 @@
 //! `Takeovers` as the service's routes use them: real locks, displays and fits over the
-//! fit tests' fake Chromium and a fake Xvnc, and a real `Privacy` over a private-flag store the
-//! test can hold or fail.
+//! fit tests' fake Chromium and a fake Xvnc. Browser gates hold a fit or restore while tests
+//! check the agent's lock and the handoff order.
 //!
 //! The trace store reads through sqlx, whose pool does not run under paused time, so these tests
 //! use real time. Those that wait out a TTL or the give-back's budget pause the clock once nothing
@@ -18,8 +18,7 @@ use browser::{Call, FakeBrowser};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
-use neo_takeover::testing::{FakeXvnc, NoStamps};
+use neo_takeover::testing::FakeXvnc;
 use neo_takeover::{
     Admitted, BrowserTabs, DisplayEnd, DisplayRequest, Displays, FitState, Fits, Follow, Front,
     FrontError, LockEnd, LockTarget, Locks, OwnerHasControl, OwnerHasScreen, PartError, Reads,
@@ -27,16 +26,15 @@ use neo_takeover::{
     Takeovers,
 };
 use neo_trace::{
-    Effect, EpochMillis, OperationId, OperationKind, OperationStarted, Privacy, PrivacyRecord,
-    PrivacyStore, PrivateReason, RedactionLimits, Redactor, RunId, RunStarted, SecretSet,
-    SecretSetConfig, TaskId, TraceError, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    Effect, EpochMillis, OperationId, OperationKind, OperationStarted, RedactionLimits, Redactor,
+    RunId, RunStarted, SecretSet, SecretSetConfig, TaskId, TraceSink, TraceStore, WriterConfig,
+    spawn_writer,
 };
 use serde_json::json;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, timeout};
 
@@ -75,68 +73,10 @@ const RESTORE: [&str; 4] = [
     "Emulation.setDeviceMetricsOverride",
 ];
 
-/// Private flags as the trace writer commits them, kept in memory. A test can hold commits
-/// until it lets them through, or fail them.
-struct Flags {
-    committed: Mutex<Vec<TabId>>,
-    attempts: AtomicUsize,
-    fail: AtomicBool,
-    /// While true, every commit waits.
-    held: watch::Sender<bool>,
-}
-
-impl Flags {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            committed: Mutex::default(),
-            attempts: AtomicUsize::new(0),
-            fail: AtomicBool::new(false),
-            held: watch::channel(false).0,
-        })
-    }
-
-    fn committed(&self) -> Vec<TabId> {
-        self.committed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-}
-
-impl PrivacyStore for Flags {
-    fn persist_private(
-        &self,
-        tab: TabId,
-        _record: PrivacyRecord,
-    ) -> BoxFuture<'_, Result<(), TraceError>> {
-        Box::pin(async move {
-            self.attempts.fetch_add(1, Ordering::SeqCst);
-            let mut held = self.held.subscribe();
-            held.wait_for(|held| !*held)
-                .await
-                .map_err(|_| TraceError::Closed)?;
-            if self.fail.load(Ordering::SeqCst) {
-                return Err(TraceError::Closed);
-            }
-            self.committed
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(tab);
-            Ok(())
-        })
-    }
-
-    fn forget_private(&self, _tab: TabId) -> BoxFuture<'_, Result<(), TraceError>> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
 struct Harness {
     _dir: tempfile::TempDir,
     xvnc: Arc<FakeXvnc>,
     browser: Arc<FakeBrowser>,
-    flags: Arc<Flags>,
-    privacy: Arc<Privacy>,
     sink: TraceSink,
     locks: Arc<Locks>,
     fits: Arc<Fits>,
@@ -155,12 +95,6 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         WriterConfig::default(),
         None,
     );
-    let flags = Flags::new();
-    let privacy = Privacy::new(
-        Arc::clone(&secrets),
-        Arc::clone(&flags) as Arc<dyn PrivacyStore>,
-        HashMap::new(),
-    );
     let xvnc = Arc::new(FakeXvnc::start(HOME).await?);
     let browser = FakeBrowser::new(Arc::clone(&xvnc), tabs);
     let tabs = BrowserTabs::new(
@@ -168,18 +102,15 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         Arc::new(Viewports::default()),
     );
     let locks = Locks::new(store.clone(), sink.clone());
-    let fits = Fits::new(tabs.clone(), xvnc.xvnc(HOME), secrets);
+    let fits = Fits::new(tabs.clone(), xvnc.xvnc(HOME));
     let displays = Displays::new(
         xvnc.addr(),
         tabs.clone(),
-        Arc::clone(&privacy),
-        Arc::new(NoStamps),
         Arc::clone(&locks),
         sink.clone(),
         store,
     );
     let takeovers = Takeovers::new(
-        Arc::clone(&privacy),
         Arc::clone(&locks),
         Arc::clone(&fits),
         Arc::clone(&displays),
@@ -189,8 +120,6 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         _dir: dir,
         xvnc,
         browser,
-        flags,
-        privacy,
         sink,
         locks,
         fits,
@@ -251,7 +180,6 @@ impl Harness {
             effect: Effect::Write,
             tab: Some(TabId(tab)),
             args: json!({ "selector": "#next" }),
-            policy: Arc::default(),
             also_mask: None,
             at: EpochMillis::now(),
         });
@@ -400,33 +328,9 @@ fn released_for(takeover: &Takeover) -> Option<ReleaseReason> {
 }
 
 #[tokio::test]
-async fn the_tab_is_private_on_disk_before_the_agent_is_locked_out() -> TestResult {
+async fn a_takeover_locks_the_tab_and_fits_the_owners_viewer() -> TestResult {
     let h = harness(&[3, 4]).await?;
-    let request = request(Some(PHONE))?;
-    h.flags.held.send_replace(true);
-    let starting = tokio::spawn({
-        let takeovers = Arc::clone(&h.takeovers);
-        async move { takeovers.start(request).await }
-    });
-    eventually(|| h.flags.attempts.load(Ordering::SeqCst) == 1).await?;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(
-        h.privacy.is_private(TAB).is_some(),
-        "captures are refused from the moment the flag is set"
-    );
-    assert!(
-        !h.locks.is_locked(TAB),
-        "no lock while the flag is not on disk"
-    );
-    assert!(h.xvnc.resizes().is_empty(), "and no fit");
-
-    h.flags.held.send_replace(false);
-    let takeover = timeout(WITHIN, starting).await???;
-    assert_eq!(h.flags.committed(), [TAB]);
-    assert_eq!(
-        h.privacy.is_private(TAB).map(|record| record.reason),
-        Some(PrivateReason::Takeover)
-    );
+    let takeover = h.takeovers.start(request(Some(PHONE))?).await?;
     assert_eq!(takeover.state, TakeoverState::Active);
     assert_eq!(
         h.locks.check(LockTarget::Tab(TAB), Effect::Read),
@@ -449,24 +353,6 @@ async fn the_tab_is_private_on_disk_before_the_agent_is_locked_out() -> TestResu
 }
 
 #[tokio::test]
-async fn a_flag_that_is_not_committed_refuses_the_start_with_nothing_taken() -> TestResult {
-    let h = harness(&[3]).await?;
-    h.flags.fail.store(true, Ordering::SeqCst);
-    let refused = h.takeovers.start(request(Some(PHONE))?).await;
-    assert!(matches!(refused, Err(PartError::Privacy(_))), "{refused:?}");
-    assert!(!h.locks.is_locked(TAB));
-    assert!(h.views_admitted().await?);
-
-    assert!(h.xvnc.resizes().is_empty());
-
-    h.flags.fail.store(false, Ordering::SeqCst);
-    let started = h.takeovers.start(request(None)?).await?;
-    assert!(h.locks.is_locked(TAB), "a start after the store recovers");
-    assert_eq!(started.fit, None);
-    Ok(())
-}
-
-#[tokio::test]
 async fn a_failed_fit_gives_back_what_the_start_took() -> TestResult {
     let h = harness(&[3]).await?;
     h.xvnc.refuse_next(3);
@@ -475,10 +361,6 @@ async fn a_failed_fit_gives_back_what_the_start_took() -> TestResult {
     assert!(!h.locks.is_locked(TAB), "the lock is lifted");
     assert!(h.views_admitted().await?, "spectators are let back");
 
-    assert!(
-        h.privacy.is_private(TAB).is_some(),
-        "the tab stays private, which only over-protects it"
-    );
     assert_eq!(h.xvnc.size(), HOME);
     Ok(())
 }
@@ -567,18 +449,18 @@ async fn views_and_the_lock_stay_until_the_give_back_is_done() -> TestResult {
 #[tokio::test]
 async fn a_start_whose_caller_hangs_up_still_finishes() -> TestResult {
     let h = harness(&[3]).await?;
-    h.flags.held.send_replace(true);
+    h.browser.hold("Browser.getWindowForTarget");
     let hung_up = timeout(
         Duration::from_millis(100),
-        h.takeovers.start(request(None)?),
+        h.takeovers.start(request(Some(PHONE))?),
     )
     .await;
     assert!(hung_up.is_err(), "the caller stopped waiting");
-    h.flags.held.send_replace(false);
+    h.browser.let_go("Browser.getWindowForTarget");
     eventually(|| h.locks.is_locked(TAB)).await?;
 
     let retried = h.takeovers.start(request(None)?).await?;
-    assert_eq!(h.flags.attempts.load(Ordering::SeqCst), 1, "one start ran");
+    assert_eq!(h.xvnc.resizes().len(), 1, "the retry did not fit twice");
     assert_eq!(
         h.locks.check(LockTarget::Tab(TAB), Effect::Write),
         Err(OwnerHasControl { lock: retried.lock }),
@@ -789,7 +671,7 @@ async fn a_closed_tab_releases_its_takeover_without_the_steps_that_need_it() -> 
 async fn one_takeover_per_tab_and_one_give_back_per_takeover() -> TestResult {
     let h = harness(&[3]).await?;
     let (first, second) = tokio::join!(
-        h.takeovers.start(request(None)?),
+        h.takeovers.start(request(Some(PHONE))?),
         h.takeovers.start(request(Some(PHONE))?)
     );
     let (first, second) = (first?, second?);

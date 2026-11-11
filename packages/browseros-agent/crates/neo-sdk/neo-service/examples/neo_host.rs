@@ -67,8 +67,8 @@ use neo_takeover::{Front, FrontError, LockTarget, Locks, ScreenSize, Xvnc};
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, Privacy, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
-    SecretSet, SecretSetConfig, SecretSource, ShotRead, TargetSensitivity, TaskId, TraceSink,
-    TraceStore, WriterConfig, screenshot_queue, spawn_writer,
+    SecretSet, SecretSetConfig, SecretSource, ShotRead, TaskId, TraceSink, TraceStore,
+    WriterConfig, screenshot_queue, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::convert::Infallible;
@@ -495,7 +495,6 @@ impl SurfaceCalls {
             effect,
             tab: Some(tab),
             args: Value::Null,
-            policy: Arc::default(),
             also_mask: None,
             at: EpochMillis::now(),
         });
@@ -510,7 +509,6 @@ impl SurfaceCalls {
             result: None,
             error: None,
             page_after: None,
-            target: TargetSensitivity::Ordinary,
             also_mask: None,
             at: EpochMillis::now(),
         });
@@ -653,7 +651,6 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             effect: Effect::Write,
             tab: Some(tab),
             args: json!({"selector": "h1"}),
-            policy: Arc::default(),
             also_mask: None,
             at: EpochMillis::now(),
         });
@@ -669,7 +666,6 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
                 url: None,
                 title: None,
             }),
-            target: TargetSensitivity::Ordinary,
             also_mask: None,
             at: EpochMillis::now(),
         });
@@ -732,7 +728,6 @@ async fn record_fake_runs(sink: TraceSink) {
                 effect,
                 tab: Some(TabId(1)),
                 args: json!({"page": {"$neo": "page", "id": 1}}),
-                policy: Arc::default(),
                 also_mask: None,
                 at: EpochMillis::now(),
             });
@@ -749,7 +744,6 @@ async fn record_fake_runs(sink: TraceSink) {
                     url: Some("https://example.com/".into()),
                     title: Some("Example Domain".into()),
                 }),
-                target: TargetSensitivity::Ordinary,
                 also_mask: None,
                 at: EpochMillis::now(),
             });

@@ -599,17 +599,22 @@ impl SealedWorld {
         &self.global
     }
 
-    /// Runs rendering-only screenshot preparation in this held isolated world, returning no
-    /// page data. Keeping the CDP script gateway here prevents capture code from accidentally
-    /// evaluating in the page's main world or a recycled numeric execution context.
-    pub(crate) async fn render_for_screenshot(
+    /// Runs an internal screenshot rendering or geometry script in this held isolated world.
+    /// Screenshot code may read layout numbers here; agent-provided functions never enter this
+    /// gateway. The held global prevents a recycled numeric context from changing the world.
+    pub(crate) async fn call_for_screenshot(
         &self,
         script: &str,
         arguments: &Value,
-    ) -> Result<(), CoreError> {
+    ) -> Result<Value, CoreError> {
+        #[derive(Deserialize)]
+        struct ResultValue {
+            value: Option<Value>,
+        }
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Reply {
+            result: Option<ResultValue>,
             exception_details: Option<Value>,
         }
         let arguments: Vec<Value> = arguments
@@ -618,25 +623,17 @@ impl SealedWorld {
             .flatten()
             .map(|value| json!({ "value": value }))
             .collect();
-        let reply: Reply = self
-            .session
-            .send(
-                "Runtime.callFunctionOn",
-                json!({
-                    "objectId": self.global(),
-                    "functionDeclaration": script,
-                    "arguments": arguments,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                }),
-            )
-            .await?;
+        let reply: Reply = self.session.send("Runtime.callFunctionOn", json!({
+            "objectId": self.global(), "functionDeclaration": script, "arguments": arguments,
+            "returnByValue": true, "awaitPromise": true,
+        })).await?;
         if reply.exception_details.is_some() {
-            return Err(CoreError::PageScript(
-                "screenshot rendering failed".to_owned(),
-            ));
+            return Err(CoreError::PageScript("screenshot script failed".to_owned()));
         }
-        Ok(())
+        Ok(reply
+            .result
+            .and_then(|result| result.value)
+            .unwrap_or(Value::Null))
     }
 
     /// The context id `DOM.resolveNode` needs; see the field.

@@ -285,7 +285,14 @@ export function read(
   root: Node | undefined,
 ): ReplyTo<'read'> {
   const reader = readerFor(request, root)
-  const found = resolveTarget(world, request.target, request.strictness, root)
+  // File choosers may originate from an input that was never attached. Upstream's
+  // setInputFiles checks its type and properties directly, without requiring attachment.
+  const found =
+    request.read.kind === 'fileInput' &&
+    request.target === 'root' &&
+    root instanceof Element
+      ? { kind: 'one' as const, element: root }
+      : resolveTarget(world, request.target, request.strictness, root)
   if (found.kind !== 'one') return found
   const { value, from } = reader(world, found.element)
   // The seal guards each field's own getters, not an ancestor's text: a <div> around a

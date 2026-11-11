@@ -1,4 +1,4 @@
-//! The background task that turns CDP's target, dialog, console and download events into the
+//! The background task that turns CDP's target, navigation, dialog and console events into the
 //! event log's records. One per `Playwright`, and the log's only writer.
 //!
 //! - **Discovery.** On start, after a lag in the event stream and on every connection epoch
@@ -40,14 +40,14 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, MissedTickBehavior};
 
-use crate::events::PageEventKind;
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
 use crate::events::page_event::{
     ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened, DownloadStarted,
-    ExceptionParams, OpenedPage, PageError, PageEvent, WindowKind,
+    ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent, WindowKind,
 };
-use crate::world::{FrameAttachLog, FrameEvent};
+use crate::events::{PageEventKind, navigation_event};
+use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
 /// click that opened it (build-design graft 7).
@@ -228,6 +228,13 @@ struct NavigatedFrame {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct FileChooserParams {
+    frame_id: FrameId,
+    backend_node_id: Option<BackendNodeId>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DownloadParams {
     frame_id: String,
     guid: String,
@@ -385,6 +392,14 @@ impl Watcher {
             session_id,
         } = event;
         match method.as_str() {
+            "Page.frameNavigated" | "Page.navigatedWithinDocument" | "Page.frameDetached" => {
+                if let Some(session) = &session_id {
+                    self.frame_lifecycle(&method, session, &params).await;
+                }
+                if let Some(navigation) = navigation_event::parse(&method, params) {
+                    self.writer.record(navigation);
+                }
+            }
             "Target.targetCreated" => {
                 if let Some(TargetEvent { target_info }) = parse(params) {
                     self.created(target_info);
@@ -414,37 +429,31 @@ impl Watcher {
                 }
             }
             "Page.frameAttached" => {
-                if let (Some(session), Some(FrameAttached { frame_id })) =
-                    (session_id, parse(params))
-                {
-                    self.frame_event(&session, FrameEvent::Attached(FrameId(frame_id)))
-                        .await;
-                }
-            }
-            "Page.frameDetached" => {
-                if let (Some(session), Some(detached)) =
-                    (session_id, parse::<FrameDetached>(params))
-                    && detached.reason != "swap"
-                {
-                    let removed = FrameEvent::Removed(FrameId(detached.frame_id));
-                    self.frame_event(&session, removed).await;
-                }
-            }
-            "Page.frameNavigated" => {
-                if let (Some(session), Some(FrameNavigated { frame })) = (session_id, parse(params))
-                    && let Some(tab) = self.target_of(&session).await
-                    // A tab's main frame id is its target id; a child's commit keeps its number.
-                    && frame.id == tab.0
-                {
-                    // Upstream's frame URL: `framePayload.url + (framePayload.urlFragment || '')`.
-                    let url = format!("{}{}", frame.url, frame.url_fragment.unwrap_or_default());
-                    self.attach_log
-                        .record(&tab, FrameEvent::MainCommitted { url });
+                if let Some(session) = &session_id {
+                    self.frame_lifecycle(&method, session, &params).await;
                 }
             }
             "Page.javascriptDialogOpening" => {
                 if let (Some(session), Some(dialog)) = (session_id, parse(params)) {
                     self.dialog_opened(session, dialog).await;
+                }
+            }
+            "Page.fileChooserOpened" => {
+                // Core owns interception on agent tabs and their remote descendants. Keep
+                // every chooser in the bounded log: a wait may be admitted after its click,
+                // but its synchronous `since` stamp still predates this event.
+                if let Some(session) = session_id
+                    && let Some(target) = self.target_of(&session).await
+                    && let Some(params) = parse::<FileChooserParams>(params)
+                    && let Some(node) = params.backend_node_id
+                {
+                    self.writer
+                        .record(PageEvent::FileChooser(FileChooserOpened {
+                            target,
+                            session,
+                            frame: params.frame_id,
+                            node,
+                        }));
                 }
             }
             "Page.javascriptDialogClosed" => {
@@ -612,6 +621,40 @@ impl Watcher {
         self.sessions
             .insert(session.clone(), info.target_id.clone());
         Some(info.target_id)
+    }
+
+    /// The frame log's part of a frame event: an attached or removed child frame, or the main
+    /// frame's commit. Same-document navigations and process swaps change no number.
+    async fn frame_lifecycle(&mut self, method: &str, session: &SessionId, params: &Value) {
+        match method {
+            "Page.frameAttached" => {
+                if let Some(FrameAttached { frame_id }) = parse(params.clone()) {
+                    self.frame_event(session, FrameEvent::Attached(FrameId(frame_id)))
+                        .await;
+                }
+            }
+            "Page.frameDetached" => {
+                if let Some(detached) = parse::<FrameDetached>(params.clone())
+                    && detached.reason != "swap"
+                {
+                    let removed = FrameEvent::Removed(FrameId(detached.frame_id));
+                    self.frame_event(session, removed).await;
+                }
+            }
+            "Page.frameNavigated" => {
+                if let Some(FrameNavigated { frame }) = parse(params.clone())
+                    && let Some(tab) = self.target_of(session).await
+                    // A tab's main frame id is its target id; a child's commit keeps its number.
+                    && frame.id == tab.0
+                {
+                    // Upstream's frame URL: `framePayload.url + (framePayload.urlFragment || '')`.
+                    let url = format!("{}{}", frame.url, frame.url_fragment.unwrap_or_default());
+                    self.attach_log
+                        .record(&tab, FrameEvent::MainCommitted { url });
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Logs `event` for the tab `session` belongs to.

@@ -24,6 +24,7 @@ import {
   type EvaluateOptions,
   pageCall,
 } from './evaluation'
+import { EventDeadline } from './event-deadline'
 import { checkReported, isReported } from './events'
 import {
   type ClickOptions,
@@ -40,6 +41,7 @@ import {
   type TextMatch,
   type UrlMatcher,
   type WaitForFunctionOptions,
+  type WaitForNavigationOptions,
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
@@ -119,6 +121,16 @@ export class Page extends EventEmitter {
    * script ran an op on it. A listed tab the script never touched keeps the tree it had.
    */
   _working = false
+  /**
+   * Navigation ops (goto, reload, goBack, goForward) in flight on this page. While Chromium has
+   * not answered a `Page.navigate` (or history or reload command) for a tab, it holds every
+   * command bound for that tab's renderer, from any session, until the navigation commits or
+   * fails (measured: `Page.getFrameTree` and `Runtime.evaluate` both wait). Upstream's
+   * `waitForTimeout` never reads the page, so its frame refresh skips a page with one in flight
+   * rather than hold the script's sleep until the page answers, which deadlocks a script that
+   * releases the navigation once it has slept. The navigation's own reply refreshes the tree.
+   */
+  _navigationsInFlight = 0
   readonly #childFrames = new Map<string, Frame>()
 
   constructor(context: BrowserContext, tab: number | null, url?: string) {
@@ -568,6 +580,16 @@ export class Page extends EventEmitter {
     )
   }
 
+  waitForNavigation(
+    options?: WaitForNavigationOptions,
+  ): Promise<Response | null> {
+    return this._waitForNavigation(
+      'page.waitForNavigation',
+      this._mainFrame,
+      options,
+    )
+  }
+
   waitForURL(
     url: UrlMatcher,
     options?: TimeoutOption & { waitUntil?: LoadState },
@@ -782,6 +804,16 @@ export class Page extends EventEmitter {
     if (value instanceof ElementHandle) return value
     const brand = elementBrand(value)
     return brand ? new ElementHandle(this, brand) : null
+  }
+
+  /** Runs a navigation op, counted in `_navigationsInFlight` from the call until it settles. */
+  async _navigating<T>(work: () => Promise<T>): Promise<T> {
+    this._navigationsInFlight++
+    try {
+      return await work()
+    } finally {
+      this._navigationsInFlight--
+    }
   }
 
   /** Applies what a navigation or wait returned; the frame tree is fetched if it was not. */
@@ -1045,19 +1077,114 @@ export class Page extends EventEmitter {
     }
   }
 
+  /**
+   * Keep a single call-time fence and journal cursor across predicate checks. A predicate
+   * runs in the agent realm; Rust retains later events while it runs, including synchronous
+   * pushState bursts. Unmatched URLs wait only for commit, never for a stalled load.
+   */
+  async _waitForNavigation(
+    api: string,
+    frame: Frame,
+    options: WaitForNavigationOptions = {},
+  ): Promise<Response | null> {
+    const signal = signalOf(api, options)
+    return await untilAborted(
+      signal,
+      () => abortedError(api, signal as SignalLike),
+      () => this.#waitForNavigation(api, frame, options, signal),
+    )
+  }
+
+  /** The journal cursor and deadline survive re-waits and share the call's abort signal. */
+  async #waitForNavigation(
+    api: string,
+    frame: Frame,
+    options: WaitForNavigationOptions,
+    signal: SignalLike | undefined,
+  ): Promise<Response | null> {
+    const since = Date.now()
+    let after = this.#liveHead
+    const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
+    const timeout = frame._navigationTimeout(options)
+    const matcher = options.url
+    const predicate = typeof matcher === 'function' ? matcher : undefined
+    const url =
+      typeof matcher === 'string'
+        ? { glob: matcher }
+        : matcher instanceof RegExp
+          ? { regexSource: matcher.source, regexFlags: matcher.flags }
+          : undefined
+    if (matcher !== undefined && !url && !predicate)
+      throw clientError(api, 'url: expected a string, a RegExp or a function')
+    const args = await frame._frameArgs(api)
+    const deadline = new EventDeadline(api, null, since, timeout)
+    const rethrow = (error: unknown): never => {
+      throw deadline.named(error)
+    }
+    for (;;) {
+      const { value: result, observed } = await deadline
+        .race(
+          invokeObserved(
+            'page.waitForNavigation',
+            frame._call(api, deadline.left()),
+            {
+              ...args,
+              since,
+              after,
+              ...(url ? { url } : {}),
+              waitUntil: predicate ? 'commit' : waitUntil,
+            },
+            undefined,
+            signal,
+          ),
+        )
+        .catch(rethrow)
+      const response = await deadline.race(
+        this._navigated(api, frame, result, observed),
+      )
+      if (!predicate) {
+        deadline.left()
+        return response
+      }
+      after = result.navigationSeq
+      let matched: unknown
+      try {
+        matched = await deadline.race(
+          predicate(URL.parse(result.url ?? '') ?? result.url),
+        )
+      } catch (error) {
+        throw prefixed(api, error)
+      }
+      if (matched) {
+        await deadline.race(
+          frame
+            ._waitForLoadState(api, waitUntil, {
+              timeout: deadline.left(),
+              signal,
+            })
+            .catch(rethrow),
+        )
+        deadline.left()
+        return response
+      }
+    }
+  }
+
   async #history(
     api: 'page.reload' | 'page.goBack' | 'page.goForward',
     options: NavigateOptions = {},
   ): Promise<Response | null> {
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
-    const { value: result, observed } = await invokeObserved(
-      api,
-      this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),
-      { page: await this._brand(api), waitUntil },
-      undefined,
-      signal,
-    )
-    return await this._navigated(api, this._mainFrame, result, observed)
+    return await this._navigating(async () => {
+      const { value: result, observed } = await invokeObserved(
+        api,
+        this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),
+        { page: await this._brand(api), waitUntil },
+        undefined,
+        signal,
+      )
+      return await this._navigated(api, this._mainFrame, result, observed)
+    })
   }
 }

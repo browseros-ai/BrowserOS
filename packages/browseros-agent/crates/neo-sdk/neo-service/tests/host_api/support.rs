@@ -21,8 +21,8 @@ use neo_takeover::testing::FakeXvnc;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, Privacy, PrivacyStore, RedactionLimits, Redactor, RequestId, RunEnded, RunId,
-    RunStarted, RunStatus, SecretSet, SecretSetConfig, TargetSensitivity, TaskId, TraceSink,
-    TraceStore, WriterConfig, screenshot_queue, spawn_writer,
+    RunStarted, RunStatus, SecretSet, SecretSetConfig, TaskId, TraceSink, TraceStore, WriterConfig,
+    screenshot_queue, spawn_writer,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -60,7 +60,6 @@ fn authenticated(service: &Service) -> Result<Router, BoxError> {
 
 pub(crate) struct Harness {
     pub(crate) dir: tempfile::TempDir,
-    pub(crate) store: TraceStore,
     pub(crate) sink: TraceSink,
     pub(crate) privacy: Arc<Privacy>,
     pub(crate) browser: Arc<ScriptedBrowser>,
@@ -201,7 +200,6 @@ async fn start(
     .await?;
     Ok(Harness {
         dir,
-        store,
         sink,
         privacy,
         browser,
@@ -377,7 +375,6 @@ pub(crate) fn op_started(sink: &TraceSink, id: OperationId, op: Op<'_>) {
         effect: op.effect,
         tab: op.tab.map(TabId),
         args: serde_json::json!({"page": op.tab}),
-        policy: Arc::default(),
         also_mask: None,
         at: at(op.at),
     });
@@ -397,7 +394,6 @@ pub(crate) fn op_ended(
         result,
         error: None,
         page_after: None,
-        target: TargetSensitivity::Ordinary,
         also_mask: None,
         at: at(10_000),
     });

@@ -112,6 +112,11 @@ export type WaitForFunctionOptions = TimeoutOption &
   SignalOption & {
     polling?: number | 'raf'
   }
+export type WaitForNavigationOptions = TimeoutOption &
+  SignalOption & {
+    url?: UrlMatcher
+    waitUntil?: LoadState | 'networkidle0'
+  }
 /** One call's resolved timeout and the signal that aborts it (`Frame._wait`). */
 export type Wait = { timeout: number; signal?: SignalLike }
 export type UrlMatcher = string | RegExp | ((url: unknown) => unknown)
@@ -519,6 +524,16 @@ export class Frame extends EventEmitter {
 
   waitForLoadState(state?: LoadState, options?: TimeoutOption): Promise<void> {
     return this._waitForLoadState('frame.waitForLoadState', state, options)
+  }
+
+  waitForNavigation(
+    options?: WaitForNavigationOptions,
+  ): Promise<Response | null> {
+    return this._page._waitForNavigation(
+      'frame.waitForNavigation',
+      this,
+      options,
+    )
   }
 
   waitForURL(
@@ -1167,20 +1182,22 @@ export class Frame extends EventEmitter {
       throw clientError(api, `url: expected string, got ${typeof url}`)
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
-    const args = await this._frameArgs(api)
-    const { value: result, observed } = await invokeObserved(
-      'page.goto',
-      this._call(api, this._navigationTimeout(options)),
-      {
-        ...args,
-        url,
-        waitUntil,
-        ...pick(options, ['referer']),
-      },
-      undefined,
-      signal,
-    )
-    return await this._page._navigated(api, this, result, observed)
+    return await this._page._navigating(async () => {
+      const args = await this._frameArgs(api)
+      const { value: result, observed } = await invokeObserved(
+        'page.goto',
+        this._call(api, this._navigationTimeout(options)),
+        {
+          ...args,
+          url,
+          waitUntil,
+          ...pick(options, ['referer']),
+        },
+        undefined,
+        signal,
+      )
+      return await this._page._navigated(api, this, result, observed)
+    })
   }
 
   async _waitForLoadState(
@@ -1304,7 +1321,6 @@ export type ScreenshotOptionsInput = TimeoutOption &
     mask?: Locator[]
     maskColor?: string
     omitBackground?: boolean
-    scale?: 'css' | 'device'
   }
 
 /** Options that need capture features beyond temporary DOM preparation. */
@@ -1315,8 +1331,6 @@ export function refusedScreenshotOption(
     return 'Neo cannot mask elements in a screenshot; omit mask'
   if (options.omitBackground)
     return 'Neo cannot capture a transparent background; omit omitBackground'
-  if (options.scale === 'css')
-    return 'Neo captures at the device scale; omit scale or pass "device"'
   return undefined
 }
 

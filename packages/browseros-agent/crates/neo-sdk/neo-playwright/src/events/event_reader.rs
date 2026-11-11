@@ -9,10 +9,11 @@ use serde::Serialize;
 
 use crate::events::Subscription;
 use crate::events::event_hub::EventRecord;
+use crate::events::file_chooser::FileChooser;
 use crate::events::page_event::{DialogId, Location, OpenedPage, PageEvent, WindowKind};
 use crate::op_scope::OpScope;
 use crate::page::PageHandle;
-use crate::{ErrorCode, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// How many times a read lists the tabs again for a new tab the view does not list yet.
 const LISTING_RETRIES: u32 = 5;
@@ -62,6 +63,11 @@ enum Payload {
     Download {
         page: PageHandle,
         download: Download,
+    },
+    #[serde(rename = "filechooser")]
+    FileChooser {
+        page: PageHandle,
+        chooser: FileChooser,
     },
 }
 
@@ -177,6 +183,7 @@ impl Tabs {
 /// The script's event for `record`, which `subscription` receives, or `None` when the run's
 /// view does not admit the tab it names.
 pub(crate) async fn deliver(
+    pw: &Playwright,
     scope: &OpScope<'_>,
     subscription: &Subscription,
     record: &EventRecord,
@@ -255,13 +262,26 @@ pub(crate) async fn deliver(
                 suggested_filename: download.suggested_filename.clone(),
             },
         },
-        // The context receives only new tabs.
+        (PageEvent::FileChooser(opened), Some(page)) => {
+            // World installation is a large future; keep it off every event reader's stack.
+            let Some(chooser) = Box::pin(FileChooser::adopt(pw, scope, &page, opened)).await?
+            else {
+                return Ok(None);
+            };
+            Payload::FileChooser { page, chooser }
+        }
+        // Internal navigation facts are never public events; the context receives only new tabs.
         (
+            PageEvent::Navigation(_) | PageEvent::FrameDetached(_) | PageEvent::FrameSwapped(_),
+            _,
+        )
+        | (
             PageEvent::Closed(_)
             | PageEvent::Dialog(_)
             | PageEvent::Console(_)
             | PageEvent::PageError(_)
-            | PageEvent::Download(_),
+            | PageEvent::Download(_)
+            | PageEvent::FileChooser(_),
             None,
         ) => return Ok(None),
     };
@@ -298,11 +318,13 @@ async fn popup_tab(
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::sync::Arc;
 
     use browseros_core::{TabId, TargetId};
     use serde_json::json;
 
     use super::{ConsoleMessage, Delivered, NewTab, Payload, Tabs, WindowPopup};
+    use crate::Playwright;
     use crate::events::event_hub::EventRecord;
     use crate::events::page_event::{Location, PageEvent};
     use crate::events::{PageEventKind, Subscription};
@@ -310,7 +332,8 @@ mod tests {
     use crate::op_scope::OpScope;
     use crate::page::PageHandle;
     use crate::target::CallHeader;
-    use crate::test_env::{EnvCall, TestEnv};
+    use crate::test_env::{self, EnvCall, TestEnv};
+    use crate::test_support::RecordingHooks;
 
     /// Page `id` on tab `id * 100`.
     fn handle(id: u32) -> PageHandle {
@@ -391,6 +414,10 @@ mod tests {
             event: PageEvent::Closed(target.clone()),
         };
         let delivered = super::deliver(
+            &Playwright::new(
+                test_env::offline_session(),
+                Arc::new(RecordingHooks::default()),
+            ),
             &scope,
             &subscription,
             &record,

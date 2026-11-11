@@ -86,9 +86,8 @@ impl Op {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashSet};
-    use std::error::Error;
 
-    use neo_trace::{Effect, JsonPointer};
+    use neo_trace::Effect;
 
     use super::Op;
     use crate::action::ActionOp;
@@ -115,7 +114,7 @@ mod tests {
             None,
             "an unsupported method is no op"
         );
-        assert_eq!(names.len(), 75, "the v1 op list has 75 ops");
+        assert_eq!(names.len(), 77, "the v1 op list has 77 ops");
     }
 
     #[test]
@@ -135,48 +134,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tests_that_every_sensitive_argument_is_a_json_pointer() -> Result<(), Box<dyn Error>> {
-        for op in Op::all() {
-            let spec = op.spec();
-            for pointer in spec.sensitive_args {
-                JsonPointer::parse(pointer)?;
-            }
-            assert_eq!(
-                spec.redaction().sensitive.len(),
-                spec.sensitive_args.len(),
-                "{} must redact every argument it declares sensitive",
-                spec.name
-            );
-            assert!(
-                spec.redaction().secret.is_empty(),
-                "no Playwright argument is always secret"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_typed_text_is_redacted_for_a_sensitive_target() -> Result<(), Box<dyn Error>> {
-        for (name, pointer) in [
-            ("locator.fill", "/value"),
-            ("locator.pressSequentially", "/text"),
-            ("locator.press", "/key"),
-            ("keyboard.type", "/text"),
-            ("keyboard.insertText", "/text"),
-            ("keyboard.press", "/key"),
-            ("keyboard.down", "/key"),
-        ] {
-            let op = Op::from_name(name).ok_or(name)?;
-            assert_eq!(
-                op.spec().sensitive_args,
-                [pointer],
-                "{name} carries typed text"
-            );
-        }
-        Ok(())
-    }
-
     /// The audit of record: every op, with exactly what it reaches beyond its page's sealed
     /// world, and whether its gateway polices all of it before its first effect (`gated`). A
     /// host holds and polices ops by these declarations, so a new op without a row, or a
@@ -193,9 +150,13 @@ mod tests {
     /// `frame.$eval` and `elementHandle.evaluate` send `locator.evaluate`; `$$eval` sends
     /// `locator.evaluateAll`; the `frame` forms send the page ops.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one explicit audited capability row per operation keeps additions reviewable"
+    )]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
         use Capability::{Capture, HostFiles, MainWorld};
-        const AUDITED: [(&str, &[Capability], bool); 75] = [
+        const AUDITED: [(&str, &[Capability], bool); 77] = [
             ("locator.click", &[], true),
             ("locator.dblclick", &[], true),
             ("locator.hover", &[], true),
@@ -248,6 +209,7 @@ mod tests {
             ("page.reload", &[], true),
             ("page.goBack", &[], true),
             ("page.goForward", &[], true),
+            ("page.waitForNavigation", &[], true),
             ("page.waitForURL", &[], true),
             ("page.waitForLoadState", &[], true),
             ("page.title", &[], true),
@@ -267,15 +229,15 @@ mod tests {
             ("events.listen", &[], true),
             ("events.next", &[], true),
             ("events.wait", &[], true),
+            ("events.interceptFileChooser", &[], true),
             ("dialog.accept", &[], true),
             ("dialog.dismiss", &[], true),
             ("download.path", &[], true),
             ("download.saveAs", &[], true),
         ];
-        let mut audited: BTreeMap<&str, (&[Capability], bool)> = AUDITED
-            .into_iter()
-            .map(|(name, capabilities, gated)| (name, (capabilities, gated)))
-            .collect();
+        let mut audited = BTreeMap::from(
+            AUDITED.map(|(name, capabilities, gated)| (name, (capabilities, gated))),
+        );
         let mut differ = Vec::new();
         for spec in Op::all().map(Op::spec) {
             let row = audited.remove(spec.name);
