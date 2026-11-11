@@ -24,8 +24,8 @@ use neo_takeover::{
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, RedactionLimits, Redactor, RunId, RunStarted, SecretSet, SecretSetConfig,
-    TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    Outcome, RedactionLimits, Redactor, RunId, RunStarted, SecretSet, SecretSetConfig, TaskId,
+    TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::net::SocketAddr;
