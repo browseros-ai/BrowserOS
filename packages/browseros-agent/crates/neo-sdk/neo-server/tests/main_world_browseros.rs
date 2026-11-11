@@ -1,9 +1,7 @@
 //! The main-world scripts on a real BrowserOS, through MCP `run` (S4, S5): each API that runs the
 //! agent's script or HTML in the page behaves as Playwright 1.64.1's, the frame forms in a child
 //! frame included, an owner's lock that blocks reads withholds what a script that was already
-//! running read, of its own page or across an opener link, a popup's script is sent only while no
-//! one holds its opener, which the script can act on, and a lock taken on the opener while the
-//! popup's script runs is not settled.
+//! running read of its own page, and a popup takes a script at once from either end.
 //!
 //! ```text
 //!  page.evaluate, frame.evaluate ──────────────────────────────────▶ page.evaluate
@@ -11,8 +9,8 @@
 //!  locator.evaluate, elementHandle.evaluate, $eval (page, frame, handle) ─▶ locator.evaluate
 //!  locator.evaluateAll, $$eval (page, frame, handle) ──────────────▶ locator.evaluateAll
 //!  page.setContent, frame.setContent ──────────────────────────────▶ page.setContent
-//!    each op: the crate's evaluate guard sweeps, sends, sweeps, masks ─ the door: the rules again
-//!    as a read of the tab ─▶ the realm, and the trace the host reads back
+//!    each op: the crate's gateway rechecks the op's tab and sends ─ the door: the rules again as a
+//!    read of the tab ─▶ the realm, and the trace the host reads back
 //! ```
 //!
 //! Each case's script returns what it saw, as the realm saw it, and the test compares that with
@@ -24,17 +22,12 @@ pub mod browseros_rig;
 
 use std::error::Error;
 use std::future::Future;
-use std::net::Ipv4Addr;
 use std::pin::Pin;
 use std::time::Duration;
-use std::{fs, io};
 
 use browseros_rig::{CaptchaKey, HOST_TOKEN, PATIENCE, Rig, TestResult};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-use tokio::sync::watch;
 use tokio::time;
 
 /// The whole drive; see `e2e_browseros.rs` for why the budget sits inside the test.
@@ -91,23 +84,6 @@ async fn set_content_behaves_as_playwright_on_browseros() -> TestResult {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_owner_lock_that_blocks_reads_withholds_what_a_running_script_read() -> TestResult {
     on_browseros(|rig| Box::pin(lock_while_a_script_runs(rig))).await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_popups_script_runs_only_while_no_one_holds_its_opener() -> TestResult {
-    on_browseros(|rig| Box::pin(popup_reaching_its_opener(rig))).await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn an_owner_lock_on_an_opener_withholds_what_a_running_popup_script_read_there() -> TestResult
-{
-    on_browseros(|rig| Box::pin(lock_an_opener_while_its_popup_reads(rig))).await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "waits for sdk-traces' operation_reach recording and settle (op-reach)"]
-async fn an_owner_lock_on_an_opener_is_not_settled_while_its_popups_script_runs() -> TestResult {
-    on_browseros(|rig| Box::pin(settle_an_opener_while_its_popup_runs(rig))).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -398,8 +374,8 @@ const WRITTEN_SECRET: &str = "setc-pw-7Rb3";
 /// `page.setContent`, and `frame.setContent`, which sends it, on a child frame and on the main
 /// frame: each writes its own frame's document, the HTML's inline script runs once, and Neo
 /// refuses `networkidle`, which it cannot observe after a write. A password field the HTML writes
-/// reads masked through every read the realm has, a child frame's script reaching its parent
-/// included: the crate's seal and its evaluate guard mask it.
+/// reads masked through the sealed world (`content`, `inputValue`), and raw through a main-world
+/// script, as Playwright's does, a child frame's script reaching its parent included.
 async fn set_content(rig: &Rig) -> TestResult {
     let script = format!(
         r#"
@@ -438,9 +414,9 @@ async fn set_content(rig: &Rig) -> TestResult {
     )
     .await?;
     client.cancel().await?;
-    // The main world reads the field's value as `[private]`, and the sealed world shows it as
-    // `••••`, as an aria snapshot does.
-    let masked = json!(["[private]", false]);
+    // The main world reads the field's value as the page holds it, and the sealed world shows it
+    // as `••••`, as an aria snapshot does.
+    let raw = json!([WRITTEN_SECRET, true]);
     let sealed = json!(["••••", false]);
     assert_eq!(
         returned(&result)?,
@@ -454,15 +430,15 @@ async fn set_content(rig: &Rig) -> TestResult {
             "runs": 1,
             "content": [r#"<input type="password" id="pw" value="••••">"#, false],
             "inputValue": sealed,
-            "evaluate": masked,
-            "childFrame": masked,
+            "evaluate": raw,
+            "childFrame": raw,
             "mainFrame": "Again",
             "networkidle": threw(
                 "Error", "neo", "unsupported", "not_sent",
                 "page.setContent: waitUntil \"networkidle\" cannot be observed after setContent in Neo; use \"load\"",
             ),
         }),
-        "setContent as Playwright runs it, but for networkidle, with the written password masked"
+        "setContent as Playwright runs it, but for networkidle and the sealed world's reads"
     );
     set_content_recorded(&run_record(rig, &result).await?)
 }
@@ -498,8 +474,8 @@ fn set_content_recorded(recorded: &Value) -> TestResult {
 /// G2 (decision 35c) on the real surface. A script reads the page 15 s after it starts; the host
 /// takes the tab with reads blocked meanwhile, and the page changes under the owner. The script
 /// ran, so its op is `done`, but what it read is withheld, from the realm and from the record.
-/// The lock waits for the script's own mark in the page, [`READING`], since the op's record
-/// starts before its pre-send sweep: a lock taken in that sweep refuses the op unsent instead.
+/// The lock waits for the script's own mark in the page, [`READING`], since a lock taken before
+/// the send refuses the op unsent instead.
 async fn lock_while_a_script_runs(rig: &Rig) -> TestResult {
     // What the owner types into a field no seal masks, built from parts in the page, so that no
     // script or URL holds it whole.
@@ -579,305 +555,6 @@ async fn lock_while_a_script_runs(rig: &Rig) -> TestResult {
     Ok(())
 }
 
-/// The title the opener's script gives its popup, by which each later run finds the popup.
-const POPUP_TITLE: &str = "Reach popup";
-
-/// A popup's script reaches its opener through `window.opener`, so Neo runs its rules on the
-/// opener too before it sends a script to the popup (`OpEnv::recheck_reach`), as a write there.
-/// With no lock the script runs and returns Playwright's value. With the host holding the
-/// opener, even with reads allowed, it is refused unsent, and it never ran in the popup.
-async fn popup_reaching_its_opener(rig: &Rig) -> TestResult {
-    rig.until_ready().await?;
-    let client = rig.client().await?;
-    let meta = json!({ "taskId": "reach" });
-    let open = format!(
-        r"
-        await page.goto('data:text/html,' + encodeURIComponent('<title>Opener</title>'));
-        await page.evaluate((title) => {{ window.open('', 'reach').document.title = title; }}, {POPUP_TITLE:?});
-        return page;"
-    );
-    let opened = browseros_rig::run(&client, &open, &meta).await?;
-    let opener = returned(&opened)?
-        .get("tab")
-        .and_then(Value::as_i64)
-        .ok_or_else(|| format!("a page leaves a run as its brand, with its tab: {opened:?}"))?;
-    // Each run finds the popup among every tab the browser has, and reports what its script did.
-    let in_popup = |script: &str| {
-        format!(
-            r"
-            const tabs = context.pages();
-            const titles = await Promise.all(tabs.map((tab) => tab.title().catch(() => null)));
-            const popup = tabs[titles.indexOf({POPUP_TITLE:?})];
-            try {{
-              return {{ value: await popup.evaluate({script}) }};
-            }} catch (error) {{
-              return {{ threw: [error.owner, error.code, error.delivery], message: error.message }};
-            }}"
-        )
-    };
-    let free = browseros_rig::run(
-        &client,
-        &in_popup("() => [window.opener.document.title, 6 * 7]"),
-        &meta,
-    )
-    .await?;
-    let free = returned(&free)?;
-    assert_eq!(
-        free.get("value"),
-        Some(&json!(["Opener", 42])),
-        "with no one holding the opener, the popup's script runs and reaches it: {free}"
-    );
-
-    let take = json!({ "tabId": opener, "reads": "allow", "ttlSeconds": 600 });
-    let taken = rig
-        .host("POST", "/v1/locks", Some(HOST_TOKEN), Some(&take))
-        .await?;
-    assert_eq!(
-        taken.status,
-        200,
-        "the host locks the opener: {}",
-        taken.text()
-    );
-    let held =
-        browseros_rig::run(&client, &in_popup("() => { window.ran = true; }"), &meta).await?;
-    let held = returned(&held)?;
-    assert_eq!(
-        held.get("threw"),
-        Some(&json!(["host", "owner_has_control", "not_sent"])),
-        "the popup's script could act on the opener the owner holds, so Neo sent none of it: \
-         {held}"
-    );
-
-    let lock = taken.json()?;
-    let lock_id = lock
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or("a lock has an id")?;
-    let released = rig
-        .host(
-            "DELETE",
-            &format!("/v1/locks/{lock_id}"),
-            Some(HOST_TOKEN),
-            None,
-        )
-        .await?;
-    assert_eq!(released.status, 200, "{}", released.text());
-    let after = browseros_rig::run(&client, &in_popup("() => window.ran ?? false"), &meta).await?;
-    client.cancel().await?;
-    let after = returned(&after)?;
-    assert_eq!(
-        after.get("value"),
-        Some(&json!(false)),
-        "the refused script never ran in the popup: {after}"
-    );
-    Ok(())
-}
-
-/// What [`lock_an_opener_while_its_popup_reads`]'s opener shows. Its page builds it from parts, so
-/// that no script or URL holds it whole: only a script that read the opener can carry it to the
-/// realm or the trace store.
-const OPENERS_TEXT: &str = "opener-text-3Wd8";
-
-/// G2 across an opener link. A popup's script reads its opener through `window.opener` 15 s after
-/// it starts; the host takes the opener with reads blocked meanwhile, once the script marks the
-/// popup [`READING`]. No one holds the popup, the script's own tab, yet what it read of the opener
-/// is withheld: the op is `done`, refused `owner_has_control`, and neither the realm, the run's
-/// record nor the trace store's files get the opener's text.
-async fn lock_an_opener_while_its_popup_reads(rig: &Rig) -> TestResult {
-    rig.until_ready().await?;
-    let client = rig.client().await?;
-    let meta = json!({ "taskId": "reach-lock" });
-    let open = format!(
-        r"
-        await page.goto('data:text/html,' + encodeURIComponent(`<title>Opener</title><p id='text'></p>
-          <script>document.getElementById('text').textContent = ['opener', '-text', '-3Wd8'].join('')</script>`));
-        await page.evaluate((title) => {{ window.open('', 'reader').document.title = title; }}, {POPUP_TITLE:?});
-        return page;"
-    );
-    let opened = browseros_rig::run(&client, &open, &meta).await?;
-    let opener = returned(&opened)?
-        .get("tab")
-        .and_then(Value::as_i64)
-        .ok_or_else(|| format!("a page leaves a run as its brand, with its tab: {opened:?}"))?;
-    let reading = format!(
-        r"
-        const tabs = context.pages();
-        const titles = await Promise.all(tabs.map((tab) => tab.title().catch(() => null)));
-        const popup = tabs[titles.indexOf({POPUP_TITLE:?})];
-        try {{
-          const read = await popup.evaluate((reading) => {{
-            document.title = reading;
-            return new Promise((resolve) => setTimeout(() => resolve(window.opener.document.body.innerText), 15000));
-          }}, {READING:?});
-          return {{ released: read }};
-        }} catch (error) {{
-          return {{ withheld: [error.owner, error.code, error.delivery], message: error.message }};
-        }}"
-    );
-    let (lock, read) = tokio::join!(
-        lock_once_the_script_runs(rig, opener, "block"),
-        browseros_rig::run(&client, &reading, &meta),
-    );
-    let read = read?;
-    let lock = lock.map_err(|error| format!("{error}; the run returned {read:?}"))?;
-    client.cancel().await?;
-    let recorded = run_record(rig, &read).await?;
-    let script_tab = operations(&recorded)?
-        .iter()
-        .find(|row| row.get("name") == Some(&json!("page.evaluate")))
-        .and_then(|row| row.get("tabId"))
-        .and_then(Value::as_i64);
-    assert!(
-        script_tab.is_some_and(|tab| tab != opener),
-        "the script ran in the popup, a tab the host never took: {lock}\n{recorded}"
-    );
-    let read = returned(&read)?;
-    assert_eq!(
-        read.get("withheld"),
-        Some(&json!(["host", "owner_has_control", "done"])),
-        "the script ran, and what it read of the opener the host took is withheld: {read}\n\
-         {recorded}"
-    );
-    assert!(
-        !read.to_string().contains(OPENERS_TEXT),
-        "the realm gets none of the opener's text: {read}"
-    );
-    assert!(
-        !recorded.to_string().contains(OPENERS_TEXT),
-        "the run's record keeps none of it: {recorded}"
-    );
-    assert!(
-        !holds(&trace_files(rig)?, OPENERS_TEXT),
-        "trace.db and its WAL keep no copy of it"
-    );
-    let lock_id = lock
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("the lock answered with its id: {lock}"))?;
-    let released = rig
-        .host(
-            "DELETE",
-            &format!("/v1/locks/{lock_id}"),
-            Some(HOST_TOKEN),
-            None,
-        )
-        .await?;
-    assert_eq!(released.status, 200, "{}", released.text());
-    Ok(())
-}
-
-/// The settle across an opener link (sdk-traces' `OperationReached`). A takeover lock's `settled`
-/// says whether the agent's writes on the tab ended before the owner got it, and a popup's script
-/// can act on its opener through `window.opener`. So a lock the host takes on the opener while the
-/// popup's script runs finds a write in flight there and answers `settled: false`, though the
-/// script's own tab is the popup.
-///
-/// The script marks the popup [`READING`] once it runs, then waits on a fetch that the test's
-/// server answers only after the lock answered, so the op stays open past the lock's settle budget
-/// however loaded the machine is. Both pages are the server's, so the popup shares its opener's
-/// origin. The lock lets reads through, so the release rules pass and the script's answer, read
-/// from the opener, goes out. A lock taken once the op ended answers `settled: true`.
-async fn settle_an_opener_while_its_popup_runs(rig: &Rig) -> TestResult {
-    let (release, released) = watch::channel(false);
-    let origin = serve_opener(released).await?;
-    rig.until_ready().await?;
-    let client = rig.client().await?;
-    let meta = json!({ "taskId": "reach-settle" });
-    let open = format!(
-        r"
-        await page.goto({opener:?});
-        await page.evaluate((title) => {{ window.open('', 'settle').document.title = title; }}, {POPUP_TITLE:?});
-        return page;",
-        opener = format!("{origin}/opener"),
-    );
-    let opened = browseros_rig::run(&client, &open, &meta).await?;
-    let opener = returned(&opened)?
-        .get("tab")
-        .and_then(Value::as_i64)
-        .ok_or_else(|| format!("a page leaves a run as its brand, with its tab: {opened:?}"))?;
-    let running = format!(
-        r"
-        const tabs = context.pages();
-        const titles = await Promise.all(tabs.map((tab) => tab.title().catch(() => null)));
-        const popup = tabs[titles.indexOf({POPUP_TITLE:?})];
-        try {{
-          const read = await popup.evaluate(async ({{ reading, release }}) => {{
-            document.title = reading;
-            await fetch(release);
-            return window.opener.document.title;
-          }}, {{ reading: {READING:?}, release: {release_url:?} }});
-          return {{ released: read }};
-        }} catch (error) {{
-          return {{ threw: [error.owner, error.code, error.delivery], message: error.message }};
-        }}",
-        release_url = format!("{origin}/release"),
-    );
-    let (lock, ran) = tokio::join!(
-        async {
-            let lock = lock_once_the_script_runs(rig, opener, "allow").await;
-            // Whatever the lock answered, so that the run ends either way.
-            release.send_replace(true);
-            lock
-        },
-        browseros_rig::run(&client, &running, &meta),
-    );
-    let ran = ran?;
-    let lock = lock.map_err(|error| format!("{error}; the run returned {ran:?}"))?;
-    let recorded = run_record(rig, &ran).await?;
-    let ran = returned(&ran)?;
-    assert_eq!(
-        lock.get("settled"),
-        Some(&json!(false)),
-        "the popup's script could act on the opener when the host took it: {lock}\n{ran}\n\
-         {recorded}"
-    );
-    assert_eq!(
-        ran.get("released"),
-        Some(&json!("Opener")),
-        "the lock lets reads through, so what the script read of the opener goes out: {ran}"
-    );
-    release_lock(rig, &lock).await?;
-
-    let after = take_lock(rig, opener, "allow").await?;
-    client.cancel().await?;
-    assert_eq!(
-        after.get("settled"),
-        Some(&json!(true)),
-        "the popup's script ended before this lock: {after}\n{recorded}"
-    );
-    release_lock(rig, &after).await
-}
-
-/// A web server on loopback for [`settle_an_opener_while_its_popup_runs`]: `/release` answers only
-/// once `released` turns true, and every other path is a page titled `Opener`. Returns its origin;
-/// it serves until the test's runtime ends.
-async fn serve_opener(released: watch::Receiver<bool>) -> Result<String, Box<dyn Error>> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
-    let origin = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
-    tokio::spawn(async move {
-        while let Ok((mut stream, _)) = listener.accept().await {
-            let mut released = released.clone();
-            tokio::spawn(async move {
-                let mut request = [0_u8; 4096];
-                let read = stream.read(&mut request).await.unwrap_or(0);
-                let head = String::from_utf8_lossy(request.get(..read).unwrap_or_default());
-                let body = if head.split(' ').nth(1) == Some("/release") {
-                    let _ = released.wait_for(|&released| released).await;
-                    "released"
-                } else {
-                    "<title>Opener</title>"
-                };
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes()).await;
-            });
-        }
-    });
-    Ok(origin)
-}
-
 /// The page [`popup_scripts_at_once`] loads: each click on its button opens a popup linked to
 /// it, numbered in its title, and keeps the window `window.open` returned.
 const POPUP_OPENER: &str = r"
@@ -896,14 +573,9 @@ await page.goto('data:text/html,' + encodeURIComponent(`<title>Opener</title>
 ";
 
 /// The flow an agent writes for a popup: a click opens it, `waitForEvent('popup')` hands it over,
-/// and a script runs in it at once. Neo checks its rules on every tab a main-world script can
-/// reach before it sends one, and refuses a tab its browser link has not listed yet
-/// (`OpCtx::recheck_reach`), so a popup the link lists late would be refused here. Each script
-/// runs in a popup of its own, at once: in the popup after the event, in the opener after the
-/// event, and in the opener right after the click, with no wait for the event. The popup's
-/// script reaches only its opener, listed long before; the opener's reaches the new popup.
-/// Measured on BrowserOS at a load of 50 to 150: the link listed each popup within 45 ms of the
-/// browser announcing its target, and at least 24 ms before the door checked it.
+/// and a script runs in it at once. Each script runs in a popup of its own, at once: in the popup
+/// after the event, in the opener after the event, and in the opener right after the click, with
+/// no wait for the event.
 async fn popup_scripts_at_once(rig: &Rig) -> TestResult {
     let script = format!(
         r"{POPUP_OPENER}
@@ -949,29 +621,8 @@ async fn popup_scripts_at_once(rig: &Rig) -> TestResult {
     Ok(())
 }
 
-/// The bytes of the trace store's database and its WAL, as they are on disk now. SQLite drops the
-/// WAL when its last connection closes, so a missing one holds nothing.
-fn trace_files(rig: &Rig) -> Result<Vec<u8>, Box<dyn Error>> {
-    let db = rig.trace_path();
-    let mut stored = fs::read(&db)?;
-    match fs::read(db.with_extension("db-wal")) {
-        Ok(wal) => stored.extend(wal),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    Ok(stored)
-}
-
-/// Whether `stored` holds `value`'s bytes anywhere.
-fn holds(stored: &[u8], value: &str) -> bool {
-    stored
-        .windows(value.len())
-        .any(|bytes| bytes == value.as_bytes())
-}
-
-/// The title the scripts of [`lock_while_a_script_runs`], [`lock_an_opener_while_its_popup_reads`]
-/// and [`settle_an_opener_while_its_popup_runs`] give their page from inside the page, once Neo
-/// sent them and they run.
+/// The title [`lock_while_a_script_runs`]'s script gives its page from inside the page, once Neo
+/// sent it and it runs.
 const READING: &str = "the script is reading";
 
 /// Takes `tab` with `reads` (`block` or `allow`), as a host does, once a script runs in its page:
@@ -1005,19 +656,6 @@ async fn take_lock(rig: &Rig, tab: i64, reads: &str) -> Result<Value, Box<dyn Er
         return Err(format!("the host locks the tab: {}", taken.text()).into());
     }
     taken.json()
-}
-
-/// Gives `lock` back, as a host does.
-async fn release_lock(rig: &Rig, lock: &Value) -> TestResult {
-    let id = lock
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("the lock answered with its id: {lock}"))?;
-    let released = rig
-        .host("DELETE", &format!("/v1/locks/{id}"), Some(HOST_TOKEN), None)
-        .await?;
-    assert_eq!(released.status, 200, "{}", released.text());
-    Ok(())
 }
 
 /// The run of `result` as the host reads it back from the store, once it is complete.
