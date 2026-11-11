@@ -78,10 +78,6 @@ docs/plans/
 **/tests/**/*.js
 # Fixture scripts the crate's live tests serve to a browser are sources.
 !crates/neo-sdk/neo-playwright/tests/data/**/*.js
-# So are conformance's case bodies, its fixture scripts and the case contract both runners read.
-!crates/neo-sdk/neo-playwright/tests/conformance/**/*.js
-# And upstream's page-test assets, vendored byte for byte by third_party/playwright/sync.sh.
-!crates/neo-sdk/neo-playwright/third_party/playwright/tests/**/*.js
 **/tests/**/*.d.ts
 **/tests/**/*.d.ts.map
 
@@ -210,3 +206,6 @@ test-results/
 .agent/
 .llm/
 .grove/
+
+# Neo behavior programs and their browser fixtures are authored JavaScript sources.
+!crates/neo-sdk/neo-server/tests/behavior/**/*.js

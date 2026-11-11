@@ -1,0 +1,6 @@
+.git
+.scratch
+.wt
+**/node_modules
+packages/browseros-agent/target
+**/.env*

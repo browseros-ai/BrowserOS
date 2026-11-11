@@ -1,0 +1,3 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Hang</title><script src="frame.js"></script></head>
+<body><h1>Hang (D, level 1)</h1><button>Hang button</button>
+<script>addEventListener("load", () => setTimeout(() => { for (;;) {} }, 1500)); // an unresponsive cross-site frame (its own process), after it has loaded</script></body></html>
