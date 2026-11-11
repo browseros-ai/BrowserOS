@@ -192,6 +192,9 @@ impl<'env> OpScope<'env> {
             .repair_viewport(&info.page_id, &session)
             .await
             .map_err(|error| self.core_error(&error))?;
+        self.run_state()
+            .events
+            .remember_page(&session.target_id, tab);
         Ok(Some(AdmittedPage {
             tab,
             core_page: info.page_id,

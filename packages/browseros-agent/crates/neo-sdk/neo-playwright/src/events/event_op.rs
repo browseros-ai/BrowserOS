@@ -265,6 +265,10 @@ async fn observe_context(scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
     let setup = async {
         let listing = scope.view().list_pages().await?;
         for page in listing.pages {
+            scope
+                .run_state()
+                .events
+                .remember_page(&page.target_id, page.tab_id);
             // A tab can close between listing and attachment. The watcher retries live tabs.
             if let Err(error) = scope.view().page_session(page.page_id).await {
                 scope.log(format!(

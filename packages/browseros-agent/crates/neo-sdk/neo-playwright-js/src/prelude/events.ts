@@ -48,6 +48,7 @@ const PAGE_EVENTS: ReadonlySet<string> = new Set([
   'popup',
   'close',
   'dialog',
+  'dialogclosed',
   'console',
   'pageerror',
   'download',
@@ -62,6 +63,7 @@ const PAGE_EVENTS: ReadonlySet<string> = new Set([
 const CONTEXT_EVENTS: ReadonlySet<string> = new Set([
   'page',
   'pageload',
+  'dialogclosed',
   'frameattached',
   'framenavigated',
   'framedetached',
@@ -84,7 +86,6 @@ const UNREPORTED: Readonly<Record<string, string>> = {
   crash: 'Neo does not report crashes; a crashed page fails its next call',
   pageclose: 'listen for close on the page itself: page.on("close")',
   weberror: 'listen for pageerror on the page itself: page.on("pageerror")',
-  dialogclosed: 'Neo does not report closed dialogs',
 }
 
 /**
@@ -482,6 +483,12 @@ export class EventHub {
       case 'close':
         this.page(record.page)._closeEvent(record.seq, observed)
         return
+      case 'dialogclosed': {
+        const page = this.page(record.page)
+        const emitter = record.context ? this.owner : page
+        emitter.emit('dialogclosed', this.dialog(page, record.dialog))
+        return
+      }
       case 'dialog': {
         const page = this.page(record.page)
         const dialog = this.dialog(page, record.dialog)
@@ -568,6 +575,7 @@ export class EventHub {
         return page
       }
       case 'dialog':
+      case 'dialogclosed':
         return this.dialog(this.page(record.page), record.dialog)
       case 'console':
         return new ConsoleMessage(this.page(record.page), record.message)
