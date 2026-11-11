@@ -3,11 +3,83 @@
 // route row in Rust, then run `cargo test -p neo-playwright --test wire_generated`, which
 // rewrites this folder.
 
+import type * as pw from '../../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
+import { invoke } from '../bridge'
+import type { CallSite } from '../call-site'
+import type { SignalLike } from '../signal'
+import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { CallHeader } from '../wire'
+import type { CloseInput } from './types/CloseInput'
+import type { DocumentInput } from './types/DocumentInput'
+import type { FramesInput } from './types/FramesInput'
+import type { GotoInput } from './types/GotoInput'
+import type { LoadStateInput } from './types/LoadStateInput'
+import type { LoadStateReached } from './types/LoadStateReached'
+import type { NavigateInput } from './types/NavigateInput'
+import type { NavigationReply } from './types/NavigationReply'
+import type { NavigationResult } from './types/NavigationResult'
+import type { OpenerResult } from './types/OpenerResult'
+import type { PageFrames } from './types/PageFrames'
+import type { PageOnlyInput } from './types/PageOnlyInput'
+import type { SetContentInput } from './types/SetContentInput'
+import type { UrlResult } from './types/UrlResult'
+import type { WaitForNavigationInput } from './types/WaitForNavigationInput'
+import type { WaitForUrlInput } from './types/WaitForUrlInput'
+
+export type { CloseInput } from './types/CloseInput'
+export type { DocumentInput } from './types/DocumentInput'
+export type { FrameInfo } from './types/FrameInfo'
+export type { FramesInput } from './types/FramesInput'
+export type { GotoInput } from './types/GotoInput'
+export type { LoadState } from './types/LoadState'
+export type { LoadStateInput } from './types/LoadStateInput'
+export type { LoadStateReached } from './types/LoadStateReached'
+export type { NavigateInput } from './types/NavigateInput'
+export type { NavigationPublication } from './types/NavigationPublication'
+export type { NavigationReply } from './types/NavigationReply'
+export type { NavigationResult } from './types/NavigationResult'
+export type { OpenerResult } from './types/OpenerResult'
+export type { PageFrames } from './types/PageFrames'
+export type { PageOnlyInput } from './types/PageOnlyInput'
+export type { ResponseInfo } from './types/ResponseInfo'
+export type { SetContentInput } from './types/SetContentInput'
+export type { UrlResult } from './types/UrlResult'
+export type { WaitForNavigationInput } from './types/WaitForNavigationInput'
+export type { WaitForUrlInput } from './types/WaitForUrlInput'
+
 /** Each page op's input, after the `call` header every op shares. */
-export type PageInputs = {}
+export type PageInputs = {
+  'page.goto': GotoInput
+  'page.reload': NavigateInput
+  'page.goBack': NavigateInput
+  'page.goForward': NavigateInput
+  'page.waitForNavigation': WaitForNavigationInput
+  'page.waitForURL': WaitForUrlInput
+  'page.waitForLoadState': LoadStateInput
+  'page.title': DocumentInput
+  'page.content': DocumentInput
+  'page.setContent': SetContentInput
+  'page.close': CloseInput
+  'page.opener': PageOnlyInput
+  'page.frames': FramesInput
+}
 
 /** Each page op's result. */
-export type PageOutputs = {}
+export type PageOutputs = {
+  'page.goto': NavigationResult
+  'page.reload': NavigationResult
+  'page.goBack': NavigationResult
+  'page.goForward': NavigationResult
+  'page.waitForNavigation': NavigationReply
+  'page.waitForURL': UrlResult
+  'page.waitForLoadState': LoadStateReached
+  'page.title': string
+  'page.content': string
+  'page.setContent': null
+  'page.close': null
+  'page.opener': OpenerResult
+  'page.frames': PageFrames
+}
 
 /**
  * The script's option keys of each page op that takes an `options` bag: the fields of its
@@ -20,4 +92,122 @@ export const PAGE_OPTION_KEYS = {} as const
  * One typed sender per page op. A class passes its input as an object literal, so every
  * field is checked against Rust's input type and the result is Rust's result type.
  */
-export const PAGE_SEND = {}
+export const PAGE_SEND = {
+  'page.goto': (
+    site: CallSite,
+    call: CallHeader,
+    input: GotoInput,
+    signal?: SignalLike,
+  ): Promise<NavigationResult> => invoke('page.goto', site, call, input, signal),
+  'page.reload': (
+    site: CallSite,
+    call: CallHeader,
+    input: NavigateInput,
+    signal?: SignalLike,
+  ): Promise<NavigationResult> => invoke('page.reload', site, call, input, signal),
+  'page.goBack': (
+    site: CallSite,
+    call: CallHeader,
+    input: NavigateInput,
+    signal?: SignalLike,
+  ): Promise<NavigationResult> => invoke('page.goBack', site, call, input, signal),
+  'page.goForward': (
+    site: CallSite,
+    call: CallHeader,
+    input: NavigateInput,
+    signal?: SignalLike,
+  ): Promise<NavigationResult> => invoke('page.goForward', site, call, input, signal),
+  'page.waitForNavigation': (
+    site: CallSite,
+    call: CallHeader,
+    input: WaitForNavigationInput,
+    signal?: SignalLike,
+  ): Promise<NavigationReply> => invoke('page.waitForNavigation', site, call, input, signal),
+  'page.waitForURL': (
+    site: CallSite,
+    call: CallHeader,
+    input: WaitForUrlInput,
+    signal?: SignalLike,
+  ): Promise<UrlResult> => invoke('page.waitForURL', site, call, input, signal),
+  'page.waitForLoadState': (
+    site: CallSite,
+    call: CallHeader,
+    input: LoadStateInput,
+    signal?: SignalLike,
+  ): Promise<LoadStateReached> => invoke('page.waitForLoadState', site, call, input, signal),
+  'page.title': (
+    site: CallSite,
+    call: CallHeader,
+    input: DocumentInput,
+    signal?: SignalLike,
+  ): Promise<string> => invoke('page.title', site, call, input, signal),
+  'page.content': (
+    site: CallSite,
+    call: CallHeader,
+    input: DocumentInput,
+    signal?: SignalLike,
+  ): Promise<string> => invoke('page.content', site, call, input, signal),
+  'page.setContent': (
+    site: CallSite,
+    call: CallHeader,
+    input: SetContentInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('page.setContent', site, call, input, signal),
+  'page.close': (
+    site: CallSite,
+    call: CallHeader,
+    input: CloseInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('page.close', site, call, input, signal),
+  'page.opener': (
+    site: CallSite,
+    call: CallHeader,
+    input: PageOnlyInput,
+    signal?: SignalLike,
+  ): Promise<OpenerResult> => invoke('page.opener', site, call, input, signal),
+  'page.frames': (
+    site: CallSite,
+    call: CallHeader,
+    input: FramesInput,
+    signal?: SignalLike,
+  ): Promise<PageFrames> => invoke('page.frames', site, call, input, signal),
+}
+
+// Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
+// names the op and every key that differs without a reason, or whose reason went stale.
+// page.goto: Frame.goto
+//   adds publication: the run-local receipt the prelude stamps, correlating the host's navigation facts with the call that caused them
+type _page_goto = Assert<UpstreamCheck<'page.goto', GotoInput, pw.FrameGotoParams, 'publication', never, never>>
+type _page_goto_result = Assert<VoidIsNull<'page.goto', pw.FrameGotoResult, NavigationResult>>
+// page.reload: Page.reload
+//   adds publication: the run-local receipt the prelude stamps, correlating the host's navigation facts with the call that caused them
+type _page_reload = Assert<UpstreamCheck<'page.reload', NavigateInput, pw.PageReloadParams, 'publication', never, never>>
+type _page_reload_result = Assert<VoidIsNull<'page.reload', pw.PageReloadResult, NavigationResult>>
+// page.goBack: Page.goBack
+//   adds publication: the run-local receipt the prelude stamps, correlating the host's navigation facts with the call that caused them
+type _page_goBack = Assert<UpstreamCheck<'page.goBack', NavigateInput, pw.PageGoBackParams, 'publication', never, never>>
+type _page_goBack_result = Assert<VoidIsNull<'page.goBack', pw.PageGoBackResult, NavigationResult>>
+// page.goForward: Page.goForward
+//   adds publication: the run-local receipt the prelude stamps, correlating the host's navigation facts with the call that caused them
+type _page_goForward = Assert<UpstreamCheck<'page.goForward', NavigateInput, pw.PageGoForwardParams, 'publication', never, never>>
+type _page_goForward_result = Assert<VoidIsNull<'page.goForward', pw.PageGoForwardResult, NavigationResult>>
+// page.waitForNavigation: Neo only: a client-side wait upstream; Neo waits on its navigation journal in Rust
+// page.waitForURL: Neo only: a client-side wait upstream; Neo matches the URL as part of a navigation wait
+// page.waitForLoadState: Neo only: a client-side wait upstream; Neo waits on its lifecycle journal
+// page.title: Frame.title
+type _page_title = Assert<UpstreamCheck<'page.title', DocumentInput, pw.FrameTitleParams, never, never, never>>
+type _page_title_result = Assert<VoidIsNull<'page.title', pw.FrameTitleResult, string>>
+// page.content: Frame.content
+//   omits includeShadow: Neo returns the document's HTML; shadow-root serialization is not offered
+type _page_content = Assert<UpstreamCheck<'page.content', DocumentInput, pw.FrameContentParams, never, 'includeShadow', never>>
+type _page_content_result = Assert<VoidIsNull<'page.content', pw.FrameContentResult, string>>
+// page.setContent: Frame.setContent
+type _page_setContent = Assert<UpstreamCheck<'page.setContent', SetContentInput, pw.FrameSetContentParams, never, never, never>>
+type _page_setContent_result = Assert<VoidIsNull<'page.setContent', pw.FrameSetContentResult, null>>
+// page.close: Page.close
+//   adds runBeforeUnload: upstream sends Page.runBeforeUnload as a command of its own; Neo folds it into close, where the host's policy reads it
+//   omits reason: the script's close reason is not sent; a closed page's errors do not carry it
+type _page_close = Assert<UpstreamCheck<'page.close', CloseInput, pw.PageCloseParams, 'runBeforeUnload', 'reason', never>>
+type _page_close_result = Assert<VoidIsNull<'page.close', pw.PageCloseResult, null>>
+// page.opener: Neo only: upstream reads its initializer state; Neo asks its tab bookkeeping
+// page.frames: Neo only: upstream keeps client-side frame objects; Neo reads the tree for the prelude's synchronous frames()

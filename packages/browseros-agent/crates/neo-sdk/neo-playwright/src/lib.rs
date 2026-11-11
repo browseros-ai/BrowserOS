@@ -69,9 +69,7 @@ mod test_support;
     not(test),
     expect(
         dead_code,
-        unused_imports,
-        reason = "the families move onto route rows one at a time; until each does, only the \
-                  machinery's own tests walk a route"
+        reason = "route metadata helpers remain unused until their families migrate"
     )
 )]
 mod wire;

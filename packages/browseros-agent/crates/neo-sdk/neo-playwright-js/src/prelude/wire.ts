@@ -17,7 +17,7 @@
  */
 
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
-import type { Rect, SelectOption, UrlPattern } from '../probe/protocol'
+import type { Rect, SelectOption } from '../probe/protocol'
 import type { GeneratedInputs, GeneratedOutputs } from './generated'
 import type { OpName } from './generated/ops'
 
@@ -28,12 +28,17 @@ export type {
   DblclickOptions,
   DragOptions,
   ElementBrand,
+  FrameInfo,
   HoverOptions,
+  LoadState,
   NavigationCut,
+  NavigationPublication,
+  NavigationResult,
   PageBrand,
   PageHandle,
   PartialFrame,
   PointerOptions,
+  ResponseInfo,
   ScrollOption,
   SnapshotResult,
   Strictness,
@@ -44,6 +49,7 @@ export type { SerializedValue }
 
 import type {
   ElementBrand,
+  FrameInfo,
   PageBrand,
   PageHandle,
   Strictness,
@@ -84,46 +90,6 @@ export type PageFact = {
   closed?: boolean
   viewportSize?: { width: number; height: number } | null
 }
-
-/** One frame of a page's tree, main frame first; `parentId` null only for the main frame. */
-export type FrameInfo = {
-  id: string
-  parentId: string | null
-  name: string
-  url: string
-}
-
-/**
- * The response a navigation committed, read from the new document's navigation timing entry
- * without the Network domain. Rust owns all of it: the reason phrase comes from its table, and
- * `headers` is always empty because reading them needs the Network domain.
- */
-export type ResponseInfo = {
-  url: string
-  status: number
-  statusText: string
-  ok: boolean
-  headers: Record<string, string>
-}
-
-/**
- * What a navigation or a wait returns. `url` and `frames` refresh `page.url()` and
- * `page.frames()`, which are synchronous in Playwright; `url` is null when no document
- * committed.
- */
-export type NavigationResult = {
-  response?: ResponseInfo | null
-  url?: string | null
-  frames?: FrameInfo[]
-  /** Native navigation already attempted its bounded snapshot; absence means keep cached facts. */
-  frameSnapshotAttempted?: boolean
-}
-
-/** Run-local completion identity; acknowledgments keep the host receipt ledger bounded by in-flight work. */
-export type NavigationPublication = { id: number; acknowledged: number[] }
-
-/** `page.frames`: every frame of the tab, the main frame first, each parent before its children. */
-export type FrameTree = { frames: FrameInfo[] }
 
 /** One tab, with the URL the prelude caches for its synchronous `url()`. */
 export type PageEntry = { page: PageBrand; url: string }
@@ -252,7 +218,6 @@ export type Modifier = 'Alt' | 'Control' | 'ControlOrMeta' | 'Meta' | 'Shift'
 
 export type FillOptions = { force?: boolean }
 export type KeyOptions = { delay?: number; noWaitAfter?: boolean }
-export type LoadState = 'load' | 'domcontentloaded' | 'networkidle' | 'commit'
 export type WaitForState = 'attached' | 'detached' | 'visible' | 'hidden'
 export type ElementStateName =
   | 'visible'
@@ -415,36 +380,7 @@ export type HandInputs = {
     options: { button?: MouseButton; clickCount?: number; delay?: number }
   }
   'mouse.wheel': PageArgs & { deltaX: number; deltaY: number }
-  'page.goto': FrameArgs & {
-    publication?: NavigationPublication
-    url: string
-    waitUntil: LoadState
-    referer?: string
-  }
-  'page.reload': PageArgs & {
-    publication?: NavigationPublication
-    waitUntil: LoadState
-  }
-  'page.goBack': PageArgs & {
-    publication?: NavigationPublication
-    waitUntil: LoadState
-  }
-  'page.goForward': PageArgs & {
-    publication?: NavigationPublication
-    waitUntil: LoadState
-  }
-  /** Matched in the page with vendored `urlMatches`, so globs and RegExps keep JS semantics. */
-  'page.waitForNavigation': FrameArgs & {
-    url?: UrlPattern
-    waitUntil: LoadState
-    since: number
-    after: number
-  }
-  'page.waitForURL': FrameArgs & { url: UrlPattern; waitUntil: LoadState }
-  'page.waitForLoadState': FrameArgs & { state: LoadState }
   'page.requestGC': PageArgs
-  'page.title': FrameArgs
-  'page.content': FrameArgs
   'page.emulateMedia': PageArgs & {
     media?: 'screen' | 'print' | 'no-override'
     colorScheme?: 'dark' | 'light' | 'no-preference' | 'no-override'
@@ -463,10 +399,6 @@ export type HandInputs = {
     path?: string
     content?: string
   }
-  'page.setContent': FrameArgs & { html: string; waitUntil: LoadState }
-  'page.close': PageArgs & { runBeforeUnload?: true }
-  'page.opener': PageArgs
-  'page.frames': PageArgs
   'worker.evaluate': { page: PageHandle; worker: string; script: PageScript }
   'page.evaluate': FrameArgs & { script: PageScript }
   /** `noWait` is `$eval`: no waiting for the element, as `locator.evaluate` does. */
@@ -606,23 +538,10 @@ export type HandOutputs = {
   'mouse.up': null
   'mouse.click': null
   'mouse.wheel': null
-  'page.goto': NavigationResult | null
-  'page.reload': NavigationResult | null
-  'page.goBack': NavigationResult | null
-  'page.goForward': NavigationResult | null
-  'page.waitForNavigation': NavigationResult & { navigationSeq: number }
-  'page.waitForURL': NavigationResult | null
-  'page.waitForLoadState': NavigationResult | null
   'page.requestGC': null
-  'page.title': string
-  'page.content': string
   'page.emulateMedia': null
   'page.addScriptTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.addStyleTag': { element: ElementBrand; frames?: FrameInfo[] }
-  'page.setContent': NavigationResult | null
-  'page.close': null
-  'page.opener': { opener: PageBrand | null }
-  'page.frames': Partial<FrameTree>
   /** The script's result in Playwright's in-page format. */
   'worker.evaluate': { value: SerializedValue }
   'page.evaluate': { value: SerializedValue; frames?: FrameInfo[] }

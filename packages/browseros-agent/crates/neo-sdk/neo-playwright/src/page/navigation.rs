@@ -20,16 +20,17 @@ use browseros_core::{CoreError, FrameId, PageJs, ProtocolSession, SessionId, Tab
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::time;
+use ts_rs::TS;
 
-use crate::op_output::to_output;
 use crate::op_scope::{AdmittedPage, OpScope, Sent};
 use crate::page::document_watch::{
     Arrival, CommitOutcome, DocumentWatch, Expect, FrameTreeReply, WatchError, decode,
 };
 use crate::page::frame_routes::RootAttachment;
-use crate::page::frame_tree::FrameTree;
+use crate::page::frame_tree::{FrameInfo, FrameTree};
 use crate::page::{LoadState, frame_tree, subtree_load};
 use crate::target::PageRef;
+use crate::wire::options;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// How long the response read may take once the document is there. It runs inside the op's
@@ -40,16 +41,19 @@ const TIMING_READ: Duration = Duration::from_secs(2);
 /// failure.
 const ERROR_PAGE_COMMIT: Duration = Duration::from_secs(1);
 
-/// `page.goto(url, { waitUntil, referer })` and `frame.goto`.
-#[derive(Debug, Deserialize)]
+/// `page.goto(url, { waitUntil, referer })` and `frame.goto`. The script's options are flat
+/// fields, as they always were on this op; there is no `options` bag.
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct GotoInput {
     page: PageRef,
     /// Run-local publication correlation, shared with the bridge rather than a browser identity.
     #[serde(default, rename = "publication")]
+    #[ts(optional)]
     publication: Option<NavigationPublication>,
     /// The frame `frame.goto` names, a frame id from `page.frames()`; absent is the main frame.
     #[serde(default)]
+    #[ts(optional)]
     frame: Option<FrameId>,
     url: String,
     #[serde(default)]
@@ -57,23 +61,27 @@ pub(crate) struct GotoInput {
     /// Sent as the request's `Referer`, with the `unsafeUrl` policy as upstream does, so the
     /// page's own referrer policy cannot drop it.
     #[serde(default)]
+    #[ts(optional)]
     referer: Option<String>,
 }
+options!(GotoInput);
 
 /// `page.reload`, `page.goBack` and `page.goForward`: `{ page, waitUntil? }`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct NavigateInput {
     page: PageRef,
     /// Run-local publication correlation, shared with the bridge rather than a browser identity.
     #[serde(default, rename = "publication")]
+    #[ts(optional)]
     publication: Option<NavigationPublication>,
     #[serde(default)]
     wait_until: LoadState,
 }
+options!(NavigateInput);
 
 /// A run-local receipt identity shared with the host bridge, never a browser identity.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NavigationPublication {
     id: u64,
@@ -81,16 +89,24 @@ pub(crate) struct NavigationPublication {
 }
 
 /// `page.waitForLoadState(state)` and `frame.waitForLoadState(state)`: `{ page, frame?, state? }`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct LoadStateInput {
     page: PageRef,
     /// A frame id from `page.frames()`; absent is the main frame.
     #[serde(default)]
+    #[ts(optional)]
     frame: Option<FrameId>,
     #[serde(default)]
     state: LoadState,
 }
+options!(LoadStateInput);
+
+/// `page.waitForLoadState`'s answer: `{}`, as it has always been. Upstream's method answers
+/// nothing and the prelude reads nothing from it; an empty object rather than `Nothing` keeps
+/// the reply's bytes.
+#[derive(Debug, Serialize, TS)]
+pub(crate) struct LoadStateReached {}
 
 /// What starts a navigation of a page or one of its child frames.
 #[derive(Clone, Debug)]
@@ -110,15 +126,21 @@ pub(crate) enum Navigation {
 }
 
 /// The addressed frame's result; only a main-frame URL also changes `page.url()`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NavigationResult {
     pub(crate) response: Option<Response>,
     pub(crate) url: Option<String>,
-    #[serde(flatten)]
-    frames: Option<FrameTree>,
+    /// The page's frames after the navigation, read within the op's deadline; absent when that
+    /// bounded read did not finish.
+    // A plain optional field where a flattened `Option<FrameTree>` was (ts-rs cannot print a
+    // flattened `Option`): the same keys in the same order, pinned by
+    // `tests::tests_that_the_navigation_answer_keeps_its_bytes`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    frames: Option<Vec<FrameInfo>>,
     /// A missing optional snapshot must not trigger an unbounded client-side renderer read.
-    frame_snapshot_attempted: bool,
+    pub(crate) frame_snapshot_attempted: bool,
 }
 
 impl NavigationResult {
@@ -134,14 +156,16 @@ impl NavigationResult {
 }
 
 /// Playwright's `Response` for the selected document, from its navigation timing entry.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename = "ResponseInfo")]
 pub(crate) struct Response {
     url: String,
     status: u16,
     status_text: &'static str,
     ok: bool,
     /// Always empty: reading headers needs the Network domain, which Neo leaves off.
+    #[ts(type = "Record<string, string>")]
     headers: Map<String, Value>,
 }
 
@@ -191,7 +215,7 @@ pub(crate) async fn navigate(
     navigation: Navigation,
     wait_until: LoadState,
     publication: Option<NavigationPublication>,
-) -> Result<Value, PlaywrightError> {
+) -> Result<NavigationResult, PlaywrightError> {
     if let Some(publication) = &publication {
         scope
             .run_state()
@@ -280,13 +304,12 @@ pub(crate) async fn navigate(
         .and_then(Result::ok)
         .and_then(Result::ok)
         .flatten();
-    let result = NavigationResult {
+    Ok(NavigationResult {
         response,
         url: watch.url().map(str::to_owned),
-        frames,
+        frames: frames.map(FrameTree::into_frames),
         frame_snapshot_attempted: true,
-    };
-    to_output(scope, &result)
+    })
 }
 
 /// A tab's main frame id is its target id.
@@ -511,7 +534,7 @@ pub(crate) async fn wait_for_load_state(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: LoadStateInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<LoadStateReached, PlaywrightError> {
     let page = input.page.tab();
     let admitted = scope.admit(pw.browser(), page).await?;
     let main = main_frame(admitted);
@@ -537,7 +560,7 @@ pub(crate) async fn wait_for_load_state(
         Ok::<_, PlaywrightError>(())
     };
     match scope.within(wait).await {
-        Ok(result) => result.map(|()| json!({})),
+        Ok(result) => result.map(|()| LoadStateReached {}),
         Err(_expired) => Err(scope.timed_out(ErrorCode::WaitTimeout)),
     }
 }
@@ -823,10 +846,79 @@ fn status_text(status: u16) -> &'static str {
     }
 }
 
+/// A committed 200, for the answers' byte tests.
+#[cfg(test)]
+impl Response {
+    pub(crate) fn sample() -> Self {
+        Self {
+            url: "https://main.test/".to_owned(),
+            status: 200,
+            status_text: "OK",
+            ok: true,
+            headers: Map::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{complete_user_url, status_text};
+    use serde::Serialize;
+
+    use super::{FrameTree, NavigationResult, Response, complete_user_url, status_text};
+    use crate::page::frame_tree::sample_tree;
     use crate::test_support::TestResult;
+
+    /// A navigation answers the bytes the struct with a flattened `Option<FrameTree>` it
+    /// replaced wrote, key order included, with frames and without: a later edit cannot drift
+    /// unseen.
+    #[test]
+    fn tests_that_the_navigation_answer_keeps_its_bytes() -> TestResult {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Before {
+            response: Option<Response>,
+            url: Option<String>,
+            #[serde(flatten)]
+            frames: Option<FrameTree>,
+            frame_snapshot_attempted: bool,
+        }
+        let url = || Some("https://main.test/".to_owned());
+        let with = serde_json::to_string(&NavigationResult {
+            response: Some(Response::sample()),
+            url: url(),
+            frames: Some(sample_tree()?.into_frames()),
+            frame_snapshot_attempted: true,
+        })?;
+        let before = Before {
+            response: Some(Response::sample()),
+            url: url(),
+            frames: Some(sample_tree()?),
+            frame_snapshot_attempted: true,
+        };
+        assert_eq!(with, serde_json::to_string(&before)?);
+        assert_eq!(
+            with,
+            r#"{"response":{"url":"https://main.test/","status":200,"statusText":"OK","ok":true,"headers":{}},"url":"https://main.test/","frames":[{"id":"main","parentId":null,"name":"","url":"https://main.test/"},{"id":"child","parentId":"main","name":"ad","url":"https://child.test/"}],"frameSnapshotAttempted":true}"#
+        );
+        let without = serde_json::to_string(&NavigationResult {
+            response: None,
+            url: None,
+            frames: None,
+            frame_snapshot_attempted: true,
+        })?;
+        let before = Before {
+            response: None,
+            url: None,
+            frames: None,
+            frame_snapshot_attempted: true,
+        };
+        assert_eq!(without, serde_json::to_string(&before)?);
+        assert_eq!(
+            without,
+            r#"{"response":null,"url":null,"frameSnapshotAttempted":true}"#
+        );
+        Ok(())
+    }
 
     /// A renderer that never answers must not extend a child's requested wait deadline.
     #[tokio::test]

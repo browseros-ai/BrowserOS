@@ -56,6 +56,7 @@ import {
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
+import { send } from './generated'
 import { addInitScript, type Disposable } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
@@ -747,8 +748,7 @@ export class Page extends EventEmitter {
   async title(): Promise<string> {
     const site = captureSite()
     const api = 'page.title'
-    const title = await invoke(
-      'page.title',
+    const title = await send['page.title'](
       site,
       { api, timeoutMs: 0 },
       { page: await this._brand(api) },
@@ -1023,8 +1023,7 @@ export class Page extends EventEmitter {
     const site = captureSite()
     const api = 'page.opener'
     const target = await this._brand(api)
-    const { opener } = await invoke(
-      'page.opener',
+    const { opener } = await send['page.opener'](
       site,
       { api, timeoutMs: 0 },
       { page: target },
@@ -1044,16 +1043,11 @@ export class Page extends EventEmitter {
     // error has the door's fields only after the script next yields to Rust.
     const page = await this._brand(api)
     try {
-      await invoke(
-        'page.close',
+      // Absent unless set: the codec drops an undefined field, as the door expects.
+      await send['page.close'](
         site,
         { api, timeoutMs: 0 },
-        {
-          page,
-          ...(options.runBeforeUnload
-            ? { runBeforeUnload: true as const }
-            : {}),
-        },
+        { page, runBeforeUnload: options.runBeforeUnload ? true : undefined },
       )
     } catch (error) {
       // As upstream: closing a page that is already gone is not an error.
@@ -1166,10 +1160,14 @@ export class Page extends EventEmitter {
   }
 
   /** Applies native frame facts; older replies retain the fallback tree read. */
+  /**
+   * Applies the navigation facts an op answered: a navigation's result, a wait's reply, or a
+   * wait that answers only the URL or nothing, so every field is optional here.
+   */
   async _navigated(
     api: string,
     frame: Frame,
-    result: NavigationResult | null,
+    result: Partial<NavigationResult> | null,
     at: Observation | null,
     ready?: () => void,
   ): Promise<Response | null> {

@@ -97,9 +97,9 @@ impl Op {
             OpKind::Snapshot(op) => op.wire(),
             OpKind::Action(op) => op.wire(),
             OpKind::Expect(op) => op.wire(),
+            OpKind::Page(op) => op.wire(),
             OpKind::Read(_)
             | OpKind::Input(_)
-            | OpKind::Page(_)
             | OpKind::Context(_)
             | OpKind::Event(_)
             | OpKind::LocatorHandler(_) => None,
