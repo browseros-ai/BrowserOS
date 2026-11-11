@@ -399,7 +399,7 @@ async fn tests_that_goto_loads_a_local_file() -> TestResult {
     with_page(|run, _server, page| async move {
         let result = async {
             let file =
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/conformance/pages/child.html");
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/local-navigation.html");
             let url = url::Url::from_file_path(&file)
                 .map_err(|()| "a local file URL")?
                 .to_string();
@@ -419,7 +419,10 @@ async fn tests_that_goto_loads_a_local_file() -> TestResult {
                 assert_eq!(reply["response"]["status"], json!(200), "{reply}");
                 assert_eq!(reply["response"]["statusText"], json!("OK"));
                 assert_eq!(reply["response"]["ok"], json!(true));
-                assert_eq!(run.eval(&page, "document.title").await?, json!("Child"));
+                assert_eq!(
+                    run.eval(&page, "document.title").await?,
+                    json!("Local navigation")
+                );
             }
             Ok(())
         }
