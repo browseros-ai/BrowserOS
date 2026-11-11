@@ -869,6 +869,7 @@
   var SCREENSHOT_KEYS = [
     "type",
     "quality",
+    "omitBackground",
     "fullPage",
     "clip",
     "animations",
@@ -7411,8 +7412,6 @@ ${value.stack}`;
   function refusedScreenshotOption(options) {
     if (options.mask !== undefined && options.mask.length > 0)
       return "Neo cannot mask elements in a screenshot; omit mask";
-    if (options.omitBackground)
-      return "Neo cannot capture a transparent background; omit omitBackground";
     return;
   }
   var HELD_VALUE = "Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()";

@@ -281,7 +281,8 @@ export type ScreenshotOptions = {
   animations?: 'disabled' | 'allow'
   caret?: 'hide' | 'initial'
   style?: string
-  type?: 'png' | 'jpeg'
+  type?: 'png' | 'jpeg' | 'webp'
+  omitBackground?: boolean
   quality?: number
   fullPage?: boolean
   clip?: Rect
