@@ -210,10 +210,21 @@ it('tests that a frame missing from the tree a wait reads is detached', async ()
 it.each([false, true])(
   'tests that a native removal is fenced even when its reply closes the page (%s)',
   async (closed) => {
+    const nestedTree = {
+      frames: [
+        ...TREE.frames,
+        {
+          id: 'nested',
+          parentId: 'same',
+          name: 'nested',
+          url: 'https://a.example/nested',
+        },
+      ],
+    }
     const runtime = loadPrelude({
       seed: SEED,
       answer: (call) => {
-        if (call.name === 'page.frames') return TREE
+        if (call.name === 'page.frames') return nestedTree
         return {
           err: {
             owner: 'neo',
@@ -230,15 +241,19 @@ it.each([false, true])(
       json(
         await runtime.run(`
         const same = page.frame('same')
+        const nested = page.frame('nested')
         try { await same.waitForURL('**/never') } catch {}
-        // An older pull may still deliver the frame's previous navigation.
+        // An older pull may deliver either frame after the whole subtree was retired.
         page._eventFrame(9, 'framenavigated', {
           id: 'same', parentId: 'main', name: 'same', url: 'https://a.example/old',
         })
-        return { detached: same.isDetached(), names: page.frames().map(f => f.name()) }
+        page._eventFrame(9, 'framenavigated', {
+          id: 'nested', parentId: 'same', name: 'nested', url: 'https://a.example/old-child',
+        })
+        return { detached: same.isDetached(), nestedDetached: nested.isDetached(), names: page.frames().map(f => f.name()) }
       `),
       ),
-    ).toEqual({ detached: true, names: ['', 'cross'] })
+    ).toEqual({ detached: true, nestedDetached: true, names: ['', 'cross'] })
   },
 )
 
