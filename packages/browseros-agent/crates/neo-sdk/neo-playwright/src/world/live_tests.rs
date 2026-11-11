@@ -1,9 +1,8 @@
 //! Sealed-world facts no op can observe, against a real browser: where a page's seqs start,
 //! that concurrent first uses share one install, that a navigation retires a seq, that the
 //! seal masks what the probe reads, that a strict CSP does not stop the install, that a second
-//! `Playwright` re-keys a world, that the journal reports typing in the main frame, that
-//! `page.setContent` retires the seq and keeps the journal, and that the install takes its
-//! handle by the new world's unique id in every kind of frame and fails `Gone` when the
+//! `Playwright` re-keys a world, that `page.setContent` retires the seq, and that the install
+//! takes its handle by the new world's unique id in every kind of frame and fails `Gone` when the
 //! document changes renderer inside its window.
 //!
 //! Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
@@ -16,14 +15,12 @@ use std::time::Duration;
 
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::sensitive_fields::{SEALED_WORLD, SensitiveKind};
-use browseros_core::testing::TestConnection;
 use browseros_core::{CdpConnection, FrameId, ProtocolSession, SessionId};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 
-use crate::TypedBy;
 use crate::op::Op;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
@@ -33,7 +30,7 @@ use crate::probe::{
 };
 use crate::target::{CallHeader, Strictness};
 use crate::test_support::fixture_server::{FixtureServer, Page};
-use crate::test_support::{Journaled, LiveBrowser, Tab, TestResult, count_op};
+use crate::test_support::{LiveBrowser, Tab, TestResult, count_op};
 use crate::world::{
     ContextWatch, FrameSeq, ParentLink, Pin, Place, SealedWorld, SeqLookup, SessionKind,
 };
@@ -221,36 +218,17 @@ impl CdpConnection for Recorder {
     }
 }
 
-/// Offline, unlike the rest of this module: the recorder's own wiring needs no browser.
-#[test]
-fn tests_that_the_recorder_hands_its_targeted_subscriber_what_its_connection_emits() -> TestResult {
-    let connection = TestConnection::new([]);
-    let recorder = Recorder {
-        inner: Arc::clone(&connection) as Arc<dyn CdpConnection>,
-        sent: Mutex::default(),
-        swap: Mutex::default(),
-    };
-    let mut targeted = recorder.events_targeted("Runtime.bindingCalled");
-    connection.emit("Runtime.bindingCalled", json!({ "name": "probe" }), None);
-    assert_eq!(targeted.try_recv()?.params["name"], "probe");
-    Ok(())
-}
-
 /// One install as `FrameWorlds` runs it (session setup, then the watch, then the install),
 /// over `recorder`.
 async fn install_over(
     live: &LiveBrowser,
     recorder: &Arc<Recorder>,
-    tab: &Tab,
     at: (&ProtocolSession, &str, SessionKind),
     seq: u32,
 ) -> TestResult<Result<SealedWorld, ProbeFailure>> {
     let (session, frame, kind) = at;
     let session = recorder.session(session)?;
-    live.playwright
-        .sessions()
-        .ensure(&session, tab.id, kind)
-        .await?;
+    live.playwright.sessions().ensure(&session, kind).await?;
     Ok(SealedWorld::install(
         session,
         FrameId(frame.to_owned()),
@@ -605,39 +583,6 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_the_journal_reports_typing_in_a_main_frame_password_field() -> TestResult {
-    let live = LiveBrowser::connect().await?;
-    let server = fixtures().await?;
-    let tab = live
-        .open(&server.url("127.0.0.1", "/password.html"))
-        .await?;
-    let env = live.env();
-    let scope = OpScope::new(&env, count_op()?, CallHeader::default());
-    main_world(&live, &scope, &tab).await?;
-    tab.main_world(
-        "document.getElementById('pw').value = ''; document.getElementById('pw').focus()",
-    )
-    .await?;
-    tab.session
-        .send::<_, Value>("Input.insertText", json!({ "text": "journal-main" }))
-        .await?;
-    let expected = Journaled {
-        page: tab.id,
-        kind: SensitiveKind::Password,
-        value: "journal-main".to_owned(),
-        by: TypedBy::NotAgent,
-    };
-    assert!(
-        live.hooks.wait_for(&expected).await,
-        "the seal's journal reached the hooks, attributed to the page: {:?}",
-        live.hooks.journaled()
-    );
-    live.close(&tab).await;
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
 async fn tests_that_an_older_protocols_probe_is_rekeyed_then_replaced() -> TestResult {
     let live = LiveBrowser::connect().await?;
     let server = fixtures().await?;
@@ -748,8 +693,7 @@ async fn tests_that_an_ops_objects_are_released_when_its_scope_drops() -> TestRe
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_set_content_retires_the_seq_so_an_old_ref_fails_and_the_journal_resumes()
--> TestResult {
+async fn tests_that_set_content_retires_the_seq_so_an_old_ref_fails() -> TestResult {
     let live = LiveBrowser::connect().await?;
     let server = fixtures().await?;
     let tab = live
@@ -804,24 +748,6 @@ async fn tests_that_set_content_retires_the_seq_so_an_old_ref_fails_and_the_jour
         "a ref minted before setContent fails at once: {old_ref:?}"
     );
 
-    tab.main_world(
-        "document.getElementById('pw').value = ''; document.getElementById('pw').focus()",
-    )
-    .await?;
-    tab.session
-        .send::<_, Value>("Input.insertText", json!({ "text": "journal-after-set" }))
-        .await?;
-    let expected = Journaled {
-        page: tab.id,
-        kind: SensitiveKind::Password,
-        value: "journal-after-set".to_owned(),
-        by: TypedBy::NotAgent,
-    };
-    assert!(
-        live.hooks.wait_for(&expected).await,
-        "document.open removed the seal's listeners and the probe's watch restored them: {:?}",
-        live.hooks.journaled()
-    );
     live.close(&tab).await;
     Ok(())
 }
@@ -886,7 +812,11 @@ async fn tests_that_every_kind_of_frame_takes_a_new_worlds_handle_by_its_unique_
         ),
     ];
     for (label, session, frame, kind, url) in frames {
-        let world = install_over(&live, &recorder, &tab, (session, frame, kind), 0).await??;
+        let world = install_over(&live, &recorder, (session, frame, kind), 0).await??;
+        assert!(
+            recorder.take("Runtime.addBinding").is_empty(),
+            "{label}: world setup does not install a typing journal binding"
+        );
         let evaluated = recorder.take("Runtime.evaluate");
         assert!(
             evaluated.len() == 1
@@ -904,7 +834,7 @@ async fn tests_that_every_kind_of_frame_takes_a_new_worlds_handle_by_its_unique_
 
         // The world exists now, so the create sends no event: the number takes the handle,
         // in a window the session reported nothing about it.
-        let again = install_over(&live, &recorder, &tab, (session, frame, kind), 0).await??;
+        let again = install_over(&live, &recorder, (session, frame, kind), 0).await??;
         let evaluated = recorder.take("Runtime.evaluate");
         assert!(
             evaluated.len() == 1 && evaluated[0].get("contextId").is_some(),
@@ -929,7 +859,7 @@ async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_pag
 
     // A new world: the document moves to another site between the create and the evaluate.
     recorder.swap_before("Runtime.evaluate", server.url("localhost", "/kids.html"));
-    let installed = install_over(&live, &recorder, &tab, main, 0).await?;
+    let installed = install_over(&live, &recorder, main, 0).await?;
     let landed = match &installed {
         Ok(world) => world_url(world).await?,
         Err(_) => Value::Null,
@@ -941,12 +871,12 @@ async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_pag
 
     // A world that already existed: the same swap, now on the numeric path.
     tab.navigate(&start).await?;
-    install_over(&live, &recorder, &tab, main, 0).await??;
+    install_over(&live, &recorder, main, 0).await??;
     recorder.swap_before(
         "Runtime.evaluate",
         server.url("localhost", "/kids.html?again"),
     );
-    let installed = install_over(&live, &recorder, &tab, main, 0).await?;
+    let installed = install_over(&live, &recorder, main, 0).await?;
     let landed = match &installed {
         Ok(world) => world_url(world).await?,
         Err(_) => Value::Null,
@@ -958,7 +888,7 @@ async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_pag
     );
 
     // The retry a gone world gets: the next document's own world, sealed.
-    let world = install_over(&live, &recorder, &tab, main, 1).await??;
+    let world = install_over(&live, &recorder, main, 1).await??;
     assert_eq!(
         world_url(&world).await?,
         json!([server.url("localhost", "/kids.html?again"), false])

@@ -363,8 +363,7 @@ impl<'a> FormRunner<'a> {
     /// Upstream's `_fill`: the probe sets the value of an input that takes no typing, or
     /// focuses and selects the field, and the value is then typed in one `Input.insertText`
     /// (an empty one presses Delete). The tab's input lock is held from before the edit to
-    /// the last key, so no other op's keys reach the field in between, and the typing window
-    /// covers it, so the journal reports the value as the agent's own.
+    /// the last key, so no other op's keys reach the field in between.
     async fn fill(
         &self,
         located: &Resolved,
@@ -373,7 +372,6 @@ impl<'a> FormRunner<'a> {
     ) -> Result<Applied, PlaywrightError> {
         let mut input = input::hold(self.scope, self.page).await?;
         let sent = self.scope.send_effect()?;
-        let _typing = self.page.state().typing(&sent);
         let edit = Edit::Fill {
             value: value.clone(),
         };

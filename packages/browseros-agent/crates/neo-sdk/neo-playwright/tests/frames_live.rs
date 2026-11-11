@@ -1,9 +1,8 @@
 //! Frames through `Playwright::invoke`, against a real browser: frame locator chains into each
 //! of the 8 frames of the nested 4-level fixture (same-process children, OOPIFs, an OOPIF
 //! inside an OOPIF), `count` at each level of a chain 4 deep, strict mode inside a frame, a
-//! frame that navigated, refs the page never printed, and the journal from a password field
-//! inside an out-of-process iframe. Also checks the hand-built locator input against the
-//! vendored parser's output.
+//! frame that navigated and refs the page never printed. Also checks the hand-built locator
+//! input against the vendored parser's output.
 //!
 //! The live tests need BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --test frames_live -- --ignored`. They serve the
@@ -31,14 +30,13 @@ mod locator;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use browseros_core::sensitive_fields::SensitiveKind;
 use browseros_core::{PageId, TabId};
-use fixture_server::{FixtureServer, Page, nest_pages};
+use fixture_server::{FixtureServer, nest_pages};
 use js_runner::OpHost;
-use live_browser::{Journaled, LiveBrowser, TestPage, TestResult};
+use live_browser::{LiveBrowser, TestPage, TestResult};
 use live_run::LiveRun;
 use locator::{aria_ref, attr, css, enter_frame, locator, role, text};
-use neo_playwright::{ErrorCode, TypedBy};
+use neo_playwright::ErrorCode;
 use serde_json::{Value, json};
 use tokio::time;
 
@@ -423,103 +421,6 @@ async fn tests_that_refs_the_page_never_printed_fail_at_once() -> TestResult {
         started.elapsed() < Duration::from_secs(5),
         "neither waits out its timeout"
     );
-    live.close(&page).await
-}
-
-const LOGIN_TOP: &str = r"<!doctype html><title>login top</title><body><script>
-const frame = document.createElement('iframe');
-frame.title = 'login';
-frame.src = `http://localhost:${location.port}/pw/login.html`;
-document.body.append(frame);
-</script></body>";
-
-const LOGIN: &str =
-    r#"<!doctype html><title>login</title><input id="pw" type="password" aria-label="Password">"#;
-
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_the_journal_reports_typing_in_an_oopif_password_field() -> TestResult {
-    let live = LiveBrowser::connect().await?;
-    let mut pages = nest_pages();
-    pages.insert("/pw/top.html".to_owned(), Page::html(LOGIN_TOP));
-    pages.insert("/pw/login.html".to_owned(), Page::html(LOGIN));
-    let server = FixtureServer::start(pages).await?;
-    let page = live.open(&server.url("127.0.0.1", "/pw/top.html")).await?;
-    // Counting through the frame locator seals the OOPIF's world and sets its session up.
-    let field = locator(
-        &page,
-        &[attr("[title=\"login\"s]"), enter_frame(), css("#pw")],
-        "page.frameLocator('[title=\"login\"]').locator('#pw')",
-    );
-    let mut counted = json!(0);
-    for _ in 0..100 {
-        counted = live.invoke("locator.count", count(&field)).await??;
-        if counted == 1 {
-            break;
-        }
-        time::sleep(Duration::from_millis(50)).await;
-    }
-    assert_eq!(counted, json!(1), "the OOPIF's field is there");
-
-    // Type as the owner would, on a session of the test's own to the OOPIF's target.
-    let targets = live
-        .browser
-        .cdp("Target.getTargets", json!({}), None)
-        .await?;
-    let login = targets["targetInfos"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|info| {
-            info["type"] == "iframe"
-                && info["url"]
-                    .as_str()
-                    .is_some_and(|url| url.ends_with("/pw/login.html"))
-        })
-        .ok_or("the login iframe is its own target")?;
-    let attached = live
-        .browser
-        .cdp(
-            "Target.attachToTarget",
-            json!({ "targetId": login["targetId"], "flatten": true }),
-            None,
-        )
-        .await?;
-    let session =
-        browseros_core::SessionId::from(attached["sessionId"].as_str().ok_or("no session id")?);
-    live.browser
-        .cdp(
-            "Runtime.evaluate",
-            json!({ "expression": "document.getElementById('pw').focus()" }),
-            Some(&session),
-        )
-        .await?;
-    live.browser
-        .cdp(
-            "Input.insertText",
-            json!({ "text": "journal-oopif" }),
-            Some(&session),
-        )
-        .await?;
-    let expected = Journaled {
-        page: page.tab,
-        kind: SensitiveKind::Password,
-        value: "journal-oopif".to_owned(),
-        by: TypedBy::NotAgent,
-    };
-    assert!(
-        live.hooks.wait_for(&expected).await,
-        "the OOPIF's seal journaled the value, attributed to its page: {:?}",
-        live.hooks.journaled()
-    );
-    let _detached = live
-        .browser
-        .cdp(
-            "Target.detachFromTarget",
-            json!({ "sessionId": session.as_str() }),
-            None,
-        )
-        .await;
     live.close(&page).await
 }
 
