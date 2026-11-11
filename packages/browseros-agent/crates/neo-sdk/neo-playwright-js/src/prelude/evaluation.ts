@@ -22,6 +22,7 @@
  * in the main world (`run.handles`). Rust adopts a handle only into its own document.
  */
 import {
+  kFunctionBindingPrefix,
   parseEvaluationResultValue,
   serializeAsCallArgument,
 } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
@@ -40,8 +41,42 @@ import { WaitHandle } from './frame'
 import { isHandle } from './options'
 import type { ElementBrand, PageScript, SerializedValue } from './wire'
 
-/** `evaluate`'s options: upstream's one, which Neo refuses (`refuseExposedFunctions`). */
+/**
+ * `evaluate`'s options: upstream's one. With `exposeFunctions`, each function in the argument
+ * reaches the page as one it can call back (`Callbacks`).
+ */
 export type EvaluateOptions = { exposeFunctions?: boolean }
+
+/**
+ * The functions an argument passes with `exposeFunctions`, each under the fresh `__pw_fn_` name
+ * its `{ fn: name }` carries to the page, as upstream's `serializeArgumentWithCallbacks` names
+ * them. The caller exposes each as a binding of the script's page before the op goes out
+ * (`Page._exposeEvaluateCallbacks`); the page's controller turns `{ fn }` into a function that
+ * calls it.
+ */
+export type Callbacks = [
+  name: string,
+  callback: (...args: unknown[]) => unknown,
+][]
+
+/** upstream's `kFunctionBindingPrefix` and `createGuid`: a callback binding's fresh name. */
+function callbackName(): string {
+  let text = ''
+  for (let index = 0; index < 16; index++)
+    text += Math.floor(Math.random() * 256)
+      .toString(16)
+      .padStart(2, '0')
+  return kFunctionBindingPrefix + text
+}
+
+/** Whether `options` asks for upstream's `exposeFunctions`. */
+export function exposesFunctions(options: unknown): boolean {
+  return (
+    typeof options === 'object' &&
+    options !== null &&
+    !!Reflect.get(options, 'exposeFunctions')
+  )
+}
 
 const TOO_MANY_ARGUMENTS =
   'Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.'
@@ -92,19 +127,6 @@ function assertEvaluateOptions(options: unknown): void {
     throw new FailedCheck('plain', TOO_MANY_ARGUMENTS)
 }
 
-/** `exposeFunctions` would let the page call back into the agent's runtime, which Neo forbids. */
-function refuseExposedFunctions(api: string, options: unknown): void {
-  if (
-    typeof options === 'object' &&
-    options !== null &&
-    Reflect.get(options, 'exposeFunctions')
-  )
-    throw unsupportedError(
-      api,
-      'pages cannot call back into the script in Neo; return what the page computed instead',
-    )
-}
-
 const fallThrough = (value: unknown) => ({ fallThrough: value })
 
 /**
@@ -122,8 +144,8 @@ const fallThrough = (value: unknown) => ({ fallThrough: value })
  * channel validator's. `locator.evaluate` defers everything: `_withElement` runs the handle's
  * evaluate inside its `_wrapApiCall`, after `waitForSelector` (PW:59823), so every check fails
  * after the wait with the prefix, as a refusal Rust raises there. Normalization is always the
- * server's, after the element is found. Neo's own refusal of `exposeFunctions` comes first in
- * every form that takes options.
+ * server's, after the element is found. With `exposeFunctions`, `callbacks` collects the
+ * argument's functions, which the caller exposes before its op.
  */
 export type CallForm = 'frame' | 'locator' | 'handle' | 'query'
 
@@ -146,12 +168,12 @@ export function pageCall(
   pageFunction: unknown,
   arg: unknown,
   options?: unknown,
+  callbacks?: Callbacks,
 ): PageScript {
   const { options: checksOptions, afterWait } = FORMS[form]
-  if (checksOptions) refuseExposedFunctions(api, options)
   try {
     if (checksOptions) assertEvaluateOptions(options)
-    return script(api, pageFunction, arg)
+    return script(api, pageFunction, arg, callbacks)
   } catch (error) {
     if (afterWait) {
       const message = error instanceof Error ? error.message : String(error)
@@ -168,9 +190,14 @@ export function pageCall(
 }
 
 /** The script once the options passed: the argument's checks, normalization, the page form. */
-function script(api: string, pageFunction: unknown, arg: unknown): PageScript {
+function script(
+  api: string,
+  pageFunction: unknown,
+  arg: unknown,
+  callbacks: Callbacks | undefined,
+): PageScript {
   const isFunction = typeof pageFunction === 'function'
-  const { serialized, clientHandles } = serializeArgument(api, arg)
+  const { serialized, clientHandles } = serializeArgument(api, arg, callbacks)
   let expression: string
   try {
     expression = normalizeEvaluationExpression(String(pageFunction), isFunction)
@@ -205,12 +232,23 @@ function script(api: string, pageFunction: unknown, arg: unknown): PageScript {
  * A handle the argument names twice passes one copy, which the serializer then refers back to,
  * so the page receives one object for it, as upstream's page receives its one remote object.
  */
-function serializeArgument(api: string, arg: unknown) {
+function serializeArgument(
+  api: string,
+  arg: unknown,
+  callbacks: Callbacks | undefined,
+) {
   let serialized: ReturnType<typeof serializeValue>
   const clientHandles: ElementHandle[] = []
   const copies = new Map<WaitHandle, unknown>()
   try {
     serialized = serializeValue(arg, (value) => {
+      // upstream's `registerCallback`: without `exposeFunctions` a function falls through to
+      // the serializer's own "Attempting to serialize unexpected value".
+      if (typeof value === 'function' && callbacks) {
+        const name = callbackName()
+        callbacks.push([name, value as Callbacks[number][1]])
+        return { fn: name }
+      }
       if (value instanceof ElementHandle) {
         clientHandles.push(value)
         return { h: clientHandles.length - 1 }

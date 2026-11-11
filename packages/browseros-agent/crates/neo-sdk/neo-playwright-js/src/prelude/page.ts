@@ -23,6 +23,7 @@ import {
 } from './errors'
 import {
   assertMaxArguments,
+  type Callbacks,
   type EvaluateOptions,
   pageCall,
 } from './evaluation'
@@ -769,6 +770,31 @@ export class Page extends EventEmitter {
   ): Promise<Disposable> {
     return exposeOnPage(this, 'page.exposeFunction', name, (_source, ...args) =>
       Reflect.apply(callback, undefined, args),
+    )
+  }
+
+  /**
+   * The functions an `evaluate` with `exposeFunctions` passed (`Callbacks`), exposed as this
+   * page's bindings off `window`, before the op that names them goes out, as upstream's
+   * `_exposeEvaluateCallback` does. They last until the run ends, as every binding does; upstream
+   * also erases them when the main frame loads a new document, which no script there can reach
+   * them from anyway.
+   */
+  async _exposeEvaluateCallbacks(
+    api: string,
+    callbacks: Callbacks | undefined,
+  ): Promise<void> {
+    if (!callbacks?.length) return
+    await Promise.all(
+      callbacks.map(([name, callback]) =>
+        exposeOnPage(
+          this,
+          api,
+          name,
+          (_source, ...args) => Reflect.apply(callback, undefined, args),
+          true,
+        ),
+      ),
     )
   }
 

@@ -19,7 +19,9 @@ import {
 } from './errors'
 import {
   assertMaxArguments,
+  type Callbacks,
   type EvaluateOptions,
+  exposesFunctions,
   fromPageValue,
   pageCall,
 } from './evaluation'
@@ -1386,7 +1388,11 @@ export class Frame extends EventEmitter {
     arg: unknown,
     options: EvaluateOptions | undefined,
   ): Promise<unknown> {
-    const script = pageCall(api, 'frame', pageFunction, arg, options)
+    const callbacks: Callbacks | undefined = exposesFunctions(options)
+      ? []
+      : undefined
+    const script = pageCall(api, 'frame', pageFunction, arg, options, callbacks)
+    await this._page._exposeEvaluateCallbacks(api, callbacks)
     const { value: result, observed } = await invokeObserved(
       'page.evaluate',
       this._call(api, 0),

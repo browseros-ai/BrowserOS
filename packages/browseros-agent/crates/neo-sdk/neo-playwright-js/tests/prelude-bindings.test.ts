@@ -225,3 +225,59 @@ it('tests that a failed exposeFunctions setup disposes the bindings it made', as
       .sort(),
   ).toEqual([1, 2])
 })
+
+describe("evaluate's exposeFunctions", () => {
+  const name = `__pw_fn_${'80'.repeat(16)}`
+
+  it('tests that each function is exposed off window before the evaluate that names it, and answers the page', async () => {
+    const run = runtime([call(name, [21])])
+    await run.run(`
+      Math.random = () => 0.5
+      await page.evaluate(({ cb }) => cb(21), { cb: (n) => n * 2 }, { exposeFunctions: true })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    `)
+    await settle()
+    const ops = run.calls
+      .map((sent) => sent.name)
+      .filter((op) => op === 'page.exposeBinding' || op === 'page.evaluate')
+    expect(ops).toEqual(['page.exposeBinding', 'page.evaluate'])
+    expect(run.sent('page.exposeBinding').map((sent) => sent.input)).toEqual([
+      {
+        call: { api: 'page.evaluate', timeoutMs: 0 },
+        page: { $neo: 'page', tab: 1007 },
+        name,
+        noGlobal: true,
+      },
+    ])
+    const [evaluate] = run.sent('page.evaluate')
+    const script = evaluate?.input.script as { run: { arg: string } }
+    expect(JSON.parse(script.run.arg)).toEqual({
+      o: [{ k: 'cb', v: { fn: name } }],
+      id: 1,
+    })
+    const [answer] = run.sent('bindingCall.resolve')
+    expect(JSON.parse(String(answer?.input.arg)).o[2]).toEqual({
+      k: 'result',
+      v: 42,
+    })
+  })
+
+  it('tests that locator.evaluate exposes nothing when its check fails, which it raises after the wait', async () => {
+    const run = runtime()
+    await run.run(`
+      await page.locator('div').evaluate(() => 1, { cb: () => 1 }, { exposeFunctions: true, timeout: 5 })
+      await page.locator('div').evaluate(() => 1, { cb: () => 1, page }, { exposeFunctions: true })
+    `)
+    const scripts = run
+      .sent('locator.evaluate')
+      .map((sent) => sent.input.script as { refused?: string })
+    expect(String(scripts[1]?.refused)).toStartWith(
+      'Neo passes element handles',
+    )
+    expect(
+      run
+        .sent('page.exposeBinding')
+        .map((sent) => (sent.input.call as { api: string }).api),
+    ).toEqual(['locator.evaluate'])
+  })
+})

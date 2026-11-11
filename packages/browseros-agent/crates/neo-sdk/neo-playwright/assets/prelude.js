@@ -6804,7 +6804,10 @@ ${value.stack}`;
     }
     async evaluate(pageFunction, arg, options) {
       const api = "locator.evaluate";
-      const script = pageCall(api, "locator", pageFunction, arg, options);
+      const callbacks = exposesFunctions(options) ? [] : undefined;
+      const script = pageCall(api, "locator", pageFunction, arg, options, callbacks);
+      if ("run" in script)
+        await this._frame._page._exposeEvaluateCallbacks(api, callbacks);
       return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
     }
     async waitForFunction(pageFunction, arg, options) {
@@ -7522,7 +7525,9 @@ ${value.stack}`;
       await this._page._navigated(api, this, result, observed);
     }
     async _evaluate(api, pageFunction, arg, options) {
-      const script = pageCall(api, "frame", pageFunction, arg, options);
+      const callbacks = exposesFunctions(options) ? [] : undefined;
+      const script = pageCall(api, "frame", pageFunction, arg, options, callbacks);
+      await this._page._exposeEvaluateCallbacks(api, callbacks);
       const { value: result, observed } = await invokeObserved("page.evaluate", this._call(api, 0), {
         ...await this._frameArgs(api),
         script
@@ -7814,7 +7819,9 @@ ${value.stack}`;
     async evaluate(pageFunction, arg, options) {
       const api = "elementHandle.evaluate";
       this.#live(api);
-      const script = pageCall(api, "handle", pageFunction, arg, options);
+      const callbacks = exposesFunctions(options) ? [] : undefined;
+      const script = pageCall(api, "handle", pageFunction, arg, options, callbacks);
+      await this._page._exposeEvaluateCallbacks(api, callbacks);
       return fromPageValue(api, await this.#op("locator.evaluate", api, 0, { script }));
     }
     async $eval(selector, pageFunction, arg) {
@@ -7853,6 +7860,15 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
+  function callbackName() {
+    let text = "";
+    for (let index = 0;index < 16; index++)
+      text += Math.floor(Math.random() * 256).toString(16).padStart(2, "0");
+    return kFunctionBindingPrefix + text;
+  }
+  function exposesFunctions(options) {
+    return typeof options === "object" && options !== null && !!Reflect.get(options, "exposeFunctions");
+  }
   var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
   var REFUSALS = {
     unsupported: unsupportedError,
@@ -7875,10 +7891,6 @@ ${value.stack}`;
     if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
       throw new FailedCheck("plain", TOO_MANY_ARGUMENTS);
   }
-  function refuseExposedFunctions(api, options) {
-    if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
-      throw unsupportedError(api, "pages cannot call back into the script in Neo; return what the page computed instead");
-  }
   var fallThrough = (value) => ({ fallThrough: value });
   var FORMS = {
     frame: { options: true, afterWait: false },
@@ -7886,14 +7898,12 @@ ${value.stack}`;
     handle: { options: true, afterWait: false },
     query: { options: false, afterWait: false }
   };
-  function pageCall(api, form, pageFunction, arg, options) {
+  function pageCall(api, form, pageFunction, arg, options, callbacks) {
     const { options: checksOptions, afterWait } = FORMS[form];
-    if (checksOptions)
-      refuseExposedFunctions(api, options);
     try {
       if (checksOptions)
         assertEvaluateOptions(options);
-      return script(api, pageFunction, arg);
+      return script(api, pageFunction, arg, callbacks);
     } catch (error) {
       if (afterWait) {
         const message = error instanceof Error ? error.message : String(error);
@@ -7906,9 +7916,9 @@ ${value.stack}`;
       throw error;
     }
   }
-  function script(api, pageFunction, arg) {
+  function script(api, pageFunction, arg, callbacks) {
     const isFunction = typeof pageFunction === "function";
-    const { serialized, clientHandles } = serializeArgument(api, arg);
+    const { serialized, clientHandles } = serializeArgument(api, arg, callbacks);
     let expression;
     try {
       expression = normalizeEvaluationExpression(String(pageFunction), isFunction);
@@ -7932,12 +7942,17 @@ ${value.stack}`;
       }
     };
   }
-  function serializeArgument(api, arg) {
+  function serializeArgument(api, arg, callbacks) {
     let serialized;
     const clientHandles = [];
     const copies = new Map;
     try {
       serialized = serializeValue(arg, (value) => {
+        if (typeof value === "function" && callbacks) {
+          const name = callbackName();
+          callbacks.push([name, value]);
+          return { fn: name };
+        }
         if (value instanceof ElementHandle) {
           clientHandles.push(value);
           return { h: clientHandles.length - 1 };
@@ -9250,6 +9265,11 @@ ${value.stack}`;
     }
     exposeFunction(name, callback) {
       return exposeOnPage(this, "page.exposeFunction", name, (_source, ...args) => Reflect.apply(callback, undefined, args));
+    }
+    async _exposeEvaluateCallbacks(api, callbacks) {
+      if (!callbacks?.length)
+        return;
+      await Promise.all(callbacks.map(([name, callback]) => exposeOnPage(this, api, name, (_source, ...args) => Reflect.apply(callback, undefined, args), true)));
     }
     async _bindingFrame(id) {
       if (id === null)
