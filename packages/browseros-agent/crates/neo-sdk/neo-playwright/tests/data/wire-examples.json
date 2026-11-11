@@ -2124,6 +2124,35 @@
         }
       }
     ],
+    "page.addLocatorHandler": [
+      {
+        "call": {
+          "api": "page.addLocatorHandler",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:text",
+                  "body": "\"Accept cookies\"i",
+                  "source": "\"Accept cookies\"i"
+                }
+              ]
+            }
+          ],
+          "display": "getByText('Accept cookies')"
+        },
+        "noWaitAfter": true
+      }
+    ],
     "page.addScriptTag": [
       {
         "call": {
@@ -2482,6 +2511,14 @@
         }
       }
     ],
+    "page.locatorHandlerTriggered": [
+      {
+        "call": {
+          "api": "page.locatorHandlerTriggered",
+          "timeoutMs": 0
+        }
+      }
+    ],
     "page.opener": [
       {
         "call": {
@@ -2521,6 +2558,24 @@
           "id": 2,
           "acknowledged": []
         }
+      }
+    ],
+    "page.removeLocatorHandler": [
+      {
+        "call": {
+          "api": "page.removeLocatorHandler",
+          "timeoutMs": 0
+        },
+        "uid": 1
+      }
+    ],
+    "page.resolveLocatorHandler": [
+      {
+        "call": {
+          "api": "page.resolveLocatorHandler",
+          "timeoutMs": 0
+        },
+        "uid": 1
       }
     ],
     "page.saveScreenshot": [

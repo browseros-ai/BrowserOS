@@ -21,6 +21,10 @@
 //! A fill uses `PageInput` only when the page asks for typing. `setInputFiles` uses
 //! `DOM.setFileInputFiles` or a isolated-world edit.
 //!
+//! Every outer pass, and every inner retry after the first attempt, starts with the page's
+//! locator-handler checkpoint (`locator_handler.rs`), unless `force` skips it: an overlay the
+//! script registered a handler for is dismissed before the action looks at its element.
+//!
 //! Pointer actions follow this path:
 //!
 //! ```text

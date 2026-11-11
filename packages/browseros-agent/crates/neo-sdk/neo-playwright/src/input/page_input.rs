@@ -167,6 +167,11 @@ impl PageInput {
         self.drain(scope, usize::MAX).await
     }
 
+    /// Whether the tab's mouse holds `button`: a `dragTo` press, until its release.
+    pub(crate) fn holds(&self, button: MouseButton) -> bool {
+        self.tab.devices.mouse.holds(button)
+    }
+
     /// Lets go of `button` if the tab's mouse still holds it: the release is planned on the
     /// tab's devices and owed, so it goes out once this input is dropped, before any later
     /// input. A `dragTo` press holds the left button across both halves; on an exit that never

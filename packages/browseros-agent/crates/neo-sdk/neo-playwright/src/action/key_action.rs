@@ -17,6 +17,7 @@ use crate::action::requested_navigations::RequestedNavigations;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::input::{self, InputDevices, InputStep, UnknownKey};
+use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{Edit, ProbeFailure, ProbeReply, ProbeRequest, Want};
@@ -111,7 +112,8 @@ impl<'a> KeyRunner<'a> {
             if self.scope.sleep(backoff.wait(pass)).await.is_err() {
                 return Err(self.timed_out());
             }
-            let Ok(located) = self.scope.within(self.subject.locate(pass)).await else {
+            let locating = self.subject.locate(pass, Prechecks::LocatorPasses);
+            let Ok(located) = self.scope.within(locating).await else {
                 return Err(self.timed_out());
             };
             let Some(located) = located? else {
