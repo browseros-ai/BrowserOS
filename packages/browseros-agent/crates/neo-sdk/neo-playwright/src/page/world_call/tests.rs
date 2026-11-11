@@ -8,8 +8,7 @@ use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 
 use crate::test_env::{EnvCall, TestEnv};
-use crate::test_support::{self, RecordingHooks};
-use crate::{ErrorCode, Op, Playwright};
+use crate::{ErrorCode, Op, Playwright, test_support};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -44,7 +43,7 @@ async fn tests_that_an_op_ends_at_its_timeout_while_its_frames_world_never_insta
             }}]
         }}),
     )?;
-    let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
+    let playwright = Playwright::new(Arc::clone(&browser));
     let brand = json!({ "$neo": "page", "tab": 7 });
     let script = json!({ "run": { "expression": "() => true", "isFunction": true,
                                   "arg": r#"{"v":"undefined"}"# } });
