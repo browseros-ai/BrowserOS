@@ -55,6 +55,8 @@ export function runSummary(
     neoRunId: reply === null ? null : `neo-${seq}`,
     neoStatus: status === 'running' ? null : status,
     neoEffects: null,
+    neoDurationMs: null,
+    operationCount: null,
   }
 }
 
@@ -65,6 +67,7 @@ export function runDetail(
 ): RunDetail {
   return {
     ...run,
+    neo: null,
     request: { raw: '{}', forwarded: null, jsonRpcId: run.seq },
     reply: {
       httpStatus: text === null ? null : 200,

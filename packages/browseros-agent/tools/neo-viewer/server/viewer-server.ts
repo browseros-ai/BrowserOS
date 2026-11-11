@@ -9,6 +9,7 @@ import type { ViewerConfig } from './config'
 import { configureHostApi } from './hostApi'
 import { TaskStore } from './log/task-store'
 import { containerUp, runCommand } from './neo-container'
+import { joinNeoRuns } from './neo-runs'
 import { buildPage, type PageFile } from './page'
 import { handleMcp, type McpProxyDeps } from './proxy/mcp-proxy'
 import { ClientNames } from './tasks/client-names'
@@ -46,6 +47,8 @@ export async function startViewer(
   ])
   // The proxy needs the bound port (for the process lookup) before the first request.
   let proxy: McpProxyDeps | null = null
+  // Neo's record of each run, read through the host API once its reply is in.
+  const joiner = joinNeoRuns(store)
   const info: Omit<ViewerInfo, 'container'> = {
     mcpUrl: '',
     upstreamUrl: config.upstream.href,
@@ -101,6 +104,7 @@ export async function startViewer(
     store,
     async stop() {
       await server.stop(true)
+      await joiner.stop()
       await store.flush()
     },
   }
