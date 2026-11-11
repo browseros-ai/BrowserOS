@@ -24,7 +24,6 @@ pub(crate) enum ErrorCode {
     BrowserUnavailable,
     InternalError,
     FitRestored,
-    DisplayPaused,
     DisplayUnavailable,
     TakeoverReleased,
 }
@@ -42,7 +41,6 @@ impl ErrorCode {
             Self::BrowserUnavailable => "browser_unavailable",
             Self::InternalError => "internal_error",
             Self::FitRestored => "fit_restored",
-            Self::DisplayPaused => "display_paused",
             Self::DisplayUnavailable => "display_unavailable",
             Self::TakeoverReleased => "takeover_released",
         }
@@ -182,11 +180,6 @@ impl From<PartError> for ApiError {
             PartError::UnusableViewer(_) => {
                 Self::invalid("`width` and `height` must each be at least 100")
             }
-            PartError::DisplayPaused => Self::new(
-                StatusCode::CONFLICT,
-                ErrorCode::DisplayPaused,
-                "view displays are paused; try again later",
-            ),
             PartError::TakeoverReleased => Self::new(
                 StatusCode::CONFLICT,
                 ErrorCode::TakeoverReleased,

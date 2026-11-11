@@ -14,10 +14,10 @@
 //! ```
 //!
 //! **The order keeps the owner's handoff intact.** The agent is locked out before the owner
-//! can reach the tab, and spectators and agent moves of the front are held
-//! off before the owner's display can open. Release stops the owner's input before restoring
-//! the fit and giving back the screen. The agent's lock lifts last, so the agent never acts on
-//! a half-restored tab. The TTL release starts 10 s before the lock's deadline so the same
+//! can reach the tab, and agent moves of the front are held off before the owner's
+//! display can open. Spectator streams remain available throughout. Release stops the owner's
+//! input before restoring the fit and giving back the screen. The agent's lock lifts last,
+//! so the agent never acts on a half-restored tab. The TTL release starts 10 s before the lock's deadline so the same
 //! ordering holds when the owner leaves the takeover open.
 //!
 //! **A start cannot outrun its TTL release.** The release is scheduled as the lock is taken, and
@@ -45,10 +45,11 @@
 //! in a task of its own, so one the budget leaves behind finishes in the background instead of
 //! stopping halfway: a fit's restore cut short would leave its fit active for good.
 
+use crate::browser_tabs::ScreenHoldGuard;
 use crate::limits::{GIVE_BACK, KEEP_RELEASED_TAKEOVER, MIN_TAKEOVER_TTL, TAKEOVER_CHANGES};
 use crate::{
-    BrowserTabs, DisplayBinding, Displays, FitId, Fits, LockBinding, LockId, LockTtl, Locks,
-    PartError, Reads, ScreenHold, ScreenSize, TakeoverId,
+    BrowserTabs, DisplayBinding, FitId, Fits, LockBinding, LockId, LockTtl, Locks, PartError,
+    Reads, ScreenHolder, ScreenSize, TakeoverId,
 };
 use browseros_core::TabId;
 use futures_util::future::{self, BoxFuture, FutureExt};
@@ -171,8 +172,8 @@ enum Phase {
 struct Held {
     /// Ties the owner's control displays to the takeover (`release=`).
     binding: DisplayBinding,
-    /// Keeps view displays and the agent's moves off the screen.
-    screen: ScreenHold,
+    /// Keeps the agent's moves off the owner's screen until the fit is restored.
+    screen: ScreenHoldGuard,
     /// Stops the TTL release once the takeover's give-back has begun.
     timer: DropGuard,
 }
@@ -183,7 +184,7 @@ struct Held {
 struct Parts {
     /// Ties the owner's control displays to the takeover. None is bound to an unpublished one.
     binding: DisplayBinding,
-    screen: ScreenHold,
+    screen: ScreenHoldGuard,
     fit: BoxFuture<'static, Option<FitId>>,
     /// Stops the TTL release once the give-back has begun.
     timer: DropGuard,
@@ -211,7 +212,6 @@ impl Parts {
 pub struct Takeovers {
     locks: Arc<Locks>,
     fits: Arc<Fits>,
-    displays: Arc<Displays>,
     browser: BrowserTabs,
     /// Held by a start from its first look at the table to its end, so two starts on one tab
     /// cannot both find none there. A tab close waits on it too, so a takeover started on a tab
@@ -223,19 +223,13 @@ pub struct Takeovers {
 
 impl Takeovers {
     /// No takeovers. The flow uses the same parts the host's own routes do:
-    /// `locks`, `fits`, `displays` (the screen hold and the display binding),
-    /// and `browser` to check the tab.
+    /// `locks`, `fits`, and `browser` to check the tab and hold its front. The flow owns
+    /// its display binding, which drains owner input before returning the fitted surface.
     #[must_use]
-    pub fn new(
-        locks: Arc<Locks>,
-        fits: Arc<Fits>,
-        displays: Arc<Displays>,
-        browser: BrowserTabs,
-    ) -> Arc<Self> {
+    pub fn new(locks: Arc<Locks>, fits: Arc<Fits>, browser: BrowserTabs) -> Arc<Self> {
         Arc::new(Self {
             locks,
             fits,
-            displays,
             browser,
             starting: tokio::sync::Mutex::default(),
             table: Mutex::default(),
@@ -293,7 +287,7 @@ impl Takeovers {
             timer.clone(),
         ));
         let timer = timer.drop_guard();
-        let screen = self.displays.hold_screen();
+        let screen = self.browser.hold_screen(ScreenHolder::Takeover);
         let mut takeover = Takeover {
             id,
             tab,

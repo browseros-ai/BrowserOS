@@ -152,9 +152,8 @@ async fn meets(
     };
     let reply = site.call(&root_read(Read::State { state: query })).await?;
     match reply {
-        // A state read carries no sweep (protocol.ts `ReadValue`).
         ProbeReply::Read { value, .. } => {
-            element_read::read_value(scope, value.textless()).map(Some)
+            element_read::read_value(scope, value.into_value()).map(Some)
         }
         ProbeReply::Detached => Ok(None),
         other => Err(resolve::refused(scope, other)),
@@ -169,7 +168,7 @@ async fn border_box(
 ) -> Result<Option<Option<Rect>>, PlaywrightError> {
     match site.call(&root_read(Read::BoundingBox)).await? {
         ProbeReply::Read { value, .. } => {
-            element_read::read_value(scope, value.textless()).map(Some)
+            element_read::read_value(scope, value.into_value()).map(Some)
         }
         ProbeReply::Detached => Ok(None),
         other => Err(resolve::refused(scope, other)),

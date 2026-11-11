@@ -20,7 +20,7 @@ struct FirstWriteFails {
 impl TabScript for FirstWriteFails {
     fn probe(&self, _frame: &str, request: &Value) -> ProbeAnswer {
         if request["op"] != "setContent" {
-            return ProbeAnswer::empty_sweep();
+            return ProbeAnswer::unexpected();
         }
         if self.writes.fetch_add(1, Ordering::SeqCst) == 0 {
             ProbeAnswer::error(self.first)

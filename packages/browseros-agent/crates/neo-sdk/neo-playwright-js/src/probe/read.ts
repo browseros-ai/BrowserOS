@@ -267,18 +267,6 @@ function located(
   }
 }
 
-/**
- * The reads whose value is only booleans, a box or a frame origin, which no page text can
- * reach. Every other read sends this document's sweep with its value.
- */
-const TEXTLESS: ReadonlySet<ReadRequest['read']['kind']> = new Set([
-  'state',
-  'checkable',
-  'fileInput',
-  'boundingBox',
-  'frameOrigin',
-])
-
 export function read(
   world: World,
   request: ReadRequest,
@@ -295,13 +283,7 @@ export function read(
       : resolveTarget(world, request.target, request.strictness, root)
   if (found.kind !== 'one') return found
   const { value, from } = reader(world, found.element)
-  // The seal guards each field's own getters, not an ancestor's text: a <div> around a
-  // prefilled <textarea> reads its value raw through innerText. Rust masks every string of
-  // the value with the sweep, as it does page.content().
-  const sweep = TEXTLESS.has(request.read.kind)
-    ? []
-    : world.seal.sensitiveValues()
-  return { kind: 'read', value, sensitive: world.seal.kind(from), sweep }
+  return { kind: 'read', value, sensitive: world.seal.kind(from) }
 }
 
 /**
@@ -316,11 +298,9 @@ export function readAll(
 ): ReplyTo<'readAll'> {
   const elements = queryAll(world, request.target, root)
   const count = elements.length
-  // As in `read`: every value with page text in it is masked by Rust with this sweep.
-  const sweep = () => world.seal.sensitiveValues()
   switch (request.read) {
     case 'count':
-      return { kind: 'values', count, values: [], sweep: [] }
+      return { kind: 'values', count, values: [] }
     case 'pins': {
       // One entry for the whole batch: Rust makes a handle of each before any can be evicted.
       const pins = world.pins.addAll(elements)
@@ -333,7 +313,6 @@ export function readAll(
             preview: world.injected.previewNode(element),
           }),
         ),
-        sweep: sweep(),
       }
     }
     case 'textContents':
@@ -341,7 +320,6 @@ export function readAll(
         kind: 'values',
         count,
         values: elements.map((element) => element.textContent ?? ''),
-        sweep: sweep(),
       }
     case 'innerTexts':
       return {
@@ -350,7 +328,6 @@ export function readAll(
         values: elements.map(
           (element) => (element as HTMLElement).innerText ?? '',
         ),
-        sweep: sweep(),
       }
   }
 }

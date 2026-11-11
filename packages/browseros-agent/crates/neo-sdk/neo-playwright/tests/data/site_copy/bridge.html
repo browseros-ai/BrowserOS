@@ -1,8 +1,0 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Bridge</title></head>
-<body><p>A cross-site frame between the top page and a field of the top page's site.</p>
-<script>
-const frame = document.createElement('iframe');
-frame.title = 'field';
-frame.src = `http://127.0.0.1:${location.port}/site_copy/field.html`;
-document.body.append(frame);
-</script></body></html>

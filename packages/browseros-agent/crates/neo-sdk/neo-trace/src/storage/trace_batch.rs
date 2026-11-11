@@ -1,6 +1,6 @@
 //! One transaction and the only row-write interface for the trace file. The ordered writer,
 //! startup recovery (before readers exist) and salvage (before the writer starts) are its only
-//! callers. Callers supply already-masked values: rewriting a raw row would leave raw WAL pages.
+//! callers. Callers bound payloads before supplying them; this layer never transforms text.
 //! Dropping a batch without commit rolls back; replies, events and camera jobs must wait for commit.
 
 use browseros_core::TabId;
@@ -21,8 +21,8 @@ use crate::{
     Swept, TaskId, TraceError,
 };
 
-/// A run's start row, as the writer stores it. Its host data is not here: the run's end stores
-/// it, masked with what the end's own set knows ([`RunEndRow::host_data`]).
+/// A run's start row, containing only identity and state. Code and host data arrive with the
+/// end row, preserving the reader-visible lifecycle ([`RunEndRow::host_data`]).
 pub(crate) struct RunStartRow<'a> {
     pub(crate) id: RunId,
     pub(crate) task: Option<&'a TaskId>,
@@ -32,7 +32,7 @@ pub(crate) struct RunStartRow<'a> {
 
 /// What a run's end stores of its code.
 pub(crate) enum RunCode<'a> {
-    /// The masked, bounded code.
+    /// The bounded code.
     Stored { text: &'a str, truncated: bool },
     /// No code, and why: `unavailable` when the writer never saw it.
     Withheld(&'static str),
@@ -47,7 +47,7 @@ pub(crate) struct RunEndRow<'a> {
     pub(crate) result: Option<&'a Value>,
     pub(crate) result_truncated: bool,
     pub(crate) code: RunCode<'a>,
-    /// The run's host data, masked and bounded; `None` keeps what the row has (nothing, for a
+    /// The run's bounded host data; `None` keeps what the row has (nothing, for a
     /// run whose start the writer never saw).
     pub(crate) host_data: Option<&'a Value>,
     pub(crate) replay: Option<&'a Value>,
@@ -58,7 +58,7 @@ pub(crate) struct RunEndRow<'a> {
 }
 
 /// An operation's start row, as the writer stores it. It has no input: the operation's end
-/// stores that, masked with what the end's own set knows. An operation with a target tab also
+/// stores that, bounded to its storage budget. An operation with a target tab also
 /// lists its run under that tab.
 pub(crate) struct OperationStartRow<'a> {
     pub(crate) id: OperationId,
@@ -70,7 +70,7 @@ pub(crate) struct OperationStartRow<'a> {
     pub(crate) at: EpochMillis,
 }
 
-/// An operation's end row, as the writer stores it (everything already masked and bounded).
+/// An operation's end row, as the writer stores it (payloads already bounded).
 pub(crate) struct OperationEndRow<'a> {
     pub(crate) id: OperationId,
     pub(crate) at: EpochMillis,
@@ -120,7 +120,7 @@ impl TraceBatch {
             .filter(operations::Column::Outcome.is_null())
             .exec(&self.txn)
             .await?;
-        // Code only reaches disk at the end. An interrupted run has nothing safe to show.
+        // Code only reaches disk at the end. An interrupted run has no completed code to show.
         runs::Entity::update_many()
             .col_expr(runs::Column::Status, Expr::value("interrupted"))
             .col_expr(runs::Column::Effects, Expr::value("unknown"))

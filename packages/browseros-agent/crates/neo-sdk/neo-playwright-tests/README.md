@@ -92,3 +92,23 @@ The report selects refusal wordings from `run.json.engine`, labels Claw reports
 “v1”, and retains the stable verdict IDs (`neo-lacks`, `neo-differs`, etc.). Only
 an unexpected reference failure establishes `invalid-here`. Missing APIs are
 SDK gaps; add-on loading and fixture setup failures are harness errors.
+
+The runner prints **All tests** and **In-scope tests** after execution and writes
+`scores.json`. Both count Playwright expected/flaky outcomes (including expectLoop
+passes); totals include skips and incomplete cases. An empty denominator prints
+`n/a`. The offline report prints the same scores alongside its unchanged verdicts.
+
+`node/scope.json` is reviewed reporting policy, separate from curation. Entries name
+a corpus-relative spec `file`, optionally narrowed with `ids`; omitting `ids` covers
+that whole spec. Each has one reason: `network`, `handles`, `drift`, or
+`decided-deviation`. Network/handle entries identify explicit refusal evidence;
+ordinary failures stay in scope. The initial evidence is the lead's parity gap
+list and the corresponding per-test errors from the full run (mixed event groups
+also contain supported events, so the entire group is not excluded).
+
+Scope never skips, deletes, patches or reclassifies a test. Each score subtracts
+the matched cases and their passing count; exclusions are counted per reason.
+Every passing excluded test is listed for review. Filtered runs count only their
+selected cases. `run.json.scope.manifestSha256` records a copied `scope.json` next
+to the results; offline reports verify its hash. Legacy runs use the current
+repository policy with an explicit provenance note.

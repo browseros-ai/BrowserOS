@@ -303,10 +303,9 @@ paths:
         Binary frames carry RFB 3.8 both ways. No subprotocol is required, and `binary` is echoed
         when the client offers it.
 
-        `view` drops every input message. `control` forwards input. Its first input closes
-        view displays (`4001`), and new ones are refused (`409 display_paused`) while that
-        control display is open or a takeover is active. Views can open again when control ends.
-        The tab's screencast, video and trace screenshots keep serving.
+        `view` drops every input message. `control` forwards input. View displays remain
+        available and keep streaming during control input and takeovers. The tab's screencast,
+        video and trace screenshots keep serving.
         While no owner has control, `followTab` keeps that tab in front, and `followTask` keeps
         the task's current page in front (the tab its latest operation targeted). Both pause
         while the owner holds the screen or a lock holds their target tab. `followTab` and
@@ -317,7 +316,6 @@ paths:
         `409 takeover_released`.
 
         A display ends with a WebSocket close frame that says why:
-        - `4001` paused because the owner has control.
         - `4002` released: the display's takeover was released;
         - `1008`: the client sent something the display refuses: an RFB message it does not
           know, a paste over 1 MiB, or a handshake other than RFB 3.8 with no security;
@@ -759,8 +757,7 @@ components:
       description: >-
         A part was already given back: the fit was restored (`fit_restored`), the lock released
         (`lock_released`), or the takeover released (`takeover_released`). Or a takeover is in
-        the way: the lock belongs to one, so release the takeover instead (`takeover_lock`), or
-        view displays are paused (`display_paused`).
+        the way: the lock belongs to one, so release the takeover instead (`takeover_lock`).
       content:
         application/json:
           schema:
@@ -921,19 +918,19 @@ components:
           type: object
           description: >-
             The host data the run was started with (`_meta["com.browseros.neo/run"].hostData`), if
-            any; masked. Present once the run has ended: Neo masks it with what the run's end
-            knows, so a running run, or one cut short by a restart, has none.
+            any; bounded for storage. Present once the run has ended, so a running run, or one
+            cut short by a restart, has none.
         code:
           type: string
           description: >-
-            The script, masked. Stored when the run ends, so it is absent while the run is
+            The script, bounded for storage. Stored when the run ends, so it is absent while the run is
             `running`. Older runs may also have no stored code.
         codeWithheld:
           type: string
           description: Neo stopped before the run ended, so its code was never stored.
           x-extensible-enum: [unavailable]
         result:
-          description: The script's return value, masked and bounded.
+          description: The script's return value, bounded for storage.
         resultTruncated:
           type: boolean
         unknown:
@@ -997,14 +994,14 @@ components:
           $ref: '#/components/schemas/PageRef'
         args:
           description: >-
-            Arguments, masked and bounded. Target field kinds do not redact them. Page and locator
+            Original arguments, bounded for storage. Page and locator
             handles appear as their branded JSON, e.g. `{"$neo":"locator","page":3,"selector":"…"}`.
-            Present once the operation has ended: Neo masks them with what the operation's end
-            knows, so an operation still running, or one whose end Neo never recorded, has none.
+            Present once the operation has ended, so an operation still running, or one whose end Neo
+            never recorded, has none.
         argsTruncated:
           type: boolean
         result:
-          description: Safe result, masked and bounded.
+          description: Result, bounded for storage.
         resultTruncated:
           type: boolean
         outcome:
@@ -1023,8 +1020,7 @@ components:
         notes:
           type: array
           description: >-
-            Its call-log lines, oldest first, e.g. `waiting for getByRole('button')`. Masked and
-            bounded: a long line ends in `…[+N bytes]`, and lines past the limit are counted in one
+            Its call-log lines, oldest first, e.g. `waiting for getByRole('button')`. Bounded: a long line ends in `…[+N bytes]`, and lines past the limit are counted in one
             last `…[+N lines]` line. They are stored with the operation's end, so the field is
             absent while it runs and when it noted nothing.
           items:
@@ -1327,7 +1323,6 @@ components:
               fit_restored,
               takeover_released,
               takeover_lock,
-              display_paused,
               display_unavailable,
               browser_unavailable,
               internal_error,

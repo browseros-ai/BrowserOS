@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
 use neo_trace::{
-    Effect, OperationId, OperationRow, RedactionLimits, Redactor, RunId, SecretSet,
-    SecretSetConfig, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    Effect, OperationId, OperationRow, RedactionLimits, Redactor, RunId, TraceSink, TraceStore,
+    WriterConfig, spawn_writer,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -84,9 +84,7 @@ impl Harness {
         .await?;
         let dir = tempfile::tempdir()?;
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-        // neo-trace's redactor still takes a secret set; the harness registers nothing in it.
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let redactor = Redactor::new(secrets, RedactionLimits::default());
+        let redactor = Redactor::new(RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, WriterConfig::default(), None);
         let lock = Arc::new(TabLock::default());
         let seen = Arc::new(SeenChecks::default());

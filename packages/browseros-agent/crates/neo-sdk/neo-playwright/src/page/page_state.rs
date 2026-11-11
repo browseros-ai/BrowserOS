@@ -7,7 +7,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::action::FocusLease;
 use crate::input::{Platform, TabInput};
-use crate::world::{FrameSeq, FrameWorlds};
+use crate::world::FrameWorlds;
 
 /// One tab's state, shared by every op on it. Created on the first op that admits the tab,
 /// and kept while the `Playwright` lives: a second one for the same tab would restart its seq
@@ -35,11 +35,10 @@ pub(crate) struct PageState {
 }
 
 impl PageState {
-    /// A tab whose main frame's first document will take `first`, in a browser on
-    /// `platform`.
-    pub(crate) fn new(first: FrameSeq, platform: Platform) -> Self {
+    /// A tab whose frames `frames` numbers, in a browser on `platform`.
+    pub(crate) fn new(frames: FrameWorlds, platform: Platform) -> Self {
         Self {
-            frames: FrameWorlds::new(first),
+            frames,
             input: Arc::new(AsyncMutex::new(TabInput::new(platform))),
             focus: Arc::default(),
             screenshots: Arc::default(),

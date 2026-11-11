@@ -27,8 +27,7 @@ use neo_takeover::{
 };
 use neo_trace::{
     Effect, EpochMillis, OperationId, OperationKind, OperationStarted, RedactionLimits, Redactor,
-    RunId, RunStarted, SecretSet, SecretSetConfig, TaskId, TraceSink, TraceStore, WriterConfig,
-    spawn_writer,
+    RunId, RunStarted, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -88,10 +87,9 @@ struct Harness {
 async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
     let dir = tempfile::tempdir()?;
     let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
     let sink = spawn_writer(
         &store,
-        Redactor::new(Arc::clone(&secrets), RedactionLimits::default()),
+        Redactor::new(RedactionLimits::default()),
         WriterConfig::default(),
         None,
     );
@@ -110,12 +108,7 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         sink.clone(),
         store,
     );
-    let takeovers = Takeovers::new(
-        Arc::clone(&locks),
-        Arc::clone(&fits),
-        Arc::clone(&displays),
-        tabs,
-    );
+    let takeovers = Takeovers::new(Arc::clone(&locks), Arc::clone(&fits), tabs);
     Ok(Harness {
         _dir: dir,
         xvnc,
@@ -169,7 +162,6 @@ impl Harness {
             request_id: None,
             task_id: Some(task.clone()),
             host_data: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         self.sink.op_started(OperationStarted {
@@ -180,22 +172,16 @@ impl Harness {
             effect: Effect::Write,
             tab: Some(TabId(tab)),
             args: json!({ "selector": "#next" }),
-            also_mask: None,
             at: EpochMillis::now(),
         });
     }
 
     /// Whether a view display is admitted now; one that is goes away at once.
     async fn views_admitted(&self) -> Result<bool, BoxError> {
-        match self
-            .displays
+        self.displays
             .admit(DisplayRequest::View { follow: None })
-            .await
-        {
-            Ok(_) => Ok(true),
-            Err(PartError::DisplayPaused) => Ok(false),
-            Err(error) => Err(error.into()),
-        }
+            .await?;
+        Ok(true)
     }
 
     /// The owner's control display, bound to `takeover`, with a key forwarded through it.
@@ -278,7 +264,7 @@ impl Harness {
             Ok(()),
             "the agent writes again once the lock lifted"
         );
-        assert!(self.views_admitted().await?, "spectators are back");
+        assert!(self.views_admitted().await?, "spectators are admitted");
         Ok(())
     }
 }
@@ -343,7 +329,7 @@ async fn a_takeover_locks_the_tab_and_fits_the_owners_viewer() -> TestResult {
         takeover.expires_at.millis() - takeover.created_at.millis(),
         1_200_000
     );
-    assert!(!h.views_admitted().await?, "spectators are held off");
+    assert!(h.views_admitted().await?, "spectators remain admitted");
 
     let fit = h.fits.view(takeover.fit.ok_or("a fit")?).ok_or("the fit")?;
     assert_eq!((fit.tab, fit.screen), (TAB, PHONE));
@@ -359,7 +345,7 @@ async fn a_failed_fit_gives_back_what_the_start_took() -> TestResult {
     let refused = h.takeovers.start(request(Some(PHONE))?).await;
     assert!(matches!(refused, Err(PartError::Screen(_))), "{refused:?}");
     assert!(!h.locks.is_locked(TAB), "the lock is lifted");
-    assert!(h.views_admitted().await?, "spectators are let back");
+    assert!(h.views_admitted().await?, "spectators remain admitted");
 
     assert_eq!(h.xvnc.size(), HOME);
     Ok(())
@@ -402,7 +388,7 @@ async fn release_gives_back_in_order_and_lifts_the_lock_last() -> TestResult {
     );
 
     assert!(!h.locks.is_locked(TAB), "then the lock lifted");
-    assert!(h.views_admitted().await?, "and spectators are back");
+    assert!(h.views_admitted().await?, "and spectators are admitted");
     assert_eq!(h.xvnc.size(), HOME);
     assert_eq!(h.browser.window(), "maximized");
     Ok(())
@@ -418,7 +404,7 @@ async fn views_and_the_lock_stay_until_the_give_back_is_done() -> TestResult {
         async move { takeovers.release(takeover.id, ReleaseReason::Done).await }
     });
     eventually(|| h.browser.held("Emulation.clearDeviceMetricsOverride") > 0).await?;
-    assert!(!h.views_admitted().await?, "spectators are still held off");
+    assert!(h.views_admitted().await?, "spectators remain admitted");
     assert!(
         h.locks.check(LockTarget::Tab(TAB), Effect::Write).is_err(),
         "the agent is still locked out"
@@ -466,7 +452,7 @@ async fn a_start_whose_caller_hangs_up_still_finishes() -> TestResult {
         Err(OwnerHasControl { lock: retried.lock }),
         "the retry found the takeover the first start made"
     );
-    assert!(!h.views_admitted().await?);
+    assert!(h.views_admitted().await?);
     let released = h.takeovers.release(retried.id, ReleaseReason::Done).await?;
     assert_eq!(released_for(&released), Some(ReleaseReason::Done));
     assert!(!h.locks.is_locked(TAB), "the host can still give it back");

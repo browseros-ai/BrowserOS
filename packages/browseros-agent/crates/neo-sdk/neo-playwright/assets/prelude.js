@@ -339,6 +339,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "locator.waitForFunction": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
     "page.screenshot": {
       effect: "read",
       target: "page",
@@ -6809,6 +6814,11 @@ ${value.stack}`;
       const script = pageCall(api, "locator", pageFunction, arg, options);
       return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
     }
+    async waitForFunction(pageFunction, arg, options) {
+      const api = "locator.waitForFunction";
+      const script = pageCall(api, "query", pageFunction, arg);
+      await this._frame._selectorOp("locator.waitForFunction", api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
+    }
     async evaluateAll(pageFunction, arg) {
       const api = "locator.evaluateAll";
       return await this._frame._evaluateAll(api, this._selector, pageCall(api, "query", pageFunction, arg));
@@ -7331,14 +7341,16 @@ ${value.stack}`;
         throw clientError(api, `url: expected string, got ${typeof url}`);
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      const args = await this._frameArgs(api);
-      const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
-        ...args,
-        url,
-        waitUntil,
-        ...pick(options, ["referer"])
-      }, undefined, signal);
-      return await this._page._navigated(api, this, result, observed);
+      return await this._page._navigating(async () => {
+        const args = await this._frameArgs(api);
+        const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
+          ...args,
+          url,
+          waitUntil,
+          ...pick(options, ["referer"])
+        }, undefined, signal);
+        return await this._page._navigated(api, this, result, observed);
+      });
     }
     async _waitForLoadState(api, state, options = {}) {
       const verified = loadState(api, "state", state ?? "load");
@@ -8008,6 +8020,7 @@ ${value.stack}`;
     #closeEvent = 0;
     #approvedClose = null;
     _working = false;
+    _navigationsInFlight = 0;
     #childFrames = new Map;
     constructor(context, tab, url) {
       super();
@@ -8312,6 +8325,14 @@ ${value.stack}`;
       const brand = elementBrand(value);
       return brand ? new ElementHandle(this, brand) : null;
     }
+    async _navigating(work) {
+      this._navigationsInFlight++;
+      try {
+        return await work();
+      } finally {
+        this._navigationsInFlight--;
+      }
+    }
     async _navigated(api, frame, result, at) {
       if (this.#payloadCurrent(at)) {
         if (typeof result?.url === "string") {
@@ -8545,8 +8566,10 @@ ${value.stack}`;
     async#history(api, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil }, undefined, signal);
-      return await this._navigated(api, this._mainFrame, result, observed);
+      return await this._navigating(async () => {
+        const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil }, undefined, signal);
+        return await this._navigated(api, this._mainFrame, result, observed);
+      });
     }
   }
 
@@ -8639,7 +8662,7 @@ ${value.stack}`;
       return page;
     }
     async _refreshWorkingFrames(api) {
-      const working = this.pages().filter((page) => page._working && page._tab !== null);
+      const working = this.pages().filter((page) => page._working && page._tab !== null && page._navigationsInFlight === 0);
       await Promise.all(working.map((page) => page._refreshFrames(api).catch(() => {
         return;
       })));
@@ -9474,8 +9497,7 @@ Timeout: ${timeout}ms`);
       hideHighlight: NO_INSPECTOR,
       highlight: NO_INSPECTOR,
       normalize: "not available in Neo; use the locator as built",
-      tap: NO_TOUCH,
-      waitForFunction: "poll with expect(locator).toPass() or page.waitForFunction()"
+      tap: NO_TOUCH
     },
     FrameLocator: {},
     Keyboard: {},

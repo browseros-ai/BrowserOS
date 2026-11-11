@@ -26,10 +26,7 @@ fn input(frame: Option<&str>) -> Result<SetContentInput, serde_json::Error> {
 /// Paused: core waits out its own attach timeout before it gives up on the page.
 #[tokio::test(start_paused = true)]
 async fn tests_that_only_an_op_declaring_main_world_writes_a_document() -> TestResult {
-    let playwright = Playwright::new(
-        test_env::offline_session(),
-        Arc::new(RecordingHooks::default()),
-    );
+    let playwright = Playwright::new(test_env::offline_session(), Arc::new(RecordingHooks));
     let env = TestEnv::new();
     let screenshot = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
     let set_content_op = Op::from_name("page.setContent").ok_or("page.setContent is an op")?;

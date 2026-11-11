@@ -1,8 +1,8 @@
-//! What hosted BrowserOS Neo (claw-sdk) remembers about agent work, and what it refuses to
-//! remember: run and operation records, the one process-wide secret set, and pixel privacy.
+//! What hosted BrowserOS Neo (claw-sdk) remembers about agent work: bounded run and operation
+//! records, screenshots and request-id replay history.
 //!
 //! claw-sdk's dispatcher hands every run and every SDK operation to a [`TraceSink`]. One writer
-//! task masks and bounds each event and batches it into a SQLite file. The [`TraceStore`] reads
+//! task bounds each event and batches it into a SQLite file. The [`TraceStore`] reads
 //! it back for the service API. The store never re-derives delivery: it records what the
 //! dispatcher decided, so the agent's error and the record cannot disagree.
 //!
@@ -12,9 +12,6 @@
 //!      │                                                    ├─▶ broadcast    │ TraceStore reads
 //!      │                                                    └─ ShotJob ─▶ camera (service)
 //!      │                                     ShotAnswer ◀── writes screenshots/<run>/<seq>.jpg
-//!      ├─ Masker ──────────────▶ SecretSet ◀── protected fill, /host/v1/secrets, takeover
-//!      └─ SecretInput, takeover ▶ Privacy ── make_private ─▶ writer (durable) ─┘
-//!                                    └── CaptureGuard ◀── every screenshot and frame
 //! ```
 //!
 //! The writer decides which operations get a screenshot and when a run is `complete`; the
@@ -49,7 +46,6 @@ mod salvage;
 mod screenshot_files;
 mod screenshot_queue;
 mod screenshot_rule;
-mod secret_set;
 mod storage;
 mod trace_error;
 mod trace_store;
@@ -74,10 +70,6 @@ pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};
 pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus};
 pub use salvage::{Loss, Recovery, Salvage};
 pub use screenshot_queue::{Shot, ShotAnswer, ShotJob, ShotJobs, ShotQueue, screenshot_queue};
-pub use secret_set::{
-    Registration, SecretSet, SecretSetConfig, SecretSource, SecretValue, mask_json_with,
-    mask_str_with,
-};
 pub use trace_error::TraceError;
 pub use trace_store::{RetentionPolicy, Swept, TraceStore};
 pub use trace_writer::{TraceRecordEvent, TraceSink, WriterConfig, spawn_writer};
