@@ -80,6 +80,11 @@ export function writeJson(value: unknown): string | undefined {
     default:
       return undefined
   }
+  // JSON.stringify writes a boxed primitive as its primitive. The serializer copies an error's
+  // name, message and stack as the page set them, so one can be boxed (`new String('Error')`).
+  if (value instanceof String) return quote(`${value}`)
+  if (value instanceof Number) return writeJson(+value)
+  if (value instanceof Boolean) return value.valueOf() ? 'true' : 'false'
   if (Array.isArray(value)) {
     let out = '['
     for (let index = 0; index < value.length; index++) {

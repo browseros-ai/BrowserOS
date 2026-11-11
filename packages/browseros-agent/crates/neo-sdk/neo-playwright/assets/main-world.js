@@ -437,6 +437,12 @@ function writeJson(value) {
     default:
       return;
   }
+  if (value instanceof String)
+    return quote(`${value}`);
+  if (value instanceof Number)
+    return writeJson(+value);
+  if (value instanceof Boolean)
+    return value.valueOf() ? "true" : "false";
   if (Array.isArray(value)) {
     let out = "[";
     for (let index = 0;index < value.length; index++) {

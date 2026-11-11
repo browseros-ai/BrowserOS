@@ -172,3 +172,14 @@ it("tests that a setter on the page's Object.prototype does not take an argument
   const arg = JSON.stringify({ a: [1, 2], id: 1 })
   expect(call('evaluate', true, '(x) => x.length', 1, arg)).toBe('2')
 })
+
+it("tests that an error whose name the page boxed still leaves as the format's error", () => {
+  const { call } = mainWorld()
+  const text = call(
+    'evaluate',
+    true,
+    "() => { const e = new Error('boom'); e.name = new String('Error'); return e }",
+    0,
+  )
+  expect(JSON.parse(String(text)).e).toMatchObject({ n: 'Error', m: 'boom' })
+})

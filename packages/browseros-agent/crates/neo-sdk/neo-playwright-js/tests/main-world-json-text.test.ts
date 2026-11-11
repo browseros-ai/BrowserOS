@@ -44,6 +44,17 @@ it('tests that writeJson spells every value as JSON.stringify does', () => {
     expect(writeJson(value)).toBe(JSON.stringify(value))
 })
 
+it('tests that writeJson writes a boxed primitive as JSON.stringify does', () => {
+  const boxed = {
+    e: {
+      n: new String('Error'),
+      m: new Number(1.5),
+      s: new Boolean(false),
+    },
+  }
+  expect(writeJson(boxed)).toBe(JSON.stringify(boxed))
+})
+
 it('tests that writeJson drops what JSON.stringify drops', () => {
   expect(writeJson(undefined)).toBeUndefined()
   expect(writeJson(() => 1)).toBeUndefined()
