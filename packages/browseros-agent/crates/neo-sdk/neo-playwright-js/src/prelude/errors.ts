@@ -27,8 +27,9 @@
  * client prefixes every API error. expect's errors are the exception: Playwright prints those
  * as `expect(locator).toHaveText(expected) failed`, named `Error`, never `TimeoutError`.
  */
+
+import type { OpName } from './generated/ops'
 import { localTimeout, type RefusalCode, refuser } from './host'
-import type { OpName } from './ops.generated'
 import type { SignalLike } from './signal'
 
 /** What claw-sdk's error envelope says (runtime/bridge.rs `ErrBody`), on every error. */

@@ -103,4 +103,18 @@ export type KeyList<Up> = readonly {
   [K in Keys<Up>]: KeysCheck<'pick', K, Up> extends true ? K : never
 }[Keys<Up>][]
 
+/**
+ * Where upstream's command answers nothing (`void`), Neo answers `null`, never `{}`. The generated
+ * family files assert it for each command row whose Rust result has no stated reason to answer
+ * more (the row's `.result(..)`).
+ */
+export type VoidIsNull<Op extends string, UpRes, NeoRes> =
+  IsAny<UpRes | NeoRes> extends true
+    ? { op: Op; unresolvedType: 'any' }
+    : [keyof UpRes] extends [never]
+      ? [NeoRes] extends [null]
+        ? true
+        : { op: Op; voidButAnswers: NeoRes }
+      : true
+
 export type Assert<T extends true> = T

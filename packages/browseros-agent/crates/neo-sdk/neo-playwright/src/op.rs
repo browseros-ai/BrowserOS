@@ -2,9 +2,10 @@
 //!
 //! Each family keeps its ops in its own subsystem's file (`action/action_op.rs`, ...), so work
 //! on one family never edits a shared list. [`Op::all`] chains the families; claw-sdk's
-//! registry and the prelude's `ops.generated.ts` are both derived from it, and
-//! `tests/ops_generated.rs` fails when the TypeScript copy is stale. Adding an op is one
-//! variant and one spec row in its family file.
+//! registry and the prelude's generated `ops.ts` are both derived from it, and
+//! `tests/wire_generated.rs` fails when the TypeScript copy is stale. Adding an op is one
+//! variant and one spec row in its family file; in a family on route rows (`crate::wire`), also
+//! its route row and handler, whose types [`Op::wire`] describes.
 
 use crate::action::ActionOp;
 use crate::events::EventOp;
@@ -15,6 +16,7 @@ use crate::op_spec::OpSpec;
 use crate::page::{ContextOp, PageOp};
 use crate::read::ReadOp;
 use crate::snapshot::SnapshotOp;
+use crate::wire::OpWire;
 
 /// One registered operation. Opaque: the host lists them with [`Op::all`], reads each one's
 /// [`OpSpec`] and hands one back to `Playwright::invoke`.
@@ -85,6 +87,43 @@ impl Op {
         }
     }
 
+    /// The op's wire: its input and result as TypeScript, its script option keys and its place
+    /// in Playwright's protocol, described from its family's route row and handler types.
+    /// `None` while the family still decodes in a hand-written `run` match; the prelude then
+    /// declares the op's shapes by hand in `wire.ts`.
+    #[must_use]
+    pub fn wire(self) -> Option<OpWire> {
+        match self.0 {
+            OpKind::Action(_)
+            | OpKind::Read(_)
+            | OpKind::Snapshot(_)
+            | OpKind::Expect(_)
+            | OpKind::Input(_)
+            | OpKind::Page(_)
+            | OpKind::Context(_)
+            | OpKind::Event(_)
+            | OpKind::LocatorHandler(_) => None,
+        }
+    }
+
+    /// The op's family as a file name (`action`, `locator-handler`): the generated prelude file
+    /// its types and upstream checks land in, one per family, so changes to two families never
+    /// edit one generated file.
+    #[must_use]
+    pub fn family(self) -> &'static str {
+        match self.0 {
+            OpKind::Action(_) => "action",
+            OpKind::Read(_) => "read",
+            OpKind::Snapshot(_) => "snapshot",
+            OpKind::Expect(_) => "expect",
+            OpKind::Input(_) => "input",
+            OpKind::Page(_) => "page",
+            OpKind::Context(_) => "context",
+            OpKind::Event(_) => "event",
+            OpKind::LocatorHandler(_) => "locator-handler",
+        }
+    }
+
     /// The op's family, for `Playwright::invoke`'s dispatch.
     pub(crate) fn kind(self) -> OpKind {
         self.0
@@ -121,6 +160,60 @@ mod tests {
             Op::from_name("locator.tap"),
             None,
             "an unsupported method is no op"
+        );
+    }
+
+    /// Every way a described op differs from Playwright's command carries a reason, so the
+    /// generated upstream check never hides a deviation nobody explained.
+    #[test]
+    fn tests_that_every_upstream_deviation_has_a_reason() {
+        for op in Op::all() {
+            let Some(wire) = op.wire() else { continue };
+            let unexplained = wire.upstream.unexplained();
+            assert!(
+                unexplained.is_empty(),
+                "{}: {unexplained:?}",
+                op.spec().name
+            );
+        }
+    }
+
+    /// A described op's input and result are typed: TypeScript's `unknown` or `any` would let
+    /// the prelude send or read anything, which is what describing the op exists to stop.
+    #[test]
+    fn tests_that_no_input_or_output_is_unknown() {
+        for op in Op::all() {
+            let Some(wire) = op.wire() else { continue };
+            for (side, reference) in [("input", &wire.input), ("output", &wire.output)] {
+                let bare = reference.trim_end_matches(" | null");
+                assert!(
+                    !matches!(bare, "unknown" | "any" | "JsonValue"),
+                    "{}: its {side} prints as `{reference}`",
+                    op.spec().name
+                );
+            }
+        }
+    }
+
+    /// The generator writes one file per family: each name is a safe file stem, and no two
+    /// families share one.
+    #[test]
+    fn tests_that_every_family_names_its_own_generated_file() {
+        let mut kinds: BTreeMap<&str, HashSet<String>> = BTreeMap::new();
+        for op in Op::all() {
+            let family = op.family();
+            assert!(
+                !family.is_empty() && family.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+                "{family} is written as generated/{family}.ts"
+            );
+            let kind = format!("{:?}", op.kind());
+            let kind = kind.split_once('(').map_or(kind.as_str(), |(kind, _)| kind);
+            kinds.entry(family).or_default().insert(kind.to_owned());
+        }
+        assert_eq!(kinds.len(), 9, "each OpKind family has its own file");
+        assert!(
+            kinds.values().all(|kinds| kinds.len() == 1),
+            "a file holds one family: {kinds:?}"
         );
     }
 

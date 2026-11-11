@@ -7,8 +7,13 @@
  * or renamed here must change there in the same commit, or the op fails `script /
  * invalid_input` before it sends anything. Types the probe consumes unchanged (expect params,
  * select options, URL patterns) are imported from the probe protocol, so the three halves
- * cannot drift apart. `OpInputs` and `OpOutputs` must name every op in ops.generated.ts; the
- * `complete` check at the end fails to compile otherwise.
+ * cannot drift apart.
+ *
+ * The op maps are being moved into Rust one family at a time: a family on route rows has its
+ * inputs and results generated from its handlers' types (`./generated`, written by
+ * crates/neo-sdk/neo-playwright/tests/wire_generated.rs), and its hand rows leave
+ * `HandInputs` and `HandOutputs` here in the same change. `_Partition` at the end fails to
+ * compile while an op is described by both, or by neither.
  */
 
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
@@ -19,7 +24,8 @@ import type {
   SelectOption,
   UrlPattern,
 } from '../probe/protocol'
-import type { OpName } from './ops.generated'
+import type { GeneratedInputs, GeneratedOutputs } from './generated'
+import type { OpName } from './generated/ops'
 import type { AriaSnapshotJSON, ParsedSelector } from './vendored'
 
 /** Playwright's in-page serialized value (`utilityScriptSerializers.ts`), as JSON. */
@@ -427,8 +433,8 @@ export type ExpectArgs = {
   templateError?: string
 }
 
-/** Each op's input after `call`. */
-export type OpInputs = {
+/** Each op's input after `call`, for the ops Rust does not describe yet. */
+export type HandInputs = {
   'events.interceptFileChooser': PageArgs & { lease: number; on: boolean }
   'locator.click': TargetArgs & { options: PointerOptions }
   'locator.dblclick': TargetArgs & { options: DblclickOptions }
@@ -671,11 +677,8 @@ export type OpInputs = {
   'download.saveAs': { download: string; path: string }
 }
 
-/**
- * Each op's result. Page and element handles arrive revived by the bootstrap
- * (`__neo.brands.register`); the revivers and the classes read the raw brands.
- */
-export type OpOutputs = {
+/** Each op's result, for the ops Rust does not describe yet. */
+export type HandOutputs = {
   'events.interceptFileChooser': Done
   'locator.click': { navigation: NavigationCut } | null
   'locator.dblclick': null
@@ -782,10 +785,24 @@ export type OpOutputs = {
   'download.saveAs': null
 }
 
+/** Each op's input after `call`: Rust's generated type, or the hand row above. */
+export type OpInputs = GeneratedInputs & HandInputs
+
+/**
+ * Each op's result. Page and element handles arrive revived by the bootstrap
+ * (`__neo.brands.register`); the revivers and the classes read the raw brands.
+ */
+export type OpOutputs = GeneratedOutputs & HandOutputs
+
 type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
-/** Fails to compile when an op in ops.generated.ts lacks an input or a result type here. */
-type _WireCoversEveryOp = [
+/**
+ * Fails to compile when an op is described both by Rust and by hand, or by neither: every op
+ * in `OPS` has exactly one input and one result type.
+ */
+type _Partition = [
+  Assert<Exact<keyof GeneratedInputs & keyof HandInputs, never>>,
+  Assert<Exact<keyof GeneratedOutputs & keyof HandOutputs, never>>,
   Assert<Exact<keyof OpInputs, OpName>>,
   Assert<Exact<keyof OpOutputs, OpName>>,
 ]
