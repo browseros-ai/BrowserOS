@@ -9,7 +9,8 @@ description = "Playwright-compatible locators and actions for BrowserOS Neo's ru
 
 [dependencies]
 browseros-cdp.workspace = true
-browseros-core.workspace = true
+# `ts-rs`: the three core ids on the wire (`TabId`, `FrameId`, `TargetId`) print as TypeScript.
+browseros-core = { workspace = true, features = ["ts-rs"] }
 neo-trace.workspace = true
 # Tall native-tab screenshots are joined one PNG row at a time, without a full RGBA bitmap.
 png.workspace = true
@@ -28,6 +29,11 @@ serde_json = { workspace = true, features = ["float_roundtrip", "raw_value", "un
 # Names the failing field in `invalid_input` messages (`target.chunks[0]: ...`).
 serde_path_to_error.workspace = true
 tokio.workspace = true
+# Prints each op's input and result types as the prelude's TypeScript (`src/wire/`,
+# tests/wire_generated.rs). A normal dependency because the route rows' bounds name `TS`; outside
+# the generator its impls are never called. Default features only (`serde-compat`): no impl for
+# `serde_json::Value`, so a handler cannot answer an untyped value.
+ts-rs.workspace = true
 # Normalizes navigation URLs using the URL parser before dispatch.
 url.workspace = true
 # The random epoch and seq base a `Playwright` boots worlds with; core already builds it.

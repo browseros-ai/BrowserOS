@@ -27,8 +27,8 @@ import {
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
 import { dropFiles, inputFiles, withClientErrors } from './files'
+import type { OpName } from './generated/ops'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
-import type { OpName } from './ops.generated'
 import {
   CHECK_KEYS,
   DBLCLICK_KEYS,

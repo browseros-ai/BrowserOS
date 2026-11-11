@@ -33,8 +33,8 @@
 import type { CallSite } from './call-site'
 import { readyChoosers } from './chooser-setup'
 import { shapeBridgeError, unsupportedError, withAbortCause } from './errors'
+import type { OpName } from './generated/ops'
 import { host, refuser } from './host'
-import type { OpName } from './ops.generated'
 import { completedPublications } from './publication'
 import type { SignalLike } from './signal'
 import type {

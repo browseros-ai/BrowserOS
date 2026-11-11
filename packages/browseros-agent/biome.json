@@ -24,6 +24,7 @@
       "!crates/neo-sdk/neo-server/tests/behavior/pages",
       "!crates/neo-sdk/neo-server/conformance/inventory.json",
       "!crates/neo-sdk/neo-playwright-js/tests/data",
+      "!crates/neo-sdk/neo-playwright-js/src/prelude/generated",
       "!apps/server/src/lib/db/migrations"
     ]
   },

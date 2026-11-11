@@ -4,7 +4,7 @@
  * deviation describes an intentional difference from upstream rather than a loose declaration.
  */
 import type * as pw from '../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
-import type { OpName } from './ops.generated'
+import type { OpName } from './generated/ops'
 import type {
   CHECK_KEYS,
   DBLCLICK_KEYS,

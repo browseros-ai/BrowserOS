@@ -14,7 +14,7 @@
  * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
  */
 (() => {
-  // crates/neo-sdk/neo-playwright-js/src/prelude/ops.generated.ts
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/ops.ts
   var OPS = {
     "locator.click": {
       effect: "write",

@@ -23,7 +23,7 @@ import {
   type ScreenshotOptionsInput,
   screenshotOptions,
 } from './frame'
-import type { OpName } from './ops.generated'
+import type { OpName } from './generated/ops'
 import {
   CHECK_KEYS,
   DBLCLICK_KEYS,
