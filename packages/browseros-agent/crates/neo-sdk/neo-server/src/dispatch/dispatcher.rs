@@ -9,21 +9,21 @@ use std::sync::{Mutex, PoisonError};
 use crate::browser::Seen;
 use browseros_core::pages::PageInfo;
 use browseros_core::{PageId, TabId};
-use neo_trace::{Delivery, Effect, OperationId, OperationReached, PageState, SecretSet, TraceSink};
+use neo_trace::{Delivery, Effect, OperationId, OperationReached, PageState, TraceSink};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use super::close_release::close_release;
 use super::op_ctx::{OpCore, OpState, PageChange, PageReport};
-use super::operation_guard::{Ending, OpName, OpStart, OperationGuard, StartTab};
+use super::operation_guard::{Ending, OpStart, OperationGuard, StartTab};
 use super::page_target::TargetHandle;
 use super::refusal_brand::RefusalBrand;
 use super::registry::DecodedCall;
 use super::{
-    ActedTarget, Answer, Claim, ErrorCode, HeldValues, LeafError, MethodSpec, Observation,
-    Observer, OpFailure, OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry,
-    ResultHold, RunCtx, RunMask, Visibility,
+    ActedTarget, Answer, Claim, ErrorCode, LeafError, MethodSpec, Observation, Observer, OpFailure,
+    OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry, ResultHold, RunCtx,
+    Visibility, clip,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 
@@ -58,10 +58,7 @@ pub(crate) struct Dispatcher {
     registry: Registry,
     /// Fixed at startup, in the one order the app writes down (see [`Policy`]).
     policies: Vec<Arc<dyn Policy>>,
-    secrets: Arc<SecretSet>,
     trace: TraceSink,
-    /// What every run's records are masked with beyond `secrets` ([`HeldValues`]).
-    held: Arc<dyn HeldValues>,
     browser: Arc<BrowserLink>,
     tabs: Arc<TabRegistry>,
     observer: Observer,
@@ -71,7 +68,7 @@ pub(crate) struct Dispatcher {
     reaches_told: Mutex<Vec<OperationReached>>,
 }
 
-/// Who is calling. A script's results are masked; Neo's own may name `Internal` methods.
+/// Who is calling. Only Neo's own calls may name `Internal` methods.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Caller {
     /// The agent's script, through the bridge.
@@ -103,7 +100,7 @@ pub(crate) struct CallSite {
     pub(crate) column: u32,
 }
 
-/// What the door hands back: the outcome (masked for a script), and fresh facts about the
+/// What the door hands back: the outcome, and fresh facts about the
 /// pages the op touched, read from core's cache so the prelude's sync accessors
 /// (`page.url()`) stay current without a round trip. A plain data bag.
 #[derive(Debug)]
@@ -216,16 +213,10 @@ impl fmt::Display for CallSite {
 impl Dispatcher {
     /// Builds the door. `policies` is in its fixed order.
     #[must_use]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the application assembles the dispatcher dependencies once"
-    )]
     pub(crate) fn new(
         registry: Registry,
         policies: Vec<Arc<dyn Policy>>,
-        secrets: Arc<SecretSet>,
         trace: TraceSink,
-        held: Arc<dyn HeldValues>,
         browser: Arc<BrowserLink>,
         tabs: Arc<TabRegistry>,
         observer: Observer,
@@ -233,9 +224,7 @@ impl Dispatcher {
         Self {
             registry,
             policies,
-            secrets,
             trace,
-            held,
             browser,
             tabs,
             observer,
@@ -248,19 +237,6 @@ impl Dispatcher {
     #[must_use]
     pub(crate) fn registry(&self) -> &Registry {
         &self.registry
-    }
-
-    /// The process's known secrets, which the door masks out of everything a script sees.
-    #[must_use]
-    pub(crate) fn secrets(&self) -> &Arc<SecretSet> {
-        &self.secrets
-    }
-
-    /// The values the process's secret set has not learned yet, which every record of a run is
-    /// masked with too.
-    #[must_use]
-    pub(crate) fn held(&self) -> &Arc<dyn HeldValues> {
-        &self.held
     }
 
     /// Shares one observation order between operation replies and run initialization.
@@ -411,32 +387,19 @@ impl Dispatcher {
         // decided before visibility is, so it gets one answer under every name, and it is never
         // decoded or run, its page never opened and no rule asked.
         //
-        // A name the caller may not call is the script's own string, and may hold a value its
-        // run holds (decision 34). The start record gets it as typed, and the trace writer masks
-        // it there with the process's set and the start's `also_mask`, then clips it; a start
-        // sent once the run lost a held value withholds it instead, decided with that same
-        // `also_mask` ([`OpName::Uncallable`]). A refusal is the door's own text: the name and a
-        // brand's reason in it are masked and cut here, which bounds its size, and masked again,
-        // or withheld, with what the run holds as the refusal enters the realm.
+        // A name the caller may not call is the script's own string. The start record gets it as
+        // typed, and the trace writer clips it there. A refusal is the door's own text: the name
+        // and a brand's reason in it are cut here, which bounds its size.
         let decoded = match (brand, registered) {
-            (Some(brand), _) => {
-                let mask = RunMask::of(&self.secrets, &run.held_values());
-                Err(brand.refusal(&mask.shown(name.clone(), NAME_CHARS), &mask))
-            }
+            (Some(brand), _) => Err(brand.refusal(&clip(name.clone(), NAME_CHARS))),
             (None, Some(registered)) if callable => registered.decode(&input),
             (None, Some(_) | None) => {
-                let shown =
-                    RunMask::of(&self.secrets, &run.held_values()).shown(name.clone(), NAME_CHARS);
+                let shown = clip(name.clone(), NAME_CHARS);
                 Err(OperationError::script(
                     ErrorCode::METHOD_UNAVAILABLE,
                     format_args!("`{shown}` is not a Neo method"),
                 ))
             }
-        };
-        let name = if callable {
-            OpName::Callable(name)
-        } else {
-            OpName::Uncallable(name)
         };
         let (spec, redaction) = registered.map_or_else(
             || (UNKNOWN_METHOD, Arc::default()),
@@ -460,10 +423,9 @@ impl Dispatcher {
             args: input,
             tab,
             site,
-            caller,
             reply,
         };
-        let guard = OperationGuard::start(&self.trace, &self.secrets, run, start);
+        let guard = OperationGuard::start(&self.trace, run, start);
         match decoded {
             Ok(decoded) => {
                 let admitted = Admitted {
@@ -841,14 +803,7 @@ impl PageFact {
         }
     }
 
-    /// Masks what a script would see of the page, its URL and title, with `mask`.
-    pub(crate) fn mask(&mut self, mask: &RunMask<'_>) {
-        for text in [&mut self.url, &mut self.title].into_iter().flatten() {
-            mask.mask_str(text);
-        }
-    }
-
-    /// The fact as the trace's `page_after`. The writer masks and clips it.
+    /// The fact as the trace's `page_after`. The writer clips it.
     pub(super) fn page_state(&self) -> PageState {
         PageState {
             tab_id: Some(self.tab),

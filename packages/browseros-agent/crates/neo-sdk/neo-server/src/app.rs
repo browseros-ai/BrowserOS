@@ -142,8 +142,9 @@ impl App {
         log_startup(&config, address);
 
         let OpenedTrace { store, recovery } = open_trace(&config.env.trace_dir()).await?;
-        // One secret set for the process: every exit a script or the trace sees is masked
-        // with it, and sdk-traces' privacy and protected fills register into it.
+        // One secret set for the process, neo-trace's: the trace writer masks its records with
+        // it, and the host API (`/v1/secrets`, the takeover journal) registers into it, reading
+        // it from `Privacy`. The door masks nothing with it: a script sees what its ops returned.
         let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
         let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
         let writer = WriterConfig {
@@ -178,15 +179,14 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
-        // neo-playwright's privacy callbacks feed the same secret set the door masks with,
-        // and name Neo's own secret files to its upload deny list. The crate holds them from
-        // `PlaywrightFacade::start` on, so the list is config's, located before the start.
+        // neo-playwright's privacy callbacks: which tabs may be captured, and Neo's own secret
+        // files for its upload deny list. The crate holds them from `PlaywrightFacade::start` on,
+        // so the list is config's, located before the start.
         let hooks = Arc::new(PrivacyHooks::new(
             privacy,
             Arc::clone(&tabs),
             recovery,
             config.secret_files,
-            config.env.typed_quiet,
         ));
         let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::clone(&hooks) as _);
 
@@ -206,11 +206,7 @@ impl App {
         let dispatcher = Arc::new(Dispatcher::new(
             methods,
             builtins::door_rules(&takeover, &hooks, &claims),
-            Arc::clone(&secrets),
             trace.clone(),
-            // What every run's records and reply are masked with beyond the secret set: the
-            // values typed or swept that the set learns only once their fields go quiet.
-            hooks.typed(),
             Arc::clone(&browser),
             Arc::clone(&tabs),
             Observer::new(playwright),
@@ -222,7 +218,6 @@ impl App {
             tabs: Arc::clone(&tabs),
             store: store.clone(),
             trace: trace.clone(),
-            secrets: Arc::clone(&secrets),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
         });
