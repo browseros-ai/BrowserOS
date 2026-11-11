@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use super::entities::{operations, run_tabs, runs};
 use super::record_rows::{json_error, parse_id};
+use crate::run_outputs::RunOutputs;
 use crate::screenshot_files::ShotFiles;
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, Outcome, PageState,
@@ -375,9 +376,12 @@ impl TraceBatch {
 
     /// Delete files before rows. A failed file delete retains its rows and its cap accounting;
     /// rollback may leave missing files, which read as expired and converge on the next sweep.
+    /// An aged run's outputs (its kept downloads) go with its screenshots; the cap below frees
+    /// screenshots only.
     pub(crate) async fn sweep(
         &self,
         files: &ShotFiles,
+        outputs: &RunOutputs,
         policy: RetentionPolicy,
         now: EpochMillis,
     ) -> Result<Swept, TraceError> {
@@ -394,7 +398,7 @@ impl TraceBatch {
         let mut swept = Swept::default();
         for id in aged {
             if let Ok(run) = id.parse::<RunId>()
-                && !remove_run_files(files, run).await
+                && !(remove_run_files(files, run).await && remove_run_outputs(outputs, run).await)
             {
                 continue;
             }
@@ -539,6 +543,17 @@ async fn remove_run_files(files: &ShotFiles, run: RunId) -> bool {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
         Err(error) => {
             tracing::warn!(%error, %run, "a run's screenshots stay on disk until the next sweep");
+            false
+        }
+    }
+}
+
+async fn remove_run_outputs(outputs: &RunOutputs, run: RunId) -> bool {
+    match tokio::fs::remove_dir_all(outputs.run_dir(run)).await {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => {
+            tracing::warn!(%error, %run, "a run's kept outputs stay on disk until the next sweep");
             false
         }
     }

@@ -58,6 +58,8 @@ const ANSWERS: Record<string, unknown> = {
   'page.frames': FRAMES,
   'page.opener': { opener: null },
   'page.evaluate': { value: null },
+  'page.addScriptTag': { element: ELEMENT },
+  'page.addStyleTag': { element: ELEMENT },
   'page.waitForFunction': { value: true, preview: 'true' },
   'context.newPage': {
     page: { $neo: 'page', tab: 1008 },
@@ -88,7 +90,7 @@ const EVERY_OP = `
   await l.count(); await l.normalize(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor()
   const handle = await l.elementHandle(); await handle.click(); await l.elementHandles()
   await handle.$('b'); await handle.$$('b')
-  await page.ariaSnapshot(); await l.ariaSnapshot()
+  await page.ariaSnapshot(); await l.ariaSnapshot(); await page.ariaSnapshotJSON({ boxes: true })
   await expect(l).toBeVisible(); await expect(page).toHaveTitle('x')
   await page.keyboard.down('a'); await page.keyboard.up('a'); await page.keyboard.press('a')
   await page.keyboard.type('ab'); await page.keyboard.insertText('ab')
@@ -98,12 +100,14 @@ const EVERY_OP = `
   await pay.goto('https://pay.example/'); await pay.waitForLoadState('domcontentloaded'); await pay.locator('#card').count()
   await page.waitForNavigation(); await pay.waitForNavigation({ url: '**/pay' });
   await page.waitForURL('**/a'); await page.waitForLoadState(); await page.title(); await page.content()
+  await page.addScriptTag({ content: 'window.injected = true' }); await pay.addStyleTag({ content: 'body { color: red }' });
   await page.setContent('<p>hi</p>'); await page.opener(); await page.evaluate(() => 1)
   await l.evaluate((e) => e.id); await l.evaluateAll((es) => es.length); await page.waitForFunction(() => true)
   await l.waitForFunction((e) => e.id)
   await handle.evaluate((e) => e.id); await handle.$eval('b', (e) => e.id); await handle.$$eval('b', (es) => es.length)
   await page.$eval('b', (e) => e.id); await page.$$eval('b', (es) => es.length); await page.evaluate((e, h) => h.id, handle)
   await page.screenshot(); await l.screenshot(); await page.pdf()
+  await page.setViewportSize({ width: 640, height: 480 })
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})
   const chooserListener = () => {}

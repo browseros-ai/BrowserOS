@@ -65,6 +65,9 @@ pub struct Run {
     pub unknown: Option<Vec<models::UnknownOperation>>,
     #[serde(rename = "operations")]
     pub operations: Vec<models::Operation>,
+    /// The files the run's `download` events handed its script, in the order it first saw each. Recorded when the run ends: absent while it runs, and when it was handed none.
+    #[serde(rename = "downloads", skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<Vec<models::RunDownload>>,
 }
 
 impl Run {
@@ -97,6 +100,7 @@ impl Run {
             result_truncated: None,
             unknown: None,
             operations,
+            downloads: None,
         }
     }
 }

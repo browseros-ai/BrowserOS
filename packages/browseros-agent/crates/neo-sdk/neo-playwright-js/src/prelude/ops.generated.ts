@@ -303,6 +303,16 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.addScriptTag': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'page.addStyleTag': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'page.close': {
     effect: 'write',
     target: 'page',
@@ -350,6 +360,11 @@ export const OPS = {
   },
   'page.pdf': {
     effect: 'read',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'page.setViewportSize': {
+    effect: 'write',
     target: 'page',
     lifetime: 'operation',
   },

@@ -12,8 +12,8 @@ use crate::op_spec::{Capability, OpSpec, PAGE, TARGET};
 use crate::page::document_watch::decode;
 use crate::page::navigation::{GotoInput, NavigateInput, Navigation};
 use crate::page::{
-    PageHandle, document_op, element_evaluate, evaluate, frame_tree, navigation, pdf, screenshot,
-    wait_for_navigation, wait_for_url,
+    PageHandle, add_tag, document_op, element_evaluate, evaluate, frame_tree, navigation, pdf,
+    screenshot, viewport_size, wait_for_navigation, wait_for_url,
 };
 use crate::probe::DocumentPart;
 use crate::target::PageRef;
@@ -33,6 +33,8 @@ listed_enum! {
         Title,
         Content,
         SetContent,
+        AddScriptTag,
+        AddStyleTag,
         Close,
         Opener,
         Frames,
@@ -43,13 +45,19 @@ listed_enum! {
         WaitForFunctionOnElement,
         Screenshot,
         Pdf,
+        SetViewportSize,
     }
 }
 
 impl PageOp {
     /// This op's registration metadata.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one registration row per page operation keeps the dispatch contract together"
+    )]
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
+            Self::SetViewportSize => viewport_size::SPEC,
             Self::Goto => OpSpec::write(
                 "page.goto",
                 PAGE,
@@ -89,6 +97,20 @@ impl PageOp {
                 "replace the document's HTML and wait for the load state",
             )
             .using(&[Capability::MainWorld])
+            .policed(),
+            Self::AddScriptTag => OpSpec::write(
+                "page.addScriptTag",
+                PAGE,
+                "insert a script and return its element",
+            )
+            .using(&[Capability::MainWorld, Capability::HostFiles])
+            .policed(),
+            Self::AddStyleTag => OpSpec::write(
+                "page.addStyleTag",
+                PAGE,
+                "insert a stylesheet and return its element",
+            )
+            .using(&[Capability::MainWorld, Capability::HostFiles])
             .policed(),
             Self::Close => OpSpec::write("page.close", PAGE, "close the tab"),
             Self::Opener => OpSpec::read("page.opener", PAGE, "the page that opened this one"),
@@ -160,6 +182,7 @@ pub(crate) async fn invoke(
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
     match op {
+        PageOp::SetViewportSize => viewport_size::set(pw, scope, args.decode(scope)?).await,
         PageOp::Goto => {
             let (page, navigation, wait_until) = args.decode::<GotoInput>(scope)?.into_parts();
             let page = page.tab();
@@ -170,6 +193,24 @@ pub(crate) async fn invoke(
         PageOp::GoForward => renavigate(pw, scope, args, Navigation::History(1)).await,
         PageOp::WaitForLoadState => {
             navigation::wait_for_load_state(pw, scope, args.decode(scope)?).await
+        }
+        PageOp::AddScriptTag => {
+            Box::pin(add_tag::insert(
+                pw,
+                scope,
+                args.decode(scope)?,
+                add_tag::TagKind::Script,
+            ))
+            .await
+        }
+        PageOp::AddStyleTag => {
+            Box::pin(add_tag::insert(
+                pw,
+                scope,
+                args.decode(scope)?,
+                add_tag::TagKind::Style,
+            ))
+            .await
         }
         PageOp::Close => close(pw, scope, args.decode(scope)?).await,
         PageOp::Opener => opener(pw, scope, args.decode(scope)?).await,

@@ -309,6 +309,16 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.addScriptTag": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.addStyleTag": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "page.close": {
       effect: "write",
       target: "page",
@@ -356,6 +366,11 @@
     },
     "page.pdf": {
       effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.setViewportSize": {
+      effect: "write",
       target: "page",
       lifetime: "operation"
     },
@@ -690,12 +705,21 @@
       const url = Reflect.get(page, "url");
       const title = Reflect.get(page, "title");
       const closed = Reflect.get(page, "closed");
+      const viewport = Reflect.get(page, "viewportSize");
       if (typeof url === "string")
         fact.url = url;
       if (typeof title === "string")
         fact.title = title;
       if (typeof closed === "boolean")
         fact.closed = closed;
+      if (viewport === null)
+        fact.viewportSize = null;
+      else if (typeof viewport === "object" && viewport !== null) {
+        const width = Reflect.get(viewport, "width");
+        const height = Reflect.get(viewport, "height");
+        if (typeof width === "number" && typeof height === "number")
+          fact.viewportSize = { width, height };
+      }
       facts.push(fact);
     }
     return facts;
@@ -889,6 +913,33 @@
   function isHandle(value) {
     return typeof value === "object" && value !== null && handles.has(value);
   }
+  function selectOption(api, path, item) {
+    if (typeof item !== "object" || item === null)
+      throw clientError(api, `${path}: expected object, got ${item === null ? "null" : typeof item}`);
+    const option = item;
+    const picked = {};
+    for (const key of ["valueOrLabel", "value", "label"]) {
+      const given = option[key];
+      if (given === undefined)
+        continue;
+      if (given instanceof String)
+        picked[key] = given.valueOf();
+      else if (typeof given === "string")
+        picked[key] = given;
+      else
+        throw clientError(api, `${path}.${key}: expected string, got ${typeof given}`);
+    }
+    const index = option.index;
+    if (index !== undefined) {
+      const value = index instanceof Number ? index.valueOf() : typeof index === "number" ? index : null;
+      if (value === null)
+        throw clientError(api, `${path}.index: expected integer, got ${typeof index}`);
+      if (!Number.isInteger(value))
+        throw clientError(api, `${path}.index: expected integer, got float ${value}`);
+      picked.index = value;
+    }
+    return picked;
+  }
   function selectOptionValues(api, values) {
     if (values === null || values === undefined)
       return { options: [], elements: [] };
@@ -907,19 +958,7 @@
         elements.push(brand);
         continue;
       }
-      const option = item;
-      const given = ["valueOrLabel", "value", "label", "index"].filter((key) => option[key] !== undefined);
-      if (given.length !== 1)
-        throw clientError(api, `options[${index}]: Neo matches an option by one of value, label or index; got ${JSON.stringify(item)}`);
-      const [key] = given;
-      if (key === "index")
-        options.push({ index: Number(option.index) });
-      else if (key === "value")
-        options.push({ value: String(option.value) });
-      else if (key === "label")
-        options.push({ label: String(option.label) });
-      else
-        options.push({ valueOrLabel: String(option.valueOrLabel) });
+      options.push(selectOption(api, `options[${index}]`, item));
     }
     return { options, elements };
   }
@@ -7187,6 +7226,12 @@ ${value.stack}`;
     content() {
       return this._content("frame.content");
     }
+    addScriptTag(options = {}) {
+      return this._addTag("frame.addScriptTag", "page.addScriptTag", options);
+    }
+    addStyleTag(options = {}) {
+      return this._addTag("frame.addStyleTag", "page.addStyleTag", options);
+    }
     setContent(html, options) {
       return this._setContent("frame.setContent", html, options);
     }
@@ -7358,10 +7403,12 @@ ${value.stack}`;
       return fromPageValue(api, value);
     }
     async _snapshot(api, selector, options = {}) {
-      if (options.boxes)
-        throw unsupportedError(api, "Neo snapshots carry no boxes; use locator.boundingBox()");
       const mode = options.mode ?? "default";
-      const shape = pick({ mode, depth: options.depth }, ["mode", "depth"]);
+      const shape = pick({ mode, depth: options.depth, boxes: options.boxes }, [
+        "mode",
+        "depth",
+        "boxes"
+      ]);
       const wait = this._wait(api, options);
       if (selector !== null)
         return await this._selectorOp("locator.ariaSnapshot", api, selector, true, wait, shape);
@@ -7415,6 +7462,31 @@ ${value.stack}`;
     }
     async _content(api) {
       return await invoke("page.content", this._call(api, 0), await this._frameArgs(api));
+    }
+    async _addTag(api, op, options) {
+      const keys = op === "page.addScriptTag" ? ["url", "path", "content", "type"] : ["url", "path", "content"];
+      const input = pick(options, keys);
+      for (const key of keys) {
+        const value = input[key];
+        if (value !== undefined && typeof value !== "string")
+          throw clientError(api, `${key}: expected string, got ${value === null ? "object" : typeof value}`);
+      }
+      let handle;
+      try {
+        const { value: result, observed } = await invokeObserved(op, this._call(api, 0), {
+          ...await this._frameArgs(api),
+          ...input
+        });
+        this._page._evaluated(result.frames, observed);
+        handle = this._page._handle(result.element);
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith(`${api}: `) && /^(?:E[A-Z0-9]+|UNKNOWN): .*?, (?:open|read) '/.test(error.message.slice(api.length + 2)))
+          error.message = error.message.slice(api.length + 2);
+        throw error;
+      }
+      if (!handle)
+        throw plainError(api, "The inserted tag did not return an element");
+      return handle;
     }
     async _setContent(api, html, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
@@ -8069,6 +8141,8 @@ ${value.stack}`;
     #urlKnown;
     _title = "";
     _closed = false;
+    #viewportSize = null;
+    #viewportSet = false;
     #observedSeq = 0;
     #liveHead = 0;
     #closeEvent = 0;
@@ -8123,7 +8197,17 @@ ${value.stack}`;
       return null;
     }
     viewportSize() {
-      return null;
+      return this.#viewportSize || null;
+    }
+    async setViewportSize(viewportSize) {
+      this.#viewportSize = viewportSize;
+      this.#viewportSet = true;
+      for (const side of ["width", "height"]) {
+        if (!Number.isInteger(viewportSize?.[side]))
+          throw clientError("page.setViewportSize", `viewportSize.${side}: expected integer`);
+      }
+      const size = { width: viewportSize.width, height: viewportSize.height };
+      await invoke("page.setViewportSize", { api: "page.setViewportSize", timeoutMs: 0 }, { page: await this._brand("page.setViewportSize"), viewportSize: size });
     }
     workers() {
       return [];
@@ -8283,6 +8367,12 @@ ${value.stack}`;
     }
     content() {
       return this._mainFrame._content("page.content");
+    }
+    addScriptTag(options = {}) {
+      return this._mainFrame._addTag("page.addScriptTag", "page.addScriptTag", options);
+    }
+    addStyleTag(options = {}) {
+      return this._mainFrame._addTag("page.addStyleTag", "page.addStyleTag", options);
     }
     setContent(html, options) {
       return this._mainFrame._setContent("page.setContent", html, options);
@@ -8524,10 +8614,17 @@ ${value.stack}`;
         }
       }
     }
+    #applyViewport(size) {
+      if (this.#viewportSet || size === undefined)
+        return;
+      if (this.#viewportSize === null || size === null || this.#viewportSize.width !== size.width || this.#viewportSize.height !== size.height)
+        this.#viewportSize = size;
+    }
     _applyFact(fact, at, approved = null) {
       if (fact.tab !== undefined)
         this._tab = fact.tab;
       if (at === null) {
+        this.#applyViewport(fact.viewportSize);
         if (fact.url !== undefined && !this.#urlKnown) {
           this._url = fact.url;
           this.#urlKnown = true;
@@ -8537,6 +8634,7 @@ ${value.stack}`;
       if (at.seq < this.#observedSeq)
         return;
       this.#observedSeq = at.seq;
+      this.#applyViewport(fact.viewportSize);
       if (fact.url !== undefined) {
         this._url = fact.url;
         this.#urlKnown = true;
@@ -9555,8 +9653,6 @@ Timeout: ${timeout}ms`);
     Page: {
       addInitScript: "init scripts are not available in Neo; run page.evaluate() after page.goto()",
       addLocatorHandler: "locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting",
-      addScriptTag: "adding tags is not available in Neo; change the page with page.evaluate()",
-      addStyleTag: "adding tags is not available in Neo; change the page with page.evaluate()",
       bringToFront: "Neo keeps agent tabs in the background; act on the page directly",
       cancelPickLocator: NO_INSPECTOR,
       clearConsoleMessages: 'Neo keeps no console history; listen with page.on("console")',
@@ -9577,7 +9673,6 @@ Timeout: ${timeout}ms`);
       routeFromHAR: NETWORK,
       routeWebSocket: NETWORK,
       setExtraHTTPHeaders: "network settings are not available in Neo",
-      setViewportSize: "the hosted viewport is fixed",
       tap: NO_TOUCH,
       unroute: NETWORK,
       unrouteAll: NETWORK,
@@ -9611,8 +9706,6 @@ Timeout: ${timeout}ms`);
       webmcp: { hint: "WebMCP is not available in Neo", kind: "property" }
     },
     Frame: {
-      addScriptTag: "adding tags is not available in Neo; change the page with frame.evaluate()",
-      addStyleTag: "adding tags is not available in Neo; change the page with frame.evaluate()",
       evaluateHandle: NO_HANDLES,
       frameElement: "locate the iframe from its parent instead: page.locator('iframe')",
       tap: NO_TOUCH,

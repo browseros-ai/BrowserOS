@@ -10,9 +10,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::backoff::Backoff;
-use crate::page::OpPage;
 use crate::page::screenshot_geometry::{GeometryOptions, Scale, ScreenshotGeometry};
 use crate::page::screenshot_preparation::ScreenshotPreparation;
+use crate::page::{OpPage, screenshot_png};
 use crate::probe::Rect;
 
 use crate::op_output::{Bytes, to_output};
@@ -262,12 +262,25 @@ async fn capture_pixels(
                 .is_some_and(|geometry| geometry.beyond_viewport)
         ),
     );
-    if let Some(geometry) = geometry {
+    if let Some(geometry) = &geometry {
         let clip = geometry.clip;
         params.insert("clip".to_owned(), json!({ "x": clip.x, "y": clip.y, "width": clip.width, "height": clip.height, "scale": clip.scale }));
     }
     if let Some(quality) = input.encoding_quality() {
         params.insert("quality".to_owned(), json!(quality));
+    }
+    if format == ScreenshotFormat::Png
+        && let Some(geometry) = geometry.as_ref()
+        && screenshot_png::needs_tiles(geometry)
+    {
+        let capture = scope
+            .view()
+            .begin_screenshot(page.core_page().clone(), background)
+            .await
+            .map_err(|error| scope.core_error(&error))?;
+        let data = screenshot_png::capture(&capture, params, geometry, scope).await;
+        capture.finish().await;
+        return data;
     }
     scope
         .view()

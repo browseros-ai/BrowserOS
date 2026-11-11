@@ -101,6 +101,7 @@ export type PageFact = {
   url?: string
   title?: string
   closed?: boolean
+  viewportSize?: { width: number; height: number } | null
 }
 
 /** One frame of a page's tree, main frame first; `parentId` null only for the main frame. */
@@ -393,10 +394,15 @@ export type OpInputs = {
   /** `noWait` is `page.$`: the first match now, or null, instead of waiting for one. */
   'locator.elementHandle': TargetArgs & { noWait?: true }
   'locator.elementHandles': EveryMatchArgs
-  'page.ariaSnapshot': PageArgs & { mode: 'ai' | 'default'; depth?: number }
+  'page.ariaSnapshot': PageArgs & {
+    mode: 'ai' | 'default'
+    depth?: number
+    boxes?: boolean
+  }
   'locator.ariaSnapshot': TargetArgs & {
     mode: 'ai' | 'default'
     depth?: number
+    boxes?: boolean
   }
   'expect.locator': { target: Target } & ExpectArgs
   'expect.page': PageArgs & ExpectArgs
@@ -437,6 +443,17 @@ export type OpInputs = {
   'page.waitForLoadState': FrameArgs & { state: LoadState }
   'page.title': FrameArgs
   'page.content': FrameArgs
+  'page.addScriptTag': FrameArgs & {
+    url?: string
+    path?: string
+    content?: string
+    type?: string
+  }
+  'page.addStyleTag': FrameArgs & {
+    url?: string
+    path?: string
+    content?: string
+  }
   'page.setContent': FrameArgs & { html: string; waitUntil: LoadState }
   'page.close': PageArgs & { runBeforeUnload?: true }
   'page.opener': PageArgs
@@ -460,6 +477,9 @@ export type OpInputs = {
     strict?: Strictness
   } & ScreenshotOptions
   'page.pdf': PageArgs & PdfOptions
+  'page.setViewportSize': PageArgs & {
+    viewportSize: { width: number; height: number }
+  }
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
   /**
@@ -562,6 +582,8 @@ export type OpOutputs = {
   'page.waitForLoadState': NavigationResult | null
   'page.title': string
   'page.content': string
+  'page.addScriptTag': { element: ElementBrand; frames?: FrameInfo[] }
+  'page.addStyleTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.setContent': NavigationResult | null
   'page.close': Done
   'page.opener': { opener: PageBrand | null }
@@ -576,6 +598,7 @@ export type OpOutputs = {
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
   'page.screenshot': unknown
   'page.pdf': unknown
+  'page.setViewportSize': Done
   'context.pages': { pages: PageEntry[] }
   'context.newPage': PageEntry
   'events.listen': Done

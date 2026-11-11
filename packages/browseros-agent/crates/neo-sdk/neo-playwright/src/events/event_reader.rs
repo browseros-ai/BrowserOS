@@ -154,6 +154,16 @@ struct Download {
     suggested_filename: String,
 }
 
+impl Delivered {
+    /// The browser's guid of the download this event hands the script, if it is a `download`.
+    pub(crate) fn download(&self) -> Option<&str> {
+        match &self.payload {
+            Payload::Download { download, .. } => Some(&download.id),
+            _ => None,
+        }
+    }
+}
+
 /// What a read does with a popup that opened as a separate window (D9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WindowPopup {

@@ -68,6 +68,32 @@ three are optional, and the two ids are at most 128 bytes each:
 | — (Xvnc on 127.0.0.1:5900, no auth) | `GET /v1/display?mode=view\|control&followTab={tabId}` or `&followTask={taskId}` | RFB over WebSocket. `view` drops input; `followTab` or `followTask` (not both) replaces zuzu's `follow`/`toFront`; `control` forwards input |
 | — (zuzu's handoff: `frontPage`, `fitOwnerView`, `giveBack`, `steerOwnerTab`) | `POST /v1/takeovers {tabId, viewer?, reads?, ttlSeconds?}` when the owner opens the link, `POST /v1/takeovers/{id}/release` when they are done | The flow composes small parts a host can also use alone: `POST /v1/locks {tabId, reads?, ttlSeconds}`, `POST /v1/tabs/{tabId}/fit` (+ `GET /v1/fits/{id}`, `…/navigate`, `…/restore`), and `/v1/display`. Neo locks the agent out of the tab (`host / owner_has_control`) and fits the page to the owner's screen. `reads: block` is the default; send `allow` to let the agent keep reading the tab. To pause a whole task, stop sending its runs |
 
+## Downloads
+
+zuzu's `neo_download` → `neo_upload` and `import` flows move into the script and onto the run's
+record. A script waits for the file with Playwright's own calls:
+
+```js
+const [download] = await Promise.all([page.waitForEvent('download'), page.getByRef(ref).click()]);
+return { path: await download.path(), filename: download.suggestedFilename() };
+```
+
+- `download.path()` resolves once the browser finished the file and returns where the browser
+  saved it (`/data/downloads/…` in the image, ` (1)` added on a clash). That path is on Neo's
+  disk: a later run uploads it with `locator.setInputFiles(path)`. `download.saveAs(path)` copies
+  it, and `download.failure()` reads `null` or why it failed (`canceled`).
+- `GET /v1/runs/{runId}` lists the run's `downloads[]`: `index`, `url`, `suggestedFilename`,
+  `path`, `size`, `state` (`completed`, `in_progress`, `failed`) and `failure`. A download is
+  the run's once one of its `download` events handed it to the script, whether or not the script
+  asked for the file.
+- `GET /v1/runs/{runId}/downloads/{index}` returns the bytes of a `completed` one
+  (`application/octet-stream`, the suggested name in `Content-Disposition`), on the host socket
+  with the same token. They are a copy Neo took when the run ended, so they are there as soon as
+  the run's reply is, and they go when retention removes the run (7 days). This replaces reading
+  the file through `read_output` parts: `/data` stays `neo 0700`.
+- A download still being written when the run ended is recorded `in_progress` with no bytes.
+  Await `download.path()` before returning when the host needs the file.
+
 ## Error bodies
 
 The body shape is unchanged: `{code, message, requestId}`. The codes are new

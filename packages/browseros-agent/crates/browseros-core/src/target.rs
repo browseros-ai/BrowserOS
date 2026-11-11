@@ -401,6 +401,26 @@ impl BrowserView {
     pub fn current_viewport(&self, page: &PageId) -> Option<crate::viewport::ViewportRequest> {
         self.viewports.as_ref()?.current(page)
     }
+    /// The script's configured viewport, independent of a temporary owner fit. It stays
+    /// with the tab across runs; a tab with no Playwright override returns `None`.
+    #[must_use]
+    pub fn playwright_viewport(&self, page: &PageId) -> Option<crate::viewport::Size> {
+        self.viewports.as_ref()?.playwright_size(page)
+    }
+    /// Admits and locks a Playwright resize without sending it. The caller checks permission
+    /// after this await, then immediately applies the change. Fits keep their measured path.
+    pub async fn prepare_playwright_viewport(
+        &self,
+        page: PageId,
+        request: crate::viewport::ViewportRequest,
+    ) -> Result<crate::viewport::ViewportChange, CoreError> {
+        match &self.viewports {
+            Some(viewports) => viewports.prepare_change(self, page, request).await,
+            None => Err(CoreError::Message(
+                "setViewport is only available on a hosted BrowserOS neo server".to_owned(),
+            )),
+        }
+    }
     /// Holds the page without changing anything, for work outside a page operation that must
     /// not overlap viewport changes, such as a background screenshot: a capture
     /// rewrites the page's emulation until it finishes.
@@ -1038,6 +1058,21 @@ impl BrowserView {
             None => self.session.pages.get_session(page).await,
         }
     }
+    /// Repairs an interrupted viewport before an SDK operation uses its admitted session.
+    /// This configures no new request. Call before taking a viewport lease; legacy callers
+    /// that already hold one continue using `prepare_viewport`'s existing repair path.
+    pub async fn repair_viewport(
+        &self,
+        page: &PageId,
+        session: &PageSession,
+    ) -> Result<(), CoreError> {
+        if let Some(viewports) = &self.viewports
+            && self.signals().pending_dialog(page).is_none()
+        {
+            viewports.repair_pending(self, page, session).await?;
+        }
+        Ok(())
+    }
     /// A frame endpoint admitted through this page capability, including same-process children.
     pub async fn frame_session(
         &self,
@@ -1195,18 +1230,35 @@ impl BrowserView {
         params: Value,
         background: ScreenshotBackground,
     ) -> Result<String, CoreError> {
+        let capture = self.begin_screenshot(page, background).await?;
+        let data = capture.capture(params).await;
+        capture.finish().await;
+        data
+    }
+
+    /// Begin one admitted capture sequence. The returned lease shares audit/desktop capture
+    /// serialization and can capture multiple PNG tiles without releasing temporary state.
+    pub async fn begin_screenshot(
+        &self,
+        page: PageId,
+        background: ScreenshotBackground,
+    ) -> Result<crate::screenshot::ScreenshotCapture, CoreError> {
         if self.epoch_guard()?.is_none() {
             let session = self.session.pages.get_session(page).await?;
-            return crate::screenshot::capture_cdp(&session.session, params, background).await;
+            return crate::screenshot::ScreenshotCapture::acquire(
+                session.session,
+                None,
+                background,
+            )
+            .await;
         }
         let access = self
             .page_access(page)
             .await?
             .ok_or_else(|| cdp_policy::unsupported("Page.captureScreenshot"))?;
         let session = access.session().await?;
-        let data = crate::screenshot::capture_cdp(&session.session, params, background).await?;
-        access.fresh().await?;
-        Ok(data)
+        crate::screenshot::ScreenshotCapture::acquire(session.session, Some(access), background)
+            .await
     }
 
     /// [`Self::screenshot`] with the caller's last word on the capture: `before_capture` runs
