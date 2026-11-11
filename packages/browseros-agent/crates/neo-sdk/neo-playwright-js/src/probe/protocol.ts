@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../neo-playwright/third_party/playwri
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 17
+export const PROTOCOL = 18
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -299,6 +299,14 @@ export type ArmInputRequest = { op: 'armInput'; pin: Pin }
 /** Second half: whether that `input` has come, as `value` true or false. Rust polls it. */
 export type InputArrivedRequest = { op: 'inputArrived'; pin: Pin }
 
+/** Caller-selected screenshot overlays; cleanup is idempotent in each held world. */
+export type ScreenshotMaskRequest = {
+  op: 'screenshotMask'
+  target: ProbeTarget
+  color: string
+}
+export type ScreenshotMaskCleanupRequest = { op: 'screenshotMaskCleanup' }
+
 export type ProbeRequest =
   | DescribeRequest
   | ResolveRequest
@@ -319,6 +327,8 @@ export type ProbeRequest =
   | SetContentRequest
   | ArmInputRequest
   | InputArrivedRequest
+  | ScreenshotMaskRequest
+  | ScreenshotMaskCleanupRequest
 export type Op = ProbeRequest['op']
 /** Each request by its op, as a map so a handler table keyed by op type-checks per op. */
 export type RequestMap = { [R in ProbeRequest as R['op']]: R }
@@ -478,6 +488,8 @@ export const REPLY_KINDS = {
   setContent: ['replaced'],
   armInput: ['value', 'detached'],
   inputArrived: ['value', 'detached'],
+  screenshotMask: ['value'],
+  screenshotMaskCleanup: ['value'],
 } as const satisfies Record<ValueOp, readonly ReplyKind[]>
 
 /** Everything a request may answer by value. */

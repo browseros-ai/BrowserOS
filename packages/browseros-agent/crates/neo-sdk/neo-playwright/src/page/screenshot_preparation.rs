@@ -6,6 +6,7 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
+use browseros_core::screenshot::ScreenshotCapture;
 use futures_util::future;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
@@ -13,6 +14,7 @@ use tokio::sync::OwnedMutexGuard;
 use tokio::time;
 
 use crate::op_scope::OpScope;
+use crate::page::screenshot_masks::{MaskLocator, ScreenshotMasks};
 use crate::page::{OpPage, frame_tree, world_call};
 use crate::resolve::{self, HandleSite};
 use crate::target::Target;
@@ -33,6 +35,8 @@ const RESTORE: &str = "function() { window.__pwCleanupScreenshot?.(); }";
 pub(super) struct ScreenshotPreparation {
     worlds: Vec<SealedWorld>,
     queue: Option<OwnedMutexGuard<()>>,
+    masks: ScreenshotMasks,
+    capture: Option<ScreenshotCapture>,
 }
 
 impl ScreenshotPreparation {
@@ -41,7 +45,28 @@ impl ScreenshotPreparation {
         Self {
             worlds: Vec::new(),
             queue: Some(Arc::clone(page.state().screenshots()).lock_owned().await),
+            masks: ScreenshotMasks::default(),
+            capture: None,
         }
+    }
+
+    /// Hold core's shared queue before masks are painted; audit images must wait for removal.
+    pub(super) fn hold_capture(&mut self, capture: ScreenshotCapture) {
+        self.capture = Some(capture);
+    }
+
+    pub(super) fn capture(&self) -> Option<&ScreenshotCapture> {
+        self.capture.as_ref()
+    }
+
+    pub(super) async fn mask(
+        &mut self,
+        page: &OpPage<'_>,
+        scope: &OpScope<'_>,
+        locators: &[MaskLocator],
+        color: &str,
+    ) -> Result<(), PlaywrightError> {
+        self.masks.apply(page, scope, locators, color).await
     }
 
     /// Applies Playwright's utility-world algorithm independently in every frame. Detached or
@@ -117,14 +142,18 @@ impl ScreenshotPreparation {
     /// Restores before returning bytes, so the caller can immediately inspect animation and
     /// caret state. If this await is cancelled, Drop retries the idempotent cleanup.
     pub(super) async fn restore(mut self) {
+        self.masks.restore().await;
         restore(&self.worlds).await;
         self.worlds.clear();
+        if let Some(capture) = self.capture.take() {
+            capture.finish().await;
+        }
     }
 }
 
 impl Drop for ScreenshotPreparation {
     fn drop(&mut self) {
-        if self.worlds.is_empty() {
+        if self.worlds.is_empty() && self.masks.is_empty() && self.capture.is_none() {
             return;
         }
         let Ok(runtime) = Handle::try_current() else {
@@ -132,11 +161,17 @@ impl Drop for ScreenshotPreparation {
         };
         let worlds = mem::take(&mut self.worlds);
         let queue = self.queue.take();
+        let mut masks = mem::take(&mut self.masks);
+        let capture = self.capture.take();
         drop(runtime.spawn(async move {
             // A second screenshot must not replace the first one's cleanup callback while
             // restoration is still pending on a renderer.
             let _queue = queue;
+            masks.restore().await;
             restore(&worlds).await;
+            if let Some(capture) = capture {
+                capture.finish().await;
+            }
         }));
     }
 }
@@ -165,7 +200,7 @@ mod tests {
     use tokio::sync::Mutex;
     use tokio::{task, time};
 
-    use super::ScreenshotPreparation;
+    use super::{ScreenshotMasks, ScreenshotPreparation};
     use crate::world::SealedWorld;
 
     #[tokio::test(start_paused = true)]
@@ -188,6 +223,8 @@ mod tests {
         let preparation = ScreenshotPreparation {
             worlds: vec![world(&stalled, "stalled"), world(&healthy, "healthy")],
             queue: Some(Arc::clone(&queue).lock_owned().await),
+            masks: ScreenshotMasks::default(),
+            capture: None,
         };
         drop(preparation);
         task::yield_now().await;

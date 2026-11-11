@@ -904,7 +904,8 @@
     "animations",
     "caret",
     "style",
-    "scale"
+    "scale",
+    "maskColor"
   ];
   var handles = new WeakSet;
   function markHandle(object) {
@@ -7422,10 +7423,7 @@ ${value.stack}`;
     async _screenshot(api, selector, options = {}) {
       if (options.path !== undefined)
         throw unsupportedError(api, "Neo returns the image instead of writing a file; omit path");
-      const refused = refusedScreenshotOption(options);
-      if (refused !== undefined)
-        throw unsupportedError(api, refused);
-      const wire = pick(options, SCREENSHOT_KEYS);
+      const wire = await screenshotOptions(api, options);
       const { timeout, signal } = this._wait(api, options);
       const page = await this._page._brand(api);
       if (selector === null)
@@ -7532,10 +7530,16 @@ ${value.stack}`;
     }
     return Boolean(url(frame.url()));
   }
-  function refusedScreenshotOption(options) {
-    if (options.mask !== undefined && options.mask.length > 0)
-      return "Neo cannot mask elements in a screenshot; omit mask";
-    return;
+  async function screenshotOptions(api, options) {
+    const wire = pick(options, SCREENSHOT_KEYS);
+    if (options.mask !== undefined) {
+      wire.mask = await Promise.all(options.mask.map((locator) => {
+        if (!(locator instanceof Locator))
+          throw clientError(api, "mask: expected a Locator");
+        return locator._frame._locatorBrand(api, locator._selector);
+      }));
+    }
+    return wire;
   }
   var HELD_VALUE = "Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()";
 
@@ -7960,10 +7964,7 @@ ${value.stack}`;
       const api = "elementHandle.screenshot";
       if (options.path !== undefined)
         throw unsupportedError(api, "Neo returns the image instead of writing a file; omit path");
-      const refused = refusedScreenshotOption(options);
-      if (refused !== undefined)
-        throw unsupportedError(api, refused);
-      const wire = pick(options, SCREENSHOT_KEYS);
+      const wire = await screenshotOptions(api, options);
       return await invoke("page.screenshot", { api, timeoutMs: timeoutMs(api, this.#timeout(options)) }, {
         page: await this._page._brand(api),
         target: this._brand,

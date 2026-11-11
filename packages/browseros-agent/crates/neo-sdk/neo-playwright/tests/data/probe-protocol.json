@@ -1,5 +1,5 @@
 {
-  "protocol": 17,
+  "protocol": 18,
   "callFunction": "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -83,6 +83,12 @@
     "inputArrived": [
       "value",
       "detached"
+    ],
+    "screenshotMask": [
+      "value"
+    ],
+    "screenshotMaskCleanup": [
+      "value"
     ]
   },
   "byHandle": [
@@ -95,6 +101,24 @@
   "requests": [
     {
       "op": "describe"
+    },
+    {
+      "op": "screenshotMask",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "button[name=\"Go\"i]",
+              "source": "button[name=\"Go\"i]"
+            }
+          ]
+        }
+      },
+      "color": "#F0F"
+    },
+    {
+      "op": "screenshotMaskCleanup"
     },
     {
       "op": "resolve",
@@ -934,19 +958,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 17,
+      "protocol": 18,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 17,
+      "protocol": 18,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 17,
+      "protocol": 18,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0

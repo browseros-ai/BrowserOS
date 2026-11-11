@@ -129,6 +129,10 @@ pub(crate) enum ProbeRequest {
     },
     /// One read of every match, without waiting.
     ReadAll { target: ProbeTarget, read: ReadAll },
+    /// Paint every explicit screenshot-mask match in this world, without waiting.
+    ScreenshotMask { target: ProbeTarget, color: String },
+    /// Remove this world's caller-selected screenshot overlays. Idempotent.
+    ScreenshotMaskCleanup,
     /// Upstream's `generateSelectorSimple` for the first element `target` matches now
     /// (`locator.normalize`, one frame's part).
     Selector { target: ProbeTarget },
@@ -501,6 +505,8 @@ mod tests {
             "edit",
             "read",
             "readAll",
+            "screenshotMask",
+            "screenshotMaskCleanup",
             "snapshot",
             "expect",
             "matchUrl",
