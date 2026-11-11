@@ -131,3 +131,34 @@ it('tests that a predicate throwing on its first poll fails the call that builds
     ),
   ).toThrow('at once')
 })
+
+// A page owns the globals JSON text could be spelled with: Playwright's own specs (page-evaluate
+// EV-069, EV-088, EV-095) replace them, and upstream's evaluate still works, because CDP carries
+// its values by value. Neo's text must not depend on them either.
+it('tests that a page without JSON still sends and receives its values', () => {
+  const { call, realm } = mainWorld()
+  runInContext('JSON.stringify = null; globalThis.JSON = null', realm)
+  const arg = JSON.stringify({ o: [{ k: 'abc', v: 122 }], id: 1 })
+  expect(call('evaluate', true, '(x) => ({ abc: x.abc + 1 })', 1, arg)).toBe(
+    JSON.stringify({ o: [{ k: 'abc', v: 123 }], id: 1 }),
+  )
+})
+
+it("tests that an array's toJSON on the page does not change the text", () => {
+  const { call } = mainWorld()
+  const text = call(
+    'evaluate',
+    true,
+    '() => { Array.prototype.toJSON = () => "busted"; return [1, 2, 3] }',
+    0,
+  )
+  expect(text).toBe(JSON.stringify({ a: [1, 2, 3], id: 1 }))
+})
+
+it('tests that busted array methods on the page do not break the transport', async () => {
+  const { call, realm } = mainWorld()
+  runInContext('Array.prototype.map = null; Array.prototype.push = null', realm)
+  expect(call('evaluate', false, '1+2', 1, '{"v":"undefined"}')).toBe('3')
+  const poll = call('poller', false, '1+2', 1, '{"v":"undefined"}') as Poll
+  expect(await poll.first).toEqual([true, '3'])
+})

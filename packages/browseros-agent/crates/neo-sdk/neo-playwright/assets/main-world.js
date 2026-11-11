@@ -377,18 +377,285 @@ class UtilityScript {
   }
 }
 
+// crates/neo-sdk/neo-playwright-js/src/main-world/json-text.ts
+var HEX = "0123456789abcdef";
+function controlEscape(code) {
+  switch (code) {
+    case 8:
+      return "\\b";
+    case 9:
+      return "\\t";
+    case 10:
+      return "\\n";
+    case 12:
+      return "\\f";
+    case 13:
+      return "\\r";
+    default:
+      return unicodeEscape(code);
+  }
+}
+var unicodeEscape = (code) => `\\u${HEX[code >> 12 & 15]}${HEX[code >> 8 & 15]}${HEX[code >> 4 & 15]}${HEX[code & 15]}`;
+function quote(text) {
+  let out = '"';
+  let start = 0;
+  for (let at = 0;at < text.length; at++) {
+    const code = text.charCodeAt(at);
+    let escaped;
+    if (code === 34)
+      escaped = "\\\"";
+    else if (code === 92)
+      escaped = "\\\\";
+    else if (code < 32)
+      escaped = controlEscape(code);
+    else if (code >= 55296 && code <= 57343) {
+      const next = text.charCodeAt(at + 1);
+      if (code <= 56319 && next >= 56320 && next <= 57343) {
+        at++;
+        continue;
+      }
+      escaped = unicodeEscape(code);
+    } else
+      continue;
+    out += text.slice(start, at) + escaped;
+    start = at + 1;
+  }
+  return `${out}${text.slice(start)}"`;
+}
+function writeJson(value) {
+  if (value === null)
+    return "null";
+  switch (typeof value) {
+    case "string":
+      return quote(value);
+    case "number":
+      return value - value === 0 ? `${value}` : "null";
+    case "boolean":
+      return value ? "true" : "false";
+    case "object":
+      break;
+    default:
+      return;
+  }
+  if (Array.isArray(value)) {
+    let out = "[";
+    for (let index = 0;index < value.length; index++) {
+      if (index > 0)
+        out += ",";
+      out += writeJson(value[index]) ?? "null";
+    }
+    return `${out}]`;
+  }
+  const record = value;
+  const keys = Object.keys(record);
+  let out = "{";
+  let first = true;
+  for (let index = 0;index < keys.length; index++) {
+    const key = keys[index];
+    const text = writeJson(record[key]);
+    if (text === undefined)
+      continue;
+    out += `${first ? "" : ","}${quote(key)}:${text}`;
+    first = false;
+  }
+  return `${out}}`;
+}
+function readJson(text) {
+  const reader = new JsonReader(text);
+  const value = reader.value();
+  reader.end();
+  return value;
+}
+
+class JsonReader {
+  text;
+  at = 0;
+  constructor(text) {
+    this.text = text;
+  }
+  value() {
+    this.skipSpace();
+    switch (this.text[this.at]) {
+      case "{":
+        return this.object();
+      case "[":
+        return this.array();
+      case '"':
+        return this.string();
+      case "t":
+        return this.literal("true", true);
+      case "f":
+        return this.literal("false", false);
+      case "n":
+        return this.literal("null", null);
+      default:
+        return this.number();
+    }
+  }
+  end() {
+    this.skipSpace();
+    if (this.at !== this.text.length)
+      this.fail();
+  }
+  object() {
+    this.take("{");
+    const out = {};
+    if (this.next("}"))
+      return out;
+    do {
+      this.skipSpace();
+      const key = this.string();
+      if (key === "__proto__")
+        this.fail();
+      this.skipSpace();
+      this.take(":");
+      out[key] = this.value();
+    } while (this.next(","));
+    this.skipSpace();
+    this.take("}");
+    return out;
+  }
+  array() {
+    this.take("[");
+    const out = [];
+    if (this.next("]"))
+      return out;
+    do
+      out[out.length] = this.value();
+    while (this.next(","));
+    this.skipSpace();
+    this.take("]");
+    return out;
+  }
+  string() {
+    const { text } = this;
+    this.take('"');
+    let out = "";
+    let start = this.at;
+    for (;; ) {
+      if (this.at >= text.length || text.charCodeAt(this.at) < 32)
+        this.fail();
+      const char = text[this.at];
+      if (char === '"')
+        break;
+      if (char !== "\\") {
+        this.at++;
+        continue;
+      }
+      out += text.slice(start, this.at) + this.escape();
+      start = this.at;
+    }
+    out += text.slice(start, this.at);
+    this.at++;
+    return out;
+  }
+  escape() {
+    const kind = this.text[this.at + 1];
+    this.at += 2;
+    if (kind !== "u")
+      return unescaped(kind) ?? this.fail();
+    let unit = 0;
+    for (const end = this.at + 4;this.at < end; this.at++)
+      unit = unit * 16 + (hexDigit(this.text.charCodeAt(this.at)) ?? this.fail());
+    return String.fromCharCode(unit);
+  }
+  number() {
+    const start = this.at;
+    this.eat("-");
+    if (!this.eat("0"))
+      this.digits();
+    if (this.eat("."))
+      this.digits();
+    if (this.eat("e") || this.eat("E")) {
+      if (!this.eat("+"))
+        this.eat("-");
+      this.digits();
+    }
+    return +this.text.slice(start, this.at);
+  }
+  digits() {
+    const start = this.at;
+    while (isDigit(this.text.charCodeAt(this.at)))
+      this.at++;
+    if (this.at === start)
+      this.fail();
+  }
+  literal(word, value) {
+    if (this.text.slice(this.at, this.at + word.length) !== word)
+      this.fail();
+    this.at += word.length;
+    return value;
+  }
+  next(char) {
+    this.skipSpace();
+    return this.eat(char);
+  }
+  eat(char) {
+    if (this.text[this.at] !== char)
+      return false;
+    this.at++;
+    return true;
+  }
+  take(char) {
+    if (this.text[this.at] !== char)
+      this.fail();
+    this.at++;
+  }
+  skipSpace() {
+    for (;; ) {
+      const code = this.text.charCodeAt(this.at);
+      if (code !== 32 && code !== 9 && code !== 10 && code !== 13)
+        return;
+      this.at++;
+    }
+  }
+  fail() {
+    throw new SyntaxError(`Neo: malformed JSON argument at ${this.at}`);
+  }
+}
+function unescaped(kind) {
+  switch (kind) {
+    case '"':
+    case "\\":
+    case "/":
+      return kind;
+    case "b":
+      return "\b";
+    case "f":
+      return "\f";
+    case "n":
+      return `
+`;
+    case "r":
+      return "\r";
+    case "t":
+      return "\t";
+    default:
+      return;
+  }
+}
+function hexDigit(code) {
+  if (isDigit(code))
+    return code - 48;
+  const lower = code | 32;
+  return lower >= 97 && lower <= 102 ? lower - 87 : undefined;
+}
+var isDigit = (code) => code >= 48 && code <= 57;
+
 // crates/neo-sdk/neo-playwright-js/src/main-world/index.ts
 var isThenable = (value) => !!value && typeof value === "object" && typeof value.then === "function";
-var asText = (value) => value === undefined ? undefined : JSON.stringify(value);
+var asText = (value) => value === undefined ? undefined : writeJson(value);
 function neoMainWorld(mode, isFunction, expression, argCount, ...argTextsThenHandles) {
-  const args = argTextsThenHandles.slice(0, argCount).map((text) => JSON.parse(text));
+  const args = [];
+  for (let index = 0;index < argCount; index++)
+    args[index] = readJson(argTextsThenHandles[index]);
   const handles = argTextsThenHandles.slice(argCount);
   const utility = new UtilityScript(globalThis, false);
   if (mode === "evaluate") {
     const out = utility.evaluate(isFunction, true, expression, argCount, ...args, ...handles);
     return isThenable(out) ? out.then((value) => asText(value)) : asText(out);
   }
-  const [arg] = args.map((serialized) => parseEvaluationResultValue(serialized, handles));
+  const arg = argCount > 0 ? parseEvaluationResultValue(args[0], handles) : undefined;
   let evaledExpression;
   const predicate = () => {
     let result = evaledExpression ?? globalThis.eval(expression);
