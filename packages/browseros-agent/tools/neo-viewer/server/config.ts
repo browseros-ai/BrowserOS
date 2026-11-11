@@ -101,7 +101,7 @@ export function launchOptionsFrom(
     dataDir: resolve(
       values['data-dir'] ??
         env.NEO_VIEWER_DATA_DIR ??
-        join(defaultDataDir(env), instance),
+        join(stateRoot(env), instance),
     ),
     upstream: upstream ? new URL(upstream) : null,
     keepData: values['keep-data'] ?? false,
@@ -129,7 +129,7 @@ function hostApiFrom(
 }
 
 /** `$XDG_STATE_HOME/neo-viewer`, else `~/.local/state/neo-viewer`: outside any checkout; one folder per instance below it. */
-function defaultDataDir(env: Record<string, string | undefined>): string {
+export function stateRoot(env: Record<string, string | undefined>): string {
   return join(
     env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'),
     'neo-viewer',

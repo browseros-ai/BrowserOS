@@ -78,7 +78,12 @@ A start replaces only an earlier start of the same instance; if that one's viewe
 it says so in one line, and refuses (touching nothing) when that viewer holds the same port.
 Cleanup never touches another instance: each object carries the labels `com.browseros.neo-viewer`
 and `com.browseros.neo-viewer.instance`, a same-named object without them stops the start, and the
-only image removed is the one this instance's own last build recorded in its `start-state.json`.
+only images removed are ones this instance's own builds replaced (recorded in its `start-state.json`).
+Instances on one commit share one image, so even that waits while anything else holds it: any
+container, running or stopped, or another instance's `start-state.json` naming it as its last build.
+The start says in one line what it kept and why, and tries again at its later starts; it never
+forces a removal (Docker refuses a plain one under a container, and a forced one deletes the image
+under a stopped container).
 **Workers and scripts: always pass your own `--name` and port; `default` is the owner's.**
 
 `GET /api/info` reports the image in use and whether the container is up;
