@@ -53,7 +53,7 @@ impl Completion {
 
 impl HostedRun {
     pub(super) fn start(
-        dispatcher: Arc<Dispatcher>,
+        dispatcher: &Arc<Dispatcher>,
         browser: &BrowserLink,
         tabs: &TabRegistry,
         shutdown: CancellationToken,
@@ -69,7 +69,7 @@ impl HostedRun {
         // `initialize` touches it, as `RunService::execute` does, once it can ask core.
         let page = tabs.default_page(None);
         let (context, guard) = RunCtx::start(
-            &dispatcher,
+            dispatcher,
             RunStart {
                 id: RunId::new(),
                 code: "/* JavaScript supplied by the hosted-run caller */".to_owned(),
@@ -81,14 +81,13 @@ impl HostedRun {
                 default_page: page.clone(),
             },
         );
-        let bridge = Arc::new(Bridge::new(Arc::clone(&context), Arc::clone(&dispatcher)));
+        let bridge = Arc::new(Bridge::new(Arc::clone(&context), Arc::clone(dispatcher)));
         let (sender, reply) = watch::channel(None);
         // Own the guard in an independent task: dropping a finish future cannot lose the end
         // record, and the deadline still fires while Node is busy or no longer references us.
         tokio::spawn(Self::complete(
             Arc::clone(&context),
             Arc::clone(&bridge),
-            dispatcher,
             guard,
             shutdown,
             sender,
@@ -106,7 +105,7 @@ impl HostedRun {
     /// The async half of `RunService::execute`'s run start. The default page is touched only
     /// once core confirms it is open, under a liveness ticket taken just before asking, so the
     /// idle-tab janitor leaves it alone without a closed tab being revived. The init carries the
-    /// same masked listing and observation `run_script` hands QuickJS.
+    /// same listing and observation `run_script` hands QuickJS.
     pub(super) async fn initialize(
         &mut self,
         service: &RunService,
@@ -134,7 +133,7 @@ impl HostedRun {
         self.context.id().to_string()
     }
 
-    /// The product prelude's `RunInit` JSON: default page and masked facts for every open tab.
+    /// The product prelude's `RunInit` JSON: default page and facts for every open tab.
     #[must_use]
     pub fn init(&self) -> &str {
         &self.init
@@ -154,7 +153,7 @@ impl HostedRun {
         async move { bridge.answer(pending).await }
     }
 
-    /// Records one console line through the product's masking and log limits.
+    /// Records one console line through the product's log limits.
     pub fn log(&self, level: &str, text: String) {
         self.bridge.log(level, text);
     }
@@ -183,7 +182,6 @@ impl HostedRun {
     async fn complete(
         context: Arc<RunCtx>,
         bridge: Arc<Bridge>,
-        dispatcher: Arc<Dispatcher>,
         guard: RunGuard,
         shutdown: CancellationToken,
         sender: watch::Sender<Option<Arc<RunReply>>>,
@@ -212,10 +210,8 @@ impl HostedRun {
             outcome: ScriptOutcome::Returned(Value::Null),
             logs: bridge.take_logs(),
         };
-        let held = context.held_values();
-        let mut reply = RunReply::build(&context, end, dispatcher.secrets());
-        reply.mask_held(&held);
-        guard.finish(reply.trace_end(None), held.set());
+        let reply = RunReply::build(&context, end);
+        guard.finish(reply.trace_end(None));
         sender.send_replace(Some(Arc::new(reply)));
     }
 }

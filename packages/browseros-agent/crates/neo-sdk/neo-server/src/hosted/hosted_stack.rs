@@ -41,8 +41,10 @@ impl HostedStack {
         let (store, recovery) = App::hosted_trace(&config.env.trace_dir())
             .await
             .map_err(HostedError::from_error)?;
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
+        // As the sidecar: the trace writer masks with a set nothing registers into, and the
+        // second set is the one `Privacy` feeds and housekeeping expires. Neither masks a run.
+        let unmasked = Arc::new(SecretSet::new(SecretSetConfig::default()));
+        let redactor = Redactor::new(unmasked, RedactionLimits::default());
         let trace = neo_trace::spawn_writer(
             &store,
             redactor,
@@ -52,6 +54,7 @@ impl HostedStack {
             },
             None,
         );
+        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
         let privacy = Privacy::new(
             Arc::clone(&secrets),
             Arc::new(trace.clone()),
@@ -69,7 +72,6 @@ impl HostedStack {
             Arc::clone(&tabs),
             recovery,
             config.secret_files,
-            config.env.typed_quiet,
         ));
         let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::clone(&hooks) as _);
         let solver = CaptchaSolver::new(config.captcha).map(Arc::new);
@@ -88,9 +90,7 @@ impl HostedStack {
         let dispatcher = Arc::new(Dispatcher::new(
             methods.build(),
             builtins::door_rules(&takeover, &hooks, &claims),
-            Arc::clone(&secrets),
             trace.clone(),
-            hooks.typed(),
             Arc::clone(&browser),
             Arc::clone(&tabs),
             Observer::new(Arc::clone(&playwright) as _),
@@ -102,7 +102,6 @@ impl HostedStack {
             tabs: Arc::clone(&tabs),
             store,
             trace: trace.clone(),
-            secrets: Arc::clone(&secrets),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
         });
@@ -146,7 +145,7 @@ impl HostedStack {
             }
             completions.retain(|completion| !completion.is_finished());
             let run = HostedRun::start(
-                Arc::clone(&self.dispatcher),
+                &self.dispatcher,
                 &self.browser,
                 &self.tabs,
                 self.shutdown.clone(),

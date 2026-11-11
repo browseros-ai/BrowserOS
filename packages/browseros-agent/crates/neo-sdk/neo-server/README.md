@@ -12,7 +12,7 @@ facade, built-ins, dispatcher and tab janitor. It binds no listeners and disable
 screenshot queue. Feature-off builds retain the product path.
 
 Each connection owns an `App::runtime()` executor with the product's worker stack size.
-`open_run(timeout)` starts a real `RunCtx` and seeds the same masked tab listing as MCP runs.
+`open_run(timeout)` starts a real `RunCtx` and seeds the same tab listing as MCP runs.
 `invoke(name, json, site)` enters that executor and calls `Bridge::submit` synchronously; its
 returned future always resolves to the bridge envelope. `log` and `sleep` use the same bridge.
 `finish()` stops, drains operations, builds the reply and records the end exactly once; a
