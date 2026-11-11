@@ -109,7 +109,12 @@ function serve() {
     server.listen(0, '127.0.0.1', () =>
       done({
         url: (path) => `http://127.0.0.1:${server.address().port}${path}`,
-        close: () => server.close(),
+        close: () => {
+          server.close()
+          // Chromium may leave a speculative HTTP connection with no request to drain.
+          // This fixture owns every socket on its ephemeral server; release them at exit.
+          server.closeAllConnections()
+        },
       }),
     ),
   )
