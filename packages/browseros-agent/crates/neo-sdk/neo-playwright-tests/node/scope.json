@@ -207,7 +207,7 @@
     },
     {
       "file": "tests/page/page-aria-snapshot-ai.spec.ts",
-      "ids": ["AR-060", "AR-063"],
+      "ids": ["AR-052", "AR-060", "AR-063"],
       "reason": "drift"
     },
     {
