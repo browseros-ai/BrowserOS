@@ -323,7 +323,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         sdk_locations,
         ["analytics/aliases.rs", "analytics/service.rs"]
     );
-    assert_eq!(claw_server::analytics::events::ALL.len(), 8);
+    assert_eq!(claw_server::analytics::events::ALL.len(), 9);
     Ok(())
 }
 

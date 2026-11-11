@@ -10,12 +10,14 @@ use crate::{
 };
 use posthog_rs::{Client, ClientOptionsBuilder, Event};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     env,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -214,43 +216,45 @@ impl AnalyticsService {
     }
 
     pub fn capture(&self, definition: EventDefinition, properties: Value) {
-        let active = self
-            .active
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(active) = active.as_ref() else {
+        let Some(active) = self.active_client() else {
             return;
         };
-        let Some(Value::Object(properties)) = definition.sanitize(&properties) else {
-            return;
-        };
+        if let Some(event) = build_event(&active, definition, properties) {
+            active.client.capture(event);
+        }
+    }
 
-        let mut event = Event::new(definition.name(), active.distinct_id.as_str());
-        for (key, value) in properties {
-            if event.insert_prop(key, value).is_err() {
-                return;
-            }
+    /// Whether events leave this process right now: consent given, a project key, desktop.
+    #[must_use]
+    pub fn delivers(&self) -> bool {
+        self.active_client().is_some()
+    }
+
+    /// Captures an event that describes a finished period, stamped at `timestamp_ms` and given
+    /// an id derived from the install and `dedupe_key`. Sending the same key again yields the
+    /// same id, which PostHog collapses, so a retried send cannot count twice.
+    pub fn capture_once(
+        &self,
+        definition: EventDefinition,
+        properties: Value,
+        timestamp_ms: i64,
+        dedupe_key: &str,
+    ) -> bool {
+        let Some(active) = self.active_client() else {
+            return false;
+        };
+        let Some(mut event) = build_event(&active, definition, properties) else {
+            return false;
+        };
+        let Some(timestamp) = chrono::DateTime::from_timestamp_millis(timestamp_ms) else {
+            return false;
+        };
+        if event.set_timestamp(timestamp).is_err() {
+            return false;
         }
-        for (key, value) in [
-            (
-                SERVER_VERSION,
-                Value::String(env!("CARGO_PKG_VERSION").to_string()),
-            ),
-            (
-                OS_PLATFORM,
-                Value::String(events::platform_token().to_string()),
-            ),
-            (INSTALL_ID, Value::String(active.distinct_id.clone())),
-            (PRODUCT, Value::String(PRODUCT_BROWSERCLAW.to_string())),
-            (SURFACE, Value::String(SURFACE_SERVER.to_string())),
-            (PROCESS_PERSON_PROFILE, Value::Bool(false)),
-            (IS_SERVER, Value::Bool(true)),
-        ] {
-            if event.insert_prop(key, value).is_err() {
-                return;
-            }
-        }
+        event.set_uuid(dedupe_uuid(&active.distinct_id, definition, dedupe_key));
         active.client.capture(event);
+        true
     }
 
     pub async fn shutdown(&self) {
@@ -307,6 +311,45 @@ impl AnalyticsSink for AnalyticsService {
     fn capture(&self, event: EventDefinition, properties: Value) {
         Self::capture(self, event, properties);
     }
+}
+
+fn build_event(
+    active: &ActiveClient,
+    definition: EventDefinition,
+    properties: Value,
+) -> Option<Event> {
+    let Some(Value::Object(properties)) = definition.sanitize(&properties) else {
+        return None;
+    };
+    let mut event = Event::new(definition.name(), active.distinct_id.as_str());
+    for (key, value) in properties {
+        event.insert_prop(key, value).ok()?;
+    }
+    for (key, value) in [
+        (
+            SERVER_VERSION,
+            Value::String(env!("CARGO_PKG_VERSION").to_string()),
+        ),
+        (
+            OS_PLATFORM,
+            Value::String(events::platform_token().to_string()),
+        ),
+        (INSTALL_ID, Value::String(active.distinct_id.clone())),
+        (PRODUCT, Value::String(PRODUCT_BROWSERCLAW.to_string())),
+        (SURFACE, Value::String(SURFACE_SERVER.to_string())),
+        (PROCESS_PERSON_PROFILE, Value::Bool(false)),
+        (IS_SERVER, Value::Bool(true)),
+    ] {
+        event.insert_prop(key, value).ok()?;
+    }
+    Some(event)
+}
+
+fn dedupe_uuid(distinct_id: &str, definition: EventDefinition, dedupe_key: &str) -> Uuid {
+    let digest = Sha256::digest(format!("{distinct_id}:{}:{dedupe_key}", definition.name()));
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_custom_bytes(bytes).into_uuid()
 }
 
 async fn build_client(

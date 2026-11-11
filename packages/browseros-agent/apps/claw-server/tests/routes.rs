@@ -830,6 +830,40 @@ async fn tests_that_explicit_grouping_never_sends_the_cleanup_tip() -> anyhow::R
 }
 
 #[tokio::test]
+async fn mcp_tool_calls_are_counted_for_the_day() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    for arguments in [
+        json!({ "name": "first" }),
+        json!({ "name": "second" }),
+        json!({ "name": 5 }),
+    ] {
+        stateless_mcp_request(
+            &app.router,
+            "tools/call",
+            json!({ "name": "name_session", "arguments": arguments }),
+            Some("Codex"),
+        )
+        .await?;
+    }
+
+    let now_ms = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis(),
+    )?;
+    let counts = app
+        .state
+        .tool_calls_daily
+        .counts(&claw_server::db::run_error_budget::utc_day(now_ms))
+        .await?;
+    assert_eq!(counts.len(), 1, "{counts:?}");
+    assert_eq!(counts[0].tool_name, "name_session");
+    assert_eq!(counts[0].calls, 3);
+    assert_eq!(counts[0].error_calls, 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_stateless_product_precedence_fallback_and_reuse() -> anyhow::Result<()> {
     let app = test_app().await?;
     for (reported, declared, expected) in [
