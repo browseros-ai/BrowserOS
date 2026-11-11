@@ -79,6 +79,11 @@ const IMPORTED: &[Imported] = &[
         checked_by: "tests/data/probe-protocol.json",
     },
     Imported {
+        module: "../../../probe/protocol",
+        name: "ExpectParams",
+        checked_by: "tests/data/probe-protocol.json",
+    },
+    Imported {
         module: "../../vendored",
         name: "AriaSnapshotJSON",
         checked_by: "tests/data/snapshot-output.json",

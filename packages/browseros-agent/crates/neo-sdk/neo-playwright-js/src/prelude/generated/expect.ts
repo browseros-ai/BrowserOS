@@ -3,11 +3,28 @@
 // route row in Rust, then run `cargo test -p neo-playwright --test wire_generated`, which
 // rewrites this folder.
 
+import type * as pw from '../../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
+import { invoke } from '../bridge'
+import type { CallSite } from '../call-site'
+import type { SignalLike } from '../signal'
+import type { CallHeader } from '../wire'
+import type { LocatorExpectInput } from './types/LocatorExpectInput'
+import type { PageExpectInput } from './types/PageExpectInput'
+
+export type { LocatorExpectInput } from './types/LocatorExpectInput'
+export type { PageExpectInput } from './types/PageExpectInput'
+
 /** Each expect op's input, after the `call` header every op shares. */
-export type ExpectInputs = {}
+export type ExpectInputs = {
+  'expect.locator': LocatorExpectInput
+  'expect.page': PageExpectInput
+}
 
 /** Each expect op's result. */
-export type ExpectOutputs = {}
+export type ExpectOutputs = {
+  'expect.locator': null
+  'expect.page': null
+}
 
 /**
  * The script's option keys of each expect op that takes an `options` bag: the fields of its
@@ -20,4 +37,24 @@ export const EXPECT_OPTION_KEYS = {} as const
  * One typed sender per expect op. A class passes its input as an object literal, so every
  * field is checked against Rust's input type and the result is Rust's result type.
  */
-export const EXPECT_SEND = {}
+export const EXPECT_SEND = {
+  'expect.locator': (
+    site: CallSite,
+    call: CallHeader,
+    input: LocatorExpectInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('expect.locator', site, call, input, signal),
+  'expect.page': (
+    site: CallSite,
+    call: CallHeader,
+    input: PageExpectInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('expect.page', site, call, input, signal),
+}
+
+// Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
+// names the op and every key that differs without a reason, or whose reason went stale.
+// expect.locator replaces Frame.expect: probe matcher parameters and preformatted locator diagnostics
+type _expect_locator_replaces = pw.FrameExpectParams
+// expect.page replaces Frame.expect: probe matcher parameters and preformatted page diagnostics
+type _expect_page_replaces = pw.FrameExpectParams

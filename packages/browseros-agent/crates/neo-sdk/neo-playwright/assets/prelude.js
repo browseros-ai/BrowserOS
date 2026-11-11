@@ -3731,7 +3731,10 @@ ${value.stack}`;
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/expect.ts
   var EXPECT_OPTION_KEYS = {};
-  var EXPECT_SEND = {};
+  var EXPECT_SEND = {
+    "expect.locator": (site, call, input, signal) => invoke("expect.locator", site, call, input, signal),
+    "expect.page": (site, call, input, signal) => invoke("expect.page", site, call, input, signal)
+  };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/input.ts
   var INPUT_OPTION_KEYS = {};
@@ -17847,23 +17850,28 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       throw argumentError(name, `${name} can be only used with ${matcher.receiver} object${matcher.receiver.includes(" or ") ? "s" : ""}, was called with ${receiverText(actual)}`);
     const timeout = matcher.options?.timeout ?? state.config.timeout;
     const call = { api, timeoutMs: timeoutMs(api, timeout) };
-    const shape = {
-      matcher: name,
-      expectation: matcher.expectation,
-      expected: matcher.expected(state.isNot),
-      params: { ...matcher.params, isNot: state.isNot },
-      templateError: matcher.templateError
-    };
+    const expectation = matcher.expectation;
+    const expected = matcher.expected(state.isNot);
+    const params = { ...matcher.params, isNot: state.isNot };
+    const templateError = matcher.templateError;
     try {
       if (actual instanceof Page)
-        await invoke("expect.page", site, call, {
+        await send["expect.page"](site, call, {
           page: await actual._brand(api),
-          ...shape
+          matcher: name,
+          expectation,
+          expected,
+          params,
+          templateError
         });
       else if (actual instanceof Locator)
-        await invoke("expect.locator", site, call, {
+        await send["expect.locator"](site, call, {
           target: await actual._frame._locatorBrand(api, actual._selector),
-          ...shape
+          matcher: name,
+          expectation,
+          expected,
+          params,
+          templateError
         });
     } catch (error) {
       if (error instanceof Error)

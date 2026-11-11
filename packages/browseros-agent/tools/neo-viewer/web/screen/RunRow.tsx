@@ -145,6 +145,8 @@ export function RunRow({
           style={{ width: `${bar.reply * 100}%` }}
         />
       </span>
+      {/* The copy slot: `CopyRunButton` lies over it, beside this button rather than in it. */}
+      <span className="w-8 shrink-0" />
     </button>
   )
 }

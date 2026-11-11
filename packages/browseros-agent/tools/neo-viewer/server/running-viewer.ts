@@ -3,7 +3,7 @@
  * it (`viewer.json`), so a later start can tell it is still running.
  */
 
-import { readdir, readFile, writeFile } from 'node:fs/promises'
+import { readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { StartState } from './neo-container'
 
@@ -134,4 +134,23 @@ export async function otherInstanceStates(
     }
   }
   return states
+}
+
+/**
+ * Writes `text` to a temporary file beside `path` and renames it into place, so a reader (another
+ * instance's start, reading this one's `start-state.json`) sees the old file or the new one, never
+ * a truncated one it would skip as unreadable.
+ */
+export async function writeFileAtomically(
+  path: string,
+  text: string,
+): Promise<void> {
+  const temporary = `${path}.${process.pid}.tmp`
+  try {
+    await writeFile(temporary, text)
+    await rename(temporary, path)
+  } catch (error) {
+    await rm(temporary, { force: true })
+    throw error
+  }
 }
