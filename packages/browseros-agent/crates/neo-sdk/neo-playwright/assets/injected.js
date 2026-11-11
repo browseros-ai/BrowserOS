@@ -4651,6 +4651,7 @@
   class Highlight {
     #pane;
     #shadow;
+    #style;
     #entries = [];
     #injected;
     constructor(injected) {
@@ -4659,6 +4660,9 @@
       this.#pane.setAttribute("popover", "manual");
       this.#pane.style.cssText = "inset:0;width:100%;height:100%;max-width:none;max-height:none;padding:0;margin:0;border:none;overflow:visible;pointer-events:none;display:flex;background-color:transparent";
       this.#shadow = this.#pane.attachShadow({ mode: "closed" });
+      this.#style = injected.document.createElement("style");
+      this.#style.textContent = ':host{font-size:13px;font-family:system-ui,"Ubuntu","Droid Sans",sans-serif;color:#333;color-scheme:light}';
+      this.#shadow.appendChild(this.#style);
     }
     install() {
       const root = this.#injected.document.documentElement;
@@ -4676,7 +4680,7 @@
     addMaskedElements(elements, color) {
       for (const element of elements)
         this.#entries.push({ element, color });
-      this.#shadow.replaceChildren();
+      this.#shadow.replaceChildren(this.#style);
       const highlights = this.#entries.map(() => {
         const highlight = this.#injected.document.createElement("x-pw-highlight");
         highlight.style.cssText = "position:absolute;top:0;left:0;width:0;height:0";

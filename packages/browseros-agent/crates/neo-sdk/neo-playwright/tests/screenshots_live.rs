@@ -287,11 +287,14 @@ async fn caller_masks_cover_matches_and_restore_on_success_and_cancellation() ->
         const locator=await pixels(await page.locator('#main').screenshot({mask:[page.locator('#main')],scale:'css'}),[[5,5]]);
         const element=await page.$('#main');
         const handle=await pixels(await element.screenshot({mask:[page.locator('#main')],maskColor:'blue',scale:'css'}),[[5,5]]);
+        await page.evaluate(() => { document.documentElement.style.color='red'; document.documentElement.style.colorScheme='dark'; });
+        const currentColor=await pixels(await page.screenshot({mask:[page.locator('#main')],maskColor:'currentColor',scale:'css'}),[[25,25]]);
+        const lightDark=await pixels(await page.screenshot({mask:[page.locator('#main')],maskColor:'light-dark(rgb(1,2,3),rgb(4,5,6))',scale:'css'}),[[25,25]]);
         let failed=false;
         try { await page.screenshot({mask:[page.locator('#main'),page.locator('unknown-engine=oops')]}); }
         catch { failed=true; }
         const overlays=await page.evaluate(() => [document.querySelectorAll('x-pw-glass').length,document.querySelector('iframe').contentDocument.querySelectorAll('x-pw-glass').length]);
-        return {masked,normal,alpha,locator,handle,overlays,failed};
+        return {masked,normal,alpha,locator,handle,currentColor,lightDark,overlays,failed};
     "#).await;
     let cancelled = if measured.is_ok() {
         run.intercept("Page.captureScreenshot", Intercept::Hang);
@@ -318,6 +321,7 @@ async fn caller_masks_cover_matches_and_restore_on_success_and_cancellation() ->
             "masked": [[0,255,0,255],[0,255,0,255],[0,255,0,255],[0,255,0,255]],
             "normal": [[255,0,0,255],[255,255,255,255],[0,0,255,255],[0,128,0,255]],
             "alpha": [[127,128,0,255]], "locator": [[255,0,255,255]], "handle": [[0,0,255,255]], "overlays": [0,0], "failed": true,
+            "currentColor": [[51,51,51,255]], "lightDark": [[1,2,3,255]],
         })
     );
     assert_eq!(cancelled?, json!(true));

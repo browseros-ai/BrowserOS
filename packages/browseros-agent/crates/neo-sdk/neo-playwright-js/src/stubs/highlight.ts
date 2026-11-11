@@ -23,6 +23,7 @@ export class Highlight {
   readonly [method: string]: (...args: any[]) => any
   readonly #pane: HTMLElement
   readonly #shadow: ShadowRoot
+  readonly #style: HTMLStyleElement
   readonly #entries: { element: Element; color: string }[] = []
 
   readonly #injected: InjectedScript
@@ -34,6 +35,12 @@ export class Highlight {
     this.#pane.style.cssText =
       'inset:0;width:100%;height:100%;max-width:none;max-height:none;padding:0;margin:0;border:none;overflow:visible;pointer-events:none;display:flex;background-color:transparent'
     this.#shadow = this.#pane.attachShadow({ mode: 'closed' })
+    // Host defaults affect CSS colors such as currentColor and light-dark(), even when the
+    // page itself chooses another text color or color scheme. Keep upstream's declarations.
+    this.#style = injected.document.createElement('style')
+    this.#style.textContent =
+      ':host{font-size:13px;font-family:system-ui,"Ubuntu","Droid Sans",sans-serif;color:#333;color-scheme:light}'
+    this.#shadow.appendChild(this.#style)
   }
 
   install() {
@@ -52,7 +59,7 @@ export class Highlight {
 
   addMaskedElements(elements: Element[], color: string) {
     for (const element of elements) this.#entries.push({ element, color })
-    this.#shadow.replaceChildren()
+    this.#shadow.replaceChildren(this.#style)
     const highlights = this.#entries.map(() => {
       const highlight = this.#injected.document.createElement('x-pw-highlight')
       highlight.style.cssText =
