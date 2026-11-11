@@ -14,13 +14,7 @@ import type { Rect } from '../probe/protocol'
 import { invoke } from './bridge'
 import { EventEmitter } from './emitter'
 import { clientError } from './errors'
-import {
-  type Callbacks,
-  type EvaluateOptions,
-  exposesFunctions,
-  fromPageValue,
-  pageCall,
-} from './evaluation'
+import { type EvaluateOptions, fromPageValue, pageCall } from './evaluation'
 import { inputFiles, withClientErrors } from './files'
 import {
   type ClickOptions,
@@ -414,18 +408,13 @@ export class ElementHandle extends EventEmitter {
   ): Promise<unknown> {
     const api = 'elementHandle.evaluate'
     this.#live(api)
-    const callbacks: Callbacks | undefined = exposesFunctions(options)
-      ? []
-      : undefined
-    const script = pageCall(
+    const script = await this._page._evaluationScript(
       api,
       'handle',
       pageFunction,
       arg,
       options,
-      callbacks,
     )
-    await this._page._exposeEvaluateCallbacks(api, callbacks)
     return fromPageValue(
       api,
       await this.#op('locator.evaluate', api, 0, { script }),

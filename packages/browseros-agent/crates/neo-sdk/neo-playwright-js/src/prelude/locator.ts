@@ -10,12 +10,7 @@
 import type { Rect } from '../probe/protocol'
 import type { ElementHandle } from './element-handle'
 import { internalError, plainError } from './errors'
-import {
-  type Callbacks,
-  type EvaluateOptions,
-  exposesFunctions,
-  pageCall,
-} from './evaluation'
+import { type EvaluateOptions, pageCall } from './evaluation'
 import type {
   ClickOptions,
   ExactOption,
@@ -623,20 +618,13 @@ export class Locator {
     options?: TimeoutOption & EvaluateOptions & SignalOption,
   ): Promise<unknown> {
     const api = 'locator.evaluate'
-    const callbacks: Callbacks | undefined = exposesFunctions(options)
-      ? []
-      : undefined
-    const script = pageCall(
+    const script = await this._frame._page._evaluationScript(
       api,
       'locator',
       pageFunction,
       arg,
       options,
-      callbacks,
     )
-    // A check that failed is the op's to raise after its wait; it exposes nothing.
-    if ('run' in script)
-      await this._frame._page._exposeEvaluateCallbacks(api, callbacks)
     return await this._frame._evaluateOn(
       api,
       this._selector,

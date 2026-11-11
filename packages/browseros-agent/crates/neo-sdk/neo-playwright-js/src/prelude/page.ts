@@ -24,7 +24,9 @@ import {
 import {
   assertMaxArguments,
   type Callbacks,
+  type CallForm,
   type EvaluateOptions,
+  exposesFunctions,
   pageCall,
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
@@ -79,6 +81,7 @@ import type {
   PageBrand,
   PageFact,
   PageHandle,
+  PageScript,
 } from './wire'
 
 /** Page-scoped preferences; omitted values are retained and null clears just that override. */
@@ -774,28 +777,37 @@ export class Page extends EventEmitter {
   }
 
   /**
-   * The functions an `evaluate` with `exposeFunctions` passed (`Callbacks`), exposed as this
-   * page's bindings off `window`, before the op that names them goes out, as upstream's
-   * `_exposeEvaluateCallback` does. They last until the run ends, as every binding does; upstream
-   * also erases them when the main frame loads a new document, which no script there can reach
-   * them from anyway.
+   * `pageCall` for an evaluate on this page. With `exposeFunctions`, each function in the
+   * argument is exposed as this page's binding off `window` before the op that names it goes
+   * out, as upstream's `serializeArgumentWithCallbacks` awaits `_exposeEvaluateCallback`. A
+   * refused script fails in its op (after the wait, for a locator) and exposes nothing. The
+   * callbacks last until the run ends, as every binding does; upstream also erases them when
+   * the main frame loads a new document, which no script there can reach them from anyway.
    */
-  async _exposeEvaluateCallbacks(
+  async _evaluationScript(
     api: string,
-    callbacks: Callbacks | undefined,
-  ): Promise<void> {
-    if (!callbacks?.length) return
-    await Promise.all(
-      callbacks.map(([name, callback]) =>
-        exposeOnPage(
-          this,
-          api,
-          name,
-          (_source, ...args) => Reflect.apply(callback, undefined, args),
-          true,
+    form: CallForm,
+    pageFunction: unknown,
+    arg: unknown,
+    options: unknown,
+  ): Promise<PageScript> {
+    const callbacks: Callbacks | undefined = exposesFunctions(options)
+      ? []
+      : undefined
+    const script = pageCall(api, form, pageFunction, arg, options, callbacks)
+    if (callbacks?.length && 'run' in script)
+      await Promise.all(
+        callbacks.map(([name, callback]) =>
+          exposeOnPage(
+            this,
+            api,
+            name,
+            (_source, ...args) => Reflect.apply(callback, undefined, args),
+            true,
+          ),
         ),
-      ),
-    )
+      )
+    return script
   }
 
   /**

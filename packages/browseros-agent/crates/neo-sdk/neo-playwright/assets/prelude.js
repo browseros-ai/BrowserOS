@@ -6804,10 +6804,7 @@ ${value.stack}`;
     }
     async evaluate(pageFunction, arg, options) {
       const api = "locator.evaluate";
-      const callbacks = exposesFunctions(options) ? [] : undefined;
-      const script = pageCall(api, "locator", pageFunction, arg, options, callbacks);
-      if ("run" in script)
-        await this._frame._page._exposeEvaluateCallbacks(api, callbacks);
+      const script = await this._frame._page._evaluationScript(api, "locator", pageFunction, arg, options);
       return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
     }
     async waitForFunction(pageFunction, arg, options) {
@@ -7525,9 +7522,7 @@ ${value.stack}`;
       await this._page._navigated(api, this, result, observed);
     }
     async _evaluate(api, pageFunction, arg, options) {
-      const callbacks = exposesFunctions(options) ? [] : undefined;
-      const script = pageCall(api, "frame", pageFunction, arg, options, callbacks);
-      await this._page._exposeEvaluateCallbacks(api, callbacks);
+      const script = await this._page._evaluationScript(api, "frame", pageFunction, arg, options);
       const { value: result, observed } = await invokeObserved("page.evaluate", this._call(api, 0), {
         ...await this._frameArgs(api),
         script
@@ -7819,9 +7814,7 @@ ${value.stack}`;
     async evaluate(pageFunction, arg, options) {
       const api = "elementHandle.evaluate";
       this.#live(api);
-      const callbacks = exposesFunctions(options) ? [] : undefined;
-      const script = pageCall(api, "handle", pageFunction, arg, options, callbacks);
-      await this._page._exposeEvaluateCallbacks(api, callbacks);
+      const script = await this._page._evaluationScript(api, "handle", pageFunction, arg, options);
       return fromPageValue(api, await this.#op("locator.evaluate", api, 0, { script }));
     }
     async $eval(selector, pageFunction, arg) {
@@ -9266,10 +9259,12 @@ ${value.stack}`;
     exposeFunction(name, callback) {
       return exposeOnPage(this, "page.exposeFunction", name, (_source, ...args) => Reflect.apply(callback, undefined, args));
     }
-    async _exposeEvaluateCallbacks(api, callbacks) {
-      if (!callbacks?.length)
-        return;
-      await Promise.all(callbacks.map(([name, callback]) => exposeOnPage(this, api, name, (_source, ...args) => Reflect.apply(callback, undefined, args), true)));
+    async _evaluationScript(api, form, pageFunction, arg, options) {
+      const callbacks = exposesFunctions(options) ? [] : undefined;
+      const script = pageCall(api, form, pageFunction, arg, options, callbacks);
+      if (callbacks?.length && "run" in script)
+        await Promise.all(callbacks.map(([name, callback]) => exposeOnPage(this, api, name, (_source, ...args) => Reflect.apply(callback, undefined, args), true)));
+      return script;
     }
     async _bindingFrame(id) {
       if (id === null)
