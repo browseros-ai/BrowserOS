@@ -3,6 +3,7 @@
 //! the log's close records before a cached tab can be reported live. Delivered claims and
 //! remembered dead bindings remain decisive after ring eviction, until core detaches or rebinds.
 
+use futures_util::future::BoxFuture;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -18,8 +19,16 @@ use crate::browser::{BrowserLink, TabRegistry};
 
 /// The event evidence needed to reconcile a cache read with the independent target watcher.
 pub(crate) trait EventLog: Send + Sync {
+    /// Drain already-received lifecycle facts before capturing a foreground observation.
+    fn synchronize(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
     /// Newest event recorded before the batch begins reading core.
     fn head(&self) -> u64;
+    /// Dedicated workers for a live page; absent for hosts without worker observation.
+    fn workers(&self, _target: &TargetId) -> Option<Vec<WorkerFact>> {
+        None
+    }
     /// Retained close evidence for the exact current target from the cache read.
     fn closed(&self, target: &TargetId) -> Option<u64>;
     /// The newest retained navigation of the target's main frame, including one the page made
@@ -27,6 +36,13 @@ pub(crate) trait EventLog: Send + Sync {
     fn navigated(&self, _target: &TargetId) -> Option<u64> {
         None
     }
+}
+
+/// A worker identity in the host protocol, independent of the browser adapter.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct WorkerFact {
+    pub(crate) id: String,
+    pub(crate) url: String,
 }
 
 /// Freshness of a batch of page facts. Neither counter is a page identity.
@@ -68,6 +84,7 @@ pub(crate) struct ActedTarget {
 pub(crate) struct ObservedPages {
     pub(crate) observed: Observation,
     pub(crate) infos: Vec<Option<PageInfo>>,
+    pub(crate) workers: Vec<Option<Vec<WorkerFact>>>,
     /// Closed only by records withheld from this reply. Internal evidence still updates.
     pub(crate) withheld: Vec<TabId>,
 }
@@ -128,6 +145,7 @@ impl Observer {
         R: Future<Output = Option<PageInfo>>,
     {
         let mut serial = self.serial.lock().await;
+        self.log.synchronize().await;
         *serial += 1;
         let mut observed = Observation {
             seq: *serial,
@@ -136,6 +154,7 @@ impl Observer {
             closes: Vec::new(),
         };
         let mut infos = Vec::with_capacity(tabs.len());
+        let mut workers = Vec::with_capacity(tabs.len());
         let mut withheld = Vec::new();
         for &tab in tabs {
             let delivered = claims.get(&tab).map_or(&[][..], Vec::as_slice);
@@ -154,6 +173,7 @@ impl Observer {
                     } else if !delivered.is_empty() {
                         withheld.push(tab);
                     }
+                    workers.push(Some(Vec::new()));
                     infos.push(None);
                     break;
                 };
@@ -189,6 +209,11 @@ impl Observer {
                         seq: claim.seq,
                     });
                 }
+                workers.push(if dead {
+                    Some(Vec::new())
+                } else {
+                    self.log.workers(&info.target_id)
+                });
                 infos.push((!dead).then_some(info));
                 break;
             }
@@ -196,6 +221,7 @@ impl Observer {
         ObservedPages {
             observed,
             infos,
+            workers,
             withheld,
         }
     }

@@ -228,6 +228,10 @@ export class BrowserContext extends EventEmitter {
    * and a result that name that tab find the script's `page` object instead of making a
    * second one.
    */
+  _settleWorkerFacts(at: Observation | null): void {
+    for (const page of this.#byTab.values()) page._settleWorkerFacts(at)
+  }
+
   _applyReply({ pages, defaultPage, observed }: Reply): void {
     const page = this.#unopened
     if (defaultPage && page) {

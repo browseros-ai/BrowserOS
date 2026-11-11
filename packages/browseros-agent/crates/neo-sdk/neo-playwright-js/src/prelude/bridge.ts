@@ -40,6 +40,7 @@ import type {
   OpOutputs,
   PageBrand,
   PageFact,
+  WorkerInfo,
 } from './wire'
 
 /** What a run starts with (claw-sdk's run_script.rs `init`). */
@@ -209,6 +210,13 @@ export function registerBrand(
 export function onReply(listener: (reply: Reply) => void): void {
   host().onReply((envelope) => {
     const observed = readObservation(field(envelope, 'observed'))
+    const result = field(envelope, 'ok')
+    if (
+      observed &&
+      (Array.isArray(field(result, 'events')) ||
+        typeof field(result, 'event') === 'string')
+    )
+      observed.deferWorkers = true
     // A failed event read returns no records for the hub to deliver. Its closed facts
     // must settle now, even if the host copied a close before the operation failed.
     if (observed && field(envelope, 'err') !== undefined) observed.closes = []
@@ -312,9 +320,24 @@ function readPageFacts(pages: unknown): PageFact[] {
       if (typeof width === 'number' && typeof height === 'number')
         fact.viewportSize = { width, height }
     }
+    const workers = readWorkers(field(page, 'workers'))
+    if (workers) fact.workers = workers
     facts.push(fact)
   }
   return facts
+}
+
+/** Worker metadata is validated once at the reply boundary, independently of page facts. */
+function readWorkers(value: unknown): WorkerInfo[] | null {
+  if (!Array.isArray(value)) return null
+  const workers: WorkerInfo[] = []
+  for (const worker of value) {
+    const id = field(worker, 'id')
+    const url = field(worker, 'url')
+    if (typeof id === 'string' && typeof url === 'string')
+      workers.push({ id, url })
+  }
+  return workers
 }
 
 /** The bootstrap's clock, or null in a realm without one. */

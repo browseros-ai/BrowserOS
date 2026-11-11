@@ -41,6 +41,7 @@ listed_enum! {
         Opener,
         Frames,
         Evaluate,
+        WorkerEvaluate,
         EvaluateOnElement,
         EvaluateOnAll,
         WaitForFunction,
@@ -65,6 +66,13 @@ impl PageOp {
     )]
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
+            Self::WorkerEvaluate => OpSpec::write(
+                "worker.evaluate",
+                PAGE,
+                "evaluate a script in a dedicated worker",
+            )
+            .using(&[Capability::MainWorld])
+            .policed(),
             Self::SaveScreenshot => save_screenshot::SPEC,
             Self::WebStorageRead => web_storage::READ_SPEC,
             Self::WebStorageWrite => web_storage::WRITE_SPEC,
@@ -213,6 +221,10 @@ const RESOLVE_BINDING: OpSpec = OpSpec::write(
 /// Runs one page op. The ops that run in the page's sealed world (title, content, setContent,
 /// waitForURL) or its main world (evaluate, waitForFunction, the element scripts) are built with
 /// those worlds.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one typed dispatch arm per page operation keeps the op contract together"
+)]
 pub(crate) async fn invoke(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -273,6 +285,9 @@ pub(crate) async fn invoke(
         PageOp::Evaluate => Box::pin(evaluate::evaluate(pw, scope, args.decode(scope)?)).await,
         PageOp::WaitForFunction => {
             Box::pin(evaluate::wait_for_function(pw, scope, args.decode(scope)?)).await
+        }
+        PageOp::WorkerEvaluate => {
+            super::worker_evaluate::evaluate(pw, scope, args.decode(scope)?).await
         }
         PageOp::Title => {
             document_op::read(pw, scope, args.decode(scope)?, DocumentPart::Title).await
@@ -369,6 +384,7 @@ async fn close(
             .map_err(core)?;
     }
     if !input.run_before_unload {
+        pw.workers_closed(admitted.session.target_id.clone()).await;
         scope.run_state().frames.forget(page);
     }
     Ok(json!({}))

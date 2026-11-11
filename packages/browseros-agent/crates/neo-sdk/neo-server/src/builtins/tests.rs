@@ -3175,3 +3175,59 @@ async fn a_nonhosted_console_wait_still_receives_native_messages() -> Result<(),
     assert!(message.to_string().contains("native console"), "{message}");
     Ok(())
 }
+
+#[tokio::test]
+async fn worker_bookkeeping_can_unsubscribe_after_its_page_closed() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.owner_tab("https://example.com/worker").await?;
+    let (run, _guard) = harness.run()?;
+    value(
+        harness
+            .submit(
+                &run,
+                "events.listen",
+                json!({
+                    "call":{"api":"page.on","timeoutMs":0},
+                    "page":handle(&page),"event":"workerstate","on":true,"since":0
+                }),
+            )
+            .await,
+    )?;
+    value(
+        harness
+            .submit(
+                &run,
+                "page.close",
+                json!({
+                    "call":{"api":"page.close","timeoutMs":0},"page":handle(&page)
+                }),
+            )
+            .await,
+    )?;
+    let reply = harness
+        .submit(
+            &run,
+            "events.listen",
+            json!({
+                "call":{"api":"page.off","timeoutMs":0},
+                "page":null,"retiredTab":page.tab,"event":"workerstate","on":false,"since":0
+            }),
+        )
+        .await;
+    assert!(reply.default_page.is_none(), "cleanup must not open a tab");
+    assert_eq!(value(reply)?, json!({}));
+    let refused = failure(
+        harness
+            .submit(
+                &run,
+                "events.listen",
+                json!({
+                    "call":{"api":"page.on","timeoutMs":0},
+                    "page":null,"retiredTab":page.tab,"event":"workerstate","on":true,"since":0
+                }),
+            )
+            .await,
+    )?;
+    assert!(refused.error.message().contains("retiredTab"));
+    Ok(())
+}

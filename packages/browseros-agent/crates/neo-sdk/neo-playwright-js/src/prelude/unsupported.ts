@@ -30,6 +30,10 @@ const ROOTED =
   'element handles cannot root a selector in Neo; use locator.locator(selector) instead'
 
 export const UNSUPPORTED = {
+  Selectors: {
+    register:
+      'custom selector engines are not available in Neo; locate with CSS, text, role or test-id selectors',
+  },
   Browser: {
     bind: 'Neo does not share its browser',
     browserType: {

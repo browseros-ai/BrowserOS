@@ -57,6 +57,28 @@ const failed = async (call) => {
 };
 "#;
 
+/// Worker execution crosses the real QuickJS/runtime/dispatcher/CDP boundary; the Node
+/// corpus uses the same prelude but cannot prove QuickJS value revival or pending-op cleanup.
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_evaluate_behaves_as_playwright_on_browseros() -> TestResult {
+    on_browseros(|rig| Box::pin(async move {
+        let value = observed(rig, "worker-evaluate", r"
+            const created = page.waitForEvent('worker');
+            await page.evaluate(() => { window.worker = new Worker(URL.createObjectURL(new Blob(['self.initial = 42'], { type: 'application/javascript' }))); });
+            const worker = await created;
+            const initial = await worker.evaluate(() => self.initial);
+            const values = await worker.evaluate(arg => ({ answer: arg + 1, big: 12n, nan: NaN }), 41);
+            let closed = false;
+            worker.once('close', () => closed = true);
+            const pending = worker.evaluate(() => new Promise(() => {})).catch(error => error.message);
+            await page.close();
+            return { initial, answer: values.answer, big: values.big === 12n, nan: Number.isNaN(values.nan), closed, empty: page.workers().length === 0, rejected: (await pending).includes('worker.evaluate') };
+        ").await?;
+        assert_eq!(value, json!({ "initial": 42, "answer": 42, "big": true, "nan": true, "closed": true, "empty": true, "rejected": true }));
+        Ok(())
+    })).await
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn page_evaluate_behaves_as_playwright_on_browseros() -> TestResult {
     on_browseros(|rig| Box::pin(page_evaluate(rig))).await

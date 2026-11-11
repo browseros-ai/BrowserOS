@@ -172,12 +172,15 @@ export function classify(
       return finish('harness-error', `${side}: invalid record/provenance`, true)
     if (side === 'native' && p.playwrightCore !== '1.64.1')
       return finish('harness-error', 'oracle version missing', true)
+    // Older stored runs marked withheld source as verified. Rejudging must require an
+    // evidence kind that includes source, even when the old verification flag is true.
     if (
       side === 'neo' &&
       (!p.neo?.runId ||
         !p.neo.binarySha256 ||
         !p.neo.gitSha ||
         !Number.isInteger(p.neo.opCount) ||
+        !['full', 'truncated'].includes(p.neo.traceCode) ||
         !p.neo.traceVerified)
     )
       return finish('harness-error', 'Neo trace provenance missing', true)

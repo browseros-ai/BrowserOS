@@ -18,6 +18,12 @@ use crate::world::BackendNodeId;
 pub(crate) enum PageEvent {
     /// Internal facts for navigation waiters; never delivered as public page events.
     Navigation(NavigationEvent),
+    /// Dedicated worker lifetime, retained independently of page listeners.
+    Worker {
+        target: TargetId,
+        worker: super::worker_table::WorkerInfo,
+        closed: bool,
+    },
     /// Public frame state at the transition, retained after the frame disappears.
     FrameLifecycle(FrameLifecycle),
     /// A main document fired a load event; OOPIF loads never become page loads.
@@ -53,6 +59,23 @@ impl PageEvent {
     /// Whether this is an event of `kind` for the page whose target is `target`.
     pub(crate) fn concerns(&self, kind: PageEventKind, target: &TargetId) -> bool {
         match (kind, self) {
+            (PageEventKind::WorkerState, Self::Worker { target: page, .. })
+            | (
+                PageEventKind::Worker,
+                Self::Worker {
+                    target: page,
+                    closed: false,
+                    ..
+                },
+            )
+            | (
+                PageEventKind::WorkerClosed,
+                Self::Worker {
+                    target: page,
+                    closed: true,
+                    ..
+                },
+            ) => page == target,
             (kind, Self::FrameLifecycle(frame)) => frame.target == *target && frame.kind == kind,
             (
                 kind,
@@ -178,6 +201,7 @@ impl DialogKind {
 /// A console message, in Playwright's terms.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ConsoleMessage {
+    pub(crate) worker: Option<super::worker_table::WorkerInfo>,
     pub(crate) target: TargetId,
     /// `log`, `warning`, `error`, `info`, `debug`, ... as CDP and Playwright both name them.
     pub(crate) kind: String,
@@ -316,6 +340,7 @@ impl ConsoleMessage {
             })
             .unwrap_or_default();
         Self {
+            worker: None,
             target,
             kind: params.kind,
             text: text.join(" "),

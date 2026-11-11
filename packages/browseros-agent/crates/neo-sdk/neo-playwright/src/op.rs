@@ -118,7 +118,8 @@ mod tests {
 
     #[test]
     fn tests_that_names_are_playwright_receivers_and_methods() {
-        const RECEIVERS: [&str; 11] = [
+        const RECEIVERS: [&str; 12] = [
+            "worker",
             "locator",
             "page",
             "keyboard",
@@ -238,6 +239,7 @@ mod tests {
             ("page.close", &[], true),
             ("page.opener", &[], true),
             ("page.frames", &[], true),
+            ("worker.evaluate", &[MainWorld], true),
             ("page.evaluate", &[MainWorld], true),
             ("locator.evaluate", &[MainWorld], true),
             ("locator.evaluateAll", &[MainWorld], true),
@@ -361,7 +363,7 @@ mod tests {
                     _,
                     Some(
                         "page" | "keyboard" | "mouse" | "dialog" | "expect" | "bindingCall"
-                        | "webStorage",
+                        | "worker" | "webStorage",
                     ),
                 ) => OpTarget::Field("page"),
                 _ => OpTarget::None,

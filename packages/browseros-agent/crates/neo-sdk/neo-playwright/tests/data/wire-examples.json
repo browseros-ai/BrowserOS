@@ -208,6 +208,19 @@
         "event": "download",
         "since": 1700000000000,
         "after": null
+      },
+      {
+        "call": {
+          "api": "page.waitForEvent",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "event": "worker",
+        "since": 1700000000000,
+        "after": null
       }
     ],
     "expect.locator": [
@@ -2717,6 +2730,26 @@
         "action": "setItem",
         "name": "flag",
         "value": "1"
+      }
+    ],
+    "worker.evaluate": [
+      {
+        "call": {
+          "api": "worker.evaluate",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "worker": "worker-1",
+        "script": {
+          "run": {
+            "expression": "() => 1",
+            "isFunction": true,
+            "arg": "{\"v\":\"undefined\"}"
+          }
+        }
       }
     ]
   }

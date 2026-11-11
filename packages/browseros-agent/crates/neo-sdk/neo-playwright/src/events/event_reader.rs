@@ -58,6 +58,22 @@ impl Delivered {
 #[derive(Debug, Serialize)]
 #[serde(tag = "event")]
 enum Payload {
+    #[serde(rename = "workerstate")]
+    WorkerState {
+        page: PageHandle,
+        worker: super::worker_table::WorkerInfo,
+        closed: bool,
+    },
+    #[serde(rename = "worker")]
+    Worker {
+        page: PageHandle,
+        worker: super::worker_table::WorkerInfo,
+    },
+    #[serde(rename = "workerclosed")]
+    WorkerClosed {
+        page: PageHandle,
+        worker: super::worker_table::WorkerInfo,
+    },
     /// On the opener's page: the tab it opened.
     #[serde(rename = "popup")]
     Popup { page: PageHandle, popup: NewTab },
@@ -152,6 +168,8 @@ struct Dialog {
 /// Playwright's `ConsoleMessage`: `type()`, `text()`, `location()`, `timestamp()`.
 #[derive(Debug, Serialize)]
 struct ConsoleMessage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker: Option<super::worker_table::WorkerInfo>,
     #[serde(rename = "type")]
     kind: String,
     text: String,
@@ -292,8 +310,21 @@ pub(crate) async fn deliver(
     };
     let context = matches!(subscription, Subscription::Context(_));
     report_navigation(scope, listener.as_ref(), &record.event);
-    let payload = if let Some(payload) = lifecycle_payload(&record.event, listener.clone(), context)
+    let payload = if let (
+        Subscription::Page {
+            event: PageEventKind::WorkerState,
+            tab,
+            ..
+        },
+        PageEvent::Worker { worker, closed, .. },
+    ) = (subscription, &record.event)
     {
+        Payload::WorkerState {
+            page: PageHandle::new(*tab),
+            worker: worker.clone(),
+            closed: *closed,
+        }
+    } else if let Some(payload) = lifecycle_payload(&record.event, listener.clone(), context) {
         payload
     } else if let Some(payload) = ordinary_payload(
         pw,
@@ -471,6 +502,19 @@ pub(crate) fn binding_call(queued: QueuedCall) -> Delivered {
 /// (lifecycles, new tabs, closes, choosers) or drops.
 fn plain(event: &PageEvent, page: PageHandle) -> Option<Payload> {
     Some(match event {
+        PageEvent::Worker { worker, closed, .. } => {
+            if *closed {
+                Payload::WorkerClosed {
+                    page,
+                    worker: worker.clone(),
+                }
+            } else {
+                Payload::Worker {
+                    page,
+                    worker: worker.clone(),
+                }
+            }
+        }
         PageEvent::Dialog(dialog) => Payload::Dialog {
             page,
             dialog: dialog_info(dialog),
@@ -478,6 +522,7 @@ fn plain(event: &PageEvent, page: PageHandle) -> Option<Payload> {
         PageEvent::Console(message) => Payload::Console {
             page,
             message: ConsoleMessage {
+                worker: message.worker.clone(),
                 kind: message.kind.clone(),
                 text: message.text.clone(),
                 location: message.location.clone(),
@@ -619,6 +664,7 @@ mod tests {
             payload: Payload::Console {
                 page: handle(7),
                 message: ConsoleMessage {
+                    worker: None,
                     kind: "log".to_owned(),
                     text: "hi".to_owned(),
                     location: Location::default(),
