@@ -6,13 +6,14 @@
   "description": "Local dev tool: an MCP proxy in front of the Neo SDK image that logs every run() call per agent task, with a web UI. Not shipped.",
   "scripts": {
     "start": "bun server/main.ts",
-    "test": "bun test server shared",
-    "test:real-image": "bun test tests/real-image.test.ts",
+    "test": "bun test server shared web",
+    "test:real-image": "bun test tests",
     "typecheck": "tsc --noEmit",
     "lint": "bunx biome check",
     "lint:fix": "bunx biome check --write --unsafe"
   },
   "dependencies": {
+    "@novnc/novnc": "^1.7.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

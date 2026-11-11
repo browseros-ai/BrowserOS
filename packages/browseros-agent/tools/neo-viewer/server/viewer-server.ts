@@ -1,11 +1,15 @@
 /**
  * Builds and starts the viewer: one Bun server on 127.0.0.1 that serves the agent's MCP
- * endpoint (`/mcp`, proxied to Neo), the JSON API (`/api/*`) and the web page (`/`).
+ * endpoint (`/mcp`, proxied to Neo), the JSON API (`/api/*`), the live screen's relay to Neo's
+ * display (`/api/live/*`) and the web page (`/`).
  */
 
 import type { ViewerInfo } from '../shared/api'
 import { apiRouteTable, isLocalRequest } from './api/api-routes'
 import type { ViewerConfig } from './config'
+import { type LiveHost, viewerHost } from './live-screen/live-host'
+import { liveScreen } from './live-screen/live-routes'
+import { socketSessions } from './live-screen/socket-session'
 import { TaskStore } from './log/task-store'
 import { buildPage, type PageFile } from './page'
 import { handleMcp, type McpProxyDeps } from './proxy/mcp-proxy'
@@ -13,12 +17,16 @@ import { ClientNames } from './tasks/client-names'
 import { PeerProcessFinder, type ProcessFinder } from './tasks/peer-process'
 import { type CallOrigin, DEFAULT_IDLE_MS, TaskRule } from './tasks/task-rule'
 
-/** Seams tests replace: the clock, the process lookup and the task id generator. */
+/** The longest `stop` waits for open connections to close. */
+const STOP_WAIT_MS = 2_000
+
+/** Seams tests replace: the clock, the process lookup, the task id generator and Neo's host API. */
 export interface ViewerSeams {
   now?: () => number
   processes?: (listenPort: number) => ProcessFinder
   newTaskId?: (origin: CallOrigin) => string
   idleMs?: number
+  liveHost?: LiveHost
 }
 
 export interface RunningViewer {
@@ -41,6 +49,7 @@ export async function startViewer(
     TaskStore.open(config.dataDir, rule),
     buildPage(),
   ])
+  const live = liveScreen(seams.liveHost ?? viewerHost)
   // The proxy needs the bound port (for the process lookup) before the first request.
   let proxy: McpProxyDeps | null = null
   const info: ViewerInfo = {
@@ -58,7 +67,10 @@ export async function startViewer(
     routes: {
       ...pageRoutes(page),
       ...apiRouteTable(store, info),
+      ...live.routes,
     },
+    // Each upgraded socket carries its own session (the live screen's display relay).
+    websocket: socketSessions,
     fetch(req, server) {
       const { pathname } = new URL(req.url)
       if ((pathname === '/mcp' || pathname.startsWith('/mcp/')) && proxy) {
@@ -90,7 +102,11 @@ export async function startViewer(
     mcpUrl: info.mcpUrl,
     store,
     async stop() {
-      await server.stop(true)
+      await live.stop()
+      // Bun before 1.4.2 (the repo's pin) never settles `stop` once the server has closed a
+      // WebSocket itself, as the display relay does; a local Bun can be older, and Ctrl+C
+      // must still exit.
+      await Promise.race([server.stop(true), Bun.sleep(STOP_WAIT_MS)])
       await store.flush()
     },
   }

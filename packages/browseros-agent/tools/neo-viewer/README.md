@@ -12,8 +12,8 @@ under `tools/`: not shipped, and not part of the image.
                ~/.local/state/neo-viewer/tasks/<task>.jsonl ──▶ /api/* ──▶ the page at /
 ```
 
-This is the viewer's first part (PR B): the proxy, the per-task log, the API and a plain run list.
-Starting and stopping Docker, Neo's host API (operations, tabs), the live screen and the designed
+So far: the proxy, the per-task log, the API, a plain run list and the live screen (watch, control,
+take over). Starting and stopping Docker, Neo's operations joined to the runs and the designed
 Viewer C v2 screen come in the next PRs, on the same API.
 
 ## Start it
@@ -103,21 +103,63 @@ shows as `lost`. Tokens are estimates, characters divided by four, always shown 
 `RunSummary.neoRunId` is the reply's `_meta["com.browseros.neo/run"].id`, the key to join Neo's
 run record (`GET /v1/runs/{id}`) when the host API arrives.
 
+## The live screen
+
+The panel beside the runs shows Neo's screen live and lets the owner step in. The browser cannot
+reach Neo's host API (a bearer token, which a browser cannot put on a WebSocket), so the viewer
+relays it and adds the token on its side; `shared/live-screen.ts` holds the routes and types.
+
+```text
+ page (noVNC) ──ws /api/live/display?mode=…──▶ viewer ──ws /v1/display?mode=… + token──▶ Neo
+ page ──/api/live/status, /api/live/takeovers──▶ viewer ──/v1/tabs, /v1/trace, /v1/takeovers──▶ Neo
+```
+
+| On the panel | What it opens on Neo |
+|---|---|
+| Follow agent | `GET /v1/display?mode=view&followTask=<task>`: watch; Neo keeps the task's current tab in front |
+| Control | `GET /v1/display?mode=control`: clicks and keys reach the browser; the front tab stops following; the agent is not held |
+| Take over / Give back | `POST /v1/takeovers {tabId}` for the tab the task's latest operation targeted, then `display?mode=control&release=<id>`; the agent's calls on that tab fail with `owner_has_control` until `POST /v1/takeovers/{id}/release` |
+
+The relay passes RFB frames and close codes through unchanged (Neo's `4002 released` ends a
+takeover's display) and closes with its own codes for what Neo cannot say: 4901 the host API is not
+reachable (no container), 4902 Neo refused the display (the reason carries Neo's error), 4903 the
+connection dropped. The panel says so and reopens the display on its own, so it comes back when the
+container restarts. The display and both POSTs take only requests whose `Origin` is the viewer's own
+page: a WebSocket is not covered by the same-origin policy. The viewer gives back the takeovers it
+holds when it stops.
+
+The components are self-contained, for the designed screen to dock and pop out:
+`useLiveScreen(neoTaskId)` makes the controller; `<LiveScreen size="docked" | "large">`,
+`<LiveScreenPopup>` and `<TakeOverButton>` take it (`web/live-screen/`).
+
+Neo's VNC server (TigerVNC's Xvnc) blocks a client address for 10 s, then twice as long each time,
+after five connections that end before their handshake finishes, and every display reaches it from
+Neo's own 127.0.0.1. So the panel opens a display only after it has stayed on screen for 150 ms; a
+script that opens displays and drops them mid-handshake can still block every display for a while.
+
 ## Layout and checks
 
 - `server/`: the Bun server. `proxy/` forwards and reads MCP, `tasks/` holds the task rule and the
-  process lookup, `log/` the JSONL log and the in-memory store, `api/` the routes.
+  process lookup, `log/` the JSONL log and the in-memory store, `api/` the routes, `live-screen/`
+  the display relay and the takeover routes.
 - `web/`: the page, React and Tailwind as in `apps/claw-app`. `server/page.ts` bundles it in memory
   when the viewer starts (`Bun.build`, about 40 ms), compiling Tailwind with the same
   `@tailwindcss/node` and `oxide` packages claw-app's Vite plugin uses.
-- `shared/api.ts`: the API's types.
+- `shared/api.ts`: the API's types; `shared/live-screen.ts`: the live screen's.
 
 ```sh
-bun run test                     # in this folder: unit tests and the proxy against a fake Neo
+bun run test                     # in this folder: unit tests, the proxy and the relay against a fake Neo
 NEO_VIEWER_REAL_UPSTREAM=http://127.0.0.1:9010/mcp bun run test:real-image
+# and the live screen, with the host API on TCP (CLAW_HOST_TCP=0.0.0.0:9300, port published on 127.0.0.1):
+NEO_VIEWER_REAL_UPSTREAM=… NEO_VIEWER_REAL_HOST=http://127.0.0.1:9300 \
+  NEO_VIEWER_REAL_HOST_TOKEN_FILE=<token file> bun run test:real-image
 ```
 
-The real-image test puts a TCP tap between the viewer and the image and checks that each reply the
+The live-screen real-image test speaks RFB through the relay without a browser: it follows a task,
+clicks and types in control mode, takes over (the agent's run fails with `owner_has_control`) and
+gives back (Neo closes the owner's display with 4002).
+
+The proxy's real-image test puts a TCP tap between the viewer and the image and checks that each reply the
 agent read is the bytes Neo sent, for a plain value, an error, console lines, a blob marker and a
 streamed reply. Neo streams its 5 s keep-alive only to 2025-06-18 clients: a 2026-07-28 reply is one
 event at the end, however long the run takes.
