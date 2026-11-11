@@ -17,6 +17,8 @@
     "scripts/patch-windows-exe.ts",
     "packages/agent-cursor/src/index.ts",
     "packages/agent-cursor/scripts/classic-entry.ts",
+    "crates/neo-sdk/neo-server/conformance/conformance.mjs",
+    "crates/neo-sdk/neo-server/conformance/src/diagnostic-plugin.cjs",
     "crates/neo-sdk/neo-playwright-js/src/probe/index.ts",
     "crates/neo-sdk/neo-playwright-js/src/prelude/index.ts",
     "crates/neo-sdk/neo-playwright-js/src/main-world/index.ts",

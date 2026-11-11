@@ -4,6 +4,17 @@
   "private": true,
   "scripts": {
     "lint:rust": "../check.sh",
-    "test:rust": "cargo test --package neo-server --locked"
+    "test:rust": "cargo test --package neo-server --locked",
+    "conformance": "node conformance/conformance.mjs",
+    "test:conformance": "bun test conformance/src"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "playwright": "1.64.1",
+    "playwright-core": "1.64.1",
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "pngjs": "7.0.0",
+    "jpeg-js": "0.4.4",
+    "mime": "4.1.0"
   }
 }
