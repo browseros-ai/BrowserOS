@@ -4,11 +4,10 @@
 //! Upstream handles protocol messages one at a time, so the `Runtime.consoleAPICalled` an
 //! evaluate caused, or the binding call it made, has reached the script before the evaluate's
 //! reply resolves. In Neo the watcher reads events on a task of its own, and an op can finish
-//! before the watcher handled an event that came first on the wire. The watcher reads three
-//! streams, and the CDP client numbers each: the broadcast
-//! (`BrowserSession::cdp_events_broadcast`), and the `Runtime.bindingCalled` and
-//! `Log.entryAdded` events the targeted router hands its subscribers
-//! (`BrowserSession::cdp_events_targeted_delivered`). The watcher
+//! before the watcher handled an event that came first on the wire. The watcher reads two
+//! streams, and the CDP client numbers both: the broadcast
+//! (`BrowserSession::cdp_events_broadcast`), and the `Runtime.bindingCalled` events the targeted
+//! router hands its subscribers (`BrowserSession::cdp_events_targeted_delivered`). The watcher
 //! counts what it handled on the same numbering, so once its counts reach the client's counts
 //! read after a reply ([`Fence`]), every earlier event was handled.
 
@@ -24,8 +23,6 @@ pub(crate) struct Fence {
     pub(crate) events: u64,
     /// `Runtime.bindingCalled` events the targeted router handed out.
     pub(crate) calls: u64,
-    /// `Log.entryAdded` events the targeted router handed out.
-    pub(crate) logs: u64,
 }
 
 /// Shared by the watcher (the only writer) and every op that waits for it.
@@ -38,21 +35,23 @@ pub(crate) struct WatcherProgress {
     /// Binding calls handled, on the router's numbering for `Runtime.bindingCalled`: its count
     /// when the watcher subscribed, then one per call handled. `u64::MAX` once stopped.
     calls: AtomicU64,
-    /// Log entries handled, on the router's numbering for `Log.entryAdded`, as `calls` counts.
-    logs: AtomicU64,
     changed: Notify,
 }
 
 impl WatcherProgress {
-    /// The watcher subscribed when the client had broadcast `before.events` events and handed
-    /// out `before.calls` binding calls and `before.logs` log entries, which its receivers never
-    /// get (`cdp_events_counted` and `cdp_events_targeted_counted` take each count with its
-    /// subscription).
-    pub(crate) fn start(&self, before: Fence) {
-        self.handled.store(before.events, Ordering::Release);
-        self.calls.store(before.calls, Ordering::Release);
-        self.logs.store(before.logs, Ordering::Release);
+    /// The watcher subscribed when the client had broadcast `events` events and handed out
+    /// `calls` binding calls, which its receivers never get (`cdp_events_counted` and
+    /// `cdp_events_targeted_counted` take each count with its subscription).
+    pub(crate) fn start(&self, events: u64, calls: u64) {
+        self.handled.store(events, Ordering::Release);
+        self.calls.store(calls, Ordering::Release);
         self.changed.notify_waiters();
+    }
+
+    /// Broadcast events handled so far, on the client's numbering: the one being handled now is
+    /// the next.
+    pub(crate) fn handled_count(&self) -> u64 {
+        self.handled.load(Ordering::Acquire)
     }
 
     /// The watcher handled, or a lag skipped, `count` more broadcast events.
@@ -67,17 +66,10 @@ impl WatcherProgress {
         self.changed.notify_waiters();
     }
 
-    /// The watcher handled one more log entry.
-    pub(crate) fn log_handled(&self) {
-        self.logs.fetch_add(1, Ordering::AcqRel);
-        self.changed.notify_waiters();
-    }
-
     /// The watcher ended (its connection closed, or no runtime ran it).
     pub(crate) fn stopped(&self) {
         self.handled.store(u64::MAX, Ordering::Release);
         self.calls.store(u64::MAX, Ordering::Release);
-        self.logs.store(u64::MAX, Ordering::Release);
         self.changed.notify_waiters();
     }
 
@@ -89,7 +81,6 @@ impl WatcherProgress {
             changed.as_mut().enable();
             if self.handled.load(Ordering::Acquire) >= fence.events
                 && self.calls.load(Ordering::Acquire) >= fence.calls
-                && self.logs.load(Ordering::Acquire) >= fence.logs
             {
                 return;
             }
@@ -110,11 +101,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn tests_that_a_wait_ends_when_the_watcher_counts_past_the_fence() {
         let progress = Arc::new(WatcherProgress::default());
-        progress.start(Fence {
-            events: 10,
-            calls: 4,
-            logs: 2,
-        });
+        progress.start(10, 4);
         let waiter = tokio::spawn({
             let progress = Arc::clone(&progress);
             async move {
@@ -122,7 +109,6 @@ mod tests {
                     .reached(Fence {
                         events: 12,
                         calls: 5,
-                        logs: 3,
                     })
                     .await;
             }
@@ -134,17 +120,10 @@ mod tests {
         time::sleep(Duration::from_millis(1)).await;
         assert!(!waiter.is_finished(), "every event, but one call short");
         progress.call_handled();
-        time::sleep(Duration::from_millis(1)).await;
-        assert!(
-            !waiter.is_finished(),
-            "every event and call, but one log entry short"
-        );
-        progress.log_handled();
         assert!(time::timeout(Duration::from_secs(1), waiter).await.is_ok());
         let earlier = Fence {
             events: 5,
             calls: 0,
-            logs: 0,
         };
         assert!(
             time::timeout(Duration::from_secs(1), progress.reached(earlier))
@@ -161,7 +140,6 @@ mod tests {
         let fence = Fence {
             events: u64::MAX - 1,
             calls: u64::MAX - 1,
-            logs: u64::MAX - 1,
         };
         assert!(
             time::timeout(Duration::from_secs(1), progress.reached(fence))

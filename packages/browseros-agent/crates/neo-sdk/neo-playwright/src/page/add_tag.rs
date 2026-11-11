@@ -9,6 +9,7 @@ use browseros_cdp::CdpEvent;
 use browseros_core::FrameId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
 use tokio::{fs, time};
 
 use crate::op_scope::OpScope;
@@ -96,14 +97,16 @@ pub(crate) async fn insert(
         .await
         .map_err(|failure| resolve::failed(scope, failure))?;
     let session = world.session();
-    let mut events = pw.browser().cdp_events_targeted("Log.entryAdded");
+    // The broadcast, not a targeted channel: that would take `Log.entryAdded` from the event
+    // watcher, which passes the entries on as console messages in wire order.
+    let mut events = pw.browser().cdp_events();
     session
         .send_value("Log.enable", json!({}))
         .await
         .map_err(|error| scope.core_error(&error))?;
     // Log.enable replays retained entries. They belong to earlier actions, so only messages
     // arriving after this barrier participate in this insertion's upstream-style CSP race.
-    while events.try_recv().is_ok() {}
+    while queued(&mut events).is_some() {}
     let params = TagParams {
         kind: match kind {
             TagKind::Script => "script",
@@ -116,9 +119,15 @@ pub(crate) async fn insert(
     let sent = scope.send_effect()?;
     let insert = evaluate_guard::insert_tag(scope, &world, &document, json!(params), &sent);
     let failure = async {
-        while let Some(event) = events.recv().await {
-            if let Some(message) = csp_message(&event, world.session_id()) {
-                return scope.fail(ErrorCode::PageError, &message);
+        loop {
+            match events.recv().await {
+                Ok(event) => {
+                    if let Some(message) = csp_message(&event, world.session_id()) {
+                        return scope.fail(ErrorCode::PageError, &message);
+                    }
+                }
+                Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => break,
             }
         }
         scope.fail(
@@ -133,7 +142,7 @@ pub(crate) async fn insert(
     };
     // The gateway's final round trip flushes asynchronous inline CSP reports, as upstream
     // Chromium does. Prefer their useful browser wording over a generic load-event failure.
-    while let Ok(event) = events.try_recv() {
+    while let Some(event) = queued(&mut events) {
         if let Some(message) = csp_message(&event, world.session_id()) {
             return Err(scope.fail(ErrorCode::PageError, &message));
         }
@@ -161,7 +170,7 @@ fn csp_message(event: &CdpEvent, session: Option<&browseros_core::SessionId>) ->
     struct Logged {
         entry: Entry,
     }
-    if event.session_id.as_ref() != session {
+    if event.method != "Log.entryAdded" || event.session_id.as_ref() != session {
         return None;
     }
     let logged: Logged = serde_json::from_value(event.params.clone()).ok()?;
@@ -169,6 +178,17 @@ fn csp_message(event: &CdpEvent, session: Option<&browseros_core::SessionId>) ->
     (level == "error"
         && (text.contains("Content-Security-Policy") || text.contains("Content Security Policy")))
     .then_some(text)
+}
+
+/// The next event already received, past any the receiver lagged over; `None` when none is.
+fn queued(events: &mut broadcast::Receiver<CdpEvent>) -> Option<CdpEvent> {
+    loop {
+        match events.try_recv() {
+            Ok(event) => return Some(event),
+            Err(TryRecvError::Lagged(_)) => {}
+            Err(TryRecvError::Empty | TryRecvError::Closed) => return None,
+        }
+    }
 }
 
 /// Playwright reads UTF-8 with replacement and strips newlines only from the sourceURL.

@@ -62,7 +62,7 @@ use crate::events::page_event::{
     DownloadStarted, ExceptionParams, FileChooserOpened, LogEntryParams, OpenedPage, PageError,
     PageEvent, WindowKind,
 };
-use crate::events::{Fence, PageEventKind, WatcherProgress, navigation_event};
+use crate::events::{PageEventKind, WatcherProgress, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// upstream's `PageBinding.kBindingName`: the CDP binding every exposed binding's stub calls.
@@ -70,11 +70,6 @@ pub(crate) const BINDING_NAME: &str = "__playwright__binding__";
 
 /// The event a call of [`BINDING_NAME`] arrives as, on a targeted channel of its own.
 pub(crate) const BINDING_CALLED: &str = "Runtime.bindingCalled";
-
-/// A browser log entry (a CORS failure, a CSP violation, an intervention), on a targeted
-/// channel: `addScriptTag` takes the method there too, and a targeted method leaves the
-/// broadcast. Upstream's `crPage` turns each one not from a worker into a console message.
-pub(crate) const LOG_ENTRY_ADDED: &str = "Log.entryAdded";
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
 /// click that opened it (build-design graft 7).
@@ -428,12 +423,7 @@ impl Watcher {
         // that arrived before this watcher subscribed, including the binding stream.
         let (mut events, before) = self.browser.cdp_events_counted();
         let (mut bindings, calls_before) = self.browser.cdp_events_targeted_counted(BINDING_CALLED);
-        let (mut logs, logs_before) = self.browser.cdp_events_targeted_counted(LOG_ENTRY_ADDED);
-        self.progress.start(Fence {
-            events: before,
-            calls: calls_before,
-            logs: logs_before,
-        });
+        self.progress.start(before, calls_before);
         let mut tick = time::interval(TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
@@ -461,12 +451,6 @@ impl Watcher {
                     self.drain(&mut events).await;
                     self.binding_called(call).await;
                     self.progress.call_handled();
-                }
-                Some(entry) = logs.recv() => {
-                    // Every event sent before the entry, the console messages among them.
-                    self.drain(&mut events).await;
-                    self.log_entry(entry).await;
-                    self.progress.log_handled();
                 }
                 Some(request) = requests.recv() => {
                     // Initial synchronous page facts need attachments even for tabs the
@@ -527,6 +511,7 @@ impl Watcher {
 
     /// A session went: its tab and its contexts are forgotten.
     fn session_detached(&mut self, session: &SessionId) {
+        self.writer.hub().forget_log(session);
         self.root_observers.remove(session);
         if let Some(id) = self.worker_sessions.remove(session) {
             self.close_worker(&id);
@@ -554,19 +539,17 @@ impl Watcher {
         }
     }
 
-    /// Records a call of [`BINDING_NAME`] on a tab where some run exposes a binding.
     /// Records a browser log entry as upstream's `_onLogEntryAdded` emits it: a console message
     /// of the entry's level, with no arguments, unless a worker logged it. An entry `Log.enable`
-    /// replayed from before Neo enabled the domain is not news (`EventHub::log_entry_is_new`).
-    async fn log_entry(&mut self, event: CdpEvent) {
-        let Some(session) = event.session_id else {
-            return;
-        };
-        let Some(params) = parse::<LogEntryParams>(event.params) else {
+    /// replayed from before the first console listener is not news (`EventHub::log_entry_is_new`).
+    /// Read off the broadcast, so in wire order with the console API's messages: a targeted
+    /// subscriber would take the method off it, so `addScriptTag` reads it there too.
+    async fn log_entry(&mut self, session: Option<SessionId>, params: Value) {
+        let (Some(session), Some(entry)) = (session, parse::<LogEntryParams>(params)) else {
             return;
         };
         // Upstream releases the entry's argument objects, which it does not pass on.
-        let held = params.argument_objects();
+        let held = entry.argument_objects();
         if !held.is_empty() {
             let objects = self.browser.protocol_session(session.clone());
             tokio::spawn(async move {
@@ -577,20 +560,22 @@ impl Watcher {
                 }
             });
         }
-        if !params.logged_by_page()
-            || !self
-                .writer
-                .hub()
-                .log_entry_is_new(&session, params.timestamp())
-        {
+        // This event's place on the client's numbering: the progress counts it once handled.
+        let position = self.progress.handled_count() + 1;
+        let news = self
+            .writer
+            .hub()
+            .log_entry_is_new(&session, entry.timestamp(), position);
+        if !entry.logged_by_page() || !news {
             return;
         }
         if let Some(target) = self.wanted(&session, PageEventKind::Console).await {
-            let message = ConsoleMessage::from_log_entry(target, params);
+            let message = ConsoleMessage::from_log_entry(target, entry);
             self.writer.record(PageEvent::Console(message));
         }
     }
 
+    /// Records a call of [`BINDING_NAME`] on a tab where some run exposes a binding.
     async fn binding_called(&mut self, event: CdpEvent) {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -784,7 +769,6 @@ impl Watcher {
             "Target.detachedFromTarget" => {
                 if let Some(Detached { session_id }) = parse(params) {
                     self.dialog_closed(&session_id);
-                    self.writer.hub().forget_log(&session_id);
                     self.session_detached(&session_id);
                     self.lifecycle_sources.detach(&session_id);
                 }
@@ -830,6 +814,7 @@ impl Watcher {
                     self.console(&session, target, params);
                 }
             }
+            "Log.entryAdded" => self.log_entry(session_id, params).await,
             "Runtime.exceptionThrown" => {
                 if let Some(session) = session_id
                     && let Some(target) = self.wanted(&session, PageEventKind::PageError).await

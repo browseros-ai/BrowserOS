@@ -10,6 +10,7 @@ use std::pin::pin;
 use std::time::Duration;
 use std::{io, slice};
 
+use browseros_cdp::CdpError;
 use browseros_core::{CoreError, ProtocolSession, SessionId, TabId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -20,7 +21,7 @@ use crate::events::event_hub::{now_ms, receives};
 use crate::events::event_reader::{Delivered, Tabs, WindowPopup, binding_call, deliver};
 use crate::events::page_event::DialogId;
 use crate::events::subscription::Unknown;
-use crate::events::{LOG_ENTRY_ADDED, ListenerKey, PageEvent, PageEventKind, Subscription};
+use crate::events::{ListenerKey, PageEvent, PageEventKind, Subscription};
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_output::to_output;
@@ -286,34 +287,33 @@ struct Subscribed {
 
 /// Enables `Log` on a page's session for its first console listener or wait, as upstream's
 /// `crPage` enables it on every page: a browser log entry (a CORS failure, say) is a console
-/// message too (CM-008). Sent after the op registered its interest, so a live entry during the
-/// enable is not dropped for want of a listener. Within the op's deadline and abort, and
-/// bounded for a listener, which has neither. Best effort: a page that refuses it keeps its
+/// message too (CM-008). Sent after the op registered its interest, attached at `since_ms`, so a
+/// live entry during the enable is not dropped for want of a listener; the watcher tells the
+/// replay from live entries (`EventHub::log_entry_is_new`). Within the op's deadline and abort,
+/// and bounded for a listener, which has neither. Best effort: a page that refuses it keeps its
 /// console API messages.
-async fn enable_log(pw: &Playwright, scope: &OpScope<'_>, session: &SessionId) {
-    let Some(enabling) = pw.events().start_log(session) else {
+async fn enable_log(pw: &Playwright, scope: &OpScope<'_>, session: &SessionId, since_ms: u64) {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "milliseconds since the epoch stay far below 2^52"
+    )]
+    let since = since_ms as f64;
+    let Some(enabling) = pw.events().start_log(session, since) else {
         return;
     };
-    let enable = async {
-        pw.browser()
-            .protocol_session(session.clone())
-            .send_value("Log.enable", json!({}))
-            .await?;
-        // Its replay came before its reply: confirm only once the watcher judged every entry
-        // delivered by then against the enable's start (`EventHub::log_entry_is_new`).
-        let replayed = pw.browser().cdp_events_targeted_delivered(LOG_ENTRY_ADDED);
-        pw.log_entries_handled(replayed).await;
-        Ok::<(), CoreError>(())
-    };
+    let page = pw.browser().protocol_session(session.clone());
+    let enable = page.send_value("Log.enable", json!({}));
     match time::timeout(LOG_ENABLE, scope.within(enable)).await {
-        Ok(Ok(Ok(()))) => enabling.confirm(),
-        Ok(Ok(Err(error))) => {
+        // The replay came before the reply, so it is all at or before this count.
+        Ok(Ok(Ok(_))) => enabling.replied(pw.browser().cdp_events_broadcast()),
+        Ok(Ok(Err(error @ CoreError::Cdp(CdpError::Protocol { .. })))) => {
+            enabling.refused();
             scope.log(format!(
                 "browser log entries stay off on this page: {error}"
             ));
         }
-        // Dropped unconfirmed: the next console listener tries again.
-        Ok(Err(_)) | Err(_) => {}
+        // It may still have enabled: the filter stays and the next listener sends again.
+        Ok(Ok(Err(_)) | Err(_)) | Err(_) => {}
     }
 }
 
@@ -404,7 +404,7 @@ async fn listen(
         observe_context(scope).await?;
     }
     if let Some(session) = log {
-        enable_log(pw, scope, &session).await;
+        enable_log(pw, scope, &session, since).await;
     }
     // A pump that already read past an event this listener should get reads again.
     hub.wake();
@@ -505,7 +505,7 @@ async fn wait(
         observe_context(scope).await?;
     }
     if let Some(session) = log {
-        enable_log(pw, scope, &session).await;
+        enable_log(pw, scope, &session, input.since).await;
     }
     let found = first_event(
         pw,
