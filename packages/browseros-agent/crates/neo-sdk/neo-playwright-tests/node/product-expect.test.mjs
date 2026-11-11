@@ -105,3 +105,41 @@ test('unsupported product matchers fail without skipping or synthesizing results
     (error) => error === failure,
   )
 })
+
+test('visual assertions keep runner options and chains while web assertions stay in Neo', async () => {
+  const subject = {},
+    visual = {},
+    annotations = [],
+    calls = []
+  const options = { timeout: 17, maxDiffPixels: 3 }
+  function original(actual, message) {
+    assert.equal(actual, visual)
+    assert.equal(message, 'visual message')
+    return { not: { toHaveScreenshot: async (...args) => calls.push(args) } }
+  }
+  original.configure = (config) => {
+    assert.deepEqual(config, { timeout: 17 })
+    return original
+  }
+  const product = {
+    not: { toHaveScreenshot: () => assert.fail('Neo has no test baselines') },
+    toBeVisible: () => 'product',
+  }
+  const wrapped = productExpect(original, {
+    isNeo: (value) => value === subject,
+    provider: () => ({ configure: () => () => product }),
+    info: () => ({ annotations }),
+    visual: (value) => {
+      assert.equal(value, subject)
+      return visual
+    },
+  }).configure({ timeout: 17 })
+  await wrapped(subject, 'visual message').not.toHaveScreenshot(
+    'expected.png',
+    options,
+  )
+  assert.deepEqual(calls, [['expected.png', options]])
+  assert.equal(annotations[0].description, 'playwright-visual/neo-capture')
+  assert.equal(wrapped(subject).toBeVisible(), 'product')
+  assert.equal(annotations[1].description, 'product')
+})

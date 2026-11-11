@@ -1,21 +1,29 @@
 /**
  * Binds Playwright Test's import seam to the active run's public expect parameter.
- * Neo owns matcher execution, retries, options and errors; Playwright keeps value assertions
- * and test-runner statics. The provider is lazy because specs load before worker fixtures.
+ * Neo owns web matchers; Playwright Test owns value assertions and visual baselines.
+ * Providers are lazy because specs load before worker fixtures.
  */
 // The generated Playwright config and the run must use the same assertion deadline.
 export const EXPECT_TIMEOUT = 10000
 
 export function productExpect(
   original,
-  { isNeo, provider, info },
+  { isNeo, provider, info, visual },
   config = { timeout: EXPECT_TIMEOUT },
 ) {
   return new Proxy(original, {
     apply(target, thisArg, args) {
       if (!isNeo(args[0])) return Reflect.apply(target, thisArg, args)
-      info()?.annotations.push({ type: 'neoExpect', description: 'product' })
-      return provider().configure(config)(...args)
+      const annotation = { type: 'neoExpect', description: 'product' }
+      info()?.annotations.push(annotation)
+      const product = provider().configure(config)(...args)
+      if (!visual) return product
+      return visualMatchers(
+        product,
+        () =>
+          Reflect.apply(target, thisArg, [visual(args[0]), ...args.slice(1)]),
+        annotation,
+      )
     },
     get(target, name, receiver) {
       // Configured and extended imports must retain the same run binding. Returning the
@@ -24,21 +32,42 @@ export function productExpect(
         return (options) =>
           productExpect(
             target.configure(options),
-            { isNeo, provider, info },
+            { isNeo, provider, info, visual },
             { ...config, ...options },
           )
       if (name === 'extend')
         return (matchers) =>
           productExpect(
             target.extend(matchers),
-            { isNeo, provider, info },
+            { isNeo, provider, info, visual },
             config,
           )
       if (name === 'soft')
         return productExpect(
           target.soft,
-          { isNeo, provider, info },
+          { isNeo, provider, info, visual },
           { ...config, soft: true },
+        )
+      return Reflect.get(target, name, receiver)
+    },
+  })
+}
+
+// Baseline paths, TestInfo, tolerances and attachments belong to the test runner. Keep its
+// matcher chain intact, while the visual receiver directs all browser reads to Neo.
+function visualMatchers(product, runner, annotation) {
+  return new Proxy(product, {
+    get(target, name, receiver) {
+      if (name === 'toHaveScreenshot')
+        return (...args) => {
+          annotation.description = 'playwright-visual/neo-capture'
+          return runner().toHaveScreenshot(...args)
+        }
+      if (['not', 'resolves', 'rejects'].includes(name))
+        return visualMatchers(
+          Reflect.get(target, name, receiver),
+          () => runner()[name],
+          annotation,
         )
       return Reflect.get(target, name, receiver)
     },
