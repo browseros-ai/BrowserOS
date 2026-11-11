@@ -515,8 +515,10 @@ impl FrameRegistry {
         let _ = session
             .send::<_, Value>("Accessibility.enable", json!({}))
             .await;
-        // This frame inherits `parent`'s configuration, so its own children need it too.
-        let pause = Self::pauses_children_of(&initializers, parent.as_ref());
+        // A frame that started paused belongs to a page with configuration, and so do its
+        // children; one that did not asks the initializers about the parent it inherits from.
+        let pause =
+            waiting_for_debugger || Self::pauses_children_of(&initializers, parent.as_ref());
         let _ = session
             .send::<_, Value>("Target.setAutoAttach", frame_auto_attach(pause))
             .await;
@@ -1266,12 +1268,18 @@ mod tests {
                 )
                 .await?;
         }
-        for (parent, child) in [("plain", "plain-child"), ("emulated", "emulated-child")] {
+        // A child that itself started paused belongs to a configured page, whatever its
+        // parent's initializers say now.
+        for (parent, child, waiting) in [
+            ("plain", "plain-child", false),
+            ("emulated", "emulated-child", false),
+            ("plain", "paused-child", true),
+        ] {
             registry
                 .handle_event(CdpEvent {
                     method: "Target.attachedToTarget".to_owned(),
                     session_id: Some(SessionId::from(parent)),
-                    params: json!({"sessionId": child, "waitingForDebugger": false, "targetInfo": {
+                    params: json!({"sessionId": child, "waitingForDebugger": waiting, "targetInfo": {
                         "targetId": child, "type": "iframe", "title": "", "url": "about:blank",
                         "attached": true, "canAccessOpener": false
                     }}),
@@ -1292,6 +1300,7 @@ mod tests {
             ("emulated", true),
             ("plain-child", false),
             ("emulated-child", true),
+            ("paused-child", true),
         ]
         .map(|(session, paused)| (Some(session.to_owned()), json!(paused)));
         // A paused frame Chromium detaches mid-navigation is never resumed, so a page with

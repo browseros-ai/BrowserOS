@@ -181,8 +181,10 @@ impl MediaSessions {
 
 impl FrameInitializer for MediaInitializer {
     /// Every admitted page has a binding; only one whose page emulates media has anything to
-    /// install, so only its new frames start paused. A page lock held elsewhere is an
-    /// emulateMedia call changing the settings, so the frame waits for them.
+    /// install, so only its new frames start paused. The page lock is also taken by every op
+    /// that admits the page, so a held lock reads as nothing to install: a needless pause can
+    /// leave a frame stalled for good, while emulation that is changing at this instant still
+    /// reaches the frame through that change's own broadcast.
     fn configures(&self, parent: &SessionId) -> bool {
         let Some(inner) = self.inner.upgrade() else {
             return false;
@@ -195,10 +197,7 @@ impl FrameInitializer for MediaInitializer {
         else {
             return false;
         };
-        state
-            .try_lock()
-            .ok()
-            .is_none_or(|state| state.is_emulated())
+        state.try_lock().is_ok_and(|state| state.is_emulated())
     }
 
     fn detached(&self, session: &SessionId) {
