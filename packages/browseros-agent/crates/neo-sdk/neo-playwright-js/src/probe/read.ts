@@ -19,7 +19,7 @@ import type {
   Rect,
   ReplyTo,
 } from './protocol'
-import { queryAll, resolveTarget } from './resolve'
+import { queryAll, resolutionOf, resolveTarget } from './resolve'
 import { frameSource, ProbeError, type World } from './world'
 
 type Reader = (world: World, element: Element) => unknown
@@ -261,7 +261,18 @@ export function read(
       ? { kind: 'one' as const, element: root }
       : resolveTarget(world, request.target, request.strictness, root)
   if (found.kind !== 'one') return found
-  return { kind: 'read', value: reader(world, found.element) }
+  // Only setInputFiles logs what its chunk resolved to; other reads skip the preview's cost.
+  if (request.read.kind !== 'fileInput')
+    return { kind: 'read', value: reader(world, found.element) }
+  const resolution = resolutionOf(world, found)
+  try {
+    return { kind: 'read', value: reader(world, found.element), ...resolution }
+  } catch (error) {
+    // The input's own refusal still names what the locator resolved to, as upstream logs it
+    // first; the error reply copies it (index.ts `thrownReply`), its class unchanged.
+    if (error instanceof Error) Object.assign(error, resolution)
+    throw error
+  }
 }
 
 /**

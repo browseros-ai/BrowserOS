@@ -522,7 +522,12 @@ async fn file_input(
         frame_visible: true,
         read: files.read(),
     };
-    match subject.call(located, &request).await {
+    let reply = subject.call(located, &request).await;
+    // What the pass's locator resolved to, as upstream logs it before the input's own answer.
+    if let Some(resolved) = reply.as_ref().ok().and_then(ProbeReply::resolution) {
+        scope.log(resolved.log_line());
+    }
+    match reply {
         Ok(ProbeReply::Read { value, .. }) => serde_json::from_value(value.into_value())
             .map(Some)
             .map_err(|error| {

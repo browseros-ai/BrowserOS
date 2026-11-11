@@ -24,7 +24,7 @@ pub(crate) use probe_call::{
     reply_of,
 };
 pub(crate) use probe_reply::{
-    ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, SnapshotIframe,
+    ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, Resolution, SnapshotIframe,
 };
 pub(crate) use probe_request::{
     ArmPlan, DocumentPart, DropEntry, Edit, ElementState, ExpectParams, FilePayload, FillValue,

@@ -104,6 +104,7 @@ pub(crate) async fn call(
         ProbeReply::Error {
             message,
             class: ErrorClass::Script,
+            ..
         } => Err(scope.fail(ErrorCode::PageError, &message)),
         other => Err(failed(scope, unexpected("webStorage", other))),
     }

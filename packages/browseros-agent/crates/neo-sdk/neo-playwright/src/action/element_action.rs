@@ -79,7 +79,19 @@ impl<'a> ElementRunner<'a> {
                 want: Want::Element,
             };
             let pin = match self.call(&located, &resolve).await? {
-                Some(ProbeReply::Element { pin, .. }) => pin,
+                Some(ProbeReply::Element { pin, resolved, .. }) => {
+                    // What the pass's locator resolved to, as upstream logs it: dispatchEvent's
+                    // selector wait names the element alone.
+                    if let Some(resolved) = resolved {
+                        self.scope
+                            .log(if matches!(edit, Edit::DispatchEvent { .. }) {
+                                resolved.element_line()
+                            } else {
+                                resolved.log_line()
+                            });
+                    }
+                    pin
+                }
                 // The locator matches nothing yet: polled again with nothing logged, as
                 // upstream's `continuePolling`.
                 Some(ProbeReply::None { stale_ref: None }) | None => continue,
@@ -179,7 +191,14 @@ impl<'a> ElementRunner<'a> {
                     .measure(&located, target.clone(), true, required_states)
                     .await?;
                 match measured {
-                    Measured::Rect(..) | Measured::Hidden => attempt.found(),
+                    Measured::Rect(..) | Measured::Hidden => {
+                        // Upstream's client finds the element with a selector wait first, then
+                        // calls the handle's own method: the error shows that call alone.
+                        if !attempt.is_found() {
+                            self.scope.restart_log();
+                        }
+                        attempt.found();
+                    }
                     // Nothing matched, or its world went: the next outer pass, with nothing
                     // logged until the element was seen.
                     Measured::Unmatched | Measured::Gone if !attempt.is_found() => break,

@@ -1,5 +1,5 @@
 {
-  "protocol": 22,
+  "protocol": 23,
   "callFunction": "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -1013,19 +1013,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 22,
+      "protocol": 23,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 22,
+      "protocol": 23,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 22,
+      "protocol": 23,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1047,6 +1047,15 @@
       "preview": "<button>Go</button>"
     },
     {
+      "kind": "element",
+      "pin": 3,
+      "preview": "<button>Go</button>",
+      "resolved": {
+        "preview": "<button>Go</button>",
+        "count": 2
+      }
+    },
+    {
       "kind": "frame",
       "pin": 4,
       "key": "#1",
@@ -1063,6 +1072,14 @@
     {
       "kind": "state",
       "missing": "visible"
+    },
+    {
+      "kind": "state",
+      "missing": "enabled",
+      "resolved": {
+        "preview": "<button disabled>Go</button>",
+        "count": 1
+      }
     },
     {
       "kind": "measured",
@@ -1082,6 +1099,26 @@
       "borderOffset": {
         "x": 5,
         "y": 5
+      }
+    },
+    {
+      "kind": "measured",
+      "pin": 3,
+      "rect": {
+        "x": 8,
+        "y": 8,
+        "width": 60,
+        "height": 20
+      },
+      "point": {
+        "x": 38,
+        "y": 18
+      },
+      "inView": true,
+      "transformed": false,
+      "resolved": {
+        "preview": "<button>Go</button>",
+        "count": 1
       }
     },
     {
@@ -1187,6 +1224,17 @@
     {
       "kind": "read",
       "value": "Welcome"
+    },
+    {
+      "kind": "read",
+      "value": {
+        "multiple": false,
+        "webkitdirectory": false
+      },
+      "resolved": {
+        "preview": "<input type=\"file\"/>",
+        "count": 1
+      }
     },
     {
       "kind": "read",
@@ -1364,6 +1412,15 @@
       "kind": "error",
       "class": "unsupported",
       "message": "toHaveValue(RegExp) is not supported on password, card and one-time-code fields; use an exact string."
+    },
+    {
+      "kind": "error",
+      "class": "script",
+      "message": "Node is not an HTMLInputElement",
+      "resolved": {
+        "preview": "<div id=\"notfile\">Not a file input</div>",
+        "count": 1
+      }
     },
     {
       "kind": "error",

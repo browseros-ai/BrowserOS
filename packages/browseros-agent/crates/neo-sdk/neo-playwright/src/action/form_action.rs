@@ -31,7 +31,7 @@ use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{
     Edit, ElementState, FillValue, PageText, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
-    Retarget, ScrollPlan, SelectOption, Want,
+    Resolution, Retarget, ScrollPlan, SelectOption, Want,
 };
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
@@ -59,6 +59,14 @@ struct Row {
 }
 
 impl FormEdit<'_> {
+    /// Upstream's `fill("x")` line (dom.ts `_fill`), which it logs before the fill's attempts.
+    fn announcement(&self) -> Option<String> {
+        match self {
+            Self::Fill(value) => Some(format!("  fill(\"{}\")", value.0)),
+            Self::SelectOptions(_) | Self::SelectText => None,
+        }
+    }
+
     const fn row(&self) -> Row {
         use ElementState::{Editable, Enabled, Visible};
         match self {
@@ -119,6 +127,9 @@ enum Ready {
     Gone,
     /// The locator matches nothing yet: the next outer pass, with nothing logged.
     Unmatched,
+    /// The element refused the edit after the locator resolved (`editable` on a <div>): the
+    /// op fails with the reply, once the pass's lines are logged as upstream logs them.
+    Refused(ProbeReply),
 }
 
 /// Where ② left the attempt.
@@ -209,7 +220,6 @@ impl<'a> FormRunner<'a> {
     ) -> Result<Option<Value>, PlaywrightError> {
         let inner = Backoff::inner();
         let mut pin = None;
-        let mut announced = false;
         // The attempt's lines wait until the element is seen (`attempt_log.rs`).
         let mut attempt = AttemptLog::new(self.scope, false);
         for retry in 0.. {
@@ -235,19 +245,29 @@ impl<'a> FormRunner<'a> {
             if !self.force {
                 attempt.log(format!("  waiting for element to be {}", row.waits_for));
             }
-            let ready = self.ready(located, pin, row, attempt.is_found()).await?;
+            let (ready, resolved) = self.ready(located, pin, row, attempt.is_found()).await?;
             match &ready {
-                Ready::At(_) | Ready::Missing(_) => attempt.found(),
+                Ready::At(_) | Ready::Missing(_) | Ready::Refused(_) => {
+                    let handle_call = matches!(edit, FormEdit::SelectText);
+                    if handle_call && !attempt.is_found() {
+                        // Upstream's client finds the element with a selector wait first, then
+                        // calls selectText on its handle: the error shows that call alone.
+                        self.scope.restart_log();
+                    }
+                    // Upstream's lines between resolving the locator and attempting the edit,
+                    // on the pass that found the element: what it resolved to, then `fill("x")`.
+                    let resolved_line = resolved
+                        .as_ref()
+                        .filter(|_| !handle_call)
+                        .map(Resolution::log_line);
+                    attempt.found_with(resolved_line.into_iter().chain(edit.announcement()));
+                }
                 Ready::Unmatched => return Ok(None),
                 Ready::Gone => {}
             }
             let pinned = match ready {
                 Ready::At(pin) => {
                     self.matched = true;
-                    if !announced {
-                        announced = true;
-                        self.announce(edit);
-                    }
                     pin
                 }
                 Ready::Missing(state) => {
@@ -256,6 +276,7 @@ impl<'a> FormRunner<'a> {
                         .log(format!("  element is not {}", state_name(state)));
                     continue;
                 }
+                Ready::Refused(reply) => return Err(self.subject.refused(reply)),
                 Ready::Gone | Ready::Unmatched => return Ok(None),
             };
             pin = Some(pinned);
@@ -268,14 +289,14 @@ impl<'a> FormRunner<'a> {
         Err(self.timed_out())
     }
 
-    /// ①: the element pinned once its states hold.
+    /// ①: the element pinned once its states hold, and what the pass's locator resolved to.
     async fn ready(
         &self,
         located: &Resolved,
         pin: Option<Pin>,
         row: &Row,
         found: bool,
-    ) -> Result<Ready, PlaywrightError> {
+    ) -> Result<(Ready, Option<Resolution>), PlaywrightError> {
         let target = pin.map_or_else(|| self.subject.first_target(), ProbeTarget::Pin);
         let request = if self.force {
             ProbeRequest::Resolve {
@@ -295,22 +316,29 @@ impl<'a> FormRunner<'a> {
                 arm: None,
             }
         };
-        Ok(match self.call(located, &request).await? {
+        let called = self.call(located, &request).await?;
+        let resolved = match &called {
+            Called::Reply(reply) => reply.resolution().cloned(),
+            Called::Gone => None,
+        };
+        let ready = match called {
             Called::Reply(ProbeReply::Measured { pin, .. } | ProbeReply::Element { pin, .. }) => {
                 Ready::At(pin)
             }
-            Called::Reply(ProbeReply::State { missing }) => Ready::Missing(missing),
+            Called::Reply(ProbeReply::State { missing, .. }) => Ready::Missing(missing),
             Called::Reply(ProbeReply::None { stale_ref: None }) if !found => Ready::Unmatched,
             Called::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
                 self.subject.detached()?;
                 Ready::Gone
             }
+            Called::Reply(other) if other.resolution().is_some() => Ready::Refused(other),
             Called::Reply(other) => return Err(self.subject.refused(other)),
             Called::Gone => {
                 self.subject.lost(located)?;
                 Ready::Gone
             }
-        })
+        };
+        Ok((ready, resolved))
     }
 
     /// ②: the edit itself, after `send_effect`.
@@ -417,13 +445,6 @@ impl<'a> FormRunner<'a> {
             // not a <select> element").
             Called::Reply(other) => Err(self.subject.refused(other)),
             Called::Gone => self.subject.lost(located).map(|()| None),
-        }
-    }
-
-    /// Upstream's `fill("value")` line.
-    fn announce(&self, edit: &FormEdit<'_>) {
-        if let FormEdit::Fill(value) = edit {
-            self.scope.log(format!("  fill(\"{}\")", value.0));
         }
     }
 

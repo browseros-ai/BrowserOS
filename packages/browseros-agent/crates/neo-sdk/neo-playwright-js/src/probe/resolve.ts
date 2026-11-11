@@ -15,6 +15,7 @@ import type {
   PinnedRequest,
   ProbeTarget,
   ReplyTo,
+  Resolution,
   ResolveRequest,
   SelectorRequest,
   Strictness,
@@ -23,8 +24,9 @@ import type {
 import { engineTable, frameSource, ProbeError, type World } from './world'
 
 /** What resolving a target found: its one element, or why there is none to act on. */
+/** `count` is how many a chunk matched; a pin, a root or the document leave it out. */
 export type Found =
-  | { kind: 'one'; element: Element }
+  | { kind: 'one'; element: Element; count?: number }
   | NoMatch
   | StrictViolation
   | Detached
@@ -93,7 +95,22 @@ export function resolveTarget(
       kind: 'strict',
       message: injected.strictModeViolationError(chunk, elements).message,
     }
-  return { kind: 'one', element: first }
+  return { kind: 'one', element: first, count: elements.length }
+}
+
+/** The reply field naming what a chunk resolved to; nothing for any other target. */
+export function resolutionOf(
+  world: World,
+  found: { element: Element; count?: number },
+): { resolved?: Resolution } {
+  return found.count === undefined
+    ? {}
+    : {
+        resolved: {
+          preview: world.injected.previewNode(found.element),
+          count: found.count,
+        },
+      }
 }
 
 /**
@@ -150,6 +167,7 @@ export function resolve(
       kind: 'element',
       pin: world.pins.add(element),
       preview: world.injected.previewNode(element),
+      ...resolutionOf(world, found),
     }
   const src = frameSource(element)
   if (src === undefined)

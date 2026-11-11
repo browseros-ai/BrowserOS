@@ -139,7 +139,13 @@ impl<'a> KeyRunner<'a> {
             want: Want::Element,
         };
         let pin = match self.call(located, &resolve).await? {
-            Called::Reply(ProbeReply::Element { pin, .. }) => pin,
+            Called::Reply(ProbeReply::Element { pin, resolved, .. }) => {
+                // Upstream's line for the pass that resolved the locator, before the keys'.
+                if let Some(resolved) = resolved {
+                    self.scope.log(resolved.log_line());
+                }
+                pin
+            }
             Called::Reply(ProbeReply::None { stale_ref: None }) => return Ok(false),
             Called::Reply(ProbeReply::Detached) => return self.subject.detached().map(|()| false),
             Called::Reply(other) => return Err(self.subject.refused(other)),

@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../neo-playwright/third_party/playwri
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 22
+export const PROTOCOL = 23
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -395,10 +395,18 @@ export type Described = {
 /** Zero matches. `staleRef` names a ref that can never match here again: fail at once. */
 export type NoMatch = { kind: 'none'; staleRef?: string }
 export type StrictViolation = { kind: 'strict'; message: string }
+/**
+ * What a selector chunk resolved to: the first match's preview and how many matched, for
+ * upstream's `locator resolved to <preview>` call-log line (frames.ts
+ * `_retryWithProgressIfNotConnected`). Only a reply to a request that targets a chunk carries
+ * one: a pin or a handle's node was resolved before.
+ */
+export type Resolution = { preview: string; count: number }
 export type ResolvedElement = {
   kind: 'element'
   pin: Pin
   preview: string
+  resolved?: Resolution
 }
 /**
  * `key` names the iframe in this world's ref map, for the child frame's parent link. A hop
@@ -414,7 +422,11 @@ export type ResolvedFrame = {
 export type NotFrame = { kind: 'notFrame'; preview: string }
 /** The element is gone, or its pin was evicted: back to the outer retry loop. */
 export type Detached = { kind: 'detached' }
-export type MissingState = { kind: 'state'; missing: ElementState }
+export type MissingState = {
+  kind: 'state'
+  missing: ElementState
+  resolved?: Resolution
+}
 export type Measured = {
   kind: 'measured'
   pin: Pin
@@ -424,6 +436,7 @@ export type Measured = {
   transformed: boolean
   /** Original element border widths plus position, independent of the stability target. */
   borderOffset?: Point
+  resolved?: Resolution
 }
 export type Covered = { kind: 'covered'; by: string }
 export type Armed = { kind: 'armed'; rect: Rect; point: Point; token: number }
@@ -436,8 +449,8 @@ export type FrameBox = {
 }
 /** A read or edit result. */
 export type Value = { kind: 'value'; value: unknown }
-/** One element's read. */
-export type ReadValue = { kind: 'read'; value: unknown }
+/** One element's read; a file input's carries what its chunk resolved to. */
+export type ReadValue = { kind: 'read'; value: unknown; resolved?: Resolution }
 /** Every match's read. */
 export type Values = {
   kind: 'values'
@@ -477,7 +490,15 @@ export type DocumentText = {
 }
 /** The document's content was replaced; the world stays booted under the same seq. */
 export type Replaced = { kind: 'replaced' }
-export type ErrorReply = { kind: 'error'; message: string; class: ErrorClass }
+/** `resolved` only from a request on a chunk whose element refused it after it resolved (a
+ * file input refusing the files, `editable` on a <div>): upstream logs what the locator
+ * resolved to before that error. */
+export type ErrorReply = {
+  kind: 'error'
+  message: string
+  class: ErrorClass
+  resolved?: Resolution
+}
 export type Uninstalled = { kind: 'uninstalled' }
 
 export type ProbeReply =
