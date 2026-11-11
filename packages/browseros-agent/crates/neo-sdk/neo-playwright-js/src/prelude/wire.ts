@@ -512,6 +512,7 @@ export type OpInputs = {
   }
   'page.waitForURL': FrameArgs & { url: UrlPattern; waitUntil: LoadState }
   'page.waitForLoadState': FrameArgs & { state: LoadState }
+  'page.requestGC': PageArgs
   'page.title': FrameArgs
   'page.content': FrameArgs
   'page.emulateMedia': PageArgs & {
@@ -675,6 +676,7 @@ export type OpOutputs = {
   'page.waitForNavigation': NavigationResult & { navigationSeq: number }
   'page.waitForURL': NavigationResult | null
   'page.waitForLoadState': NavigationResult | null
+  'page.requestGC': null
   'page.title': string
   'page.content': string
   'page.emulateMedia': null

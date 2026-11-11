@@ -685,6 +685,16 @@ export class Page extends EventEmitter {
     return this._waitForURL('page.waitForURL', this._mainFrame, url, options)
   }
 
+  /** The host admits/rechecks this page and collects in its root renderer. */
+  async requestGC(): Promise<void> {
+    const api = 'page.requestGC'
+    await invoke(
+      'page.requestGC',
+      { api, timeoutMs: 0 },
+      { page: await this._brand(api) },
+    )
+  }
+
   async title(): Promise<string> {
     const api = 'page.title'
     const title = await invoke(

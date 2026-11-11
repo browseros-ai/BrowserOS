@@ -105,7 +105,6 @@ export const UNSUPPORTED = {
     pause: NO_INSPECTOR,
     pickLocator: NO_INSPECTOR,
     removeLocatorHandler: 'locator handlers are not available in Neo',
-    requestGC: 'garbage collection is not available in Neo',
     requests: 'Neo does not record network requests',
     route: NETWORK,
     routeFromHAR: NETWORK,

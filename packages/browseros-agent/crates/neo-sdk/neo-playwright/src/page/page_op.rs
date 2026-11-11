@@ -18,7 +18,7 @@ use crate::page::{
 };
 use crate::probe::DocumentPart;
 use crate::target::PageRef;
-use crate::{Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError};
 
 listed_enum! {
     /// Page and frame leaves. A frame's form of a method (`frame.title`, `frame.evaluate`,
@@ -37,6 +37,7 @@ listed_enum! {
         AddScriptTag,
         AddStyleTag,
         EmulateMedia,
+        RequestGc,
         Close,
         Opener,
         Frames,
@@ -131,6 +132,11 @@ impl PageOp {
                 "page.emulateMedia",
                 PAGE,
                 "set page media preferences across renderer and run lifetimes",
+            ),
+            Self::RequestGc => OpSpec::write(
+                "page.requestGC",
+                PAGE,
+                "request garbage collection in the page's main renderer",
             ),
             Self::Close => OpSpec::write("page.close", PAGE, "close the tab"),
             Self::Opener => OpSpec::read("page.opener", PAGE, "the page that opened this one"),
@@ -262,6 +268,7 @@ pub(crate) async fn invoke(
         PageOp::EmulateMedia => {
             Box::pin(media_emulation::emulate(pw, scope, args.decode(scope)?)).await
         }
+        PageOp::RequestGc => request_gc(pw, scope, args.decode(scope)?).await,
         PageOp::Close => close(pw, scope, args.decode(scope)?).await,
         PageOp::Opener => opener(pw, scope, args.decode(scope)?).await,
         PageOp::Frames => frame_tree::frames(pw, scope, args.decode(scope)?).await,
@@ -391,18 +398,38 @@ async fn close_with_unload(session: &ProtocolSession, _sent: &Sent<'_>) -> Resul
     Ok(())
 }
 
-/// `page.opener()`: `{ page }`.
+/// Page methods without options (`opener`, `requestGC`): `{ page }`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OpenerInput {
+struct PageInput {
     page: PageRef,
+}
+
+/// Upstream collects on the main renderer session. Treat collection as a write because
+/// finalizers can execute page code; recheck the host immediately before the CDP command.
+async fn request_gc(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: PageInput,
+) -> Result<Value, PlaywrightError> {
+    let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
+    let session = pw
+        .browser()
+        .protocol_session(admitted.session.session_id.clone());
+    let _sent = scope.send_effect()?;
+    scope
+        .within(session.send_value("HeapProfiler.collectGarbage", json!({})))
+        .await
+        .map_err(|_expired| scope.timed_out(ErrorCode::BrowserDisconnected))?
+        .map_err(|error| scope.core_error(&error))?;
+    Ok(Value::Null)
 }
 
 /// The tab that opened this one while it is still open, as upstream: `{ opener: page | null }`.
 async fn opener(
     pw: &Playwright,
     scope: &OpScope<'_>,
-    input: OpenerInput,
+    input: PageInput,
 ) -> Result<Value, PlaywrightError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]

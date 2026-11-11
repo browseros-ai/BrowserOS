@@ -2523,6 +2523,18 @@
         }
       }
     ],
+    "page.requestGC": [
+      {
+        "call": {
+          "api": "page.requestGC",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      }
+    ],
     "page.saveScreenshot": [
       {
         "call": {
