@@ -95,6 +95,54 @@ type SelectOptionValue = {
 }
 
 /**
+ * One option object, checked as upstream's protocol validator checks a `SelectOption`
+ * (validatorPrimitives.ts `tObject`, `tString`, `tInt`, with its messages), keeping every
+ * attribute it names: the page selects the option matching all of them. An object naming none
+ * matches any option, as upstream's does; anything else is refused before it is sent.
+ */
+function selectOption(api: string, path: string, item: unknown): SelectOption {
+  if (typeof item !== 'object' || item === null)
+    throw clientError(
+      api,
+      `${path}: expected object, got ${item === null ? 'null' : typeof item}`,
+    )
+  const option = item as SelectOptionValue
+  const picked: SelectOption = {}
+  for (const key of ['valueOrLabel', 'value', 'label'] as const) {
+    const given: unknown = option[key]
+    if (given === undefined) continue
+    if (given instanceof String) picked[key] = given.valueOf()
+    else if (typeof given === 'string') picked[key] = given
+    else
+      throw clientError(
+        api,
+        `${path}.${key}: expected string, got ${typeof given}`,
+      )
+  }
+  const index: unknown = option.index
+  if (index !== undefined) {
+    const value =
+      index instanceof Number
+        ? index.valueOf()
+        : typeof index === 'number'
+          ? index
+          : null
+    if (value === null)
+      throw clientError(
+        api,
+        `${path}.index: expected integer, got ${typeof index}`,
+      )
+    if (!Number.isInteger(value))
+      throw clientError(
+        api,
+        `${path}.index: expected integer, got float ${value}`,
+      )
+    picked.index = value
+  }
+  return picked
+}
+
+/**
  * upstream's convertSelectOptionValues, onto the probe's options, each matching on every
  * attribute it names. Element handles select those `<option>` elements.
  */
@@ -127,16 +175,7 @@ export function selectOptionValues(
       elements.push(brand as ElementBrand)
       continue
     }
-    // Every attribute the script named goes through, as upstream's client sends the object:
-    // the page selects the option that matches all of them.
-    const option = item as SelectOptionValue
-    const picked: SelectOption = {}
-    if (option.valueOrLabel !== undefined)
-      picked.valueOrLabel = String(option.valueOrLabel)
-    if (option.value !== undefined) picked.value = String(option.value)
-    if (option.label !== undefined) picked.label = String(option.label)
-    if (option.index !== undefined) picked.index = Number(option.index)
-    options.push(picked)
+    options.push(selectOption(api, `options[${index}]`, item))
   }
   return { options, elements }
 }

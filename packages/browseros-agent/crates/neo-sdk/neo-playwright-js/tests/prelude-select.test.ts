@@ -30,3 +30,25 @@ it('tests that strings, single attributes and an index each keep their own shape
     ],
   ])
 })
+
+it("tests that wrong types are refused with upstream's validator messages, before anything is sent", async () => {
+  const runtime = loadPrelude({ seed: SEED, answer: () => [] })
+  const messages = await runtime.run(`
+    const tries = [12, true, { value: 12 }, { label: 12 }, { index: '12' }, { index: NaN }]
+    const out = []
+    for (const value of tries)
+      out.push(await page.selectOption('select', value).then(() => 'sent', (e) => e.message))
+    return out
+  `)
+  expect(messages).toEqual([
+    'page.selectOption: options[0]: expected object, got number',
+    'page.selectOption: options[0]: expected object, got boolean',
+    'page.selectOption: options[0].value: expected string, got number',
+    'page.selectOption: options[0].label: expected string, got number',
+    'page.selectOption: options[0].index: expected integer, got string',
+    'page.selectOption: options[0].index: expected integer, got float NaN',
+  ])
+  expect(
+    runtime.calls.filter((call) => call.name === 'locator.selectOption'),
+  ).toEqual([])
+})

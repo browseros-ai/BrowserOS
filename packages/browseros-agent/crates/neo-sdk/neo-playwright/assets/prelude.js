@@ -884,6 +884,33 @@
   function isHandle(value) {
     return typeof value === "object" && value !== null && handles.has(value);
   }
+  function selectOption(api, path, item) {
+    if (typeof item !== "object" || item === null)
+      throw clientError(api, `${path}: expected object, got ${item === null ? "null" : typeof item}`);
+    const option = item;
+    const picked = {};
+    for (const key of ["valueOrLabel", "value", "label"]) {
+      const given = option[key];
+      if (given === undefined)
+        continue;
+      if (given instanceof String)
+        picked[key] = given.valueOf();
+      else if (typeof given === "string")
+        picked[key] = given;
+      else
+        throw clientError(api, `${path}.${key}: expected string, got ${typeof given}`);
+    }
+    const index = option.index;
+    if (index !== undefined) {
+      const value = index instanceof Number ? index.valueOf() : typeof index === "number" ? index : null;
+      if (value === null)
+        throw clientError(api, `${path}.index: expected integer, got ${typeof index}`);
+      if (!Number.isInteger(value))
+        throw clientError(api, `${path}.index: expected integer, got float ${value}`);
+      picked.index = value;
+    }
+    return picked;
+  }
   function selectOptionValues(api, values) {
     if (values === null || values === undefined)
       return { options: [], elements: [] };
@@ -902,17 +929,7 @@
         elements.push(brand);
         continue;
       }
-      const option = item;
-      const picked = {};
-      if (option.valueOrLabel !== undefined)
-        picked.valueOrLabel = String(option.valueOrLabel);
-      if (option.value !== undefined)
-        picked.value = String(option.value);
-      if (option.label !== undefined)
-        picked.label = String(option.label);
-      if (option.index !== undefined)
-        picked.index = Number(option.index);
-      options.push(picked);
+      options.push(selectOption(api, `options[${index}]`, item));
     }
     return { options, elements };
   }
