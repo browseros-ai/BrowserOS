@@ -45,6 +45,7 @@ mod run_events;
 mod subscription;
 mod target_watcher;
 mod watcher_progress;
+pub(crate) mod worker_table;
 
 pub(crate) use event_hub::EventHub;
 pub(crate) use event_op::EventOp;

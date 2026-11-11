@@ -45,7 +45,7 @@ pub(crate) use dispatcher::{
     Call, CallSite, Caller, Dispatcher, OpReply, PageFact, PageFacts, PendingReply,
 };
 pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, PageScript, Visibility};
-pub(crate) use observation::{ActedTarget, Claim, EventLog, Observation, Observer};
+pub(crate) use observation::{ActedTarget, Claim, EventLog, Observation, Observer, WorkerFact};
 pub(crate) use op_abort::OpAbort;
 pub(crate) use op_ctx::{OpCtx, PageChange};
 pub(crate) use operation_error::{

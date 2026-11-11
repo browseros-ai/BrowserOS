@@ -349,6 +349,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "worker.evaluate": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "locator.evaluate": {
       effect: "write",
       target: "target",
@@ -739,6 +744,9 @@
   function onReply(listener) {
     host().onReply((envelope) => {
       const observed = readObservation(field(envelope, "observed"));
+      const result = field(envelope, "ok");
+      if (observed && (Array.isArray(field(result, "events")) || typeof field(result, "event") === "string"))
+        observed.deferWorkers = true;
       if (observed && field(envelope, "err") !== undefined)
         observed.closes = [];
       listener({
@@ -818,9 +826,24 @@
         if (typeof width === "number" && typeof height === "number")
           fact.viewportSize = { width, height };
       }
+      const workers = readWorkers(field(page, "workers"));
+      if (workers)
+        fact.workers = workers;
       facts.push(fact);
     }
     return facts;
+  }
+  function readWorkers(value) {
+    if (!Array.isArray(value))
+      return null;
+    const workers = [];
+    for (const worker of value) {
+      const id = field(worker, "id");
+      const url = field(worker, "url");
+      if (typeof id === "string" && typeof url === "string")
+        workers.push({ id, url });
+    }
+    return workers;
   }
   function clock() {
     const sleep = Reflect.get(globalThis, "__neo_sleep");
@@ -8429,8 +8452,10 @@ ${value.stack}`;
 
   class ConsoleMessage {
     #pageValue;
+    #workerValue;
     #info;
     constructor(page, info) {
+      this.#workerValue = info.worker ? page._worker(info.worker) : null;
       this.#pageValue = page;
       this.#info = info;
       markHandle(this);
@@ -8439,7 +8464,7 @@ ${value.stack}`;
       return this.#pageValue;
     }
     worker() {
-      return null;
+      return this.#workerValue;
     }
     type() {
       return this.#info.type;
@@ -8476,6 +8501,7 @@ ${value.stack}`;
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/events.ts
   var PAGE_EVENTS = new Set([
+    "worker",
     "popup",
     "close",
     "dialog",
@@ -8504,7 +8530,6 @@ ${value.stack}`;
     requestfailed: "Neo does not report network events; wait for what the page shows instead",
     requestfinished: "Neo does not report network events; wait for what the page shows instead",
     websocket: "Neo does not report WebSockets",
-    worker: "Neo does not report workers",
     serviceworker: "Neo does not report service workers",
     backgroundpage: "Neo does not report extension background pages",
     crash: "Neo does not report crashes; a crashed page fails its next call",
@@ -8529,6 +8554,7 @@ ${value.stack}`;
   class EventHub {
     owner;
     listening = 0;
+    workerPages = new Set;
     pumping = false;
     batch = null;
     dialogs = new Map;
@@ -8541,6 +8567,16 @@ ${value.stack}`;
     contextSince = new Map;
     constructor(owner) {
       this.owner = owner;
+    }
+    observeWorkers(page) {
+      if (this.workerPages.has(page))
+        return;
+      this.workerPages.add(page);
+      this.listen(page, "workerstate", true);
+    }
+    forgetWorkers(page) {
+      if (this.workerPages.delete(page))
+        this.listen(page, "workerstate", false);
     }
     listen(page, event, on) {
       const since = Date.now();
@@ -8639,12 +8675,19 @@ ${value.stack}`;
       try {
         if (on && lease)
           await lease.ready;
-        await invoke("events.listen", { api, timeoutMs: 0 }, {
+        const input = !on && event === "workerstate" && page?._tab != null ? {
+          page: null,
+          retiredTab: page._tab,
+          event,
+          on: false,
+          since
+        } : {
           page: page === null ? null : await page._openedBrand(api),
           event,
           on,
           since
-        });
+        };
+        await invoke("events.listen", { api, timeoutMs: 0 }, input);
       } catch {
         if (on && lease)
           lease.release().catch(() => {});
@@ -8722,6 +8765,7 @@ ${value.stack}`;
       return page;
     }
     settleCloses(observed) {
+      this.owner._settleWorkerFacts(observed);
       for (const close of observed?.closes ?? [])
         this.page({ $neo: "page", tab: close.tab })._settleClose(observed);
     }
@@ -8734,6 +8778,18 @@ ${value.stack}`;
       if (context && typeof record.at === "number" && record.at < (this.contextSince.get(record.event) ?? Infinity))
         return;
       switch (record.event) {
+        case "workerstate": {
+          const worker = this.page(record.page)._worker(record.worker);
+          if (record.closed)
+            worker._didClose();
+          return;
+        }
+        case "worker":
+          this.page(record.page).emit("worker", this.page(record.page)._worker(record.worker));
+          return;
+        case "workerclosed":
+          this.page(record.page)._worker(record.worker)._didClose();
+          return;
         case "popup":
           this.page(record.page).emit("popup", this.page(record.popup.page, record.popup.url));
           return;
@@ -8816,6 +8872,15 @@ ${value.stack}`;
     }
     value(record, observed) {
       switch (record.event) {
+        case "workerstate":
+          return;
+        case "worker":
+          return this.page(record.page)._worker(record.worker);
+        case "workerclosed": {
+          const worker = this.page(record.page)._worker(record.worker);
+          worker._didClose();
+          return worker;
+        }
         case "popup":
           return this.page(record.popup.page, record.popup.url);
         case "page":
@@ -9013,6 +9078,105 @@ ${value.stack}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/worker.ts
+  class Worker extends EventEmitter {
+    #page;
+    #info;
+    _closed = false;
+    #consoleForward = null;
+    constructor(page, info) {
+      super();
+      this.#page = page;
+      this.#info = info;
+      markHandle(this);
+    }
+    url() {
+      return this.#info.url;
+    }
+    async evaluate(pageFunction, arg) {
+      const api = "worker.evaluate";
+      assertMaxArguments(api, arguments.length, 2);
+      const script = pageCall(api, "frame", pageFunction, arg);
+      if (this._closed)
+        throw clientError(api, "Target page, context or browser has been closed");
+      const { value } = await invoke("worker.evaluate", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), worker: this.#info.id, script });
+      return fromPageValue(api, value);
+    }
+    evaluateHandle() {
+      throw unsupportedError("worker.evaluateHandle", "JS handles are not available in Neo; use worker.evaluate instead");
+    }
+    async waitForEvent(event, optionsOrPredicate = {}) {
+      const api = "worker.waitForEvent";
+      if (event !== "close" && event !== "console")
+        throw unsupportedError(api, `Worker event "${event}" is not available in Neo`);
+      const object = typeof optionsOrPredicate === "object" && optionsOrPredicate !== null ? optionsOrPredicate : {};
+      const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : Reflect.get(object, "predicate");
+      const timeout = Reflect.get(object, "timeout");
+      if (predicate !== undefined && typeof predicate !== "function")
+        throw clientError(api, "predicate: expected function");
+      if (timeout !== undefined && typeof timeout !== "number")
+        throw clientError(api, "timeout: expected number");
+      const options = timeout === undefined ? {} : { timeout };
+      const deadline = new EventDeadline(api, event, Date.now(), timeoutMs(api, this.#page._timeoutSettings.timeout(options)));
+      let listener = () => {};
+      let closed = () => {};
+      const result = new Promise((resolve, reject) => {
+        listener = (value) => {
+          if (typeof predicate !== "function") {
+            resolve(value);
+            return;
+          }
+          try {
+            const accepted = predicate(value);
+            if ((typeof accepted === "object" || typeof accepted === "function") && accepted !== null && typeof Reflect.get(accepted, "then") === "function") {
+              Promise.resolve(accepted).then((result) => {
+                if (result)
+                  resolve(value);
+              }, reject);
+            } else if (accepted)
+              resolve(value);
+          } catch (error) {
+            reject(error);
+          }
+        };
+        closed = () => reject(clientError(api, "Target page, context or browser has been closed"));
+        this.on(event, listener);
+        if (event !== "close")
+          this.on("close", closed);
+        if (this._closed)
+          closed();
+      });
+      try {
+        return await deadline.race(result);
+      } finally {
+        this.off(event, listener);
+        this.off("close", closed);
+      }
+    }
+    _didClose() {
+      if (this._closed)
+        return;
+      this._closed = true;
+      if (this.#consoleForward)
+        this.#page.off("console", this.#consoleForward);
+      this.emit("close", this);
+    }
+    _listenersChanged(event, listening) {
+      if (event !== "console")
+        return;
+      if (listening && !this._closed) {
+        this.#consoleForward = (message) => {
+          if (message.worker() === this)
+            this.emit("console", message);
+        };
+        this.#page.on("console", this.#consoleForward);
+      } else if (this.#consoleForward) {
+        this.#page.off("console", this.#consoleForward);
+        this.#consoleForward = null;
+      }
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/page.ts
   var PDF_KEYS = [
     "scale",
@@ -9112,8 +9276,33 @@ ${value.stack}`;
       const size = { width: viewportSize.width, height: viewportSize.height };
       await invoke("page.setViewportSize", { api: "page.setViewportSize", timeoutMs: 0 }, { page: await this._brand("page.setViewportSize"), viewportSize: size });
     }
+    #workers = new Map;
+    #workerBatches = new Set;
+    #workerSnapshot = null;
     workers() {
-      return [];
+      return [...this.#workers.values()].filter((worker) => !worker._closed);
+    }
+    _worker(info) {
+      let worker = this.#workers.get(info.id);
+      if (!worker) {
+        worker = new Worker(this, info);
+        this.#workers.set(info.id, worker);
+      }
+      return worker;
+    }
+    _settleWorkerFacts(at) {
+      if (at)
+        this.#workerBatches.delete(at.seq);
+      if (this.#workerBatches.size === 0 && this.#workerSnapshot)
+        this.#applyWorkers(this.#workerSnapshot);
+    }
+    #applyWorkers(workers) {
+      const live = new Set(workers.map((worker) => worker.id));
+      for (const [id, worker] of this.#workers)
+        if (!live.has(id))
+          worker._didClose();
+      for (const info of workers)
+        this._worker(info);
     }
     toJSON() {
       return this._tab === null ? { $neo: "page", tab: null } : { $neo: "page", tab: this._tab };
@@ -9625,6 +9814,15 @@ ${value.stack}`;
       if (at.seq < this.#observedSeq)
         return;
       this.#observedSeq = at.seq;
+      if (fact.workers) {
+        this.#workerSnapshot = fact.workers;
+        for (const worker of fact.workers)
+          this._worker(worker);
+        if (at.deferWorkers)
+          this.#workerBatches.add(at.seq);
+        else
+          this._settleWorkerFacts(null);
+      }
       this.#observedHead = Math.max(this.#observedHead, at.events);
       this.#applyViewport(fact.viewportSize);
       if (fact.url !== undefined) {
@@ -9639,13 +9837,18 @@ ${value.stack}`;
           this.#close();
         return;
       }
-      if (fact.closed !== false)
+      if (fact.closed !== false) {
+        if (!this._closed && fact.workers)
+          this._context._events.observeWorkers(this);
         return;
+      }
       this.#approvedClose = null;
       if (this._closed && at.events < this.#closeEvent)
         return;
       this.#liveHead = at.events;
       this._closed = false;
+      if (fact.workers)
+        this._context._events.observeWorkers(this);
     }
     _closeEvent(seq, at = null) {
       if (this.#approvedClose?.seq === seq) {
@@ -9678,6 +9881,9 @@ ${value.stack}`;
       if (this._closed)
         return;
       this._closed = true;
+      this._context._events.forgetWorkers(this);
+      this.#workerSnapshot = [];
+      this._settleWorkerFacts(null);
       this.emit("close", this);
     }
     async _waitForURL(api, frame, url, options = {}) {
@@ -9895,6 +10101,10 @@ ${value.stack}`;
       await Promise.all(working.map((page) => page._refreshFrames(api).catch(() => {
         return;
       })));
+    }
+    _settleWorkerFacts(at) {
+      for (const page of this.#byTab.values())
+        page._settleWorkerFacts(at);
     }
     _applyReply({ pages, defaultPage, observed }) {
       const page = this.#unopened;

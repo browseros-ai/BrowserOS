@@ -118,7 +118,8 @@ mod tests {
 
     #[test]
     fn tests_that_names_are_playwright_receivers_and_methods() {
-        const RECEIVERS: [&str; 10] = [
+        const RECEIVERS: [&str; 11] = [
+            "worker",
             "locator",
             "page",
             "keyboard",
@@ -236,6 +237,7 @@ mod tests {
             ("page.close", &[], true),
             ("page.opener", &[], true),
             ("page.frames", &[], true),
+            ("worker.evaluate", &[MainWorld], true),
             ("page.evaluate", &[MainWorld], true),
             ("locator.evaluate", &[MainWorld], true),
             ("locator.evaluateAll", &[MainWorld], true),
@@ -353,9 +355,13 @@ mod tests {
                 // The screenshot client's filesystem step has no browser target.
                 ("page.saveScreenshot", _) => OpTarget::None,
                 ("expect.locator", _) | (_, Some("locator")) => OpTarget::Field("target"),
-                (_, Some("page" | "keyboard" | "mouse" | "dialog" | "expect" | "bindingCall")) => {
-                    OpTarget::Field("page")
-                }
+                (
+                    _,
+                    Some(
+                        "page" | "keyboard" | "mouse" | "dialog" | "expect" | "bindingCall"
+                        | "worker",
+                    ),
+                ) => OpTarget::Field("page"),
                 _ => OpTarget::None,
             };
             assert_eq!(spec.target, expected, "{} target field", spec.name);

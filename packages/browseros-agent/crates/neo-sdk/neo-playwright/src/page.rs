@@ -59,6 +59,7 @@ mod subtree_load;
 mod viewport_size;
 mod wait_for_navigation;
 mod wait_for_url;
+pub(crate) mod worker_evaluate;
 pub(crate) mod world_call;
 
 pub(crate) use context_op::ContextOp;

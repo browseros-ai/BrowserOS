@@ -306,6 +306,7 @@ mod tests {
             served("page.addScriptTag", &[MainWorld, HostFiles]),
             served("page.addStyleTag", &[MainWorld, HostFiles]),
             served("page.evaluate", &[MainWorld]),
+            served("worker.evaluate", &[MainWorld]),
             served("locator.evaluate", &[MainWorld]),
             served("locator.evaluateAll", &[MainWorld]),
             served("page.waitForFunction", &[MainWorld]),
@@ -475,6 +476,12 @@ mod tests {
     /// The BrowserOS cases of the ops that reach past their page's isolated world into the main
     /// world, Neo's files or Neo's screen, where no fake browser shows what a real one does.
     const BROWSEROS_CASES: &[BrowserosCase] = &[
+        BrowserosCase {
+            op: "worker.evaluate",
+            file: "main_world_browseros.rs",
+            test: "worker_evaluate_behaves_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
         BrowserosCase {
             op: "page.addInitScript",
             file: "init_scripts_browseros.rs",

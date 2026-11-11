@@ -343,6 +343,8 @@ fn a_script_drives_a_page_through_the_playwright_api() -> TestResult {
         let ops: Vec<_> = detail
             .operations
             .iter()
+            // Worker bookkeeping can run read-only subscriptions beside the foreground writes.
+            .filter(|op| op.effect == Effect::Write)
             .map(|op| (op.name.as_str(), op.effect, op.outcome, op.delivery))
             .collect();
         assert_eq!(

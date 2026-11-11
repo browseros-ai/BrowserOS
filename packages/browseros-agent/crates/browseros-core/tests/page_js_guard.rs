@@ -1,8 +1,8 @@
 //! Keeps page JavaScript on known paths. Every `Runtime.evaluate` and `Runtime.callFunctionOn`
 //! that BrowserOS sends goes through `browseros_core::page_js`, which decides the world a script
 //! runs in, or through the neo-playwright files in `ALLOWED`, which own its isolated
-//! `browseros-engine` world and its main-world `page.evaluate`. A raw send anywhere else would run
-//! in the page's own world whatever the caller intended.
+//! `browseros-engine` world, main-world `page.evaluate`, and dedicated-worker evaluation. A raw
+//! send anywhere else would run in the target's default world whatever the caller intended.
 //!
 //! A send is recognised by the method literal in argument position (followed by a comma), which
 //! leaves the CDP policy tables and error labels that merely name the methods alone.
@@ -20,6 +20,9 @@ const ALLOWED: &[&str] = &[
     "crates/neo-sdk/neo-playwright/src/world/isolated_world.rs",
     "crates/neo-sdk/neo-playwright/src/probe/probe_call.rs",
     "crates/neo-sdk/neo-playwright/src/page/evaluate_guard.rs",
+    // Workers have no document or isolated world. This gateway selects the worker target's
+    // startup context and races its lifetime, after checking the owning page's capability.
+    "crates/neo-sdk/neo-playwright/src/page/worker_evaluate.rs",
 ];
 const SKIPPED_DIRS: &[&str] = &["target", "node_modules", "dist", "tests"];
 
