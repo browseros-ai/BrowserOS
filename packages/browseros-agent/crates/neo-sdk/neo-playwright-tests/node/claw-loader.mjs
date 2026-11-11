@@ -133,6 +133,11 @@ export async function openClaw(cdpPort, options = {}, { onUncaught } = {}) {
     } finally {
       await close()
     }
-    throw error
+    // Nothing here is a test's own SDK call: connecting to BrowserOS, opening the run or
+    // evaluating the three files failed, so the report must count it as the harness's.
+    throw new Error(
+      `harness-error: Claw setup failed: ${error?.message ?? error}`,
+      { cause: error },
+    )
   }
 }
