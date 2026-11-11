@@ -1,6 +1,6 @@
 //! The process-wide event log: one writer, many readers.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use browseros_core::TargetId;
@@ -34,6 +34,10 @@ struct EventLog {
     records: VecDeque<EventRecord>,
     /// The seq the last record got; seqs start at 1, so 0 reads "from the start".
     last_seq: u64,
+    /// Each live target's newest main-frame navigation, kept apart from `records` so the bounded
+    /// ring cannot evict one the host has not refreshed its URL facts for. Dropped when the
+    /// target's close is recorded.
+    navigated: HashMap<TargetId, u64>,
 }
 
 /// One event, numbered and stamped when the watcher recorded it.
@@ -175,18 +179,7 @@ impl EventHub {
     /// host's URL facts. Core's page cache does not follow a navigation the page makes itself,
     /// so the host refreshes it when this moves past the seq it last refreshed through.
     pub(crate) fn navigated_at(&self, target: &TargetId) -> Option<u64> {
-        self.lock_log()
-            .records
-            .iter()
-            .rev()
-            .find_map(|record| match &record.event {
-                PageEvent::Navigation(navigation)
-                    if navigation.frame.as_str() == target.as_str() =>
-                {
-                    Some(record.seq)
-                }
-                _ => None,
-            })
+        self.lock_log().navigated.get(target).copied()
     }
 
     /// The type of a dialog recorded on `target` after seq `after` that is still open, if
@@ -239,6 +232,17 @@ impl EventWriter {
             let mut log = self.hub.lock_log();
             log.last_seq += 1;
             let seq = log.last_seq;
+            // A main frame's id is its target's id.
+            match &event {
+                PageEvent::Navigation(navigation) => {
+                    log.navigated
+                        .insert(TargetId(navigation.frame.as_str().to_owned()), seq);
+                }
+                PageEvent::Closed(target) => {
+                    log.navigated.remove(target);
+                }
+                _ => {}
+            }
             log.records.push_back(EventRecord {
                 seq,
                 at_ms: now_ms(),
@@ -284,11 +288,12 @@ mod tests {
     use std::error::Error;
     use std::sync::Arc;
 
-    use browseros_core::TargetId;
+    use browseros_core::{FrameId, TargetId};
     use neo_trace::EpochMillis;
 
     use super::{EventHub, LOG_CAPACITY};
     use crate::RunState;
+    use crate::events::navigation_event::NavigationEvent;
     use crate::events::page_event::PageEvent;
     use crate::events::{PageEventKind, Subscription};
 
@@ -333,6 +338,31 @@ mod tests {
             0,
             "a reader past them lost nothing"
         );
+    }
+
+    fn navigated(frame: &str) -> PageEvent {
+        PageEvent::Navigation(NavigationEvent {
+            frame: FrameId(frame.to_owned()),
+            url: "https://a.test/#moved".to_owned(),
+            new_document: false,
+            loader: None,
+            unreachable: None,
+        })
+    }
+
+    /// The host's URL refresh reads each target's newest main-frame navigation, which the bounded
+    /// ring must not evict before it does, and which goes once the target closes.
+    #[test]
+    fn tests_that_the_newest_navigation_outlives_the_ring_until_its_target_closes() {
+        let (hub, mut writer) = EventHub::new();
+        let moved = writer.record(navigated("A"));
+        for _ in 0..LOG_CAPACITY + 5 {
+            writer.record(closed("B"));
+        }
+        let target = TargetId("A".to_owned());
+        assert_eq!(hub.navigated_at(&target), Some(moved));
+        writer.record(closed("A"));
+        assert_eq!(hub.navigated_at(&target), None);
     }
 
     /// claw-sdk compares `at_ms` with takeover lock times, which `EpochMillis::now` stamps.

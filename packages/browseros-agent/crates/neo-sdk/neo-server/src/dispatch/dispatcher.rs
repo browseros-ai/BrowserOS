@@ -675,8 +675,8 @@ impl Dispatcher {
                 }
                 PageChange::Navigated if !refreshed.contains(&page.tab) => {
                     refreshed.push(page.tab);
-                    self.mark_refreshed(page);
-                    refresh(run, &self.browser, page.tab).await;
+                    self.refresh_and_mark(run, page, self.refresh_mark(page))
+                        .await;
                 }
                 PageChange::Navigated | PageChange::Linked => {}
                 PageChange::Gone { target, seq } => {
@@ -772,37 +772,46 @@ impl Dispatcher {
             if closed.contains(&page.tab) || refreshed.contains(&page.tab) {
                 continue;
             }
-            if self.navigated_since_refresh(page).await {
-                refresh(run, &self.browser, page.tab).await;
+            if let Some(mark) = self.navigated_since_refresh(page).await {
+                self.refresh_and_mark(run, page, Some(mark)).await;
             }
         }
     }
 
-    /// Whether `page`'s main frame navigated past the event seq the door last refreshed its
-    /// cache entry through; if so, that seq moves to the log's head, as the refresh that follows
-    /// reads core after it. A tab the registry does not track has nothing to compare.
-    async fn navigated_since_refresh(&self, page: &PageRef) -> bool {
-        let Some(through) = self.tabs.slot::<RefreshedThrough>(page) else {
-            return false;
-        };
-        let Some(info) = self.browser.page(page.tab).await else {
-            return false;
-        };
-        let Some(navigated) = self.observer.navigated(&info.target_id) else {
-            return false;
-        };
-        if navigated <= through.0.load(Ordering::Relaxed) {
-            return false;
-        }
-        through.0.fetch_max(self.observer.head(), Ordering::Relaxed);
-        true
+    /// `page`'s refresh mark and the log's head now, when its main frame navigated past the
+    /// event seq the door last refreshed its cache entry through. A refresh that then reads core
+    /// covers every event up to that head. A tab the registry does not track has no mark.
+    async fn navigated_since_refresh(
+        &self,
+        page: &PageRef,
+    ) -> Option<(Arc<RefreshedThrough>, u64)> {
+        let through = self.tabs.slot::<RefreshedThrough>(page)?;
+        let info = self.browser.page(page.tab).await?;
+        let navigated = self.observer.navigated(&info.target_id)?;
+        (navigated > through.0.load(Ordering::Relaxed)).then(|| (through, self.observer.head()))
     }
 
-    /// Records that `page`'s cache entry is about to be refreshed past every event so far.
-    fn mark_refreshed(&self, page: &PageRef) {
-        if let Some(through) = self.tabs.slot::<RefreshedThrough>(page) {
-            through.0.fetch_max(self.observer.head(), Ordering::Relaxed);
+    /// Refreshes `page`'s cache entry, then moves its mark to `mark`'s head. Only a refresh
+    /// that read core moves it: a failed or cancelled one leaves the navigation owed, so a later
+    /// reply tries again. A concurrent reply may refresh the same tab too, which costs one more
+    /// read and is never stale.
+    async fn refresh_and_mark(
+        &self,
+        run: &RunCtx,
+        page: &PageRef,
+        mark: Option<(Arc<RefreshedThrough>, u64)>,
+    ) {
+        if refresh(run, &self.browser, page.tab).await
+            && let Some((through, head)) = mark
+        {
+            through.0.fetch_max(head, Ordering::Relaxed);
         }
+    }
+
+    /// The head before a navigating op's refresh: its mark once that refresh read core.
+    fn refresh_mark(&self, page: &PageRef) -> Option<(Arc<RefreshedThrough>, u64)> {
+        let through = self.tabs.slot::<RefreshedThrough>(page)?;
+        Some((through, self.observer.head()))
     }
 
     /// Facts and their reported close records cross policy together, after the async cache
@@ -952,18 +961,21 @@ fn ending_of(run: &RunCtx, state: &OpState, result: Result<Value, LeafError>) ->
 
 /// One `Browser.getTabInfo` so core's cache matches the page after an unbound navigation.
 /// Raced with the stop: a stopping run does not wait on it.
-async fn refresh(run: &RunCtx, browser: &BrowserLink, tab: TabId) {
+/// Reads `tab`'s entry in core's page cache again; `true` once it did.
+async fn refresh(run: &RunCtx, browser: &BrowserLink, tab: TabId) -> bool {
     let Some(info) = browser.page(tab).await else {
-        return;
+        return false;
     };
     tokio::select! {
         biased;
-        () = run.cancel_token().cancelled() => {}
-        refreshed = run.view().refresh_page(info.page_id) => {
-            if let Err(error) = refreshed {
+        () = run.cancel_token().cancelled() => false,
+        refreshed = run.view().refresh_page(info.page_id) => match refreshed {
+            Ok(_) => true,
+            Err(error) => {
                 tracing::debug!(%error, tab = tab.0, "could not refresh a navigated page; its facts may be stale");
+                false
             }
-        }
+        },
     }
 }
 
