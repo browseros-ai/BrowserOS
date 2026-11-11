@@ -308,7 +308,7 @@ fn a_script_drives_a_page_through_the_playwright_api() -> TestResult {
             "the description lists the Playwright API and its ref hint: {description}"
         );
 
-        // The fake browser has no sealed world for neo-playwright's reads, so this drive
+        // The fake browser has no isolated world for neo-playwright's reads, so this drive
         // opens and closes a tab; tests/e2e_browseros.rs reads pages on a real BrowserOS.
         let code = r"
             const p = await context.newPage();

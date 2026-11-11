@@ -13,7 +13,7 @@ use crate::probe::{
 use crate::resolve::frame_start::{FrameStart, Started};
 use crate::resolve::{self, FramePath, HandleSite, Hop, HopIframe};
 use crate::target::{AriaRefJump, Chunk, LocatorTarget, RootHandle, Strictness};
-use crate::world::{ParentLink, Pin, Place, SealedWorld, SeqLookup};
+use crate::world::{IsolatedWorld, ParentLink, Pin, Place, SeqLookup};
 use crate::{ErrorCode, PlaywrightError};
 
 /// Resolves one locator for one op. It never waits: "not there yet" is an attempt that lands
@@ -35,7 +35,7 @@ pub(crate) struct Resolver<'a> {
 #[derive(Debug)]
 pub(crate) struct Landed {
     pub(crate) reply: ProbeReply,
-    pub(crate) world: SealedWorld,
+    pub(crate) world: IsolatedWorld,
     pub(crate) path: FramePath,
 }
 
@@ -64,7 +64,7 @@ impl Way {
 /// Where the last chunk runs.
 #[derive(Debug)]
 pub(crate) struct Resolved {
-    world: SealedWorld,
+    world: IsolatedWorld,
     /// The parents of `world`'s frame, from the main frame down.
     path: FramePath,
     /// Every `<iframe>` on the way is visible (upstream's `frameVisible`).
@@ -97,7 +97,7 @@ impl Resolved {
     }
 
     /// The world the last chunk runs in.
-    pub(crate) fn world(&self) -> &SealedWorld {
+    pub(crate) fn world(&self) -> &IsolatedWorld {
         &self.world
     }
 
@@ -118,7 +118,7 @@ enum Step {
     Missing,
     /// A world on the way turned out gone; it is invalidated (when there is one) and the pass
     /// runs again.
-    Gone(Option<SealedWorld>),
+    Gone(Option<IsolatedWorld>),
 }
 
 /// An `<iframe>` a hop found in its parent's world: its remote object (in the op's group), its
@@ -137,7 +137,7 @@ pub(super) struct Iframe {
 )]
 pub(crate) enum Hopped {
     Into {
-        child: SealedWorld,
+        child: IsolatedWorld,
         hop: Hop,
         visible: bool,
     },
@@ -272,7 +272,7 @@ impl<'a> Resolver<'a> {
     /// with a ref jumps to the document that printed it first, as upstream's
     /// `_jumpToAriaRefFrameIfNeeded` does, so no start world is needed for it.
     async fn resolve(&self) -> Result<Step, PlaywrightError> {
-        let mut world: Option<SealedWorld> = None;
+        let mut world: Option<IsolatedWorld> = None;
         let mut way = Way::top();
         let mut jumped = None;
         for chunk in self.target.chunks.hops() {
@@ -339,9 +339,9 @@ impl<'a> Resolver<'a> {
     async fn enter(
         &self,
         chunk: &Chunk,
-        current: Option<SealedWorld>,
+        current: Option<IsolatedWorld>,
         way: &mut Way,
-    ) -> Result<Result<SealedWorld, Step>, PlaywrightError> {
+    ) -> Result<Result<IsolatedWorld, Step>, PlaywrightError> {
         if let Some(jump) = chunk.jump {
             return match self.page.frames().by_seq(jump.seq) {
                 SeqLookup::Live { world, parents } => {
@@ -441,7 +441,7 @@ impl<'a> Resolver<'a> {
 pub(crate) async fn hop(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
-    parent: &SealedWorld,
+    parent: &IsolatedWorld,
     chunk: &Chunk,
     strictness: Strictness,
 ) -> Result<Hopped, PlaywrightError> {
@@ -453,7 +453,7 @@ pub(crate) async fn hop(
 async fn hop_from(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
-    parent: &SealedWorld,
+    parent: &IsolatedWorld,
     chunk: &Chunk,
     strictness: Strictness,
     root: Option<&str>,
@@ -492,7 +492,7 @@ async fn hop_from(
 async fn enter_pinned(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
-    parent: &SealedWorld,
+    parent: &IsolatedWorld,
     pin: Pin,
     key: String,
     visible: bool,
@@ -519,7 +519,7 @@ async fn enter_pinned(
 pub(super) async fn enter_iframe(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
-    parent: &SealedWorld,
+    parent: &IsolatedWorld,
     iframe: Iframe,
 ) -> Result<Hopped, PlaywrightError> {
     let Iframe {
@@ -591,7 +591,7 @@ pub(super) async fn enter_iframe(
 /// `request` in `world`: from the document, or from `root` (an element handle's node there),
 /// which the probe reads as the call's root element.
 pub(crate) async fn ask(
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     request: &ProbeRequest,
     root: Option<&str>,
 ) -> Result<ProbeReply, ProbeFailure> {

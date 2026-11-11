@@ -13,7 +13,7 @@
 //! ```
 //!
 //! The crate owns what each op does and how its failures read; the door keeps its own chores
-//! (the trace, the rules, delivery, masking, page facts). This file only translates between
+//! (the trace, the rules, delivery and page facts). This file only translates between
 //! the two. An op that [`OpMarks`] holds is the exception: its name answers a refusal, and the
 //! crate never sees the call.
 
@@ -909,10 +909,10 @@ mod tests {
     }
 
     /// A model calls only what the line offers, so outside the held clause it names each op the
-    /// door serves that reaches past the page's sealed world: by its wire name, or by the method a
+    /// door serves that reaches past the page's isolated world: by its wire name, or by the method a
     /// script calls (`pdf`, `setInputFiles`).
     #[test]
-    fn the_line_offers_every_served_op_that_reaches_past_the_sealed_world() {
+    fn the_line_offers_every_served_op_that_reaches_past_the_isolated_world() {
         let line: &str = &PLAYWRIGHT_LINE;
         let offered = match op_marks::held_clause(Op::all().map(Op::spec)) {
             Some(clause) => line.replacen(&clause, "", 1),

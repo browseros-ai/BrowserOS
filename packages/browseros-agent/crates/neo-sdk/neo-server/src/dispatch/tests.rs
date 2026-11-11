@@ -758,7 +758,7 @@ async fn a_refusal_brand_cannot_claim_another_owner_or_code() -> Result<(), Box<
     Ok(())
 }
 
-/// FR/RC C4 and risk 1 of the privacy cut. A refusal's reason is the script's own text: the door
+/// A refusal's reason is the script's own text: the door
 /// passes it through whole, and cuts a long one to `TEXT_CHARS`, so a script cannot make a
 /// refusal as large as it likes.
 #[tokio::test]

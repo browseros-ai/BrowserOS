@@ -9,7 +9,7 @@ use crate::dispatch::{ErrorCode, Lifetime, Listing, MethodSpec, OperationError, 
 
 /// One crate op as the door registers it. A plain data bag, built once per op at startup.
 pub(super) struct OpMarks {
-    /// The crate's name, effect, lifetime and sensitive args, plus the marks the door's rules key
+    /// The crate's name, effect and lifetime, plus the marks the door's rules key
     /// by, derived from the op's capabilities: `page_script` is `MainWorld` for a `MainWorld`
     /// op. Listed under the Playwright line when served, unlisted when held.
     pub(super) spec: MethodSpec,
@@ -67,7 +67,7 @@ const fn policing(capability: Capability) -> Policing {
 /// at its gateways yet ([`OpSpec::gated`] is false). A door rule cannot stand in for a guard the
 /// crate lacks.
 const UNGATED: Hold = Hold {
-    why: "reaches beyond the page's sealed world before Neo's Playwright guards that reach",
+    why: "reaches beyond the page's isolated world before Neo's Playwright guards that reach",
     meanwhile: "reach the page through the rest of the Playwright API",
 };
 
@@ -186,7 +186,7 @@ impl OpMarks {
             page_script: if spec.uses(Capability::MainWorld) {
                 PageScript::MainWorld
             } else {
-                PageScript::Sealed
+                PageScript::Isolated
             },
             ..MethodSpec::new(spec.name, spec.effect)
         };
@@ -442,7 +442,7 @@ mod tests {
                 scripts += 1;
                 PageScript::MainWorld
             } else {
-                PageScript::Sealed
+                PageScript::Isolated
             };
             assert_eq!(
                 OpMarks::of(&spec, LINE).spec.page_script,
@@ -472,7 +472,7 @@ mod tests {
         proves: Proves,
     }
 
-    /// The BrowserOS cases of the ops that reach past their page's sealed world into the main
+    /// The BrowserOS cases of the ops that reach past their page's isolated world into the main
     /// world, Neo's files or Neo's screen, where no fake browser shows what a real one does.
     const BROWSEROS_CASES: &[BrowserosCase] = &[
         BrowserosCase {

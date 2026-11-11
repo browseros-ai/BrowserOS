@@ -281,7 +281,7 @@ impl Expectation {
         if expression == Expression::Property {
             return Err(scope.fail(
                 ErrorCode::Unsupported,
-                "toHaveJSProperty is not supported: Neo matches in a sealed world that does \
+                "toHaveJSProperty is not supported: Neo matches in an isolated world that does \
                  not see the page's own JavaScript objects; use expect.poll(() => \
                  locator.evaluate((element) => element.name)).toEqual(value) instead",
             ));

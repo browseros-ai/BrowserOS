@@ -4,8 +4,7 @@
 //! who owns the failure, whether it is a Playwright timeout (the bootstrap then throws
 //! `TimeoutError`) and whether Neo can vouch for what happened. No leaf can pair a code with
 //! the wrong owner. Messages are Playwright-shaped (`locator.click: Timeout 5000ms exceeded.`,
-//! then the call log) and quote only what the sealed world returned, so they carry no field
-//! values.
+//! then the call log) and quote the values returned by the browser.
 //!
 //! The answer column is what holds once the op may have sent something. The dispatcher reports
 //! `not_sent` for an op that never called `OpScope::send_effect`, whatever the answer says

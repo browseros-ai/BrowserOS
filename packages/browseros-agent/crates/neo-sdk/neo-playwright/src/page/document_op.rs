@@ -1,4 +1,4 @@
-//! A frame's document as a whole, in its sealed world: the main frame's, or that of the child
+//! A frame's document as a whole, in its isolated world: the main frame's, or that of the child
 //! frame a `frame.*` form names. `page.title()` and `page.content()` read it there, as upstream
 //! reads it from its utility world. `page.setContent()` replaces it from there, through the
 //! main-world gateway (`DocumentWrite`), because the HTML's scripts run in the page's main world.
@@ -74,12 +74,12 @@ pub(crate) async fn read(
 }
 
 /// Replaces the frame's document with `html` and waits for `waitUntil`, as upstream does,
-/// through the main-world gateway: the probe writes from the sealed world, but the HTML's scripts
+/// through the main-world gateway: the probe writes from the isolated world, but the HTML's scripts
 /// and event handlers run in the main world.
 ///
 /// Playwright-core never sees `load` on a hosted BrowserOS, because it waits for a console
 /// message after `document.open()`, which a hosted browser never sends; the write's watch needs
-/// none. The write runs in the sealed world, whose engine and seq outlive document.open as
+/// none. The write runs in the isolated world, whose engine and seq outlive document.open as
 /// upstream's utility world does, so the refs a later snapshot prints keep the frame's prefix.
 pub(crate) async fn set_content(
     pw: &Playwright,

@@ -96,7 +96,7 @@ impl PageOp {
             Self::Content => OpSpec::read(
                 "page.content",
                 PAGE,
-                "the document's HTML, read in the sealed world so field values are masked",
+                "the document's HTML, read in the engine's isolated world",
             ),
             Self::SetContent => OpSpec::write(
                 "page.setContent",
@@ -206,7 +206,7 @@ const RESOLVE_BINDING: OpSpec = OpSpec::write(
 .using(&[Capability::MainWorld])
 .policed();
 
-/// Runs one page op. The ops that run in the page's sealed world (title, content, setContent,
+/// Runs one page op. The ops that run in the page's isolated world (title, content, setContent,
 /// waitForURL) or its main world (evaluate, waitForFunction, the element scripts) are built with
 /// those worlds.
 pub(crate) async fn invoke(

@@ -35,8 +35,8 @@ pub(crate) struct RunStartRow<'a> {
 pub(crate) enum RunCode<'a> {
     /// The bounded code.
     Stored { text: &'a str, truncated: bool },
-    /// No code, and why: `unavailable` when the writer never saw it.
-    Withheld(&'static str),
+    /// The writer never received the run's code.
+    Unavailable,
 }
 
 /// A run's end row, as the writer stores it.
@@ -215,7 +215,7 @@ impl TraceBatch {
         };
         let (code, code_truncated, code_withheld) = match run.code {
             RunCode::Stored { text, truncated } => (Some(text.to_owned()), truncated, None),
-            RunCode::Withheld(reason) => (None, false, Some(reason.to_owned())),
+            RunCode::Unavailable => (None, false, Some("unavailable".to_owned())),
         };
         let mut model = runs::ActiveModel {
             ended_at: Set(Some(run.at.millis())),

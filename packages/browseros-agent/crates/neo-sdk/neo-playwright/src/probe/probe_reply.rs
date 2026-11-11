@@ -402,7 +402,7 @@ mod tests {
     fn tests_that_a_reply_this_build_cannot_read_is_refused() {
         for bad in [
             json!({ "kind": "described", "protocol": 1, "seq": 0 }),
-            json!({ "kind": "element", "pin": 3, "preview": "<b>", "sensitive": null }),
+            json!({ "kind": "element", "pin": 3, "preview": "<b>", "unexpected": null }),
             json!({ "kind": "none", "staleRef": "e5", "extra": true }),
             json!({ "kind": "teleported" }),
         ] {

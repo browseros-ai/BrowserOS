@@ -49,12 +49,11 @@ This is a migration map, not a claim that each new check has already passed. Val
 | set-content.js | navigation-and-scripts.js |
 | set-input-files-upstream.js | Upstream `tests/page/page-set-input-files.spec.ts › should upload the file` and the remaining assertions in that selected spec |
 | set-input-files.js | uploads_browseros.rs::an_upload_of_neos_host_token_is_refused_and_an_ordinary_file_uploads (retained real-MCP regression) plus selected upstream upload assertions |
-| shadow-roots.js | refs-and-privacy.js |
-| snapshot-ai.js | refs-and-privacy.js and nested-frames.js |
-| snapshot-default.js | refs-and-privacy.js |
-| snapshot-locator.js | refs-and-privacy.js |
-| snapshot-ref-lifetime.js | refs-and-privacy.js |
-| snapshot-sensitive.js | refs-and-privacy.js |
+| shadow-roots.js | refs-and-values.js |
+| snapshot-ai.js | refs-and-values.js and nested-frames.js |
+| snapshot-default.js | refs-and-values.js |
+| snapshot-locator.js | refs-and-values.js |
+| snapshot-ref-lifetime.js | refs-and-values.js |
 | strict-mode.js | Upstream locator-any-frame.spec.ts › should fail click upon strict mode violation inside a single frame |
 | wait-for-function.js | dialogs.js |
 | wait-for-load-state.js | navigation-and-scripts.js |

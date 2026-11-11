@@ -542,7 +542,7 @@ fn set_content_recorded(recorded: &Value) -> TestResult {
 /// The lock waits for the script's own mark in the page, [`READING`], since a lock taken before
 /// the send refuses the op unsent instead.
 async fn lock_while_a_script_runs(rig: &Rig) -> TestResult {
-    // What the owner types into a field no seal masks, built from parts in the page, so that no
+    // The owner's text, built from parts in the page, so that no
     // script or URL holds it whole.
     let typed = "4 Elm St";
     rig.until_ready().await?;

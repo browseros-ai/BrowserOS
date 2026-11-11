@@ -141,7 +141,7 @@ takeover() {
   expect "(e) the run works again after release" "$rec" 'meta.status == "ok"' 'outcome + " url=\(value.url)"'
 
   rec=$(run close-page.js --task "$task")
-  expect "(e) close the takeover's tab, private until it closes" "$rec" 'meta.status == "ok"' 'outcome'
+  expect "(e) close the takeover's tab" "$rec" 'meta.status == "ok"' 'outcome'
 }
 
 # Playwright actions and expect: each script fills or types, clicks or presses, and asserts with
@@ -166,30 +166,26 @@ actions() {
   expect "(g) keyboard.type then Enter, expect toHaveText" "$rec" \
     'meta.status == "ok" and value.shown == "Results for claw sdk"' 'outcome + " shown=\(value.shown)"'
 
-  # An ordinary file uploads; Neo's host token is refused before a byte is read, the refusal
-  # names no path, and the input keeps the file it had.
   rec=$(run upload-file.js --task check-actions)
-  expect "(g) setInputFiles uploads /etc/os-release and refuses the host token" "$rec" \
+  expect "(g) setInputFiles uploads a local path and an in-memory payload" "$rec" \
     'meta.status == "ok" and (value.uploaded | startswith("os-release: "))
-      and value.token.owner == "script" and value.token.code == "neo_secret_upload_refused"
-      and value.token.delivery == "not_sent" and (value.token.message | test("host-token|/run/") | not)
-      and value.shownAfterRefusal == value.uploaded' \
-    'outcome + " uploaded=\(value.uploaded) token=\(value.token)"'
-  expect "(g) Neo's trace has the upload done and the token's upload not_sent" "$(trace_of "$rec")" \
-    '[.operations[] | select(.name == "locator.setInputFiles") | .delivery] == ["done", "not_sent"]' \
+      and value.payload == "note.txt: hello from Neo"' \
+    'outcome + " uploaded=\(value.uploaded) payload=\(value.payload)"'
+  expect "(g) Neo's trace records both uploads as done" "$(trace_of "$rec")" \
+    '[.operations[] | select(.name == "locator.setInputFiles") | .delivery] == ["done", "done"]' \
     '[.operations[] | select(.name == "locator.setInputFiles") | .delivery] | join(", ")'
+
 }
 
 probes() {
   local rec
   rec=$(run probe-evaluate.js --task check-probes)
-  expect "(f) page.evaluate is held" "$rec" \
-    'meta.error.owner == "script" and meta.error.code == "method_unavailable" and meta.error.delivery == "not_sent"' 'outcome'
+  expect "(f) page.evaluate returns the main-world title" "$rec" \
+    'meta.status == "ok" and value == "Evaluate"' 'outcome'
 
   rec=$(run probe-file-url.js --task check-probes)
-  expect "(f) goto file:///etc/passwd is refused before loading" "$rec" \
-    'meta.status == "error" and meta.error.delivery == "not_sent" and meta.effects == "none" and value.content == null' \
-    'outcome + ": " + meta.error.message'
+  expect "(f) goto file:///etc/os-release loads the local file" "$rec" \
+    'meta.status == "ok" and (value.content | contains("PRETTY_NAME="))' 'outcome'
 
   local script
   # The SDK refuses these itself, before any operation, so the error carries no delivery and

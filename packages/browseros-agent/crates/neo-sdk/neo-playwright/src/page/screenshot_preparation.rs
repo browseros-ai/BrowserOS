@@ -18,7 +18,7 @@ use crate::page::screenshot_masks::{MaskLocator, ScreenshotMasks};
 use crate::page::{OpPage, frame_tree, world_call};
 use crate::resolve::{self, HandleSite};
 use crate::target::Target;
-use crate::world::SealedWorld;
+use crate::world::IsolatedWorld;
 use crate::{ErrorCode, PlaywrightError};
 
 /// How long preparation waits on one frame (its world, its script) before skipping it as
@@ -33,7 +33,7 @@ const RESTORE: &str = "function() { window.__pwCleanupScreenshot?.(); }";
 /// reply after its script already changed the document.
 #[must_use = "the guard holds the screenshot queue through rendering cleanup"]
 pub(super) struct ScreenshotPreparation {
-    worlds: Vec<SealedWorld>,
+    worlds: Vec<IsolatedWorld>,
     queue: Option<OwnedMutexGuard<()>>,
     masks: ScreenshotMasks,
     capture: Option<ScreenshotCapture>,
@@ -176,7 +176,7 @@ impl Drop for ScreenshotPreparation {
     }
 }
 
-async fn restore(worlds: &[SealedWorld]) {
+async fn restore(worlds: &[IsolatedWorld]) {
     // Each renderer gets its own bounded attempt. A dead first renderer must not prevent
     // healthy child frames from resuming animations or restoring their caret and styles.
     future::join_all(worlds.iter().map(|world| async {
@@ -201,7 +201,7 @@ mod tests {
     use tokio::{task, time};
 
     use super::{ScreenshotMasks, ScreenshotPreparation};
-    use crate::world::SealedWorld;
+    use crate::world::IsolatedWorld;
 
     #[tokio::test(start_paused = true)]
     async fn cancellation_restores_healthy_frames_while_a_renderer_is_stalled()
@@ -209,7 +209,7 @@ mod tests {
         let stalled = TestConnection::new([("Runtime.callFunctionOn", cdp_pending())]);
         let healthy = TestConnection::new([]);
         let world = |connection: &Arc<TestConnection>, name: &str| {
-            SealedWorld::for_tests(
+            IsolatedWorld::for_tests(
                 ProtocolSession::for_session(
                     Arc::clone(connection) as Arc<dyn CdpConnection>,
                     SessionId::from(name),

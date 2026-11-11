@@ -10,7 +10,7 @@ use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Re
 use crate::read::element_read;
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{LocatorTarget, PageRef, Strictness};
-use crate::world::{BackendNodeId, Pin, SealedWorld};
+use crate::world::{BackendNodeId, IsolatedWorld, Pin};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// A `located` read's value: the first match, pinned, and what `waitForSelector` checks and
@@ -74,7 +74,7 @@ struct DescribedNode {
 pub(crate) async fn element_brand(
     scope: &OpScope<'_>,
     page: &PageRef,
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     pin: Pin,
     preview: &str,
 ) -> Result<Option<Value>, PlaywrightError> {
@@ -94,17 +94,17 @@ pub(crate) async fn element_brand(
 /// that world's session for good; `None` when the element or the world went first.
 pub(crate) async fn backend_node(
     scope: &OpScope<'_>,
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     pin: Pin,
 ) -> Result<Option<BackendNodeId>, PlaywrightError> {
-    let sealed = match probe::pinned_object(scope, world, pin).await {
+    let isolated = match probe::pinned_object(scope, world, pin).await {
         Ok(Some(object)) => object,
         Ok(None) | Err(ProbeFailure::Gone(_)) => return Ok(None),
         Err(failure) => return Err(resolve::failed(scope, failure)),
     };
     let described = world
         .session()
-        .send::<_, Described>("DOM.describeNode", json!({ "objectId": sealed }))
+        .send::<_, Described>("DOM.describeNode", json!({ "objectId": isolated }))
         .await;
     match described {
         Ok(described) => Ok(Some(described.node.backend_node_id)),
@@ -124,7 +124,7 @@ pub(crate) async fn every_match(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
     target: &LocatorTarget,
-) -> Result<Option<(SealedWorld, Vec<BackendNodeId>)>, PlaywrightError> {
+) -> Result<Option<(IsolatedWorld, Vec<BackendNodeId>)>, PlaywrightError> {
     let resolver = Resolver::new(page, scope, target, Strictness::FirstMatch);
     let landed = resolver
         .attempt_at(|last, _| ProbeRequest::ReadAll {

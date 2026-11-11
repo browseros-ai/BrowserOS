@@ -114,7 +114,7 @@ impl Playwright {
         &self.epoch
     }
 
-    /// Per-session setup for sealed worlds.
+    /// Per-session setup for isolated worlds.
     pub(crate) fn sessions(&self) -> &SessionSetup {
         &self.sessions
     }

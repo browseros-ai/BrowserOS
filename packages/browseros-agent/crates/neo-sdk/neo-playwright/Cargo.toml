@@ -28,7 +28,7 @@ serde_json = { workspace = true, features = ["float_roundtrip", "raw_value", "un
 # Names the failing field in `invalid_input` messages (`target.chunks[0]: ...`).
 serde_path_to_error.workspace = true
 tokio.workspace = true
-# A frame's site, for the main-world sweep's scope: its URL's scheme and host, `blob:` included.
+# Normalizes navigation URLs using the URL parser before dispatch.
 url.workspace = true
 # The random epoch and seq base a `Playwright` boots worlds with; core already builds it.
 uuid.workspace = true

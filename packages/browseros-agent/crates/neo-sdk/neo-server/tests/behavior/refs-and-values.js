@@ -33,7 +33,7 @@ expect(Boolean(detached)).toBe(true)
 expect(
   await page.getByRole('button', { name: 'Replacement' }).textContent(),
 ).toBe('Replacement')
-await page.goto(`${origin}/sensitive.html`)
+await page.goto(`${origin}/form-values.html`)
 expect(await page.locator('#password').inputValue()).toBe(
   String.fromCharCode(104, 117, 110, 116, 101, 114, 50, 50),
 )

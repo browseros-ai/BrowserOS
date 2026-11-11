@@ -176,7 +176,7 @@ mod tests {
     use crate::resolve::{FramePath, Hop, HopIframe};
     use crate::target::CallHeader;
     use crate::test_env::TestEnv;
-    use crate::world::SealedWorld;
+    use crate::world::IsolatedWorld;
     use crate::{ErrorCode, Op};
 
     /// A vanished ancestor is retryable only for screenshots. boundingBox keeps its public
@@ -197,7 +197,7 @@ mod tests {
                 "Runtime.callFunctionOn",
                 json!({ "result": { "type": "object", "value": reply } }),
             )?;
-            let parent = SealedWorld::for_tests(
+            let parent = IsolatedWorld::for_tests(
                 ProtocolSession::for_session(
                     Arc::clone(&connection) as Arc<dyn CdpConnection>,
                     SessionId::from("parent"),

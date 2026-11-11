@@ -1,4 +1,4 @@
-//! How the page ops call into a frame's sealed world: the frame a `frame.*` form names, found
+//! How the page ops call into a frame's isolated world: the frame a `frame.*` form names, found
 //! the way `frame.locator` finds it, and one retry when the frame's document was replaced under
 //! the world. A failure left after it is the op's through `resolve::failed`.
 
@@ -10,7 +10,7 @@ use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{ProbeFailure, ProbeReply};
 use crate::resolve::{self, FrameStart, Started};
-use crate::world::{Endpoint, Place, SealedWorld};
+use crate::world::{Endpoint, IsolatedWorld, Place};
 use crate::{ErrorCode, PlaywrightError};
 
 /// The world of the frame a page op's input names: absent, or the main frame's own id, is the
@@ -24,7 +24,7 @@ pub(crate) async fn frame_world(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
     frame: Option<&FrameId>,
-) -> Result<SealedWorld, PlaywrightError> {
+) -> Result<IsolatedWorld, PlaywrightError> {
     listed_frame_world(page, scope, frame)
         .await?
         .ok_or_else(|| scope.fail(ErrorCode::TargetClosed, "Frame was detached"))
@@ -36,7 +36,7 @@ pub(crate) async fn listed_frame_world(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
     frame: Option<&FrameId>,
-) -> Result<Option<SealedWorld>, PlaywrightError> {
+) -> Result<Option<IsolatedWorld>, PlaywrightError> {
     let main = page.main_endpoint();
     let child = frame.filter(|frame| **frame != main.frame);
     for _attempt in 0..2 {
@@ -78,7 +78,7 @@ pub(crate) async fn with_world<T, F, Fut>(
     call: F,
 ) -> Result<T, ProbeFailure>
 where
-    F: Fn(SealedWorld) -> Fut,
+    F: Fn(IsolatedWorld) -> Fut,
     Fut: Future<Output = Result<T, ProbeFailure>>,
 {
     let world = page.world(endpoint, place.clone()).await?;

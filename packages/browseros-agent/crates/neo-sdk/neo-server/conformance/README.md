@@ -14,7 +14,7 @@ read-only Playwright commit -> upstream transform -> program bytes (one file per
 ```
 
 The native BrowserOS oracle is not hosted. Neo uses the same browser binary in hosted mode,
-through the built server, its dispatcher, privacy layer and trace. A program's upstream test
+through the built server, its dispatcher, takeover rules and trace. A program's upstream test
 body, hooks and closure state stay in one module. Only Playwright Test infrastructure—test
 registration, fixtures, hook execution, budgets and soft assertions—is supplied by `src/runtime.js`.
 The runtime's own pages, locators, callbacks, handles and matchers remain under test.
@@ -111,7 +111,7 @@ and preserves terminal failures.
 Neo-specific expectations are separate in `tests/behavior/` and can be run with `bun run conformance behavior`
 or the `behavior_browseros` Rust integration target (set `CLAW_SDK_E2E_BROWSER`). They use real MCP run
 with explicit values and have no native comparison. `tier-triage.md` accounts for the 52 former tier-1
-cases; source-specific integration and privacy regressions remain product tests.
+cases; source-specific integration regressions remain product tests.
 
 Single-side diagnostics are available with `--side native` or `--side neo`; the report remains
 unpaired and cannot pass conformance. `--keep` retains a copy of the run's private state after
