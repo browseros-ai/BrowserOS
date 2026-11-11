@@ -17,7 +17,6 @@ export type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
 export type { PageSnapshotInput } from './types/PageSnapshotInput'
 export type { PartialFrame } from './types/PartialFrame'
 export type { SnapshotResult } from './types/SnapshotResult'
-export type { Strictness } from './types/Strictness'
 
 /** Each snapshot op's input, after the `call` header every op shares. */
 export type SnapshotInputs = {

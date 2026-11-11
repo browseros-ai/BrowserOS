@@ -23,14 +23,11 @@ import {
   type ScreenshotOptionsInput,
   screenshotOptions,
 } from './frame'
+import { OPTION_KEYS, send } from './generated'
 import type { OpName } from './generated/ops'
 import {
-  CHECK_KEYS,
-  DBLCLICK_KEYS,
   FILL_KEYS,
-  HOVER_KEYS,
   markHandle,
-  POINTER_KEYS,
   PRESS_KEYS,
   pick,
   selectOptionValues,
@@ -185,66 +182,66 @@ export class ElementHandle extends EventEmitter {
 
   async click(options: ClickOptions = {}): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.click',
+    const api = 'elementHandle.click'
+    const timeout = this.#timeout(options)
+    const picked = pick(options, OPTION_KEYS['locator.click'])
+    this.#live(api)
+    await send['locator.click'](
       site,
-      'elementHandle.click',
-      this.#timeout(options),
-      {
-        options: pick(options, POINTER_KEYS),
-      },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', options: picked },
     )
   }
 
   async dblclick(options: ClickOptions = {}): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.dblclick',
+    const api = 'elementHandle.dblclick'
+    const timeout = this.#timeout(options)
+    const picked = pick(options, OPTION_KEYS['locator.dblclick'])
+    this.#live(api)
+    await send['locator.dblclick'](
       site,
-      'elementHandle.dblclick',
-      this.#timeout(options),
-      {
-        options: pick(options, DBLCLICK_KEYS),
-      },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', options: picked },
     )
   }
 
   async hover(options: ClickOptions = {}): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.hover',
+    const api = 'elementHandle.hover'
+    const timeout = this.#timeout(options)
+    const picked = pick(options, OPTION_KEYS['locator.hover'])
+    this.#live(api)
+    await send['locator.hover'](
       site,
-      'elementHandle.hover',
-      this.#timeout(options),
-      {
-        options: pick(options, HOVER_KEYS),
-      },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', options: picked },
     )
   }
 
   async check(options: ClickOptions = {}): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.check',
+    const api = 'elementHandle.check'
+    const timeout = this.#timeout(options)
+    const picked = pick(options, OPTION_KEYS['locator.check'])
+    this.#live(api)
+    await send['locator.check'](
       site,
-      'elementHandle.check',
-      this.#timeout(options),
-      {
-        options: pick(options, CHECK_KEYS),
-      },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', options: picked },
     )
   }
 
   async uncheck(options: ClickOptions = {}): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.uncheck',
+    const api = 'elementHandle.uncheck'
+    const timeout = this.#timeout(options)
+    const picked = pick(options, OPTION_KEYS['locator.uncheck'])
+    this.#live(api)
+    await send['locator.uncheck'](
       site,
-      'elementHandle.uncheck',
-      this.#timeout(options),
-      {
-        options: pick(options, CHECK_KEYS),
-      },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', options: picked },
     )
   }
 
@@ -253,12 +250,15 @@ export class ElementHandle extends EventEmitter {
     options: ClickOptions = {},
   ): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      checked ? 'locator.check' : 'locator.uncheck',
+    const op = checked ? 'locator.check' : 'locator.uncheck'
+    const api = 'elementHandle.setChecked'
+    const timeout = this.#timeout(options)
+    const picked = pick(options, OPTION_KEYS[op])
+    this.#live(api)
+    await send[op](
       site,
-      'elementHandle.setChecked',
-      this.#timeout(options),
-      { options: pick(options, CHECK_KEYS) },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', options: picked },
     )
   }
 

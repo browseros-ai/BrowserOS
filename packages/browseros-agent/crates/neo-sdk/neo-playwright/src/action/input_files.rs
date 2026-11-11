@@ -37,6 +37,7 @@ use browseros_core::CoreError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::fs;
+use ts_rs::TS;
 
 use crate::action::focus_lease;
 use crate::action::subject::Subject;
@@ -71,14 +72,14 @@ pub(crate) enum FilesInput {
 }
 
 /// Drop paths carry MIME types from Playwright's vendored table in the prelude.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum DropFiles {
     Paths(Vec<DropPath>),
-    Payloads(Vec<FilePayload>),
+    Payloads(#[ts(type = "Array<import('../../../probe/protocol').FilePayload>")] Vec<FilePayload>),
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DropPath {
     path: String,

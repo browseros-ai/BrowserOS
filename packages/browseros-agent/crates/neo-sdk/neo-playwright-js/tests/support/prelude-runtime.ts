@@ -41,6 +41,9 @@ type Envelope = {
 }
 export type Answer = (call: Call) => unknown | Promise<unknown>
 
+/** The unmodified strings crossing the bootstrap's native engine boundary. */
+export type WireExchange = { op: string; args: string; reply: string }
+
 /** How a run ended, as claw-sdk's run_script.rs `settle` reports it. */
 export type Settled =
   | { ok: unknown }
@@ -114,6 +117,8 @@ export function loadPrelude(
     prelude?: string
     /** A fixed `Date.now()` for the realm, so recorded `since` stamps are reproducible. */
     now?: number
+    /** Observe transport bytes before any test-side parsing or result normalization. */
+    onWire?: (exchange: WireExchange) => void
     /**
      * The bootstrap as it was before sdk-skeleton's FR/RC: its `__neo` without `refuse`, which
      * the prelude takes for an older bootstrap.
@@ -143,11 +148,16 @@ export function loadPrelude(
     btoa,
     DOMException,
     __neo_invoke: async (name: string, inputJson: string): Promise<string> => {
+      const recordReply = (value: unknown): string => {
+        const reply = JSON.stringify(value)
+        options.onWire?.({ op: name, args: inputJson, reply })
+        return reply
+      }
       const input = JSON.parse(inputJson)
       if (name === '$neo.abort') {
         aborts.push(input)
         abortable.get(input.key)?.(input.reason)
-        return JSON.stringify({ ok: null, pages: [] })
+        return recordReply({ ok: null, pages: [] })
       }
       const call: Call =
         input?.$neo === 'abortable'
@@ -170,7 +180,7 @@ export function loadPrelude(
       )
       if (refused) {
         failures.set(refused.err.operationId, refused.err)
-        return JSON.stringify(refused)
+        return recordReply(refused)
       }
       let reply: unknown
       try {
@@ -212,7 +222,7 @@ export function loadPrelude(
           envelope.pages = [{ tab: target.tab }]
       } else if (envelope.observed !== null)
         observations = Math.max(observations, envelope.observed.seq)
-      return JSON.stringify({ pages: [], ...envelope, ok: envelope.ok ?? null })
+      return recordReply({ pages: [], ...envelope, ok: envelope.ok ?? null })
     },
     __neo_log: () => {},
     __neo_sleep: (ms: number) =>

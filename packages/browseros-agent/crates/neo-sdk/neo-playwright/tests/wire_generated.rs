@@ -60,6 +60,21 @@ struct Imported {
 const IMPORTED: &[Imported] = &[
     Imported {
         module: "../../../probe/protocol",
+        name: "Point",
+        checked_by: "tests/data/probe-protocol.json",
+    },
+    Imported {
+        module: "../../../probe/protocol",
+        name: "Edit",
+        checked_by: "tests/data/probe-protocol.json",
+    },
+    Imported {
+        module: "../../../probe/protocol",
+        name: "FilePayload",
+        checked_by: "tests/data/probe-protocol.json",
+    },
+    Imported {
+        module: "../../../probe/protocol",
         name: "SnapshotMode",
         checked_by: "tests/data/probe-protocol.json",
     },
