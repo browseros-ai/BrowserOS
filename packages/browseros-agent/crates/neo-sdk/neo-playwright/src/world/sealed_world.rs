@@ -139,6 +139,9 @@ pub(crate) struct Installed {
     /// `Playwright` (a restart's re-key) it names a document that old refs may still print, so
     /// the page must never hand it out again (`FrameWorlds`).
     pub(crate) retired: Option<FrameSeq>,
+    /// The document's URL when the world booted (`location.href`): the page a main frame's
+    /// next commit leaves, when no commit of it was seen yet (`FrameWorlds`).
+    pub(crate) url: String,
 }
 
 /// The `Runtime` events one install reads about the world it creates. It must be subscribed
@@ -349,13 +352,13 @@ impl SealedWorld {
             )
             .await
             .map_err(ProbeFailure::from_core)?;
-        let (seq, retired) = match probe::reply_of(called) {
+        let (seq, retired, url) = match probe::reply_of(called) {
             Ok(ProbeReply::Described {
                 protocol,
                 seq,
                 retired,
-                ..
-            }) if protocol == PROBE_PROTOCOL => (seq, retired),
+                url,
+            }) if protocol == PROBE_PROTOCOL => (seq, retired, url),
             Ok(ProbeReply::Described { protocol, .. }) => {
                 return Err(ProbeFailure::Broken(format!(
                     "engine asset is stale: the world runs probe protocol {protocol}, this build \
@@ -380,7 +383,11 @@ impl SealedWorld {
             Ok(watched) => watched?,
             Err(_late) => return Err(ProbeFailure::Late),
         };
-        Ok(Installed { world, retired })
+        Ok(Installed {
+            world,
+            retired,
+            url,
+        })
     }
 
     /// The booted world, once its seal watches every hidden root its document holds now.

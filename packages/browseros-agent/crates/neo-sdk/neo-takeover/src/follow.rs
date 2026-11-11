@@ -232,7 +232,6 @@ async fn bring_forward(
         next_activation(FollowState {
             target,
             paused: displays.screen_held()
-                || displays.views_paused()
                 || target.is_some_and(|tab| displays.locks.is_locked(tab)),
             shown: None,
         })

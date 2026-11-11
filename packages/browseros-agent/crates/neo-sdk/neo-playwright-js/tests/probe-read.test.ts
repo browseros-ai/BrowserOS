@@ -39,53 +39,27 @@ it('tests that the text reads answer with the element and no seal verdict', () =
     kind: 'read',
     value: 'Hello <b>there</b>',
     sensitive: null,
-    sweep: ['hunter2'],
   })
   expect(read(probe, 'h1', { kind: 'innerText' })).toEqual({
     kind: 'read',
     value: 'Hello there',
     sensitive: null,
-    sweep: ['hunter2'],
   })
   expect(read(probe, 'h1', { kind: 'attribute', name: 'title' })).toEqual({
     kind: 'read',
     value: 'Greeting',
     sensitive: null,
-    sweep: ['hunter2'],
   })
   expect(read(probe, 'h1', { kind: 'attribute', name: 'lang' })).toEqual({
     kind: 'read',
     value: null,
     sensitive: null,
-    sweep: ['hunter2'],
   })
   expect(read(probe, '#name', { kind: 'inputValue' })).toEqual({
     kind: 'read',
     value: 'Ada',
     sensitive: null,
-    sweep: ['hunter2'],
   })
-})
-
-it('tests that reads with page text carry the sweep and the others carry none', () => {
-  const probe = booted()
-  const sweepOf = (selector: string, kind: object) =>
-    (read(probe, selector, kind) as { sweep?: unknown }).sweep
-  for (const kind of [
-    { kind: 'textContent' },
-    { kind: 'innerText' },
-    { kind: 'innerHtml' },
-    { kind: 'attribute', name: 'title' },
-    { kind: 'located' },
-  ])
-    expect(sweepOf('h1', kind)).toEqual(['hunter2'])
-  expect(sweepOf('#name', { kind: 'inputValue' })).toEqual(['hunter2'])
-  for (const kind of [
-    { kind: 'state', state: 'visible' },
-    { kind: 'boundingBox' },
-  ])
-    expect(sweepOf('h1', kind)).toEqual([])
-  expect(sweepOf('#pay', { kind: 'frameOrigin' })).toEqual([])
 })
 
 it("tests that innerText and inputValue throw upstream's messages as script errors", () => {
@@ -137,7 +111,7 @@ it("tests that state reads are upstream's elementState, frames' visibility inclu
   })
 })
 
-it("tests that the checkable read carries no sweep and throws upstream's message", () => {
+it("tests that the checkable read throws upstream's message", () => {
   const probe = booted()
   // linkedom has no `checked` property, so the values themselves are read by actions_live.rs.
   expect(read(probe, 'h1', { kind: 'checkable' })).toEqual({
@@ -159,19 +133,16 @@ it('tests that readAll reads every match in document order, and nothing for none
     kind: 'values',
     count: 2,
     values: ['Hello there', 'Password '],
-    sweep: ['hunter2'],
   })
   expect(every('h1, #name', 'innerTexts')).toEqual({
     kind: 'values',
     count: 2,
     values: ['Hello there', ''],
-    sweep: ['hunter2'],
   })
   expect(every('#missing', 'innerTexts')).toEqual({
     kind: 'values',
     count: 0,
     values: [],
-    sweep: ['hunter2'],
   })
 })
 
@@ -232,7 +203,6 @@ it("tests that a root target is the handle's own node, detached once it leaves",
     kind: 'read',
     value: 'Ada',
     sensitive: null,
-    sweep: ['hunter2'],
   })
   name?.remove()
   expect(readValue()).toEqual({ kind: 'detached' })
@@ -244,13 +214,11 @@ it('tests that boxes and frame origins are null without a layout box', () => {
     kind: 'read',
     value: null,
     sensitive: null,
-    sweep: [],
   })
   expect(read(probe, '#pay', { kind: 'frameOrigin' })).toEqual({
     kind: 'read',
     value: null,
     sensitive: null,
-    sweep: [],
   })
   expect(read(probe, 'h1', { kind: 'frameOrigin' })).toEqual({
     kind: 'error',

@@ -644,61 +644,36 @@ async fn a_viewer_sending_a_message_the_filter_does_not_know_is_refused() -> Tes
 }
 
 #[tokio::test]
-async fn views_close_at_the_owners_first_input_and_stay_out_while_that_display_is_open()
--> TestResult {
+async fn views_keep_streaming_and_admitting_during_control_input() -> TestResult {
     let h = harness().await?;
-    let view = h.view(None).await?;
+    let mut view = h.view(None).await?;
     view.send(HANDSHAKE);
+    view.read(SERVER_HANDSHAKE).await?;
     let mut control = h.control(None).await?;
     control.send(HANDSHAKE);
     control.send(&HOVER);
     control.send(&RESIZE);
-    h.received(1, 5).await?;
+    control.send(&CLICK);
+    h.received(1, 6).await?;
+
+    view.send(&UPDATE);
+    view.read(1).await?;
     assert!(
         !view.serving.is_finished(),
-        "a hover move and a resize are not input"
+        "input keeps the existing view open"
     );
-
-    control.send(&CLICK);
-    assert_eq!(view.ended().await?, DisplayEnd::Paused);
-    assert!(matches!(
-        h.displays
-            .admit(DisplayRequest::View { follow: None })
-            .await,
-        Err(PartError::DisplayPaused)
-    ));
+    let mut joined = h.view(None).await?;
+    joined.send(HANDSHAKE);
+    joined.read(SERVER_HANDSHAKE).await?;
+    joined.send(&UPDATE);
+    joined.read(1).await?;
 
     control.leave();
     assert_eq!(control.ended().await?, DisplayEnd::ViewerLeft);
-    let back = h.view(None).await?;
-    back.send(HANDSHAKE);
-    assert_eq!(
-        h.received(2, 3).await?,
-        handshake_received(),
-        "views are let in again once the owner leaves"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_screen_hold_closes_open_views_and_refuses_new_ones_until_dropped() -> TestResult {
-    let h = harness().await?;
-    let view = h.view(None).await?;
-    let hold = h.displays.hold_screen();
-    assert_eq!(view.ended().await?, DisplayEnd::Paused);
-    assert!(matches!(
-        h.displays
-            .admit(DisplayRequest::View { follow: None })
-            .await,
-        Err(PartError::DisplayPaused)
-    ));
-    let control = h.control(None).await?;
-    assert!(
-        !control.serving.is_finished(),
-        "the owner's display is not a view"
-    );
-    drop(hold);
-    h.view(None).await?;
+    view.send(&UPDATE);
+    view.read(1).await?;
+    joined.send(&UPDATE);
+    joined.read(1).await?;
     Ok(())
 }
 
@@ -785,6 +760,24 @@ async fn a_view_display_drops_keys_and_pastes() -> TestResult {
 }
 
 #[tokio::test]
+async fn dropping_an_unserved_control_display_returns_the_owners_screen() -> TestResult {
+    let h = harness().await?;
+    let admitted = h
+        .displays
+        .admit(DisplayRequest::Control { binding: None })
+        .await?;
+    assert_eq!(
+        h.front().check(),
+        Err(OwnerHasScreen {
+            by: ScreenHolder::ControlDisplay
+        })
+    );
+    drop(admitted);
+    assert_eq!(h.front().check(), Ok(()), "a failed upgrade leaves no hold");
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_display_ends_when_xvnc_drops_it_and_is_refused_when_xvnc_is_gone() -> TestResult {
     let h = harness().await?;
     let control = h.control(None).await?;
@@ -802,6 +795,7 @@ async fn a_display_ends_when_xvnc_drops_it_and_is_refused_when_xvnc_is_gone() ->
     ] {
         let refused = h.displays.admit(request).await;
         assert!(matches!(refused, Err(PartError::Screen(_))));
+        assert_eq!(h.front().check(), Ok(()), "a failed dial leaves no hold");
     }
     Ok(())
 }
@@ -854,22 +848,24 @@ async fn follow_keeps_a_tab_in_front() -> TestResult {
 }
 
 #[tokio::test]
-async fn a_view_admitted_while_views_are_held_brings_nothing_forward() -> TestResult {
+async fn a_view_streams_while_its_follower_waits_for_owner_control_to_end() -> TestResult {
     let h = harness().await?;
     h.browser.list_tabs(&[3, 4], 3)?;
-    let _hold = h.displays.hold_screen();
-    assert!(matches!(
-        h.displays
-            .admit(DisplayRequest::View {
-                follow: Some(Follow::Tab(TabId(4)))
-            })
-            .await,
-        Err(PartError::DisplayPaused)
-    ));
+    let mut control = h.control(None).await?;
+    let mut view = h.view(Some(Follow::Tab(TabId(4)))).await?;
+    view.send(HANDSHAKE);
+    view.read(SERVER_HANDSHAKE).await?;
+    view.send(&UPDATE);
+    view.read(1).await?;
+    tokio::time::sleep(QUIET).await;
     assert!(
         h.activated()?.is_empty(),
-        "a takeover holding views keeps its tab in front"
+        "viewing keeps the owner's tab in front"
     );
+
+    control.leave();
+    assert_eq!(control.ended().await?, DisplayEnd::ViewerLeft);
+    eventually(|| h.activated().is_ok_and(|tabs| tabs == [4])).await?;
     Ok(())
 }
 
@@ -949,23 +945,8 @@ async fn the_owner_holding_the_screen_refuses_the_move_and_sends_nothing() -> Te
     control.leave();
     control.ended().await?;
 
-    let hold = h.displays.hold_screen();
-    let refused = h.front().bring_to_front(TabId(4), None, commit).await;
-    assert!(
-        matches!(
-            refused,
-            Err(FrontError::OwnerHasScreen(OwnerHasScreen {
-                by: ScreenHolder::Takeover
-            }))
-        ),
-        "a takeover's hold: {refused:?}"
-    );
-    assert_eq!(
-        view.ended().await?,
-        DisplayEnd::Paused,
-        "the hold itself closed the view, as a takeover's start does"
-    );
-    drop(hold);
+    view.send(&UPDATE);
+    view.read(1).await?;
     assert_eq!(commits.load(Ordering::SeqCst), 0, "commit never ran");
     assert_eq!(h.activated()?, [0; 0], "and nothing was sent");
     Ok(())

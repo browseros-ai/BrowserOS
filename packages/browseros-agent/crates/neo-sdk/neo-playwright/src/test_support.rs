@@ -1,6 +1,5 @@
 //! A live browser for the crate's own live tests: one CDP connection with a `Playwright` over
-//! it, as claw-sdk builds them, tabs it opens and closes, and hooks that record what the
-//! sweeps told the host. Needs BrowserOS with CDP on
+//! it, as claw-sdk builds them, and tabs it opens and closes. Needs BrowserOS with CDP on
 //! `BROWSEROS_CDP_PORT` (default 9005). Also the scripted browsers unit tests run an op against
 //! ([`one_tab`], and [`ScriptedTab`] for ops that install and call a sealed world); they live
 //! here because core's `page_js_guard` reads every other non-test file as production code, and
@@ -35,30 +34,15 @@ use crate::{Playwright, PlaywrightHooks, Refusal, TypedBy};
 
 pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
-/// Hooks that remember every value a sweep told the host.
-#[derive(Default)]
-pub(crate) struct RecordingHooks {
-    swept: Mutex<Vec<String>>,
-}
-
-impl RecordingHooks {
-    /// Every value `values_swept` was told so far, long enough to register, in order.
-    pub(crate) fn swept(&self) -> Vec<String> {
-        self.swept
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-}
+/// A test host's hooks. The crate calls none back, so a sweep report or a capture check fails
+/// the test that reaches it.
+pub(crate) struct RecordingHooks;
 
 impl PlaywrightHooks for RecordingHooks {
     fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
 
-    fn values_swept(&self, _page: TabId, values: &FieldValues) {
-        self.swept
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(values.registrable().map(str::to_owned));
+    fn values_swept(&self, _page: TabId, _values: &FieldValues) {
+        panic!("no op sweeps sensitive values to report")
     }
 
     fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
@@ -81,11 +65,7 @@ impl LiveBrowser {
         let client: Arc<dyn CdpConnection> =
             Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
         let browser = BrowserSession::new(client, BrowserSessionHooks::default());
-        let hooks = Arc::new(RecordingHooks::default());
-        let playwright = Playwright::new(
-            Arc::clone(&browser),
-            Arc::clone(&hooks) as Arc<dyn PlaywrightHooks>,
-        );
+        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
         // The start-up read of open tabs, so a tab the test opens next counts as new.
         playwright.pages().note_open_tabs(&browser).await;
         Ok(Self {
@@ -260,9 +240,11 @@ impl ProbeAnswer {
         }
     }
 
-    /// A sweep of a document that holds no sensitive field.
-    pub(crate) fn empty_sweep() -> Self {
-        Self::reply(json!({ "kind": "sweep", "values": [] }))
+    /// The probe's internal error, for a tab whose test sends it no probe request: a request
+    /// that reaches it fails the op.
+    pub(crate) fn unexpected() -> Self {
+        Self::reply(json!({ "kind": "error", "class": "internal",
+                            "message": "the scripted tab expects no probe request" }))
     }
 }
 
@@ -340,7 +322,7 @@ static SCRIPTED_SESSIONS: AtomicU64 = AtomicU64::new(0);
 /// its process, or one in a process of its own, when the script asks for one. It answers what
 /// admitting the tab, attaching its out-of-process frame, installing a frame's sealed world and
 /// listing its frames and targets send, as for a page with no closed shadow root, and hands
-/// every probe request, a sweep included, to its [`TabScript`].
+/// every probe request to its [`TabScript`].
 pub(crate) struct ScriptedTab<S> {
     script: S,
     session: String,
@@ -675,11 +657,9 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
     }
 }
 
-/// A `Playwright` over a [`ScriptedTab`], the hooks it reports to, the host's side of its ops
-/// and the tab's brand.
+/// A `Playwright` over a [`ScriptedTab`], the host's side of its ops and the tab's brand.
 pub(crate) struct ScriptedRun {
     pub(crate) playwright: Arc<Playwright>,
-    pub(crate) hooks: Arc<RecordingHooks>,
     pub(crate) env: TestEnv,
     pub(crate) page: PageRef,
 }
@@ -689,17 +669,12 @@ impl ScriptedRun {
     pub(crate) async fn over<S: TabScript>(tab: &Arc<ScriptedTab<S>>) -> TestResult<Self> {
         let connection: Arc<dyn CdpConnection> = Arc::clone(tab) as Arc<dyn CdpConnection>;
         let browser = BrowserSession::new(connection, BrowserSessionHooks::default());
-        let hooks = Arc::new(RecordingHooks::default());
-        let playwright = Playwright::new(
-            Arc::clone(&browser),
-            Arc::clone(&hooks) as Arc<dyn PlaywrightHooks>,
-        );
+        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
         let listed = browser.pages.list().await?;
         let listed = listed.first().ok_or("the tab is listed")?;
         let page = serde_json::from_value(json!({ "$neo": "page", "tab": listed.tab_id }))?;
         Ok(Self {
             playwright,
-            hooks,
             env: TestEnv::over(BrowserView::unbound(browser, None)),
             page,
         })

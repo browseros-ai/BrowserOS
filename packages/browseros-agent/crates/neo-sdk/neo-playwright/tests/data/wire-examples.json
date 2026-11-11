@@ -1857,6 +1857,42 @@
         "omitReturnValue": true
       }
     ],
+    "locator.waitForFunction": [
+      {
+        "call": {
+          "api": "locator.waitForFunction",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "script": {
+          "run": {
+            "expression": "(e) => e.id",
+            "isFunction": true,
+            "arg": "{\"v\":\"undefined\"}"
+          }
+        }
+      }
+    ],
     "mouse.click": [
       {
         "call": {

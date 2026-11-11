@@ -339,6 +339,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "locator.waitForFunction": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
     "page.screenshot": {
       effect: "read",
       target: "page",
@@ -6808,6 +6813,11 @@ ${value.stack}`;
       const script = pageCall(api, "locator", pageFunction, arg, options);
       return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
     }
+    async waitForFunction(pageFunction, arg, options) {
+      const api = "locator.waitForFunction";
+      const script = pageCall(api, "query", pageFunction, arg);
+      await this._frame._selectorOp("locator.waitForFunction", api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
+    }
     async evaluateAll(pageFunction, arg) {
       const api = "locator.evaluateAll";
       return await this._frame._evaluateAll(api, this._selector, pageCall(api, "query", pageFunction, arg));
@@ -9493,8 +9503,7 @@ Timeout: ${timeout}ms`);
       hideHighlight: NO_INSPECTOR,
       highlight: NO_INSPECTOR,
       normalize: "not available in Neo; use the locator as built",
-      tap: NO_TOUCH,
-      waitForFunction: "poll with expect(locator).toPass() or page.waitForFunction()"
+      tap: NO_TOUCH
     },
     FrameLocator: {},
     Keyboard: {},

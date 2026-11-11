@@ -588,7 +588,7 @@ async fn document_text(run: &LiveRun, page: &TestPage, op: &str) -> TestResult<S
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_title_and_content_read_through_the_seal_and_mask_echoes() -> TestResult {
+async fn tests_that_title_and_content_read_through_the_seal() -> TestResult {
     on_page("/reflect.html", |run, server, page| async move {
         let result = async {
             run.eval(
@@ -599,25 +599,13 @@ async fn tests_that_title_and_content_read_through_the_seal_and_mask_echoes() ->
                  document.title = 'Account of typed-secret-2'",
             )
             .await?;
-            // How often the host was told `value`, to register it as a secret.
-            let reported = |value: &str| run.swept().iter().filter(|swept| *swept == value).count();
             let title = document_text(&run, &page, "page.title").await?;
             assert_eq!(
-                title, "Account of [private]",
-                "a title can echo a typed value"
-            );
-            assert_eq!(
-                (reported("typed-secret-2"), reported("attr-secret-1")),
-                (1, 1),
-                "title() reports the values it swept"
+                title, "Account of typed-secret-2",
+                "a title reads as the page wrote it"
             );
 
             let content = document_text(&run, &page, "page.content").await?;
-            assert_eq!(
-                (reported("typed-secret-2"), reported("attr-secret-1")),
-                (2, 2),
-                "content() reports the values it swept"
-            );
             assert!(
                 content.starts_with("<!DOCTYPE html><html><head>"),
                 "{content}"
@@ -628,12 +616,13 @@ async fn tests_that_title_and_content_read_through_the_seal_and_mask_echoes() ->
                 "the seal masks every value attribute it serializes: {content}"
             );
             assert!(
-                content.contains("you typed [private]"),
-                "the sweep masks the typed value the page echoed in its text: {content}"
+                content.contains("you typed typed-secret-2"),
+                "the page's own text comes back as the page wrote it: {content}"
             );
-            for secret in ["typed-secret-2", "attr-secret-1"] {
-                assert!(!content.contains(secret), "{secret} leaked: {content}");
-            }
+            assert!(
+                !content.contains("attr-secret-1"),
+                "a value attribute reads through the seal: {content}"
+            );
             let raw = run
                 .eval(&page, "document.documentElement.outerHTML")
                 .await?;
@@ -668,7 +657,7 @@ async fn tests_that_title_and_content_read_through_the_seal_and_mask_echoes() ->
 /// leaves `content()`, and a script's `outerHTML`, in that form, not the raw one.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_content_masks_an_echo_the_serializer_escaped() -> TestResult {
+async fn tests_that_content_serializes_an_echo_as_the_page_markup_does() -> TestResult {
     on_page("/reflect.html", |run, _server, page| async move {
         let result = async {
             run.eval(
@@ -691,11 +680,9 @@ async fn tests_that_content_masks_an_echo_the_serializer_escaped() -> TestResult
 
             let content = document_text(&run, &page, "page.content").await?;
             assert!(
-                content
-                    .contains(r#"<p id="echo" data-echo="[private]">you typed [private]</p>"#),
-                "the escaped echo in an attribute and in text is masked: {content}"
+                raw.as_str().is_some_and(|raw| content.contains(raw)),
+                "content() serializes the echo as the page's markup holds it: {content}"
             );
-            assert!(!content.contains("secret"), "the value leaked: {content}");
 
             let echoed = evaluate(
                 &run,

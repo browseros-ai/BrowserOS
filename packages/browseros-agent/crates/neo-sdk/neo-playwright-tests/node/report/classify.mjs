@@ -37,8 +37,12 @@ export function caseKey(suite, titles) {
   return JSON.stringify([suite, titles])
 }
 
-/** Duplicate titles across projects/repeats cannot be joined by the required identity. Fail visibly. */
-export function flattenResults(report, corpus = []) {
+/** Joins require unique identities; the standalone scoreboard may count repeated instances. */
+export function flattenResults(
+  report,
+  corpus = [],
+  { allowRepeated = false } = {},
+) {
   if (!Array.isArray(report.suites))
     throw new Error('results.json must contain a suites array')
   const cases = []
@@ -54,21 +58,22 @@ export function flattenResults(report, corpus = []) {
       const key = caseKey(specFile, titlePath)
       if (!specFile || typeof spec.title !== 'string')
         throw new Error('Case is missing its file or title')
-      if (seen.has(key) || spec.tests?.length > 1)
+      if (!allowRepeated && (seen.has(key) || spec.tests?.length > 1))
         throw new Error(
           `Duplicate case identity; use one project and repeatEach=1: ${key}`,
         )
       seen.add(key)
-      const test = spec.tests?.[0] || { results: [] }
-      cases.push({
-        key,
-        suite: specFile,
-        titles: titlePath,
-        title: titlePath.join(' › '),
-        caseId: spec.title.match(/\b[A-Z][A-Z0-9]*-\d+\b/)?.[0] || null,
-        location: { file: specFile, line: spec.line, column: spec.column },
-        test,
-      })
+      for (const test of spec.tests?.length ? spec.tests : [{ results: [] }]) {
+        cases.push({
+          key,
+          suite: specFile,
+          titles: titlePath,
+          title: titlePath.join(' › '),
+          caseId: spec.title.match(/\b[A-Z][A-Z0-9]*-\d+\b/)?.[0] || null,
+          location: { file: specFile, line: spec.line, column: spec.column },
+          test,
+        })
+      }
     }
     for (const child of suite.suites || []) visit(child, titles, file)
   }
@@ -149,7 +154,8 @@ function isLoopError(line) {
   )
 }
 
-function outcome(row) {
+/** Shared Playwright outcome semantics for verdict classification and scope scores. */
+export function outcome(row) {
   const test = row.test
   const results = test.results || []
   if (test.status === 'skipped') return 'skip'

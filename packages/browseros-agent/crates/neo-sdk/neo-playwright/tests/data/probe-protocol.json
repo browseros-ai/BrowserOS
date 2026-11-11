@@ -1,6 +1,6 @@
 {
-  "protocol": 13,
-  "callFunction": "function (request, root, mask) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, mask) : { kind: \"uninstalled\" }; }",
+  "protocol": 14,
+  "callFunction": "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
       "described"
@@ -62,9 +62,6 @@
       "strict",
       "detached"
     ],
-    "sweep": [
-      "sweep"
-    ],
     "focused": [
       "focused"
     ],
@@ -91,8 +88,7 @@
   ],
   "anyRequest": [
     "error",
-    "uninstalled",
-    "needsMask"
+    "uninstalled"
   ],
   "requests": [
     {
@@ -868,9 +864,6 @@
       }
     },
     {
-      "op": "sweep"
-    },
-    {
       "op": "focused"
     },
     {
@@ -916,19 +909,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 13,
+      "protocol": 14,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 13,
+      "protocol": 14,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 13,
+      "protocol": 14,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1085,24 +1078,17 @@
     {
       "kind": "read",
       "value": "Welcome",
-      "sensitive": null,
-      "sweep": [
-        "hunter2"
-      ]
+      "sensitive": null
     },
     {
       "kind": "read",
       "value": "••••",
-      "sensitive": "password",
-      "sweep": [
-        "hunter2"
-      ]
+      "sensitive": "password"
     },
     {
       "kind": "read",
       "value": null,
-      "sensitive": null,
-      "sweep": []
+      "sensitive": null
     },
     {
       "kind": "read",
@@ -1112,8 +1098,7 @@
         "width": 60,
         "height": 20
       },
-      "sensitive": null,
-      "sweep": []
+      "sensitive": null
     },
     {
       "kind": "read",
@@ -1123,14 +1108,12 @@
         "scaleX": 1,
         "scaleY": 1
       },
-      "sensitive": null,
-      "sweep": []
+      "sensitive": null
     },
     {
       "kind": "read",
       "value": "rotated",
-      "sensitive": null,
-      "sweep": []
+      "sensitive": null
     },
     {
       "kind": "read",
@@ -1138,8 +1121,7 @@
         "checked": true,
         "radio": true
       },
-      "sensitive": null,
-      "sweep": []
+      "sensitive": null
     },
     {
       "kind": "read",
@@ -1148,8 +1130,7 @@
         "target": 8,
         "takesPaths": true
       },
-      "sensitive": null,
-      "sweep": []
+      "sensitive": null
     },
     {
       "kind": "read",
@@ -1159,10 +1140,7 @@
         "visible": true,
         "count": 2
       },
-      "sensitive": null,
-      "sweep": [
-        "hunter2"
-      ]
+      "sensitive": null
     },
     {
       "kind": "values",
@@ -1170,16 +1148,12 @@
       "values": [
         "One",
         "Two"
-      ],
-      "sweep": [
-        "hunter2"
       ]
     },
     {
       "kind": "values",
       "count": 2,
-      "values": [],
-      "sweep": []
+      "values": []
     },
     {
       "kind": "values",
@@ -1193,8 +1167,7 @@
           "pin": 7,
           "preview": "<li>Two</li>"
         }
-      ],
-      "sweep": []
+      ]
     },
     {
       "kind": "snapshot",
@@ -1221,9 +1194,6 @@
           "depth": 1,
           "src": "https://pay.example/frame"
         }
-      ],
-      "sweep": [
-        "hunter2"
       ]
     },
     {
@@ -1265,17 +1235,6 @@
       "sensitive": null
     },
     {
-      "kind": "sweep",
-      "values": []
-    },
-    {
-      "kind": "sweep",
-      "values": [
-        "hunter2",
-        "482913"
-      ]
-    },
-    {
       "kind": "focused",
       "sensitive": true,
       "iframe": null,
@@ -1300,15 +1259,11 @@
     },
     {
       "kind": "documentText",
-      "text": "Pay",
-      "sweep": []
+      "text": "Pay"
     },
     {
       "kind": "documentText",
-      "text": "<!DOCTYPE html><html><head></head><body><input type=\"password\" value=\"••••\"></body></html>",
-      "sweep": [
-        "hunter2"
-      ]
+      "text": "<!DOCTYPE html><html><head></head><body><input type=\"password\" value=\"••••\"></body></html>"
     },
     {
       "kind": "replaced"
@@ -1332,9 +1287,6 @@
       "kind": "error",
       "class": "internal",
       "message": "not built yet"
-    },
-    {
-      "kind": "needsMask"
     },
     {
       "kind": "uninstalled"

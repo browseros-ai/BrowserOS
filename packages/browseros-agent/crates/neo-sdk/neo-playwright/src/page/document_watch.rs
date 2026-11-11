@@ -186,7 +186,7 @@ impl DocumentWatch {
     /// watch reads the frame, so a navigation between that read and the wait is still seen.
     ///
     /// It lives here, under the op's timeout, rather than in a sealed world's session setup,
-    /// whose calls spend a frame's sweep budget.
+    /// whose calls spend a frame's install budget.
     pub(crate) async fn enable_page(&self) -> Result<(), WatchError> {
         self.session.send_value("Page.enable", json!({})).await?;
         Ok(())
@@ -477,10 +477,6 @@ pub(crate) struct FrameFields {
     pub(crate) url_fragment: Option<String>,
     #[serde(default)]
     pub(crate) unreachable_url: Option<String>,
-    /// The URL's registrable domain by Chromium's own public suffix list (`bbc.co.uk`); empty
-    /// for an IP address, `localhost`, a public suffix itself and a URL with no host.
-    #[serde(default)]
-    pub(crate) domain_and_registry: Option<String>,
 }
 
 /// `Page.getFrameTree`'s reply.

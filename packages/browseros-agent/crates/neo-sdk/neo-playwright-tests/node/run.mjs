@@ -9,6 +9,7 @@ import { browserLaunch, browserVersion, cleanupWorkers } from './browser.mjs'
 import { curationArgs } from './curation.mjs'
 import { runnerOptions } from './options.mjs'
 import { materialize } from './overlay.mjs'
+import { loadScope, printScores, recordScope, scoreResults } from './scope.mjs'
 
 const argv = process.argv.slice(2)
 const options = runnerOptions(argv)
@@ -114,6 +115,8 @@ async function command(executable, args, settings = {}) {
   }
 }
 try {
+  run.scope = recordScope(output)
+  writeRun()
   if (process.env.PWPAGE_IMPL || process.env.PWDEBUG)
     throw new Error(
       'PWPAGE_IMPL and PWDEBUG override the headless BrowserOS corpus contract',
@@ -215,6 +218,17 @@ try {
       fs.readFileSync(path.join(output, 'results.json'), 'utf8'),
     )
     console.log(`Playwright totals: ${JSON.stringify(report.stats)}`)
+    if (!options.args.includes('--list')) {
+      const scores = scoreResults(
+        report,
+        loadScope(path.join(output, 'scope.json')),
+      )
+      fs.writeFileSync(
+        path.join(output, 'scores.json'),
+        JSON.stringify(scores, null, 2),
+      )
+      printScores(scores)
+    }
   }
   process.exitCode = interrupted
     ? interrupted === 'SIGINT'

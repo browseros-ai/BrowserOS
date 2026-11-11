@@ -432,6 +432,7 @@ export type OpInputs = {
   'locator.evaluateAll': EveryMatchArgs & { script: PageScript }
   /** `polling` in milliseconds; absent is `'raf'`. */
   'page.waitForFunction': FrameArgs & { script: PageScript; polling?: number }
+  'locator.waitForFunction': TargetArgs & { script: PageScript }
   /** With `target`, a screenshot of one element (`locator.screenshot`). */
   'page.screenshot': PageArgs & {
     target?: Target
@@ -549,6 +550,7 @@ export type OpOutputs = {
   'locator.evaluateAll': SerializedValue
   /** The predicate's truthy value, masked, and upstream's preview of it (`toString()`). */
   'page.waitForFunction': { value: SerializedValue; preview: string }
+  'locator.waitForFunction': null
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
   'page.screenshot': unknown
   'page.pdf': unknown

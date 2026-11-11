@@ -123,7 +123,7 @@ mod tests {
                 "frame": { "id": "target-7", "loaderId": "L", "url": "https://a.test/" }
             }}),
         )?;
-        let pw = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
+        let pw = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
         let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
         let scope = OpScope::new(
             &env,

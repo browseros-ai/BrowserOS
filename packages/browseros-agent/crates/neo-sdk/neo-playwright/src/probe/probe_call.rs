@@ -10,11 +10,6 @@
 //! hostile page could have defined `__neoProbe` and read the request. An object id carries its
 //! renderer isolate's id, and the same call on a stale handle fails with "Cannot find context
 //! with specified id", which [`ProbeFailure::from_core`] reads as gone.
-//!
-//! A call may carry a [`ProbeMask`], the values of every sensitive field of its frame's site,
-//! as `CALL_FUNCTION`'s third argument. The probe masks page text with it before Playwright's
-//! engine cuts or quotes that text for a preview or a locator hint; a call without one whose
-//! reply would hold such text answers `needsMask` (`resolve::Resolver` asks again with it).
 
 use std::error::Error;
 use std::fmt;
@@ -22,7 +17,6 @@ use std::fmt;
 use browseros_cdp::CdpError;
 use browseros_core::CoreError;
 use browseros_core::page_js::is_stale_context;
-use browseros_core::sensitive_fields::FieldValues;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -33,33 +27,9 @@ use crate::world::{Pin, SealedWorld};
 
 /// The function declaration every request is sent with. It must equal `CALL_FUNCTION` in
 /// protocol.ts (a test checks it against probe-protocol.json). It runs on the world's global,
-/// with the request, an element handle's node or null as the call's root, and the call's mask
-/// when it has one; a world without a booted probe answers `uninstalled`, which Rust treats
-/// like a stale context.
-pub(crate) const CALL_FUNCTION: &str = "function (request, root, mask) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, mask) : { kind: \"uninstalled\" }; }";
-
-/// The values of one frame's site that a call hands the probe as protocol.ts's `Mask`: those
-/// long enough to be masked wherever they occur (`FieldValues::registrable`). A short value is
-/// masked only where a whole string equals it, which no cut can make of it, so it stays out.
-/// They go only to a world of that site, whose own page script could read those fields anyway,
-/// and only into its sealed world. It borrows the values, keeping no copy of its own, never
-/// prints and has no `Serialize` (STYLE P4): [`call_arguments`] is the one place that encodes
-/// them.
-#[derive(Clone, Copy)]
-pub(crate) struct ProbeMask<'a>(&'a FieldValues);
-
-impl<'a> ProbeMask<'a> {
-    /// The mask of `values`.
-    pub(crate) fn of(values: &'a FieldValues) -> Self {
-        Self(values)
-    }
-}
-
-impl fmt::Debug for ProbeMask<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("[field values]")
-    }
-}
+/// with the request and an element handle's node or null as the call's root; a world without
+/// a booted probe answers `uninstalled`, which Rust treats like a stale context.
+pub(crate) const CALL_FUNCTION: &str = "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }";
 
 /// Why a probe call or an install produced no reply.
 #[derive(Debug)]
@@ -76,8 +46,7 @@ pub(crate) enum ProbeFailure {
     /// threw, a stale asset.
     Broken(String),
     /// An install's scan for hidden shadow roots missed the frame's budget (`FRAME_BUDGET`).
-    /// A world whose closed roots the seal may not see is not sealed, so the op is refused, as a
-    /// sweep that misses it refuses the op.
+    /// A world whose closed roots the seal may not see is not sealed, so the op is refused.
     Late,
 }
 
@@ -222,7 +191,7 @@ pub(crate) async fn call(
     world: &SealedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, None, None, Gesture::None).await
+    send(world, request, None, Gesture::None).await
 }
 
 /// [`call`] with a user gesture, as upstream sends its own utility-world calls
@@ -232,7 +201,7 @@ pub(crate) async fn call_with_gesture(
     world: &SealedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, None, None, Gesture::User).await
+    send(world, request, None, Gesture::User).await
 }
 
 /// One request about an element handle's node (`root`, a remote object in this world), which
@@ -249,18 +218,7 @@ pub(crate) async fn call_on(
     request: &ProbeRequest,
     root: &str,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, Some(root), None, Gesture::None).await
-}
-
-/// [`call`], or [`call_on`] with `root`, carrying `mask`: what a request whose reply previews
-/// page text is sent with, so that it never answers `needsMask`.
-pub(crate) async fn call_masked(
-    world: &SealedWorld,
-    request: &ProbeRequest,
-    root: Option<&str>,
-    mask: ProbeMask<'_>,
-) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, root, Some(mask), Gesture::None).await
+    send(world, request, Some(root), Gesture::None).await
 }
 
 /// Whether a probe call carries a user gesture.
@@ -276,13 +234,12 @@ async fn send(
     world: &SealedWorld,
     request: &ProbeRequest,
     root: Option<&str>,
-    mask: Option<ProbeMask<'_>>,
     gesture: Gesture,
 ) -> Result<ProbeReply, ProbeFailure> {
     let mut params = json!({
         "objectId": world.global(),
         "functionDeclaration": CALL_FUNCTION,
-        "arguments": call_arguments(request, root, mask)?,
+        "arguments": call_arguments(request, root)?,
         "returnByValue": true,
         "awaitPromise": true,
     });
@@ -306,38 +263,20 @@ async fn send(
     reply_of(called)
 }
 
-/// [`CALL_FUNCTION`]'s `arguments` for one call: the request, the root (null when only a mask
-/// follows), and the mask's values long enough to be masked wherever they occur, encoded here
-/// by hand because nothing else may encode them.
-fn call_arguments(
-    request: &ProbeRequest,
-    root: Option<&str>,
-    mask: Option<ProbeMask<'_>>,
-) -> Result<Vec<Value>, ProbeFailure> {
+/// [`CALL_FUNCTION`]'s `arguments` for one call: the request, then the root when there is one.
+fn call_arguments(request: &ProbeRequest, root: Option<&str>) -> Result<Vec<Value>, ProbeFailure> {
     let request = serde_json::to_value(request).map_err(|error| {
         ProbeFailure::Broken(format!("a probe request did not encode: {error}"))
     })?;
     let mut arguments = vec![json!({ "value": request })];
-    match (root, mask) {
-        (Some(root), _) => arguments.push(json!({ "objectId": root })),
-        (None, Some(_)) => arguments.push(json!({ "value": null })),
-        (None, None) => {}
-    }
-    if let Some(ProbeMask(values)) = mask {
-        let values = values
-            .registrable()
-            .map(|value| Value::String(value.to_owned()))
-            .collect();
-        arguments.push(json!({ "value": Value::Array(values) }));
+    if let Some(root) = root {
+        arguments.push(json!({ "objectId": root }));
     }
     Ok(arguments)
 }
 
 /// The reply in a by-value `Runtime.callFunctionOn` result; `uninstalled` is `Gone`. The
-/// install decodes its `described` with it too. A read's text stays raw in its [`PageText`]
-/// here: only the op knows the read frame's site, whose values mask it (`page::SiteValues`).
-///
-/// [`PageText`]: crate::probe::PageText
+/// install decodes its `described` with it too.
 pub(crate) fn reply_of(called: Value) -> Result<ProbeReply, ProbeFailure> {
     let called: Called = serde_json::from_value(called)
         .map_err(|error| ProbeFailure::Broken(format!("CDP returned no call result: {error}")))?;
@@ -413,38 +352,16 @@ fn is_uninstalled(preview: Option<&ObjectPreview>) -> bool {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
-    use std::marker::PhantomData;
 
     use browseros_cdp::CdpError;
     use browseros_core::CoreError;
-    use browseros_core::sensitive_fields::FieldValues;
-    use serde::Serialize;
     use serde_json::{Value, json};
 
-    use super::{CALL_FUNCTION, ProbeFailure, ProbeMask, Ran, call_arguments, reply_of};
+    use super::{CALL_FUNCTION, ProbeFailure, Ran, call_arguments, reply_of};
     use crate::probe::probe_reply::ProbeReply;
     use crate::probe::probe_request::ProbeRequest;
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
-
-    /// `<Serializes<T>>::YES` is the inherent `true` when `T: Serialize`, and the trait's
-    /// `false` otherwise.
-    struct Serializes<T>(PhantomData<T>);
-
-    trait NotSerialize {
-        const YES: bool = false;
-    }
-
-    impl<T> NotSerialize for Serializes<T> {}
-
-    impl<T: Serialize> Serializes<T> {
-        const YES: bool = true;
-    }
-
-    // A mask is raw field values, which never print, serialize or log (STYLE P4): the build
-    // fails once it can be serialized, and the check sees a type that can.
-    const _: () = assert!(!<Serializes<ProbeMask<'static>>>::YES);
-    const _: () = assert!(<Serializes<ProbeRequest>>::YES);
 
     #[test]
     fn tests_that_the_call_function_is_the_one_the_probe_documents() -> Result<(), Box<dyn Error>> {
@@ -458,23 +375,20 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_a_mask_holds_only_long_values_and_never_prints() -> Result<(), Box<dyn Error>> {
-        let values = FieldValues::from_sweep(&json!(["hunter2", "987"]));
-        let mask = ProbeMask::of(&values);
-        let arguments = call_arguments(&ProbeRequest::Sweep, None, Some(mask))?;
+    fn tests_that_a_call_sends_the_request_then_its_root() -> Result<(), Box<dyn Error>> {
+        let request = ProbeRequest::Focused;
         assert_eq!(
-            arguments,
-            [
-                json!({ "value": { "op": "sweep" } }),
-                json!({ "value": null }),
-                json!({ "value": ["hunter2"] }),
-            ],
-            "the mask is CALL_FUNCTION's third argument, and a short value is masked only \
-             whole, which no cut makes of it"
+            call_arguments(&request, None)?,
+            [json!({ "value": { "op": "focused" } })],
+            "a call on the world's global sends the request alone"
         );
-        assert!(
-            !format!("{mask:?}").contains("hunter2"),
-            "a mask is secrets (STYLE P4)"
+        assert_eq!(
+            call_arguments(&request, Some("node-1"))?,
+            [
+                json!({ "value": { "op": "focused" } }),
+                json!({ "objectId": "node-1" }),
+            ],
+            "an element handle's node follows as the call's root"
         );
         Ok(())
     }
@@ -540,46 +454,6 @@ mod tests {
         let unreadable =
             reply_of(json!({ "result": { "type": "object", "value": { "kind": "teleported" } } }));
         assert!(matches!(unreadable, Err(ProbeFailure::Broken(_))));
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_every_string_a_read_returns_is_masked_once_with_every_value()
-    -> Result<(), Box<dyn Error>> {
-        let read = reply_of(json!({ "result": { "type": "object", "value": {
-            "kind": "read", "sensitive": null, "sweep": ["s3cret&<pw>"],
-            "value": { "pin": 4, "preview": "<p>s3cret&amp;&lt;pw&gt; abcdefgh</p>", "visible": true },
-        } } }))?;
-        let ProbeReply::Read { value, sweep, .. } = read else {
-            return Err("a read is a read".into());
-        };
-        let site = sweep.union(FieldValues::from_sweep(&json!(["abcd", "abcdefgh"])));
-        assert_eq!(
-            value.masked(&site),
-            json!({ "pin": 4, "preview": "<p>[private] [private]</p>", "visible": true }),
-            "markup's escaped form too, a longer value of another frame whole, and a number \
-             stays a number"
-        );
-        let all = reply_of(json!({ "result": { "type": "object", "value": {
-            "kind": "values", "count": 3, "sweep": ["s3cret&<pw>", "123"],
-            "values": ["before s3cret&<pw> after", "123", "1234"],
-        } } }))?;
-        let ProbeReply::Values { values, sweep, .. } = all else {
-            return Err("a readAll is values".into());
-        };
-        let masked: Vec<Value> = values
-            .into_iter()
-            .map(|value| value.masked(&sweep))
-            .collect();
-        assert_eq!(
-            masked,
-            [
-                json!("before [private] after"),
-                json!("[private]"),
-                json!("1234")
-            ],
-            "a short value only where it is the whole string"
-        );
         Ok(())
     }
 }

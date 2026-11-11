@@ -16,10 +16,10 @@
 //!                                    answer read in Playwright's format (page_value)
 //!  locator.evaluate / evaluateAll ─ element_evaluate: the elements found, then the same guard,
 //!                                   in the frame they are in
-//!  page.title / page.content ─ document_op: the sealed world's read, masked with the read
-//!                              frame's site (site_sweep, which every read and snapshot uses)
-//!  page.setContent ─ document_op: the same gateway for a write from the sealed world, a new
-//!                    seq and the load state, because the HTML's scripts run in the main world
+//!  page.title / page.content ─ document_op: the sealed world's read, through the seal
+//!  page.setContent ─ document_op: the same gateway for a write from the sealed world, the
+//!                    frame's seq kept, then the load state; the HTML's scripts run in the main
+//!                    world
 //!  page.waitForNavigation ─ journal cursor ─ URL match ─ DocumentWatch lifecycle ─ timing entry
 //!  page.waitForURL ─ wait_for_url: each navigation matched in the sealed world, the load state
 //! ```
@@ -45,17 +45,14 @@ mod pdf;
 mod screenshot;
 mod screenshot_geometry;
 mod screenshot_preparation;
-pub(crate) mod site_sweep;
 mod subtree_load;
-mod sweep_scope;
 mod wait_for_navigation;
 mod wait_for_url;
 pub(crate) mod world_call;
 
 pub(crate) use context_op::ContextOp;
-pub(crate) use evaluate_guard::FRAME_BUDGET;
 pub(crate) use load_state::LoadState;
-pub(crate) use op_page::OpPage;
+pub(crate) use op_page::{FRAME_BUDGET, OpPage};
 pub(crate) use page_handle::PageHandle;
 pub(crate) use page_op::PageOp;
 pub(crate) use page_registry::PageRegistry;

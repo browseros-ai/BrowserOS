@@ -289,10 +289,10 @@ impl InputFiles {
         };
         if directory {
             let arm = ProbeRequest::ArmInput { pin: input.target };
-            match subject.call(located, &arm).await? {
+            match subject.call(located, &arm).await {
                 Ok(ProbeReply::Value { .. }) => {}
                 Ok(ProbeReply::Detached) => return subject.detached().map(|()| None),
-                Ok(other) => return Err(subject.refused(located, other).await),
+                Ok(other) => return Err(subject.refused(other)),
                 Err(ProbeFailure::Gone(_)) => return subject.lost(located).map(|()| None),
                 Err(failure) => return Err(resolve::failed(scope, failure)),
             }
@@ -386,9 +386,9 @@ async fn set_payloads(
     let Ok(edited) = scope.within(subject.call(located, &request)).await else {
         return Err(scope.timed_out(ErrorCode::NotActionable));
     };
-    match edited? {
+    match edited {
         Ok(ProbeReply::Value { value }) => {
-            match serde_json::from_value::<Option<Threw>>(value.textless()) {
+            match serde_json::from_value::<Option<Threw>>(value.into_value()) {
                 Ok(None) => Ok(Set::Done),
                 Ok(Some(Threw { threw })) => Err(scope.fail(ErrorCode::InvalidInput, &threw)),
                 Err(error) => Err(scope.fail(
@@ -400,7 +400,7 @@ async fn set_payloads(
             }
         }
         Ok(ProbeReply::Detached) => subject.detached().map(|()| Set::Again),
-        Ok(other) => Err(subject.refused(located, other).await),
+        Ok(other) => Err(subject.refused(other)),
         Err(ProbeFailure::Gone(_)) => subject.lost(located).map(|()| Set::Again),
         Err(failure) => Err(resolve::failed(scope, failure)),
     }
@@ -420,16 +420,16 @@ async fn wait_for_input(
         let Ok(arrived) = scope.within(subject.call(located, &request)).await else {
             return Err(scope.timed_out(ErrorCode::WaitTimeout));
         };
-        match arrived? {
+        match arrived {
             Ok(ProbeReply::Value { value }) => {
-                if value.textless() == Value::Bool(true) {
+                if value.into_value() == Value::Bool(true) {
                     return Ok(Set::Done);
                 }
             }
             // An evicted pin never comes back, so the op waits out its timeout, as upstream's
             // listener on an element that never sees `input` does.
             Ok(ProbeReply::Detached) => {}
-            Ok(other) => return Err(subject.refused(located, other).await),
+            Ok(other) => return Err(subject.refused(other)),
             Err(ProbeFailure::Gone(_)) => return Ok(Set::Done),
             Err(failure) => return Err(resolve::failed(scope, failure)),
         }
@@ -454,8 +454,8 @@ async fn file_input(
         frame_visible: true,
         read: files.read(),
     };
-    match subject.call(located, &request).await? {
-        Ok(ProbeReply::Read { value, .. }) => serde_json::from_value(value.textless())
+    match subject.call(located, &request).await {
+        Ok(ProbeReply::Read { value, .. }) => serde_json::from_value(value.into_value())
             .map(Some)
             .map_err(|error| {
                 scope.fail(
@@ -465,7 +465,7 @@ async fn file_input(
             }),
         Ok(ProbeReply::None { stale_ref: None }) => Ok(None),
         Ok(ProbeReply::Detached) => subject.detached().map(|()| None),
-        Ok(other) => Err(subject.refused(located, other).await),
+        Ok(other) => Err(subject.refused(other)),
         Err(ProbeFailure::Gone(_)) => subject.lost(located).map(|()| None),
         Err(failure) => Err(resolve::failed(scope, failure)),
     }
