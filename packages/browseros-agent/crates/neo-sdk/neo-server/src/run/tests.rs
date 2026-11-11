@@ -147,7 +147,6 @@ async fn run_once(
         request_id: Some(request_id.clone()),
         task_id: None,
         host_data: None,
-        also_mask: None,
         at: EpochMillis::now(),
     });
     let reply = Arc::new(RunReply {
@@ -168,7 +167,6 @@ async fn run_once(
         error: end.error,
         result: end.result,
         replay: end.replay,
-        also_mask: None,
         at: EpochMillis::now(),
     });
     ticket.finish(Arc::clone(&reply));
@@ -572,7 +570,6 @@ fn a_repeat_that_races_the_first_runs_commit_joins_it() -> Result<(), TestError>
             request_id: Some(RequestId::parse("race-1")?),
             task_id: None,
             host_data: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         rig.sink.flush().await?;

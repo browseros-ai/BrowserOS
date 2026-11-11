@@ -9,8 +9,8 @@ use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, IdError, Loss, OperationEnded, OperationId, OperationKind,
     OperationStarted, Outcome, Privacy, PrivacyRecord, PrivateReason, Recovery, RedactionLimits,
-    Redactor, RequestId, RunEffects, RunEnded, RunId, RunStarted, RunStatus, Salvage, SecretSet,
-    SecretSetConfig, TaskId, TraceError, TraceSink, TraceStore, WriterConfig,
+    Redactor, RequestId, RunEffects, RunEnded, RunId, RunStarted, RunStatus, Salvage, TaskId,
+    TraceError, TraceSink, TraceStore, WriterConfig,
 };
 use sea_orm::sqlx;
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -52,10 +52,7 @@ fn reply() -> Value {
 fn writer(store: &TraceStore) -> TraceSink {
     neo_trace::spawn_writer(
         store,
-        Redactor::new(
-            Arc::new(SecretSet::new(SecretSetConfig::default())),
-            RedactionLimits::default(),
-        ),
+        Redactor::new(RedactionLimits::default()),
         WriterConfig::default(),
         None,
     )
@@ -89,7 +86,6 @@ fn start(
         request_id: request_id.map(request).transpose()?,
         task_id: task_id.map(task).transpose()?,
         host_data: None,
-        also_mask: None,
         at: at(millis),
     });
     Ok(run)
@@ -99,11 +95,7 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
     let path = dir.join("old/trace.db");
     let store = TraceStore::open(&path).await?;
     let sink = writer(&store);
-    let privacy = Privacy::new(
-        Arc::new(SecretSet::new(SecretSetConfig::default())),
-        Arc::new(sink.clone()),
-        HashMap::new(),
-    );
+    let privacy = Privacy::new(Arc::new(sink.clone()), HashMap::new());
     privacy
         .make_private(TabId(3), PrivateReason::SecretInput, at(5))
         .await?;
@@ -117,7 +109,6 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
         error: None,
         result: Some(json!({"title": "Done"})),
         replay: Some(reply()),
-        also_mask: None,
         at: at(1_000),
     });
     let running = start(&sink, Some("call-2"), None, 2_000)?;
@@ -133,7 +124,6 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
             effect: Effect::Read,
             tab: Some(TabId(4)),
             args: json!({"note": "x".repeat(300)}),
-            also_mask: None,
             at: at(3_000 + i64::from(seq)),
         });
         sink.op_ended(OperationEnded {
@@ -144,7 +134,6 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
             result: None,
             error: None,
             page_after: None,
-            also_mask: None,
             at: at(3_000 + i64::from(seq)),
         });
     }
@@ -358,11 +347,7 @@ async fn a_readable_trace_carries_its_flags_and_request_history_into_the_fresh_s
         flags.get(&TabId(9)).map(|record| record.reason),
         Some(PrivateReason::Takeover)
     );
-    let privacy = Privacy::new(
-        Arc::new(SecretSet::new(SecretSetConfig::default())),
-        Arc::new(writer(&store)),
-        flags,
-    );
+    let privacy = Privacy::new(Arc::new(writer(&store)), flags);
     assert!(
         privacy.capture(TabId(3)).is_none(),
         "a private tab stays private across the broken file"

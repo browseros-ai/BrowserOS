@@ -8,7 +8,7 @@ use browseros_core::CdpConnection;
 use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use neo_capture::{CaptureFailure, CaptureResult, CaptureTransport};
-use neo_trace::{Registration, SecretSource, SecretValue};
+
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
@@ -209,14 +209,6 @@ async fn a_screencast_keeps_its_url_and_frames_during_a_takeover() -> TestResult
     h.capture.emit_frame(SESSION, b"before", 1_800_000_000.0);
     assert_eq!(live.part().await?.jpeg, b"before");
 
-    assert_eq!(
-        h.privacy.secrets().register_from(
-            SecretValue::new("capture-test-value".into()),
-            None,
-            SecretSource::Host,
-        ),
-        Registration::Registered
-    );
     let takeover = h.post("/v1/takeovers", r#"{"tabId":7}"#).await?;
     assert_eq!(takeover.status, StatusCode::OK, "{}", takeover.body);
     h.capture.emit_frame(SESSION, b"during", 1_800_000_001.0);

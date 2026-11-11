@@ -177,8 +177,6 @@ export const UNSUPPORTED = {
     highlight: NO_INSPECTOR,
     normalize: 'not available in Neo; use the locator as built',
     tap: NO_TOUCH,
-    waitForFunction:
-      'poll with expect(locator).toPass() or page.waitForFunction()',
   },
   FrameLocator: {},
   Keyboard: {},

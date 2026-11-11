@@ -16,7 +16,7 @@ use std::fmt;
 /// is a table test.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ScreenFacts {
-    /// A takeover's `ScreenHold` lives, from its start to its release. It also covers the gap
+    /// A takeover's screen guard lives, from its start to its release. It also covers the gap
     /// while zuzu's control relay reconnects (synthesis item 2).
     pub(crate) takeover: usize,
     /// A control display is admitted, with or without input: the owner's next key goes to

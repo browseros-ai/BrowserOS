@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { loadScope } from '../scope.mjs'
 import { flattenResults } from './classify.mjs'
 import { commandLine, renderReport, runnerCommand } from './report.mjs'
 
@@ -109,6 +110,26 @@ test('report exposes commands, actual counts, transitions, gaps and _expect limi
   assert.ok(!report.markdown.includes('\x1b'))
 })
 
+test('report shows both scores, reason counts and passing excluded tests without changing verdicts', () => {
+  const input = inputs()
+  const original = renderReport(input)
+  const [row] = flattenResults(input.neo.results)
+  const scope = {
+    ...loadScope(),
+    entries: [{ file: row.suite, reason: 'network' }],
+  }
+  const report = renderReport({ ...input, scope })
+  assert.deepEqual(report.counts, original.counts)
+  assert.deepEqual(report.rows, original.rows)
+  assert.deepEqual(report.scores.all, { passed: 1, total: 5 })
+  assert.deepEqual(report.scores.inScope, { passed: 0, total: 0 })
+  assert.match(report.markdown, /All tests: \*\*1\/5 \(20.0%\)\*\*/)
+  assert.match(report.markdown, /In-scope tests: \*\*0\/0 \(n\/a\)\*\*/)
+  assert.match(report.markdown, /\| network \| 5 \| 1 \|/)
+  assert.match(report.markdown, /Passing tests in scope file \(1\)/)
+  assert.match(report.markdown, /legacy run/)
+})
+
 test('runner errors are visible without fabricating per-case transitions', () => {
   const input = inputs()
   input.neo.results.errors.push({
@@ -197,6 +218,21 @@ test('CLI writes markdown and parseable one-verdict-per-case JSONL; invalid inpu
   assert.equal(self.status, 0, self.stderr)
   assert.equal(JSON.parse(self.stdout).counts.pass, 5)
   assert.match(fs.readFileSync(output, 'utf8'), /^# Vanilla in Node/)
+  // Scope is now a report input; neither output flag may destroy its provenance.
+  for (const dir of ['neo', 'reference']) {
+    const scopeFile = path.join(root, dir, 'scope.json')
+    fs.writeFileSync(scopeFile, 'preserved scope input')
+    for (const flag of ['--out', '--json']) {
+      const collision = [...args]
+      collision[collision.indexOf(flag) + 1] = scopeFile
+      const rejected = spawnSync(process.execPath, collision, {
+        encoding: 'utf8',
+      })
+      assert.equal(rejected.status, 1)
+      assert.match(rejected.stderr, /must not overwrite an input/)
+      assert.equal(fs.readFileSync(scopeFile, 'utf8'), 'preserved scope input')
+    }
+  }
   fs.rmSync(path.join(root, 'neo', 'run.json'))
   fs.rmSync(output)
   const failure = spawnSync(process.execPath, args, { encoding: 'utf8' })

@@ -232,23 +232,17 @@ fn op(name: &str) -> Result<Op, PlaywrightError> {
         .ok_or_else(|| PlaywrightError::new(ErrorCode::Internal, format!("{name} is not an op")))
 }
 
-/// The host's privacy layer: every value a read's sweep found is kept, as the host would register
-/// it. The unused capture hook can refuse to detect callers.
+/// The host's hooks. No op calls them back; the capture hook can refuse, so capture tests prove
+/// it is bypassed.
 #[derive(Default)]
 struct LiveHooks {
     capture: Mutex<Option<Refusal>>,
-    swept: Mutex<Vec<String>>,
 }
 
 impl PlaywrightHooks for LiveHooks {
     fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
 
-    fn values_swept(&self, _page: TabId, values: &FieldValues) {
-        self.swept
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(values.registrable().map(str::to_owned));
-    }
+    fn values_swept(&self, _page: TabId, _values: &FieldValues) {}
 
     fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
         self.capture
@@ -389,7 +383,14 @@ impl LiveRun {
 
     /// Runs op `name` with `input`, as claw-sdk's handler does.
     pub(crate) async fn invoke(&self, name: &str, input: Value) -> Result<Value, PlaywrightError> {
-        self.playwright.invoke(&self.env, op(name)?, input).await
+        let result = self.playwright.invoke(&self.env, op(name)?, input).await?;
+        // The browser tests below inspect the script value. Supplemental frame metadata is
+        // consumed by the real prelude and covered by the Node navigation regression suite.
+        Ok(if name == "page.evaluate" {
+            result.get("value").cloned().unwrap_or(Value::Null)
+        } else {
+            result
+        })
     }
 
     /// Ends this run and starts the next on the same `Playwright`, as claw-sdk does between
@@ -476,15 +477,6 @@ impl LiveRun {
             .send_value("Input.insertText", json!({ "text": text }))
             .await?;
         Ok(())
-    }
-
-    /// The values the sweeps reported so far, long enough to register.
-    pub(crate) fn swept(&self) -> Vec<String> {
-        self.hooks
-            .swept
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
     }
 
     /// Makes the retained capture hook refuse, so capture tests prove it is bypassed.

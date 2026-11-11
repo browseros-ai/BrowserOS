@@ -1182,20 +1182,22 @@ export class Frame extends EventEmitter {
       throw clientError(api, `url: expected string, got ${typeof url}`)
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
-    const args = await this._frameArgs(api)
-    const { value: result, observed } = await invokeObserved(
-      'page.goto',
-      this._call(api, this._navigationTimeout(options)),
-      {
-        ...args,
-        url,
-        waitUntil,
-        ...pick(options, ['referer']),
-      },
-      undefined,
-      signal,
-    )
-    return await this._page._navigated(api, this, result, observed)
+    return await this._page._navigating(async () => {
+      const args = await this._frameArgs(api)
+      const { value: result, observed } = await invokeObserved(
+        'page.goto',
+        this._call(api, this._navigationTimeout(options)),
+        {
+          ...args,
+          url,
+          waitUntil,
+          ...pick(options, ['referer']),
+        },
+        undefined,
+        signal,
+      )
+      return await this._page._navigated(api, this, result, observed)
+    })
   }
 
   async _waitForLoadState(
@@ -1255,11 +1257,16 @@ export class Frame extends EventEmitter {
     options: EvaluateOptions | undefined,
   ): Promise<unknown> {
     const script = pageCall(api, 'frame', pageFunction, arg, options)
-    const value = await invoke('page.evaluate', this._call(api, 0), {
-      ...(await this._frameArgs(api)),
-      script,
-    })
-    return fromPageValue(api, value)
+    const { value: result, observed } = await invokeObserved(
+      'page.evaluate',
+      this._call(api, 0),
+      {
+        ...(await this._frameArgs(api)),
+        script,
+      },
+    )
+    this._page._evaluated(result.frames, observed)
+    return fromPageValue(api, result.value)
   }
 
   /** upstream's `Frame.waitForFunction`: its polling check, unprefixed, comes first. */
@@ -1318,8 +1325,6 @@ export type ScreenshotOptionsInput = TimeoutOption &
     path?: string
     mask?: Locator[]
     maskColor?: string
-    omitBackground?: boolean
-    scale?: 'css' | 'device'
   }
 
 /** Options that need capture features beyond temporary DOM preparation. */
@@ -1328,10 +1333,6 @@ export function refusedScreenshotOption(
 ): string | undefined {
   if (options.mask !== undefined && options.mask.length > 0)
     return 'Neo cannot mask elements in a screenshot; omit mask'
-  if (options.omitBackground)
-    return 'Neo cannot capture a transparent background; omit omitBackground'
-  if (options.scale === 'css')
-    return 'Neo captures at the device scale; omit scale or pass "device"'
   return undefined
 }
 

@@ -5,13 +5,11 @@
 //! gateway (`DocumentWrite`), because the HTML's scripts run in the page's main world.
 
 use browseros_core::FrameId;
-use futures_util::future;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
 use crate::page::evaluate_guard::{self, DocumentWrite, TreeFrame};
-use crate::page::site_sweep::SiteSweep;
 use crate::page::world_call::{self, unexpected, with_world};
 use crate::page::{LoadState, OpPage};
 use crate::probe::{self, DocumentPart, ProbeReply, ProbeRequest};
@@ -41,11 +39,8 @@ pub(crate) struct SetContentInput {
     wait_until: LoadState,
 }
 
-/// Reads `part` of the frame's document. The seal masks the fields the markup serializes; the
-/// values of every sensitive field in the frame's site then mask a typed value the page copied
-/// elsewhere in its markup or its title, which no getter of the seal sees (an attribute, a
-/// heading), from its own fields or from any frame of its site. They also go to the host, as
-/// evaluate's and snapshot's do, so its mask at every exit knows them.
+/// Reads `part` of the frame's document, through the seal, which masks the fields the markup
+/// serializes.
 pub(crate) async fn read(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -69,22 +64,15 @@ pub(crate) async fn read(
     let TreeFrame { endpoint, place } =
         evaluate_guard::frame_endpoint(&page, world.session(), world.frame().clone());
     let request = &ProbeRequest::Document { part };
-    let admitted = &page;
-    let (text, sweep, site) = with_world(&page, &endpoint, &place, |world| async move {
-        let (reply, site) = future::join(
-            probe::call(&world, request),
-            SiteSweep::of(admitted, world.clone()),
-        )
-        .await;
-        match reply? {
-            ProbeReply::DocumentText { text, sweep } => Ok((text, sweep, site)),
+    let text = with_world(&page, &endpoint, &place, |world| async move {
+        match probe::call(&world, request).await? {
+            ProbeReply::DocumentText { text } => Ok(text),
             other => Err(unexpected("document", other)),
         }
     })
     .await
     .map_err(|failure| failed(scope, failure))?;
-    let values = site.values(pw, scope, page.tab(), sweep)?;
-    Ok(Value::String(values.mask_text(text)))
+    Ok(Value::String(text))
 }
 
 /// Replaces the frame's document with `html` and waits for `waitUntil`, as upstream does,

@@ -17,7 +17,7 @@ use super::{ErrorCode, OperationError, TEXT_CHARS, operation_error};
 const REFUSAL_CODES: [ErrorCode; 2] = [ErrorCode::METHOD_UNAVAILABLE, ErrorCode::INVALID_INPUT];
 
 /// The refusal brand a script call's input is, read once at admission. Only `code` and `reason`
-/// are read; the record keeps every field the brand carried, masked and bounded like any input.
+/// are read; the record keeps every field the brand carried, bounded like any input.
 pub(super) enum RefusalBrand<'a> {
     /// A refusal the script may make: a code from [`REFUSAL_CODES`], and the reason as sent.
     Refused { code: ErrorCode, reason: &'a str },

@@ -31,6 +31,37 @@ pub(crate) async fn in_main_viewport(
     path: &FramePath,
     local: Value,
 ) -> Result<Value, PlaywrightError> {
+    project(scope, path, local, Projection::BoundingBox).await
+}
+
+/// Screenshot locators must retry the entire preparation when an ancestor disappears. Keep
+/// this distinct from a hidden frame, which has no capturable layout rather than a new node.
+pub(crate) async fn for_screenshot(
+    scope: &OpScope<'_>,
+    path: &FramePath,
+    local: Value,
+) -> Result<Value, PlaywrightError> {
+    project(scope, path, local, Projection::Screenshot).await
+}
+
+#[derive(Clone, Copy)]
+enum Projection {
+    BoundingBox,
+    Screenshot,
+}
+
+enum OriginState {
+    Present(FrameOrigin),
+    Hidden,
+    Detached,
+}
+
+async fn project(
+    scope: &OpScope<'_>,
+    path: &FramePath,
+    local: Value,
+    projection: Projection,
+) -> Result<Value, PlaywrightError> {
     let Some(rect) = element_read::read_value::<Option<Rect>>(scope, local)? else {
         return Ok(Value::Null);
     };
@@ -41,7 +72,7 @@ pub(crate) async fn in_main_viewport(
     // call is one local round trip, which upstream's own recursion also pays.
     for hop in path.hops() {
         match frame_origin(scope, hop).await? {
-            Some(FrameOrigin::Placed {
+            OriginState::Present(FrameOrigin::Placed {
                 x,
                 y,
                 scale_x,
@@ -52,14 +83,20 @@ pub(crate) async fn in_main_viewport(
                 scale.x *= scale_x;
                 scale.y *= scale_y;
             }
-            Some(FrameOrigin::Rotated(Rotated::Rotated)) => {
+            OriginState::Present(FrameOrigin::Rotated(Rotated::Rotated)) => {
                 return Err(scope.fail(
                     ErrorCode::Unsupported,
                     "the element is inside a rotated, skewed or flipped iframe, which has no box \
                      in page coordinates in Neo",
                 ));
             }
-            None => return Ok(Value::Null),
+            OriginState::Hidden => return Ok(Value::Null),
+            OriginState::Detached => {
+                return match projection {
+                    Projection::BoundingBox => Ok(Value::Null),
+                    Projection::Screenshot => Err(resolve::handle_detached(scope)),
+                };
+            }
         }
     }
     Ok(json!(Rect {
@@ -93,12 +130,8 @@ enum Rotated {
     Rotated,
 }
 
-/// Where `hop`'s iframe's document starts in the parent's viewport; `None` when the iframe is
-/// not rendered or has gone.
-async fn frame_origin(
-    scope: &OpScope<'_>,
-    hop: &Hop,
-) -> Result<Option<FrameOrigin>, PlaywrightError> {
+/// Keep a missing node distinct from an existing iframe without a layout box.
+async fn frame_origin(scope: &OpScope<'_>, hop: &Hop) -> Result<OriginState, PlaywrightError> {
     let iframe = hop
         .iframe
         .target()
@@ -110,8 +143,13 @@ async fn frame_origin(
         read: Read::FrameOrigin,
     };
     match probe::call(&hop.parent, &request).await {
-        Ok(ProbeReply::Read { value, .. }) => element_read::read_value(scope, value.textless()),
-        Ok(ProbeReply::None { .. } | ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => Ok(None),
+        Ok(ProbeReply::Read { value, .. }) => {
+            let origin: Option<FrameOrigin> = element_read::read_value(scope, value.into_value())?;
+            Ok(origin.map_or(OriginState::Hidden, OriginState::Present))
+        }
+        Ok(ProbeReply::None { .. } | ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => {
+            Ok(OriginState::Detached)
+        }
         Ok(other) => Err(scope.fail(
             ErrorCode::Internal,
             &format!(
@@ -122,5 +160,76 @@ async fn frame_origin(
         Err(ProbeFailure::Cdp(error)) => Err(scope.core_error(&error)),
         Err(ProbeFailure::Broken(why)) => Err(scope.fail(ErrorCode::Internal, &why)),
         Err(failure @ ProbeFailure::Late) => Err(resolve::failed(scope, failure)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::sync::Arc;
+
+    use browseros_core::testing::TestConnection;
+    use browseros_core::{CdpConnection, ProtocolSession, SessionId};
+    use serde_json::{Value, json};
+
+    use super::{for_screenshot, in_main_viewport};
+    use crate::op_scope::OpScope;
+    use crate::resolve::{FramePath, Hop, HopIframe};
+    use crate::target::CallHeader;
+    use crate::test_env::TestEnv;
+    use crate::world::SealedWorld;
+    use crate::{ErrorCode, Op};
+
+    /// A vanished ancestor is retryable only for screenshots. boundingBox keeps its public
+    /// null contract, and an existing hidden iframe remains null for both callers.
+    #[tokio::test]
+    async fn ancestor_detachment_is_distinct_from_hidden_layout() -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let op = Op::from_name("page.screenshot").ok_or("screenshot op missing")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        for detached in [false, true] {
+            let connection = TestConnection::new([]);
+            let reply = if detached {
+                json!({ "kind": "detached" })
+            } else {
+                json!({ "kind": "read", "value": null, "sensitive": null })
+            };
+            connection.always(
+                "Runtime.callFunctionOn",
+                json!({ "result": { "type": "object", "value": reply } }),
+            )?;
+            let parent = SealedWorld::for_tests(
+                ProtocolSession::for_session(
+                    Arc::clone(&connection) as Arc<dyn CdpConnection>,
+                    SessionId::from("parent"),
+                ),
+                "parent",
+                0,
+                "global",
+            );
+            let mut path = FramePath::default();
+            path.push(Hop {
+                parent,
+                iframe: HopIframe::Key("#iframe".to_owned()),
+            });
+            let local = json!({ "x": 1, "y": 2, "width": 3, "height": 4 });
+            assert_eq!(
+                in_main_viewport(&scope, &path, local.clone()).await?,
+                Value::Null
+            );
+            let screenshot = for_screenshot(&scope, &path, local).await;
+            if detached {
+                assert_eq!(
+                    screenshot
+                        .err()
+                        .ok_or("missing detachment error")?
+                        .error_code(),
+                    Some(ErrorCode::ElementDetached)
+                );
+            } else {
+                assert_eq!(screenshot?, Value::Null);
+            }
+        }
+        Ok(())
     }
 }

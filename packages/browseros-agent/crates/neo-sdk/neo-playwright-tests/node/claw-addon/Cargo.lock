@@ -1564,7 +1564,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "url",
- "zeroize",
 ]
 
 [[package]]
@@ -1613,7 +1612,6 @@ dependencies = [
 name = "neo-trace"
 version = "0.1.0"
 dependencies = [
- "aho-corasick",
  "browseros-core",
  "futures-util",
  "percent-encoding",
@@ -1625,7 +1623,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "zeroize",
 ]
 
 [[package]]

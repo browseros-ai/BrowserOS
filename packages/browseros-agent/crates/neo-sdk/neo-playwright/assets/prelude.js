@@ -339,6 +339,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "locator.waitForFunction": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
     "page.screenshot": {
       effect: "read",
       target: "page",
@@ -864,11 +869,13 @@
   var SCREENSHOT_KEYS = [
     "type",
     "quality",
+    "omitBackground",
     "fullPage",
     "clip",
     "animations",
     "caret",
-    "style"
+    "style",
+    "scale"
   ];
   var handles = new WeakSet;
   function markHandle(object) {
@@ -6807,6 +6814,11 @@ ${value.stack}`;
       const script = pageCall(api, "locator", pageFunction, arg, options);
       return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
     }
+    async waitForFunction(pageFunction, arg, options) {
+      const api = "locator.waitForFunction";
+      const script = pageCall(api, "query", pageFunction, arg);
+      await this._frame._selectorOp("locator.waitForFunction", api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
+    }
     async evaluateAll(pageFunction, arg) {
       const api = "locator.evaluateAll";
       return await this._frame._evaluateAll(api, this._selector, pageCall(api, "query", pageFunction, arg));
@@ -7329,14 +7341,16 @@ ${value.stack}`;
         throw clientError(api, `url: expected string, got ${typeof url}`);
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      const args = await this._frameArgs(api);
-      const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
-        ...args,
-        url,
-        waitUntil,
-        ...pick(options, ["referer"])
-      }, undefined, signal);
-      return await this._page._navigated(api, this, result, observed);
+      return await this._page._navigating(async () => {
+        const args = await this._frameArgs(api);
+        const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
+          ...args,
+          url,
+          waitUntil,
+          ...pick(options, ["referer"])
+        }, undefined, signal);
+        return await this._page._navigated(api, this, result, observed);
+      });
     }
     async _waitForLoadState(api, state, options = {}) {
       const verified = loadState(api, "state", state ?? "load");
@@ -7357,11 +7371,12 @@ ${value.stack}`;
     }
     async _evaluate(api, pageFunction, arg, options) {
       const script = pageCall(api, "frame", pageFunction, arg, options);
-      const value = await invoke("page.evaluate", this._call(api, 0), {
+      const { value: result, observed } = await invokeObserved("page.evaluate", this._call(api, 0), {
         ...await this._frameArgs(api),
         script
       });
-      return fromPageValue(api, value);
+      this._page._evaluated(result.frames, observed);
+      return fromPageValue(api, result.value);
     }
     async _waitForFunction(api, pageFunction, arg, options = {}) {
       if (typeof options.polling === "string" && options.polling !== "raf")
@@ -7398,10 +7413,6 @@ ${value.stack}`;
   function refusedScreenshotOption(options) {
     if (options.mask !== undefined && options.mask.length > 0)
       return "Neo cannot mask elements in a screenshot; omit mask";
-    if (options.omitBackground)
-      return "Neo cannot capture a transparent background; omit omitBackground";
-    if (options.scale === "css")
-      return 'Neo captures at the device scale; omit scale or pass "device"';
     return;
   }
   var HELD_VALUE = "Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()";
@@ -8010,6 +8021,7 @@ ${value.stack}`;
     #closeEvent = 0;
     #approvedClose = null;
     _working = false;
+    _navigationsInFlight = 0;
     #childFrames = new Map;
     constructor(context, tab, url) {
       super();
@@ -8265,7 +8277,7 @@ ${value.stack}`;
     }
     async close(options = {}) {
       const api = "page.close";
-      if (this._tab === null) {
+      if (this._closed || this._tab === null) {
         this.#close();
         return;
       }
@@ -8276,7 +8288,7 @@ ${value.stack}`;
           ...options.runBeforeUnload ? { runBeforeUnload: true } : {}
         });
       } catch (error) {
-        if (Reflect.get(Object(error), "code") !== "target_closed" || options.runBeforeUnload)
+        if (!["target_closed", "page_closed"].includes(String(Reflect.get(Object(error), "code"))) || options.runBeforeUnload)
           throw error;
       }
     }
@@ -8313,6 +8325,18 @@ ${value.stack}`;
         return value;
       const brand = elementBrand(value);
       return brand ? new ElementHandle(this, brand) : null;
+    }
+    async _navigating(work) {
+      this._navigationsInFlight++;
+      try {
+        return await work();
+      } finally {
+        this._navigationsInFlight--;
+      }
+    }
+    _evaluated(frames, at) {
+      if (this.#payloadCurrent(at) && Array.isArray(frames))
+        this._applyFrames(frames);
     }
     async _navigated(api, frame, result, at) {
       if (this.#payloadCurrent(at)) {
@@ -8547,8 +8571,10 @@ ${value.stack}`;
     async#history(api, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil }, undefined, signal);
-      return await this._navigated(api, this._mainFrame, result, observed);
+      return await this._navigating(async () => {
+        const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil }, undefined, signal);
+        return await this._navigated(api, this._mainFrame, result, observed);
+      });
     }
   }
 
@@ -8641,7 +8667,7 @@ ${value.stack}`;
       return page;
     }
     async _refreshWorkingFrames(api) {
-      const working = this.pages().filter((page) => page._working && page._tab !== null);
+      const working = this.pages().filter((page) => page._working && page._tab !== null && page._navigationsInFlight === 0);
       await Promise.all(working.map((page) => page._refreshFrames(api).catch(() => {
         return;
       })));
@@ -9476,8 +9502,7 @@ Timeout: ${timeout}ms`);
       hideHighlight: NO_INSPECTOR,
       highlight: NO_INSPECTOR,
       normalize: "not available in Neo; use the locator as built",
-      tap: NO_TOUCH,
-      waitForFunction: "poll with expect(locator).toPass() or page.waitForFunction()"
+      tap: NO_TOUCH
     },
     FrameLocator: {},
     Keyboard: {},

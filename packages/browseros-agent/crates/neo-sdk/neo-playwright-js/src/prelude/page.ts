@@ -121,6 +121,16 @@ export class Page extends EventEmitter {
    * script ran an op on it. A listed tab the script never touched keeps the tree it had.
    */
   _working = false
+  /**
+   * Navigation ops (goto, reload, goBack, goForward) in flight on this page. While Chromium has
+   * not answered a `Page.navigate` (or history or reload command) for a tab, it holds every
+   * command bound for that tab's renderer, from any session, until the navigation commits or
+   * fails (measured: `Page.getFrameTree` and `Runtime.evaluate` both wait). Upstream's
+   * `waitForTimeout` never reads the page, so its frame refresh skips a page with one in flight
+   * rather than hold the script's sleep until the page answers, which deadlocks a script that
+   * releases the navigation once it has slept. The navigation's own reply refreshes the tree.
+   */
+  _navigationsInFlight = 0
   readonly #childFrames = new Map<string, Frame>()
 
   constructor(context: BrowserContext, tab: number | null, url?: string) {
@@ -699,7 +709,7 @@ export class Page extends EventEmitter {
 
   async close(options: CloseOptions = {}): Promise<void> {
     const api = 'page.close'
-    if (this._tab === null) {
+    if (this._closed || this._tab === null) {
       this.#close()
       return
     }
@@ -720,7 +730,9 @@ export class Page extends EventEmitter {
     } catch (error) {
       // As upstream: closing a page that is already gone is not an error.
       if (
-        Reflect.get(Object(error), 'code') !== 'target_closed' ||
+        !['target_closed', 'page_closed'].includes(
+          String(Reflect.get(Object(error), 'code')),
+        ) ||
         options.runBeforeUnload
       )
         throw error
@@ -796,7 +808,23 @@ export class Page extends EventEmitter {
     return brand ? new ElementHandle(this, brand) : null
   }
 
+  /** Runs a navigation op, counted in `_navigationsInFlight` from the call until it settles. */
+  async _navigating<T>(work: () => Promise<T>): Promise<T> {
+    this._navigationsInFlight++
+    try {
+      return await work()
+    } finally {
+      this._navigationsInFlight--
+    }
+  }
+
   /** Applies what a navigation or wait returned; the frame tree is fetched if it was not. */
+  /** A script's supplemental facts must belong to this Page's current admitted binding. */
+  _evaluated(frames: FrameInfo[] | undefined, at: Observation | null): void {
+    if (this.#payloadCurrent(at) && Array.isArray(frames))
+      this._applyFrames(frames)
+  }
+
   async _navigated(
     api: string,
     frame: Frame,
@@ -1156,13 +1184,15 @@ export class Page extends EventEmitter {
   ): Promise<Response | null> {
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
-    const { value: result, observed } = await invokeObserved(
-      api,
-      this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),
-      { page: await this._brand(api), waitUntil },
-      undefined,
-      signal,
-    )
-    return await this._navigated(api, this._mainFrame, result, observed)
+    return await this._navigating(async () => {
+      const { value: result, observed } = await invokeObserved(
+        api,
+        this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),
+        { page: await this._brand(api), waitUntil },
+        undefined,
+        signal,
+      )
+      return await this._navigated(api, this._mainFrame, result, observed)
+    })
   }
 }

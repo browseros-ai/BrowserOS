@@ -1,9 +1,8 @@
 /**
  * The document as a whole. `page.title()` and `page.content()` read it here rather than in
  * the main world, so that every field value the serialization reads comes through the seal
- * (`value="••••"`); the reply carries this document's sweep, because the page may echo a typed
- * value elsewhere in its markup or title, and only Rust's mask catches that. `page.setContent`
- * replaces it here too, as upstream does from its utility world.
+ * (`value="••••"`). `page.setContent` replaces it here too, as upstream does from its utility
+ * world.
  */
 import type {
   DocumentRequest,
@@ -21,7 +20,6 @@ export function documentText(
   return {
     kind: 'documentText',
     text: request.part === 'title' ? document.title : content(document),
-    sweep: world.seal.sensitiveValues(),
   }
 }
 

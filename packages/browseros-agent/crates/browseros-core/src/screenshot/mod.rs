@@ -1,3 +1,5 @@
+mod background;
+
 use crate::{
     CoreError, FrameId, PageJs, ProtocolSession, observer::Observer, pointer, snapshot::RefEntry,
 };
@@ -16,6 +18,16 @@ use tokio::sync::Mutex;
 
 const OVERLAY_ATTR: &str = "data-browseros-screenshot-annotation";
 const OVERLAY_SCRIPT: &str = include_str!("../assets/screenshot-overlay.js");
+/// A temporary default-background override, scoped to the shared capture lock.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScreenshotBackground {
+    /// Leave the browser's current default background in place.
+    #[default]
+    Default,
+    /// Clear the default background only while this capture owns the queue.
+    Transparent,
+}
+
 static OVERLAY_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +137,31 @@ struct FrameTreeNode {
 #[derive(Debug, Deserialize)]
 struct Frame {
     id: String,
+}
+
+/// A caller-normalized CDP screenshot, serialized with all other captures on this session.
+/// The SDK owns image geometry; core owns the capture queue and agent pointer lifecycle.
+pub(crate) async fn capture_cdp(
+    session: &ProtocolSession,
+    params: Value,
+    background: ScreenshotBackground,
+) -> Result<String, CoreError> {
+    if background == ScreenshotBackground::Default {
+        return run_exclusive_screenshot_capture(session, || async {
+            let Ok(data) =
+                capture_without_pointer(session, params, || Ok::<(), Infallible>(())).await?;
+            Ok(data)
+        })
+        .await;
+    }
+    // Audit and SDK captures use this same queue. The override exists only while its guard
+    // owns the queue, including cancellation cleanup after a lost protocol acknowledgement.
+    let background =
+        background::TransparentBackground::acquire(session, screenshot_mutex(session)).await?;
+    let captured = capture_without_pointer(session, params, || Ok::<(), Infallible>(())).await;
+    background.restore().await;
+    let Ok(data) = captured?;
+    Ok(data)
 }
 
 pub async fn capture_screenshot_with_annotations(

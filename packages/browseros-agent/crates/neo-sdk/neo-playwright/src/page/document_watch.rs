@@ -1,11 +1,12 @@
 //! What one frame of a page did since a point in time: which documents committed and which load
-//! states each reached, read from the CDP events of the session that hosts it.
+//! states each reached, read from native CDP events. Child navigation follows the logical
+//! frame across hosting sessions without replacing the original event subscription.
 //!
 //! ```text
 //!  DocumentWatch::new ── subscribe ── enable lifecycle events ── send the command (goto, ...)
 //!        │                                                            │
 //!        └── Page.frameNavigated, Page.navigatedWithinDocument, ──────┴─▶ WatchedFrame
-//!            Page.lifecycleEvent (the watched frame on this session)       (states per loader)
+//!            Page.lifecycleEvent (the watched frame)                       (states per loader)
 //! ```
 //!
 //! Chromium answers `Page.navigate` before the new document commits (measured: the reply at
@@ -22,6 +23,7 @@ use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{
     BrowserSession, CdpConnection, CoreError, FrameId, ProtocolSession, SessionId,
 };
+use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -85,10 +87,15 @@ struct WatchedFrame {
     navigations: VecDeque<Navigated>,
     /// The frame's URL as last reported, for the prelude's synchronous `page.url()`.
     url: Option<String>,
+    /// Failure URL from the current snapshot, including one read after a renderer swap.
+    unreachable: Option<String>,
     /// The frame left the watched session: `Page.frameDetached` named it there, either reason
     /// (`swap`, `remove`), or the session detached. Navigation callers re-resolve this frame
     /// before continuing a commit or lifecycle wait.
     left: bool,
+    /// A later navigation has started but not committed. Renderer metadata reads can block
+    /// behind it; a completed navigation must not wait for that replacement's response.
+    pending: bool,
 }
 
 /// A document the frame committed.
@@ -160,21 +167,40 @@ impl DocumentWatch {
         }
     }
 
-    /// The native host selected by the latest frame commit or explicit attachment.
-    pub(crate) fn session(&self) -> &ProtocolSession {
-        &self.session
-    }
-
-    /// The logical frame identity survives process swaps.
-    pub(crate) fn frame_id(&self) -> &FrameId {
-        &self.frame_id
-    }
-
     /// Follow this child by its stable `FrameId` on every native session. Keeping the original
     /// receiver preserves commits queued during handoff, including immediate redirects that
     /// a newly subscribed watch could never recover from the current frame tree.
     pub(crate) fn follow_frame_events(&mut self, containing_page: FrameId) {
         self.containing_page = Some(containing_page);
+    }
+
+    /// Subscribe before dispatch: setup on an old child session can lose its reply when that
+    /// target retires. This separate cursor cancels only setup; the original commit cursor stays.
+    pub(crate) fn session_retired(&self) -> BoxFuture<'static, ()> {
+        let mut events = self.connection.events();
+        let session = self.session_id.clone();
+        let frame = self.frame_id.clone();
+        Box::pin(async move {
+            loop {
+                let Ok(event) = events.recv().await else {
+                    return;
+                };
+                let detached = event.method == "Target.detachedFromTarget"
+                    && event.params.get("sessionId").and_then(Value::as_str)
+                        == Some(session.as_str());
+                let moved = event.method == "Page.frameDetached"
+                    && event.session_id.as_ref() == Some(&session)
+                    && event.params.get("frameId").and_then(Value::as_str) == Some(frame.as_str());
+                if detached || moved {
+                    return;
+                }
+            }
+        })
+    }
+
+    /// A cancelled old-host setup must replay on the host selected by the commit instead.
+    pub(crate) fn replay_lifecycle(&mut self) {
+        self.lifecycle_pending = true;
     }
 
     /// The frame's URL as last reported, if the watch saw one.
@@ -187,6 +213,20 @@ impl DocumentWatch {
         self.frame.current.as_deref()
     }
 
+    /// The current endpoint, which a child navigation can replace when its renderer swaps.
+    pub(crate) fn session(&self) -> &ProtocolSession {
+        &self.session
+    }
+
+    /// Waits for a subsequent navigation intent while preserving all lifecycle events read
+    /// along the way. Used to cancel an optional timing read, never the navigation itself.
+    pub(crate) async fn navigation_started(&mut self) -> Result<(), WatchError> {
+        while !self.frame.pending {
+            self.next().await?;
+        }
+        Ok(())
+    }
+
     /// Turns on the `Page` domain for the session, for a watch whose frame may be an
     /// out-of-process iframe's. Chromium sends an OOPIF's `documentOpened`, `frameNavigated` and
     /// lifecycle events only on a session with `Page` enabled (measured, spike
@@ -196,7 +236,7 @@ impl DocumentWatch {
     /// watch reads the frame, so a navigation between that read and the wait is still seen.
     ///
     /// It lives here, under the op's timeout, rather than in a sealed world's session setup,
-    /// whose calls spend a frame's sweep budget.
+    /// whose calls spend a frame's install budget.
     pub(crate) async fn enable_page(&self) -> Result<(), WatchError> {
         self.session.send_value("Page.enable", json!({})).await?;
         Ok(())
@@ -222,6 +262,7 @@ impl DocumentWatch {
                 .entry(frame.loader_id.clone())
                 .or_default();
             self.frame.current = Some(frame.loader_id);
+            self.frame.unreachable = frame.unreachable_url;
             self.frame.url = Some(with_fragment(frame.url, frame.url_fragment.as_deref()));
         }
         Ok(())
@@ -236,6 +277,17 @@ impl DocumentWatch {
                 } else {
                     CommitOutcome::Interrupted(first.url.clone())
                 });
+            }
+            // A replacement session may have committed before Page was enabled there.
+            // Its current snapshot is sufficient only for this exact expected loader.
+            if self.frame.current.as_deref() == Some(loader)
+                && let Some(url) = &self.frame.url
+            {
+                return Ok(CommitOutcome::Committed(Commit {
+                    loader: loader.to_owned(),
+                    url: url.clone(),
+                    unreachable: self.frame.unreachable.clone(),
+                }));
             }
             if self.frame.left {
                 return Err(WatchError::Left);
@@ -453,6 +505,13 @@ impl DocumentWatch {
 impl WatchedFrame {
     fn apply(&mut self, event: &CdpEvent, frame_id: &FrameId) {
         match event.method.as_str() {
+            "Page.frameRequestedNavigation" | "Page.frameStartedNavigating" => {
+                if let Some(Detached { frame_id: id }) = parse(&event.params)
+                    && id == frame_id.as_str()
+                {
+                    self.pending = true;
+                }
+            }
             "Page.frameNavigated" => {
                 if let Some(FrameNavigated { frame }) = parse(&event.params)
                     && frame.id == frame_id.as_str()
@@ -486,6 +545,7 @@ impl WatchedFrame {
                     && id == frame_id.as_str()
                 {
                     self.same_document += 1;
+                    self.pending = false;
                     self.navigations.push_back(Navigated {
                         url: url.clone(),
                         unreachable: None,
@@ -510,6 +570,8 @@ impl WatchedFrame {
     }
 
     fn commit(&mut self, commit: Commit) {
+        self.pending = false;
+        self.unreachable.clone_from(&commit.unreachable);
         self.reached
             .entry(commit.loader.clone())
             .or_default()
@@ -568,10 +630,6 @@ pub(crate) struct FrameFields {
     pub(crate) url_fragment: Option<String>,
     #[serde(default)]
     pub(crate) unreachable_url: Option<String>,
-    /// The URL's registrable domain by Chromium's own public suffix list (`bbc.co.uk`); empty
-    /// for an IP address, `localhost`, a public suffix itself and a URL with no host.
-    #[serde(default)]
-    pub(crate) domain_and_registry: Option<String>,
 }
 
 /// `Page.getFrameTree`'s reply.

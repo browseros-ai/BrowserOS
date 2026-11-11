@@ -592,7 +592,9 @@ describe('errors', () => {
               node: 41,
               display: '<b>',
             }
-          : null,
+          : call.name === 'page.evaluate'
+            ? { value: null }
+            : null,
     })
     const result = json(
       await runtime.run(`
@@ -637,15 +639,15 @@ describe('errors', () => {
     const refused = json(
       await runtime.run(`
         const refused = []
-        for (const options of [{ mask: [page.locator('#a')] }, { omitBackground: true }, { scale: 'css' }])
+        for (const options of [{ mask: [page.locator('#a')] }])
           try { await page.screenshot(options) } catch (e) { refused.push(e.code) }
-        await page.locator('#a').screenshot({ type: 'jpeg', quality: 50, caret: 'initial', animations: 'disabled', style: 'p {}' })
+        await page.locator('#a').screenshot({ type: 'webp', quality: 50, omitBackground: true, caret: 'initial', animations: 'disabled', style: 'p {}', scale: 'css' })
         return refused
       `),
     )
-    expect(refused).toEqual(Array(3).fill('method_unavailable'))
+    expect(refused).toEqual(Array(1).fill('method_unavailable'))
     expect(runtime.calls.filter(isRefusal).map((call) => call.name)).toEqual(
-      Array(3).fill('page.screenshot'),
+      Array(1).fill('page.screenshot'),
     )
     expect(
       runtime.calls
@@ -657,11 +659,13 @@ describe('errors', () => {
         page: { $neo: 'page', tab: 1007 },
         target: expect.objectContaining({ display: "locator('#a')" }),
         strict: 'strict',
-        type: 'jpeg',
+        type: 'webp',
+        omitBackground: true,
         quality: 50,
         caret: 'initial',
         animations: 'disabled',
         style: 'p {}',
+        scale: 'css',
       },
     ])
   })

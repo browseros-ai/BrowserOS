@@ -15,19 +15,12 @@
 //!   frame saw the attempt's move arrive ([`PointerRunner::route`]), `force` or not. The browser
 //!   routes root-session input by its own copy of the layout, which trails a scroll in another
 //!   process.
-//!
-//! The page text an attempt reports, a strict violation's previews and the element a hit test
-//! found in the way, is masked with the site of the frame it came from (`site_sweep.rs`), swept
-//! only when a reply carries such text, so a click that lands sends no sweep. The engine cuts
-//! that text in the page first, so the mask goes there too: every request asks through
-//! [`Subject::call`] (and the verdict and parents' hit tests through `resolve::ask`), and a
-//! reply that would hold cut text answers `needsMask` and is asked again with the site's values.
 
+use std::future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::SessionId;
-use browseros_core::sensitive_fields::FieldValues;
 use browseros_core::viewport::ViewportMode;
 use serde::Deserialize;
 
@@ -42,14 +35,14 @@ use crate::input::{
     Point as PagePoint, UnknownKey,
 };
 use crate::op_scope::{OpScope, Sent};
-use crate::page::{OpPage, site_sweep};
+use crate::page::OpPage;
 use crate::probe::{
     ArmPlan, Hit, HitAction, PageText, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
     Read, Rect, ScrollPlan, Want,
 };
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
-use crate::world::{Pin, SealedWorld};
+use crate::world::Pin;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// Two measurements at least this far apart, with the same rect, make an element stable. One
@@ -356,7 +349,7 @@ impl<'a> PointerRunner<'a> {
                 Ok(Some(pin))
             }
             Called::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => Ok(None),
-            Called::Reply(other) => Err(self.subject.refused(located, other).await),
+            Called::Reply(other) => Err(self.subject.refused(other)),
             Called::Gone => self.subject.lost(located).map(|()| None),
             Called::Expired => Err(self.timed_out()),
         }
@@ -377,7 +370,7 @@ impl<'a> PointerRunner<'a> {
         };
         match self.call(located, &request).await? {
             Called::Reply(ProbeReply::Read { value, .. }) => {
-                serde_json::from_value(value.textless())
+                serde_json::from_value(value.into_value())
                     .map(Some)
                     .map_err(|error| {
                         self.scope.fail(
@@ -387,7 +380,7 @@ impl<'a> PointerRunner<'a> {
                     })
             }
             Called::Reply(ProbeReply::Detached | ProbeReply::None { stale_ref: None }) => Ok(None),
-            Called::Reply(other) => Err(self.subject.refused(located, other).await),
+            Called::Reply(other) => Err(self.subject.refused(other)),
             Called::Gone => self.subject.lost(located).map(|()| None),
             Called::Expired => Err(self.timed_out()),
         }
@@ -468,7 +461,7 @@ impl<'a> PointerRunner<'a> {
                 Called::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
                     return self.detached_from_dom();
                 }
-                Called::Reply(other) => return Err(self.subject.refused(located, other).await),
+                Called::Reply(other) => return Err(self.subject.refused(other)),
                 Called::Gone => return self.subject.lost(located).map(|()| Inner::Reresolve),
                 Called::Expired => return Err(self.timed_out()),
             };
@@ -499,8 +492,8 @@ impl<'a> PointerRunner<'a> {
             };
             let page_point = match self.place(located, measured.point, !action.force).await? {
                 Placed::At(point) => point,
-                Placed::Covered { by, world } => {
-                    self.log_covered(&world, by).await?;
+                Placed::Covered { by } => {
+                    self.log_covered(by);
                     continue;
                 }
                 Placed::Reresolve => return Ok(Inner::Reresolve),
@@ -554,14 +547,14 @@ impl<'a> PointerRunner<'a> {
                         continue;
                     }
                     Called::Reply(ProbeReply::Covered { by }) => {
-                        self.log_covered(located.world(), by).await?;
+                        self.log_covered(by);
                         continue;
                     }
                     Called::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
                         return self.detached_from_dom();
                     }
                     Called::Reply(other) => {
-                        return Err(self.subject.refused(located, other).await);
+                        return Err(self.subject.refused(other));
                     }
                     Called::Gone => {
                         return self.subject.lost(located).map(|()| Inner::Reresolve);
@@ -586,14 +579,16 @@ impl<'a> PointerRunner<'a> {
                 None => None,
                 Some(approach) => match self.call(located, &ProbeRequest::Moves).await? {
                     Called::Reply(ProbeReply::Moves { moves }) => Some((moves, approach)),
-                    Called::Reply(other) => return Err(self.subject.refused(located, other).await),
+                    Called::Reply(other) => return Err(self.subject.refused(other)),
                     Called::Gone => return self.subject.lost(located).map(|()| Inner::Reresolve),
                     Called::Expired => return Err(self.timed_out()),
                 },
             };
             let sent = self.scope.send_effect()?;
             let dialogs_from = self.pw.events().head();
-            let navigations = (action.wait_after == WaitAfter::Navigations).then(|| {
+            // Every action that reads its verdict watches the navigations its input requests:
+            // a pending one ends the verdict's wait, and a click then waits for them to finish.
+            let mut navigations = (action.wait_after != WaitAfter::Nothing).then(|| {
                 let sessions = root_id
                     .iter()
                     .chain(located.world().session_id())
@@ -635,30 +630,47 @@ impl<'a> PointerRunner<'a> {
                     // presses nothing the page sees.
                     drag.trial_press = Some(guard);
                 } else {
-                    let verdict = guard.verdict(self.page, self.scope);
-                    let Ok(verdict) = self.scope.within(verdict).await else {
-                        return Err(self.input_timed_out(dialogs_from));
+                    // Upstream reads the verdict racing its frame's pending navigation and takes
+                    // a navigation for a landed input: the frame would not answer until it ends,
+                    // which may be never. The guard is then abandoned, not awaited.
+                    let frame = located.world().frame().clone();
+                    let read = self.scope.within(guard.verdict());
+                    let navigating = async {
+                        match navigations.as_mut() {
+                            Some(watch) => watch.pending_in(&frame).await,
+                            None => future::pending().await,
+                        }
                     };
-                    let verdict = verdict.map_err(PlaywrightError::after_input)?;
-                    // A world gone under the verdict means the input navigated or closed the
-                    // frame: it landed, as upstream reads a failed `stop()`.
-                    match verdict {
-                        Ok(ProbeReply::Verdict { hit: Hit::Done(_) })
-                        | Err(ProbeFailure::Gone(_)) => {}
-                        Ok(ProbeReply::Verdict {
-                            hit: Hit::Missed { by },
-                        }) => {
-                            self.log_covered(located.world(), by)
-                                .await
-                                .map_err(PlaywrightError::after_input)?;
-                            continue;
+                    let read = tokio::select! {
+                        biased;
+                        read = read => Some(read),
+                        () = navigating => None,
+                    };
+                    // `None`: the element's frame is navigating, so the input landed.
+                    if let Some(read) = read {
+                        let Ok(verdict) = read else {
+                            return Err(self.input_timed_out(dialogs_from));
+                        };
+                        // A world gone under the verdict means the input navigated or closed
+                        // the frame: it landed, as upstream reads a failed `stop()`.
+                        match verdict {
+                            Ok(ProbeReply::Verdict { hit: Hit::Done(_) })
+                            | Err(ProbeFailure::Gone(_)) => {}
+                            Ok(ProbeReply::Verdict {
+                                hit: Hit::Missed { by },
+                            }) => {
+                                self.log_covered(by);
+                                continue;
+                            }
+                            Ok(other) => {
+                                return Err(self.subject.refused(other).after_input());
+                            }
+                            Err(failure) => {
+                                return Err(resolve::failed(self.scope, failure).after_input());
+                            }
                         }
-                        Ok(other) => {
-                            return Err(self.subject.refused(located, other).await.after_input());
-                        }
-                        Err(failure) => {
-                            return Err(resolve::failed(self.scope, failure).after_input());
-                        }
+                    } else {
+                        guard.abandon();
                     }
                 }
             }
@@ -667,7 +679,8 @@ impl<'a> PointerRunner<'a> {
             self.scope.log(format!("  {done}{} action done", req.name));
             self.scope
                 .log("  waiting for scheduled navigations to finish".to_owned());
-            if let Some(navigations) = navigations
+            if let Some(navigations) =
+                navigations.filter(|_| action.wait_after == WaitAfter::Navigations)
                 && navigations.settle(self.scope).await.is_err()
             {
                 return Err(self.scope.timed_out(ErrorCode::WaitTimeout));
@@ -744,7 +757,7 @@ impl<'a> PointerRunner<'a> {
                     }
                 }
                 Called::Reply(other) => {
-                    return Err(self.subject.refused(located, other).await.after_input());
+                    return Err(self.subject.refused(other).after_input());
                 }
                 Called::Gone => return self.subject.lost(located).map(|()| Route::Reresolve),
                 Called::Expired => return Err(self.input_timed_out(dialogs_from)),
@@ -795,8 +808,7 @@ impl<'a> PointerRunner<'a> {
         point: Point,
         hit_test: bool,
     ) -> Result<Placed, PlaywrightError> {
-        let projected =
-            frame_projection::project(self.page, self.scope, located.path(), point, hit_test);
+        let projected = frame_projection::project(self.scope, located.path(), point, hit_test);
         let Ok(projected) = self.scope.within(projected).await else {
             return Err(self.timed_out());
         };
@@ -805,7 +817,7 @@ impl<'a> PointerRunner<'a> {
                 let at = frame_projection::round_point(at);
                 Ok(Placed::At(PagePoint { x: at.x, y: at.y }))
             }
-            Projection::Covered { by, world } => Ok(Placed::Covered { by, world }),
+            Projection::Covered { by } => Ok(Placed::Covered { by }),
             Projection::Transformed => Err(self.scope.fail(
                 ErrorCode::Unsupported,
                 "an iframe on the way to the element has a CSS transform, which Neo cannot \
@@ -817,18 +829,11 @@ impl<'a> PointerRunner<'a> {
         }
     }
 
-    /// Upstream's `<element> intercepts pointer events` line. The element is the page's own
-    /// markup in `world`'s frame, the element's or a parent's, so its description is masked
-    /// with that frame's site first, within the op's timeout.
-    async fn log_covered(&self, world: &SealedWorld, by: PageText) -> Result<(), PlaywrightError> {
-        let swept =
-            site_sweep::swept_now(self.page, self.scope, world.clone(), FieldValues::default());
-        let Ok(values) = self.scope.within(swept).await else {
-            return Err(self.timed_out());
-        };
-        let by = values?.mask_line(by);
-        self.scope.log(format!("  {by} intercepts pointer events"));
-        Ok(())
+    /// Upstream's `<element> intercepts pointer events` line: the element's description, the
+    /// page's own markup.
+    fn log_covered(&self, by: PageText) {
+        self.scope
+            .log(format!("  {} intercepts pointer events", by.into_line()));
     }
 
     /// One request in the located world, rooted at the handle's node when there is one.
@@ -840,7 +845,7 @@ impl<'a> PointerRunner<'a> {
         let Ok(asked) = self.scope.within(self.subject.call(located, request)).await else {
             return Ok(Called::Expired);
         };
-        match asked? {
+        match asked {
             Ok(reply) => Ok(Called::Reply(reply)),
             Err(ProbeFailure::Gone(_)) => Ok(Called::Gone),
             Err(failure) => Err(resolve::failed(self.scope, failure)),
@@ -898,11 +903,9 @@ struct Measurement {
 /// Where the input goes.
 enum Placed {
     At(PagePoint),
-    /// A parent frame's element is in the way: its description, page text of `world`.
-    /// The world is boxed: it is large, and the other variants carry little.
+    /// A parent frame's element is in the way: its description, page text of that frame.
     Covered {
         by: PageText,
-        world: Box<SealedWorld>,
     },
     Reresolve,
 }

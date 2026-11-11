@@ -1,5 +1,5 @@
-//! Every frame of a tab and its hosting native session. The wire metadata backs the prelude's
-//! synchronous frame accessors; native navigation uses the transport map without a JS world.
+//! `page.frames()`: every frame of a tab, out-of-process ones included, for the prelude's
+//! synchronous `frames()`, `mainFrame()`, `parentFrame()` and `childFrames()`.
 //!
 //! A session's `Page.getFrameTree` lists only the frames in its own renderer. Each
 //! out-of-process iframe is a target of its own whose `parentFrameId` names the frame that
@@ -12,16 +12,24 @@
 //! ```
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
-use browseros_core::{BrowserSession, CoreError, FrameId, PageId, ProtocolSession};
+use browseros_core::{BrowserSession, CoreError, FrameId, PageId, ProtocolSession, TabId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::time;
 
 use crate::op_output::to_output;
 use crate::op_scope::OpScope;
-use crate::page::document_watch::{FrameTreeNode, FrameTreeReply, decode};
+use crate::page::document_watch::{DocumentWatch, FrameTreeNode, FrameTreeReply, decode};
+use crate::page::frame_routes::{FrameRoute, RootAttachment};
 use crate::target::PageRef;
-use crate::{Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError};
+
+/// Loading can mean an uncommitted navigation that blocks renderer reads, or just a child
+/// resource in an otherwise responsive document. Give optional facts a small budget in that
+/// case: dropping every loading tree would hide newly attached children after `setContent`.
+const LOADING_SNAPSHOT: Duration = Duration::from_millis(100);
 
 /// `page.frames()`: `{ page }`.
 #[derive(Debug, Deserialize)]
@@ -34,10 +42,20 @@ pub(crate) struct FramesInput {
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct FrameTree {
     frames: Vec<FrameInfo>,
-    /// A tree is read renderer by renderer. Protocol navigation needs this native ownership,
-    /// not an installed JavaScript world, including for same-process children of an OOPIF.
     #[serde(skip)]
-    sessions: HashMap<FrameId, ProtocolSession>,
+    hosts: HashMap<FrameId, ProtocolSession>,
+}
+
+/// Stable identity for one document when validating subtree lifecycle readiness.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct FrameDocument {
+    pub(crate) frame: FrameId,
+    pub(crate) loader: String,
+}
+
+struct HostedTree {
+    tree: FrameTreeReply,
+    session: ProtocolSession,
 }
 
 /// One frame, as Playwright's `Frame` reports it.
@@ -50,6 +68,9 @@ struct FrameInfo {
     /// The frame element's `name`, `""` without one.
     name: String,
     url: String,
+    /// Correlates lifecycle snapshots across reads; never exposed as a public Frame field.
+    #[serde(skip)]
+    loader: String,
 }
 
 /// The out-of-process iframes of the browser, as `Target.getTargets` lists them.
@@ -69,22 +90,87 @@ struct IframeTarget {
 }
 
 impl FrameTree {
+    /// The documents under `root`, including itself, in stable identity order. A replacement
+    /// document must reach its own lifecycle state even if its Frame object was retained.
+    pub(crate) fn documents(&self, root: &FrameId) -> Vec<FrameDocument> {
+        let main = self.frames.first().is_some_and(|frame| frame.id == *root);
+        let mut documents: Vec<_> = self
+            .frames
+            .iter()
+            .filter(|frame| {
+                main || self
+                    .path_to(&frame.id)
+                    .is_some_and(|path| path.contains(root))
+            })
+            .map(|frame| FrameDocument {
+                frame: frame.id.clone(),
+                loader: frame.loader.clone(),
+            })
+            .collect();
+        documents.sort_by(|a, b| a.frame.as_str().cmp(b.frame.as_str()));
+        documents
+    }
+
     /// Frame identities for page-wide operations; worlds are resolved on each frame's own
     /// CDP session, so the JavaScript never crosses renderer or origin boundaries.
     pub(crate) fn ids(&self) -> impl Iterator<Item = &FrameId> {
         self.frames.iter().map(|frame| &frame.id)
     }
 
-    /// The native session that listed this frame in its own renderer's tree.
-    pub(crate) fn session(&self, frame: &FrameId) -> Option<&ProtocolSession> {
-        self.sessions.get(frame)
+    /// The endpoint found through this page's ancestry, including same-process descendants
+    /// of OOPIFs. A global frame lookup without this host would fall back to the page session.
+    pub(crate) fn endpoint(&self, frame: &FrameId) -> Option<&ProtocolSession> {
+        self.hosts.get(frame)
     }
 
-    fn add_hosted(&mut self, tree: FrameTreeNode, embedder: Option<&str>, host: &ProtocolSession) {
-        let first = self.frames.len();
+    /// Keep endpoint hints only after a complete admitted discovery. Stamp the start, so a
+    /// renderer swap during discovery invalidates the hint rather than being hidden by it.
+    pub(crate) fn remember(
+        &self,
+        pw: &Playwright,
+        scope: &OpScope<'_>,
+        page: TabId,
+        root: &ProtocolSession,
+        since: u64,
+    ) {
+        let (Some(root_id), Some(main)) = (root.session_id(), self.frames.first()) else {
+            return;
+        };
+        let routes = self
+            .hosts
+            .iter()
+            .filter_map(|(frame, session)| {
+                Some((
+                    frame.clone(),
+                    FrameRoute {
+                        session: session.clone(),
+                        ancestors: self.path_to(frame)?,
+                    },
+                ))
+            })
+            .collect();
+        scope.run_state().frames.replace(
+            page,
+            RootAttachment {
+                session: root_id.clone(),
+                frame: main.id.clone(),
+                epoch: pw.browser().connection().connection_epoch(),
+            },
+            since,
+            routes,
+        );
+    }
+
+    fn add_hosted(
+        &mut self,
+        tree: FrameTreeNode,
+        embedder: Option<&str>,
+        session: &ProtocolSession,
+    ) {
+        let start = self.frames.len();
         self.add(tree, embedder);
-        for frame in self.frames.iter().skip(first) {
-            self.sessions.insert(frame.id.clone(), host.clone());
+        for frame in self.frames.iter().skip(start) {
+            self.hosts.insert(frame.id.clone(), session.clone());
         }
     }
 
@@ -105,6 +191,7 @@ impl FrameTree {
                 parent_id: parent.map(FrameId),
                 name: frame.name.unwrap_or_default(),
                 url,
+                loader: frame.loader_id,
             });
         }
     }
@@ -137,15 +224,57 @@ pub(crate) async fn frames(
     scope: &OpScope<'_>,
     input: FramesInput,
 ) -> Result<Value, PlaywrightError> {
-    let page = input.page.tab();
+    #[derive(Serialize)]
+    struct Snapshot {
+        #[serde(flatten)]
+        frames: Option<FrameTree>,
+    }
+    let frames = match scope.within(snapshot(pw, scope, input.page.tab())).await {
+        Ok(result) => result?,
+        Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
+    };
+    to_output(scope, &Snapshot { frames })
+}
+
+/// Cache metadata must not become a navigation barrier. Browser-owned loading state bounds
+/// reads during an existing navigation; a watcher subscribed before that read catches one
+/// that starts in between. The caller retains its previous tree when the renderer is busy.
+pub(crate) async fn snapshot(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    page: TabId,
+) -> Result<Option<FrameTree>, PlaywrightError> {
     let admitted = scope.admit(pw.browser(), page).await?;
-    let root = pw
-        .browser()
-        .protocol_session(admitted.session.session_id.clone());
-    let tree = read(pw.browser(), &admitted.core_page, &root)
-        .await
-        .map_err(|error| scope.core_error(&error))?;
-    to_output(scope, &tree)
+    let session_id = admitted.session.session_id.clone();
+    let root = pw.browser().protocol_session(session_id.clone());
+    let frame = FrameId(admitted.session.target_id.as_str().to_owned());
+    let mut watch = DocumentWatch::new(pw.browser(), root.clone(), session_id, frame);
+    let read = async {
+        let shown = scope
+            .view()
+            .page(admitted.core_page.clone())
+            .await
+            .map_err(|error| scope.core_error(&error))?;
+        let tree = async {
+            let since = pw.events().head();
+            let tree = read(pw.browser(), &admitted.core_page, &root)
+                .await
+                .map_err(|error| scope.core_error(&error))?;
+            tree.remember(pw, scope, page, &root, since);
+            Ok(Some(tree))
+        };
+        if shown.is_loading {
+            time::timeout(LOADING_SNAPSHOT, tree)
+                .await
+                .unwrap_or(Ok(None))
+        } else {
+            tree.await
+        }
+    };
+    tokio::select! {
+        result = read => result,
+        _ = watch.navigation_started() => Ok(None),
+    }
 }
 
 /// Every frame of `page`, whose main frame's session is `root`: that session's own tree, then
@@ -185,11 +314,18 @@ pub(crate) async fn read(
         for oopif in next {
             read.insert(oopif.target_id.as_str());
             // A frame that went away between the two reads is simply not listed.
-            if let Ok((subtree, session)) = oopif_tree(browser, page, &oopif.target_id).await {
+            let Some(parent) = oopif
+                .parent_frame_id
+                .as_ref()
+                .and_then(|id| tree.hosts.get(&FrameId(id.clone())))
+            else {
+                continue;
+            };
+            if let Ok(subtree) = oopif_tree(browser, page, &oopif.target_id, parent).await {
                 tree.add_hosted(
-                    subtree.frame_tree,
+                    subtree.tree.frame_tree,
                     oopif.parent_frame_id.as_deref(),
-                    &session,
+                    &subtree.session,
                 );
             }
         }
@@ -207,16 +343,26 @@ async fn oopif_tree(
     browser: &BrowserSession,
     page: &PageId,
     frame: &str,
-) -> Result<(FrameTreeReply, ProtocolSession), CoreError> {
+    parent: &ProtocolSession,
+) -> Result<HostedTree, CoreError> {
     let target = browser
         .frames()
-        .resolve_frame_target(page.clone(), Some(FrameId(frame.to_owned())), None, true)
+        .resolve_frame_target(
+            page.clone(),
+            Some(FrameId(frame.to_owned())),
+            Some(parent),
+            true,
+        )
         .await?;
     // Publish a child Frame only after its session reports navigation. On adopted tabs,
     // core has attached the OOPIF without enabling Page; enabling it when a waiter starts
     // is too late for a simultaneous same-renderer navigation (which has no swap to replay).
     target.session.send_value("Page.enable", json!({})).await?;
-    Ok((frame_tree(&target.session).await?, target.session))
+    let tree = frame_tree(&target.session).await?;
+    Ok(HostedTree {
+        tree,
+        session: target.session,
+    })
 }
 
 #[cfg(test)]

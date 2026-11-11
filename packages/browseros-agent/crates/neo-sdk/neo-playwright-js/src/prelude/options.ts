@@ -65,11 +65,13 @@ export const KEY_KEYS = ['delay', 'noWaitAfter'] as const
 export const SCREENSHOT_KEYS = [
   'type',
   'quality',
+  'omitBackground',
   'fullPage',
   'clip',
   'animations',
   'caret',
   'style',
+  'scale',
 ] as const
 
 /** Objects the prelude hands to scripts (pages, frames, locators, handles), by identity. */

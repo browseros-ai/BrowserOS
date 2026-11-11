@@ -222,7 +222,7 @@ async fn a_display_needs_the_host_token() -> TestResult {
 }
 
 #[tokio::test]
-async fn the_owners_first_key_closes_views_with_4001_until_their_display_closes() -> TestResult {
+async fn views_keep_streaming_and_admitting_while_the_owner_types() -> TestResult {
     let h = harness().await?;
     h.browser.open_tab(12);
     let socket = serve(&h)?;
@@ -241,12 +241,16 @@ async fn the_owners_first_key_closes_views_with_4001_until_their_display_closes(
     };
     let (mut control, _) = handshake(&socket.path, how).await?;
     control.send(Message::binary(QEMU_A.to_vec())).await?;
-    let (code, reason) = closed(&mut view).await?;
-    assert_eq!(code, 4001, "{reason}");
-    assert!(reason.starts_with("paused"), "{reason}");
-    assert_eq!(
-        refused(&socket.path, Open::new("mode=view")).await?,
-        (409, "display_paused".to_owned())
+    view.send(Message::binary(UPDATE.to_vec())).await?;
+    assert!(
+        !read(&mut view, 4).await?.is_empty(),
+        "the existing view still streams"
+    );
+    let (mut joined, _) = handshake(&socket.path, Open::new("mode=view")).await?;
+    joined.send(Message::binary(UPDATE.to_vec())).await?;
+    assert!(
+        !read(&mut joined, 4).await?.is_empty(),
+        "a view can join during input"
     );
 
     timeout(WITHIN, async {
@@ -263,23 +267,27 @@ async fn the_owners_first_key_closes_views_with_4001_until_their_display_closes(
         "the owner's close was not answered: {answer:?}"
     );
 
-    let (mut back, _) = handshake(&socket.path, Open::new("mode=view")).await?;
-    back.send(Message::binary(UPDATE.to_vec())).await?;
+    view.send(Message::binary(UPDATE.to_vec())).await?;
     assert!(
-        !read(&mut back, 4).await?.is_empty(),
-        "views are let in again once the owner leaves"
+        !read(&mut view, 4).await?.is_empty(),
+        "the original view survives owner departure"
+    );
+    joined.send(Message::binary(UPDATE.to_vec())).await?;
+    assert!(
+        !read(&mut joined, 4).await?.is_empty(),
+        "the joined view survives owner departure"
     );
     Ok(())
 }
 
-/// The takeover's `display` is a control display bound with `release=`: it is the only display
-/// while the takeover holds spectators off, its release closes it with 4002, and after that the
-/// same path is refused before any upgrade.
+/// Release closes only the bound control display with 4002. Spectators keep streaming, and
+/// the released control path is refused before any upgrade.
 #[tokio::test]
 async fn a_takeovers_display_closes_with_4002_at_its_release() -> TestResult {
     let h = harness().await?;
     h.browser.open_tab(12);
     let socket = serve(&h)?;
+    let (mut view, _) = handshake(&socket.path, Open::new("mode=view")).await?;
     let takeover = h.post("/v1/takeovers", r#"{"tabId": 12}"#).await?;
     assert_eq!(takeover.status, 200, "{}", takeover.body);
     let query = takeover.body["display"]
@@ -287,10 +295,10 @@ async fn a_takeovers_display_closes_with_4002_at_its_release() -> TestResult {
         .and_then(|path| path.strip_prefix("/v1/display?"))
         .ok_or("the takeover names its display")?
         .to_owned();
-    assert_eq!(
-        refused(&socket.path, Open::new("mode=view")).await?,
-        (409, "display_paused".to_owned()),
-        "the takeover holds spectators off"
+    view.send(Message::binary(UPDATE.to_vec())).await?;
+    assert!(
+        !read(&mut view, 4).await?.is_empty(),
+        "the view survives takeover start"
     );
     let (mut control, _) = handshake(&socket.path, Open::new(&query)).await?;
 
@@ -300,6 +308,11 @@ async fn a_takeovers_display_closes_with_4002_at_its_release() -> TestResult {
     let (code, reason) = closed(&mut control).await?;
     assert_eq!(code, 4002, "{reason}");
     assert!(reason.starts_with("released"), "{reason}");
+    view.send(Message::binary(UPDATE.to_vec())).await?;
+    assert!(
+        !read(&mut view, 4).await?.is_empty(),
+        "the view survives release"
+    );
     assert_eq!(
         refused(&socket.path, Open::new(&query)).await?,
         (409, "takeover_released".to_owned())

@@ -12,7 +12,7 @@ use crate::{
     pages::{MovePageOptions, NewPageOptions, PageCreation, PageInfo, PageSession},
     pointer::Pointer,
     profiles::{BrowserProfileInfo, LoadProfileOutcome, ProfileSelector, default_profile},
-    screenshot::{ScreenshotCaptureOptions, ScreenshotCaptureResult},
+    screenshot::{ScreenshotBackground, ScreenshotCaptureOptions, ScreenshotCaptureResult},
     windows::WindowInfo,
 };
 use browseros_cdp::{CdpError, CdpEvent};
@@ -1176,6 +1176,37 @@ impl BrowserView {
             .screenshot_checked(page, o, || Ok::<(), Infallible>(()))
             .await?;
         Ok(capture)
+    }
+
+    /// Captures caller-normalized `Page.captureScreenshot` parameters, retaining the view's
+    /// native target/profile admission and freshness checks. The SDK uses this when Playwright
+    /// geometry differs from core's viewport/full-page presets; both paths share the capture
+    /// queue and pointer hiding.
+    pub async fn screenshot_cdp(&self, page: PageId, params: Value) -> Result<String, CoreError> {
+        self.screenshot_cdp_with_background(page, params, ScreenshotBackground::Default)
+            .await
+    }
+
+    /// A normalized capture with a temporary background. Core holds its shared capture lock
+    /// through set, capture and reset, so concurrent audit/desktop images cannot see it.
+    pub async fn screenshot_cdp_with_background(
+        &self,
+        page: PageId,
+        params: Value,
+        background: ScreenshotBackground,
+    ) -> Result<String, CoreError> {
+        if self.epoch_guard()?.is_none() {
+            let session = self.session.pages.get_session(page).await?;
+            return crate::screenshot::capture_cdp(&session.session, params, background).await;
+        }
+        let access = self
+            .page_access(page)
+            .await?
+            .ok_or_else(|| cdp_policy::unsupported("Page.captureScreenshot"))?;
+        let session = access.session().await?;
+        let data = crate::screenshot::capture_cdp(&session.session, params, background).await?;
+        access.fresh().await?;
+        Ok(data)
     }
 
     /// [`Self::screenshot`] with the caller's last word on the capture: `before_capture` runs
