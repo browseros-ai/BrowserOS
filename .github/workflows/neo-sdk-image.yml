@@ -49,18 +49,29 @@ jobs:
       # The image's apt steps resolve Ubuntu's archive from inside a build container, through the
       # resolver the runner hands Docker. On 2026-11-11 seven runs in a row failed there with
       # "Could not resolve 'archive.ubuntu.com'" while the archive itself was up, so nothing was
-      # tested. This asks from inside a container first and, only when that fails, points the
-      # Docker engine at public resolvers. It changes the runner for this job, never the image:
-      # the Dockerfile and its package sources stay as they are.
+      # tested. This asks from inside a container first and, only when the name does not resolve,
+      # points the Docker engine at public resolvers. It changes the runner for this job, never
+      # the image: the Dockerfile and its package sources stay as they are.
+      #
+      # `getent hosts` exits 2 for a name that does not resolve. Any other failure is Docker's own
+      # (the image could not be pulled, the container could not start): its output stays visible
+      # and the job stops, because changing the resolver would hide the real cause.
       - name: Make sure containers can resolve Ubuntu's archive
         run: |
-          resolves() { docker run --rm ubuntu:24.04 getent hosts archive.ubuntu.com >/dev/null 2>&1; }
-          if resolves; then
+          probe() {
+            local status=0
+            docker run --rm ubuntu:24.04 getent hosts archive.ubuntu.com || status=$?
+            case "$status" in
+              0 | 2) return "$status" ;;
+              *) echo "::error::the resolver probe could not run (docker exit $status); see its output above"; exit 1 ;;
+            esac
+          }
+          if probe; then
             echo "containers resolve archive.ubuntu.com with the runner's own resolver"
             exit 0
           fi
           echo "::warning::containers cannot resolve archive.ubuntu.com; pointing Docker at public resolvers"
-          sed 's/^/host resolv.conf: /' /etc/resolv.conf || true
+          grep -v '^#' /etc/resolv.conf | sed 's/^/host resolv.conf: /' || true
           getent hosts archive.ubuntu.com | sed 's/^/host lookup: /' || echo "host lookup: failed as well"
           config=/etc/docker/daemon.json
           [ -s "$config" ] || echo '{}' | sudo tee "$config" >/dev/null
@@ -68,7 +79,7 @@ jobs:
           sudo mv "$config.new" "$config"
           sudo systemctl restart docker
           for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
-          if ! resolves; then
+          if ! probe; then
             echo "::error::containers still cannot resolve archive.ubuntu.com with public resolvers"
             exit 1
           fi
