@@ -129,6 +129,9 @@ pub(crate) enum ProbeRequest {
     },
     /// One read of every match, without waiting.
     ReadAll { target: ProbeTarget, read: ReadAll },
+    /// Upstream's `generateSelectorSimple` for the first element `target` matches now
+    /// (`locator.normalize`, one frame's part).
+    Selector { target: ProbeTarget },
     /// `ariaSnapshotJSON` of `root` and this frame's rendered iframe refs. `root: document` is
     /// upstream's frame root, `body,frameset`.
     Snapshot {
@@ -154,8 +157,8 @@ pub(crate) enum ProbeRequest {
     Pinned { pin: Pin },
     /// The document's title, or its doctype and root markup, read through the seal.
     Document { part: DocumentPart },
-    /// `document.open`, `write` and `close` with `html`; the probe then unboots itself, so
-    /// the new document is booted under a new seq.
+    /// `document.open`, `write` and `close` with `html`. The Document and this world outlive
+    /// the write, so the world keeps its engine and its seq.
     SetContent { html: String },
     /// A directory upload's `input` wait, armed on the pinned element, connected or not, before
     /// Rust sends `DOM.setFileInputFiles`. Answers `value` null, or `detached` for an evicted

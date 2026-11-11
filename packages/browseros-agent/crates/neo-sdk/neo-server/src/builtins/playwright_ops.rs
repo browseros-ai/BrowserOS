@@ -657,6 +657,7 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::PageError => ErrorCode::PAGE_ERROR,
         PlaywrightCode::NavigationFailed => ErrorCode::NAVIGATION_FAILED,
         PlaywrightCode::WaitTimeout => ErrorCode::WAIT_TIMEOUT,
+        PlaywrightCode::NavigationObservationTimeout => ErrorCode::NAVIGATION_OBSERVATION_TIMEOUT,
         PlaywrightCode::InvalidInput => ErrorCode::INVALID_INPUT,
         PlaywrightCode::Unsupported => ErrorCode::UNSUPPORTED,
         PlaywrightCode::SensitiveCopyRefused => ErrorCode::SENSITIVE_COPY_REFUSED,

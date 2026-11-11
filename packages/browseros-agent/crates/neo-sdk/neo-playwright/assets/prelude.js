@@ -184,6 +184,11 @@
       target: "target",
       lifetime: "operation"
     },
+    "locator.normalize": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
     "page.ariaSnapshot": {
       effect: "read",
       target: "page",
@@ -6798,6 +6803,10 @@ ${value.stack}`;
     count() {
       return this._frame._everyMatch("locator.count", "locator.count", this._selector);
     }
+    async normalize() {
+      const resolved = await this._frame._normalize("locator.normalize", this._selector);
+      return new Locator(this._frame, resolved);
+    }
     async all() {
       const count = await this._frame._everyMatch("locator.count", "locator.all", this._selector);
       return Array.from({ length: count }, (_, index) => this.nth(index));
@@ -7280,6 +7289,12 @@ ${value.stack}`;
       const target = await this._locatorBrand(api, selector);
       const input = { target };
       return await invoke(op, this._call(api, 0), input);
+    }
+    async _normalize(api, selector) {
+      const target = await this._locatorBrand(api, selector);
+      const input = { target, selector };
+      const resolved = await invoke("locator.normalize", this._call(api, 0), input);
+      return resolved.selector;
     }
     async _boundingBox(api, selector, options = {}) {
       return await this._selectorOp("locator.boundingBox", api, selector, true, this._wait(api, options), {});
@@ -9534,7 +9549,6 @@ Timeout: ${timeout}ms`);
       evaluateHandle: NO_HANDLES,
       hideHighlight: NO_INSPECTOR,
       highlight: NO_INSPECTOR,
-      normalize: "not available in Neo; use the locator as built",
       tap: NO_TOUCH
     },
     FrameLocator: {},

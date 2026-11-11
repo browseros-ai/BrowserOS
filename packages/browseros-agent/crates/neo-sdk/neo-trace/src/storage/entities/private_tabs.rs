@@ -1,9 +1,9 @@
-//! Sticky privacy flags, independent of run retention. First-record-wins inserts
-//! preserve the original private instant; only an ordered close command removes a flag.
+//! Legacy table definition used only by the baseline migration. Runtime state no longer reads
+//! or writes this table; keeping its DDL preserves compatibility with existing trace files.
 
 use sea_orm::entity::prelude::*;
 
-/// A durable private flag whose original timestamp survives repeated privacy commits.
+/// A legacy row retained in the schema for older trace files.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "private_tabs")]
 pub struct Model {

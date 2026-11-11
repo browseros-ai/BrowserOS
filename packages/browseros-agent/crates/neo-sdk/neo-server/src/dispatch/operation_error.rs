@@ -213,6 +213,8 @@ error_codes! {
     PAGE_ERROR = "page_error";
     /// The page never reached a state the op waited for: a load state, a URL, an event.
     WAIT_TIMEOUT = "wait_timeout";
+    /// Neo did not finish observing a document already restored with all load states.
+    NAVIGATION_OBSERVATION_TIMEOUT = "navigation_observation_timeout";
     /// A Playwright feature Neo does not support here, such as a popup opened as a window.
     UNSUPPORTED = "unsupported";
     /// Copy or cut in a password, card or one-time-code field.

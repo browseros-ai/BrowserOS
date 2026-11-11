@@ -192,6 +192,7 @@ mod tests {
             ("locator.waitFor", &[], true),
             ("locator.elementHandle", &[], true),
             ("locator.elementHandles", &[], true),
+            ("locator.normalize", &[], true),
             ("page.ariaSnapshot", &[], true),
             ("locator.ariaSnapshot", &[], true),
             ("expect.locator", &[], true),
@@ -238,9 +239,15 @@ mod tests {
             ("download.path", &[], true),
             ("download.saveAs", &[], true),
         ];
-        let mut audited: BTreeMap<_, _> = AUDITED.iter()
+        let mut audited: BTreeMap<_, _> = AUDITED
+            .iter()
             .map(|&(name, capabilities, gated)| (name, (capabilities, gated)))
             .collect();
+        assert_eq!(
+            audited.len(),
+            AUDITED.len(),
+            "each operation has one unambiguous audit row"
+        );
         let mut differ = Vec::new();
         for spec in Op::all().map(Op::spec) {
             let row = audited.remove(spec.name);

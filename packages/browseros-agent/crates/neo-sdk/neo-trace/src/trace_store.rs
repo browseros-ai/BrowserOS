@@ -2,7 +2,7 @@
 //!
 //! Reads run on a small pool beside the writer, which WAL allows. Every write goes through the
 //! one writer task ([`spawn_writer`](crate::spawn_writer)), through storage's `TraceBatch`.
-//! That keeps privacy commits ordered with the records around them. Startup recovery and
+//! That keeps screenshot answers ordered with the records around them. Startup recovery and
 //! [`TraceStore::salvage`] use that same write interface before the writer starts.
 //!
 //! Opening first runs the migrator's WAL switch, atomic baseline adoption and version fence,
@@ -23,7 +23,6 @@
 //! is gone (it reads as expired, and the next sweep converges), but a file never outlives its
 //! run's rows.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -38,13 +37,12 @@ use sea_orm::{
 use serde_json::Value;
 
 use crate::screenshot_files::ShotFiles;
-use crate::storage::entities::{operations, private_tabs, run_tabs, runs};
+use crate::storage::entities::{operations, run_tabs, runs};
 use crate::storage::record_rows::{self, RunDetailRow, RunSummaryRow};
 use crate::storage::{TraceBatch, trace_migrator};
 use crate::{
-    EpochMillis, OperationId, OperationRow, Page, PrivacyRecord, PrivateReason, RequestId,
-    RunDetail, RunId, RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId,
-    TraceError, TraceTail, salvage,
+    EpochMillis, OperationId, OperationRow, Page, RequestId, RunDetail, RunId, RunQuery,
+    RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TraceError, TraceTail, salvage,
 };
 
 /// The most screenshot bytes kept on disk (D5): about 7,000 JPEGs of 150 KB.
@@ -158,27 +156,6 @@ impl TraceStore {
 
     pub(crate) fn files(&self) -> &ShotFiles {
         &self.files
-    }
-
-    /// Every private tab, for [`Privacy::new`](crate::Privacy::new) at startup.
-    ///
-    /// # Errors
-    /// When the file cannot be read.
-    pub async fn private_tabs(&self) -> Result<HashMap<TabId, PrivacyRecord>, TraceError> {
-        let rows = private_tabs::Entity::find().all(&self.db).await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                (
-                    TabId(row.tab_id),
-                    PrivacyRecord {
-                        since: EpochMillis::from_millis(row.since),
-                        // Unknown stored reasons remain private rather than failing the startup load.
-                        reason: PrivateReason::parse(&row.reason).unwrap_or(PrivateReason::Host),
-                    },
-                )
-            })
-            .collect())
     }
 
     /// One run with its operations, or `None` when no run has this id.

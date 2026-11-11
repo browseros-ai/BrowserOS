@@ -23,11 +23,6 @@ impl Defaults {
         width: 1600,
         height: 1000,
     };
-    /// Where the Neo image's Dockerfile installs the CAPTCHA provider keys, under `$HOME`: a 0700
-    /// directory that holds only them. Denied to uploads whole, so a key baked into the image is
-    /// covered even when no variable names it.
-    pub(crate) const CAPTCHA_KEY_DIR: &str = ".config/browseros/captcha";
-
     /// A run's budget when the model sends no `timeout`. Fits two CAPTCHA solves (120 s each)
     /// plus page work, so a host sets nothing (decision 4).
     pub(crate) const RUN_TIMEOUT: Duration = Duration::from_secs(300);
