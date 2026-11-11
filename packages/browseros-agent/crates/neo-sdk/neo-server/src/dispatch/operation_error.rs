@@ -216,6 +216,8 @@ error_codes! {
     /// A download `download.saveAs` waited on was canceled or interrupted, or finished where Neo
     /// cannot read it.
     DOWNLOAD_FAILED = "download_failed";
+    /// Neo did not finish observing a document already restored with all load states.
+    NAVIGATION_OBSERVATION_TIMEOUT = "navigation_observation_timeout";
     /// A Playwright feature Neo does not support here, such as a popup opened as a window.
     UNSUPPORTED = "unsupported";
     /// Copy or cut in a password, card or one-time-code field.

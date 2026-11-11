@@ -162,7 +162,7 @@ impl TabRegistry {
         self.lock().open.contains_key(&tab)
     }
 
-    /// Per-tab feature state (sdk-playwright's facade, sdk-privacy's journal), created on first
+    /// Per-tab feature state (sdk-playwright's facade), created on first
     /// use. `None` once the tab closed. `T::default` runs under the registry's lock, so it must
     /// not call back into the registry.
     #[must_use]

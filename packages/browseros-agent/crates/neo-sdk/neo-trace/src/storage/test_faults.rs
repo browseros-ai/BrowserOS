@@ -10,12 +10,23 @@ use sea_orm::{
 use super::entities::{run_tabs, runs};
 
 pub(crate) async fn break_table(db: &DatabaseConnection, table: &str) -> Result<(), DbErr> {
-    assert!(matches!(
-        table,
-        "runs" | "operations" | "run_tabs" | "private_tabs"
-    ));
+    assert!(matches!(table, "runs" | "operations" | "run_tabs"));
     db.execute_unprepared(&format!("DROP TABLE {table}"))
         .await?;
+    Ok(())
+}
+
+/// A reversible failure that leaves the schema readable while a writer batch rolls back.
+pub(crate) async fn reject_test_operation(
+    db: &DatabaseConnection,
+    reject: bool,
+) -> Result<(), DbErr> {
+    let sql = if reject {
+        "CREATE TRIGGER reject_test_operation BEFORE INSERT ON operations          WHEN NEW.name = 'test.fail' BEGIN SELECT RAISE(ABORT, 'test batch failure'); END"
+    } else {
+        "DROP TRIGGER reject_test_operation"
+    };
+    db.execute_unprepared(sql).await?;
     Ok(())
 }
 

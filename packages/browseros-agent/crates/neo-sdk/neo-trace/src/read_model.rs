@@ -61,7 +61,7 @@ pub struct OperationRow {
 pub enum ShotState {
     /// A JPEG is on disk.
     Stored,
-    /// Its tab was private, so no pixels were kept.
+    /// A legacy row from an older writer that withheld pixels. Read-only: new jobs never emit it.
     Withheld,
     /// The disk cap deleted it.
     Expired,
@@ -92,7 +92,7 @@ impl ShotState {
 pub enum ShotRead {
     /// The JPEG.
     Jpeg(Vec<u8>),
-    /// Withheld because its tab was private.
+    /// A legacy withheld row. Kept so older screenshots remain readable.
     Withheld,
     /// Deleted by the disk cap, or missing from the disk.
     Expired,

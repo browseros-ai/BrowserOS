@@ -19,7 +19,7 @@
 //! camera that takes the pictures lives in `neo-service`, so this crate makes no browser
 //! calls.
 //!
-//! claw-sdk is stateless. Records and privacy hang off the browser's tab id
+//! claw-sdk is stateless. Records hang off the browser's tab id
 //! (`browseros_core::TabId`) and the host's optional `requestId` and `taskId`. The crate takes
 //! only that id from `browseros-core` and has no dispatcher or HTTP types, so it builds and
 //! tests on its own. claw-sdk maps its dispatcher's types onto the record types here
@@ -39,7 +39,6 @@ mod error_record;
 mod ids;
 mod json_pointer;
 mod operation_record;
-mod privacy;
 mod read_model;
 mod redactor;
 mod run_download;
@@ -61,9 +60,6 @@ pub use json_pointer::{JsonPointer, PointerError};
 pub use operation_record::{
     Delivery, Effect, OperationEnded, OperationKind, OperationReached, OperationStarted, Outcome,
     PageState,
-};
-pub use privacy::{
-    CaptureGuard, ControlDisplay, Privacy, PrivacyError, PrivacyRecord, PrivacyStore, PrivateReason,
 };
 pub use read_model::{
     OperationRow, Page, RunDetail, RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct,

@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, PageState, PrivateReason, RedactionLimits, Redactor, RequestId, RetentionPolicy,
-    RunEffects, RunQuery, RunStatus, ShotRead, ShotState, TailQuery, TaskId, TraceError,
-    TraceStore, WriterConfig, spawn_writer,
+    Outcome, PageState, RedactionLimits, Redactor, RequestId, RetentionPolicy, RunEffects,
+    RunQuery, RunStatus, ShotRead, ShotState, TailQuery, TaskId, TraceError, TraceStore,
+    WriterConfig, spawn_writer,
 };
 use sea_orm::sqlx::sqlite::SqliteConnectOptions;
 use sea_orm::sqlx::{self, Connection, Row, SqliteConnection};
@@ -414,14 +414,6 @@ async fn an_existing_v1_file_is_adopted_with_every_row() -> TestResult {
         .await?;
     assert_eq!(second, old_cursor);
     assert_eq!(second.items[0].id, A.parse()?);
-    assert_eq!(
-        store
-            .private_tabs()
-            .await?
-            .get(&TabId(9))
-            .map(|flag| flag.reason),
-        Some(PrivateReason::Host)
-    );
     let act = store
         .task_last_act(&TaskId::parse("task")?)
         .await?
@@ -486,7 +478,7 @@ async fn an_s4_file_gains_notes_and_takes_operation_ends() -> TestResult {
 }
 
 #[tokio::test]
-async fn an_s3_file_is_adopted_with_its_flags_and_request_history() -> TestResult {
+async fn an_s3_file_is_adopted_with_its_request_history() -> TestResult {
     let (_dir, path) = fixture("s3", true).await?;
     let store = TraceStore::open(&path).await?;
     assert!(
@@ -504,7 +496,6 @@ async fn an_s3_file_is_adopted_with_its_flags_and_request_history() -> TestResul
             .screenshot
             .is_none()
     );
-    assert!(store.private_tabs().await?.contains_key(&TabId(9)));
     assert_eq!(
         store
             .run_by_request(&RequestId::parse("global")?, None)
@@ -606,15 +597,7 @@ async fn a_refused_open_closes_every_connection() -> TestResult {
     let fresh = TraceStore::open(&path).await?;
     assert!(fresh.runs(RunQuery::default()).await?.items.is_empty());
     assert_eq!(logical_dump(&aside).await?, before);
-    let mut conn = connection(&path).await?;
-    sqlx::query("INSERT INTO private_tabs VALUES (5, 1, 'host')")
-        .execute(&mut conn)
-        .await?;
-    conn.close().await?;
-    assert!(
-        fresh.private_tabs().await?.contains_key(&TabId(5)),
-        "the replacement remains usable"
-    );
+
     Ok(())
 }
 
@@ -628,14 +611,6 @@ async fn stored_values_the_build_does_not_know_keep_their_rules() -> TestResult 
         .execute(&mut conn)
         .await?;
     conn.close().await?;
-    assert_eq!(
-        store
-            .private_tabs()
-            .await?
-            .get(&TabId(9))
-            .map(|row| row.reason),
-        Some(PrivateReason::Host)
-    );
     assert!(matches!(
         store.run(A.parse()?).await,
         Err(TraceError::Corrupt(_))

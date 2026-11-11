@@ -2,7 +2,7 @@
 //!
 //! ```text
 //!  builtin_set ─▶ playwright_ops: every neo-playwright op ─ PlaywrightFacade, the
-//!              │  process's one Playwright, built on the browser link's session ─ PrivacyHooks
+//!              │  process's one Playwright, built on the browser link's session
 //!              │  ─ op_marks: each op's marks, and whether it is held, from its capabilities
 //!              │  ─ event_release: an event pull's events through the rules, tab by tab
 //!              └▶ solve_captcha: neo.solveCaptcha ─ CaptchaClaims (also the door's busy rule)
@@ -28,7 +28,6 @@ mod keep_downloads;
 mod op_marks;
 mod playwright_facade;
 mod playwright_ops;
-mod privacy_hooks;
 mod solve_captcha;
 mod tab_janitor;
 #[cfg(test)]
@@ -39,5 +38,4 @@ pub(crate) use captcha_claims::CaptchaClaims;
 pub(crate) use keep_downloads::keep_downloads;
 pub(crate) use playwright_facade::PlaywrightFacade;
 pub(crate) use playwright_ops::PLAYWRIGHT_PRELUDE;
-pub(crate) use privacy_hooks::PrivacyHooks;
 pub(crate) use tab_janitor::TabJanitor;
