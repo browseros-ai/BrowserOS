@@ -70,6 +70,26 @@ test('docked, following: the screen follows the agent’s tab', () => {
   expect(html).not.toContain('role="status"')
 })
 
+test('docked, before it is measured: the box takes Neo’s screen ratio, so it does not jump', () => {
+  const unknown = renderToStaticMarkup(
+    <LiveScreen live={controller(STATUS_UP)} size="docked" />,
+  )
+  expect(unknown).toContain('data-fit="ratio"')
+  expect(unknown).toContain('aspect-ratio:1.6')
+  // Once the server has reported its framebuffer, its own ratio.
+  const reported = renderToStaticMarkup(
+    <LiveScreen
+      live={controller(STATUS_UP, {
+        type: 'connected',
+        screen: { width: 1280, height: 1024 },
+      })}
+      size="docked"
+    />,
+  )
+  expect(reported).toContain('aspect-ratio:1.25')
+  expect(reported).not.toContain('h-[200px]')
+})
+
 test('docked while popped out: no screen, a note where it went', () => {
   const live = controller(STATUS_UP)
   const html = renderToStaticMarkup(

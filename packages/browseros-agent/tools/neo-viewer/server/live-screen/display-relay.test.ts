@@ -222,7 +222,14 @@ test('only the viewer’s own page may open a display, with a query Neo would ac
   const viewer = await viewerWith(neo.host)
   for (const origin of [null, 'http://evil.example', 'http://127.0.0.1:1']) {
     const page = openPage(viewer, 'mode=view', origin)
-    expect((await page.closed).code).toBe(1002)
+    let opened = false
+    page.socket.addEventListener('open', () => {
+      opened = true
+    })
+    // The upgrade is refused (403), so the socket never opens. Bun's client reports that as
+    // 1002 "Expected 101 status code", or, depending on timing (Bun 1.3), as 1006.
+    expect([1002, 1006]).toContain((await page.closed).code)
+    expect(opened).toBe(false)
   }
   const display = `${viewer.url}${liveRoutes.display}`
   const refused = await fetch(`${display}?mode=view`, {
