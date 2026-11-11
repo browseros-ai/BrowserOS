@@ -113,8 +113,8 @@ The page at `/` (the approved design, "Viewer C v2"):
   its first line of code, how many calls Neo recorded, Neo time with a bar, the round trip the
   agent waited, **Code tok** (the script, what the model wrote) and **Reply tok** (what came back,
   what the model read) with a stacked bar, and a totals row. Every bar is a share of its column's
-  largest value. Click a header to sort by it (again to flip). Tokens are estimates, characters ÷ 4,
-  always shown with "≈".
+  largest value. Click #, Neo time, Round trip, Code tok or Reply tok to sort by it (again to
+  flip). Tokens are estimates, characters ÷ 4, always shown with "≈".
 - **An open run.** Click a row: its script, line by line and numbered, and on each line the
   methods that line called, from Neo's record of the run: start offset, the name Neo recorded (it
   can differ from what the script wrote: `page.textContent('h1')` is `locator.textContent`), the
@@ -134,7 +134,8 @@ The page at `/` (the approved design, "Viewer C v2"):
   tab the agent's latest run used and moves with it; **Control** lets you click and type (the agent
   is not held). **Pop out** opens it large over the page; closing it docks it back. **Take over**
   (top bar, or in the pop-up) gives you the agent's tab: its calls on that tab fail with
-  `owner_has_control` until you press **Give back**.
+  `owner_has_control` until you press **Give back**, or until the takeover expires (Neo's default,
+  20 minutes).
 
 `/?plain` is a plain list of the same runs (code, reply, raw request and reply, the live screen
 beside it), kept for debugging.
@@ -167,7 +168,7 @@ An agent that wants to label its runs sends the label in `_meta["com.browseros.n
 On disk: one append-only JSONL file, `log.jsonl`, in the instance's state folder
 (`--data-dir`, else `$NEO_VIEWER_DATA_DIR`, else `$XDG_STATE_HOME/neo-viewer/<instance>`, else
 `~/.local/state/neo-viewer/<instance>`), beside `log.prev.jsonl` (the list before the last Clear),
-the host token and `start-state.json`. The startup lines print where it is. The first
+the host token and `start-state.json`. The first
 line starts the log; then one line per thing as it happened (`run-start` with the request body as
 sent, `run-end` with the reply body as received, its text, structured content and `_meta`,
 `neo-run` with Neo's record of the run, `tools-list` with the size of the tool list a client read).
@@ -222,9 +223,9 @@ relays it and adds the token on its side; `shared/live-screen.ts` holds the rout
 
 | On the panel | What it opens on Neo |
 |---|---|
-| Follow agent | `GET /v1/display?mode=view&followTab=<tab>`: watch; Neo keeps the agent's tab in front, the tab of the most recent run's last operation (from `/v1/trace`; subscriptions act on no tab, `newPage` counts with its new tab). When that run carried its own `taskId` (zuzu's runs do), `followTask=<taskId>` instead, so Neo follows it to a new tab by itself; by tab, the panel moves when its status poll (1.5 s) sees the agent on another tab |
+| Follow agent | `GET /v1/display?mode=view&followTab=<tab>`: watch; Neo keeps the agent's tab in front, the tab of the most recent run's last operation (from `/v1/trace`; subscriptions act on no tab, `newPage` counts with its new tab). When that run carried a label (`_meta…taskId`, see One list), `followTask=<label>` instead, so Neo follows it to a new tab by itself; by tab, the panel moves when its status poll (1.5 s) sees the agent on another tab |
 | Control | `GET /v1/display?mode=control`: clicks and keys reach the browser; the front tab stops following; the agent is not held |
-| Take over / Give back | `POST /v1/takeovers {tabId, viewer}` for the agent's tab as the panel shows it, then `display?mode=control&release=<id>`; the agent's calls on that tab fail with `owner_has_control` until `POST /v1/takeovers/{id}/release`. `viewer` is Neo's own screen size, so Neo's fit brings the tab to the front and leaves the screen as it is; Neo puts the window back on release |
+| Take over / Give back | `POST /v1/takeovers {tabId, viewer}` for the agent's tab as the panel shows it, then `display?mode=control&release=<id>`; the agent's calls on that tab fail with `owner_has_control` until `POST /v1/takeovers/{id}/release`, or until the takeover expires (the viewer asks for no TTL, so Neo's default of 20 minutes applies). `viewer` is Neo's own screen size, so Neo's fit brings the tab to the front and leaves the screen as it is; Neo puts the window back on release |
 
 The relay passes RFB frames and close codes through unchanged (Neo's `4002 released` ends a
 takeover's display) and closes with its own codes for what Neo cannot say: 4901 the host API is not
