@@ -411,7 +411,7 @@ mod tests {
     async fn tests_that_journal_loss_cannot_silently_discard_an_unpublished_commit()
     -> Result<(), Box<dyn Error>> {
         let (hub, mut writer) = EventHub::new();
-        for _ in 0..LOG_CAPACITY + 1 {
+        for _ in 0..=LOG_CAPACITY {
             writer.record(PageEvent::Closed(TargetId("other".to_owned())));
         }
         let (_events, mut watch) = watch();
