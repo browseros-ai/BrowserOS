@@ -677,8 +677,16 @@
       const ready = readyChoosers(op);
       if (ready)
         await ready;
-      return await host().invoke(op, { call, ...args }, signal === undefined ? undefined : { signal });
+      countPumps();
+      const value = await host().invoke(op, { call, ...args }, signal === undefined ? undefined : { signal });
+      const held = pumpsCaughtUp(op);
+      if (held)
+        await held;
+      return value;
     } catch (thrown) {
+      const held = pumpsCaughtUp(op);
+      if (held)
+        await held;
       throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal);
     }
   }
@@ -687,18 +695,63 @@
       const ready = readyChoosers(op);
       if (ready)
         await ready;
+      countPumps();
       const reply = await host().invoke(op, { call, ...args }, {
         observed: true,
         signal,
         onResult: onResult && ((value, observed) => onResult(value, readObservation(observed)))
       });
+      const held = pumpsCaughtUp(op);
+      if (held)
+        await held;
       return {
         value: field(reply, "value"),
         observed: readObservation(field(reply, "observed"))
       };
     } catch (thrown) {
+      const held = pumpsCaughtUp(op);
+      if (held)
+        await held;
       throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal);
     }
+  }
+  var PUMP_HOLD_MS = 1000;
+  var pumpsNeeded = 0;
+  var pumpsDispatched = 0;
+  var countingPumps = false;
+  var pumpHolds = [];
+  function countPumps() {
+    if (countingPumps)
+      return;
+    countingPumps = true;
+    host().onReply((envelope) => {
+      const pumped = field(envelope, "pumped");
+      if (typeof pumped === "number" && pumped > pumpsNeeded)
+        pumpsNeeded = pumped;
+    });
+  }
+  function pumpDispatched() {
+    pumpsDispatched = Math.max(pumpsDispatched, pumpsNeeded);
+    for (const hold of pumpHolds.filter((hold) => hold.needed <= pumpsDispatched))
+      hold.release();
+  }
+  function pumpsCaughtUp(op) {
+    const needed = pumpsNeeded;
+    if (op.startsWith("events.") || pumpsDispatched >= needed)
+      return;
+    return new Promise((resolve) => {
+      let cancel = () => {};
+      const release = () => {
+        cancel();
+        const index = pumpHolds.indexOf(hold);
+        if (index >= 0)
+          pumpHolds.splice(index, 1);
+        resolve();
+      };
+      const hold = { needed, release };
+      pumpHolds.push(hold);
+      cancel = startTimer(PUMP_HOLD_MS, release);
+    });
   }
   function registerBrand(brand, fromJson) {
     host().brands.register(brand, fromJson);
@@ -8640,25 +8693,31 @@ ${value.stack}`;
     async pump() {
       try {
         while (this.listening > 0) {
-          const {
-            value: { events },
-            observed
-          } = await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events }) => this.stageBatch(events));
           try {
-            for (const event of events)
-              this.deliver(event, observed);
-          } finally {
-            try {
-              this.settleCloses(observed);
-            } finally {
-              const batch = this.batch;
-              this.batch = null;
-              batch?.finish();
-            }
+            await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events }, observed) => this.deliverBatch(events, observed));
+          } catch (error) {
+            pumpDispatched();
+            throw error;
           }
         }
       } catch {} finally {
         this.pumping = false;
+      }
+    }
+    deliverBatch(events, observed) {
+      this.stageBatch(events);
+      try {
+        for (const event of events)
+          this.deliver(event, observed);
+      } finally {
+        try {
+          this.settleCloses(observed);
+        } finally {
+          const batch = this.batch;
+          this.batch = null;
+          batch?.finish();
+          pumpDispatched();
+        }
       }
     }
     stageBatch(events) {
@@ -9058,6 +9117,7 @@ ${value.stack}`;
     #viewportSize = null;
     #viewportSet = false;
     #observedSeq = 0;
+    #observedHead = 0;
     #liveHead = 0;
     #closeEvent = 0;
     #approvedClose = null;
@@ -9480,8 +9540,8 @@ ${value.stack}`;
         return;
       });
     }
-    async _refreshFrames(api) {
-      const { value: tree, observed } = await invokeObserved("page.frames", { api, timeoutMs: 0 }, { page: await this._brand(api) });
+    async _refreshFrames(api, timeoutMs = 0) {
+      const { value: tree, observed } = await invokeObserved("page.frames", { api, timeoutMs }, { page: await this._brand(api) });
       if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
         this._applyFrames(tree.frames, observed);
     }
@@ -9580,6 +9640,33 @@ ${value.stack}`;
         }
       }
     }
+    #detachFrame(frame) {
+      const pending = [frame];
+      for (const removed of pending) {
+        pending.push(...removed.childFrames());
+        if (removed._id === null)
+          continue;
+        removed._detached = true;
+        this.#childFrames.delete(removed._id);
+        this.#frameSequences.set(removed._id, Math.max(this.#observedHead, this.#frameSequences.get(removed._id) ?? 0));
+      }
+      this.#pruneFrames();
+    }
+    async#frameWaitFailed(api, frame, error) {
+      if (frame._id === null || !(error instanceof Error) || Reflect.get(error, "code") !== "target_closed")
+        return;
+      if (this._closed || error.message.startsWith(`${api}: Navigating frame was detached!`)) {
+        this.#detachFrame(frame);
+        return;
+      }
+      if (!error.message.startsWith(`${api}: Frame was detached`))
+        return;
+      await this._refreshFrames(api, 1000).catch(() => {
+        return;
+      });
+      if (this._closed)
+        this.#detachFrame(frame);
+    }
     #applyViewport(size) {
       if (this.#viewportSet || size === undefined)
         return;
@@ -9600,6 +9687,7 @@ ${value.stack}`;
       if (at.seq < this.#observedSeq)
         return;
       this.#observedSeq = at.seq;
+      this.#observedHead = Math.max(this.#observedHead, at.events);
       this.#applyViewport(fact.viewportSize);
       if (fact.url !== undefined) {
         this._url = fact.url;
@@ -9664,15 +9752,20 @@ ${value.stack}`;
     }
     async#waitForURL(api, frame, url, waitUntil, timeout, signal) {
       const args = await frame._frameArgs(api);
+      const nativeWait = async (work) => {
+        try {
+          return await work();
+        } catch (error) {
+          await this.#frameWaitFailed(api, frame, error);
+          throw error;
+        }
+      };
+      const wait = (pattern, until, budget) => nativeWait(() => invokeObserved("page.waitForURL", frame._call(api, budget), { ...args, url: pattern, waitUntil: until }, undefined, signal));
       if (typeof url !== "function") {
         const pattern = typeof url === "string" ? { glob: url } : url instanceof RegExp ? { regexSource: url.source, regexFlags: url.flags } : undefined;
         if (!pattern)
           throw clientError(api, "url: expected a string, a RegExp or a function");
-        const { value: result, observed } = await invokeObserved("page.waitForURL", frame._call(api, timeout), {
-          ...args,
-          url: pattern,
-          waitUntil
-        }, undefined, signal);
+        const { value: result, observed } = await wait(pattern, waitUntil, timeout);
         await this._navigated(api, frame, result, observed);
         return;
       }
@@ -9688,20 +9781,13 @@ ${value.stack}`;
         const elapsed = Date.now() - started;
         const remaining = timeout === 0 ? 0 : Math.max(1, timeout - elapsed);
         if (matched) {
-          await frame._waitForLoadState(api, waitUntil, {
+          await nativeWait(() => frame._waitForLoadState(api, waitUntil, {
             timeout: remaining,
             signal
-          });
+          }));
           return;
         }
-        const { value: result, observed } = await invokeObserved("page.waitForURL", frame._call(api, remaining), {
-          ...args,
-          url: {
-            regexSource: `^(?!${escapeRegExp(current)}$)`,
-            regexFlags: ""
-          },
-          waitUntil: "commit"
-        }, undefined, signal);
+        const { value: result, observed } = await wait({ regexSource: `^(?!${escapeRegExp(current)}$)`, regexFlags: "" }, "commit", remaining);
         await this._navigated(api, frame, result, observed);
       }
     }
@@ -10704,7 +10790,7 @@ Timeout: ${timeout}ms`);
     },
     Download: {
       cancel: "Neo keeps the run's downloads; it cannot cancel one",
-      createReadStream: "read a finished download with download.saveAs(path)",
+      createReadStream: "Neo gives a script the saved file, not its bytes: await download.path() and upload it with setInputFiles; the host reads the bytes from the run",
       delete: "Neo keeps the run's downloads; it cannot delete one"
     },
     ConsoleMessage: {

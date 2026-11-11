@@ -93,7 +93,7 @@ function assertEvaluateOptions(options: unknown): void {
 }
 
 /** `exposeFunctions` would let the page call back into the agent's runtime, which Neo forbids. */
-export function refuseExposedFunctions(api: string, options: unknown): void {
+function refuseExposedFunctions(api: string, options: unknown): void {
   if (
     typeof options === 'object' &&
     options !== null &&

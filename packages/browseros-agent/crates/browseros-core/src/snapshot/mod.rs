@@ -14,6 +14,6 @@ pub use diff::{
 };
 pub use refs::{DocumentId, RefEntry, RefMap};
 pub use render::{
-    FrameFields, IframeStitch, MaskedRender, RenderOptions, RenderResult, SnapshotMode,
-    SnapshotOptions, apply_snapshot_options, ref_line, render_snapshot, render_snapshot_masked,
+    IframeStitch, RenderOptions, RenderResult, SnapshotMode, SnapshotOptions,
+    apply_snapshot_options, ref_line, render_snapshot,
 };

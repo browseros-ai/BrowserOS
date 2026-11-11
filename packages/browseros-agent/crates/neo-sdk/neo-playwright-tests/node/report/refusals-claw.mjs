@@ -208,7 +208,7 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
-    hint: 'read a finished download with download.saveAs(path)',
+    hint: 'Neo gives a script the saved file, not its bytes: await download.path() and upload it with setInputFiles; the host reads the bytes from the run',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
