@@ -326,12 +326,15 @@ mod tests {
         }
     }
 
-    /// The two long polls the prelude keeps open: the event pump and the locator-handler pull.
+    /// Only prelude-owned listener setup and pulls are exempt from unawaited-op notices.
     #[test]
-    fn tests_that_only_the_prelude_pulls_run_in_the_background() {
+    fn tests_that_only_prelude_owned_event_work_runs_in_the_background() {
         for op in Op::all() {
             let spec = op.spec();
-            let expected = if matches!(spec.name, "events.next" | "page.locatorHandlerTriggered") {
+            let expected = if matches!(
+                spec.name,
+                "events.listen" | "events.next" | "page.locatorHandlerTriggered"
+            ) {
                 OpLifetime::Background
             } else {
                 OpLifetime::Operation

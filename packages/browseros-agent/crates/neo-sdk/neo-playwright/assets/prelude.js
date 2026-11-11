@@ -454,7 +454,7 @@
     "events.listen": {
       effect: "read",
       target: null,
-      lifetime: "operation"
+      lifetime: "background"
     },
     "events.next": {
       effect: "read",

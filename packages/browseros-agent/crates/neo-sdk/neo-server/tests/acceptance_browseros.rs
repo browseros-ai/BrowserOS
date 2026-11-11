@@ -18,7 +18,6 @@
 #[path = "support/browseros_rig.rs"]
 pub mod browseros_rig;
 
-use std::collections::BTreeSet;
 use std::error::Error;
 use std::time::Duration;
 
@@ -104,7 +103,7 @@ async fn the_agent_opens_a_tab(client: &Client) -> Result<(String, i64), Box<dyn
     Ok((id, tab))
 }
 
-/// The host reads run 1 back: its ids, observed tabs, and three script operations whose
+/// The host reads run 1 back: its ids, acted-on tabs, and three script operations whose
 /// deliveries match what the agent did. Automatic monitor reads remain in the raw trace.
 async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
     let host_run = read_run(rig, id).await?;
@@ -128,7 +127,9 @@ async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
         ],
         "the host reads the run as the agent ran it: {host_run}"
     );
-    assert_eq!(field("tabs"), json!(observed_tabs(&host_run, tab)?));
+    // Listening alone does not claim a tab. Only the tab this script opened/acted on
+    // belongs to the run, even when worker monitors name other tabs in the raw trace.
+    assert_eq!(field("tabs"), json!([tab]));
     assert_eq!(
         host_run.pointer("/result/title"),
         Some(&json!(FIRST_TITLE)),
@@ -413,25 +414,6 @@ fn operations(run: &Value) -> Result<Vec<Op>, Box<dyn Error>> {
             )
         })
         .collect())
-}
-
-/// A monitor may target the run's initial working tab before the script creates another.
-/// The API includes both: allow only tabs explained by that monitor or the script's own tab.
-fn observed_tabs(run: &Value, script_tab: i64) -> Result<Vec<i64>, Box<dyn Error>> {
-    let ops = run
-        .get("operations")
-        .and_then(Value::as_array)
-        .ok_or("a run lists operations")?;
-    let mut tabs = BTreeSet::from([script_tab]);
-    tabs.extend(
-        ops.iter()
-            .filter(|op| {
-                op.get("name").and_then(Value::as_str) == Some("events.listen")
-                    && browseros_rig::is_worker_event_operation(op)
-            })
-            .filter_map(|op| op.get("tabId").and_then(Value::as_i64)),
-    );
-    Ok(tabs.into_iter().collect())
 }
 
 /// Background reads consume sequence numbers too; find the script's operation by its name.
