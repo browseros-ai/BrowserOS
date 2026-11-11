@@ -107,7 +107,7 @@ pub(crate) async fn insert(
         .map_err(|error| scope.core_error(&error))?;
     // Log.enable replays retained entries. They belong to earlier actions, so only messages
     // arriving after this barrier participate in this insertion's upstream-style CSP race.
-    while queued(&mut events).is_some() {}
+    while let Ok(Some(_)) | Err(Lagged) = queued(&mut events) {}
     let params = TagParams {
         kind: match kind {
             TagKind::Script => "script",
@@ -127,7 +127,9 @@ pub(crate) async fn insert(
                         return scope.fail(ErrorCode::PageError, &message);
                     }
                 }
-                Err(RecvError::Lagged(_)) => {}
+                // A report may have gone with what the reader missed: say so rather than wait
+                // on a load that a blocked tag never finishes.
+                Err(RecvError::Lagged(_)) => return lagged(scope),
                 Err(RecvError::Closed) => break,
             }
         }
@@ -143,9 +145,15 @@ pub(crate) async fn insert(
     };
     // The gateway's final round trip flushes asynchronous inline CSP reports, as upstream
     // Chromium does. Prefer their useful browser wording over a generic load-event failure.
-    while let Some(event) = queued(&mut events) {
-        if let Some(message) = csp_message(&event, world.session_id()) {
-            return Err(scope.fail(ErrorCode::PageError, &message));
+    loop {
+        match queued(&mut events) {
+            Ok(Some(event)) => {
+                if let Some(message) = csp_message(&event, world.session_id()) {
+                    return Err(scope.fail(ErrorCode::PageError, &message));
+                }
+            }
+            Ok(None) => break,
+            Err(Lagged) => return Err(lagged(scope)),
         }
     }
     let object = node?;
@@ -181,15 +189,27 @@ fn csp_message(event: &CdpEvent, session: Option<&browseros_core::SessionId>) ->
     .then_some(text)
 }
 
-/// The next event already received, past any the receiver lagged over; `None` when none is.
-fn queued(events: &mut broadcast::Receiver<CdpEvent>) -> Option<CdpEvent> {
-    loop {
-        match events.try_recv() {
-            Ok(event) => return Some(event),
-            Err(TryRecvError::Lagged(_)) => {}
-            Err(TryRecvError::Empty | TryRecvError::Closed) => return None,
-        }
+/// The receiver fell behind the shared broadcast and missed events.
+struct Lagged;
+
+/// The next event already received; `None` when none is.
+fn queued(events: &mut broadcast::Receiver<CdpEvent>) -> Result<Option<CdpEvent>, Lagged> {
+    match events.try_recv() {
+        Ok(event) => Ok(Some(event)),
+        Err(TryRecvError::Lagged(_)) => Err(Lagged),
+        Err(TryRecvError::Empty | TryRecvError::Closed) => Ok(None),
     }
+}
+
+/// The insertion's CSP reports arrive on the shared broadcast, which drops what a reader that
+/// fell behind has not read; a dropped report would leave a blocked tag waiting on a load it
+/// never finishes, so the op fails plainly instead.
+fn lagged(scope: &OpScope<'_>) -> PlaywrightError {
+    scope.fail(
+        ErrorCode::Internal,
+        "Neo fell behind the browser's events while this tag's Content Security Policy reports \
+         were due, so it cannot tell whether the page blocked the tag",
+    )
 }
 
 /// Playwright reads UTF-8 with replacement and strips newlines only from the sourceURL.
