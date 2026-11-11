@@ -6,8 +6,11 @@
 #     └── websockify :6080 (noVNC page + WebSocket) ◀── browser tab
 #   openbox keeps Neo maximized and follows viewer-driven screen resizes.
 #
-# Images built with claw-sdk instead of claw-server run no websockify and keep
-# the clipboard from VNC viewers; server_policy decides from the installed binary.
+# Two images run this supervisor: the Neo image here, and the Neo SDK image
+# (packages/browseros-agent/crates/neo-sdk/neo-server/docker), which builds on
+# this file instead of copying it. Images built with claw-sdk instead of
+# claw-server run no websockify, keep the clipboard from VNC viewers, and get a
+# host socket directory; server_policy decides from the installed binary.
 #
 # Only Neo is restarted here, because users can close it. If Xvnc, openbox or
 # websockify (where it runs) exits, the container exits and Docker's restart
@@ -35,6 +38,13 @@ readonly MCP_URL=http://127.0.0.1:9010
 # container competes for them, so pin them; neo-quit relies on the CDP port.
 readonly CDP_PORT=9110
 readonly SERVER_PORT=9210
+# The browser also serves the same unauthenticated MCP backend over HTTPS on
+# this port, which cannot be turned off. Hosts firewall it with 9010, so it is
+# pinned too (prepare_data).
+readonly MCP_TLS_PORT=9011
+# claw-sdk's host API socket lives here, off /data: a host's data volume may be
+# private to Neo's uid, and a Docker Desktop share cannot hold a socket.
+readonly HOST_SOCKET_DIR=/run/neo
 
 : "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
 : "${NEO_SOFTWARE_GRAPHICS:=true}"
@@ -43,12 +53,20 @@ readonly SERVER_PORT=9210
 # recordings back (README).
 : "${NEO_DISABLE_BROWSEROS_EXTENSIONS:=true}"
 : "${PUID:=1000}" "${PGID:=1000}"
+# Whether the browser's MCP ports (9010 and MCP_TLS_PORT) accept peers other
+# than loopback. Docker's port forwarding arrives from the bridge address, so
+# the Neo image keeps it on; the Neo SDK image turns it off, because its host
+# reaches Neo from inside the container (README "Security").
+: "${NEO_MCP_REMOTE:=true}"
+# The group allowed to connect to claw-sdk's host socket; empty means neo's own.
+: "${NEO_HOST_GID:=}"
 # Shared browser/server deployment flag (README). Hosted mode hides local-agent
 # MCP tools and enables hosted browser reporting; both processes require exact 1.
 : "${BROWSERCLAW_HOSTED_MODE:=1}"
 
+# tr rather than ${1,,}: the host-side tests run this under macOS's bash 3.2.
 is_true() {
-  case "${1,,}" in
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
     true | 1 | yes | on) return 0 ;;
     false | 0 | no | off) return 1 ;;
     *) die "expected true or false, got '$1'" ;;
@@ -73,6 +91,10 @@ case "$BROWSERCLAW_HOSTED_MODE" in
   0 | 1) ;;
   *) die "BROWSERCLAW_HOSTED_MODE must be 0 or 1, got '$BROWSERCLAW_HOSTED_MODE'" ;;
 esac
+# The JSON literal prepare_data writes to Local State.
+MCP_REMOTE=false
+if is_true "$NEO_MCP_REMOTE"; then MCP_REMOTE=true; fi
+readonly MCP_REMOTE
 
 # Starts "$@" as the neo user in the background. The subshell execs, so $! is
 # the program's own pid (setpriv, env and Neo's launcher all exec in turn) and
@@ -121,10 +143,14 @@ prepare_data() {
   chmod 700 "$NEO_DATA_DIR" "$OUTPUTS" "$XDG_DIR"
   ln -sfn "$DOWNLOADS" "$NEO_HOME/Downloads"
 
-  # Neo's MCP proxy drops connections that are not from loopback unless this
-  # Local State pref is set, and Docker's port forwarding arrives from the
-  # bridge address.
-  merge_json "$PROFILE/Local State" '.browseros.server.allow_remote_in_mcp = true' \
+  # Neo's two MCP proxies, HTTP on 9010 and HTTPS on MCP_TLS_PORT, drop
+  # connections that are not from loopback unless allow_remote_in_mcp is set.
+  # Docker's port forwarding arrives from the bridge address, so a published
+  # port needs it on (NEO_MCP_REMOTE). The HTTPS port is written on every start:
+  # Chromium saves the port it ended up on, and a profile that saved another
+  # one would move the listener off the port the host firewalls.
+  local server_prefs=".allow_remote_in_mcp = $MCP_REMOTE | .proxy_https_port = $MCP_TLS_PORT"
+  merge_json "$PROFILE/Local State" ".browseros.server |= ($server_prefs)" \
     || die "Could not update $PROFILE/Local State; if it is not valid JSON, fix or remove it"
 
   # Chromium's profile lock outlives the container that held it. No Neo can be
@@ -168,16 +194,39 @@ forget_zoom_levels() {
 #                         route. claw-server's call stays strict, which also stops a
 #                         claw-sdk built without its marker. Read as claw-server, it
 #                         gets a 404 for the PUT and the container exits unhealthy.
+#   HOST_SOCKET           claw-sdk's host API socket directory (prepare_host_socket).
+#                         claw-server serves its /v1 on 9010 and has no socket.
 server_policy() {
   local kind
   kind=$(neo-server-info kind) || die "Could not identify the installed Neo server"
   case "$kind" in
-    claw-server) VIEWER=1 CLIPBOARD_TO_VIEWERS=1 AGENT_SETTINGS=1 ;;
-    claw-sdk) VIEWER=0 CLIPBOARD_TO_VIEWERS=0 AGENT_SETTINGS=0 ;;
+    claw-server) VIEWER=1 CLIPBOARD_TO_VIEWERS=1 AGENT_SETTINGS=1 HOST_SOCKET=0 ;;
+    claw-sdk) VIEWER=0 CLIPBOARD_TO_VIEWERS=0 AGENT_SETTINGS=0 HOST_SOCKET=1 ;;
     *) die "Unknown Neo server '$kind'" ;;
   esac
-  readonly VIEWER CLIPBOARD_TO_VIEWERS AGENT_SETTINGS
+  readonly VIEWER CLIPBOARD_TO_VIEWERS AGENT_SETTINGS HOST_SOCKET
   log "Server: $kind"
+}
+
+# claw-sdk serves its host API (run records, live view, takeover) on a Unix
+# socket with mode 0660, and refuses a peer outside the socket's group before it
+# reads the bearer token. This directory is setgid to NEO_HOST_GID, so the
+# socket claw-sdk creates in it belongs to the host's group: a host process in
+# that group connects, any other uid gets EACCES at connect. Owner and mode are
+# set on every start, because /run survives `docker restart` and apply_ids may
+# have renumbered neo; claw-sdk removes a stale socket file itself. A caller's
+# own CLAW_HOST_SOCKET wins over the default path.
+prepare_host_socket() {
+  [ "$HOST_SOCKET" = 1 ] || return 0
+  local gid=$NEO_HOST_GID
+  [ -n "$gid" ] || gid=$(id -g neo)
+  [[ "$gid" =~ ^[0-9]+$ ]] || die "NEO_HOST_GID must be numeric"
+  mkdir -p "$HOST_SOCKET_DIR"
+  # chown first: a change of owner can clear the setgid bit.
+  chown "neo:$gid" "$HOST_SOCKET_DIR"
+  chmod 2750 "$HOST_SOCKET_DIR"
+  # spawn_as_neo keeps the environment, and Chromium passes it on to claw-sdk.
+  export CLAW_HOST_SOCKET="${CLAW_HOST_SOCKET:-$HOST_SOCKET_DIR/host.sock}"
 }
 
 # The arrays built here are never empty, because the host-side tests run this
@@ -410,6 +459,7 @@ rm -f "$CONFIGURED" "$VIEWER_MARK"
 server_policy
 apply_ids
 prepare_data
+prepare_host_socket
 apply_policies
 apply_minimal_ui
 start_display
