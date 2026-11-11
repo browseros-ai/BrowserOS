@@ -273,10 +273,9 @@ mod tests {
             ("download.path", &[], true),
             ("download.saveAs", &[], true),
         ];
-        let mut audited: BTreeMap<&str, (&[Capability], bool)> = AUDITED
-            .into_iter()
-            .map(|(name, capabilities, gated)| (name, (capabilities, gated)))
-            .collect();
+        let mut audited = BTreeMap::from(
+            AUDITED.map(|(name, capabilities, gated)| (name, (capabilities, gated))),
+        );
         let mut differ = Vec::new();
         for spec in Op::all().map(Op::spec) {
             let row = audited.remove(spec.name);
