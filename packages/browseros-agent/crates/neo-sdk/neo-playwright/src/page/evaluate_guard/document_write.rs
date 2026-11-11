@@ -7,9 +7,8 @@
 //!  DocumentWrite::open  require(MainWorld) ── admit ── the frame, within the op's timeout
 //!  write                DocumentWatch on the frame's session (subscribe, Page and lifecycle on)
 //!                       ── send_effect ── probe `setContent` with a user gesture: document.open,
-//!                       write, close; the probe unboots ── the old seq retires, the new
-//!                       document's world installs ── Page.documentOpened ── waitUntil, all within
-//!                       the op's timeout
+//!                       write, close; the world and its seq stay ── Page.documentOpened ──
+//!                       waitUntil, all within the op's timeout
 //! ```
 
 use std::future::Future;
@@ -84,23 +83,19 @@ impl<'op> DocumentWrite<'op> {
             watch.enable_page().await.map_err(watched)?;
             watch.read_current().await.map_err(watched)?;
             watch.enable_lifecycle().await.map_err(watched)?;
-            let old = self.replace_document(scope, html).await?;
-            // The world outlived document.open, unbooted: its seq retires, and the new document
-            // is booted under the next one before any other op can mint a ref in it, so a ref
-            // from before fails instead of naming a new element.
-            self.page.frames().invalidate(&old);
-            self.page
-                .world(&endpoint, self.frame.place.clone())
-                .await
-                .map_err(|failure| resolve::failed(scope, failure))?;
+            // The world outlives document.open with its engine and its seq, as upstream's frame
+            // keeps its seq when no new document commits: the next snapshot's refs keep the
+            // frame's prefix, and a ref or pin from before names a removed element, so it fails
+            // as stale.
+            self.replace_document(scope, html).await?;
             watch.opened().await.map_err(watched)?;
             watch.reached(wait_until).await.map_err(watched)
         })
         .await
     }
 
-    /// Writes `html` in the frame's world and returns that world, now unbooted. A world whose
-    /// document changed since its install fails `Gone(Ran::No)` without running the request, so
+    /// Writes `html` in the frame's world, which stays booted. A world whose document changed
+    /// since its install fails `Gone(Ran::No)` without running the request, so
     /// the write is tried once more in the new document's world, after the host's policies run
     /// again. A write a navigation cut off while it was pending may have run, the HTML's inline
     /// scripts with it, so it is never sent again: the op fails with the message upstream's
@@ -109,7 +104,7 @@ impl<'op> DocumentWrite<'op> {
         &self,
         scope: &OpScope<'_>,
         html: &str,
-    ) -> Result<SealedWorld, PlaywrightError> {
+    ) -> Result<(), PlaywrightError> {
         let install = || async {
             self.page
                 .world(&self.frame.endpoint, self.frame.place.clone())
@@ -121,7 +116,7 @@ impl<'op> DocumentWrite<'op> {
         loop {
             let sent = scope.send_effect()?;
             match write_document(&world, html, &sent).await {
-                Ok(ProbeReply::Replaced) => return Ok(world),
+                Ok(ProbeReply::Replaced) => return Ok(()),
                 Ok(other) => {
                     return Err(resolve::failed(
                         scope,

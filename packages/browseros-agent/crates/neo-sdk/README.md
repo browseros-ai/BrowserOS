@@ -30,6 +30,9 @@ host / MCP run
 | `neo-captcha` | Shared CAPTCHA solver, also used by desktop. |
 | `neo-capture` | Shared capture hub, also used by desktop. |
 
+`neo-server/docker/` builds the Neo SDK image, the browser plus this server, for hosts such as
+zuzu: see [its README](neo-server/docker/README.md).
+
 The pre-existing browser infrastructure (`browseros-cdp`, `browseros-core` and the other
 workspace crates) stays outside this folder. Desktop depends on `neo-captcha` and
 `neo-capture`; the SDK server and its other libraries do not enter desktop's dependency graph.

@@ -295,7 +295,8 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   ],
   armInput: [{ op: 'armInput', pin: 4 }],
   inputArrived: [{ op: 'inputArrived', pin: 4 }],
-  // Last: it unboots the world, so the protocol test's later requests would find none.
+  // Last: it replaces the document, so the protocol test's later requests would find none of
+  // the elements they name.
   setContent: [
     { op: 'setContent', html: '<!doctype html><title>Set</title><p>new</p>' },
   ],

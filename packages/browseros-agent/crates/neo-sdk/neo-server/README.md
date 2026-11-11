@@ -63,6 +63,8 @@ The primary launch leaves `BROWSERCLAW_HOSTED_MODE` unset to match the compariso
 
 ## How it runs
 
+To run it beside the browser in a container, use the Neo SDK image in [docker/](docker/README.md).
+
 Chromium starts the binary with its launch JSON and reads the exit code.
 
 | Invocation or event | Result |
