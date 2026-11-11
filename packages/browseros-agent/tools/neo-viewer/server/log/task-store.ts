@@ -9,6 +9,7 @@
 
 import type {
   ClientInfo,
+  NeoRunRecord,
   RunDetail,
   RunStatus,
   RunSummary,
@@ -46,6 +47,8 @@ interface RunState {
   end: StoredRunEnd | null
   /** Started in this process and not ended yet; false for a run read back without an end. */
   live: boolean
+  /** Neo's record of the run (`neo-runs.ts`), once read. */
+  neo: NeoRunRecord | null
 }
 
 /** A run as the proxy reports it starting (the store adds its `id`). */
@@ -159,6 +162,7 @@ export class TaskStore {
       start: { ...start, id },
       end: null,
       live: true,
+      neo: null,
     }
     const at = task.runs.findIndex((other) => comesBefore(run, other))
     const index = at === -1 ? task.runs.length : at
@@ -181,6 +185,21 @@ export class TaskStore {
     const task = this.tasks.get(run.taskId)
     if (task) this.emitRunsFrom(task, task.runs.indexOf(run))
     this.emitTask(run.taskId)
+  }
+
+  /** Neo's record of a run, read from its host API; replaces an earlier, incomplete one. */
+  attachNeoRun(runId: string, record: NeoRunRecord): void {
+    const run = this.runs.get(runId)
+    if (!run) return
+    run.neo = record
+    this.write(run.taskId, { type: 'neo-run', id: runId, record })
+    const task = this.tasks.get(run.taskId)
+    if (task) this.emitRunsFrom(task, task.runs.indexOf(run))
+    this.emitTask(run.taskId)
+  }
+
+  hasNeoRun(runId: string): boolean {
+    return this.runs.get(runId)?.neo != null
   }
 
   listTasks(): TaskSummary[] {
@@ -216,12 +235,16 @@ export class TaskStore {
           start: line.run,
           end: null,
           live: false,
+          neo: null,
         }
         task.runs.push(run)
         byId.set(line.run.id, run)
       } else if (line.type === 'run-end') {
         const run = byId.get(line.id)
         if (run) run.end = line.end
+      } else if (line.type === 'neo-run') {
+        const run = byId.get(line.id)
+        if (run) run.neo = line.record
       }
     }
     task.runs.sort((a, b) =>
@@ -320,12 +343,15 @@ function summarizeRun(
     neoRunId: typeof runMeta?.id === 'string' ? runMeta.id : null,
     neoStatus: typeof runMeta?.status === 'string' ? runMeta.status : null,
     neoEffects: typeof runMeta?.effects === 'string' ? runMeta.effects : null,
+    neoDurationMs: run.neo?.durationMs ?? null,
+    operationCount: run.neo ? run.neo.operations.length : null,
   }
 }
 
 function detailRun(run: RunState, view: RunSummary): RunDetail {
   return {
     ...view,
+    neo: run.neo,
     request: run.start.request,
     reply: run.end?.reply ?? {
       httpStatus: null,
