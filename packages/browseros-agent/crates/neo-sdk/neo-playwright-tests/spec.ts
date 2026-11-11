@@ -216,7 +216,7 @@ export function findBrowser({
   )
 }
 
-const isAlive = (pid: number) => {
+const processAlive = (pid: number) => {
   try {
     process.kill(pid, 0)
     return true
@@ -225,51 +225,76 @@ const isAlive = (pid: number) => {
   }
 }
 
+const isReady = (source: string) =>
+  fs.existsSync(path.join(source, '.neo-source.json'))
+
+/** The prepared source this run uses, as an absolute path (git and npm run in other folders). */
+export function sourceDir(env: NodeJS.ProcessEnv): string {
+  if (env.NEO_TESTS_PLAYWRIGHT_SOURCE)
+    return path.resolve(env.NEO_TESTS_PLAYWRIGHT_SOURCE)
+  const cache =
+    env.NEO_SPEC_CACHE_DIR ||
+    path.join(
+      env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),
+      'browseros',
+      'neo-spec',
+    )
+  return path.resolve(cache, `playwright-${corpus.version}`)
+}
+
 /**
- * Runs `work` while holding `lock`, so two first runs never prepare (and delete) the same cache
- * folder at once. mkdir is the atomic step; the owner's pid lets a later run take over the lock
- * of one that died.
+ * Prepares into a private `<source>.staging-<pid>` folder and publishes it with one rename, so
+ * `source` only ever appears complete. Two first runs each prepare their own copy; the first
+ * rename wins and the other discards only its own staging. No run ever deletes a folder another
+ * run is preparing or has published, which a shared lock could not promise once its holder died.
  */
-function withLock<T>(lock: string, waiting: string, work: () => T): T {
-  for (let announced = false; ; announced = true) {
-    try {
-      fs.mkdirSync(lock)
-      break
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error
-    }
-    const pidFile = path.join(lock, 'pid')
-    const owner = fs.existsSync(pidFile)
-      ? Number(fs.readFileSync(pidFile, 'utf8'))
-      : undefined
-    const orphaned = owner
-      ? !isAlive(owner)
-      : Date.now() - fs.statSync(lock).mtimeMs > 60_000
-    if (orphaned) fs.rmSync(lock, { recursive: true, force: true })
-    else {
-      if (!announced) console.log(waiting)
-      Bun.sleepSync(2_000)
-    }
-  }
+export function publishSource(
+  source: string,
+  build: (staging: string) => void,
+  pid = process.pid,
+) {
+  const staging = `${source}.staging-${pid}`
+  // Same pid, earlier run: whatever is here was left by a run that died.
+  fs.rmSync(staging, { recursive: true, force: true })
   try {
-    fs.writeFileSync(path.join(lock, 'pid'), String(process.pid))
-    return work()
+    build(staging)
+    try {
+      fs.renameSync(staging, source)
+    } catch (error) {
+      // A rename onto a non-empty folder fails: another run published first.
+      if (!['ENOTEMPTY', 'EEXIST'].includes(error.code) || !isReady(source))
+        throw error
+    }
   } finally {
-    fs.rmSync(lock, { recursive: true, force: true })
+    fs.rmSync(staging, { recursive: true, force: true })
   }
 }
 
-/** Shallow-clones the pinned tag and prepares it into `source` with js/prepare.mjs. */
-function prepareSource(node: string, env: NodeJS.ProcessEnv, source: string) {
-  const checkout = `${source}.checkout`
-  const log = `${source}.prepare.log`
-  fs.rmSync(source, { recursive: true, force: true })
-  fs.rmSync(checkout, { recursive: true, force: true })
+/** Removes staging folders, checkouts and logs that runs which died left beside `source`. */
+export function sweepStaging(source: string, isAlive = processAlive) {
+  const name = path.basename(source)
+  const pattern = new RegExp(
+    `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.staging-(\\d+)(?:\\.checkout|\\.log)?$`,
+  )
+  for (const entry of fs.readdirSync(path.dirname(source))) {
+    const owner = Number(pattern.exec(entry)?.[1])
+    if (owner && owner !== process.pid && !isAlive(owner))
+      fs.rmSync(path.join(path.dirname(source), entry), {
+        recursive: true,
+        force: true,
+      })
+  }
+}
+
+/** Shallow-clones the pinned tag and prepares it into `target` with js/prepare.mjs. */
+function buildSource(node: string, env: NodeJS.ProcessEnv, target: string) {
+  const checkout = `${target}.checkout`
+  const log = `${target}.log`
   const out = fs.openSync(log, 'w')
   const step = (command: string, args: string[]) => {
     const result = spawnSync(command, args, {
       cwd: crate,
-      env: { ...env, NEO_TESTS_PLAYWRIGHT_SOURCE: source },
+      env: { ...env, NEO_TESTS_PLAYWRIGHT_SOURCE: target },
       stdio: ['ignore', out, out],
     })
     if (result.error || result.status !== 0)
@@ -298,35 +323,26 @@ function prepareSource(node: string, env: NodeJS.ProcessEnv, source: string) {
     fs.closeSync(out)
     fs.rmSync(checkout, { recursive: true, force: true })
   }
+  fs.rmSync(log, { force: true })
 }
 
 /**
- * NEO_TESTS_PLAYWRIGHT_SOURCE when set; else a cache folder per pinned release, prepared the
- * first time. The stamp prepare.mjs writes last marks a finished folder, so an interrupted
- * preparation is redone, not trusted.
+ * NEO_TESTS_PLAYWRIGHT_SOURCE when set; else a folder per pinned release in the cache
+ * (NEO_SPEC_CACHE_DIR, default ~/.cache/browseros/neo-spec), prepared the first time.
  */
 function ensureSource(node: string, env: NodeJS.ProcessEnv): string {
-  if (env.NEO_TESTS_PLAYWRIGHT_SOURCE) return env.NEO_TESTS_PLAYWRIGHT_SOURCE
-  const cache = path.join(
-    env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),
-    'browseros',
-    'neo-spec',
+  const source = sourceDir(env)
+  if (env.NEO_TESTS_PLAYWRIGHT_SOURCE || isReady(source)) return source
+  if (fs.existsSync(source))
+    throw new Error(
+      `${source} is incomplete: an earlier version of this command stopped while preparing it. Delete it and run again.`,
+    )
+  fs.mkdirSync(path.dirname(source), { recursive: true })
+  sweepStaging(source)
+  console.log(
+    `Preparing Playwright v${corpus.version} test sources in ${source} (first run only: clone, npm ci, build; a few minutes).`,
   )
-  const source = path.join(cache, `playwright-${corpus.version}`)
-  const ready = () => fs.existsSync(path.join(source, '.neo-source.json'))
-  if (ready()) return source
-  fs.mkdirSync(cache, { recursive: true })
-  withLock(
-    `${source}.lock`,
-    `Waiting for another run to prepare ${source}.`,
-    () => {
-      if (ready()) return
-      console.log(
-        `Preparing Playwright v${corpus.version} test sources in ${source} (first run only: clone, npm ci, build; a few minutes).`,
-      )
-      prepareSource(node, env, source)
-    },
-  )
+  publishSource(source, (staging) => buildSource(node, env, staging))
   return source
 }
 
@@ -367,22 +383,53 @@ async function runRunner(
   }
 }
 
-/** The command that reruns the first in-scope failure (or any failure) of a finished run. */
-async function rerunCommand(output: string, flags: string[]): Promise<string> {
+/**
+ * The last closing line: the command that reruns one test. It picks a failure (in scope
+ * first), else a test the run cut off. A stopped run says so first: Playwright reports the test
+ * it interrupted, and every test it never started, as skipped, so the scores alone look clean.
+ */
+export async function rerunLine(
+  output: string,
+  flags: string[],
+): Promise<string> {
   const { flattenResults, outcome } = await import('./node/report/classify.mjs')
   const { excludedBy } = await import('./node/scope.mjs')
-  const scope = JSON.parse(
-    fs.readFileSync(path.join(output, 'scope.json'), 'utf8'),
-  )
+  const read = (file: string) =>
+    JSON.parse(fs.readFileSync(path.join(output, file), 'utf8'))
+  const scope = read('scope.json')
+  const report = read('results.json')
+  const signal = fs.existsSync(path.join(output, 'run.json'))
+    ? read('run.json').signal
+    : undefined
   // `--repeat-each` repeats a case; any failing instance names the test.
-  const failures = flattenResults(
-    JSON.parse(fs.readFileSync(path.join(output, 'results.json'), 'utf8')),
-    corpus.suites,
-    { allowRepeated: true },
-  ).filter((row) => outcome(row) === 'fail')
+  type Row = ReturnType<typeof flattenResults>[number]
+  const rows: Row[] = flattenResults(report, corpus.suites, {
+    allowRepeated: true,
+  })
+  const cutOff = (row: Row) =>
+    outcome(row) === 'harness-error' ||
+    (row.test.results ?? []).some(
+      (result: { status: string }) => result.status === 'interrupted',
+    )
+  const pick = (candidates: Row[]) =>
+    candidates.find((row) => !excludedBy(scope, row)) ?? candidates[0]
+  // A test the run never reached: skipped with no attempt and no skip or fixme of its own.
+  const notRun = (row: Row) =>
+    row.test.status === 'skipped' &&
+    !row.test.results?.length &&
+    !(row.test.annotations ?? []).some((annotation: { type: string }) =>
+      ['skip', 'fixme'].includes(annotation.type),
+    )
+  const failed = pick(rows.filter((row) => outcome(row) === 'fail'))
+  const stopped =
+    signal || report.errors?.length || rows.some(cutOff)
+      ? `Stopped${signal ? ` by ${signal}` : ''} before every test ran.`
+      : ''
+  const interrupted = failed ? undefined : pick(rows.filter(cutOff))
   const row =
-    failures.find((failure) => !excludedBy(scope, failure)) ?? failures[0]
-  if (!row) return 'Nothing failed.'
+    failed ?? interrupted ?? (stopped ? pick(rows.filter(notRun)) : undefined)
+  if (!row)
+    return stopped ? `${stopped} Nothing had failed.` : 'Nothing failed.'
   const outOfScope = excludedBy(scope, row)?.reason
   const escapeRegex = (text: string) =>
     text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -399,8 +446,9 @@ async function rerunCommand(output: string, flags: string[]): Promise<string> {
       suite.include && path.basename(suite.file, '.spec.ts') === fileName,
   )
   const name = sameName.length === 1 ? fileName : folderName
-  const label = `${row.caseId ?? 'one failure'}${outOfScope ? ` (out of scope: ${outOfScope})` : ''}`
-  return `Rerun ${label}: ${['bun run test:neo-spec', name, ...rerunFlags(flags).map(quote), '--grep', quote(grep)].join(' ')}`
+  const status = failed ? '' : interrupted ? ' (interrupted)' : ' (not run)'
+  const label = `${row.caseId ?? 'one test'}${status}${outOfScope ? ` (out of scope: ${outOfScope})` : ''}`
+  return `${stopped ? `${stopped} ` : ''}Rerun ${label}: ${['bun run test:neo-spec', name, ...rerunFlags(flags).map(quote), '--grep', quote(grep)].join(' ')}`
 }
 
 /** The four closing lines, from the scores and results run.mjs recorded. */
@@ -414,8 +462,51 @@ async function summary(output: string, flags: string[]): Promise<string> {
     `In scope:  ${scoreText(scores.inScope)}`,
     `All tests: ${scoreText(scores.all)}`,
     `Results:   ${output}`,
-    await rerunCommand(output, flags),
+    await rerunLine(output, flags),
   ].join('\n')
+}
+
+/** The environment run.mjs needs: the chosen Node first on PATH and the browser to drive. */
+export function runnerEnv({
+  node,
+  flags,
+  env = process.env,
+  browser = findBrowser,
+}: {
+  node: string
+  flags: string[]
+  env?: NodeJS.ProcessEnv
+  browser?: () => string
+}): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    // npm (for preparing the source) and run.mjs's own children use this same Node.
+    PATH: [path.dirname(node), env.PATH].join(path.delimiter),
+    // run.mjs lists tests without launching a browser.
+    ...(flags.includes('--list') ? {} : { NEO_E2E_BROWSER: browser() }),
+  }
+}
+
+/** Prints how the run ended and returns the wrapper's exit code. */
+export async function finish(
+  code: number,
+  output: string | undefined,
+  flags: string[],
+  print: {
+    log: (text: string) => void
+    error: (text: string) => void
+  } = console,
+): Promise<number> {
+  // A listing has no scores; Playwright's exit code says whether it worked.
+  if (flags.includes('--list')) return code
+  if (!output || !fs.existsSync(path.join(output, 'scores.json'))) {
+    print.error(
+      `\nNo scores: the run stopped before Playwright finished.${output ? ` Results: ${output}` : ''}`,
+    )
+    return code || 1
+  }
+  print.log(await summary(output, flags))
+  return code
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -425,22 +516,10 @@ async function main(argv: string[]): Promise<number> {
     corpus.suites.filter((suite) => suite.include).map((suite) => suite.file),
   )
   const node = findNode()
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    // npm (for preparing the source) and run.mjs's own children use this same Node.
-    PATH: [path.dirname(node), process.env.PATH].join(path.delimiter),
-    NEO_E2E_BROWSER: findBrowser(),
-  }
+  const env = runnerEnv({ node, flags })
   env.NEO_TESTS_PLAYWRIGHT_SOURCE = ensureSource(node, env)
   const { code, output } = await runRunner(node, env, [...flags, ...files])
-  if (!output || !fs.existsSync(path.join(output, 'scores.json'))) {
-    console.error(
-      `\nNo scores: the run stopped before Playwright finished.${output ? ` Results: ${output}` : ''}`,
-    )
-    return code || 1
-  }
-  console.log(await summary(output, flags))
-  return code
+  return finish(code, output, flags)
 }
 
 if (import.meta.main)

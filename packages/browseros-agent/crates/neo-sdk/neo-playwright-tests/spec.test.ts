@@ -1,13 +1,20 @@
 /** The test:neo-spec wrapper: spec names, passed-through flags, and what it says when Node or the browser is missing. */
-import { describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it } from 'bun:test'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import {
   findBrowser,
   findNode,
+  finish,
+  publishSource,
   rerunFlags,
+  rerunLine,
   resolveSuites,
+  runnerEnv,
+  sourceDir,
   splitArgs,
+  sweepStaging,
 } from './spec'
 
 const corpus = JSON.parse(
@@ -213,5 +220,176 @@ describe('findBrowser', () => {
     expect(() =>
       findBrowser({ env: {}, platform: 'win32', ...missing }),
     ).toThrow(/No default BrowserOS neo location on win32.*\n.*NEO_E2E_BROWSER/)
+  })
+})
+
+const scratch: string[] = []
+const tempDir = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neo-spec-test-'))
+  scratch.push(dir)
+  return dir
+}
+afterEach(() => {
+  for (const dir of scratch.splice(0))
+    fs.rmSync(dir, { recursive: true, force: true })
+})
+
+describe('preparing the source', () => {
+  const build = (marker: string) => (staging: string) => {
+    fs.mkdirSync(staging)
+    fs.writeFileSync(path.join(staging, '.neo-source.json'), marker)
+  }
+
+  it('two first runs never delete what the other prepared or published', () => {
+    const source = path.join(tempDir(), 'playwright-1.64.1')
+    // Run B starts first; while it builds, run A prepares and publishes.
+    publishSource(
+      source,
+      (staging) => {
+        build('B')(staging)
+        publishSource(source, build('A'), 1)
+        expect(
+          fs.readFileSync(path.join(staging, '.neo-source.json'), 'utf8'),
+        ).toBe('B')
+      },
+      2,
+    )
+    expect(fs.readFileSync(path.join(source, '.neo-source.json'), 'utf8')).toBe(
+      'A',
+    )
+    expect(fs.readdirSync(path.dirname(source))).toEqual(['playwright-1.64.1'])
+  })
+
+  it('leaves nothing behind when preparation fails', () => {
+    const source = path.join(tempDir(), 'playwright-1.64.1')
+    expect(() =>
+      publishSource(source, (staging) => {
+        fs.mkdirSync(staging)
+        throw new Error('npm ci failed')
+      }),
+    ).toThrow('npm ci failed')
+    expect(fs.readdirSync(path.dirname(source))).toEqual([])
+  })
+
+  it('sweeps only what runs that died left behind', () => {
+    const cache = tempDir()
+    const source = path.join(cache, 'playwright-1.64.1')
+    const entries = [
+      'playwright-1.64.1',
+      'playwright-1.64.1.staging-11',
+      'playwright-1.64.1.staging-11.checkout',
+      'playwright-1.64.1.staging-11.log',
+      'playwright-1.64.1.staging-22',
+      'playwright-1.65.0.staging-11',
+    ]
+    for (const entry of entries) fs.mkdirSync(path.join(cache, entry))
+    sweepStaging(source, (pid) => pid === 22)
+    expect(fs.readdirSync(cache).sort()).toEqual([
+      'playwright-1.64.1',
+      'playwright-1.64.1.staging-22',
+      'playwright-1.65.0.staging-11',
+    ])
+  })
+
+  it('resolves a relative cache folder, since git and npm run elsewhere', () => {
+    expect(sourceDir({ NEO_SPEC_CACHE_DIR: 'neo-cache' })).toBe(
+      path.resolve('neo-cache', 'playwright-1.64.1'),
+    )
+  })
+})
+
+describe('--list', () => {
+  it('needs no browser and is not a failed run', async () => {
+    const missing = () => {
+      throw new Error('BrowserOS neo is not installed')
+    }
+    expect(
+      runnerEnv({
+        node: '/n/node',
+        flags: ['--list'],
+        env: {},
+        browser: missing,
+      }).PATH,
+    ).toStartWith('/n')
+    const output = tempDir()
+    const errors: string[] = []
+    const code = await finish(0, output, ['--list'], {
+      log: () => {},
+      error: (text) => errors.push(text),
+    })
+    expect({ code, errors }).toEqual({ code: 0, errors: [] })
+  })
+})
+
+describe('the closing rerun line', () => {
+  const spec = (
+    title: string,
+    line: number,
+    status: string,
+    results: string[],
+  ) => ({
+    title,
+    line,
+    column: 3,
+    tests: [{ status, results: results.map((result) => ({ status: result })) }],
+  })
+  const runDir = (signal: string | null) => {
+    const output = tempDir()
+    const file = 'page/page-click.spec.ts'
+    const results = {
+      suites: [
+        {
+          title: file,
+          file,
+          specs: [
+            spec('should click the button @smoke', 24, 'expected', ['passed']),
+            spec(
+              'should click on a span with an inline element inside',
+              75,
+              'skipped',
+              ['interrupted'],
+            ),
+            spec(
+              'should not throw UnhandledPromiseRejection when page closes',
+              99,
+              'skipped',
+              [],
+            ),
+          ],
+        },
+      ],
+    }
+    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results))
+    fs.writeFileSync(path.join(output, 'run.json'), JSON.stringify({ signal }))
+    fs.copyFileSync(
+      path.join(import.meta.dir, 'node/scope.json'),
+      path.join(output, 'scope.json'),
+    )
+    return output
+  }
+
+  it('offers a test that never started when a stopped run cut none off', async () => {
+    const output = runDir('SIGINT')
+    const results = JSON.parse(
+      fs.readFileSync(path.join(output, 'results.json'), 'utf8'),
+    )
+    // Stopped between tests: nothing interrupted, one test never started.
+    results.suites[0].specs.splice(1, 1)
+    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results))
+    const line = await rerunLine(output, [])
+    expect(line).toStartWith('Stopped by SIGINT before every test ran. Rerun')
+    expect(line).toContain('(not run)')
+    expect(line).toContain(
+      'should not throw UnhandledPromiseRejection when page closes',
+    )
+  })
+
+  it('says a stopped run stopped, and offers the test it cut off', async () => {
+    const line = await rerunLine(runDir('SIGINT'), [])
+    expect(line).not.toContain('Nothing failed')
+    expect(line).toStartWith('Stopped by SIGINT before every test ran.')
+    expect(line).toContain(
+      "(interrupted): bun run test:neo-spec page-click --grep '(?:^| )page/page-click\\.spec\\.ts should click on a span with an inline element inside(?: @\\S+)*$'",
+    )
   })
 })

@@ -22,13 +22,16 @@ folder and the command that reruns one failing test.
 
 A name is a spec file without `.spec.ts`, or `page/<name>` when two folders share it; full paths
 work too. Other flags go to `node/run.mjs` unchanged: `--grep`, `--workers 1` to `4`,
-`--skip-build`, `--hosted-mode`, `--no-curation`.
+`--skip-build`, `--hosted-mode`, `--no-curation`. `--list` lists the selected tests and needs no
+browser.
 
 Overrides:
 
 - `NEO_E2E_BROWSER`: the browser executable. Default: `/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo`
   on macOS, `/usr/bin/browserclaw` on Linux.
 - `NEO_TESTS_PLAYWRIGHT_SOURCE`: a source prepared by `js/prepare.mjs`. Default: the cache above.
+- `NEO_SPEC_CACHE_DIR`: the cache folder that holds prepared sources, one per pinned release.
+  Default: `~/.cache/browseros/neo-spec` (under `$XDG_CACHE_HOME` when set).
 - `NEO_NODE_OUTPUT_DIR`: where result folders go. Default: `.llm/neo-node-results` at the
   repository root.
 - `CLAW_NODE_ADDON`: an add-on build to load instead of building one (with `--skip-build`).
