@@ -26,6 +26,10 @@ const output = fs.realpathSync(
   fs.mkdtempSync(path.join(root, `${options.engine}-`)),
 )
 console.log(`Results: ${output}`)
+// spec.ts (`bun run test:neo-spec`) reads the folder from here instead of from the console, which
+// it leaves to Playwright's live terminal reporter.
+if (process.env.NEO_NODE_RESULTS_FILE)
+  fs.writeFileSync(process.env.NEO_NODE_RESULTS_FILE, output)
 const run = {
   mode: options.engine,
   engine: options.engine,

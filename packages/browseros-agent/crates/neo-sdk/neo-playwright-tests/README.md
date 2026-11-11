@@ -3,6 +3,44 @@
 One runner uses Playwright Test's workers and pinned upstream specs; legacy `expectLoop`
 passes remain a separate verdict. No tests are translated into SDK calls.
 
+## Running
+
+From `packages/browseros-agent`:
+
+```sh
+bun run test:neo-spec                          # every spec on Neo (claw engine, 4 workers)
+bun run test:neo-spec page-goto page-fill      # some specs, by file name without .spec.ts
+bun run test:neo-spec page-goto --reference    # the same on real Playwright
+bun run test:neo-spec page-fill --grep 'should fill range input'
+```
+
+It needs Node 22 or newer (taken from PATH, then `/opt/homebrew/opt/node@26/bin`; the corpus
+runs on 26), BrowserOS neo installed, `git`, and `cargo` for the claw add-on. The first run
+prepares the pinned Playwright source in `~/.cache/browseros/neo-spec/playwright-1.64.1`, which
+takes a few minutes. Each run ends with the in-scope score, the all-tests score, the results
+folder and the command that reruns one failing test.
+
+A name is a spec file without `.spec.ts`, or `page/<name>` when two folders share it; full paths
+work too. Other flags go to `node/run.mjs` unchanged: `--grep`, `--workers 1` to `4`,
+`--skip-build`, `--hosted-mode`, `--no-curation`.
+
+Overrides:
+
+- `NEO_E2E_BROWSER`: the browser executable. Default: `/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo`
+  on macOS, `/usr/bin/browserclaw` on Linux.
+- `NEO_TESTS_PLAYWRIGHT_SOURCE`: a source prepared by `js/prepare.mjs`. Default: the cache above.
+- `NEO_NODE_OUTPUT_DIR`: where result folders go. Default: `.llm/neo-node-results` at the
+  repository root.
+- `CLAW_NODE_ADDON`: an add-on build to load instead of building one (with `--skip-build`).
+
+`spec.ts` only finds Node, the browser and the source; `node/run.mjs` does the rest and can be
+run directly with the variables above set, e.g.
+`node crates/neo-sdk/neo-playwright-tests/node/run.mjs --engine claw tests/page/page-goto.spec.ts`.
+`claw` is the default engine; `--reference` aliases `--engine reference`. `neo` retains
+v2's fixture implementation but fails immediately: `Neo v2's SDK is not on this branch`.
+Claw builds `node/claw-addon` with `cargo build --release --locked`, then installs
+`claw_node.node`. `--skip-build` reuses it.
+
 ## The corpus
 
 **Pin.** The specs are Playwright `v1.64.1`
@@ -12,15 +50,15 @@ release, so no test asks for behavior newer than the engine. `corpus.json` holds
 each suite's SHA-256; `node/curation.json` and `node/case-ids.json` name the same commit, and a
 run stops if any of them disagrees with the prepared source.
 
-**Preparing the source.** `js/prepare.mjs` exports the pinned commit from a Playwright clone
-with `git archive` (the clone's checkout is not touched), runs `npm ci` and `npm run build` in
-the copy, and stamps it with the revision and the hashes of every test, fixture and build
-product. Every run verifies that stamp.
+**Preparing the source.** `bun run test:neo-spec` does this on its first run. `js/prepare.mjs`
+exports the pinned commit from a Playwright clone with `git archive` (the clone's checkout is not
+touched), runs `npm ci` and `npm run build` in the copy, and stamps it with the revision and the
+hashes of every test, fixture and build product. Every run verifies that stamp. By hand:
 
 ```sh
 git clone https://github.com/microsoft/playwright ~/code/playwright   # or: git fetch origin tag v1.64.1
-NEO_TESTS_PLAYWRIGHT_SOURCE=/Users/shadowfax/llm/browseros/claw-sdk/inputs/playwright-v1.64.1 \
-  node packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/js/prepare.mjs ~/code/playwright
+NEO_TESTS_PLAYWRIGHT_SOURCE=~/.cache/browseros/neo-spec/playwright-1.64.1 \
+  node crates/neo-sdk/neo-playwright-tests/js/prepare.mjs ~/code/playwright
 ```
 
 It refuses to overwrite an existing directory; delete the old copy first to rebuild it.
@@ -58,32 +96,6 @@ Every run checks the map against the collected tests and stops on any test witho
 any ID without a test. Playwright's own output and `--grep` see titles only, so `--grep FI-005`
 selects nothing: pass the spec file and `--grep` the title. Reports print the ID before the
 title.
-
-## Running
-
-```sh
-export PATH=/opt/homebrew/opt/node@26/bin:$PATH
-export NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo"
-export NEO_TESTS_PLAYWRIGHT_SOURCE=/Users/shadowfax/llm/browseros/claw-sdk/inputs/playwright-v1.64.1
-export CARGO_TARGET_DIR=/Volumes/extssd/cargo-targets/claw-runner
-export CARGO_BUILD_BUILD_DIR=/Volumes/extssd/cargo-targets/claw-runner-build
-export NEO_NODE_OUTPUT_DIR="$PWD/.llm/claw-node-results"
-
-node packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/run.mjs --engine reference
-node packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/run.mjs --engine claw
-node packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/run.mjs --engine neo
-```
-
-`claw` is the default; `--reference` aliases `--engine reference`. `neo` retains
-v2's fixture implementation but fails immediately: `Neo v2's SDK is not on this branch`.
-Claw builds `node/claw-addon` with `cargo build --release --locked`, then installs
-`claw_node.node`. `--skip-build` reuses it; `CLAW_NODE_ADDON` can name an existing build.
-
-Append suite paths, `--grep`, or `--workers 1` through `4` for subsets. For example:
-
-```sh
-node packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/run.mjs --engine claw --workers 2 tests/page/page-goto.spec.ts tests/page/page-click.spec.ts tests/library/page-close.spec.ts
-```
 
 Every engine launches its own headless BrowserOS with a private profile and leased
 server ports. Guardians clean and verify only their own process groups, even after
