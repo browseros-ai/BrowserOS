@@ -50,7 +50,6 @@ mod op_spec;
 mod page;
 mod playwright;
 mod playwright_error;
-mod playwright_hooks;
 mod prelude_source;
 mod probe;
 mod read;
@@ -70,7 +69,6 @@ pub use op_env::{OpEnv, Refusal};
 pub use op_spec::{Capability, OpLifetime, OpSpec, OpTarget};
 pub use playwright::Playwright;
 pub use playwright_error::{Answer, ErrorCode, PlaywrightError, TimedOut};
-pub use playwright_hooks::{PlaywrightHooks, TypedBy};
 pub use prelude_source::PRELUDE_JS;
 pub use run_state::RunState;
 

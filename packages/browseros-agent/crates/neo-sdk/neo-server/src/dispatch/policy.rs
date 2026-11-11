@@ -7,12 +7,9 @@ use super::{Caller, MethodSpec, OperationError};
 
 /// One rule the door applies to every op: at admission, again when a leaf is about to send
 /// (`OpCtx::recheck`), and once more before a read's result or a main-world script's answer is
-/// released, as a read of its tab and of every other tab the script's sends reached. This keeps
-/// a result taken while an owner acquired a reads-blocking lock from reaching the script. A result
-/// that carries other tabs' data, such as an event pull's, also goes past the rules once per
-/// tab it names (`OpCtx::check_tab`), and so does a main-world script, once per other tab its
-/// page's opener links let it act on (`OpCtx::recheck_reach`): before it is sent, and again after,
-/// before its answer is released, for the windows and frames it opened since.
+/// released, as a read of its tab. This keeps a result taken while an owner acquired a
+/// reads-blocking lock from reaching the script. A result that carries other tabs' data, such as
+/// an event pull's, also goes past the rules once per tab it names (`OpCtx::check_tab`).
 ///
 /// Rules read in-memory state only and never await. That is what lets overlapping calls
 /// (`Promise.all`) pass through the door without waiting on each other (skeleton D7 rule 8).
