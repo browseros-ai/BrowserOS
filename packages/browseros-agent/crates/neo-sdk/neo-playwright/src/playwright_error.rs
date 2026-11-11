@@ -48,6 +48,9 @@ listed_enum! {
         PageError,
         /// A navigation failed with a net error.
         NavigationFailed,
+        /// A download the script waited on, through `download.saveAs`, was canceled or
+        /// interrupted, or finished where Neo cannot read it.
+        DownloadFailed,
         /// The page never reached a state the op waited for: a load state, a URL, an event, a
         /// function's truthy result, a finished download.
         WaitTimeout,
@@ -124,6 +127,7 @@ impl ErrorCode {
             Self::ElementDetached => row("element_detached", Website, No, Definite),
             Self::PageError => row("page_error", Website, No, Definite),
             Self::NavigationFailed => row("navigation_failed", Website, No, Definite),
+            Self::DownloadFailed => row("download_failed", Website, No, Definite),
             Self::WaitTimeout => row("wait_timeout", Website, Yes, Ambiguous),
             Self::InvalidInput => row("invalid_input", Script, No, Definite),
             Self::Unsupported => row("unsupported", Neo, No, Definite),
@@ -342,7 +346,7 @@ mod tests {
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
-    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 16] = [
+    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 17] = [
         (
             "strict_mode_violation",
             ErrorOwner::Script,
@@ -381,6 +385,12 @@ mod tests {
         ),
         (
             "navigation_failed",
+            ErrorOwner::Website,
+            TimedOut::No,
+            Answer::Definite,
+        ),
+        (
+            "download_failed",
             ErrorOwner::Website,
             TimedOut::No,
             Answer::Definite,

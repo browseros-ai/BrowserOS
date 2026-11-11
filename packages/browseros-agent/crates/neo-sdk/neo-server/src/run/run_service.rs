@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
 use crate::browser::{BrowserLink, PageRef, RunView, TabRegistry};
+use crate::builtins;
 use crate::config::Defaults;
 use crate::dispatch::{
     Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunStart, StopReason,
@@ -254,6 +255,9 @@ impl RunService {
         {
             ops.shutdown().await;
         }
+        // Before the reply, so a host that reads a download right after it finds the file; and
+        // before the end record, which drops the run state that lists the downloads.
+        builtins::keep_downloads(&run, self.store.outputs()).await;
         // The run's end record is built from its reply, so the trace and a `requestId` replay keep
         // exactly what the caller got.
         let reply = Arc::new(RunReply::build(&run, end));

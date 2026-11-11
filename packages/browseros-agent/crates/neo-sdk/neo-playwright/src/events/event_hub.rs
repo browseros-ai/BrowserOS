@@ -10,14 +10,16 @@ use tokio::sync::futures::Notified;
 
 use crate::RunState;
 use crate::events::dialog_table::{self, DialogAnswer, DialogTable, Unanswerable};
+use crate::events::download_table::DownloadTable;
 use crate::events::page_event::{DialogId, DialogKind, PageEvent};
 use crate::events::{PageEventKind, Subscription};
 
 /// How many records the log keeps. A reader that falls further behind is told how many it lost.
 pub(crate) const LOG_CAPACITY: usize = 1024;
 
-/// The log of page events since the `Playwright` started, the runs that read it, and the
-/// dialogs held for them. Shared by the facade (readers) and the target watcher (the writer).
+/// The log of page events since the `Playwright` started, the runs that read it, the dialogs
+/// held for them, and each download's progress. Shared by the facade (readers) and the target
+/// watcher (the writer).
 #[derive(Debug, Default)]
 pub(crate) struct EventHub {
     /// A std mutex: every holder copies or appends and lets go, never across an await.
@@ -27,6 +29,7 @@ pub(crate) struct EventHub {
     /// Runs that used an event op, weakly: a run's state dies with the run. Pruned as it goes.
     runs: Mutex<Vec<Weak<RunState>>>,
     dialogs: Mutex<DialogTable>,
+    downloads: DownloadTable,
 }
 
 #[derive(Debug, Default)]
@@ -196,6 +199,11 @@ impl EventHub {
     /// The held dialogs. A std mutex, never held across an await.
     pub(crate) fn dialogs(&self) -> MutexGuard<'_, DialogTable> {
         dialog_table::lock(&self.dialogs)
+    }
+
+    /// Every download the watcher saw begin, with its progress.
+    pub(crate) fn downloads(&self) -> &DownloadTable {
+        &self.downloads
     }
 
     /// Starts a script's answer to dialog `id` on the tab `target`. The guard keeps the dialog

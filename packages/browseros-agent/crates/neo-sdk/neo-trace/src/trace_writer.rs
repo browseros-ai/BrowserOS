@@ -626,7 +626,8 @@ impl Writer {
                     }
                     Work::Sweep { policy, now } => {
                         let files = self.store.files().clone();
-                        swept.push(tx.sweep(&files, policy, now).await?);
+                        let outputs = self.store.outputs().clone();
+                        swept.push(tx.sweep(&files, &outputs, policy, now).await?);
                     }
                     Work::Screenshot { op, shot } => {
                         tx.store_screenshot(op, shot).await?;
@@ -1145,6 +1146,62 @@ mod tests {
             .unwrap_or_else(|error| panic!("tab links: {error}"));
         assert_eq!(orphans, 0);
         assert_eq!(links, 1, "the running run keeps its link");
+    }
+
+    /// A run's kept downloads live exactly as long as its record.
+    #[tokio::test]
+    async fn a_swept_runs_kept_downloads_go_with_it() {
+        let (dir, store, sink) = writer().await;
+        let day = 24 * 60 * 60 * 1000;
+        let source = dir.path().join("statement.txt");
+        tokio::fs::write(&source, b"balance")
+            .await
+            .unwrap_or_else(|error| panic!("source: {error}"));
+        let (aged, recent) = (RunId::new(), RunId::new());
+        for (run, started) in [(aged, 0), (recent, 8 * day)] {
+            sink.run_started(RunStarted {
+                id: run,
+                code: String::new(),
+                request_id: None,
+                task_id: None,
+                host_data: None,
+                also_mask: None,
+                at: EpochMillis::from_millis(started),
+            });
+            sink.run_ended(RunEnded {
+                id: run,
+                status: RunStatus::Ok,
+                error: None,
+                result: None,
+                replay: None,
+                also_mask: None,
+                at: EpochMillis::from_millis(started + 10),
+            });
+            store
+                .outputs()
+                .keep_download(run, 0, &source)
+                .await
+                .unwrap_or_else(|error| panic!("keep: {error}"));
+        }
+        let swept = sink
+            .sweep(
+                RetentionPolicy::default(),
+                EpochMillis::from_millis(8 * day + 1),
+            )
+            .await;
+        assert_eq!(swept.ok().map(|swept| swept.runs), Some(1));
+        for (run, kept) in [(aged, false), (recent, true)] {
+            let found = store
+                .outputs()
+                .open_download(run, 0)
+                .await
+                .unwrap_or_else(|error| panic!("open: {error}"));
+            assert_eq!(
+                found.is_some(),
+                kept,
+                "only the recent run keeps its download"
+            );
+        }
     }
 
     /// Jobs leave only once their batch commits; a rolled-back batch's jobs answer `Dropped`,

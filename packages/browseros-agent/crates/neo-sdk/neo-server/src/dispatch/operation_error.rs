@@ -213,6 +213,9 @@ error_codes! {
     PAGE_ERROR = "page_error";
     /// The page never reached a state the op waited for: a load state, a URL, an event.
     WAIT_TIMEOUT = "wait_timeout";
+    /// A download `download.saveAs` waited on was canceled or interrupted, or finished where Neo
+    /// cannot read it.
+    DOWNLOAD_FAILED = "download_failed";
     /// A Playwright feature Neo does not support here, such as a popup opened as a window.
     UNSUPPORTED = "unsupported";
     /// Copy or cut in a password, card or one-time-code field.

@@ -16,6 +16,9 @@
 //! queued but not yet written may be gone. Every run becomes `complete`: the screenshot jobs it
 //! was waiting for died with the process.
 //!
+//! A run's kept downloads are files beside the database too (`run_outputs`), written by
+//! claw-sdk when the run ends; [`TraceStore::run`] reads their list from there.
+//!
 //! Screenshots are files beside the database (`screenshot_files`); an operation's `screenshot`
 //! state says whether its file is there. The camera writes a file before its answer reaches the
 //! writer. The retention sweep deletes a run's files before its rows, inside its transaction,
@@ -37,6 +40,7 @@ use sea_orm::{
 };
 use serde_json::Value;
 
+use crate::run_outputs::RunOutputs;
 use crate::screenshot_files::ShotFiles;
 use crate::storage::entities::{operations, private_tabs, run_tabs, runs};
 use crate::storage::record_rows::{self, RunDetailRow, RunSummaryRow};
@@ -88,6 +92,7 @@ pub struct Swept {
 pub struct TraceStore {
     db: DatabaseConnection,
     files: ShotFiles,
+    outputs: RunOutputs,
 }
 
 impl TraceStore {
@@ -149,6 +154,7 @@ impl TraceStore {
         Ok(Self {
             db,
             files: ShotFiles::beside(path),
+            outputs: RunOutputs::beside(path),
         })
     }
 
@@ -158,6 +164,13 @@ impl TraceStore {
 
     pub(crate) fn files(&self) -> &ShotFiles {
         &self.files
+    }
+
+    /// The files runs keep beside the trace: claw-sdk writes a run's downloads there when it
+    /// ends, and the host routes read them back.
+    #[must_use]
+    pub fn outputs(&self) -> &RunOutputs {
+        &self.outputs
     }
 
     /// Every private tab, for [`Privacy::new`](crate::Privacy::new) at startup.
@@ -211,7 +224,9 @@ impl TraceStore {
             .map(record_rows::operation_row)
             .collect::<Result<Vec<_>, _>>()?;
         // Preserve the existing two independent reads; no new read transaction is introduced.
-        record_rows::run_detail(row, operations).map(Some)
+        let mut detail = record_rows::run_detail(row, operations)?;
+        detail.downloads = self.outputs.downloads(id).await?;
+        Ok(Some(detail))
     }
 
     /// One operation, or `None`.

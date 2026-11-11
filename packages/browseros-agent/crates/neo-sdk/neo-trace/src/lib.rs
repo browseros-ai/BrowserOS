@@ -15,6 +15,7 @@
 //!      ├─ Masker ──────────────▶ SecretSet ◀── protected fill, /host/v1/secrets, takeover
 //!      └─ SecretInput, takeover ▶ Privacy ── make_private ─▶ writer (durable) ─┘
 //!                                    └── CaptureGuard ◀── every screenshot and frame
+//!  run service, at a run's end ─▶ RunOutputs ─▶ outputs/<run>/ (kept downloads), beside trace.db
 //! ```
 //!
 //! The writer decides which operations get a screenshot and when a run is `complete`; the
@@ -44,6 +45,8 @@ mod operation_record;
 mod privacy;
 mod read_model;
 mod redactor;
+mod run_download;
+mod run_outputs;
 mod run_record;
 mod salvage;
 mod screenshot_files;
@@ -71,6 +74,8 @@ pub use read_model::{
     TraceTail,
 };
 pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};
+pub use run_download::{DownloadStatus, RunDownload};
+pub use run_outputs::RunOutputs;
 pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus};
 pub use salvage::{Loss, Recovery, Salvage};
 pub use screenshot_queue::{Shot, ShotAnswer, ShotJob, ShotJobs, ShotQueue, screenshot_queue};

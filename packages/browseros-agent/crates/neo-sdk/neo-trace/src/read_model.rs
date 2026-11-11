@@ -6,7 +6,7 @@
 
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, Outcome, PageState,
-    RequestId, RunEffects, RunId, RunStatus, TaskId,
+    RequestId, RunDownload, RunEffects, RunId, RunStatus, TaskId,
 };
 use browseros_core::TabId;
 use serde_json::Value;
@@ -149,6 +149,9 @@ pub struct RunDetail {
     pub result_truncated: bool,
     /// Its operations, by `seq`.
     pub operations: Vec<OperationRow>,
+    /// The downloads its `download` events handed the script, by index. Empty until the run
+    /// ends: they are recorded beside the trace when it does.
+    pub downloads: Vec<RunDownload>,
 }
 
 /// The latest operations that match a [`TailQuery`], with the runs they belong to.
