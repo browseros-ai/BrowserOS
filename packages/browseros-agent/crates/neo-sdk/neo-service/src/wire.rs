@@ -151,6 +151,12 @@ pub(crate) fn operation(op: &OperationRow, inlined: &Inlined) -> api::Operation 
         run_id: op.id.run.to_string(),
         parent_id: op.parent.map(|parent| parent.to_string()),
         name: op.name.clone(),
+        site: op.site.map(|site| {
+            Box::new(api::OperationSite {
+                line: i64::from(site.line),
+                column: i64::from(site.column),
+            })
+        }),
         kind: op.kind.as_str().to_string(),
         attempt: op
             .kind

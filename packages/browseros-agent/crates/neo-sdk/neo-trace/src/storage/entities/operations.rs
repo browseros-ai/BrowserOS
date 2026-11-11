@@ -14,6 +14,7 @@ pub struct Model {
     pub seq: i64,
     pub parent_id: Option<String>,
     pub name: String,
+    pub site: Option<String>,
     pub kind: String,
     pub attempt: Option<i64>,
     pub effect: String,

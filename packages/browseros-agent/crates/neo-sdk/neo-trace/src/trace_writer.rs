@@ -652,6 +652,7 @@ impl Writer {
         // Names identify running operations immediately; input still waits for the end.
         let name = self.redactor.text(&event.name);
         tx.insert_operation(OperationStartRow {
+            site: event.site,
             id: event.id,
             parent: event.parent,
             name: &name,
@@ -945,6 +946,7 @@ mod tests {
                 at: EpochMillis::from_millis(started),
             });
             sink.op_started(OperationStarted {
+                site: None,
                 id: OperationId::new(run, 1),
                 parent: None,
                 name: "page.title".into(),
@@ -1064,6 +1066,7 @@ mod tests {
         assert!(dropped.is_ok());
         let click = OperationId::new(run, 1);
         sink.op_started(OperationStarted {
+            site: None,
             id: click,
             parent: None,
             name: "locator.click".into(),
@@ -1140,6 +1143,7 @@ mod tests {
         let (first, second) = (OperationId::new(run, 1), OperationId::new(run, 2));
         for click in [first, second] {
             sink.op_started(OperationStarted {
+                site: None,
                 id: click,
                 parent: None,
                 name: "locator.click".into(),
@@ -1200,6 +1204,7 @@ mod tests {
             bytes_len: jpeg.len() as u64,
         });
         sink.op_started(OperationStarted {
+            site: None,
             id: OperationId::new(RunId::new(), 1),
             parent: None,
             name: "test.fail".into(),

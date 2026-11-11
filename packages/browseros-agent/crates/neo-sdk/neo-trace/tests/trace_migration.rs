@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 
 use browseros_core::TabId;
 use neo_trace::{
-    Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, PageState, RedactionLimits, Redactor, RequestId, RetentionPolicy, RunEffects,
-    RunQuery, RunStatus, ShotRead, ShotState, TailQuery, TaskId, TraceError, TraceStore,
-    WriterConfig, spawn_writer,
+    Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationSite,
+    OperationStarted, Outcome, PageState, RedactionLimits, Redactor, RequestId, RetentionPolicy,
+    RunEffects, RunQuery, RunStatus, ShotRead, ShotState, TailQuery, TaskId, TraceError,
+    TraceStore, WriterConfig, spawn_writer,
 };
 use sea_orm::sqlx::sqlite::SqliteConnectOptions;
 use sea_orm::sqlx::{self, Connection, Row, SqliteConnection};
@@ -172,7 +172,7 @@ fn without_migration(mut dump: Dump) -> Dump {
 }
 
 /// Replays the old build's migrate/recover sequence, frozen at fc93354bc; it ignores the new
-/// migration ledger and proves rollback to that binary can still use an adopted S5 file.
+/// migration ledger and refuses a file after a later migration raises its version fence.
 async fn old_build_open(path: &Path) -> TestResult {
     let mut conn = connection(path).await?;
     sqlx::raw_sql("PRAGMA journal_mode = WAL")
@@ -181,7 +181,9 @@ async fn old_build_open(path: &Path) -> TestResult {
     let version: i64 = sqlx::query_scalar("PRAGMA user_version")
         .fetch_one(&mut conn)
         .await?;
-    assert!(version <= 1, "the old binary refuses a newer fence");
+    if version > 1 {
+        return Err("the old binary refuses a newer fence".into());
+    }
     let mut tx = conn.begin().await?;
     sqlx::raw_sql(include_str!("fixtures/trace_schema_s5.sql"))
         .execute(&mut *tx)
@@ -197,6 +199,16 @@ async fn old_build_open(path: &Path) -> TestResult {
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    conn.close().await?;
+    Ok(())
+}
+
+/// Extend a frozen S5 fixture to the expected current shape without invoking the migrator.
+async fn expected_site_column(path: &Path) -> TestResult {
+    let mut conn = connection(path).await?;
+    sqlx::raw_sql(r#"ALTER TABLE "operations" ADD COLUMN "site" text; PRAGMA user_version = 2"#)
+        .execute(&mut conn)
+        .await?;
     conn.close().await?;
     Ok(())
 }
@@ -312,15 +324,16 @@ async fn legacy_redacted_arguments_and_withheld_code_remain_readable() -> TestRe
 }
 
 #[tokio::test]
-async fn a_fresh_file_has_exactly_the_v1_schema() -> TestResult {
+async fn a_fresh_file_has_exactly_the_current_schema() -> TestResult {
     let (_legacy, old) = fixture("s5", false).await?;
     let fresh = tempfile::tempdir()?;
     let path = fresh.path().join("trace.db");
     drop(TraceStore::open(&path).await?);
+    expected_site_column(&old).await?;
     assert_eq!(shape(&path).await?, shape(&old).await?);
     let dump = logical_dump(&path).await?;
-    assert_eq!(dump.version, 1);
-    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(1));
+    assert_eq!(dump.version, 2);
+    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(2));
     assert_eq!(
         dump.rows["seaql_migrations"][0][0],
         "'m0001_trace_baseline'"
@@ -333,11 +346,12 @@ async fn an_existing_v1_file_is_adopted_with_every_row() -> TestResult {
     let (_legacy, path) = fixture("s5", true).await?;
     let (_expected, expected) = fixture("s5", true).await?;
     old_build_open(&expected).await?;
+    expected_site_column(&expected).await?;
     let store = TraceStore::open(&path).await?;
     assert_eq!(
         without_migration(logical_dump(&path).await?),
         logical_dump(&expected).await?,
-        "only documented crash recovery and the migration ledger may change"
+        "only documented crash recovery, the nullable site and the migration ledger may change"
     );
     let detail = store.run(A.parse()?).await?.ok_or("missing run")?;
     assert_eq!(detail.summary.status, RunStatus::Ok);
@@ -346,6 +360,7 @@ async fn an_existing_v1_file_is_adopted_with_every_row() -> TestResult {
     assert_eq!(detail.code.as_deref(), Some("return 1"));
     assert_eq!(detail.result, Some(json!(1)));
     assert_eq!(detail.operations.len(), 3);
+    assert!(detail.operations.iter().all(|op| op.site.is_none()));
     assert_eq!(detail.operations[0].notes, ["looked"]);
     assert_eq!(detail.operations[0].screenshot, Some(ShotState::Stored));
     assert_eq!(
@@ -449,6 +464,7 @@ async fn an_s4_file_gains_notes_and_takes_operation_ends() -> TestResult {
     );
     let id = OperationId::new(A.parse()?, 4);
     sink.op_started(OperationStarted {
+        site: None,
         id,
         parent: None,
         name: "page.title".into(),
@@ -504,6 +520,7 @@ async fn an_s3_file_is_adopted_with_its_request_history() -> TestResult {
         Some(B.parse()?)
     );
     let (_old, old) = fixture("s5", false).await?;
+    expected_site_column(&old).await?;
     assert_eq!(shape(&path).await?, shape(&old).await?);
     Ok(())
 }
@@ -532,7 +549,7 @@ async fn a_session_era_file_is_refused_untouched() -> TestResult {
 async fn a_newer_user_version_is_refused_untouched() -> TestResult {
     let (_dir, path) = fixture("s5", true).await?;
     let mut conn = connection(&path).await?;
-    sqlx::raw_sql("PRAGMA user_version = 2")
+    sqlx::raw_sql("PRAGMA user_version = 3")
         .execute(&mut conn)
         .await?;
     conn.close().await?;
@@ -575,11 +592,11 @@ async fn a_failed_adoption_leaves_the_file_as_it_was() -> TestResult {
 }
 
 #[tokio::test]
-async fn the_previous_build_still_opens_an_adopted_file() -> TestResult {
+async fn the_previous_build_refuses_a_file_with_the_new_site_migration() -> TestResult {
     let (_dir, path) = fixture("s5", true).await?;
     drop(TraceStore::open(&path).await?);
     let before = logical_dump(&path).await?;
-    old_build_open(&path).await?;
+    assert!(old_build_open(&path).await.is_err());
     assert_eq!(logical_dump(&path).await?, before);
     Ok(())
 }
@@ -720,6 +737,7 @@ async fn a_runs_tabs_come_back_sorted_from_one_statement() -> TestResult {
 #[tokio::test]
 async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> TestResult {
     let (_dir, path) = fixture("s5", true).await?;
+    drop(TraceStore::open(&path).await?);
     let schema_before = shape(&path).await?;
     let mut conn = connection(&path).await?;
     sqlx::query("UPDATE operations SET page_id = 9223372036854775807, tab_id = 9, title = 'old tab' WHERE run_id = ? AND seq = 1")
@@ -748,6 +766,7 @@ async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> Tes
     );
     let id = OperationId::new(A.parse()?, 4);
     sink.op_started(OperationStarted {
+        site: None,
         id,
         parent: None,
         name: "page.title".into(),
@@ -796,5 +815,64 @@ async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> Tes
     );
     assert_eq!(current, None, "new data leaves the legacy column NULL");
     conn.close().await?;
+    Ok(())
+}
+
+/// A deployed v1 file already has its baseline ledger entry: upgrades must run the new
+/// migration even when baseline adoption is skipped, and preserve history across reopening.
+#[tokio::test]
+async fn an_already_migrated_file_gains_sites_without_losing_its_operations() -> TestResult {
+    let (_dir, path) = fixture("s5", true).await?;
+    let mut conn = connection(&path).await?;
+    sqlx::raw_sql("CREATE TABLE seaql_migrations (version TEXT PRIMARY KEY, applied_at BIGINT NOT NULL); INSERT INTO seaql_migrations VALUES ('m0001_trace_baseline', 1)")
+        .execute(&mut conn).await?;
+    conn.close().await?;
+    let store = TraceStore::open(&path).await?;
+    let old = OperationId::new(A.parse()?, 1);
+    assert_eq!(
+        store.operation(old).await?.ok_or("old operation")?.site,
+        None
+    );
+    let sink = spawn_writer(
+        &store,
+        Redactor::new(RedactionLimits::default()),
+        WriterConfig::default(),
+        None,
+    );
+    let id = OperationId::new(A.parse()?, 4);
+    let site = OperationSite {
+        line: 3,
+        column: 17,
+    };
+    sink.op_started(OperationStarted {
+        site: Some(site),
+        id,
+        parent: None,
+        name: "page.title".into(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Read,
+        tab: Some(TabId(3)),
+        args: Value::Null,
+        at: EpochMillis::from_millis(40),
+    });
+    sink.flush().await?;
+    let running = store.operation(id).await?.ok_or("running operation")?;
+    assert_eq!(running.site, Some(site));
+    assert_eq!(running.outcome, None);
+    drop(sink);
+    drop(store);
+    let reopened = TraceStore::open(&path).await?;
+    assert_eq!(
+        reopened
+            .operation(id)
+            .await?
+            .ok_or("reopened operation")?
+            .site,
+        Some(site)
+    );
+    assert_eq!(
+        reopened.operation(old).await?.ok_or("old operation")?.site,
+        None
+    );
     Ok(())
 }

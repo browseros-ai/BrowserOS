@@ -165,6 +165,7 @@ impl Harness {
             at: EpochMillis::now(),
         });
         self.sink.op_started(OperationStarted {
+            site: None,
             id: OperationId::new(run, 1),
             parent: None,
             name: "locator.click".into(),

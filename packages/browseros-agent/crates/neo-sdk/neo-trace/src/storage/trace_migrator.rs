@@ -12,16 +12,20 @@ use sea_orm_migration::prelude::{MigrationTrait, MigratorTrait, async_trait};
 use crate::TraceError;
 
 mod m0001_trace_baseline;
+mod m0002_operation_site;
 
 /// The ordered schema history, applied only inside prepare's owned SQLite transaction.
 pub(crate) struct TraceMigrator;
 
-const USER_VERSION_FENCE: i64 = 1;
+const USER_VERSION_FENCE: i64 = 2;
 
 #[async_trait::async_trait]
 impl MigratorTrait for TraceMigrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m0001_trace_baseline::Migration)]
+        vec![
+            Box::new(m0001_trace_baseline::Migration),
+            Box::new(m0002_operation_site::Migration),
+        ]
     }
 }
 

@@ -16,11 +16,10 @@ use super::entities::{operations, run_tabs, runs};
 use super::record_rows::{json_error, parse_id};
 use crate::run_outputs::RunOutputs;
 use crate::screenshot_files::ShotFiles;
-use crate::trace_store;
 use crate::{
-    Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, Outcome, PageState,
-    RequestId, RetentionPolicy, RunEffects, RunId, RunStatus, Shot, ShotState, Swept, TaskId,
-    TraceError,
+    Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, OperationSite, Outcome,
+    PageState, RequestId, RetentionPolicy, RunEffects, RunId, RunStatus, Shot, ShotState, Swept,
+    TaskId, TraceError, trace_store,
 };
 
 /// A run's start row, containing only identity and state. Code and host data arrive with the
@@ -63,6 +62,7 @@ pub(crate) struct RunEndRow<'a> {
 /// stores that, bounded to its storage budget. An operation with a target tab also
 /// lists its run under that tab.
 pub(crate) struct OperationStartRow<'a> {
+    pub(crate) site: Option<OperationSite>,
     pub(crate) id: OperationId,
     pub(crate) parent: Option<OperationId>,
     pub(crate) name: &'a str,
@@ -259,6 +259,12 @@ impl TraceBatch {
             seq: Set(i64::from(op.id.seq)),
             parent_id: Set(op.parent.map(|parent| parent.to_string())),
             name: Set(op.name.to_owned()),
+            site: Set(op
+                .site
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(json_error)?),
             kind: Set(op.kind.as_str().to_owned()),
             attempt: Set(op.kind.attempt().map(i64::from)),
             effect: Set(op.effect.as_str().to_owned()),

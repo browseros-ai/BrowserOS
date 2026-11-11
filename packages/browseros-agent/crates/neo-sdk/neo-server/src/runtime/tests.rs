@@ -532,6 +532,48 @@ fn code_that_does_not_compile_is_a_syntax_error() -> Result<(), TestError> {
     })
 }
 
+/// The runtime owns source coordinates; the trace must keep them through the bridge and
+/// the lazy page's delayed start, while the internal page open has no script frame to borrow.
+#[test]
+fn script_call_sites_survive_on_the_operation_record() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = "\nawait __neo.invoke('test.title', { page });\n\nawait __neo.invoke('test.echo', {});\nawait page.title().catch(() => {});\nreturn 1;";
+        assert_eq!(returned(run_code(&rig, &run, code).await)?, json!(1));
+        rig.sink.flush().await?;
+        let detail = rig.store.run(run.id()).await?.ok_or("recorded run")?;
+        for (name, line) in [("test.title", 2), ("test.echo", 4)] {
+            let op = detail
+                .operations
+                .iter()
+                .find(|op| op.name == name)
+                .ok_or("script operation")?;
+            let site = op.site.ok_or("script call site")?;
+            assert_eq!(site.line, line, "{name}");
+            assert!(site.column > 0, "{name} has a 1-based column");
+        }
+        // The current prelude captures after its own await. Persist that absence honestly;
+        // capturing at public method entry is the separate follow-up to this storage change.
+        let playwright = detail
+            .operations
+            .iter()
+            .find(|op| op.name == "page.title")
+            .ok_or("Playwright operation")?;
+        assert_eq!(playwright.site, None);
+        let internal = detail
+            .operations
+            .iter()
+            .find(|op| op.name == "context.newPage")
+            .ok_or("lazy page open")?;
+        assert_eq!(
+            internal.site, None,
+            "internal work must not borrow a script call site"
+        );
+        Ok(())
+    })
+}
+
 #[test]
 fn an_operation_left_running_names_the_line_that_started_it() -> Result<(), TestError> {
     on_neo_runtime(async {
@@ -1836,6 +1878,28 @@ fn bridge_carries_completed_navigation_receipts_until_acknowledged() -> Result<(
             .await;
         let next: Value = serde_json::from_str(&next)?;
         assert_eq!(next["completedNavigations"], json!([8]));
+        Ok(())
+    })
+}
+
+/// Background polls belong to the prelude, even when their first invocation is made while
+/// a listener's registration frame is still on the script stack.
+#[test]
+fn background_operations_do_not_borrow_a_script_call_site() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code =
+            "__neo.invoke('test.pull', {});\nawait __neo.invoke('test.echo', {});\nreturn 1;";
+        assert_eq!(returned(run_code(&rig, &run, code).await)?, json!(1));
+        rig.sink.flush().await?;
+        let detail = rig.store.run(run.id()).await?.ok_or("recorded run")?;
+        let poll = detail
+            .operations
+            .iter()
+            .find(|op| op.name == "test.pull")
+            .ok_or("background poll")?;
+        assert_eq!(poll.site, None);
         Ok(())
     })
 }

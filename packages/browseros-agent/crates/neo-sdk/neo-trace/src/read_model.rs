@@ -5,8 +5,8 @@
 //! time.
 
 use crate::{
-    Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, Outcome, PageState,
-    RequestId, RunDownload, RunEffects, RunId, RunStatus, TaskId,
+    Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, OperationSite, Outcome,
+    PageState, RequestId, RunDownload, RunEffects, RunId, RunStatus, TaskId,
 };
 use browseros_core::TabId;
 use serde_json::Value;
@@ -14,6 +14,8 @@ use serde_json::Value;
 /// One stored operation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OperationRow {
+    /// The script call site; absent for old rows and work without a script frame.
+    pub site: Option<OperationSite>,
     /// Its id.
     pub id: OperationId,
     /// The operation it ran inside.

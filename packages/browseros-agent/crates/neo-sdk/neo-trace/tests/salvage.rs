@@ -108,6 +108,7 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
     // the pages after the schema.
     for seq in 1..=40 {
         sink.op_started(OperationStarted {
+            site: None,
             id: OperationId::new(untracked, seq),
             parent: None,
             name: "page.title".into(),

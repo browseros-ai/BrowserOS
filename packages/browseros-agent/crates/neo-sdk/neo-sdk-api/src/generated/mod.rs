@@ -20,6 +20,8 @@ pub mod operation;
 pub use self::operation::Operation;
 pub mod operation_error;
 pub use self::operation_error::OperationError;
+pub mod operation_site;
+pub use self::operation_site::OperationSite;
 pub mod page_ref;
 pub use self::page_ref::PageRef;
 pub mod release_request;

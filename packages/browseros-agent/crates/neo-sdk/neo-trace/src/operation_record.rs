@@ -7,6 +7,7 @@
 
 use crate::{EpochMillis, ErrorRecord, OperationId};
 use browseros_core::TabId;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Where an operation sits in the run's tree.
@@ -127,9 +128,21 @@ pub struct PageState {
     pub title: Option<String>,
 }
 
+/// The agent script location that submitted an operation, kept with its start record so
+/// running, refused and interrupted operations can all be mapped back to the source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationSite {
+    /// The script line, starting at 1.
+    pub line: u32,
+    /// The script column, starting at 1.
+    pub column: u32,
+}
+
 /// An operation was admitted, before policy runs.
 #[derive(Clone, Debug)]
 pub struct OperationStarted {
+    /// The script call site; absent for Neo and prelude work without a script frame.
+    pub site: Option<OperationSite>,
     /// Its id.
     pub id: OperationId,
     /// The operation it runs inside: a wrap's method, a defined method, a host call.

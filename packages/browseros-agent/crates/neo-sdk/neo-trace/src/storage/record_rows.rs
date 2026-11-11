@@ -87,6 +87,7 @@ pub(crate) fn operation_row(row: operations::Model) -> Result<OperationRow, Trac
     let seq = u32::try_from(row.seq).map_err(|_| TraceError::Corrupt("operation seq".into()))?;
     let attempt = row.attempt.and_then(|value| u32::try_from(value).ok());
     Ok(OperationRow {
+        site: json_column(row.site.as_deref())?,
         id: OperationId::new(run, seq),
         parent: row.parent_id.as_deref().map(parse_id).transpose()?,
         tab: row.target_tab_id.map(TabId),

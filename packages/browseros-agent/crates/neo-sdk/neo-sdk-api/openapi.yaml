@@ -1156,6 +1156,10 @@ components:
         name:
           type: string
           description: e.g. `page.goto`, `locator.click`, `zuzu.auth.fill`, `host.call`, `host.protectedFill`.
+        site:
+          description: Absent for operations without a script call site and historical records.
+          allOf:
+            - $ref: '#/components/schemas/OperationSite'
         kind:
           type: string
           x-extensible-enum: [builtin, defined, next, host_call, protected]
@@ -1223,6 +1227,19 @@ components:
           type: boolean
         screenshot:
           $ref: '#/components/schemas/Screenshot'
+    OperationSite:
+      type: object
+      description: The call location in the agent script, with 1-based line and column numbers.
+      required: [line, column]
+      properties:
+        line:
+          type: integer
+          format: int64
+          minimum: 1
+        column:
+          type: integer
+          format: int64
+          minimum: 1
     Screenshot:
       type: object
       required: [contentType, data]

@@ -8,8 +8,8 @@ use crate::support::{
 use axum::http::StatusCode;
 use browseros_core::TabId;
 use neo_trace::{
-    Delivery, Effect, OperationEnded, OperationId, OperationKind, OperationStarted, Outcome,
-    PageState, RunEnded, RunId, RunStarted, RunStatus, TaskId,
+    Delivery, Effect, OperationEnded, OperationId, OperationKind, OperationSite, OperationStarted,
+    Outcome, PageState, RunEnded, RunId, RunStarted, RunStatus, TaskId,
 };
 use serde_json::json;
 use std::{fs, io};
@@ -342,6 +342,7 @@ async fn record_values_read_back_as_given_in_every_channel() -> TestResult {
     });
     let read = OperationId::new(run, 1);
     h.sink.op_started(OperationStarted {
+        site: None,
         id: read,
         parent: None,
         name: "page.title".to_string(),
@@ -445,6 +446,7 @@ async fn starts_defer_input_and_ends_publish_the_original_values() -> TestResult
     });
     let fill = OperationId::new(run, 1);
     h.sink.op_started(OperationStarted {
+        site: None,
         id: fill,
         parent: None,
         name: "locator.fill".to_string(),
@@ -525,4 +527,42 @@ fn store_holds(h: &Harness, needle: &str) -> Result<bool, BoxError> {
         file.windows(needle.len())
             .any(|window| window == needle.as_bytes())
     }))
+}
+
+/// The optional field is shared by all operation routes. Absent means no script location,
+/// rather than a fabricated coordinate or JSON null for internal and historical work.
+#[tokio::test]
+async fn operation_routes_return_script_sites_and_omit_missing_sites() -> TestResult {
+    let h = harness().await?;
+    let run = start_run(&h.sink, Start::default());
+    let id = OperationId::new(run, 1);
+    h.sink.op_started(OperationStarted {
+        site: Some(OperationSite {
+            line: 2,
+            column: 17,
+        }),
+        id,
+        parent: None,
+        name: "page.title".into(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Read,
+        tab: None,
+        args: json!({}),
+        at: at(1),
+    });
+    op_started(&h.sink, OperationId::new(run, 2), Op::write(3, 2));
+    h.flushed().await?;
+    let detail = h.get(&format!("/v1/runs/{run}")).await?;
+    assert_eq!(detail.status, StatusCode::OK);
+    assert_eq!(
+        detail.body["operations"][0]["site"],
+        json!({"line": 2, "column": 17})
+    );
+    assert!(detail.body["operations"][1].get("site").is_none());
+    let operation = h.get(&format!("/v1/operations/{id}")).await?;
+    assert_eq!(operation.status, StatusCode::OK);
+    assert_eq!(operation.body["site"], detail.body["operations"][0]["site"]);
+    let tail = h.get("/v1/trace").await?;
+    assert_eq!(tail.body["operations"][0]["site"], operation.body["site"]);
+    Ok(())
 }

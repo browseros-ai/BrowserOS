@@ -1407,6 +1407,7 @@ fn holds(file: &[u8], needle: &str) -> bool {
 /// `op`'s start, as [`op_started`] sends it.
 fn started(op: Op<'_>) -> OperationStarted {
     OperationStarted {
+        site: None,
         id: op.id,
         parent: op.parent,
         name: op.name.to_string(),
