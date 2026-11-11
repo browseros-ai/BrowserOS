@@ -3,21 +3,180 @@
 // route row in Rust, then run `cargo test -p neo-playwright --test wire_generated`, which
 // rewrites this folder.
 
+import type * as pw from '../../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
+import { invoke } from '../bridge'
+import type { CallSite } from '../call-site'
+import type { SignalLike } from '../signal'
+import type { Assert, KeysCheck, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { CallHeader } from '../wire'
+import type { KeyboardInsertTextInput } from './types/KeyboardInsertTextInput'
+import type { KeyboardKeyInput } from './types/KeyboardKeyInput'
+import type { KeyboardPressInput } from './types/KeyboardPressInput'
+import type { KeyboardTypeInput } from './types/KeyboardTypeInput'
+import type { MouseButtonInput } from './types/MouseButtonInput'
+import type { MouseClickInput } from './types/MouseClickInput'
+import type { MouseMoveInput } from './types/MouseMoveInput'
+import type { MouseWheelInput } from './types/MouseWheelInput'
+
+export type { KeyboardDelayOptions } from './types/KeyboardDelayOptions'
+export type { KeyboardInsertTextInput } from './types/KeyboardInsertTextInput'
+export type { KeyboardKeyInput } from './types/KeyboardKeyInput'
+export type { KeyboardPressInput } from './types/KeyboardPressInput'
+export type { KeyboardTypeInput } from './types/KeyboardTypeInput'
+export type { MouseButton } from './types/MouseButton'
+export type { MouseButtonInput } from './types/MouseButtonInput'
+export type { MouseButtonOptions } from './types/MouseButtonOptions'
+export type { MouseClickInput } from './types/MouseClickInput'
+export type { MouseClickOptions } from './types/MouseClickOptions'
+export type { MouseMoveInput } from './types/MouseMoveInput'
+export type { MouseStepOptions } from './types/MouseStepOptions'
+export type { MouseWheelInput } from './types/MouseWheelInput'
+export type { Typed } from './types/Typed'
+
 /** Each input op's input, after the `call` header every op shares. */
-export type InputInputs = {}
+export type InputInputs = {
+  'keyboard.down': KeyboardKeyInput
+  'keyboard.up': KeyboardKeyInput
+  'keyboard.press': KeyboardPressInput
+  'keyboard.type': KeyboardTypeInput
+  'keyboard.insertText': KeyboardInsertTextInput
+  'mouse.move': MouseMoveInput
+  'mouse.down': MouseButtonInput
+  'mouse.up': MouseButtonInput
+  'mouse.click': MouseClickInput
+  'mouse.wheel': MouseWheelInput
+}
 
 /** Each input op's result. */
-export type InputOutputs = {}
+export type InputOutputs = {
+  'keyboard.down': null
+  'keyboard.up': null
+  'keyboard.press': null
+  'keyboard.type': null
+  'keyboard.insertText': null
+  'mouse.move': null
+  'mouse.down': null
+  'mouse.up': null
+  'mouse.click': null
+  'mouse.wheel': null
+}
 
 /**
  * The script's option keys of each input op that takes an `options` bag: the fields of its
  * Rust options struct, for `pick`. Each command row's list is held to upstream's
  * `<Command>Options` below, so a field the prelude computes is never forwarded from a script.
  */
-export const INPUT_OPTION_KEYS = {} as const
+export const INPUT_OPTION_KEYS = {
+  'keyboard.press': ['delay'],
+  'keyboard.type': ['delay'],
+  'mouse.move': ['steps'],
+  'mouse.down': ['button', 'clickCount'],
+  'mouse.up': ['button', 'clickCount'],
+  'mouse.click': ['button', 'clickCount', 'delay'],
+} as const
 
 /**
  * One typed sender per input op. A class passes its input as an object literal, so every
  * field is checked against Rust's input type and the result is Rust's result type.
  */
-export const INPUT_SEND = {}
+export const INPUT_SEND = {
+  'keyboard.down': (
+    site: CallSite,
+    call: CallHeader,
+    input: KeyboardKeyInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('keyboard.down', site, call, input, signal),
+  'keyboard.up': (
+    site: CallSite,
+    call: CallHeader,
+    input: KeyboardKeyInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('keyboard.up', site, call, input, signal),
+  'keyboard.press': (
+    site: CallSite,
+    call: CallHeader,
+    input: KeyboardPressInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('keyboard.press', site, call, input, signal),
+  'keyboard.type': (
+    site: CallSite,
+    call: CallHeader,
+    input: KeyboardTypeInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('keyboard.type', site, call, input, signal),
+  'keyboard.insertText': (
+    site: CallSite,
+    call: CallHeader,
+    input: KeyboardInsertTextInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('keyboard.insertText', site, call, input, signal),
+  'mouse.move': (
+    site: CallSite,
+    call: CallHeader,
+    input: MouseMoveInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('mouse.move', site, call, input, signal),
+  'mouse.down': (
+    site: CallSite,
+    call: CallHeader,
+    input: MouseButtonInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('mouse.down', site, call, input, signal),
+  'mouse.up': (
+    site: CallSite,
+    call: CallHeader,
+    input: MouseButtonInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('mouse.up', site, call, input, signal),
+  'mouse.click': (
+    site: CallSite,
+    call: CallHeader,
+    input: MouseClickInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('mouse.click', site, call, input, signal),
+  'mouse.wheel': (
+    site: CallSite,
+    call: CallHeader,
+    input: MouseWheelInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('mouse.wheel', site, call, input, signal),
+}
+
+// Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
+// names the op and every key that differs without a reason, or whose reason went stale.
+// keyboard.down: Page.keyboardDown
+type _keyboard_down = Assert<UpstreamCheck<'keyboard.down', KeyboardKeyInput, pw.PageKeyboardDownParams, never, never, never>>
+type _keyboard_down_result = Assert<VoidIsNull<'keyboard.down', pw.PageKeyboardDownResult, null>>
+// keyboard.up: Page.keyboardUp
+type _keyboard_up = Assert<UpstreamCheck<'keyboard.up', KeyboardKeyInput, pw.PageKeyboardUpParams, never, never, never>>
+type _keyboard_up_result = Assert<VoidIsNull<'keyboard.up', pw.PageKeyboardUpResult, null>>
+// keyboard.press: Page.keyboardPress
+type _keyboard_press = Assert<UpstreamCheck<'keyboard.press', KeyboardPressInput, pw.PageKeyboardPressParams, never, never, never>>
+type _keyboard_press_keys = Assert<KeysCheck<'keyboard.press', (typeof INPUT_OPTION_KEYS)['keyboard.press'][number], pw.PageKeyboardPressOptions>>
+type _keyboard_press_result = Assert<VoidIsNull<'keyboard.press', pw.PageKeyboardPressResult, null>>
+// keyboard.type: Page.keyboardType
+type _keyboard_type = Assert<UpstreamCheck<'keyboard.type', KeyboardTypeInput, pw.PageKeyboardTypeParams, never, never, never>>
+type _keyboard_type_keys = Assert<KeysCheck<'keyboard.type', (typeof INPUT_OPTION_KEYS)['keyboard.type'][number], pw.PageKeyboardTypeOptions>>
+type _keyboard_type_result = Assert<VoidIsNull<'keyboard.type', pw.PageKeyboardTypeResult, null>>
+// keyboard.insertText: Page.keyboardInsertText
+type _keyboard_insertText = Assert<UpstreamCheck<'keyboard.insertText', KeyboardInsertTextInput, pw.PageKeyboardInsertTextParams, never, never, never>>
+type _keyboard_insertText_result = Assert<VoidIsNull<'keyboard.insertText', pw.PageKeyboardInsertTextResult, null>>
+// mouse.move: Page.mouseMove
+type _mouse_move = Assert<UpstreamCheck<'mouse.move', MouseMoveInput, pw.PageMouseMoveParams, never, never, never>>
+type _mouse_move_keys = Assert<KeysCheck<'mouse.move', (typeof INPUT_OPTION_KEYS)['mouse.move'][number], pw.PageMouseMoveOptions>>
+type _mouse_move_result = Assert<VoidIsNull<'mouse.move', pw.PageMouseMoveResult, null>>
+// mouse.down: Page.mouseDown
+type _mouse_down = Assert<UpstreamCheck<'mouse.down', MouseButtonInput, pw.PageMouseDownParams, never, never, never>>
+type _mouse_down_keys = Assert<KeysCheck<'mouse.down', (typeof INPUT_OPTION_KEYS)['mouse.down'][number], pw.PageMouseDownOptions>>
+type _mouse_down_result = Assert<VoidIsNull<'mouse.down', pw.PageMouseDownResult, null>>
+// mouse.up: Page.mouseUp
+type _mouse_up = Assert<UpstreamCheck<'mouse.up', MouseButtonInput, pw.PageMouseUpParams, never, never, never>>
+type _mouse_up_keys = Assert<KeysCheck<'mouse.up', (typeof INPUT_OPTION_KEYS)['mouse.up'][number], pw.PageMouseUpOptions>>
+type _mouse_up_result = Assert<VoidIsNull<'mouse.up', pw.PageMouseUpResult, null>>
+// mouse.click: Page.mouseClick
+type _mouse_click = Assert<UpstreamCheck<'mouse.click', MouseClickInput, pw.PageMouseClickParams, never, never, never>>
+type _mouse_click_keys = Assert<KeysCheck<'mouse.click', (typeof INPUT_OPTION_KEYS)['mouse.click'][number], pw.PageMouseClickOptions>>
+type _mouse_click_result = Assert<VoidIsNull<'mouse.click', pw.PageMouseClickResult, null>>
+// mouse.wheel: Page.mouseWheel
+type _mouse_wheel = Assert<UpstreamCheck<'mouse.wheel', MouseWheelInput, pw.PageMouseWheelParams, never, never, never>>
+type _mouse_wheel_result = Assert<VoidIsNull<'mouse.wheel', pw.PageMouseWheelResult, null>>

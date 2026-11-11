@@ -3,10 +3,11 @@
 use std::fmt;
 
 use serde::Deserialize;
+use ts_rs::TS;
 
 /// A key, a chord or a text the script types. It can be a password typed key by key, so its
 /// `Debug` never prints it (STYLE P4); the call log shows it as upstream's does.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, TS)]
 #[serde(transparent)]
 pub(crate) struct Typed(pub(crate) String);
 

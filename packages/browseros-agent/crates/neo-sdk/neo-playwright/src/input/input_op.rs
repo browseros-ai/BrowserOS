@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::input::{
     BurstFailure, ClickOptions, InputDevices, InputStep, Keyboard, MouseButton, PageInput, Point,
@@ -28,6 +29,7 @@ use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE};
 use crate::page::OpPage;
 use crate::target::PageRef;
+use crate::wire::{self, Describe, Nothing, OpWire, Route, Run, options};
 use crate::{ErrorCode, Playwright, PlaywrightError, action};
 
 listed_enum! {
@@ -48,6 +50,11 @@ listed_enum! {
 }
 
 impl InputOp {
+    /// Describes the same input shapes and null answers the runtime route handles.
+    pub(crate) fn wire(self) -> Option<OpWire> {
+        route(self, Describe)
+    }
+
     /// This op's registration metadata.
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
@@ -86,89 +93,110 @@ impl InputOp {
 }
 
 /// `keyboard.down(key)` and `keyboard.up(key)`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "KeyboardKeyInput")]
 struct KeyInput {
     page: PageRef,
     key: Typed,
 }
+options!(KeyInput);
 
 /// `keyboard.press(key, { delay })`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "KeyboardPressInput")]
 struct PressInput {
     page: PageRef,
     key: Typed,
     options: DelayOptions,
 }
+options!(PressInput => DelayOptions);
 
 /// `keyboard.type(text, { delay })`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "KeyboardTypeInput")]
 struct TypeInput {
     page: PageRef,
     text: Typed,
     options: DelayOptions,
 }
+options!(TypeInput => DelayOptions);
 
 /// `keyboard.insertText(text)`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "KeyboardInsertTextInput")]
 struct InsertTextInput {
     page: PageRef,
     text: Typed,
 }
+options!(InsertTextInput);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "KeyboardDelayOptions")]
+#[ts(optional_fields)]
 struct DelayOptions {
     /// Milliseconds, as upstream's `delay`.
     delay: Option<f64>,
 }
 
 /// `mouse.move(x, y, { steps })`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "MouseMoveInput")]
 struct MoveInput {
     page: PageRef,
     x: f64,
     y: f64,
     options: StepOptions,
 }
+options!(MoveInput => StepOptions);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "MouseStepOptions")]
+#[ts(optional_fields)]
 struct StepOptions {
     steps: Option<u32>,
 }
 
 /// `mouse.down({ button, clickCount })` and `mouse.up(..)`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "MouseButtonInput")]
 struct ButtonInput {
     page: PageRef,
     options: ButtonOptions,
 }
+options!(ButtonInput => ButtonOptions);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(rename = "MouseButtonOptions")]
+#[ts(optional_fields)]
 struct ButtonOptions {
     button: Option<WireButton>,
     click_count: Option<u32>,
 }
 
 /// `mouse.click(x, y, { button, clickCount, delay })` and `mouse.dblclick`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "MouseClickInput")]
 struct ClickInput {
     page: PageRef,
     x: f64,
     y: f64,
     options: MouseClickOptions,
 }
+options!(ClickInput => MouseClickOptions);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 struct MouseClickOptions {
     button: Option<WireButton>,
     click_count: Option<u32>,
@@ -176,16 +204,19 @@ struct MouseClickOptions {
 }
 
 /// `mouse.wheel(deltaX, deltaY)`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(rename = "MouseWheelInput")]
 struct WheelInput {
     page: PageRef,
     delta_x: f64,
     delta_y: f64,
 }
+options!(WheelInput);
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename = "MouseButton")]
 enum WireButton {
     Left,
     Right,
@@ -200,114 +231,172 @@ fn button(wire: Option<WireButton>) -> MouseButton {
     }
 }
 
-/// Runs one keyboard or mouse op. Boxed, as the action family's are: `Playwright::invoke`'s
-/// future is as large as its largest family's.
+/// Runs one keyboard or mouse op through the shared decode/call/encode boundary. The route
+/// boxes the burst future so the dispatcher does not inherit its device state machine.
 pub(crate) async fn invoke(
     pw: &Playwright,
     scope: &OpScope<'_>,
     op: InputOp,
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
-    Box::pin(run(pw, scope, op, args)).await
+    route(op, Run { pw, scope, args }).await
 }
 
-async fn run(
+/// Run and Describe share this exhaustive list. Admission, leases and device-state commit
+/// remain inside `burst`; describing a contract never acquires any of them.
+fn route<'a, R: Route<'a>>(op: InputOp, r: R) -> R::Out {
+    match op {
+        InputOp::KeyboardDown => r.op(wire::command("Page.keyboardDown"), keyboard_down),
+        InputOp::KeyboardUp => r.op(wire::command("Page.keyboardUp"), keyboard_up),
+        InputOp::KeyboardPress => r.op(wire::command("Page.keyboardPress"), keyboard_press),
+        InputOp::KeyboardType => r.op(wire::command("Page.keyboardType"), keyboard_type),
+        InputOp::KeyboardInsertText => r.op(
+            wire::command("Page.keyboardInsertText"),
+            keyboard_insert_text,
+        ),
+        InputOp::MouseMove => r.op(wire::command("Page.mouseMove"), mouse_move),
+        InputOp::MouseDown => r.op(wire::command("Page.mouseDown"), mouse_down),
+        InputOp::MouseUp => r.op(wire::command("Page.mouseUp"), mouse_up),
+        InputOp::MouseClick => r.op(wire::command("Page.mouseClick"), mouse_click),
+        InputOp::MouseWheel => r.op(wire::command("Page.mouseWheel"), mouse_wheel),
+    }
+}
+
+async fn keyboard_down(
     pw: &Playwright,
     scope: &OpScope<'_>,
-    op: InputOp,
-    args: OpArgs,
-) -> Result<Value, PlaywrightError> {
-    match op {
-        InputOp::KeyboardDown | InputOp::KeyboardUp => {
-            let input: KeyInput = args.decode(scope)?;
-            burst(pw, scope, &input.page, |devices| {
-                if op == InputOp::KeyboardUp {
-                    devices.keyboard.up(&input.key.0)
-                } else {
-                    devices.keyboard.down(&input.key.0)
-                }
-            })
-            .await?;
-        }
-        InputOp::KeyboardPress => {
-            let input: PressInput = args.decode(scope)?;
-            let delay = millis(input.options.delay);
-            burst(pw, scope, &input.page, |devices| {
-                devices.keyboard.press(&input.key.0, delay)
-            })
-            .await?;
-        }
-        InputOp::KeyboardType => {
-            let input: TypeInput = args.decode(scope)?;
-            let delay = millis(input.options.delay);
-            burst(pw, scope, &input.page, |devices| {
-                Ok(devices.keyboard.type_text(&input.text.0, delay))
-            })
-            .await?;
-        }
-        InputOp::KeyboardInsertText => {
-            let input: InsertTextInput = args.decode(scope)?;
-            burst(pw, scope, &input.page, |_| {
-                Ok(Keyboard::insert_text(&input.text.0))
-            })
-            .await?;
-        }
-        InputOp::MouseMove => {
-            let input: MoveInput = args.decode(scope)?;
-            let to = Point {
-                x: input.x,
-                y: input.y,
-            };
-            let steps = input.options.steps.unwrap_or(1);
-            burst(pw, scope, &input.page, |devices| {
-                let held = devices.keyboard.modifiers();
-                Ok(devices.mouse.move_to(to, steps, held))
-            })
-            .await?;
-        }
-        InputOp::MouseDown | InputOp::MouseUp => {
-            let input: ButtonInput = args.decode(scope)?;
-            let pressed = button(input.options.button);
-            let count = input.options.click_count.unwrap_or(1);
-            burst(pw, scope, &input.page, |devices| {
-                let held = devices.keyboard.modifiers();
-                Ok(if op == InputOp::MouseDown {
-                    devices.mouse.down(pressed, count, held)
-                } else {
-                    devices.mouse.up(pressed, count, held)
-                })
-            })
-            .await?;
-        }
-        InputOp::MouseClick => {
-            let input: ClickInput = args.decode(scope)?;
-            // 1.64.1's protocol gives `mouse.click` no `steps` (mouse.rs, `ClickOptions`).
-            let options = ClickOptions {
-                button: button(input.options.button),
-                click_count: input.options.click_count.unwrap_or(1),
-                delay: millis(input.options.delay),
-                steps: 1,
-            };
-            let at = Point {
-                x: input.x,
-                y: input.y,
-            };
-            burst(pw, scope, &input.page, |devices| {
-                let held = devices.keyboard.modifiers();
-                Ok(devices.mouse.click(at, options, held))
-            })
-            .await?;
-        }
-        InputOp::MouseWheel => {
-            let input: WheelInput = args.decode(scope)?;
-            burst(pw, scope, &input.page, |devices| {
-                let held = devices.keyboard.modifiers();
-                Ok(devices.mouse.wheel(input.delta_x, input.delta_y, held))
-            })
-            .await?;
-        }
-    }
-    Ok(Value::Null)
+    input: KeyInput,
+) -> Result<Nothing, PlaywrightError> {
+    burst(pw, scope, &input.page, |devices| {
+        devices.keyboard.down(&input.key.0)
+    })
+    .await
+}
+
+async fn keyboard_up(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: KeyInput,
+) -> Result<Nothing, PlaywrightError> {
+    burst(pw, scope, &input.page, |devices| {
+        devices.keyboard.up(&input.key.0)
+    })
+    .await
+}
+
+async fn keyboard_press(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: PressInput,
+) -> Result<Nothing, PlaywrightError> {
+    let delay = millis(input.options.delay);
+    burst(pw, scope, &input.page, |devices| {
+        devices.keyboard.press(&input.key.0, delay)
+    })
+    .await
+}
+
+async fn keyboard_type(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: TypeInput,
+) -> Result<Nothing, PlaywrightError> {
+    let delay = millis(input.options.delay);
+    burst(pw, scope, &input.page, |devices| {
+        Ok(devices.keyboard.type_text(&input.text.0, delay))
+    })
+    .await
+}
+
+async fn keyboard_insert_text(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: InsertTextInput,
+) -> Result<Nothing, PlaywrightError> {
+    burst(pw, scope, &input.page, |_| {
+        Ok(Keyboard::insert_text(&input.text.0))
+    })
+    .await
+}
+
+async fn mouse_move(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: MoveInput,
+) -> Result<Nothing, PlaywrightError> {
+    let to = Point {
+        x: input.x,
+        y: input.y,
+    };
+    let steps = input.options.steps.unwrap_or(1);
+    burst(pw, scope, &input.page, |devices| {
+        let held = devices.keyboard.modifiers();
+        Ok(devices.mouse.move_to(to, steps, held))
+    })
+    .await
+}
+
+async fn mouse_down(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ButtonInput,
+) -> Result<Nothing, PlaywrightError> {
+    let pressed = button(input.options.button);
+    let count = input.options.click_count.unwrap_or(1);
+    burst(pw, scope, &input.page, |devices| {
+        let held = devices.keyboard.modifiers();
+        Ok(devices.mouse.down(pressed, count, held))
+    })
+    .await
+}
+
+async fn mouse_up(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ButtonInput,
+) -> Result<Nothing, PlaywrightError> {
+    let pressed = button(input.options.button);
+    let count = input.options.click_count.unwrap_or(1);
+    burst(pw, scope, &input.page, |devices| {
+        let held = devices.keyboard.modifiers();
+        Ok(devices.mouse.up(pressed, count, held))
+    })
+    .await
+}
+
+async fn mouse_click(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ClickInput,
+) -> Result<Nothing, PlaywrightError> {
+    // 1.64.1's protocol gives `mouse.click` no `steps` (mouse.rs, `ClickOptions`).
+    let options = ClickOptions {
+        button: button(input.options.button),
+        click_count: input.options.click_count.unwrap_or(1),
+        delay: millis(input.options.delay),
+        steps: 1,
+    };
+    let at = Point {
+        x: input.x,
+        y: input.y,
+    };
+    burst(pw, scope, &input.page, |devices| {
+        let held = devices.keyboard.modifiers();
+        Ok(devices.mouse.click(at, options, held))
+    })
+    .await
+}
+
+async fn mouse_wheel(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: WheelInput,
+) -> Result<Nothing, PlaywrightError> {
+    burst(pw, scope, &input.page, |devices| {
+        let held = devices.keyboard.modifiers();
+        Ok(devices.mouse.wheel(input.delta_x, input.delta_y, held))
+    })
+    .await
 }
 
 /// One call's burst on `page`, from admission to its last step. `build` turns the call into
@@ -359,4 +448,30 @@ pub(crate) fn millis(delay: Option<f64>) -> Duration {
         .filter(|millis| millis.is_finite() && *millis > 0.0)
         .and_then(|millis| Duration::try_from_secs_f64(millis / 1000.0).ok())
         .unwrap_or(Duration::ZERO)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use super::InputOp;
+    use crate::wire::Nothing;
+
+    #[test]
+    fn tests_that_every_input_answer_keeps_its_null_bytes() -> Result<(), Box<dyn Error>> {
+        // Input already answered null before route migration. A typed empty object would
+        // change those bytes, even though the script's methods discard their answers.
+        let answer: Nothing = ();
+        assert_eq!(serde_json::to_string(&answer)?, "null");
+        for op in InputOp::ALL {
+            let wire = op.wire().ok_or("every input op has a typed route")?;
+            assert_eq!(
+                wire.output,
+                "null",
+                "{} must still answer null",
+                op.spec().name
+            );
+        }
+        Ok(())
+    }
 }
