@@ -4,7 +4,7 @@
  */
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 
 /** The port the agent's MCP URL and the UI use (the build contract's `:7310`). */
@@ -72,8 +72,10 @@ export function launchOptionsFrom(
   const upstream = values.upstream ?? env.NEO_VIEWER_UPSTREAM
   return {
     port,
-    dataDir:
+    // Absolute: the token file inside it is bind-mounted into the container by path.
+    dataDir: resolve(
       values['data-dir'] ?? env.NEO_VIEWER_DATA_DIR ?? defaultDataDir(env),
+    ),
     upstream: upstream ? new URL(upstream) : null,
     keepData: values['keep-data'] ?? false,
     build: !values['no-build'],

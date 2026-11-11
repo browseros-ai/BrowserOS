@@ -26,8 +26,10 @@ bun run neo:viewer
 
 That is the whole loop. It works out this checkout's Neo SDK image the way `build.sh` names it
 (`neo-sdk:<browser>-<commit>[-dirty]-<arch>`), builds it with `build.sh` when it is not on the
-machine or the checkout's uncommitted build inputs changed since the viewer built it (a first build
-takes about 7 minutes; edits to this tool alone never need one), starts it fresh, and prints:
+machine or the checkout's uncommitted build inputs changed since the viewer built it, starts it
+fresh, and prints what follows. A first build takes about 7 minutes; a new commit that leaves the
+server alone rebuilds from Docker's cache in seconds, and uncommitted changes outside the image's
+build inputs (this tool, say) reuse the commit's image:
 
 ```text
   Viewer:         http://127.0.0.1:7310

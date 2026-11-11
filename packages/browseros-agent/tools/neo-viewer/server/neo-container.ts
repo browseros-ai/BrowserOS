@@ -59,11 +59,15 @@ export const runCommand: Runner = async (command, args, options = {}) => {
 /** The image this checkout builds, and a fingerprint of its uncommitted build inputs. */
 export interface CheckoutImage {
   tag: string
+  /** The tag of this commit without its changes, whose image is the same when no input changed. */
+  cleanTag: string
   /**
    * Null for a clean checkout (the commit names the image). With changes, a hash of the changed
    * build inputs, since a `-dirty` tag stays the same while the changes move.
    */
   fingerprint: string | null
+  /** Whether any changed file is a build input (`buildInputs`); false when clean. */
+  buildInputsChanged: boolean
 }
 
 /** `build.sh`'s default tag: `neo-sdk:<browser>-<9-char commit>[-dirty]-<arch>`. */
@@ -148,7 +152,9 @@ export async function checkoutImage(
     await run('docker', ['version', '--format', '{{.Server.Arch}}'])
   ).stdout.trim()
   const tag = imageTag({ browserVersion, commit, dirty, arch })
-  if (!dirty) return { tag, fingerprint: null }
+  const cleanTag = imageTag({ browserVersion, commit, dirty: false, arch })
+  if (!dirty)
+    return { tag, cleanTag, fingerprint: null, buildInputsChanged: false }
   const changed = (
     await git([
       'status',
@@ -175,7 +181,12 @@ export async function checkoutImage(
         : new Uint8Array([0]),
     )
   }
-  return { tag, fingerprint: hash.digest('hex') }
+  return {
+    tag,
+    cleanTag,
+    fingerprint: hash.digest('hex'),
+    buildInputsChanged: paths.length > 0,
+  }
 }
 
 /** What the command remembers between starts, in the viewer's state folder. */
@@ -190,25 +201,31 @@ export type ImagePlan =
 
 /**
  * Reuse the checkout's image when it is on the machine and current: a clean checkout's tag names
- * its commit; a changed checkout's image must be the one this command built from the same
- * changes. Otherwise build.
+ * its commit; a checkout whose changes touch no build input runs the same server as its commit,
+ * so the commit's image serves when present; otherwise a changed checkout's image must be the one
+ * this command built from the same changes. Else build.
  */
 export function planImage(
   wanted: CheckoutImage,
-  existingId: string | null,
+  existing: { tag: string | null; cleanTag: string | null },
   state: StartState,
 ): ImagePlan {
-  if (existingId === null)
-    return { kind: 'build', tag: wanted.tag, fingerprint: wanted.fingerprint }
-  if (wanted.fingerprint === null) return { kind: 'reuse', tag: wanted.tag }
+  const build: ImagePlan = {
+    kind: 'build',
+    tag: wanted.tag,
+    fingerprint: wanted.fingerprint,
+  }
+  if (wanted.fingerprint === null)
+    return existing.tag ? { kind: 'reuse', tag: wanted.tag } : build
+  if (!wanted.buildInputsChanged && existing.cleanTag)
+    return { kind: 'reuse', tag: wanted.cleanTag }
   const last = state.lastBuild
   const same =
+    existing.tag !== null &&
     last?.tag === wanted.tag &&
-    last.id === existingId &&
+    last.id === existing.tag &&
     last.fingerprint === wanted.fingerprint
-  return same
-    ? { kind: 'reuse', tag: wanted.tag }
-    : { kind: 'build', tag: wanted.tag, fingerprint: wanted.fingerprint }
+  return same ? { kind: 'reuse', tag: wanted.tag } : build
 }
 
 /** The image's id, or null when it is not on the machine. */
@@ -255,10 +272,53 @@ export async function removeReplacedImage(
 
 type Kind = 'container' | 'network' | 'volume'
 
+/** Marks one launch's objects, so its Ctrl-C removes what it made and not a later launch's. */
+const LAUNCH_LABEL = `${LABEL}.launch`
+
+/** A label of a named object, `undefined` when no object has that name. */
+async function labelOf(
+  run: Runner,
+  kind: Kind,
+  name: string,
+  key: string,
+): Promise<string | undefined> {
+  const labels = kind === 'container' ? '.Config.Labels' : '.Labels'
+  const inspect = await run('docker', [
+    kind,
+    'inspect',
+    '--format',
+    `{{index ${labels} "${key}"}}`,
+    name,
+  ])
+  if (inspect.code !== 0) return undefined
+  return inspect.stdout.trim()
+}
+
+async function remove(
+  run: Runner,
+  kind: Kind,
+  name: string,
+  keepData: boolean,
+): Promise<void> {
+  // A kept profile needs the image's graceful stop (25 s), so the browser saves its cookies.
+  if (kind === 'container' && keepData)
+    await run('docker', ['stop', '--time', '25', name])
+  const result = await run(
+    'docker',
+    kind === 'container' ? ['rm', '-f', name] : [kind, 'rm', name],
+  )
+  if (result.code !== 0) {
+    throw new Error(
+      `neo-viewer: could not remove ${kind} ${name}: ${result.stderr.trim()}`,
+    )
+  }
+}
+
 /**
  * Removes what an earlier start left under the viewer's names: the container, the network and,
- * unless `keepData`, the volume (the browser profile). A name in use by something without the
- * viewer's label is not the viewer's: the start stops rather than touch it.
+ * unless `keepData`, the volume (the browser profile). Every name is checked, the kept volume
+ * too: one in use by something without the viewer's label is not the viewer's, and the start
+ * stops rather than touch or mount it.
  */
 export async function removeLeftovers(
   run: Runner,
@@ -268,28 +328,18 @@ export async function removeLeftovers(
   const targets: Array<[Kind, string]> = [
     ['container', NAMES.container],
     ['network', NAMES.network],
-    ...(keepData ? [] : ([['volume', NAMES.volume]] as Array<[Kind, string]>)),
+    ['volume', NAMES.volume],
   ]
   for (const [kind, name] of targets) {
-    const inspect = await run('docker', [
-      kind,
-      'inspect',
-      '--format',
-      `{{index .${kind === 'container' ? 'Config.' : ''}Labels "${LABEL}"}}`,
-      name,
-    ])
-    if (inspect.code !== 0) continue
-    if (inspect.stdout.trim() !== '1') {
+    const mark = await labelOf(run, kind, name, LABEL)
+    if (mark === undefined) continue
+    if (mark !== '1') {
       throw new Error(
         `neo-viewer: a ${kind} named ${name} exists but the viewer did not create it; remove or rename it`,
       )
     }
-    const args = kind === 'container' ? ['rm', '-f', name] : [kind, 'rm', name]
-    const result = await run('docker', args)
-    if (result.code !== 0)
-      throw new Error(
-        `neo-viewer: could not remove ${kind} ${name}: ${result.stderr.trim()}`,
-      )
+    if (kind === 'volume' && keepData) continue
+    await remove(run, kind, name, keepData)
     removed.push(`${kind} ${name}`)
   }
   return removed
@@ -311,15 +361,20 @@ export interface RunningContainer {
  */
 export async function startContainer(
   run: Runner,
-  options: { image: string; tokenFile: string },
+  options: { image: string; tokenFile: string; launch: string },
 ): Promise<RunningContainer> {
-  const label = `${LABEL}=1`
-  await createNetwork(run, label)
+  const labels = [
+    '--label',
+    `${LABEL}=1`,
+    '--label',
+    `${LAUNCH_LABEL}=${options.launch}`,
+  ]
+  await createNetwork(run, labels)
+  // With --keep-data the volume (checked as the viewer's) is reused; create is then a no-op.
   const volume = await run('docker', [
     'volume',
     'create',
-    '--label',
-    label,
+    ...labels,
     NAMES.volume,
   ])
   if (volume.code !== 0)
@@ -331,8 +386,7 @@ export async function startContainer(
     '-d',
     '--name',
     NAMES.container,
-    '--label',
-    label,
+    ...labels,
     '--network',
     NAMES.network,
     '--shm-size=1g',
@@ -376,16 +430,12 @@ const FALLBACK_SUBNETS = Array.from(
  * address pools have been fully subnetted"); then a /24 is named explicitly, and Docker refuses
  * any that overlaps a network it already has.
  */
-export async function createNetwork(run: Runner, label: string): Promise<void> {
+export async function createNetwork(
+  run: Runner,
+  labels: string[],
+): Promise<void> {
   const create = (extra: string[]) =>
-    run('docker', [
-      'network',
-      'create',
-      '--label',
-      label,
-      ...extra,
-      NAMES.network,
-    ])
+    run('docker', ['network', 'create', ...labels, ...extra, NAMES.network])
   const first = await create([])
   if (first.code === 0) return
   if (!/fully subnetted|address pools/i.test(first.stderr)) {
@@ -448,15 +498,24 @@ async function publishedAddress(run: Runner, port: number): Promise<string> {
 }
 
 /**
- * Stops and removes the container and its network; the volume too, unless `keepData`. A kept
- * profile is stopped first with the image's 25 s grace, so the browser saves its cookies.
+ * Ctrl-C: removes the container and network this launch created (and its volume, unless
+ * `keepData`). Each must still carry this launch's label: another `bun run neo:viewer` started
+ * since has replaced them, and they are its to remove.
  */
 export async function stopContainer(
   run: Runner,
+  launch: string,
   keepData: boolean,
 ): Promise<void> {
-  if (keepData) await run('docker', ['stop', '--time', '25', NAMES.container])
-  await removeLeftovers(run, keepData)
+  const targets: Array<[Kind, string]> = [
+    ['container', NAMES.container],
+    ['network', NAMES.network],
+    ...(keepData ? [] : ([['volume', NAMES.volume]] as Array<[Kind, string]>)),
+  ]
+  for (const [kind, name] of targets) {
+    if ((await labelOf(run, kind, name, LAUNCH_LABEL)) !== launch) continue
+    await remove(run, kind, name, keepData)
+  }
 }
 
 /** Whether the viewer's container is running, for the page. */

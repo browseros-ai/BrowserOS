@@ -32,6 +32,8 @@ const options = launchOptionsFrom(process.argv.slice(2), process.env)
 let viewer: RunningViewer | null = null
 let ownsContainer = false
 let currentImage = ''
+/** Labels this launch's container, network and volume, so its Ctrl-C removes only those. */
+const launchId = randomBytes(6).toString('hex')
 /** When cleanup began; null until then. */
 let stoppingSince: number | null = null
 /**
@@ -82,6 +84,7 @@ async function startNeo(launch: LaunchOptions): Promise<URL> {
   const container = await startContainer(run, {
     image: currentImage,
     tokenFile,
+    launch: launchId,
   })
   return container.mcpUrl
 }
@@ -106,7 +109,14 @@ async function chooseImage(launch: LaunchOptions): Promise<string> {
   const wanted = await checkoutImage(checkout, run)
   const statePath = join(launch.dataDir, 'start-state.json')
   const state = await readState(statePath)
-  const plan = planImage(wanted, await imageId(run, wanted.tag), state)
+  const plan = planImage(
+    wanted,
+    {
+      tag: await imageId(run, wanted.tag),
+      cleanTag: await imageId(run, wanted.cleanTag),
+    },
+    state,
+  )
   if (plan.kind === 'reuse') {
     console.log(`Using ${plan.tag}, already built`)
     return plan.tag
@@ -164,7 +174,7 @@ async function stop(code: number): Promise<never> {
     console.log(
       `Removing ${NAMES.container}${options.keepData ? '' : ' and its data'}…`,
     )
-    await stopContainer(runCommand, options.keepData).catch((error) =>
+    await stopContainer(runCommand, launchId, options.keepData).catch((error) =>
       console.error(String(error)),
     )
   }
