@@ -795,18 +795,31 @@ export class Page extends EventEmitter {
       ? []
       : undefined
     const script = pageCall(api, form, pageFunction, arg, options, callbacks)
-    if (callbacks?.length && 'run' in script)
+    if (!callbacks?.length || !('run' in script)) return script
+    const settled = await Promise.allSettled(
+      callbacks.map(([name, callback]) =>
+        exposeOnPage(
+          this,
+          api,
+          name,
+          (_source, ...args) => Reflect.apply(callback, undefined, args),
+          true,
+        ),
+      ),
+    )
+    const failed = settled.find((outcome) => outcome.status === 'rejected')
+    if (failed) {
+      // A failure part way (a refused tab) leaves nothing behind, as `addInitScript`'s
+      // `exposeFunctions` does: the evaluate never goes out, so no page can call these.
       await Promise.all(
-        callbacks.map(([name, callback]) =>
-          exposeOnPage(
-            this,
-            api,
-            name,
-            (_source, ...args) => Reflect.apply(callback, undefined, args),
-            true,
-          ),
+        settled.map((outcome) =>
+          outcome.status === 'fulfilled'
+            ? outcome.value.dispose().catch(() => {})
+            : undefined,
         ),
       )
+      throw failed.reason
+    }
     return script
   }
 

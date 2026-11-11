@@ -284,4 +284,34 @@ describe("evaluate's exposeFunctions", () => {
         .map((sent) => (sent.input.call as { api: string }).api),
     ).toEqual(['locator.evaluate'])
   })
+
+  it('tests that a failed callback setup disposes the callbacks that went in, and sends no evaluate', async () => {
+    let registered = 0
+    const run = loadPrelude({
+      seed: SEED,
+      answer: (sent: Call) => {
+        if (sent.name === 'events.next') return never
+        if (sent.name === 'page.exposeBinding')
+          return ++registered === 1
+            ? { id: 1 }
+            : {
+                err: {
+                  code: 'owner_has_control',
+                  owner: 'host',
+                  message: 'held',
+                },
+              }
+        return {}
+      },
+    })
+    const failed = await run.run(`
+      return await page.evaluate(({ a, b }) => a(b()), { a: () => 1, b: () => 2 }, { exposeFunctions: true })
+        .then(() => null, (error) => error.code)
+    `)
+    expect(failed).toBe('owner_has_control')
+    expect(run.sent('disposable.dispose').map((sent) => sent.input.id)).toEqual(
+      [1],
+    )
+    expect(run.sent('page.evaluate')).toEqual([])
+  })
 })

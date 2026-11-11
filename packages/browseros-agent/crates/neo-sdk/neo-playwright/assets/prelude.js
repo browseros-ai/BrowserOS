@@ -9257,8 +9257,14 @@ ${value.stack}`;
     async _evaluationScript(api, form, pageFunction, arg, options) {
       const callbacks = exposesFunctions(options) ? [] : undefined;
       const script = pageCall(api, form, pageFunction, arg, options, callbacks);
-      if (callbacks?.length && "run" in script)
-        await Promise.all(callbacks.map(([name, callback]) => exposeOnPage(this, api, name, (_source, ...args) => Reflect.apply(callback, undefined, args), true)));
+      if (!callbacks?.length || !("run" in script))
+        return script;
+      const settled = await Promise.allSettled(callbacks.map(([name, callback]) => exposeOnPage(this, api, name, (_source, ...args) => Reflect.apply(callback, undefined, args), true)));
+      const failed = settled.find((outcome) => outcome.status === "rejected");
+      if (failed) {
+        await Promise.all(settled.map((outcome) => outcome.status === "fulfilled" ? outcome.value.dispose().catch(() => {}) : undefined));
+        throw failed.reason;
+      }
       return script;
     }
     async _bindingFrame(id) {
