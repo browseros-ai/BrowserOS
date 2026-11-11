@@ -71,7 +71,7 @@ marker is claw-server. To see which server an image runs:
 docker run --rm --entrypoint neo-server-info <image> kind   # claw-server or claw-sdk
 ```
 
-A claw-sdk image differs from a claw-server one in three ways:
+A claw-sdk image differs from a claw-server one in four ways:
 
 - Xvnc never sends the X clipboard to VNC viewers (`-SendCutText=0 -SendPrimary=0`),
   so a copied card number cannot reach one.
@@ -80,8 +80,13 @@ A claw-sdk image differs from a claw-server one in three ways:
 - The entrypoint never sends `PUT /api/v1/settings/agent`, a route claw-sdk does not
   have. claw-server's call stays strict, so a claw-sdk built without its marker stops
   before it turns healthy.
+- The entrypoint prepares `/run/neo` for claw-sdk's host socket, setgid to
+  `NEO_HOST_GID`, and points `CLAW_HOST_SOCKET` there.
 
-claw-sdk images are built and smoke-tested only for now. None is published:
+Hosts that run claw-sdk, such as zuzu, build the Neo SDK image in
+`packages/browseros-agent/crates/neo-sdk/neo-server/docker/` instead; it is never
+published by this workflow. The claw-sdk images here are built and smoke-tested only.
+None is published:
 
 ```bash
 gh workflow run release-docker.yml --ref main -f version=0.52.1.2 -f server=claw-sdk -f push=false

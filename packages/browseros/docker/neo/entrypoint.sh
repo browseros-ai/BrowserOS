@@ -222,9 +222,12 @@ prepare_host_socket() {
   [ -n "$gid" ] || gid=$(id -g neo)
   [[ "$gid" =~ ^[0-9]+$ ]] || die "NEO_HOST_GID must be numeric"
   mkdir -p "$HOST_SOCKET_DIR"
-  # chown first: a change of owner can clear the setgid bit.
+  # chown first: a change of owner can clear the setgid bit. Then chmod as a
+  # member of the group: without CAP_FSETID, which zuzu's cells do not grant,
+  # Linux silently drops a setgid bit set by a process outside the directory's
+  # group, and the socket would get neo's group instead of the host's.
   chown "neo:$gid" "$HOST_SOCKET_DIR"
-  chmod 2750 "$HOST_SOCKET_DIR"
+  setpriv --regid "$gid" --clear-groups chmod 2750 "$HOST_SOCKET_DIR"
   # spawn_as_neo keeps the environment, and Chromium passes it on to claw-sdk.
   export CLAW_HOST_SOCKET="${CLAW_HOST_SOCKET:-$HOST_SOCKET_DIR/host.sock}"
 }
@@ -234,6 +237,12 @@ prepare_host_socket() {
 start_display() {
   # X servers expect a root-owned, sticky socket directory.
   mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+  # An Xvnc killed with the rest of the container's processes (zuzu's OOM path
+  # kills them all at once and restarts this script) leaves its socket and lock
+  # behind, and the wait below would then pass before the new one listens, so
+  # vncconfig and openbox lose the display. Nothing else starts an X server
+  # here, so any :1 left at this point is stale.
+  rm -f /tmp/.X11-unix/X1 /tmp/.X1-lock
   local xvnc_argv=(Xvnc :1 -geometry "$NEO_SCREEN" -depth 24 -SecurityTypes None
     -localhost -rfbport 5900 -AlwaysShared -nolisten tcp)
   # Viewers can still paste into Neo; only copying out stops.
