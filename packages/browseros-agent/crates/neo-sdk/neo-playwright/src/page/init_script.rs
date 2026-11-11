@@ -291,13 +291,28 @@ impl InitScripts {
         admitted: &AdmittedPage,
     ) -> Result<(), PlaywrightError> {
         let missing = self.missing(admitted);
+        self.add_missing(scope, browser, admitted, missing).await
+    }
+
+    /// [`InitScripts::add_context_scripts`]' adds, from a snapshot [`InitScripts::missing`] took.
+    async fn add_missing(
+        &self,
+        scope: &OpScope<'_>,
+        browser: &BrowserSession,
+        admitted: &AdmittedPage,
+        missing: Vec<Missing>,
+    ) -> Result<(), PlaywrightError> {
         if missing.is_empty() {
             return Ok(());
         }
         let session = browser.protocol_session(admitted.session.session_id.clone());
-        for (adding, source) in missing {
-            let cell = Arc::clone(self.lock().adding.entry(adding.clone()).or_default());
+        for (adding, source, cell) in missing {
             cell.get_or_try_init(|| async {
+                // A dispose since the snapshot took this script's cell and waited for nothing,
+                // so it must not go out now.
+                if !self.keeps(adding.id) {
+                    return Ok(());
+                }
                 scope.recheck()?;
                 let registration = add_unsent(&session, &source)
                     .await
@@ -328,30 +343,37 @@ impl InitScripts {
         Ok(())
     }
 
+    /// Whether the context still keeps the script `id`.
+    fn keeps(&self, id: u64) -> bool {
+        self.lock().context.iter().any(|script| script.id == id)
+    }
+
     /// The context's scripts whose add to `admitted`'s tab session has not completed, with their
-    /// sources, copied out so no lock is held while they are added.
-    fn missing(&self, admitted: &AdmittedPage) -> Vec<(Adding, Arc<str>)> {
-        let registry = self.lock();
-        registry
-            .context
+    /// sources and single-flight cells, copied out so no lock is held while they are added. The
+    /// cells are made here, under the lock that reads the scripts, so a dispose from now on finds
+    /// each one and waits out its add, which then sees the script gone.
+    fn missing(&self, admitted: &AdmittedPage) -> Vec<Missing> {
+        let mut registry = self.lock();
+        let Registry {
+            context, adding, ..
+        } = &mut *registry;
+        context
             .iter()
-            .map(|script| {
-                let adding = Adding {
+            .filter_map(|script| {
+                let key = Adding {
                     id: script.id,
                     tab: admitted.tab,
                     session: admitted.session.session_id.clone(),
                 };
-                (adding, Arc::clone(&script.source))
-            })
-            .filter(|(adding, _)| {
-                !registry
-                    .adding
-                    .get(adding)
-                    .is_some_and(|cell| cell.initialized())
+                let cell = Arc::clone(adding.entry(key.clone()).or_default());
+                (!cell.initialized()).then(|| (key, Arc::clone(&script.source), cell))
             })
             .collect()
     }
 }
+
+/// A context script one tab session lacks: where it goes, its source, and its add's cell.
+type Missing = (Adding, Arc<str>, Arc<OnceCell<()>>);
 
 impl Registry {
     fn next_id(&mut self) -> u64 {

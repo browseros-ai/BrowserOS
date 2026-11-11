@@ -2,12 +2,14 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::BrowserView;
 use browseros_core::testing::TestConnection;
+use browseros_core::{BrowserView, TabId};
 use neo_trace::ErrorOwner;
 use serde_json::{Value, json};
 use tokio::time;
 
+use crate::op_scope::OpScope;
+use crate::target::CallHeader;
 use crate::test_env::{EnvCall, TestEnv};
 use crate::test_support::{self, RecordingHooks};
 use crate::{Op, OpEnv, Playwright, Refusal};
@@ -186,6 +188,51 @@ async fn tests_that_a_refused_tab_gets_no_script() -> TestResult {
     assert!(
         !env.calls().contains(&EnvCall::MarkSent),
         "nothing was marked sent"
+    );
+    Ok(())
+}
+
+/// A write that took its snapshot of two context scripts, and adds the second only after a
+/// dispose of it returned, adds the first alone: the dispose found the second's cell, and the add
+/// sees it gone (Greptile, PR 3348).
+#[tokio::test]
+async fn tests_that_a_script_disposed_after_a_writes_snapshot_is_not_added() -> TestResult {
+    let connection = TestConnection::new([]);
+    let browser = browser(&connection).await?;
+    let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
+    let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+    for source in ["window.one = 1", "window.two = 2"] {
+        invoke(
+            &playwright,
+            &env,
+            "context.addInitScript",
+            json!({ "call": {}, "script": { "source": source } }),
+        )
+        .await?;
+    }
+    // A read's scope admits the tab without adding anything, standing in for a write that
+    // took its snapshot and has not reached its adds yet.
+    let op = Op::from_name("page.opener").ok_or("page.opener is an op")?;
+    let scope = OpScope::new(&env, op, CallHeader::default());
+    let admitted = scope.admit(&browser, TabId(7)).await?;
+    let scripts = &env.run_state().init_scripts;
+    let snapshot = scripts.missing(admitted);
+    assert_eq!(snapshot.len(), 2, "both scripts are missing from the tab");
+
+    invoke(
+        &playwright,
+        &env,
+        "disposable.dispose",
+        json!({ "call": {}, "id": 2 }),
+    )
+    .await?;
+    scripts
+        .add_missing(&scope, &browser, admitted, snapshot)
+        .await?;
+    assert_eq!(
+        sent(&connection, ADD)?,
+        vec![json!({ "source": "window.one = 1" })],
+        "the disposed script never goes out"
     );
     Ok(())
 }
