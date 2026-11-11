@@ -545,19 +545,19 @@ mod tests {
     async fn tests_that_require_passes_only_the_declared_capability() -> Result<(), Box<dyn Error>>
     {
         let env = TestEnv::new();
-        let scope = OpScope::new(&env, op("page.screenshot")?, CallHeader::default());
-        scope.require(Capability::Capture)?;
+        let scope = OpScope::new(&env, op("locator.setInputFiles")?, CallHeader::default());
+        scope.require(Capability::HostFiles)?;
         let error = scope
             .require(Capability::MainWorld)
             .err()
-            .ok_or("page.screenshot declares Capture, not MainWorld")?;
+            .ok_or("locator.setInputFiles declares HostFiles, not MainWorld")?;
         assert_eq!(
             (error.owner(), error.code()),
             (ErrorOwner::Neo, "internal"),
             "a missing declaration is Neo's bug: {error}"
         );
         assert!(
-            error.message().starts_with("page.screenshot: ")
+            error.message().starts_with("locator.setInputFiles: ")
                 && error.message().contains("MainWorld"),
             "the refusal names the method and the capability: {error}"
         );

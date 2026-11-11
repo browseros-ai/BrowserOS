@@ -139,7 +139,7 @@ export function parity(catalog, pin, directory) {
 // The standalone screenshot suite covers this Node-only spec. Count its registrations
 // explicitly so a new omission cannot hide behind the exception.
 const screenshotSpec = 'tests/page/page-screenshot.spec.ts'
-export function compareRegistration(rows, listed) {
+function compareRegistration(rows, listed) {
   const key = ({ spec, titlePath, line }) =>
     JSON.stringify([spec, titlePath, line])
   const registered = rows.filter((row) => row.spec.startsWith('tests/page/'))

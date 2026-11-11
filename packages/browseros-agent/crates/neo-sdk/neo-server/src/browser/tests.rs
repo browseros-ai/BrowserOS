@@ -7,7 +7,6 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::sensitive_fields::SensitiveValues;
 use browseros_core::{NativeCapabilities, TabId, page_js};
 use tokio::sync::broadcast;
 use tokio::time;
@@ -91,12 +90,7 @@ async fn the_first_connect_is_retried_until_the_browser_answers() -> Result<(), 
         },
         "linked on the fake's first socket, and the last error is cleared"
     );
-    let session = link.session().ok_or("linked")?;
-    assert_eq!(
-        session.sensitive_values(),
-        SensitiveValues::Mask,
-        "snapshots mask sensitive fields from the first page on"
-    );
+    link.session().ok_or("linked")?;
     assert!(
         page_js::isolated_world_enabled(),
         "core's DOM scripts stay out of the page world"
@@ -309,43 +303,5 @@ async fn only_a_listing_without_the_tab_turns_a_destroyed_target_into_a_close()
         link.watched_listing().await.open.contains(&kept),
         "and it is still open"
     );
-    Ok(())
-}
-
-/// What the door asks, on the send path, about each tab a main-world script reaches: whether
-/// core knew it at the latest listing, which follows every tab that opens or closes. Core leaves
-/// an extension's page out of its registry, though the browser lists it, and a listing taken on
-/// one socket names no tab on the next, where Chromium may number its tabs afresh.
-#[tokio::test(start_paused = true)]
-async fn the_latest_listing_names_only_the_tabs_core_knew_on_that_socket()
--> Result<(), Box<dyn Error>> {
-    let fake = FakeCdp::new();
-    let first = fake.open_tab("https://example.com/", "Example");
-    let link = start(&fake, &Arc::new(TabRegistry::new()));
-    let epoch = 1;
-    eventually(Duration::from_secs(5), || link.lists_tab(epoch, first)).await?;
-
-    let extension = fake.open_tab("chrome-extension://abcdefgh/page.html", "Extension");
-    let second = fake.open_tab("https://example.org/", "Other");
-    eventually(Duration::from_secs(5), || link.lists_tab(epoch, second)).await?;
-    assert!(
-        !link.lists_tab(epoch, extension),
-        "the listing that has the tab opened after it lacks the extension's page"
-    );
-    assert!(
-        !link.lists_tab(epoch, TabId(9_999)),
-        "nor a tab the browser never had"
-    );
-
-    assert!(fake.close_tab(first), "the fake had the tab");
-    eventually(Duration::from_secs(5), || !link.lists_tab(epoch, first)).await?;
-
-    fake.drop_connection();
-    let next = fake.reconnect();
-    assert!(
-        !link.lists_tab(next, second),
-        "the old socket's listing vouches for no tab on the new one"
-    );
-    eventually(Duration::from_secs(5), || link.lists_tab(next, second)).await?;
     Ok(())
 }

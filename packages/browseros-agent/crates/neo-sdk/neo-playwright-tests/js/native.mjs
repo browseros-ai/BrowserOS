@@ -2,7 +2,7 @@
 import { codecFactory } from './codec.mjs'
 import { sdkCapabilities } from './sdk-families.mjs'
 
-export function nativeLoop(codecFactory, epoch, capabilities = {}) {
+function nativeLoop(codecFactory, epoch, capabilities = {}) {
   class ProtocolError extends Error {}
   const objects = new Map()
   const reverse = new WeakMap()

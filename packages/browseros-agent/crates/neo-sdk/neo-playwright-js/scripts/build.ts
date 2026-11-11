@@ -10,6 +10,8 @@
  *   assets/main-world.js page side, main world: src/main-world/index.ts with Playwright's
  *                        UtilityScript, one function expression the evaluate guard sends as
  *                        the declaration of every agent script's `Runtime.callFunctionOn`
+ *   assets/bindings-controller.js  page side, main world: Playwright's BindingsController,
+ *                        one IIFE Rust registers as an init script where a run exposes a binding
  *   tests/data/probe-protocol.json   the typed protocol examples the Rust mirror decodes
  *   tests/data/in-page-values.json   Playwright's serialized values, what Rust writes back and
  *                                    their argument texts, read by Rust and the prelude's tests
@@ -161,10 +163,11 @@ async function mainWorldFunction(): Promise<string> {
 
 export async function buildOutputs(): Promise<Output[]> {
   const { tag, commit } = vendoredVersion()
-  const [injected, prelude, mainWorld] = await Promise.all([
+  const [injected, prelude, mainWorld, bindingsController] = await Promise.all([
     bundle('src/probe/index.ts'),
     bundle('src/prelude/index.ts', 'iife', [vendored, preludeGlobals]),
     mainWorldFunction(),
+    bundle('src/main-world/bindings-controller.ts'),
   ])
   const preludeAsset = `/*
  * Playwright ${tag} (${commit}), packages/isomorphic helpers and packages/protocol value
@@ -207,6 +210,19 @@ ${injected}`,
  * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
  */
 ${mainWorld}`,
+    },
+    {
+      path: 'crates/neo-sdk/neo-playwright/assets/bindings-controller.js',
+      text: `/*
+ * Playwright ${tag} (${commit}), packages/injected BindingsController and packages/isomorphic
+ * utilityScriptSerializers, installed in a page's main world for exposeBinding.
+ * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
+ * Built unmodified from crates/neo-sdk/neo-playwright/third_party/playwright, with
+ * crates/neo-sdk/neo-playwright-js/src/main-world/bindings-controller.ts, by
+ * crates/neo-sdk/neo-playwright-js/scripts/build.ts.
+ * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
+ */
+${bindingsController}`,
     },
     {
       path: 'crates/neo-sdk/neo-playwright/tests/data/probe-protocol.json',

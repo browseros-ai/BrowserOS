@@ -246,12 +246,6 @@ error_codes! {
     NAVIGATION_OBSERVATION_TIMEOUT = "navigation_observation_timeout";
     /// A Playwright feature Neo does not support here, such as a popup opened as a window.
     UNSUPPORTED = "unsupported";
-    /// Copy or cut in a password, card or one-time-code field.
-    SENSITIVE_COPY_REFUSED = "sensitive_copy_refused";
-    /// `setInputFiles` named one of Neo's own secret files (its host token, a CAPTCHA key, its
-    /// trace store, the browser profile), or a directory that holds or sits in one. The message
-    /// never names the path.
-    SECRET_UPLOAD_REFUSED = "neo_secret_upload_refused";
     /// The page or frame closed, or left the run's view, while a Playwright op worked on it.
     TARGET_CLOSED = "target_closed";
     /// The script aborted the op through Playwright's `signal` option.

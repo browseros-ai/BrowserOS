@@ -30,7 +30,7 @@ pub(crate) enum Projection {
     /// An element of a parent frame receives events at the point instead of the iframe:
     /// upstream's description of it (`<div id="overlay"></div>`), page text of the parent.
     Covered { by: PageText },
-    /// A CSS transform on a parent's iframe makes the offset more than a translation.
+    /// A CSS transform requires browser-mapped quads rather than an additive offset.
     Transformed,
     /// An iframe on the way is gone: resolve the locator again.
     Gone,

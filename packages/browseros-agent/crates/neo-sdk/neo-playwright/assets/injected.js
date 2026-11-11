@@ -8180,13 +8180,14 @@ ${value.stack}`;
       rect: box,
       point: place.point,
       inView: place.inView,
-      transformed: isTransformed(element)
+      transformed: isTransformed(element),
+      ...place.borderOffset ? { borderOffset: place.borderOffset } : {}
     };
-    if (!arm || !place.inView)
+    if (!arm || !arm.browserMapped && !place.inView)
       return measured;
     if (arm.expectRect && !sameRect(box, arm.expectRect))
       return measured;
-    const interception = injected.setupHitTargetInterceptor(element, arm.action, place.point, arm.blockAll);
+    const interception = injected.setupHitTargetInterceptor(element, arm.action, arm.browserMapped ? undefined : place.point, arm.blockAll);
     if (interception === "error:notconnected")
       return { kind: "detached" };
     if (typeof interception === "string")
@@ -8266,12 +8267,14 @@ ${value.stack}`;
     if (position) {
       const style = getComputedStyle(element);
       const box = element.getBoundingClientRect();
+      const borderOffset = {
+        x: parseInt(style.borderLeftWidth || "0", 10) + position.x,
+        y: parseInt(style.borderTopWidth || "0", 10) + position.y
+      };
       return {
-        point: {
-          x: box.x + parseInt(style.borderLeftWidth || "", 10) + position.x,
-          y: box.y + parseInt(style.borderTopWidth || "", 10) + position.y
-        },
-        inView: true
+        point: { x: box.x + borderOffset.x, y: box.y + borderOffset.y },
+        inView: true,
+        borderOffset
       };
     }
     const width = innerWidth;
@@ -8393,6 +8396,37 @@ ${value.stack}`;
     return { kind: "replaced" };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/drop.ts
+  function drop(element, edit) {
+    const transfer = new DataTransfer;
+    for (const payload of edit.payloads) {
+      const bytes = Uint8Array.from(atob(payload.buffer), (c) => c.charCodeAt(0));
+      transfer.items.add(new File([bytes], payload.name, {
+        type: payload.mimeType,
+        lastModified: payload.lastModifiedMs
+      }));
+    }
+    for (const { mimeType, value } of edit.data)
+      transfer.setData(mimeType, value);
+    const event = (type) => new DragEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: edit.point.x,
+      clientY: edit.point.y,
+      dataTransfer: transfer
+    });
+    element.dispatchEvent(event("dragenter"));
+    const over = event("dragover");
+    element.dispatchEvent(over);
+    if (!over.defaultPrevented) {
+      element.dispatchEvent(event("dragleave"));
+      return "not-accepted";
+    }
+    element.dispatchEvent(event("drop"));
+    return "accepted";
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/files.ts
   var armed = new WeakMap;
   function setFiles(world, element, payloads) {
@@ -8452,6 +8486,8 @@ ${value.stack}`;
       case "dispatchEvent":
         injected.dispatchEvent(element, edit.type, edit.init);
         return valueReply(null);
+      case "drop":
+        return valueReply(drop(element, edit));
       case "setFiles":
         return valueReply(setFiles(world, element, edit.payloads));
     }
@@ -8503,7 +8539,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 19;
+  var PROTOCOL = 21;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";

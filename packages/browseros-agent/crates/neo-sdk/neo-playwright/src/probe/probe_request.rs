@@ -249,6 +249,9 @@ pub(crate) struct ArmPlan {
     /// The stability baseline: the probe arms only while the element still has this rect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) expect_rect: Option<Rect>,
+    /// Root quads own area/viewport checks; the interceptor checks actual event coordinates.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) browser_mapped: bool,
 }
 
 /// One `selectOptions` option, as upstream's client sends it: an option matches when every
@@ -297,19 +300,36 @@ pub(crate) enum Edit {
     SetFiles {
         payloads: Vec<FilePayload>,
     },
+    /// External drag data, dispatched after pointer actionability checks.
+    Drop {
+        payloads: Vec<FilePayload>,
+        data: Vec<DropEntry>,
+        point: Point,
+    },
+}
+
+/// MIME data in the caller's insertion order, matching DataTransfer.types ordering.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DropEntry {
+    pub(crate) mime_type: String,
+    pub(crate) value: String,
 }
 
 /// One in-memory file as upstream's injected `setInputFiles` takes it, and as the prelude's
 /// files.ts sends it: `mime_type` already defaulted from the name, and `buffer` the base64 text
 /// upstream's server makes of the script's bytes (`buffer.toString('base64')`), which the page
-/// decodes with `atob`. Rust passes it through untouched. A file's bytes may be large or
+/// decodes with `atob`. Local drop files also preserve their modification time; payloads use
+/// the browser's current time when it is absent. A file's bytes may be large or
 /// private, so they never print.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct FilePayload {
-    name: String,
-    mime_type: String,
-    buffer: String,
+    pub(crate) name: String,
+    pub(crate) mime_type: String,
+    pub(crate) buffer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_modified_ms: Option<f64>,
 }
 
 impl fmt::Debug for FilePayload {
@@ -317,6 +337,7 @@ impl fmt::Debug for FilePayload {
         f.debug_struct("FilePayload")
             .field("name", &self.name)
             .field("mime_type", &self.mime_type)
+            .field("last_modified_ms", &self.last_modified_ms)
             .field(
                 "buffer",
                 &format_args!("[{} base64 characters]", self.buffer.len()),

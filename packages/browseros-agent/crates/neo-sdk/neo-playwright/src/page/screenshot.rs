@@ -13,12 +13,11 @@ use crate::backoff::Backoff;
 use crate::page::screenshot_geometry::{GeometryOptions, Scale, ScreenshotGeometry};
 use crate::page::screenshot_masks::MaskLocator;
 use crate::page::screenshot_preparation::ScreenshotPreparation;
-use crate::page::{OpPage, screenshot_png};
+use crate::page::{OpPage, screenshot_document, screenshot_png};
 use crate::probe::Rect;
 
 use crate::op_output::{Bytes, to_output};
 use crate::op_scope::OpScope;
-use crate::op_spec::Capability;
 use crate::target::{PageRef, Strictness, Target};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -138,8 +137,6 @@ pub(crate) async fn capture(
     scope: &OpScope<'_>,
     input: ScreenshotInput,
 ) -> Result<Value, PlaywrightError> {
-    // Check the op's declared capability before admitting or preparing its page.
-    scope.require(Capability::Capture)?;
     input.validate(scope)?;
     let format = match input.image {
         ImageType::Png => ScreenshotFormat::Png,
@@ -158,22 +155,30 @@ pub(crate) async fn capture(
             .await?;
             let page = OpPage::admit_handle(pw, scope, &input.page).await?;
             let mut preparation = ScreenshotPreparation::acquire(&page).await;
-            preparation
-                .prepare(
-                    &page,
-                    scope,
-                    json!([
-                        input.style.as_deref().unwrap_or_default(),
-                        input.caret == Caret::Hide,
-                        input.animations == Animations::Disabled,
-                        false,
-                    ]),
-                )
-                .await;
-            let captured = async {
-                preparation
+            // Observe commits before preparation too: a replacement must receive its own
+            // styles and font wait, even when the old renderer loses a preparation reply.
+            let work = async {
+                if !preparation
+                    .prepare(
+                        &page,
+                        scope,
+                        json!([
+                            input.style.as_deref().unwrap_or_default(),
+                            input.caret == Caret::Hide,
+                            input.animations == Animations::Disabled,
+                            false,
+                        ]),
+                    )
+                    .await
+                {
+                    return Ok(screenshot_document::Attempt::RetryPreparation);
+                }
+                if !preparation
                     .wait_for_fonts(&page, scope, target.as_deref())
-                    .await?;
+                    .await?
+                {
+                    return Ok(screenshot_document::Attempt::RetryPreparation);
+                }
                 capture_pixels(
                     pw,
                     &page,
@@ -184,22 +189,36 @@ pub(crate) async fn capture(
                     &mut preparation,
                 )
                 .await
-            }
-            .await;
+                .map(screenshot_document::Attempt::Captured)
+            };
+            let captured = screenshot_document::capture(&page, scope, work).await;
             preparation.restore().await;
             match captured {
+                Ok(screenshot_document::Attempt::Captured(data)) => return Ok(data),
+                Ok(screenshot_document::Attempt::Navigated) => {
+                    if matches!(input.target, Some(Target::Element(_))) {
+                        return Err(scope.fail(
+                            ErrorCode::ElementDetached,
+                            "Element is not attached to the DOM",
+                        ));
+                    }
+                    scope.log("document changed during screenshot, retrying".to_owned());
+                }
+                Ok(screenshot_document::Attempt::RetryPreparation) => {
+                    scope.log("screenshot utility world was replaced, retrying".to_owned());
+                }
                 Err(error)
                     if error.error_code() == Some(ErrorCode::ElementDetached)
                         && matches!(input.target, Some(Target::Locator(_))) =>
                 {
                     scope.log("element was detached from the DOM, retrying".to_owned());
-                    scope
-                        .sleep(backoff.wait(attempt + 1))
-                        .await
-                        .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?;
                 }
-                done => return done,
+                Err(error) => return Err(error),
             }
+            scope
+                .sleep(backoff.wait(attempt + 1))
+                .await
+                .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?;
         }
         Err(scope.timed_out(ErrorCode::WaitTimeout))
     };
@@ -339,89 +358,4 @@ async fn capture_normalized(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::error::Error;
-    use std::sync::Arc;
-
-    use browseros_core::BrowserView;
-    use browseros_core::testing::TestConnection;
-    use neo_trace::ErrorOwner;
-    use serde_json::json;
-
-    use super::{ScreenshotInput, capture};
-    use crate::op_scope::OpScope;
-    use crate::target::CallHeader;
-    use crate::test_env::{self, TestEnv};
-    use crate::test_support::{self, RecordingHooks};
-    use crate::{Op, Playwright};
-
-    /// The capture path only serves ops that declare `Capture`; undeclared calls fail before
-    /// the page is admitted or prepared.
-    #[tokio::test]
-    async fn tests_that_only_an_op_declaring_capture_is_captured() -> Result<(), Box<dyn Error>> {
-        let connection = TestConnection::new([]);
-        let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
-        connection.always("Page.captureScreenshot", json!({ "data": "cG5n" }))?;
-        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
-        let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
-        let input = || {
-            serde_json::from_value::<ScreenshotInput>(
-                json!({ "page": { "$neo": "page", "tab": 7 } }),
-            )
-        };
-        let screenshot = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
-        let declared = OpScope::new(&env, screenshot, CallHeader::default());
-        capture(&playwright, &declared, input()?).await?;
-        let evaluate = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
-        let undeclared = OpScope::new(&env, evaluate, CallHeader::default());
-        let sent_before = connection.calls()?.len();
-        let error = capture(&playwright, &undeclared, input()?)
-            .await
-            .err()
-            .ok_or("an op that does not declare Capture must not be captured")?;
-        assert_eq!(
-            (error.owner(), error.code()),
-            (ErrorOwner::Neo, "internal"),
-            "{error}"
-        );
-        assert_eq!(
-            connection.calls()?.len(),
-            sent_before,
-            "the undeclared op admitted and prepared nothing"
-        );
-        let captures = connection
-            .calls()?
-            .iter()
-            .filter(|call| call.method == "Page.captureScreenshot")
-            .count();
-        assert_eq!(
-            captures, 1,
-            "only the op that declares Capture was captured"
-        );
-        Ok(())
-    }
-
-    /// The declaration is checked before anything else: an op that does not declare `Capture`
-    /// is refused as `neo / internal` even when its browser is gone, so it never reached the
-    /// page's lookup, admission or the pointer hide.
-    #[tokio::test]
-    async fn tests_that_an_undeclared_op_is_refused_before_its_page_is_looked_up()
-    -> Result<(), Box<dyn Error>> {
-        let playwright = Playwright::new(test_env::offline_session(), Arc::new(RecordingHooks));
-        let env = TestEnv::new();
-        let evaluate = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
-        let undeclared = OpScope::new(&env, evaluate, CallHeader::default());
-        let input: ScreenshotInput =
-            serde_json::from_value(json!({ "page": { "$neo": "page", "tab": 7 } }))?;
-        let error = capture(&playwright, &undeclared, input)
-            .await
-            .err()
-            .ok_or("an undeclared op is refused")?;
-        assert_eq!(
-            (error.owner(), error.code()),
-            (ErrorOwner::Neo, "internal"),
-            "{error}"
-        );
-        Ok(())
-    }
-}
+mod tests;

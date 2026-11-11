@@ -41,6 +41,12 @@ async function withTracePeer(send, use) {
   const sockets = new Set()
   const server = net.createServer((socket) => {
     sockets.add(socket)
+    // Deadline and truncation cases deliberately close the client while this peer writes.
+    // A write can fail before close clears its timer; that disconnect belongs to the fixture.
+    socket.on('error', (error) => {
+      if (error.code !== 'EPIPE' && error.code !== 'ECONNRESET') throw error
+      socket.destroy()
+    })
     socket.once('close', () => sockets.delete(socket))
     socket.once('data', () => {
       socket.write('HTTP/1.1 200 OK\r\nContent-Length: 500\r\n\r\n{')

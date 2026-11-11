@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn tests_that_names_are_playwright_receivers_and_methods() {
-        const RECEIVERS: [&str; 9] = [
+        const RECEIVERS: [&str; 10] = [
             "locator",
             "page",
             "keyboard",
@@ -128,6 +128,7 @@ mod tests {
             "events",
             "dialog",
             "disposable",
+            "bindingCall",
         ];
         for op in Op::all() {
             let name = op.spec().name;
@@ -150,7 +151,9 @@ mod tests {
     /// gated: its gateway refuses Neo's own secret files and any path into `/dev` or `/proc`
     /// before it sends a path (`input_files/secrets.rs`). `page.addInitScript` and
     /// `context.addInitScript` are gated: their source goes to the page, and a `{ path }` is read
-    /// from Neo's disk, only through `page/init_script.rs`, which requires both capabilities.
+    /// from Neo's disk, only through `page/init_script.rs`, which requires both capabilities;
+    /// so are `page.exposeBinding` and `context.exposeBinding`, whose stubs go through it too, and
+    /// `bindingCall.resolve`, whose answer goes through the evaluate guard's `resolve_binding`.
     ///
     /// The ops with an empty row send selectors, values or trusted input, or read in the sealed
     /// world. `page.goto` delegates URLs to Chromium, including `javascript:` scripts in the
@@ -164,7 +167,7 @@ mod tests {
         reason = "one explicit audited capability row per operation keeps additions reviewable"
     )]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
-        use Capability::{Capture, HostFiles, MainWorld};
+        use Capability::{HostFiles, MainWorld};
         // The explicit rows are the capability contract. Exhaustive comparisons below catch
         // additions and removals without a second, independently maintained operation count.
         const AUDITED: &[(&str, &[Capability], bool)] = &[
@@ -174,6 +177,7 @@ mod tests {
             ("locator.check", &[], true),
             ("locator.uncheck", &[], true),
             ("locator.dragTo", &[], true),
+            ("locator.drop", &[HostFiles], true),
             ("locator.fill", &[], true),
             ("locator.press", &[], true),
             ("locator.pressSequentially", &[], true),
@@ -238,14 +242,17 @@ mod tests {
             ("locator.evaluateAll", &[MainWorld], true),
             ("page.waitForFunction", &[MainWorld], true),
             ("locator.waitForFunction", &[MainWorld], true),
-            ("page.screenshot", &[Capture], true),
+            ("page.screenshot", &[], true),
             ("page.saveScreenshot", &[], true),
-            ("page.pdf", &[Capture], true),
+            ("page.pdf", &[], true),
             ("page.setViewportSize", &[], true),
             ("page.addInitScript", &[MainWorld, HostFiles], true),
+            ("page.exposeBinding", &[MainWorld], true),
+            ("bindingCall.resolve", &[MainWorld], true),
             ("context.pages", &[], true),
             ("context.newPage", &[], true),
             ("context.addInitScript", &[MainWorld, HostFiles], true),
+            ("context.exposeBinding", &[MainWorld], true),
             ("disposable.dispose", &[], true),
             ("events.listen", &[], true),
             ("events.next", &[], true),
@@ -347,7 +354,7 @@ mod tests {
                 // The screenshot client's filesystem step has no browser target.
                 ("page.saveScreenshot", _) => OpTarget::None,
                 ("expect.locator", _) | (_, Some("locator")) => OpTarget::Field("target"),
-                (_, Some("page" | "keyboard" | "mouse" | "dialog" | "expect")) => {
+                (_, Some("page" | "keyboard" | "mouse" | "dialog" | "expect" | "bindingCall")) => {
                     OpTarget::Field("page")
                 }
                 _ => OpTarget::None,

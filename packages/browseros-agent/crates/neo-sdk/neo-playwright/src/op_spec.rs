@@ -30,7 +30,7 @@ pub struct OpSpec {
 }
 
 /// What an op reaches beyond its page's sealed world, where the crate's own reads and actions
-/// run and field values are masked at the source. These are the facts a host holds and polices
+/// run. These are the facts a host holds and polices
 /// ops by, instead of lists of op names, so an op added later that reaches one is held or
 /// policed from its first build rather than served unpoliced until someone lists it.
 ///
@@ -41,17 +41,12 @@ pub struct OpSpec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Capability {
     /// Runs agent-supplied script, or HTML whose scripts run, in a page's main world. There the
-    /// script reads the page's own state and every frame of its site, and no seal masks a
-    /// field. Gateways: the evaluate guard's entries, `EvaluateGuard::open` for a script and
+    /// script reads the page's own state and every frame of its site, so claw-sdk's door checks
+    /// the op's tab again before it releases what the script answered. Gateways: the evaluate guard's entries, `EvaluateGuard::open` for a script and
     /// `DocumentWrite::open` for `page.setContent`, whose HTML the sealed world writes and whose
-    /// scripts the main world runs; and `page/init_script.rs` for the init scripts every new
-    /// document runs.
+    /// scripts the main world runs; `page/init_script.rs` for the init scripts and binding stubs
+    /// every new document runs; and the guard's `resolve_binding` for a binding call's answer.
     MainWorld,
-    /// Returns the page's pixels, which no seal masks: `page.screenshot`, with its element
-    /// forms, and `page.pdf`. A host refuses such an op on a private tab, and withholds pixels
-    /// taken while the tab went private. Gateway: `Playwright::capture_allowed`, which each
-    /// capture runs right before it reads pixels.
-    Capture,
     /// Changes which tab Neo's one screen shows, a screen the owner's takeovers and the control
     /// displays share. No op declares it yet, and so it has no gateway.
     Screen,

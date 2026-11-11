@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../neo-playwright/third_party/playwri
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 19
+export const PROTOCOL = 21
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -78,6 +78,8 @@ export type ArmPlan = {
   token: number
   expiryMs: number
   expectRect?: Rect
+  /** Root geometry owns viewport/area checks; actual events alone establish the hit. */
+  browserMapped?: boolean
 }
 /**
  * One option to select, as upstream's client sends it: an option matches when every attribute
@@ -102,12 +104,23 @@ export type Edit =
   | { kind: 'blur' }
   | { kind: 'dispatchEvent'; type: string; init: Record<string, unknown> }
   | { kind: 'setFiles'; payloads: FilePayload[] }
+  | {
+      kind: 'drop'
+      payloads: FilePayload[]
+      data: { mimeType: string; value: string }[]
+      point: Point
+    }
 /**
  * One in-memory file as upstream's injected `setInputFiles` takes it. `buffer` is the base64
  * text upstream's server makes of the script's bytes (`buffer.toString('base64')`), which the
  * page decodes with `atob`; `mimeType` is already defaulted from the name.
  */
-export type FilePayload = { name: string; mimeType: string; buffer: string }
+export type FilePayload = {
+  name: string
+  mimeType: string
+  buffer: string
+  lastModifiedMs?: number
+}
 /**
  * A `setFiles` value: null once upstream's injected `setInputFiles` returned (it set the files,
  * or left a non-file input alone, as upstream ignores why), or what it threw as CDP describes an
@@ -387,6 +400,8 @@ export type Measured = {
   point: Point
   inView: boolean
   transformed: boolean
+  /** Original element border widths plus position, independent of the stability target. */
+  borderOffset?: Point
 }
 export type Covered = { kind: 'covered'; by: string }
 export type Armed = { kind: 'armed'; rect: Rect; point: Point; token: number }

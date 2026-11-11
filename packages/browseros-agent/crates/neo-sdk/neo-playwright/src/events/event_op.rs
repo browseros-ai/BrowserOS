@@ -16,7 +16,7 @@ use tokio::fs;
 
 use crate::events::dialog_table::{ClosedBy, Unanswerable};
 use crate::events::event_hub::{now_ms, receives};
-use crate::events::event_reader::{Delivered, Tabs, WindowPopup, deliver};
+use crate::events::event_reader::{Delivered, Tabs, WindowPopup, binding_call, deliver};
 use crate::events::page_event::DialogId;
 use crate::events::subscription::Unknown;
 use crate::events::{ListenerKey, PageEvent, PageEventKind, Subscription};
@@ -344,6 +344,8 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
     let run = scope.run_state();
     let hub = pw.events();
     hub.bind(run);
+    // An op that ends waits for a pump in flight to read past its events (RunEvents::taken_through).
+    let _pumping = run.events.pumping();
     loop {
         let mut changed = pin!(hub.changed());
         changed.as_mut().enable();
@@ -382,8 +384,13 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
             }
             read_up_to.push((subscription, read.head));
         }
-        run.events.advance(&read_up_to);
-        if !events.is_empty() || lost > 0 {
+        // Before the advance, which counts this reply when it carries anything.
+        let (calls, dropped) = run.events.take_calls();
+        events.extend(calls.into_iter().map(binding_call));
+        lost += dropped;
+        let replying = !events.is_empty() || lost > 0;
+        run.events.advance(&read_up_to, replying);
+        if replying {
             events.sort_by_key(Delivered::order);
             // After the sort, so a run's download index is the order its script receives them.
             hand_downloads(pw, scope, &events);

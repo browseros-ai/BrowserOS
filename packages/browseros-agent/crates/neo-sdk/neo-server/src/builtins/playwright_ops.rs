@@ -6,7 +6,7 @@
 //!    `target.page` ─ the door resolves it to one tab and runs its rules on that tab
 //!      ─ PlaywrightOp::call: the resolved page written back into the input
 //!          ─ Playwright::invoke(OpCtxEnv, op, json), raced with the run's stop
-//!              ├─ recheck, recheck_reach, mark_sent, note ─▶ OpCtx
+//!              ├─ recheck, mark_sent, note ─▶ OpCtx
 //!              └─ PlaywrightError ─ leaf_error ─▶ LeafError: owner, code, timeout, answer
 //!          ─ opened, navigated and closed pages reported to the door
 //!          ─ an event pull's events: each one's tabs through the rules (event_release.rs)
@@ -35,7 +35,7 @@ use super::op_marks::{self, Hold, OpMarks};
 use crate::browser::PageRef;
 use crate::dispatch::{
     ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
-    RegistryBuilder, RegistryError, RunCtx, StandingRefusal,
+    RegistryBuilder, RegistryError, RunCtx,
 };
 
 /// neo-playwright's prelude, which the agent realm evaluates after its bootstrap: the
@@ -67,19 +67,24 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `count`, `isVisible`, `page.content()`, `page.title()`), actions that wait until the \
     element is actionable (`click`, `dblclick`, `hover`, `fill`, `clear`, `press`, \
     `pressSequentially`, `check`, `uncheck`, `setChecked`, `selectOption`, `selectText`, \
-    `focus`, `blur`, `dragTo`, `dispatchEvent`, `scrollIntoViewIfNeeded`; no `tap`), \
+    `focus`, `blur`, `dragTo`, `drop`, `dispatchEvent`, `scrollIntoViewIfNeeded`; no `tap`), \
     `page.keyboard` (`press`, `type`, `insertText`, `down`, `up`), `page.mouse` (`move`, \
-    `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `waitForURL`, \
-    `waitForLoadState`), scripts in the page's main world (`page.evaluate`, \
+    `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `goBack`, \
+    `goForward`, `waitForURL`, `waitForLoadState`, `waitForNavigation`), scripts in the page's \
+    main world (`page.evaluate`, \
     `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, \
     `locator.waitForFunction`, `elementHandle.evaluate`, \
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
-    `page.emulateMedia` (per page across runs and navigations), \
+    `page.emulateMedia` (per page across runs and navigations), `page.setViewportSize` (the \
+    tab keeps the size in later runs, until it closes), \
     `page.addScriptTag` and `page.addStyleTag` (also on frames), returning element handles, \
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, init scripts \
     (`page.addInitScript`, `context.addInitScript`) that every new document runs in its main \
-    world, `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), downloads \
+    world, bindings the page calls back into the script with (`exposeBinding`, \
+    `exposeFunction`, on a page or the context, and `addInitScript`'s `exposeFunctions`; the \
+    prelude answers each call with `bindingCall.resolve`), \
+    `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), downloads \
     (`download.path()` waits for the file and returns where the browser saved it, which a later \
     run can upload with `setInputFiles`; `saveAs(path)` copies it; `failure()`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
@@ -99,13 +104,15 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `javascript:` URL before reporting `net::ERR_ABORTED`. `reload` opens only `http`, `https`, \
     `data` and `about` URLs. `setInputFiles` uploads any \
     file Neo's process can read, as Playwright does \
-    (a relative path resolves against Neo's working directory), except Neo's own secret files, \
-    which fail `neo_secret_upload_refused` with nothing sent: the caller sandboxes the \
+    (a relative path resolves against Neo's working directory): the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
-    call. A directory upload needs its tab in front. An init script stays registered until the \
-    run ends, then its tab no longer runs it; a context's init script reaches each tab before \
-    the run's first write to it, so a popup's first document and cross-site iframes run \
-    without it; `exposeFunctions` is not available.";
+    call. A directory upload needs its tab in front, and the tabs Neo opens for an agent stay \
+    in the background (`bringToFront` is refused). An init script or a binding stays \
+    registered until the run ends, then its tab no longer has it; a context's reaches each tab \
+    before the run's first write to it, so a popup's first document and cross-site iframes run \
+    without it. A page's call of a binding reaches the script through the event pump, so a \
+    call the page does not await (from an event handler) may run after the op that caused it \
+    returned; `evaluate`'s `exposeFunctions` is not available.";
 
 /// At a run's end, after its ops drained: removes the init scripts its ops registered from every
 /// tab, awaiting each removal (neo-playwright's `RunState::remove_init_scripts`). The run service
@@ -218,7 +225,11 @@ impl Method for PlaywrightOp {
         let env = OpCtxEnv::new(op, self.facade.hosted_mode());
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
-            .await?;
+            .await;
+        // Read once the op ended, failed or not: by then the pump replies that carry the events
+        // before it are counted (`Playwright::events_before_reply`).
+        op.answer_after_pump(env.run_state().pump_replies());
+        let result = result?;
         pages.report(op, page, &result);
         let value = result.map_err(|error| leaf_error(&error))?;
         self.events.release(op, value)
@@ -565,22 +576,6 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
             .map_err(|refused| refusal(refused.error()))
     }
 
-    fn recheck_reach(&self, tabs: &[TabId]) -> Result<(), Refusal> {
-        // As `recheck`: the door keeps the first refusal standing as the op's error. The crate
-        // calls it before the send and again after it, so a refusal after the send withholds the
-        // answer, `done`, whatever the crate returns. An unlisted tab reaches the crate under
-        // [`TAB_UNLISTED`], the one refusal it tries again; the agent sees only the public form.
-        self.op
-            .recheck_reach(tabs)
-            .map_err(|refused| match refused {
-                StandingRefusal::Rule(error) => refusal(&error),
-                StandingRefusal::Unlisted { error, .. } => Refusal {
-                    code: TAB_UNLISTED.to_owned(),
-                    ..refusal(&error)
-                },
-            })
-    }
-
     fn mark_sent(&self) {
         self.op.mark_sent();
     }
@@ -620,13 +615,6 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
         Box::pin(self.op.aborted())
     }
 }
-
-/// The code `OpEnv::recheck_reach` hands the crate, with owner `neo`, for a reached tab that
-/// `tab_watch`'s latest listing lacks: agreed with sdk-playwright, which tries only this refusal
-/// again after the send, every 25 ms until the new tab is 1 s old, and never a rule's. It is not
-/// one of Neo's codes, so the agent never sees it: the door's standing refusal is the public
-/// `neo / unsupported`, and [`refusal_code`] reads it so when the crate hands it back.
-const TAB_UNLISTED: &str = "tab_unlisted";
 
 /// One of the door's refusals (a rule, a stopped run, a replaced connection) as the crate
 /// carries it: owner, code and message unchanged. claw-sdk's errors carry no host code yet.
@@ -688,8 +676,6 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::NavigationObservationTimeout => ErrorCode::NAVIGATION_OBSERVATION_TIMEOUT,
         PlaywrightCode::InvalidInput => ErrorCode::INVALID_INPUT,
         PlaywrightCode::Unsupported => ErrorCode::UNSUPPORTED,
-        PlaywrightCode::SensitiveCopyRefused => ErrorCode::SENSITIVE_COPY_REFUSED,
-        PlaywrightCode::SecretUploadRefused => ErrorCode::SECRET_UPLOAD_REFUSED,
         PlaywrightCode::TargetClosed => ErrorCode::TARGET_CLOSED,
         PlaywrightCode::BrowserDisconnected => ErrorCode::BROWSER_DISCONNECTED,
         PlaywrightCode::Aborted => ErrorCode::ABORTED,
@@ -698,18 +684,11 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
 }
 
 /// The code of one of Neo's own refusals, coming back through the crate as a string, or `None`
-/// when claw-sdk does not know it. Two paths refuse: the door's rules through `OpEnv::recheck`
-/// and `OpEnv::recheck_reach`, whose refusal the door keeps standing as the op's error whatever
-/// this returns; and the crate itself, as `unsupported`, when
-/// a tab the page's script reaches has no tab id to name to the door, so the script meets the
-/// same code as when the door refuses a tab it does not track. Each keeps its code, so the agent
-/// reads who must act. The door's own [`TAB_UNLISTED`] is no code of Neo's: it reads
-/// `unsupported`, so it never reaches the agent, even from a refusal the door has since cleared.
+/// when claw-sdk does not know it. The door's rules refuse through `OpEnv::recheck`, whose
+/// refusal the door keeps standing as the op's error whatever this returns; each keeps its code,
+/// so the agent reads who must act.
 fn refusal_code(error: &PlaywrightError) -> Option<ErrorCode> {
-    match error.code() {
-        TAB_UNLISTED => Some(ErrorCode::UNSUPPORTED),
-        code => ErrorCode::known(code),
-    }
+    ErrorCode::known(error.code())
 }
 
 #[cfg(test)]
@@ -1024,14 +1003,13 @@ mod tests {
     #[test]
     fn a_refusal_the_crate_hands_back_keeps_its_owner_and_code() {
         let cases = [
-            // The crate's own, when a tab the page's script can act on has no tab id to name to
-            // the door (`op_env::unchecked_reach`).
+            // The crate's own, for a Playwright feature Neo does not support here.
             (
                 ErrorOwner::Neo,
                 "unsupported",
-                "Neo refused this call: the page is linked to 1 other tab(s) through window.opener",
+                "Neo refused this call: the popup opened as a window",
             ),
-            // The door's rules, through `OpEnv::recheck` and `OpEnv::recheck_reach`.
+            // The door's rules, through `OpEnv::recheck`.
             (
                 ErrorOwner::Host,
                 "owner_has_control",
@@ -1083,25 +1061,6 @@ mod tests {
             (error.owner(), error.code()),
             (ErrorOwner::Neo, ErrorCode::INTERNAL_ERROR),
             "the host did not make that code, so it is not the host's to fix"
-        );
-    }
-
-    /// `tab_unlisted` is the code the door tells the crate a reached tab is not listed yet by, so
-    /// it may try again. It is never a code of Neo's own: if the crate returns that refusal as
-    /// the op's error, the script meets the public `neo / unsupported`.
-    #[test]
-    fn an_unlisted_tab_the_crate_hands_back_comes_back_as_unsupported() {
-        let message = "Neo does not track that tab";
-        let leaf = leaf_error(&PlaywrightError::from(Refusal {
-            owner: ErrorOwner::Neo,
-            code: "tab_unlisted".to_owned(),
-            message: message.to_owned(),
-            host_code: None,
-        }));
-        let error = leaf.error();
-        assert_eq!(
-            (error.owner(), error.code(), error.message()),
-            (ErrorOwner::Neo, ErrorCode::UNSUPPORTED, message)
         );
     }
 }

@@ -61,8 +61,9 @@ enum Started {
 }
 
 /// The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
-/// […]}`, plus `defaultPage` once the call opened the run's own page. Protocol translation
-/// only: the door decided every value in it.
+/// […]}`, plus `defaultPage` once the call opened the run's own page and `pumped` once an op
+/// ordered its answer after event-pump replies. Protocol translation only: the door decided
+/// every value in it.
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Envelope<'a> {
@@ -73,6 +74,10 @@ enum Envelope<'a> {
         observed: Option<&'a Observation>,
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
         default_page: Option<DefaultPage>,
+        /// `OpReply::pumped`: the prelude dispatches that many event-pump replies before it
+        /// hands the script this one.
+        #[serde(skip_serializing_if = "is_zero")]
+        pumped: u64,
     },
     Err {
         err: ErrBody<'a>,
@@ -81,6 +86,8 @@ enum Envelope<'a> {
         observed: Option<&'a Observation>,
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
         default_page: Option<DefaultPage>,
+        #[serde(skip_serializing_if = "is_zero")]
+        pumped: u64,
     },
 }
 
@@ -253,7 +260,16 @@ fn decode_input(input_json: &str) -> Value {
     )
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
+fn is_zero(count: &u64) -> bool {
+    *count == 0
+}
+
 fn envelope(reply: &OpReply) -> String {
+    let pumped = reply.pumped;
     let default_page = reply.default_page.as_ref().map(DefaultPage::from);
     let envelope = match &reply.outcome {
         Ok(ok) => Envelope::Ok {
@@ -261,12 +277,14 @@ fn envelope(reply: &OpReply) -> String {
             pages: &reply.pages,
             observed: reply.observed.as_ref(),
             default_page,
+            pumped,
         },
         Err(failure) => Envelope::Err {
             err: ErrBody::from(failure),
             pages: &reply.pages,
             observed: reply.observed.as_ref(),
             default_page,
+            pumped,
         },
     };
     serde_json::to_string(&envelope).unwrap_or_else(|error| {

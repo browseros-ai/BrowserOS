@@ -4,14 +4,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(test)]
-use std::sync::{Mutex, PoisonError};
 
 use crate::browser::Seen;
 use browseros_core::pages::PageInfo;
 use browseros_core::viewport::Size;
 use browseros_core::{BrowserView, PageId, TabId};
-use neo_trace::{Delivery, Effect, OperationId, OperationReached, PageState, TraceSink};
+use neo_trace::{Delivery, Effect, OperationId, PageState, TraceSink};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
@@ -76,10 +74,6 @@ pub(crate) struct Dispatcher {
     browser: Arc<BrowserLink>,
     tabs: Arc<TabRegistry>,
     observer: Observer,
-    /// Every reach this door told the trace, oldest first. The writer drops a repeat, the op's
-    /// own tab and an empty list unseen, so only what the door sent shows it never sends them.
-    #[cfg(test)]
-    reaches_told: Mutex<Vec<OperationReached>>,
 }
 
 /// Who is calling. Only Neo's own calls may name `Internal` methods.
@@ -130,6 +124,9 @@ pub(crate) struct OpReply {
     pub(crate) observed: Option<Observation>,
     /// Set when the op resolved the run's default page, so the script's `page` learns its id.
     pub(crate) default_page: Option<PageRef>,
+    /// The event-pump replies the script dispatches before it takes this one
+    /// ([`OpCtx::answer_after_pump`]); 0 for an op that set none.
+    pub(crate) pumped: u64,
 }
 
 /// One page as a reply reports it. Deliberately not a page brand (no `$neo`), so the
@@ -259,8 +256,6 @@ impl Dispatcher {
             browser,
             tabs,
             observer,
-            #[cfg(test)]
-            reaches_told: Mutex::default(),
         }
     }
 
@@ -278,26 +273,6 @@ impl Dispatcher {
     /// The trace writer every run and op records through.
     pub(super) fn trace(&self) -> &TraceSink {
         &self.trace
-    }
-
-    /// Tells the trace that an op's script reached tabs besides its target, which a takeover
-    /// lock's settle counts as a write in flight on each of them.
-    pub(super) fn op_reached(&self, event: OperationReached) {
-        #[cfg(test)]
-        self.reaches_told
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(event.clone());
-        self.trace.op_reached(event);
-    }
-
-    /// Every reach this door told the trace, oldest first.
-    #[cfg(test)]
-    pub(crate) fn reaches_told(&self) -> Vec<OperationReached> {
-        self.reaches_told
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
     }
 
     /// A call from the script. The op id is taken and the start recorded now, in the script's
@@ -541,14 +516,8 @@ impl Dispatcher {
         // answered is released only past the rules again. The rules see it as a read of the
         // op's tab: a main-world script is a write, and any lock refuses
         // a write, which would withhold a script that read the page before the owner took it.
-        //
-        // A main-world script reads the other tabs of its page's opener-linked group as easily as
-        // its own (`window.opener.document`), so the same read runs on each tab one of its sends
-        // reached (`OpState::reached`): an owner's reads-blocking lock on a popup's opener, taken
-        // while the popup's script ran, withholds what the script answered, as one on the popup
-        // would. A window the script opened itself joins the set once the crate names it to
-        // `recheck_reach` after the send, before it hands back the answer; until it does, a lock
-        // on that window before release goes unseen here.
+        // The takeover lock applies to the tab an op targets; a script that reaches another tab
+        // through `window.opener` is not checked there, as Playwright's scripts are not.
         let read = MethodSpec {
             effect: Effect::Read,
             ..spec
@@ -558,15 +527,7 @@ impl Dispatcher {
                 method: &read,
                 ..check
             };
-            let reached = state.reached();
-            match self.check(&release).and_then(|()| {
-                reached.iter().try_for_each(|&tab| {
-                    self.check(&PolicyCheck {
-                        tab: Some(tab),
-                        ..release
-                    })
-                })
-            }) {
+            match self.check(&release) {
                 Ok(()) => ending,
                 Err(refusal) => Ending::Refused(refusal),
             }
@@ -950,6 +911,7 @@ impl PendingReply {
                 pages: Vec::new(),
                 observed: None,
                 default_page: None,
+                pumped: 0,
             }
         })
     }
@@ -972,10 +934,9 @@ fn released_past_the_rules(spec: &MethodSpec, ending: &Ending) -> bool {
 }
 
 /// How a run step that came back ended. A standing refusal outranks whatever the method made of
-/// it, its value included: a rule that refused a tab after the send (`OpCtx::recheck_reach`)
-/// withholds the answer even when the crate drops the refusal, and the op reads `done`, since
-/// it was sent. Before the send a value with a refusal standing cannot come from the crate,
-/// whose one send gate returns every refusal; a passing `recheck` clears it at each attempt.
+/// it, its value included, so the rule's own error reaches the script even when the crate drops
+/// the refusal. A value with a refusal standing cannot come from the crate, whose one send gate
+/// (`OpEnv::recheck`) returns every refusal; a passing `recheck` clears it at each attempt.
 /// An error that surfaces while the run is stopping is the stop's doing; otherwise the standing
 /// refusal outranks the method's own error.
 fn ending_of(run: &RunCtx, state: &OpState, result: Result<Value, LeafError>) -> Ending {

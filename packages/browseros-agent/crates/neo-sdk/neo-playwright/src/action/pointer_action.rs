@@ -5,8 +5,8 @@
 //! Three invariants carry the design:
 //! - **Input after `Sent`.** Each attempt calls `OpScope::send_effect` right before its first
 //!   input event and never earlier, so the host re-runs its policies before every attempt
-//!   that sends, and a refused recheck sends nothing. Only [`PageInput`] dispatches, and each
-//!   of its sends takes the `Sent`.
+//!   that sends, and a refused recheck sends nothing. [`PageInput`] dispatches device events
+//!   with the `Sent`; external drops dispatch their synthetic drag events in the probe.
 //! - **Nothing left behind.** The interceptor is disarmed by its [`ArmGuard`] and held keys
 //!   and buttons are released by [`PageInput`] on every exit, the host dropping the future
 //!   included; `dragTo`'s button, held between its halves, by its [`Drag`]; the focus lease is
@@ -28,6 +28,7 @@ use crate::action::actionability::{PointerKind, Requirements, requirements, stat
 use crate::action::arm_guard::ArmGuard;
 use crate::action::attempt_log::AttemptLog;
 use crate::action::frame_projection::{self, Projection};
+use crate::action::pointer_quads::{self, Placement as QuadPlacement};
 use crate::action::requested_navigations::RequestedNavigations;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
@@ -38,8 +39,8 @@ use crate::input::{
 use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{
-    ArmPlan, Hit, HitAction, PageText, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
-    Read, Rect, ScrollPlan, Want,
+    ArmPlan, DropEntry, Edit, FilePayload, Hit, HitAction, PageText, Point, ProbeFailure,
+    ProbeReply, ProbeRequest, ProbeTarget, Ran, Read, Rect, ScrollPlan, Want,
 };
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
@@ -104,7 +105,7 @@ pub(crate) struct DragPhases {
 }
 
 /// What the input does at the element's point.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Perform {
     /// `mouse.click`: a move, then a press and a release per click.
     Click(ClickOptions),
@@ -114,6 +115,15 @@ pub(crate) enum Perform {
     MoveAndDown,
     /// `dragTo`'s second half: a move in `steps`, then the left button up.
     MoveAndUp { steps: u32 },
+    /// Synthetic external drag events, after the same pointer checks as mouse input.
+    Drop(Arc<DropData>),
+}
+
+/// External payload shared by pointer retries; bytes are prepared once before page work.
+#[derive(Clone, Debug)]
+pub(crate) struct DropData {
+    pub(crate) payloads: Vec<FilePayload>,
+    pub(crate) data: Vec<DropEntry>,
 }
 
 /// What a pointer action waits for once its input is out, upstream's `waitAfter`.
@@ -451,6 +461,7 @@ impl<'a> PointerRunner<'a> {
                     rect,
                     point,
                     in_view,
+                    border_offset,
                     ..
                 }) => {
                     self.matched = true;
@@ -459,6 +470,7 @@ impl<'a> PointerRunner<'a> {
                         rect,
                         point,
                         in_view,
+                        border_offset,
                     }
                 }
                 Called::Reply(ProbeReply::State { missing }) => {
@@ -477,14 +489,6 @@ impl<'a> PointerRunner<'a> {
                 Called::Gone => return self.subject.lost(located).map(|()| Inner::Reresolve),
                 Called::Expired => return Err(self.timed_out()),
             };
-            if !measured.in_view {
-                if action.force {
-                    return Err(self.forced("Element is outside of the viewport"));
-                }
-                self.scope
-                    .log("  element is outside of the viewport".to_owned());
-                continue;
-            }
             if !action.force && self.scope.sleep(STABLE_GAP).await.is_err() {
                 return Err(self.timed_out());
             }
@@ -502,14 +506,26 @@ impl<'a> PointerRunner<'a> {
                 Some(drag) => &mut drag.input,
                 None => own.insert(self.hold().await?),
             };
-            let page_point = match self.place(located, measured.point, !action.force).await? {
-                Placed::At(point) => point,
-                Placed::Covered { by } => {
-                    self.log_covered(by);
-                    continue;
-                }
-                Placed::Reresolve => return Ok(Inner::Reresolve),
-            };
+            let (page_point, browser_mapped) =
+                match self.place(located, pin, measured, action).await? {
+                    Placed::At {
+                        point,
+                        browser_mapped,
+                    } => (point, browser_mapped),
+                    Placed::Covered { by } => {
+                        self.log_covered(by);
+                        continue;
+                    }
+                    Placed::Outside => {
+                        if action.force {
+                            return Err(self.forced("Element is outside of the viewport"));
+                        }
+                        self.scope
+                            .log("  element is outside of the viewport".to_owned());
+                        continue;
+                    }
+                    Placed::Reresolve => return Ok(Inner::Reresolve),
+                };
 
             // The burst is built on a copy of the tab's devices, which the tab takes only as the
             // burst goes out, so a refused attempt leaves the mouse where it was.
@@ -526,6 +542,7 @@ impl<'a> PointerRunner<'a> {
                     token,
                     expiry_ms: arm_expiry(self.scope.timeout(), &burst),
                     expect_rect: Some(measured.rect),
+                    browser_mapped,
                 };
                 let arm = self.act_request(
                     located,
@@ -579,6 +596,44 @@ impl<'a> PointerRunner<'a> {
             self.scope.log("  done scrolling".to_owned());
             if action.force {
                 self.scope.log("  forcing action".to_owned());
+            }
+
+            // External drops share the pointer's checks and input lock, but do not move
+            // the device. Chromium's DataTransfer survives this isolated-world dispatch.
+            if let Perform::Drop(payload) = &action.perform {
+                let request = ProbeRequest::Edit {
+                    pin,
+                    edit: Edit::Drop {
+                        payloads: payload.payloads.clone(),
+                        data: payload.data.clone(),
+                        point: measured.point,
+                    },
+                };
+                let _sent = self.scope.send_effect()?;
+                // A failed call that provably never ran may be resolved again. Once
+                // dispatch may have happened, do not replay the website's drop handler.
+                let reply = self
+                    .scope
+                    .within(self.subject.call(located, &request))
+                    .await;
+                match reply {
+                    Ok(Ok(ProbeReply::Value { value })) => {
+                        if value.into_value() == "accepted" {
+                            return Ok(Inner::Done);
+                        }
+                        return Err(self.scope.fail(ErrorCode::PageError,
+                            "Drop target did not accept the drop — its dragover handler did not call preventDefault()"));
+                    }
+                    Ok(Ok(ProbeReply::Detached)) => return self.detached_from_dom(),
+                    Ok(Ok(other)) => return Err(self.subject.refused(other).after_input()),
+                    Ok(Err(ProbeFailure::Gone(Ran::No))) => {
+                        return self.subject.lost(located).map(|()| Inner::Reresolve);
+                    }
+                    Ok(Err(failure)) => {
+                        return Err(resolve::failed(self.scope, failure).after_input());
+                    }
+                    Err(_expired) => return Err(self.timed_out().after_input()),
+                }
             }
 
             // ③④⑤ The input. `send_effect` runs here, right before the first event, on every
@@ -817,24 +872,58 @@ impl<'a> PointerRunner<'a> {
     async fn place(
         &mut self,
         located: &Resolved,
-        point: Point,
-        hit_test: bool,
+        pin: Pin,
+        measured: Measurement,
+        action: &PointerAction,
     ) -> Result<Placed, PlaywrightError> {
-        let projected = frame_projection::project(self.scope, located.path(), point, hit_test);
+        let projected = frame_projection::project(
+            self.scope,
+            located.path(),
+            measured.point,
+            !action.force && measured.in_view,
+        );
         let Ok(projected) = self.scope.within(projected).await else {
             return Err(self.timed_out());
         };
         match projected? {
+            Projection::At(_) if !measured.in_view => Ok(Placed::Outside),
             Projection::At(at) => {
                 let at = frame_projection::round_point(at);
-                Ok(Placed::At(PagePoint { x: at.x, y: at.y }))
+                Ok(Placed::At {
+                    point: PagePoint { x: at.x, y: at.y },
+                    browser_mapped: false,
+                })
             }
             Projection::Covered { by } => Ok(Placed::Covered { by }),
-            Projection::Transformed => Err(self.scope.fail(
-                ErrorCode::Unsupported,
-                "an iframe on the way to the element has a CSS transform, which Neo cannot \
-                 place input through yet",
-            )),
+            Projection::Transformed => {
+                // Chromium maps transformed content into its target viewport. As upstream,
+                // parent translation hit tests give way to the actual event interceptor.
+                let offset = measured.border_offset;
+                let placed = self
+                    .scope
+                    .within(pointer_quads::point(
+                        self.scope, self.page, located, pin, offset,
+                    ))
+                    .await
+                    .map_err(|_expired| self.timed_out())?;
+                match placed {
+                    Ok(QuadPlacement::At(at)) => {
+                        let at = frame_projection::round_point(at);
+                        Ok(Placed::At {
+                            point: PagePoint { x: at.x, y: at.y },
+                            browser_mapped: true,
+                        })
+                    }
+                    Ok(QuadPlacement::Outside) => Ok(Placed::Outside),
+                    Ok(QuadPlacement::Detached) => {
+                        self.subject.detached().map(|()| Placed::Reresolve)
+                    }
+                    Err(ProbeFailure::Gone(_)) => {
+                        self.subject.lost(located).map(|()| Placed::Reresolve)
+                    }
+                    Err(failure) => Err(resolve::failed(self.scope, failure)),
+                }
+            }
             // A parent's document or its iframe went away: the frames are re-entered on the
             // next pass.
             Projection::Gone => Ok(Placed::Reresolve),
@@ -910,11 +999,17 @@ struct Measurement {
     rect: Rect,
     point: Point,
     in_view: bool,
+    border_offset: Option<Point>,
 }
 
 /// Where the input goes.
 enum Placed {
-    At(PagePoint),
+    At {
+        point: PagePoint,
+        browser_mapped: bool,
+    },
+    /// Browser-mapped quads leave no substantial area inside the root viewport.
+    Outside,
     /// A parent frame's element is in the way: its description, page text of that frame.
     Covered {
         by: PageText,
@@ -961,15 +1056,16 @@ fn burst(
         None => None,
     };
     let held = devices.keyboard.modifiers();
-    match action.perform {
-        Perform::Click(options) => steps.extend(devices.mouse.click(at, options, held)),
+    match &action.perform {
+        Perform::Click(options) => steps.extend(devices.mouse.click(at, *options, held)),
+        Perform::Drop(_) => {}
         Perform::Move => steps.extend(devices.mouse.move_to(at, 1, held)),
         Perform::MoveAndDown => {
             steps.extend(devices.mouse.move_to(at, 1, held));
             steps.extend(devices.mouse.down(MouseButton::Left, 1, held));
         }
         Perform::MoveAndUp { steps: moves } => {
-            steps.extend(devices.mouse.move_to(at, moves, held));
+            steps.extend(devices.mouse.move_to(at, *moves, held));
             steps.extend(devices.mouse.up(MouseButton::Left, 1, held));
         }
     }

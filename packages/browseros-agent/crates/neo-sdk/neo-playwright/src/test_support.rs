@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, ConnectOptions, TargetedEvents};
-use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
 use browseros_core::testing::TestConnection;
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, ProtocolSession,
@@ -26,29 +25,13 @@ use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 
+use crate::Playwright;
 use crate::op::Op;
 use crate::probe::PROBE_PROTOCOL;
 use crate::target::PageRef;
 use crate::test_env::TestEnv;
-use crate::{Playwright, PlaywrightHooks, Refusal, TypedBy};
 
 pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
-
-/// A test host's hooks. The crate calls none back, so a sweep report or a capture check fails
-/// the test that reaches it.
-pub(crate) struct RecordingHooks;
-
-impl PlaywrightHooks for RecordingHooks {
-    fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
-
-    fn values_swept(&self, _page: TabId, _values: &FieldValues) {
-        panic!("no op sweeps sensitive values to report")
-    }
-
-    fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
-        panic!("captures must not consult the retained host hook")
-    }
-}
 
 /// One CDP connection with a `Playwright` over it.
 pub(crate) struct LiveBrowser {
@@ -65,7 +48,7 @@ impl LiveBrowser {
         let client: Arc<dyn CdpConnection> =
             Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
         let browser = BrowserSession::new(client, BrowserSessionHooks::default());
-        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
+        let playwright = Playwright::new(Arc::clone(&browser));
         // The start-up read of open tabs, so a tab the test opens next counts as new.
         playwright.pages().note_open_tabs(&browser).await;
         Ok(Self {
@@ -279,6 +262,12 @@ pub(crate) trait TabScript: Send + Sync + 'static {
         false
     }
 
+    /// A raw protocol reply outside the DOM probe, such as encoded screenshot bytes.
+    /// Returning None retains the scripted browser's ordinary infrastructure responses.
+    fn cdp_reply(&self, _method: &str, _params: &Value) -> Option<Value> {
+        None
+    }
+
     /// Whether the tab's main frame has left for a document no world can be made in yet: an
     /// install then fails as for a frame that is gone.
     fn left(&self) -> bool {
@@ -399,10 +388,16 @@ impl<S: TabScript> ScriptedTab<S> {
 
     /// Sends the browser event `method` with `params`, as Chromium sends it on the root session.
     pub(crate) fn emit(&self, method: &str, params: Value) {
+        self.emit_on(method, params, None);
+    }
+
+    /// A flattened target event must retain its session: identical frame names on another
+    /// session cannot invalidate the document an operation actually admitted.
+    pub(crate) fn emit_on(&self, method: &str, params: Value, session_id: Option<SessionId>) {
         let event = CdpEvent {
             method: method.to_owned(),
             params,
-            session_id: None,
+            session_id,
         };
         if let Some(event) = self.targeted.deliver(event) {
             let _ = self.events.send(event);
@@ -456,6 +451,9 @@ impl<S: TabScript> ScriptedTab<S> {
         if !delay.is_zero() {
             let _slowed = Slowed::new(&self.slowed);
             time::sleep(delay).await;
+        }
+        if let Some(reply) = self.script.cdp_reply(method, params) {
+            return Ok(reply);
         }
         let on_oopif = session.is_some_and(|session| {
             self.script.oopif() && session.as_str() == self.session_of(SCRIPTED_OOPIF)
@@ -657,7 +655,7 @@ impl ScriptedRun {
     pub(crate) async fn over<S: TabScript>(tab: &Arc<ScriptedTab<S>>) -> TestResult<Self> {
         let connection: Arc<dyn CdpConnection> = Arc::clone(tab) as Arc<dyn CdpConnection>;
         let browser = BrowserSession::new(connection, BrowserSessionHooks::default());
-        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
+        let playwright = Playwright::new(Arc::clone(&browser));
         let listed = browser.pages.list().await?;
         let listed = listed.first().ok_or("the tab is listed")?;
         let page = serde_json::from_value(json!({ "$neo": "page", "tab": listed.tab_id }))?;

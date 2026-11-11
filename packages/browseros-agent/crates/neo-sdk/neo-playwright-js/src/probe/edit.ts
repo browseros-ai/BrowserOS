@@ -15,6 +15,8 @@
  * The event reaches the page's listeners the same way (it is not trusted either way), and its
  * init is JSON, so no page object crosses into this world.
  */
+
+import { drop } from './drop'
 import { setFiles } from './files'
 import type { Edit, EditRequest, ReplyTo, Value } from './protocol'
 import type { World } from './world'
@@ -44,6 +46,8 @@ function apply(world: World, edit: Edit, element: Element): Edited {
     case 'dispatchEvent':
       injected.dispatchEvent(element, edit.type, edit.init)
       return valueReply(null)
+    case 'drop':
+      return valueReply(drop(element, edit))
     case 'setFiles':
       return valueReply(setFiles(world, element, edit.payloads))
   }

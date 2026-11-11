@@ -105,6 +105,12 @@ struct Inner {
     /// validate under this guard so reused browser IDs cannot reach a replacement.
     sink: Mutex<Option<WsSink>>,
     events_tx: broadcast::Sender<CdpEvent>,
+    /// How many events the reader has put on `events_tx`, ever. The reader handles one message
+    /// at a time, so once a command's reply arrived, every event that came before it is
+    /// counted: a consumer that numbers what its receiver took can tell when it has seen them.
+    /// A std mutex, held only for the count and the non-blocking send together, so
+    /// [`CdpClient::events_counted`] subscribes between two broadcasts, never during one.
+    events_broadcast: std::sync::Mutex<u64>,
     /// The methods consumers took with [`CdpClient::events_targeted`]. The reader offers every
     /// event here first, and broadcasts only what no subscriber took. Kept across reconnects,
     /// so a subscription outlives the socket it started on.
@@ -133,6 +139,7 @@ impl CdpClient {
             pending: Mutex::new(HashMap::new()),
             sink: Mutex::new(None),
             events_tx,
+            events_broadcast: std::sync::Mutex::new(0),
             targeted: TargetedEvents::default(),
             connected: AtomicBool::new(false),
             disconnecting: AtomicBool::new(false),
@@ -318,6 +325,28 @@ impl CdpClient {
         self.inner.events_tx.subscribe()
     }
 
+    /// How many events [`Self::events`] has carried since the client started, across
+    /// reconnects. Read after a reply, it covers every event that arrived before that reply.
+    pub fn events_broadcast(&self) -> u64 {
+        *self
+            .inner
+            .events_broadcast
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// A receiver of [`Self::events`] and the count of events broadcast before it subscribed,
+    /// which it will never receive. Taken under the broadcast's lock, so an event is either in
+    /// the count or in the receiver, never both and never neither.
+    pub fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        let count = self
+            .inner
+            .events_broadcast
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (self.inner.events_tx.subscribe(), *count)
+    }
+
     pub fn on_event(&self, method: &str) -> EventStream {
         EventStream::new(method, self.events())
     }
@@ -333,6 +362,24 @@ impl CdpClient {
     #[must_use]
     pub fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
         self.inner.targeted.subscribe(method)
+    }
+
+    /// [`Self::events_targeted`], with the count of `method`'s events subscribers took before
+    /// it, which it will never receive ([`TargetedEvents::subscribe_counted`]).
+    #[must_use]
+    pub fn events_targeted_counted(
+        &self,
+        method: &str,
+    ) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.inner.targeted.subscribe_counted(method)
+    }
+
+    /// How many of `method`'s events the targeted subscribers took. The reader routes each
+    /// message before it reads the next, so read after a reply it covers every such event that
+    /// arrived before that reply ([`TargetedEvents::delivered`]).
+    #[must_use]
+    pub fn events_targeted_delivered(&self, method: &str) -> u64 {
+        self.inner.targeted.delivered(method)
     }
 
     async fn send_frame(
@@ -578,6 +625,11 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
     let Some(event) = inner.targeted.deliver(event) else {
         return;
     };
+    let mut count = inner
+        .events_broadcast
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *count += 1;
     let _ = inner.events_tx.send(event);
 }
 

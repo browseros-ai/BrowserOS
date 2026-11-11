@@ -1,5 +1,5 @@
 {
-  "protocol": 19,
+  "protocol": 21,
   "callFunction": "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -271,7 +271,8 @@
           "y": 8,
           "width": 60,
           "height": 20
-        }
+        },
+        "browserMapped": true
       }
     },
     {
@@ -390,6 +391,24 @@
       "edit": {
         "kind": "setFiles",
         "payloads": []
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "drop",
+        "payloads": [],
+        "data": [
+          {
+            "mimeType": "text/plain",
+            "value": "external"
+          }
+        ],
+        "point": {
+          "x": 20,
+          "y": 30
+        }
       }
     },
     {
@@ -962,19 +981,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 19,
+      "protocol": 21,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 19,
+      "protocol": 21,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 19,
+      "protocol": 21,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1027,7 +1046,11 @@
         "y": 18
       },
       "inView": true,
-      "transformed": false
+      "transformed": false,
+      "borderOffset": {
+        "x": 5,
+        "y": 5
+      }
     },
     {
       "kind": "covered",
