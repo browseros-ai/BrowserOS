@@ -384,42 +384,6 @@ export type UpstreamChecks = {
       never
     >
   >
-  // Neo replaces Frame.expect with probe params and preformatted matcher diagnostics, including negation in params.
-  'expect.locator': Assert<
-    UpstreamCheck<
-      'expect.locator',
-      OpInputs['expect.locator'],
-      pw.FrameExpectParams,
-      'expectation' | 'expected' | 'matcher' | 'params' | 'templateError',
-      | 'expectedNumber'
-      | 'expectedText'
-      | 'expectedValue'
-      | 'expression'
-      | 'expressionArg'
-      | 'isNot'
-      | 'pseudo'
-      | 'useInnerText',
-      never
-    >
-  >
-  // Neo replaces Frame.expect with probe params and preformatted matcher diagnostics, including negation in params.
-  'expect.page': Assert<
-    UpstreamCheck<
-      'expect.page',
-      OpInputs['expect.page'],
-      pw.FrameExpectParams,
-      'expectation' | 'expected' | 'matcher' | 'params' | 'templateError',
-      | 'expectedNumber'
-      | 'expectedText'
-      | 'expectedValue'
-      | 'expression'
-      | 'expressionArg'
-      | 'isNot'
-      | 'pseudo'
-      | 'useInnerText',
-      never
-    >
-  >
   'keyboard.down': Assert<
     UpstreamCheck<
       'keyboard.down',

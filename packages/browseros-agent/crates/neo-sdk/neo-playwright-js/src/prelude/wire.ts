@@ -17,13 +17,7 @@
  */
 
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
-import type {
-  ExpectParams,
-  Point,
-  Rect,
-  SelectOption,
-  UrlPattern,
-} from '../probe/protocol'
+import type { Point, Rect, SelectOption, UrlPattern } from '../probe/protocol'
 import type { GeneratedInputs, GeneratedOutputs } from './generated'
 import type { OpName } from './generated/ops'
 
@@ -385,18 +379,6 @@ export type NormalizeArgs = { target: Target; selector: string }
 export type PageArgs = { page: PageHandle }
 /** A page op on one of the page's frames; `frame` is left out for the main frame. */
 export type FrameArgs = PageArgs & { frame?: string }
-export type ExpectArgs = {
-  /** Playwright's matcher name, `toHaveText`. */
-  matcher: string
-  /** What the failure header prints in the matcher's parentheses: `expected`, `{ visible: false }`. */
-  expectation: string
-  /** Playwright's printed expectation line, `Expected: "Hello"` or `Expected pattern: /x/`. */
-  expected: string
-  params: ExpectParams
-  /** A malformed aria template, reported by Rust before polling the matcher. */
-  templateError?: string
-}
-
 /** Each op's input after `call`, for the ops Rust does not describe yet. */
 export type HandInputs = {
   'events.interceptFileChooser': PageArgs & { lease: number; on: boolean }
@@ -462,8 +444,6 @@ export type HandInputs = {
   /** `noWait` is `page.$`: the first match now, or null, instead of waiting for one. */
   'locator.elementHandle': TargetArgs & { noWait?: true }
   'locator.elementHandles': EveryMatchArgs
-  'expect.locator': { target: Target } & ExpectArgs
-  'expect.page': PageArgs & ExpectArgs
   'keyboard.down': PageArgs & { key: string }
   'keyboard.up': PageArgs & { key: string }
   'keyboard.press': PageArgs & { key: string; options: { delay?: number } }
@@ -670,8 +650,6 @@ export type HandOutputs = {
   'locator.waitFor': ElementBrand | null
   'locator.elementHandle': ElementBrand | null
   'locator.elementHandles': ElementBrand[]
-  'expect.locator': null
-  'expect.page': null
   'keyboard.down': null
   'keyboard.up': null
   'keyboard.press': null

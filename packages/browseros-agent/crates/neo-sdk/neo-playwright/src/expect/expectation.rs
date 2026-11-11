@@ -21,6 +21,7 @@ use crate::expect::matcher_message::{
 use crate::op_scope::OpScope;
 use crate::probe::{ErrorClass, ExpectParams, PageText, ProbeReply, ProbeRequest, ProbeTarget};
 use crate::target::Strictness;
+use crate::wire::Nothing;
 use crate::{ErrorCode, PlaywrightError, resolve};
 
 /// The least time the first poll gets, whatever the script's timeout: a poll takes a few
@@ -371,13 +372,14 @@ impl Expectation {
     /// under the timeout before the one-shot and before every later poll. `root_snapshot` reads
     /// the body's aria snapshot of the frame the matcher started in, for a failure that found
     /// nothing, as upstream's `Frame._expectInternal` does.
+    /// Success is `Nothing`; the route owns encoding that acknowledgment as JSON null.
     pub(crate) async fn run<C, CFut, F, Fut, R, RFut>(
         &self,
         scope: &OpScope<'_>,
         mut checkpoint: C,
         mut poll: F,
         root_snapshot: R,
-    ) -> Result<Value, PlaywrightError>
+    ) -> Result<Nothing, PlaywrightError>
     where
         C: FnMut() -> CFut,
         CFut: Future<Output = Result<(), PlaywrightError>>,
@@ -420,7 +422,7 @@ impl Expectation {
             None => None,
         };
         if last.as_ref().is_some_and(|poll| self.passes(poll)) {
-            return Ok(Value::Null);
+            return Ok(());
         }
         let backoff = Backoff::outer(scope.timeout());
         for attempt in 0.. {
@@ -437,7 +439,7 @@ impl Expectation {
             let polled = polled?;
             self.log(scope, &polled);
             if self.passes(&polled) {
-                return Ok(Value::Null);
+                return Ok(());
             }
             last = Some(polled);
         }
@@ -922,7 +924,7 @@ mod tests {
         let env = TestEnv::new();
         let scope = scope_with_timeout(&env, 1)?;
         let expect = visible(&scope)?;
-        let passed = expect
+        expect
             .run(
                 &scope,
                 no_handlers,
@@ -938,7 +940,6 @@ mod tests {
                 no_snapshot,
             )
             .await?;
-        assert_eq!(passed, Value::Null);
         Ok(())
     }
 
