@@ -11,6 +11,7 @@ use crate::events::Subscription;
 use crate::events::event_hub::EventRecord;
 use crate::events::file_chooser::FileChooser;
 use crate::events::page_event::{DialogId, Location, OpenedPage, PageEvent, WindowKind};
+use crate::events::run_events::QueuedCall;
 use crate::op_scope::OpScope;
 use crate::page::PageHandle;
 use crate::{ErrorCode, Playwright, PlaywrightError};
@@ -269,6 +270,26 @@ pub(crate) async fn deliver(
     }))
 }
 
+/// A queued binding call as the pump hands it to the prelude.
+pub(crate) fn binding_call(queued: QueuedCall) -> Delivered {
+    let QueuedCall {
+        seq,
+        at_ms,
+        tab,
+        call,
+    } = queued;
+    Delivered {
+        seq,
+        at: at_ms,
+        payload: Payload::Binding {
+            page: PageHandle::new(tab),
+            frame: call.frame,
+            context: call.context,
+            payload: call.payload,
+        },
+    }
+}
+
 /// The payload of an event a page listener receives as recorded, with nothing to look up:
 /// `None` for the internal navigation facts and the events [`deliver`] builds itself.
 fn plain(event: &PageEvent, page: PageHandle) -> Option<Payload> {
@@ -306,12 +327,6 @@ fn plain(event: &PageEvent, page: PageHandle) -> Option<Payload> {
                 url: download.url.clone(),
                 suggested_filename: download.suggested_filename.clone(),
             },
-        },
-        PageEvent::Binding(call) => Payload::Binding {
-            page,
-            frame: call.frame.clone(),
-            context: call.context,
-            payload: call.payload.clone(),
         },
         PageEvent::Navigation(_)
         | PageEvent::FrameDetached(_)

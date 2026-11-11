@@ -23,8 +23,9 @@
 //! - **Frames.** `Page.frameAttached`, a removing `Page.frameDetached` and the main frame's
 //!   `Page.frameNavigated` go to the `FrameAttachLog`, on any session of the tab, so frames are
 //!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`).
-//! - **Binding calls.** `Runtime.bindingCalled` for upstream's `__playwright__binding__` is
-//!   recorded only while some run exposes a binding on that tab. It comes on a channel of its own
+//! - **Binding calls.** `Runtime.bindingCalled` for upstream's `__playwright__binding__` goes,
+//!   while some run exposes a binding on that tab, to each such run's own queue, never the
+//!   bounded log, so no call the page awaits is evicted unread. It comes on a channel of its own
 //!   (`events_targeted`), unbounded, so a call is never lost to the broadcast ring's lag and a
 //!   page never waits forever on an answer nobody heard; the broadcast is drained first, so the
 //!   `Runtime.executionContextCreated` that named the caller's frame is already in hand.
@@ -426,16 +427,18 @@ impl Watcher {
             return;
         }
         if let Some(target) = self.wanted(&session, PageEventKind::Binding).await {
+            // The main frame's id is its target's; the pump names it `null`.
             let frame = self
                 .contexts
                 .get(&(session, called.execution_context_id))
+                .filter(|frame| frame.0 != target.0)
                 .cloned();
-            self.writer.record(PageEvent::Binding(BindingCalled {
+            self.writer.deliver_binding(&BindingCalled {
                 target,
                 context: called.execution_context_id,
                 frame,
                 payload: called.payload,
-            }));
+            });
         }
     }
 

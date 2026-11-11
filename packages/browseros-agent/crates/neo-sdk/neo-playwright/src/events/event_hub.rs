@@ -11,7 +11,8 @@ use tokio::sync::futures::Notified;
 use crate::RunState;
 use crate::events::dialog_table::{self, DialogAnswer, DialogTable, Unanswerable};
 use crate::events::download_table::DownloadTable;
-use crate::events::page_event::{DialogId, DialogKind, PageEvent};
+use crate::events::page_event::{BindingCalled, DialogId, DialogKind, PageEvent};
+use crate::events::run_events::QueuedCall;
 use crate::events::{PageEventKind, Subscription};
 
 /// How many records the log keeps. A reader that falls further behind is told how many it lost.
@@ -30,6 +31,10 @@ pub(crate) struct EventHub {
     runs: Mutex<Vec<Weak<RunState>>>,
     dialogs: Mutex<DialogTable>,
     downloads: DownloadTable,
+    /// Which run owns each binding name on a tab, weakly: a name is the run's until the run
+    /// ends. The page's controller keeps one binding per name, so two runs on one tab must not
+    /// share one, or each would answer and remove the other's.
+    bindings: Mutex<HashMap<(TargetId, String), Weak<RunState>>>,
 }
 
 #[derive(Debug, Default)]
@@ -160,6 +165,20 @@ impl EventHub {
         })
     }
 
+    /// Claims binding `name` on the tab whose target is `target` for `run`: false when another
+    /// live run holds it there. A run may claim its own name again (it disposed and exposes it
+    /// anew); a name stays claimed until the run that holds it ends.
+    pub(crate) fn claim_binding(&self, target: &TargetId, name: &str, run: &Arc<RunState>) -> bool {
+        let mut owners = self.bindings.lock().unwrap_or_else(PoisonError::into_inner);
+        owners.retain(|_, owner| owner.strong_count() > 0);
+        let key = (target.clone(), name.to_owned());
+        if owners.get(&key).is_some_and(|owner| !ptr_eq(owner, run)) {
+            return false;
+        }
+        owners.insert(key, Arc::downgrade(run));
+        true
+    }
+
     /// The seq of the newest record: a reader's place for "from now on".
     pub(crate) fn head(&self) -> u64 {
         self.lock_log().last_seq
@@ -258,6 +277,28 @@ impl EventWriter {
         seq
     }
 
+    /// Hands a binding call to every live run that exposes a binding on its tab, into that run's
+    /// own queue rather than the bounded log: a call is a request the page may await, so it must
+    /// reach the run however many records follow it before the pump reads. Numbered with the
+    /// log's head, so the pump orders it after the records that came before it.
+    pub(crate) fn deliver_binding(&mut self, call: &BindingCalled) {
+        let seq = self.hub.head();
+        let at_ms = now_ms();
+        for run in self.hub.listeners(&call.target, PageEventKind::Binding) {
+            if let Some(run) = run.upgrade()
+                && let Some(tab) = run.events.binding_tab(&call.target)
+            {
+                run.events.queue_call(QueuedCall {
+                    seq,
+                    at_ms,
+                    tab,
+                    call: call.clone(),
+                });
+            }
+        }
+        self.hub.changed.notify_waiters();
+    }
+
     /// Records that the navigation recorded as `seq` was `tab`'s main frame's. The watcher calls
     /// it, as only the watcher knows which tab a session's frame belongs to: a child frame's
     /// navigation is never kept, so the map holds one entry per open tab.
@@ -295,13 +336,13 @@ mod tests {
     use std::error::Error;
     use std::sync::Arc;
 
-    use browseros_core::{FrameId, TargetId};
+    use browseros_core::{FrameId, TabId, TargetId};
     use neo_trace::EpochMillis;
 
     use super::{EventHub, LOG_CAPACITY};
     use crate::RunState;
     use crate::events::navigation_event::NavigationEvent;
-    use crate::events::page_event::PageEvent;
+    use crate::events::page_event::{BindingCalled, PageEvent};
     use crate::events::{PageEventKind, Subscription};
 
     fn closed(target: &str) -> PageEvent {
@@ -407,12 +448,78 @@ mod tests {
         hub.bind(&listening);
         hub.bind(&idle);
         let _waiting = listening.events.waiting(Subscription::Page {
-            tab: browseros_core::TabId(1),
+            tab: TabId(1),
             target: target.clone(),
             event: PageEventKind::Dialog,
         });
         assert_eq!(hub.listeners(&target, PageEventKind::Dialog).len(), 1);
         assert!(hub.listeners(&target, PageEventKind::Console).is_empty());
+    }
+
+    /// A binding call goes to the queue of each run that exposes a binding on its tab, whatever
+    /// the log holds after it, and never into the log: a flood of records cannot evict it.
+    #[test]
+    fn tests_that_a_binding_call_waits_in_its_runs_queue_past_any_number_of_records() {
+        let (hub, mut writer) = EventHub::new();
+        let target = TargetId("T".to_owned());
+        let exposing = Arc::new(RunState::default());
+        let other = Arc::new(RunState::default());
+        hub.bind(&exposing);
+        hub.bind(&other);
+        exposing.events.listen(
+            Subscription::Page {
+                tab: TabId(7),
+                target: target.clone(),
+                event: PageEventKind::Binding,
+            },
+            0,
+            0,
+        );
+        writer.deliver_binding(&BindingCalled {
+            target: target.clone(),
+            context: 3,
+            frame: None,
+            payload: "{}".to_owned(),
+        });
+        for _ in 0..=LOG_CAPACITY {
+            writer.record(closed("U"));
+        }
+        let queued = exposing.events.take_calls();
+        assert_eq!(queued.len(), 1, "the call outlived the ring");
+        assert_eq!((queued[0].tab, queued[0].seq), (TabId(7), 0));
+        assert!(
+            other.events.take_calls().is_empty(),
+            "only the exposing run"
+        );
+        assert!(
+            hub.read_after(0)
+                .records
+                .iter()
+                .all(|record| matches!(record.event, PageEvent::Closed(_))),
+            "the log holds no call"
+        );
+    }
+
+    /// A binding name on a tab belongs to one live run: another run is refused it until the
+    /// first ends, and the holder may claim it again.
+    #[test]
+    fn tests_that_a_binding_name_belongs_to_one_live_run_per_tab() {
+        let (hub, _writer) = EventHub::new();
+        let tab = TargetId("T".to_owned());
+        let first = Arc::new(RunState::default());
+        let second = Arc::new(RunState::default());
+        assert!(hub.claim_binding(&tab, "add", &first));
+        assert!(hub.claim_binding(&tab, "add", &first), "its own again");
+        assert!(!hub.claim_binding(&tab, "add", &second));
+        assert!(
+            hub.claim_binding(&TargetId("U".to_owned()), "add", &second),
+            "another tab's"
+        );
+        drop(first);
+        assert!(
+            hub.claim_binding(&tab, "add", &second),
+            "once the first ended"
+        );
     }
 
     #[test]

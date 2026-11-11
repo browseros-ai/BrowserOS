@@ -7614,12 +7614,10 @@ ${value.stack}`;
     page._bindings.set(name, callback);
     const events = page._context._events;
     events.bindingAdded();
-    const forget = () => {
-      if (page._bindings.get(name) !== callback)
-        return;
+    const forget = once(() => {
       page._bindings.delete(name);
       events.bindingRemoved();
-    };
+    });
     try {
       const { id } = await invoke("page.exposeBinding", { api, timeoutMs: 0 }, {
         page: await page._brand(api),
@@ -7639,12 +7637,10 @@ ${value.stack}`;
       throw clientError(api, `Function "${name}" has been already registered in one of the pages`);
     context._bindings.set(name, callback);
     context._events.bindingAdded();
-    const forget = () => {
-      if (context._bindings.get(name) !== callback)
-        return;
+    const forget = once(() => {
       context._bindings.delete(name);
       context._events.bindingRemoved();
-    };
+    });
     try {
       const { id } = await invoke("context.exposeBinding", { api, timeoutMs: 0 }, { name, ...noGlobal ? { noGlobal: true } : {} });
       return registration(id, forget);
@@ -7652,6 +7648,15 @@ ${value.stack}`;
       forget();
       throw error;
     }
+  }
+  function once(forget) {
+    let done = false;
+    return () => {
+      if (done)
+        return;
+      done = true;
+      forget();
+    };
   }
   async function answerBindingCall(page, record) {
     let payload;

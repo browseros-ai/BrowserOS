@@ -164,3 +164,17 @@ describe('answering a call', () => {
     expect(run.sent('bindingCall.resolve')).toEqual([])
   })
 })
+
+it('tests that disposing twice does not remove the same name exposed again since', async () => {
+  const run = runtime([call('f', [])])
+  await run.run(`
+    const cb = () => 1
+    const first = await page.exposeFunction('f', cb)
+    await first.dispose()
+    await page.exposeFunction('f', cb)
+    await first.dispose()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  `)
+  await settle()
+  expect(run.sent('bindingCall.resolve')).toHaveLength(1)
+})

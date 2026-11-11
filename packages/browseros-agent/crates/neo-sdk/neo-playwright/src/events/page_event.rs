@@ -36,9 +36,6 @@ pub(crate) enum PageEvent {
     Download(DownloadStarted),
     /// A native chooser intercepted by core before an agent-created tab is exposed.
     FileChooser(FileChooserOpened),
-    /// A page called a binding a run exposed, recorded only while some run exposes one on that
-    /// page.
-    Binding(BindingCalled),
 }
 
 impl PageEvent {
@@ -54,7 +51,6 @@ impl PageEvent {
                 download.page.as_ref() == Some(target)
             }
             (PageEventKind::FileChooser, Self::FileChooser(chooser)) => chooser.target == *target,
-            (PageEventKind::Binding, Self::Binding(call)) => call.target == *target,
             _ => false,
         }
     }
@@ -72,7 +68,8 @@ pub(crate) struct FileChooserOpened {
 
 /// One call of upstream's CDP binding `__playwright__binding__` (`Runtime.bindingCalled`):
 /// the stub of a binding a run exposed posted `{ name, seq, serializedArgs }` as JSON. The run
-/// that exposed `name` answers it in `context`, the execution context that made the call.
+/// that exposed `name` answers it in `context`, the execution context that made the call. Not a
+/// log record: the watcher hands it to each such run's own queue (`EventWriter::deliver_binding`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BindingCalled {
     pub(crate) target: TargetId,

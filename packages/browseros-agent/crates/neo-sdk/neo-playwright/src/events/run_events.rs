@@ -2,12 +2,13 @@
 //! read for each listener. Only the run's own event ops write here; the watcher only asks whether
 //! the run wants an event, to decide what to record and which dialogs to hold.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use browseros_core::file_transfers::FileChooserInterception;
 use browseros_core::{TabId, TargetId};
 
+use crate::events::page_event::BindingCalled;
 use crate::events::{ListenerKey, PageEventKind, Subscription};
 
 /// Behind `RunState`. A std mutex, held for a map update and never across an await.
@@ -25,6 +26,20 @@ struct Inner {
     /// `waitForEvent` ops in flight, by what they wait for. Counted, because two may wait for
     /// the same thing at once.
     waiting: HashMap<Subscription, usize>,
+    /// Binding calls the watcher handed this run, oldest first, until its pump takes them. Kept
+    /// apart from the bounded log: each is a request the page may be waiting on.
+    calls: VecDeque<QueuedCall>,
+}
+
+/// A page's call of a binding this run exposed, as the watcher handed it over.
+#[derive(Clone, Debug)]
+pub(crate) struct QueuedCall {
+    /// The log's head when the call came: the pump orders it after the records before it.
+    pub(crate) seq: u64,
+    pub(crate) at_ms: u64,
+    /// The run's tab for the call's page.
+    pub(crate) tab: TabId,
+    pub(crate) call: BindingCalled,
 }
 
 #[derive(Debug)]
@@ -104,6 +119,31 @@ impl RunEvents {
             events: self,
             subscription,
         }
+    }
+
+    /// Queues a binding call for the pump.
+    pub(crate) fn queue_call(&self, call: QueuedCall) {
+        self.lock().calls.push_back(call);
+    }
+
+    /// The binding calls queued since the pump last took them.
+    pub(crate) fn take_calls(&self) -> Vec<QueuedCall> {
+        self.lock().calls.drain(..).collect()
+    }
+
+    /// The tab this run exposes bindings on whose target is `target`.
+    pub(crate) fn binding_tab(&self, target: &TargetId) -> Option<TabId> {
+        self.lock()
+            .listening
+            .keys()
+            .find_map(|subscription| match subscription {
+                Subscription::Page {
+                    tab,
+                    target: listened,
+                    event: PageEventKind::Binding,
+                } if listened == target => Some(*tab),
+                _ => None,
+            })
     }
 
     /// Whether the run listens for, or waits on, `event` on the tab whose target is `target`.

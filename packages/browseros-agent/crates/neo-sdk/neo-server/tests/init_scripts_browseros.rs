@@ -95,7 +95,11 @@ for (let i = 0; i < 100 && called.length === 0; i++) await page.waitForTimeout(5
 const onWindow = await page.evaluate(() => Object.keys(window).filter((key) => key.startsWith('__pw_fn_')));
 await add.dispose();
 const disposed = await page.evaluate(() => typeof window.add);
-return { loaded, source, failed, duplicate, early, called, onWindow, disposed, page };
+// More calls than Neo's event log holds, none awaited but the last: every one reaches the script.
+let ticks = 0;
+await page.exposeFunction('tick', () => { ticks++; });
+await page.evaluate(async () => { for (let i = 0; i < 3000; i++) window.tick(); await window.tick(); });
+return { loaded, source, failed, duplicate, early, called, onWindow, disposed, ticks, page };
 ";
 
 /// Run 2 of the bindings, on run 1's tab: what is left of them once run 1 ended, in the document
@@ -162,13 +166,15 @@ async fn expose(rig: &Rig) -> TestResult {
         "called": ["ran"],
         "onWindow": [],
         "disposed": "undefined",
+        "ticks": 3001,
         "page": { "$neo": "page", "tab": tab },
     });
     assert_eq!(
         exposed, expected,
         "a binding answers the loaded document at once and every later one, with its source; an \
          error reaches the page; a context binding reaches the run's tab; exposeFunctions passes \
-         the script's function off window; dispose takes it from the page"
+         the script's function off window; dispose takes it from the page; a burst of calls \
+         larger than the event log loses none"
     );
 
     let after = returned(&browseros_rig::run(&client, EXPOSED_AFTER, &meta).await?)?;

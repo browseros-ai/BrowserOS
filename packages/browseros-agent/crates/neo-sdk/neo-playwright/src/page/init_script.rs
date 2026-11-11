@@ -471,6 +471,9 @@ impl InitScripts {
         let key = (admitted.tab, admitted.session.session_id.clone());
         let cell = Arc::clone(self.lock().plumbed.entry(key).or_default());
         cell.get_or_try_init(|| async {
+            // Each write below rechecks the tab first: an owner who took it while this op
+            // waited (for another add's plumbing, or for Chromium) gets nothing more.
+            scope.recheck()?;
             let run = scope.run_state();
             hub.bind(run);
             let since = now_ms();
@@ -492,6 +495,7 @@ impl InitScripts {
                 )
                 .await
                 .map_err(core)?;
+            scope.recheck()?;
             let controller = add_script(session, BINDINGS_CONTROLLER_JS, RunNow::Yes, None)
                 .await
                 .map_err(core)?;
@@ -565,7 +569,11 @@ impl InitScripts {
                                 "a context binding was kept without its event hub",
                             )
                         })?;
-                        add_binding(self, scope, &hub, admitted, &session, binding).await?
+                        match add_binding(self, scope, &hub, admitted, &session, binding).await? {
+                            Some(registration) => registration,
+                            // Another run's binding of that name stays on this tab.
+                            None => return Ok(()),
+                        }
                     }
                 };
                 // Kept or handed back under one lock, so a dispose sees either the registration
@@ -656,7 +664,8 @@ async fn add(
     add_script(session, source, RunNow::No, None).await
 }
 
-/// A binding's stub on a tab session whose plumbing it brings in first. Takes `&Sent`.
+/// A binding's stub on a tab session whose plumbing it brings in first. Takes `&Sent`. A name
+/// another run on the tab holds fails as upstream's duplicate does, with nothing added.
 async fn expose(
     scope: &OpScope<'_>,
     hub: &EventHub,
@@ -673,10 +682,21 @@ async fn expose(
         session,
         binding,
     )
-    .await
+    .await?
+    .ok_or_else(|| {
+        scope.fail(
+            ErrorCode::InvalidInput,
+            &format!(
+                "Function \"{}\" has been already registered by another run on this page",
+                binding.name
+            ),
+        )
+    })
 }
 
 /// [`expose`] without the proof, for a context binding, which the admitting op's recheck covers.
+/// `None` when another live run holds the name on this tab ([`EventHub::claim_binding`]): the
+/// page keeps that run's binding, and this one adds nothing there.
 async fn add_binding(
     scripts: &InitScripts,
     scope: &OpScope<'_>,
@@ -684,8 +704,13 @@ async fn add_binding(
     admitted: &AdmittedPage,
     session: &ProtocolSession,
     binding: &BindingName,
-) -> Result<Registration, PlaywrightError> {
+) -> Result<Option<Registration>, PlaywrightError> {
+    let target = &admitted.session.target_id;
+    if !hub.claim_binding(target, &binding.name, scope.run_state()) {
+        return Ok(None);
+    }
     scripts.plumb(scope, hub, admitted, session).await?;
+    scope.recheck()?;
     add_script(
         session,
         &binding.stub(),
@@ -693,6 +718,7 @@ async fn add_binding(
         Some(binding.cleanup()),
     )
     .await
+    .map(Some)
     .map_err(|error| scope.core_error(&error))
 }
 

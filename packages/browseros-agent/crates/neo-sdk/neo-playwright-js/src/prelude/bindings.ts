@@ -58,11 +58,10 @@ export async function exposeOnPage(
   page._bindings.set(name, callback)
   const events = page._context._events
   events.bindingAdded()
-  const forget = () => {
-    if (page._bindings.get(name) !== callback) return
+  const forget = once(() => {
     page._bindings.delete(name)
     events.bindingRemoved()
-  }
+  })
   try {
     const { id } = await invoke(
       'page.exposeBinding',
@@ -97,11 +96,10 @@ export async function exposeOnContext(
     )
   context._bindings.set(name, callback)
   context._events.bindingAdded()
-  const forget = () => {
-    if (context._bindings.get(name) !== callback) return
+  const forget = once(() => {
     context._bindings.delete(name)
     context._events.bindingRemoved()
-  }
+  })
   try {
     const { id } = await invoke(
       'context.exposeBinding',
@@ -112,6 +110,19 @@ export async function exposeOnContext(
   } catch (error) {
     forget()
     throw error
+  }
+}
+
+/**
+ * `forget` runs once: a disposable disposed again must not remove the same name exposed anew
+ * since, even with the same callback.
+ */
+function once(forget: () => void): () => void {
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    forget()
   }
 }
 
