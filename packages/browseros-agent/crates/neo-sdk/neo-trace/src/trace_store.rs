@@ -53,7 +53,7 @@ const SCREENSHOT_CAP_BYTES: u64 = 1 << 30;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetentionPolicy {
     /// Finished runs older than this are deleted with their operations, their tab links and
-    /// their screenshots: 7 days by default. Private tab flags are never swept.
+    /// their screenshots: 7 days by default.
     pub max_age: Duration,
     /// The most screenshot bytes kept. Past it, the oldest runs' screenshots are deleted first
     /// and read as expired: 1 GiB by default.
