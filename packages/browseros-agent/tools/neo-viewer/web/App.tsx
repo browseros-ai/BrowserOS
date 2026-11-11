@@ -1,34 +1,60 @@
 /**
- * The plain run list (PR B): pick a task, read its runs in order. The designed Viewer C v2 screen
- * replaces this page (PR D) on the same API.
+ * The plain run list (PR B) with the live screen beside it: pick a task, read its runs in
+ * order, watch or take over its tab. The designed Viewer C v2 screen replaces this page (PR D)
+ * on the same API and the same live-screen components.
  */
 
 import { useState } from 'react'
 import type { TaskSummary } from '../shared/api'
 import { RunList } from './components/RunList'
 import { duration, identification, tokens } from './format'
+import {
+  LiveScreen,
+  LiveScreenPopup,
+  TakeOverButton,
+} from './live-screen/LiveScreen'
+import { useLiveScreen } from './live-screen/use-live-screen'
 import { useViewer } from './use-viewer'
 
 export function App() {
   const { info, tasks, taskId, selectTask, runs, error } = useViewer()
   const task = tasks.find((candidate) => candidate.id === taskId) ?? null
+  const live = useLiveScreen(task?.neoTaskId ?? null)
+  const [popped, setPopped] = useState(false)
   return (
-    <div className="mx-auto max-w-6xl space-y-4 p-6 font-sans text-sm text-zinc-900">
-      <header className="space-y-1">
-        <h1 className="font-semibold text-lg">Neo viewer</h1>
-        {info && <McpUrl url={info.mcpUrl} upstream={info.upstreamUrl} />}
-        {error && <p className="text-red-700">{error}</p>}
-      </header>
-      {tasks.length === 0 ? (
-        <p className="text-zinc-600">
-          No tasks yet. Give an agent the MCP URL above; each agent becomes a
-          task.
-        </p>
-      ) : (
-        <TaskPicker tasks={tasks} taskId={taskId} onSelect={selectTask} />
+    <div className="mx-auto flex max-w-6xl items-start gap-6 p-6 font-sans text-sm text-zinc-900">
+      <div className="min-w-0 flex-1 space-y-4">
+        <header className="space-y-1">
+          <div className="flex items-center gap-3">
+            <h1 className="font-semibold text-lg">Neo viewer</h1>
+            <div className="flex-1" />
+            <TakeOverButton live={live} />
+          </div>
+          {info && <McpUrl url={info.mcpUrl} upstream={info.upstreamUrl} />}
+          {error && <p className="text-red-700">{error}</p>}
+        </header>
+        {tasks.length === 0 ? (
+          <p className="text-zinc-600">
+            No tasks yet. Give an agent the MCP URL above; each agent becomes a
+            task.
+          </p>
+        ) : (
+          <TaskPicker tasks={tasks} taskId={taskId} onSelect={selectTask} />
+        )}
+        {task && <TaskHeader task={task} />}
+        {task && <RunList runs={runs} />}
+      </div>
+      <aside className="sticky top-6 w-[340px] shrink-0">
+        <LiveScreen
+          live={live}
+          size="docked"
+          popped={popped}
+          onPopOut={() => setPopped(true)}
+        />
+      </aside>
+      {popped && (
+        <LiveScreenPopup live={live} onClose={() => setPopped(false)} />
       )}
-      {task && <TaskHeader task={task} />}
-      {task && <RunList runs={runs} />}
     </div>
   )
 }

@@ -478,6 +478,7 @@
       "dependencies": {
         "@fontsource-variable/jetbrains-mono": "^5.3.0",
         "@fontsource/ibm-plex-sans": "^5.3.0",
+        "@novnc/novnc": "^1.7.0",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
@@ -1224,6 +1225,8 @@
     "@noble/ciphers": ["@noble/ciphers@2.2.0", "", {}, "sha512-Z6pjIZ/8IJcCGzb2S/0Px5J81yij85xASuk1teLNeg75bfT07MV3a/O2Mtn1I2se43k3lkVEcFaR10N4cgQcZA=="],
 
     "@noble/hashes": ["@noble/hashes@2.2.0", "", {}, "sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg=="],
+
+    "@novnc/novnc": ["@novnc/novnc@1.7.0", "", {}, "sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA=="],
 
     "@openclaw/fs-safe": ["@openclaw/fs-safe@0.18.2", "", { "optionalDependencies": { "@openclaw/fs-safe-darwin-arm64": "0.18.2", "@openclaw/fs-safe-darwin-x64": "0.18.2", "@openclaw/fs-safe-linux-arm64-gnu": "0.18.2", "@openclaw/fs-safe-linux-arm64-musl": "0.18.2", "@openclaw/fs-safe-linux-x64-gnu": "0.18.2", "@openclaw/fs-safe-linux-x64-musl": "0.18.2", "@openclaw/fs-safe-win32-x64-msvc": "0.18.2", "jszip": "^3.10.2" } }, "sha512-ZurOE7wousc+xT1HhVw+/lkqLHms378GcHz8O9dlMAsXY+MGNLKpZncmjpuEVHPz292n82FC1mp2SCCRUnvbNg=="],
 

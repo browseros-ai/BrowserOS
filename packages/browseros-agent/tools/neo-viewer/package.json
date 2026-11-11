@@ -7,7 +7,7 @@
   "scripts": {
     "start": "bun server/main.ts",
     "test": "bun test server shared web",
-    "test:real-image": "bun test tests/real-image.test.ts",
+    "test:real-image": "bun test tests",
     "typecheck": "tsc --noEmit",
     "lint": "bunx biome check",
     "lint:fix": "bunx biome check --write --unsafe"
@@ -15,6 +15,7 @@
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@novnc/novnc": "^1.7.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
