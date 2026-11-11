@@ -4,6 +4,7 @@
  */
 
 import type { RunDetail, RunSummary } from '../../shared/api'
+import { firstStatementOf, formattedCode } from './formatted-code'
 import { type BarScale, failed, neoMs, share, tokenBar } from './measures'
 import { errorCode, returnedWhat } from './reply'
 import { codeLines } from './text-lines'
@@ -137,22 +138,14 @@ export function RunRow({
   )
 }
 
+/** Display lines: the open block's count, laid out one statement per line. */
 function lineCount(code: string): number {
-  return code.trimEnd().split('\n').length
+  return formattedCode(code).lines.length
 }
 
-/** A closed row: the script's first line, its length, and why it failed if it did. */
+/** A closed row: the script's first statement on one line, its length, and why it failed. */
 function ClosedSummary({ run }: { run: RunSummary }) {
-  const lines = codeLines(run.code.trim())
-  // The first line that does something: a leading comment says less than the code under it.
-  const first =
-    lines.find((line) =>
-      line.some(
-        (segment) => segment.tone !== 'comment' && segment.text.trim() !== '',
-      ),
-    ) ??
-    lines[0] ??
-    []
+  const first = codeLines(firstStatementOf(run.code))[0] ?? []
   const total = lineCount(run.code)
   const failure =
     run.status === 'error'

@@ -127,8 +127,8 @@ function Legend() {
   return (
     <div className="flex h-6 items-center gap-[18px] overflow-hidden whitespace-nowrap border-line border-b bg-panel px-4 text-[11px] text-ink-2 leading-[14px]">
       <span>
-        <b className="font-semibold text-ink">Code tok</b>: the script the agent
-        sent in run(), what the model wrote.
+        <b className="font-semibold text-ink">Code tok</b>: the script as the
+        agent sent it in run(), what the model wrote.
       </span>
       <span>
         <b className="font-semibold text-ink">Reply tok</b>: what run() returned

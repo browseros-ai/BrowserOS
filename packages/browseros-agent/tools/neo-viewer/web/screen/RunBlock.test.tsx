@@ -158,6 +158,40 @@ describe("an open run's methods", () => {
     expect(row.getAttribute('aria-expanded')).toBe('false')
   })
 
+  it('lays a one-line minified script out by statement, each with its own methods', async () => {
+    // What agents send: everything on line 1. Neo's sites point at each method's name.
+    const minified =
+      "const p=await context.newPage();await p.goto('https://example.com');const t=await p.title();return t;"
+    const at = (name: string) => ({
+      line: 1,
+      startOffsetMs: minified.indexOf(name),
+      site: { line: 1, column: minified.indexOf(name) + 1 },
+    })
+    const run = runSummary(1, { code: minified })
+    await show(
+      run,
+      detailWith(
+        run,
+        record(
+          [
+            operation(1, 'context.newPage', at('newPage')),
+            operation(2, 'page.goto', at('goto')),
+            operation(3, 'page.title', at('title')),
+          ],
+          100,
+        ),
+      ),
+    )
+    expect(methods()).toEqual([
+      'context.newPage on line 1',
+      'page.goto on line 2',
+      'page.title on line 3',
+    ])
+    const text = dom.container.textContent ?? ''
+    expect(text).toContain('2await p.goto(')
+    expect(text).toContain('4return t;')
+  })
+
   it("shows the code alone when Neo's record is missing or the run is still running", async () => {
     const ended = runSummary(3, { code })
     await show(ended, detailWith(ended, null))

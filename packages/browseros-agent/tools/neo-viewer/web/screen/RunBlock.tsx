@@ -1,6 +1,7 @@
 /**
- * An open run: its script as the agent sent it, line by line and numbered, each line with the
- * methods it called (`MethodRows`), Neo's own operations folded under the code, then "Model
+ * An open run: its script laid out one statement per line (`shared/code-format.ts` changes only
+ * whitespace; the line numbers are display lines), each line with the methods it called
+ * (`MethodRows`), Neo's own operations folded under the code, then "Model
  * read", the reply the model got back.
  *
  * The methods come from Neo's record of the run (`RunDetail.neo`), read once the reply is in. A
@@ -10,6 +11,7 @@
 
 import { useState } from 'react'
 import type { NeoOperation, RunDetail, RunSummary } from '../../shared/api'
+import { formattedCode } from './formatted-code'
 import { MethodDetail, MethodRow, Rail, UnplacedGroup } from './MethodRows'
 import { type PlacedOperations, placeOperations } from './operations'
 import { noReplyReason, replyFacts, valueChip } from './reply'
@@ -34,9 +36,13 @@ export function RunBlock({
   selected: boolean
   onOpenFull: () => void
 }) {
-  const lines = codeLines(run.code.trimEnd())
+  // Laid out one statement per line (whitespace only); sites map to the line that holds them.
+  const formatted = formattedCode(run.code)
+  const lines = codeLines(formatted.text)
   const record = detail?.neo ?? null
-  const placed = record ? placeOperations(record, lines.length) : null
+  const placed = record
+    ? placeOperations(record, lines.length, formatted.lineOfSite)
+    : null
   const [openId, setOpenId] = useState<string | null>(null)
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(new Set())
   const [showUnplaced, setShowUnplaced] = useState(false)
