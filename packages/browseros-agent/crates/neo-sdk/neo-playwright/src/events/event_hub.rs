@@ -3,7 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use browseros_core::TargetId;
+use browseros_core::{SessionId, TargetId};
 use neo_trace::EpochMillis;
 use serde::Deserialize;
 use tokio::sync::Notify;
@@ -38,6 +38,19 @@ pub(crate) struct EventHub {
     /// ends. The page's controller keeps one binding per name, so two runs on one tab must not
     /// share one, or each would answer and remove the other's.
     bindings: Mutex<HashMap<(TargetId, String), Weak<RunState>>>,
+    /// Each page session's `Log` domain: whether Neo enabled it, and the newest entry time
+    /// passed on there. `Log.enable` replays the entries the page logged before it, and a second
+    /// enable (`addScriptTag`'s) replays them again; none of those is news.
+    log_sessions: Mutex<HashMap<SessionId, LogSession>>,
+}
+
+/// One page session's [`EventHub::log_sessions`] entry.
+#[derive(Debug, Default)]
+struct LogSession {
+    enabled: bool,
+    /// Entries logged at or before this, in ms since the epoch, were passed on or predate the
+    /// enable.
+    newest_ms: f64,
 }
 
 #[derive(Debug, Default)]
@@ -98,6 +111,54 @@ impl EventHub {
     /// Wakes every reader to read again, as after a run adds a listener.
     pub(crate) fn wake(&self) {
         self.changed.notify_waiters();
+    }
+
+    /// Whether the caller should send `Log.enable` on `session`: once, for the first console
+    /// listener or wait on its page. What the page logged before that point is a replay.
+    pub(crate) fn enable_log(&self, session: &SessionId) -> bool {
+        let mut sessions = self
+            .log_sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let log = sessions.entry(session.clone()).or_default();
+        if log.enabled {
+            return false;
+        }
+        log.enabled = true;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "milliseconds since the epoch stay far below 2^52"
+        )]
+        let now = now_ms() as f64;
+        log.newest_ms = log.newest_ms.max(now);
+        true
+    }
+
+    /// `Log.enable` failed on `session`, so the next console listener tries it again.
+    pub(crate) fn log_enable_failed(&self, session: &SessionId) {
+        if let Some(log) = self
+            .log_sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(session)
+        {
+            log.enabled = false;
+        }
+    }
+
+    /// Whether an entry `session` logged at `timestamp` is new, and if so, notes it: an entry no
+    /// newer than one passed on, or than the enable, is a replay.
+    pub(crate) fn log_entry_is_new(&self, session: &SessionId, timestamp: f64) -> bool {
+        let mut sessions = self
+            .log_sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let log = sessions.entry(session.clone()).or_default();
+        if timestamp <= log.newest_ms {
+            return false;
+        }
+        log.newest_ms = timestamp;
+        true
     }
 
     /// The records after seq `after`.
@@ -375,10 +436,10 @@ mod tests {
     use std::error::Error;
     use std::sync::Arc;
 
-    use browseros_core::{FrameId, TabId, TargetId};
+    use browseros_core::{FrameId, SessionId, TabId, TargetId};
     use neo_trace::EpochMillis;
 
-    use super::{EventHub, LOG_CAPACITY};
+    use super::{EventHub, LOG_CAPACITY, now_ms};
     use crate::RunState;
     use crate::events::navigation_event::NavigationEvent;
     use crate::events::page_event::{BindingCalled, PageEvent};
@@ -624,5 +685,37 @@ mod tests {
         assert_eq!(read.lost, 0, "the copied response still reports no loss");
         assert!(hub.read_after(0).lost > 0, "a new read sees the eviction");
         Ok(())
+    }
+
+    /// CM-008: `Log` is enabled once per page session, what the page logged before is a replay,
+    /// and so is an entry replayed again by a later enable.
+    #[test]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "milliseconds since the epoch stay far below 2^52"
+    )]
+    fn tests_that_log_entries_pass_once_from_the_enable_on() {
+        let (hub, _writer) = EventHub::new();
+        let session = SessionId::from("S".to_owned());
+        assert!(
+            hub.enable_log(&session),
+            "the first console listener enables Log"
+        );
+        assert!(!hub.enable_log(&session), "once per session");
+        let enabled = now_ms() as f64;
+        assert!(
+            !hub.log_entry_is_new(&session, enabled - 5_000.0),
+            "logged before the enable: a replay"
+        );
+        assert!(hub.log_entry_is_new(&session, enabled + 10.0));
+        assert!(
+            !hub.log_entry_is_new(&session, enabled + 10.0),
+            "replayed by a second enable"
+        );
+        assert!(hub.log_entry_is_new(&session, enabled + 11.0));
+        let other = SessionId::from("T".to_owned());
+        assert!(hub.enable_log(&other));
+        hub.log_enable_failed(&other);
+        assert!(hub.enable_log(&other), "a failed enable is tried again");
     }
 }

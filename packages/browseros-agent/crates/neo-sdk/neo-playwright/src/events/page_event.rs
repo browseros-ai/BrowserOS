@@ -274,6 +274,64 @@ struct PropertyPreview {
     value: Option<String>,
 }
 
+/// `Log.entryAdded`, reduced to what upstream's `_onLogEntryAdded` reads.
+#[derive(Debug, Deserialize)]
+pub(crate) struct LogEntryParams {
+    entry: LogEntry,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LogEntry {
+    /// `network`, `security`, `violation`, `worker`, ...
+    #[serde(default)]
+    source: String,
+    /// `verbose`, `info`, `warning` or `error`, which upstream passes on as the message's type.
+    #[serde(default)]
+    level: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    line_number: Option<u64>,
+    /// Milliseconds since the Unix epoch, as the console's own timestamps.
+    #[serde(default)]
+    timestamp: f64,
+    #[serde(default)]
+    args: Vec<HeldObject>,
+}
+
+/// A remote object a log entry holds, by id.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeldObject {
+    #[serde(default)]
+    object_id: Option<String>,
+}
+
+impl LogEntryParams {
+    /// Whether the page logged it: upstream drops what a worker logged, which reaches it as the
+    /// worker's own console.
+    pub(crate) fn logged_by_page(&self) -> bool {
+        self.entry.source != "worker"
+    }
+
+    /// When the browser logged it.
+    pub(crate) fn timestamp(&self) -> f64 {
+        self.entry.timestamp
+    }
+
+    /// The remote objects it holds, which upstream releases.
+    pub(crate) fn argument_objects(&self) -> Vec<String> {
+        self.entry
+            .args
+            .iter()
+            .filter_map(|held| held.object_id.clone())
+            .collect()
+    }
+}
+
 /// `Runtime.consoleAPICalled`, reduced to what a message needs.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -346,6 +404,24 @@ impl ConsoleMessage {
             text: text.join(" "),
             location,
             timestamp: params.timestamp,
+        }
+    }
+
+    /// Upstream's `_onLogEntryAdded`: the entry's level as the type and its text, no arguments,
+    /// and the entry's URL and line, column 0.
+    pub(crate) fn from_log_entry(target: TargetId, params: LogEntryParams) -> Self {
+        let entry = params.entry;
+        Self {
+            worker: None,
+            target,
+            kind: entry.level,
+            text: entry.text,
+            location: Location {
+                url: entry.url.unwrap_or_default(),
+                line_number: entry.line_number.unwrap_or(0),
+                column_number: 0,
+            },
+            timestamp: entry.timestamp,
         }
     }
 }
@@ -507,7 +583,7 @@ mod tests {
     use browseros_core::TargetId;
     use serde_json::json;
 
-    use super::{ConsoleMessage, ConsoleParams, ExceptionParams, PageError};
+    use super::{ConsoleMessage, ConsoleParams, ExceptionParams, LogEntryParams, PageError};
 
     fn target() -> TargetId {
         TargetId("T".to_owned())
@@ -607,6 +683,36 @@ mod tests {
             let error = PageError::from_params(target(), thrown);
             assert_eq!((error.name.as_str(), error.message.as_str()), ("", message));
         }
+        Ok(())
+    }
+
+    /// Upstream's `_onLogEntryAdded`: the level as the type, the text, the entry's URL and line
+    /// with column 0, and nothing from a worker.
+    #[test]
+    fn tests_that_a_log_entry_reads_as_upstreams_console_message() -> Result<(), serde_json::Error>
+    {
+        let blocked: LogEntryParams = serde_json::from_value(json!({ "entry": {
+            "source": "network", "level": "error",
+            "text": "Access to fetch at 'http://b.test/' from origin 'http://a.test' has been blocked by CORS policy",
+            "url": "http://b.test/", "lineNumber": 4, "timestamp": 1_700_000_000_123.5,
+            "args": [{ "type": "object", "objectId": "held" }],
+        } }))?;
+        assert!(blocked.logged_by_page());
+        assert_eq!(blocked.argument_objects(), ["held"]);
+        let message = ConsoleMessage::from_log_entry(target(), blocked);
+        assert_eq!(
+            (message.kind.as_str(), message.location.url.as_str()),
+            ("error", "http://b.test/")
+        );
+        assert!(message.text.contains("CORS policy"));
+        assert_eq!(
+            (message.location.line_number, message.location.column_number),
+            (4, 0)
+        );
+        let worker: LogEntryParams = serde_json::from_value(json!({ "entry": {
+            "source": "worker", "level": "info", "text": "w", "timestamp": 1.0,
+        } }))?;
+        assert!(!worker.logged_by_page());
         Ok(())
     }
 }

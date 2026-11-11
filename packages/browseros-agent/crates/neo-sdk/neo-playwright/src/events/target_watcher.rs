@@ -54,13 +54,14 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, MissedTickBehavior};
 
+use crate::events::Fence;
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
 use crate::events::frame_lifecycle::FrameLifecycleTracker;
 use crate::events::page_event::{
     BindingCalled, ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened,
-    DownloadStarted, ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent,
-    WindowKind,
+    DownloadStarted, ExceptionParams, FileChooserOpened, LogEntryParams, OpenedPage, PageError,
+    PageEvent, WindowKind,
 };
 use crate::events::{PageEventKind, WatcherProgress, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
@@ -70,6 +71,11 @@ pub(crate) const BINDING_NAME: &str = "__playwright__binding__";
 
 /// The event a call of [`BINDING_NAME`] arrives as, on a targeted channel of its own.
 pub(crate) const BINDING_CALLED: &str = "Runtime.bindingCalled";
+
+/// A browser log entry (a CORS failure, a CSP violation, an intervention), on a targeted
+/// channel: `addScriptTag` takes the method there too, and a targeted method leaves the
+/// broadcast. Upstream's `crPage` turns each one not from a worker into a console message.
+pub(crate) const LOG_ENTRY_ADDED: &str = "Log.entryAdded";
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
 /// click that opened it (build-design graft 7).
@@ -423,7 +429,12 @@ impl Watcher {
         // that arrived before this watcher subscribed, including the binding stream.
         let (mut events, before) = self.browser.cdp_events_counted();
         let (mut bindings, calls_before) = self.browser.cdp_events_targeted_counted(BINDING_CALLED);
-        self.progress.start(before, calls_before);
+        let (mut logs, logs_before) = self.browser.cdp_events_targeted_counted(LOG_ENTRY_ADDED);
+        self.progress.start(Fence {
+            events: before,
+            calls: calls_before,
+            logs: logs_before,
+        });
         let mut tick = time::interval(TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
@@ -451,6 +462,12 @@ impl Watcher {
                     self.drain(&mut events).await;
                     self.binding_called(call).await;
                     self.progress.call_handled();
+                }
+                Some(entry) = logs.recv() => {
+                    // Every event sent before the entry, the console messages among them.
+                    self.drain(&mut events).await;
+                    self.log_entry(entry).await;
+                    self.progress.log_handled();
                 }
                 Some(request) = requests.recv() => {
                     // Initial synchronous page facts need attachments even for tabs the
@@ -539,6 +556,42 @@ impl Watcher {
     }
 
     /// Records a call of [`BINDING_NAME`] on a tab where some run exposes a binding.
+    /// Records a browser log entry as upstream's `_onLogEntryAdded` emits it: a console message
+    /// of the entry's level, with no arguments, unless a worker logged it. An entry `Log.enable`
+    /// replayed from before Neo enabled the domain is not news (`EventHub::log_entry_is_new`).
+    async fn log_entry(&mut self, event: CdpEvent) {
+        let Some(session) = event.session_id else {
+            return;
+        };
+        let Some(params) = parse::<LogEntryParams>(event.params) else {
+            return;
+        };
+        // Upstream releases the entry's argument objects, which it does not pass on.
+        let held = params.argument_objects();
+        if !held.is_empty() {
+            let objects = self.browser.protocol_session(session.clone());
+            tokio::spawn(async move {
+                for object in held {
+                    let _released = objects
+                        .send_value("Runtime.releaseObject", json!({ "objectId": object }))
+                        .await;
+                }
+            });
+        }
+        if !params.logged_by_page()
+            || !self
+                .writer
+                .hub()
+                .log_entry_is_new(&session, params.timestamp())
+        {
+            return;
+        }
+        if let Some(target) = self.wanted(&session, PageEventKind::Console).await {
+            let message = ConsoleMessage::from_log_entry(target, params);
+            self.writer.record(PageEvent::Console(message));
+        }
+    }
+
     async fn binding_called(&mut self, event: CdpEvent) {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]

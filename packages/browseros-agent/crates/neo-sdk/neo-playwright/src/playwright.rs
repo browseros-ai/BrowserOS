@@ -9,7 +9,9 @@ use serde_json::Value;
 use tokio::time;
 
 use crate::action::action_op;
-use crate::events::{BINDING_CALLED, EventHub, Fence, TargetWatcher, WatcherProgress, event_op};
+use crate::events::{
+    BINDING_CALLED, EventHub, Fence, LOG_ENTRY_ADDED, TargetWatcher, WatcherProgress, event_op,
+};
 use crate::expect::expect_op;
 use crate::input::input_op;
 use crate::op::{Op, OpKind};
@@ -223,6 +225,7 @@ impl Playwright {
         let fence = Fence {
             events: self.browser.cdp_events_broadcast(),
             calls: self.browser.cdp_events_targeted_delivered(BINDING_CALLED),
+            logs: self.browser.cdp_events_targeted_delivered(LOG_ENTRY_ADDED),
         };
         let ordered = async {
             self.progress.reached(fence).await;

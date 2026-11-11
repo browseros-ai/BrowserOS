@@ -54,5 +54,5 @@ pub(crate) use page_event::PageEvent;
 pub(crate) use run_downloads::RunDownloads;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
-pub(crate) use target_watcher::{BINDING_CALLED, BINDING_NAME, TargetWatcher};
+pub(crate) use target_watcher::{BINDING_CALLED, BINDING_NAME, LOG_ENTRY_ADDED, TargetWatcher};
 pub(crate) use watcher_progress::{Fence, WatcherProgress};

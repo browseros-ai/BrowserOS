@@ -9,7 +9,7 @@ use std::path::{self, Path, PathBuf};
 use std::pin::pin;
 use std::{io, slice};
 
-use browseros_core::{CoreError, ProtocolSession, TabId};
+use browseros_core::{CoreError, ProtocolSession, SessionId, TabId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::fs;
@@ -249,6 +249,9 @@ async fn subscription(
             let event = page_event(scope, event)?;
             let page = handle.tab();
             let admitted = scope.admit(pw.browser(), page).await?;
+            if event == PageEventKind::Console {
+                enable_log(pw, scope, &admitted.session.session_id).await;
+            }
             Ok(Subscription::Page {
                 tab: page,
                 target: admitted.session.target_id.clone(),
@@ -260,6 +263,28 @@ async fn subscription(
             PageEventKind::context(event).ok_or_else(|| context_event(scope, event))?,
         )),
         None => Err(context_event(scope, event)),
+    }
+}
+
+/// Enables `Log` on a page's session for its first console listener or wait, as upstream's
+/// `crPage` enables it on every page: a browser log entry (a CORS failure, say) is a console
+/// message too (CM-008). The watcher passes on only what the page logs from now on
+/// (`EventHub::enable_log`). Best effort: a page that refuses it keeps its console API messages.
+async fn enable_log(pw: &Playwright, scope: &OpScope<'_>, session: &SessionId) {
+    let hub = pw.events();
+    if !hub.enable_log(session) {
+        return;
+    }
+    let enabled = pw
+        .browser()
+        .protocol_session(session.clone())
+        .send_value("Log.enable", json!({}))
+        .await;
+    if let Err(error) = enabled {
+        hub.log_enable_failed(session);
+        scope.log(format!(
+            "browser log entries stay off on this page: {error}"
+        ));
     }
 }
 
