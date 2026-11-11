@@ -40,7 +40,8 @@ impl HostedStack {
             .await
             .map_err(HostedError::from_error)?;
         // As the sidecar: the trace writer masks with a set nothing registers into, and the
-        // second set is retained for the shared housekeeping schedule. Neither masks a run.
+        // second set is the one housekeeping expires. Neither masks a run. The hosted stack
+        // serves no host API, so it needs none of the sidecar's `Privacy`.
         let unmasked = Arc::new(SecretSet::new(SecretSetConfig::default()));
         let redactor = Redactor::new(unmasked, RedactionLimits::default());
         let trace = neo_trace::spawn_writer(
