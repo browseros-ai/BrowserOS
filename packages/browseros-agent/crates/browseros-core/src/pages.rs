@@ -12,7 +12,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tokio::{sync::Mutex, time::sleep};
 use tracing::warn;
@@ -96,14 +99,36 @@ struct PageState {
     // list. Only these get focus emulation on attach, so an adopted user tab keeps
     // its real focus state (#2778).
     agent_created: HashSet<PageId>,
+    /// The listing (see [`PageManager::listings`]) each page's entry is as fresh as: the one that
+    /// last wrote it, or, for a page registered from core's own create reply, the last one
+    /// started before that registration. A listing numbered at or below this may have been
+    /// answered before the browser state the entry holds, so it neither prunes nor rewrites it.
+    fresh_as_of: HashMap<PageId, u64>,
     connection_epoch: u64,
     next_page_id: u32,
+}
+
+impl PageState {
+    /// Whether `page`'s entry predates listing `listing`, whose reply may then prune or rewrite
+    /// it. An entry with no listing number (one `update_from_tab` wrote) predates every listing.
+    fn predates(&self, page: &PageId, listing: u64) -> bool {
+        self.fresh_as_of
+            .get(page)
+            .is_none_or(|&as_of| as_of < listing)
+    }
 }
 
 pub struct PageManager {
     cdp: Arc<dyn CdpConnection>,
     hooks: PageManagerHooks,
     file_transfers: Option<Arc<crate::file_transfers::TransferState>>,
+    /// Numbers each listing before its `Browser.getTabs` goes out. A listing's reply is applied
+    /// only once the listing gets `state`, after any number of other replies were: one answered
+    /// before a concurrent `Browser.createTab` but applied after that creation registered its
+    /// tab used to prune the new page as closed, so the creation failed `PageTargetChanged`
+    /// (a run's first `context.newPage` reported target closed). The numbers let a listing tell
+    /// which entries are newer than its reply ([`PageState::fresh_as_of`]).
+    listings: AtomicU64,
     /// Never held across a send on `cdp`, because a send refused as gone takes this lock to
     /// forget its session (see `BrowserSession::forget_session`).
     state: Mutex<PageState>,
@@ -121,6 +146,7 @@ impl PageManager {
             cdp,
             hooks,
             file_transfers: None,
+            listings: AtomicU64::new(0),
         }
     }
 
@@ -143,6 +169,7 @@ impl PageManager {
         guard: Option<crate::connection::EpochGuard>,
     ) -> Result<Vec<PageInfo>, CoreError> {
         self.ensure_connected_with_epoch(guard.as_ref()).await?;
+        let listing = self.listings.fetch_add(1, Ordering::SeqCst) + 1;
         let root = ProtocolSession::root(self.cdp.clone()).with_epoch_guard(guard.clone());
         let result: NativeTabs = root.send("Browser.getTabs", json!({})).await?;
         let tabs = result
@@ -161,12 +188,18 @@ impl PageManager {
             guard.check(self.cdp.as_ref())?;
         }
         let mut seen = Vec::<TargetId>::new();
+        let mut listed = Vec::<PageId>::new();
         for tab in tabs {
             let target_id = TargetId(tab.target_id.clone());
             seen.push(target_id.clone());
             let existing_page_id = find_by_target(&state.pages, &target_id)
                 .or_else(|| find_by_tab(&state.pages, TabId(tab.tab_id)));
             if let Some(page_id) = existing_page_id {
+                listed.push(page_id.clone());
+                if !state.predates(&page_id, listing) {
+                    continue;
+                }
+                state.fresh_as_of.insert(page_id.clone(), listing);
                 let mut stale_target = None;
                 if let Some(existing) = state.pages.get_mut(&page_id) {
                     if existing.target_id != target_id {
@@ -181,6 +214,8 @@ impl PageManager {
             } else {
                 let page_id = PageId(state.next_page_id);
                 state.next_page_id += 1;
+                listed.push(page_id.clone());
+                state.fresh_as_of.insert(page_id.clone(), listing);
                 state
                     .pages
                     .insert(page_id.clone(), page_info_from_tab(page_id, tab, None));
@@ -192,19 +227,27 @@ impl PageManager {
             let Some(info) = state.pages.get(&page_id) else {
                 continue;
             };
-            if !seen.contains(&info.target_id) {
+            if !seen.contains(&info.target_id) && state.predates(&page_id, listing) {
                 let info = state.pages.remove(&page_id);
                 if let Some(info) = info {
                     state.sessions.remove(&info.target_id);
                     state.agent_created.remove(&page_id);
+                    state.fresh_as_of.remove(&page_id);
                     let after = self.hooks.on_page_removed.as_ref().map(|hook| hook(&info));
                     detached.push((page_id, info.tab_id, info.target_id, after));
                 }
             }
         }
 
-        let mut pages = state.pages.values().cloned().collect::<Vec<_>>();
-        pages.sort_by_key(|page| page.page_id.0);
+        // What this reply listed, not the whole cache: an entry newer than the reply stays
+        // cached, but a tab the reply did not show is not reported open by it, so a caller
+        // comparing listings (the SDK's tab watch) still learns of a close.
+        listed.sort_by_key(|page| page.0);
+        listed.dedup();
+        let pages = listed
+            .iter()
+            .filter_map(|page_id| state.pages.get(page_id).cloned())
+            .collect::<Vec<_>>();
         drop(state);
         for (page_id, tab, target, after) in detached {
             if let Some(after) = after {
@@ -608,6 +651,10 @@ impl PageManager {
         }
         state.pages.insert(page_id.clone(), original.clone());
         state.agent_created.insert(page_id.clone());
+        // Any listing started before now may have been answered before this tab existed.
+        state
+            .fresh_as_of
+            .insert(page_id.clone(), self.listings.load(Ordering::SeqCst));
         Ok(PageCreation { original, guard })
     }
 
@@ -672,6 +719,7 @@ impl PageManager {
         };
         state.sessions.remove(&removed.target_id);
         state.agent_created.remove(&page_id);
+        state.fresh_as_of.remove(&page_id);
         let after = self
             .hooks
             .on_page_removed
@@ -1157,27 +1205,74 @@ mod tests {
         Ok(())
     }
 
-    /// Holds the close reply while another listing replaces or removes the cached binding.
-    struct ClosingConnection {
+    /// Holds each call of the named methods until the test lets its scripted reply through, so
+    /// a test can order that reply after other work: a close's after another listing, a
+    /// listing's after a creation.
+    struct HoldingConnection {
         inner: std::sync::Arc<TestConnection>,
+        holds: Vec<Hold>,
+    }
+
+    /// One held method: `sent` fires as each call goes out, and each `resume` answers one.
+    struct Hold {
+        method: &'static str,
         sent: tokio::sync::Notify,
         resume: tokio::sync::Notify,
     }
 
-    impl crate::CdpConnection for ClosingConnection {
+    impl HoldingConnection {
+        fn new(inner: std::sync::Arc<TestConnection>, methods: &[&'static str]) -> Self {
+            let holds = methods
+                .iter()
+                .map(|&method| Hold {
+                    method,
+                    sent: tokio::sync::Notify::new(),
+                    resume: tokio::sync::Notify::new(),
+                })
+                .collect();
+            Self { inner, holds }
+        }
+
+        fn hold(&self, method: &str) -> Result<&Hold, String> {
+            self.holds
+                .iter()
+                .find(|hold| hold.method == method)
+                .ok_or_else(|| format!("{method} is not held"))
+        }
+
+        async fn wait_if_held(&self, method: &str) {
+            if let Ok(hold) = self.hold(method) {
+                hold.sent.notify_one();
+                hold.resume.notified().await;
+            }
+        }
+    }
+
+    impl crate::CdpConnection for HoldingConnection {
         fn send<'a>(
             &'a self,
             method: &'a str,
             params: Value,
             session: Option<&'a crate::SessionId>,
         ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
-            if method != "Browser.closeTab" {
-                return self.inner.send(method, params, session);
-            }
             Box::pin(async move {
-                self.sent.notify_one();
-                self.resume.notified().await;
-                Ok(json!({}))
+                self.wait_if_held(method).await;
+                self.inner.send(method, params, session).await
+            })
+        }
+        // A creation's readback is guarded by its epoch, so it goes out here.
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a crate::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
+            Box::pin(async move {
+                self.wait_if_held(method).await;
+                self.inner
+                    .send_at_epoch(expected, method, params, session)
+                    .await
             })
         }
         fn send_raw_json<'a>(
@@ -1216,14 +1311,15 @@ mod tests {
             } else {
                 vec![]
             };
-            let connection = Arc::new(ClosingConnection {
-                inner: TestConnection::new([
+            let connection = Arc::new(HoldingConnection::new(
+                TestConnection::new([
                     ("Browser.getTabs", json!({"tabs":[tab_json(7,"T1")]})),
                     ("Browser.getTabs", json!({"tabs":second})),
+                    ("Browser.closeTab", json!({})),
                 ]),
-                sent: tokio::sync::Notify::new(),
-                resume: tokio::sync::Notify::new(),
-            });
+                &["Browser.closeTab"],
+            ));
+            let close = connection.hold("Browser.closeTab")?;
             let removed = Arc::new(Mutex::new(Vec::new()));
             let before = Arc::clone(&removed);
             let after = Arc::clone(&removed);
@@ -1248,7 +1344,7 @@ mod tests {
             );
             let first = manager.list().await?.remove(0);
             let replace = async {
-                connection.sent.notified().await;
+                close.sent.notified().await;
                 let current = manager.list().await?;
                 if let Some(info) = current.first() {
                     assert_eq!(info.page_id, first.page_id);
@@ -1259,7 +1355,7 @@ mod tests {
                         .sessions
                         .insert(info.target_id.clone(), "current-session".into());
                 }
-                connection.resume.notify_one();
+                close.resume.notify_one();
                 Ok::<_, crate::CoreError>(())
             };
             let (closed, changed) = tokio::join!(manager.close(first.page_id.clone()), replace);
@@ -1276,6 +1372,90 @@ mod tests {
             assert!(!manager.state.lock().await.sessions.contains_key(&target));
             assert!(connection.is_connected());
         }
+        Ok(())
+    }
+
+    /// The race behind a run's first `context.newPage` failing target closed when several tasks
+    /// open tabs at once: the SDK's tab watch lists the tabs on every new page target, so one
+    /// listing's reply, answered before another task's `Browser.createTab`, was applied after
+    /// that creation registered its tab. It pruned the new page as closed, and the creation's
+    /// readback found it gone (`PageTargetChanged`).
+    #[tokio::test]
+    async fn a_listing_answered_before_a_creation_keeps_the_page_it_registered()
+    -> Result<(), Box<dyn Error>> {
+        use std::sync::{Arc, Mutex};
+        let connection = Arc::new(HoldingConnection::new(
+            TestConnection::new([
+                // The first listing's reply, from before the new tab existed.
+                ("Browser.getTabs", json!({ "tabs": [] })),
+                (
+                    "Browser.createTab",
+                    json!({ "tab": tab_json(7, "target-7") }),
+                ),
+                (
+                    "Browser.getTabInfo",
+                    json!({ "tab": tab_json(7, "target-7") }),
+                ),
+                // A listing sent after the creation, once the tab has closed.
+                ("Browser.getTabs", json!({ "tabs": [] })),
+            ]),
+            &["Browser.getTabs", "Browser.getTabInfo"],
+        ));
+        let detached = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::clone(&detached);
+        let manager = PageManager::new(
+            connection.clone(),
+            PageManagerHooks {
+                on_page_detached: Some(Arc::new(move |page, _, _| {
+                    hook.lock()
+                        .unwrap_or_else(|error| panic!("hook mutex poisoned: {error}"))
+                        .push(page);
+                })),
+                ..PageManagerHooks::default()
+            },
+        );
+        let tabs = connection.hold("Browser.getTabs")?;
+        let readback = connection.hold("Browser.getTabInfo")?;
+
+        let listing = async {
+            let listed = manager.list().await;
+            readback.resume.notify_one();
+            listed
+        };
+        let creation = async {
+            tabs.sent.notified().await;
+            manager.new_page_info(NewPageOptions::default()).await
+        };
+        // Once the creation has registered its tab and asked for the readback, the listing's
+        // older reply arrives, and the readback is answered only after it was applied.
+        let release = async {
+            readback.sent.notified().await;
+            tabs.resume.notify_one();
+        };
+        let (listed, created, ()) = tokio::join!(listing, creation, release);
+        let (creation, _) =
+            created.map_err(|error| format!("the creation failed after the listing: {error}"))?;
+        let page = creation.original.page_id;
+        assert!(
+            listed?.is_empty(),
+            "a reply from before the tab does not report it open"
+        );
+        assert!(manager.get_info(page.clone()).await.is_some());
+        assert!(manager.is_agent_created(&page).await);
+
+        tabs.resume.notify_one();
+        assert!(manager.list().await?.is_empty());
+        assert!(
+            manager.get_info(page.clone()).await.is_none(),
+            "a listing sent after the creation still prunes the closed tab"
+        );
+        assert_eq!(
+            *detached
+                .lock()
+                .unwrap_or_else(|error| panic!("hook mutex poisoned: {error}")),
+            [page],
+            "only the later listing detached the page"
+        );
         Ok(())
     }
 }
