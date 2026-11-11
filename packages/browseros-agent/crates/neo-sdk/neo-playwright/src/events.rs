@@ -43,6 +43,7 @@ mod run_downloads;
 mod run_events;
 mod subscription;
 mod target_watcher;
+mod watcher_progress;
 
 pub(crate) use event_hub::EventHub;
 pub(crate) use event_op::EventOp;
@@ -52,3 +53,4 @@ pub(crate) use run_downloads::RunDownloads;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
 pub(crate) use target_watcher::TargetWatcher;
+pub(crate) use watcher_progress::WatcherProgress;

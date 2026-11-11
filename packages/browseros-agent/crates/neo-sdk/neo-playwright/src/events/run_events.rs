@@ -3,17 +3,34 @@
 //! the run wants an event, to decide what to record and which dialogs to hold.
 
 use std::collections::HashMap;
+use std::pin::pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use browseros_core::file_transfers::FileChooserInterception;
 use browseros_core::{TabId, TargetId};
+use tokio::sync::Notify;
+use tokio::time;
 
 use crate::events::{ListenerKey, PageEventKind, Subscription};
+
+/// How long an op ending with events still unread waits for a pump to start, when none is in
+/// flight: the prelude calls the next `events.next` as soon as it handled the last, so a pump
+/// that does not come within this has stopped, and the op stops waiting for it.
+const PUMP_GRACE: Duration = Duration::from_millis(200);
 
 /// Behind `RunState`. A std mutex, held for a map update and never across an await.
 #[derive(Debug, Default)]
 pub(crate) struct RunEvents {
     inner: Mutex<Inner>,
+    /// Woken when a pump starts or ends, or moves a listener's place.
+    changed: Notify,
+    /// How many `events.next` replies the run's pump has been given. Every reply envelope
+    /// carries it, and the prelude holds an op's result until it has dispatched that many, so a
+    /// pump reply that completed first runs its listeners first, whatever order the host's
+    /// promises settle in (`RunState::pump_replies`).
+    pump_replies: AtomicU64,
 }
 
 #[derive(Debug, Default)]
@@ -25,6 +42,22 @@ struct Inner {
     /// `waitForEvent` ops in flight, by what they wait for. Counted, because two may wait for
     /// the same thing at once.
     waiting: HashMap<Subscription, usize>,
+    /// `events.next` calls in flight.
+    pumps: usize,
+}
+
+/// Marks one `events.next` in flight until dropped.
+pub(crate) struct Pumping<'run> {
+    events: &'run RunEvents,
+}
+
+impl Drop for Pumping<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.events.lock();
+        inner.pumps = inner.pumps.saturating_sub(1);
+        drop(inner);
+        self.events.changed.notify_waiters();
+    }
 }
 
 #[derive(Debug)]
@@ -124,12 +157,64 @@ impl RunEvents {
     }
 
     /// Moves each listener's place forward to the seq the pump read it up to. A listener removed
-    /// meanwhile stays removed.
-    pub(crate) fn advance(&self, read: &[(Subscription, u64)]) {
+    /// meanwhile stays removed. `replying` says the pump answers with what it read: that reply
+    /// is counted before an op waiting on these places wakes (`taken_through`), so the op's own
+    /// reply never carries a count that misses it. A count whose reply then fails still ends as
+    /// one the prelude dispatched, an error.
+    pub(crate) fn advance(&self, read: &[(Subscription, u64)], replying: bool) {
         let mut inner = self.lock();
         for (subscription, seq) in read {
             if let Some(listening) = inner.listening.get_mut(subscription) {
                 listening.after = listening.after.max(*seq);
+            }
+        }
+        if replying {
+            self.pump_replies.fetch_add(1, Ordering::AcqRel);
+        }
+        drop(inner);
+        self.changed.notify_waiters();
+    }
+
+    /// The `events.next` replies given so far.
+    pub(crate) fn pump_replies(&self) -> u64 {
+        self.pump_replies.load(Ordering::Acquire)
+    }
+
+    /// Counts one `events.next` in flight until the returned guard drops.
+    pub(crate) fn pumping(&self) -> Pumping<'_> {
+        self.lock().pumps += 1;
+        self.changed.notify_waiters();
+        Pumping { events: self }
+    }
+
+    /// Whether the run has a `page.on` or `context.on` listener.
+    pub(crate) fn has_listeners(&self) -> bool {
+        !self.lock().listening.is_empty()
+    }
+
+    /// Returns once the pump read every listener past log seq `head`, so whatever it found there
+    /// is on its way to the script ahead of anything that ends later. With no pump in flight it
+    /// waits [`PUMP_GRACE`] for one, then gives up: a stopped pump never holds an op. The caller
+    /// bounds the whole wait.
+    pub(crate) async fn taken_through(&self, head: u64) {
+        loop {
+            let mut changed = pin!(self.changed.notified());
+            changed.as_mut().enable();
+            let pumping = {
+                let inner = self.lock();
+                if inner
+                    .listening
+                    .values()
+                    .all(|listening| listening.after >= head)
+                {
+                    return;
+                }
+                inner.pumps > 0
+            };
+            if pumping {
+                changed.await;
+            } else if time::timeout(PUMP_GRACE, changed).await.is_err() {
+                return;
             }
         }
     }
@@ -141,9 +226,13 @@ impl RunEvents {
 
 #[cfg(test)]
 mod tests {
-    use browseros_core::{TabId, TargetId};
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use super::RunEvents;
+    use browseros_core::{TabId, TargetId};
+    use tokio::time;
+
+    use super::{PUMP_GRACE, RunEvents};
     use crate::events::{ListenerKey, PageEventKind, Subscription};
 
     fn dialogs(page: u32, target: &str) -> Subscription {
@@ -174,7 +263,7 @@ mod tests {
     fn tests_that_listening_again_keeps_the_first_attachment() {
         let events = RunEvents::default();
         events.listen(dialogs(1, "T"), 100, 0);
-        events.advance(&[(dialogs(1, "T"), 9)]);
+        events.advance(&[(dialogs(1, "T"), 9)], false);
         events.listen(dialogs(1, "T"), 500, 0);
         let listeners = events.listeners();
         assert_eq!(listeners.len(), 1);
@@ -198,5 +287,56 @@ mod tests {
         assert!(events.wants(&TargetId("U".to_owned()), PageEventKind::Dialog));
         events.unlisten(&ListenerKey::ContextPage);
         assert_eq!(events.listeners().len(), 1, "the context listener went");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_op_waits_for_the_pump_in_flight_to_take_its_events_and_count_its_reply()
+    {
+        let events = Arc::new(RunEvents::default());
+        events.listen(dialogs(1, "T"), 0, 3);
+        let pumping = events.pumping();
+        let waiter = tokio::spawn({
+            let events = Arc::clone(&events);
+            async move {
+                events.taken_through(7).await;
+                events.pump_replies()
+            }
+        });
+        time::sleep(PUMP_GRACE * 4).await;
+        assert!(
+            !waiter.is_finished(),
+            "a pump in flight is waited for past the grace"
+        );
+        events.advance(&[(dialogs(1, "T"), 7)], true);
+        let replies = time::timeout(Duration::from_secs(1), waiter).await;
+        assert!(
+            matches!(replies, Ok(Ok(1))),
+            "the reply is counted by the time the op wakes: {replies:?}"
+        );
+        drop(pumping);
+        events.advance(&[(dialogs(1, "T"), 9)], false);
+        assert_eq!(
+            events.pump_replies(),
+            1,
+            "a read with nothing to reply counts none"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_no_pump_holds_an_op_only_for_the_grace() {
+        let events = RunEvents::default();
+        events.listen(dialogs(1, "T"), 0, 3);
+        let started = time::Instant::now();
+        events.taken_through(7).await;
+        assert_eq!(started.elapsed(), PUMP_GRACE);
+        events.listen(dialogs(2, "U"), 0, 9);
+        events.unlisten(&dialogs(1, "T").key());
+        let started = time::Instant::now();
+        events.taken_through(7).await;
+        assert_eq!(
+            started.elapsed(),
+            Duration::ZERO,
+            "every listener is past the head"
+        );
     }
 }

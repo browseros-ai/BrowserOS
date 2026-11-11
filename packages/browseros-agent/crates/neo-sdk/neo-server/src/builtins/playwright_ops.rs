@@ -203,7 +203,11 @@ impl Method for PlaywrightOp {
         let env = OpCtxEnv::new(op);
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
-            .await?;
+            .await;
+        // Read once the op ended, failed or not: by then the pump replies that carry the events
+        // before it are counted (`Playwright::events_before_reply`).
+        op.answer_after_pump(env.run_state().pump_replies());
+        let result = result?;
         pages.report(op, page, &result);
         let value = result.map_err(|error| leaf_error(&error))?;
         self.events.release(op, value)

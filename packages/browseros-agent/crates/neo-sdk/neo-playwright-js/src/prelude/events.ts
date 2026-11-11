@@ -18,7 +18,7 @@
  * attached after the pump read past an event still gets it if it is newer than its own stamp.
  * A reply lost when the host cancels the pump at the run's end loses its events with the run.
  */
-import { invoke, invokeObserved } from './bridge'
+import { invoke, invokeObserved, pumpDispatched } from './bridge'
 import { trackChooserSetup } from './chooser-setup'
 import type { EventEmitter } from './emitter'
 import { abortedError, prefixed, unsupportedError } from './errors'
@@ -357,27 +357,26 @@ export class EventHub {
   private async pump(): Promise<void> {
     try {
       while (this.listening > 0) {
-        const {
-          value: { events },
-          observed,
-        } = await invokeObserved(
-          'events.next',
-          { api: 'events.next', timeoutMs: 0 },
-          {},
-          ({ events }) => this.stageBatch(events),
-        )
-        // The listener stages host-approved closes. Delivering records in log order makes
-        // earlier callbacks observe the page before its close, even within the same reply.
+        // Delivered as the reply is decoded. Rust holds an op that ends until its events are in
+        // a counted pump reply (`events_before_reply`), and the bridge holds that op's result
+        // until this many replies were dispatched (the pump ledger), so the listeners run before
+        // the script resumes past the op, as upstream's do.
+        let delivered = false
         try {
-          for (const event of events) this.deliver(event, observed)
-        } finally {
-          try {
-            this.settleCloses(observed)
-          } finally {
-            const batch = this.batch
-            this.batch = null
-            batch?.finish()
-          }
+          await invokeObserved(
+            'events.next',
+            { api: 'events.next', timeoutMs: 0 },
+            {},
+            ({ events }, observed) => {
+              delivered = true
+              this.deliverBatch(events, observed)
+            },
+          )
+        } catch (error) {
+          // Rust counted the reply it meant to give, and this error is what came instead:
+          // counting it keeps the ops held on it from waiting out their bound.
+          if (!delivered) pumpDispatched()
+          throw error
         }
       }
     } catch {
@@ -385,6 +384,30 @@ export class EventHub {
       // restarts with the next first listener.
     } finally {
       this.pumping = false
+    }
+  }
+
+  /**
+   * One pump reply's records, in log order, so earlier callbacks observe the page before its
+   * close, even within the same reply. Its host-approved closes are staged first, before waits
+   * can consume them, and settled after.
+   */
+  private deliverBatch(
+    events: EventRecord[],
+    observed: Observation | null,
+  ): void {
+    this.stageBatch(events)
+    try {
+      for (const event of events) this.deliver(event, observed)
+    } finally {
+      try {
+        this.settleCloses(observed)
+      } finally {
+        const batch = this.batch
+        this.batch = null
+        batch?.finish()
+        pumpDispatched()
+      }
     }
   }
 

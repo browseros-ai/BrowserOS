@@ -74,6 +74,14 @@ pub trait CdpConnection: Send + Sync {
     /// through a router it owns, so the channel stays open for as long as the transport lives.
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent>;
 
+    /// How many events [`Self::events`] has carried so far. Read after a reply, it counts every
+    /// event that arrived before that reply, so a reader that numbers what it took knows when
+    /// it has seen them all. A transport that does not count answers 0, and such a reader never
+    /// waits.
+    fn events_broadcast(&self) -> u64 {
+        0
+    }
+
     fn is_connected(&self) -> bool;
     fn connection_epoch(&self) -> u64;
 }
@@ -128,6 +136,10 @@ impl CdpConnection for CdpClient {
 
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
         CdpClient::events_targeted(self, method)
+    }
+
+    fn events_broadcast(&self) -> u64 {
+        CdpClient::events_broadcast(self)
     }
 
     fn is_connected(&self) -> bool {

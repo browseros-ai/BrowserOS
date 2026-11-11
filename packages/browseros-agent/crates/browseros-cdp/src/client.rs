@@ -105,6 +105,10 @@ struct Inner {
     /// validate under this guard so reused browser IDs cannot reach a replacement.
     sink: Mutex<Option<WsSink>>,
     events_tx: broadcast::Sender<CdpEvent>,
+    /// How many events the reader has put on `events_tx`, ever. The reader handles one message
+    /// at a time, so once a command's reply arrived, every event that came before it is
+    /// counted: a consumer that numbers what its receiver took can tell when it has seen them.
+    events_broadcast: AtomicU64,
     /// The methods consumers took with [`CdpClient::events_targeted`]. The reader offers every
     /// event here first, and broadcasts only what no subscriber took. Kept across reconnects,
     /// so a subscription outlives the socket it started on.
@@ -133,6 +137,7 @@ impl CdpClient {
             pending: Mutex::new(HashMap::new()),
             sink: Mutex::new(None),
             events_tx,
+            events_broadcast: AtomicU64::new(0),
             targeted: TargetedEvents::default(),
             connected: AtomicBool::new(false),
             disconnecting: AtomicBool::new(false),
@@ -316,6 +321,12 @@ impl CdpClient {
 
     pub fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.inner.events_tx.subscribe()
+    }
+
+    /// How many events [`Self::events`] has carried since the client started, across
+    /// reconnects. Read after a reply, it covers every event that arrived before that reply.
+    pub fn events_broadcast(&self) -> u64 {
+        self.inner.events_broadcast.load(Ordering::SeqCst)
     }
 
     pub fn on_event(&self, method: &str) -> EventStream {
@@ -578,6 +589,7 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
     let Some(event) = inner.targeted.deliver(event) else {
         return;
     };
+    inner.events_broadcast.fetch_add(1, Ordering::SeqCst);
     let _ = inner.events_tx.send(event);
 }
 

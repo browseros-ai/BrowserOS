@@ -80,12 +80,18 @@ export async function invoke<Op extends OpName>(
   try {
     const ready = readyChoosers(op)
     if (ready) await ready
-    return (await host().invoke(
+    countPumps()
+    const value = (await host().invoke(
       op,
       { call, ...args },
       signal === undefined ? undefined : { signal },
     )) as OpOutputs[Op]
+    const held = pumpsCaughtUp(op)
+    if (held) await held
+    return value
   } catch (thrown) {
+    const held = pumpsCaughtUp(op)
+    if (held) await held
     throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal)
   }
 }
@@ -104,6 +110,7 @@ export async function invokeObserved<Op extends OpName>(
   try {
     const ready = readyChoosers(op)
     if (ready) await ready
+    countPumps()
     const reply = await host().invoke(
       op,
       { call, ...args },
@@ -116,13 +123,71 @@ export async function invokeObserved<Op extends OpName>(
             onResult(value as OpOutputs[Op], readObservation(observed))),
       },
     )
+    const held = pumpsCaughtUp(op)
+    if (held) await held
     return {
       value: field(reply, 'value') as OpOutputs[Op],
       observed: readObservation(field(reply, 'observed')),
     }
   } catch (thrown) {
+    const held = pumpsCaughtUp(op)
+    if (held) await held
     throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal)
   }
+}
+
+/**
+ * The pump ledger. Rust holds an op that ends until the run's events pump has taken the events
+ * that came before it (`Playwright::events_before_reply`), and every reply envelope says how many
+ * pump replies exist by then (`pumped`). The host settles each op's promise on its own, in no
+ * fixed order, so an op's result could reach the script before the pump reply that carries its
+ * events; the op's result waits here until the pump dispatched that many replies, as upstream's
+ * listeners have run before the call that preceded them resolves. Every counted reply exists,
+ * so the hold ends; it is bounded anyway, for a pump the host cut off at the run's end.
+ */
+const PUMP_HOLD_MS = 1000
+let pumpsNeeded = 0
+let pumpsDispatched = 0
+let countingPumps = false
+const pumpHolds: { needed: number; release: () => void }[] = []
+
+/** Starts reading `pumped` off every reply, once, before the first op is sent. */
+function countPumps(): void {
+  if (countingPumps) return
+  countingPumps = true
+  host().onReply((envelope) => {
+    const pumped = field(envelope, 'pumped')
+    if (typeof pumped === 'number' && pumped > pumpsNeeded) pumpsNeeded = pumped
+  })
+}
+
+/** The events pump dispatched one more of its replies (events.ts). */
+export function pumpDispatched(): void {
+  pumpsDispatched += 1
+  for (const hold of pumpHolds.filter((hold) => hold.needed <= pumpsDispatched))
+    hold.release()
+}
+
+/**
+ * Settles once the pump dispatched every reply the envelopes so far counted; at once when it
+ * has, so an op with nothing to wait for keeps its timing. The event ops are the pump and the
+ * waits themselves, which Rust does not hold either.
+ */
+function pumpsCaughtUp(op: string): Promise<void> | undefined {
+  const needed = pumpsNeeded
+  if (op.startsWith('events.') || pumpsDispatched >= needed) return undefined
+  return new Promise((resolve) => {
+    let cancel = () => {}
+    const release = () => {
+      cancel()
+      const index = pumpHolds.indexOf(hold)
+      if (index >= 0) pumpHolds.splice(index, 1)
+      resolve()
+    }
+    const hold = { needed, release }
+    pumpHolds.push(hold)
+    cancel = startTimer(PUMP_HOLD_MS, release)
+  })
 }
 
 /**

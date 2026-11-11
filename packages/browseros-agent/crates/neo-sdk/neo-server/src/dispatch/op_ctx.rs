@@ -3,6 +3,7 @@
 use std::future::{self, Future};
 use std::marker::PhantomData;
 use std::mem;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_cdp::CdpError;
@@ -112,6 +113,9 @@ pub(super) struct OpState {
     reached: Mutex<Vec<TabId>>,
     /// The script's abort switch for this op (Playwright's `signal`), or its parent's.
     abort: Option<OpAbort>,
+    /// How many event-pump replies the script must have dispatched before it takes this op's
+    /// answer ([`OpCtx::answer_after_pump`]); the reply carries it as `pumped`.
+    after_pump: AtomicU64,
 }
 
 /// A refusal of the door's rules during an op, as it stands as the op's error ([`OpState`]) until
@@ -308,6 +312,18 @@ impl<M> OpCtx<M> {
         }
     }
 
+    /// The script takes this op's answer only once it has dispatched `replies` replies of the
+    /// run's event pump, so the listeners for events that came before the op ran first, as
+    /// upstream's have (sdk-playwright counts them, `RunState::pump_replies`). The door only
+    /// carries the count: the prelude holds the answer (its pump ledger), since the host settles
+    /// each reply's promise on its own and in no fixed order. Raised, never lowered.
+    pub(crate) fn answer_after_pump(&self, replies: u64) {
+        self.core
+            .state
+            .after_pump
+            .fetch_max(replies, Ordering::AcqRel);
+    }
+
     /// Reports a page this op opened, navigated or closed.
     pub(crate) fn report_page(&self, page: &PageRef, change: PageChange) {
         lock(&self.core.state.reports).push(PageReport {
@@ -494,6 +510,7 @@ impl OpState {
             reports: Mutex::new(Vec::new()),
             viewports: Mutex::new(Vec::new()),
             reached: Mutex::new(Vec::new()),
+            after_pump: AtomicU64::new(0),
         })
     }
 
@@ -513,6 +530,11 @@ impl OpState {
     /// When the op, or one of its children, marked itself sent.
     pub(super) fn sent_at(&self) -> Option<EpochMillis> {
         self.sent_at.get().copied()
+    }
+
+    /// What [`OpCtx::answer_after_pump`] last raised it to, 0 when nothing did.
+    pub(super) fn after_pump(&self) -> u64 {
+        self.after_pump.load(Ordering::Acquire)
     }
 
     /// The refusal standing as the op's error, if any.

@@ -1657,6 +1657,35 @@ fn an_abort_after_the_answer_and_a_call_without_a_signal_change_nothing() -> Res
 }
 
 #[test]
+fn bridge_carries_the_pump_replies_an_answer_waits_for() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let bridge = super::Bridge::new(Arc::clone(&run), Arc::clone(&rig.dispatcher));
+        for (input, ending) in [
+            (r#"{"pumped":3}"#, "ok"),
+            (r#"{"pumped":3,"fail":true}"#, "err"),
+        ] {
+            let reply = bridge
+                .answer(bridge.submit("test.echo".into(), input, ""))
+                .await;
+            let wire: Value = serde_json::from_str(&reply)?;
+            assert!(wire.get(ending).is_some(), "{reply}");
+            assert_eq!(wire["pumped"], json!(3), "{reply}");
+        }
+        let reply = bridge
+            .answer(bridge.submit("test.echo".into(), "{}", ""))
+            .await;
+        let wire: Value = serde_json::from_str(&reply)?;
+        assert!(
+            wire.get("pumped").is_none(),
+            "an answer that waits for none says nothing: {reply}"
+        );
+        Ok(())
+    })
+}
+
+#[test]
 fn bridge_serializes_observations_only_with_page_facts() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;

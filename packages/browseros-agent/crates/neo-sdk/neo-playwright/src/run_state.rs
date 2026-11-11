@@ -23,6 +23,16 @@ pub struct RunState {
 }
 
 impl RunState {
+    /// How many `events.next` replies the run's pump has been given. The host reads it as each op
+    /// ends and that op's reply carries it (`pumped`); the prelude holds the op's result until it
+    /// has dispatched as many pump replies, so the listeners for events an op waited on
+    /// (`Playwright::events_before_reply`) run before the script resumes past the op, however the
+    /// host's promises settle. Every reply counted here exists, so that hold always ends.
+    #[must_use]
+    pub fn pump_replies(&self) -> u64 {
+        self.events.pump_replies()
+    }
+
     /// Every download a `download` event handed this run, in the order it first saw each (the
     /// run's download index), as the browser last reported it. The host reads it after the run's
     /// ops drained and before it drops the state, to keep the finished files with the run.

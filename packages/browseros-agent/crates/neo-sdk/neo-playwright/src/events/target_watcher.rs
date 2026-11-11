@@ -49,7 +49,7 @@ use crate::events::page_event::{
     ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened, DownloadStarted,
     ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent, WindowKind,
 };
-use crate::events::{PageEventKind, navigation_event};
+use crate::events::{PageEventKind, WatcherProgress, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
@@ -81,18 +81,22 @@ impl Drop for TargetWatcher {
 
 impl TargetWatcher {
     /// Starts watching `browser`, recording page events through `writer` and frame lifecycles
-    /// into `attach_log`. Outside a tokio runtime there is nothing to run it on, so nothing is
-    /// recorded.
+    /// into `attach_log`, and counting what it handled into `progress`. Outside a tokio runtime
+    /// there is nothing to run it on, so nothing is recorded and no one waits for it.
     pub(crate) fn spawn(
         browser: Arc<BrowserSession>,
         writer: EventWriter,
         attach_log: Arc<FrameAttachLog>,
+        progress: Arc<WatcherProgress>,
     ) -> Self {
-        let task = Handle::try_current().ok().map(|runtime| {
-            let (watcher, found) = Watcher::new(browser, writer, attach_log);
-            runtime.spawn(watcher.run(found))
-        });
-        Self { task }
+        let Ok(runtime) = Handle::try_current() else {
+            progress.stopped();
+            return Self { task: None };
+        };
+        let (watcher, found) = Watcher::new(browser, writer, attach_log, progress);
+        Self {
+            task: Some(runtime.spawn(watcher.run(found))),
+        }
     }
 }
 
@@ -103,6 +107,7 @@ struct Watcher {
     view: BrowserView,
     writer: EventWriter,
     attach_log: Arc<FrameAttachLog>,
+    progress: Arc<WatcherProgress>,
     /// The connection epoch discovery ran for; `None` until it succeeds, and after a lag.
     epoch: Option<u64>,
     /// The tabs the watcher knows.
@@ -262,6 +267,7 @@ impl Watcher {
         browser: Arc<BrowserSession>,
         writer: EventWriter,
         attach_log: Arc<FrameAttachLog>,
+        progress: Arc<WatcherProgress>,
     ) -> (Self, UnboundedReceiver<OpenedPage>) {
         let (found, found_rx) = mpsc::unbounded_channel();
         let watcher = Self {
@@ -269,6 +275,7 @@ impl Watcher {
             browser,
             writer,
             attach_log,
+            progress,
             epoch: None,
             pages: HashMap::new(),
             closed_early: HashSet::new(),
@@ -282,22 +289,31 @@ impl Watcher {
     }
 
     async fn run(mut self, mut found: UnboundedReceiver<OpenedPage>) {
-        // Subscribed before discovery, so no target is created unseen in between.
+        // Subscribed before discovery, so no target is created unseen in between, and before
+        // the count is read, so the count can only include an event this receiver gets.
         let mut events = self.browser.cdp_events();
+        self.progress.start(self.browser.cdp_events_broadcast());
         let mut tick = time::interval(TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             let grace_ends = self.graces.front().map(|grace| grace.ends);
             tokio::select! {
                 received = events.recv() => match received {
-                    Ok(event) => self.handle(event).await,
+                    Ok(event) => {
+                        self.handle(event).await;
+                        self.progress.handled(1);
+                    }
                     // Events were dropped: rediscover, which records what closed meanwhile, and
                     // tell the frame log that commits may be missing.
-                    Err(RecvError::Lagged(_)) => {
+                    Err(RecvError::Lagged(skipped)) => {
                         self.epoch = None;
                         self.attach_log.lost_events();
+                        self.progress.handled(skipped);
                     }
-                    Err(RecvError::Closed) => return,
+                    Err(RecvError::Closed) => {
+                        self.progress.stopped();
+                        return;
+                    }
                 },
                 Some(opened) = found.recv() => self.found(opened),
                 _ = tick.tick() => self.tick().await,
