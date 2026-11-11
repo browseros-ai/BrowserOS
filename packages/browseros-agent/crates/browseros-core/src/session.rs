@@ -480,6 +480,10 @@ impl CdpConnection for EvictingConnection {
         self.inner.events()
     }
 
+    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+        self.inner.observe_events(methods)
+    }
+
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
         self.inner.events_targeted(method)
     }

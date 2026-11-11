@@ -633,6 +633,10 @@ impl CdpConnection for FakeCdp {
         self.targeted.subscribe(method)
     }
 
+    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+        Some(self.targeted.observe(methods))
+    }
+
     fn is_connected(&self) -> bool {
         self.lock().connected
     }

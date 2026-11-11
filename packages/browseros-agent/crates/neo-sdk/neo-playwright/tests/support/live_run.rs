@@ -171,6 +171,10 @@ impl CdpConnection for Tap {
         self.browser.events_targeted(method)
     }
 
+    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+        self.browser.observe_events(methods)
+    }
+
     fn is_connected(&self) -> bool {
         self.browser.is_connected()
     }

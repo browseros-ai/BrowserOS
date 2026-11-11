@@ -225,6 +225,10 @@ impl CdpConnection for Recording {
             .map_or_else(|| broadcast::channel(1).1, broadcast::Sender::subscribe)
     }
 
+    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+        self.events.as_ref().map(|_| self.targeted.observe(methods))
+    }
+
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
         self.targeted.subscribe(method)
     }

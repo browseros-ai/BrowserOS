@@ -29,6 +29,7 @@
 //!   with `BROWSERCLAW_HOSTED_MODE=1`), so there those events never fire.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -90,12 +91,18 @@ impl TargetWatcher {
         attach_log: Arc<FrameAttachLog>,
     ) -> Self {
         let task = Handle::try_current().ok().map(|runtime| {
-            // Subscribe before taking dialog ownership from core: a page can open an alert
-            // before this task is first polled. Queue it here so grace/reap cannot miss it.
+            // Subscribe before taking dialog ownership: alerts can open before our first poll.
+            // Keep opening/closing in one ordered queue outside the lossy broadcast ring.
+            // Discovery can await replies while another tab floods that ring; losing or
+            // reordering these events could strand a dialog or close the wrong generation.
+            let dialogs = browser.connection().observe_events(&[
+                "Page.javascriptDialogOpening",
+                "Page.javascriptDialogClosed",
+            ]);
             let events = browser.cdp_events();
             browser.page_signals.delegate_dialog_handling();
             let (watcher, found) = Watcher::new(browser, writer, attach_log);
-            runtime.spawn(watcher.run(found, events))
+            runtime.spawn(watcher.run(found, events, dialogs))
         });
         Self { task }
     }
@@ -290,14 +297,30 @@ impl Watcher {
         mut self,
         mut found: UnboundedReceiver<OpenedPage>,
         mut events: broadcast::Receiver<CdpEvent>,
+        mut dialogs: Option<UnboundedReceiver<CdpEvent>>,
     ) {
+        let observed_dialogs = dialogs.is_some();
         let mut tick = time::interval(TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             let grace_ends = self.graces.front().map(|grace| grace.ends);
             tokio::select! {
+                received = async {
+                    match dialogs.as_mut() {
+                        Some(dialogs) => dialogs.recv().await,
+                        None => future::pending().await,
+                    }
+                } => match received {
+                    Some(event) => self.handle(event).await,
+                    None => return,
+                },
                 received = events.recv() => match received {
-                    Ok(event) => self.handle(event).await,
+                    Ok(event) => {
+                        if !observed_dialogs || !matches!(event.method.as_str(),
+                            "Page.javascriptDialogOpening" | "Page.javascriptDialogClosed") {
+                            self.handle(event).await;
+                        }
+                    },
                     // Events were dropped: rediscover, which records what closed meanwhile, and
                     // tell the frame log that commits may be missing.
                     Err(RecvError::Lagged(_)) => {
@@ -891,6 +914,7 @@ mod tests {
     use browseros_cdp::CdpEvent;
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, PageId, SessionId};
     use serde_json::json;
+    use tokio::sync::broadcast::error::TryRecvError;
     use tokio::time;
 
     use super::TargetWatcher;
@@ -900,6 +924,15 @@ mod tests {
 
     #[tokio::test]
     async fn an_alert_before_the_watchers_first_poll_is_still_dismissed() {
+        verify_unanswered_alert(0).await;
+    }
+
+    #[tokio::test]
+    async fn dialog_order_and_answers_survive_broadcast_overflow() {
+        verify_unanswered_alert(64).await;
+    }
+
+    async fn verify_unanswered_alert(noise: usize) {
         let connection = Recording::streaming();
         let browser = BrowserSession::new(
             Arc::clone(&connection) as Arc<dyn CdpConnection>,
@@ -910,6 +943,7 @@ mod tests {
             .attach_page(PageId(7), SessionId::from("S"));
         let (_hub, writer) = EventHub::new();
         let _watcher = TargetWatcher::spawn(browser, writer, Arc::new(FrameAttachLog::default()));
+        let mut broadcast = connection.events();
 
         // A current-thread runtime cannot poll the spawned watcher until we yield. The live
         // page's alert must already be queued when SDK dialog ownership takes effect.
@@ -923,6 +957,28 @@ mod tests {
             params: json!({ "type": "alert", "message": "startup" }),
             session_id: Some(SessionId::from("S")),
         });
+        // An external answer followed by another alert must remain in that order. Two
+        // separate method queues could apply the old close to the new alert instead.
+        connection.emit(CdpEvent {
+            method: "Page.javascriptDialogClosed".to_owned(),
+            params: json!({}),
+            session_id: Some(SessionId::from("S")),
+        });
+        connection.emit(CdpEvent {
+            method: "Page.javascriptDialogOpening".to_owned(),
+            params: json!({ "type": "alert", "message": "second" }),
+            session_id: Some(SessionId::from("S")),
+        });
+        for _ in 0..noise {
+            connection.emit(CdpEvent {
+                method: "Test.noise".to_owned(),
+                params: json!({}),
+                session_id: None,
+            });
+        }
+        if noise > 0 {
+            assert!(matches!(broadcast.try_recv(), Err(TryRecvError::Lagged(_))));
+        }
         let answered = time::timeout(Duration::from_secs(2), async {
             loop {
                 if let Some((_, params)) = connection
@@ -937,5 +993,14 @@ mod tests {
         })
         .await;
         assert_eq!(answered.ok(), Some(json!({ "accept": false })));
+        time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            connection
+                .sent()
+                .iter()
+                .filter(|(method, _)| method == "Page.handleJavaScriptDialog")
+                .count(),
+            1
+        );
     }
 }

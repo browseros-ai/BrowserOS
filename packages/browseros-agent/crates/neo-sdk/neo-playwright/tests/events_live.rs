@@ -465,6 +465,10 @@ impl CdpConnection for HoldsOneAnswer {
         CdpConnection::events_targeted(&self.client, method)
     }
 
+    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+        CdpConnection::observe_events(&self.client, methods)
+    }
+
     fn is_connected(&self) -> bool {
         CdpConnection::is_connected(&self.client)
     }

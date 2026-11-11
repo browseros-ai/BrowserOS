@@ -62,6 +62,13 @@ pub trait CdpConnection: Send + Sync {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent>;
 
+    /// Optional ordered, lossless observation of selected event methods, leaving existing
+    /// delivery intact. The native client supports this; legacy/custom transports can retain
+    /// broadcast-only behavior. Wrappers must forward it to preserve native guarantees.
+    fn observe_events(&self, _methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+        None
+    }
+
     /// Every later event of `method` on a dedicated, unbounded channel that bypasses the
     /// broadcast ring. Each subscriber of a method gets every one of its events, and while any
     /// subscriber is live, [`Self::events`] does not carry the method: a reader that needs a
@@ -124,6 +131,10 @@ impl CdpConnection for CdpClient {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         CdpClient::events(self)
+    }
+
+    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+        Some(CdpClient::observe_events(self, methods))
     }
 
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {

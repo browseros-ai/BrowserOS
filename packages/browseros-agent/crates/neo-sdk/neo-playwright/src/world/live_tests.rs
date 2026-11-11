@@ -202,6 +202,10 @@ impl CdpConnection for Recorder {
         self.inner.events_targeted(method)
     }
 
+    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+        self.inner.observe_events(methods)
+    }
+
     fn is_connected(&self) -> bool {
         self.inner.is_connected()
     }

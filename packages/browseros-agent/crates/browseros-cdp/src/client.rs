@@ -335,6 +335,13 @@ impl CdpClient {
         self.inner.targeted.subscribe(method)
     }
 
+    /// An ordered, lossless copy of selected low-volume events. Unlike targeted subscriptions,
+    /// observation leaves existing broadcast and targeted delivery unchanged.
+    #[must_use]
+    pub fn observe_events(&self, methods: &[&str]) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.inner.targeted.observe(methods)
+    }
+
     async fn send_frame(
         &self,
         expected_epoch: Option<u64>,
