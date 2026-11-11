@@ -319,6 +319,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.emulateMedia": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "page.close": {
       effect: "write",
       target: "page",
@@ -8363,6 +8368,29 @@ ${value.stack}`;
     content() {
       return this._mainFrame._content("page.content");
     }
+    async emulateMedia(options = {}) {
+      const api = "page.emulateMedia";
+      const allowed = {
+        media: ["screen", "print", "no-override"],
+        colorScheme: ["dark", "light", "no-preference", "no-override"],
+        reducedMotion: ["reduce", "no-preference", "no-override"],
+        forcedColors: ["active", "none", "no-override"],
+        contrast: ["no-preference", "more", "no-override"]
+      };
+      const input = {};
+      for (const key of Object.keys(allowed)) {
+        const value = options[key] === null ? "no-override" : options[key];
+        if (value === undefined)
+          continue;
+        if (typeof value !== "string" || !allowed[key].includes(value))
+          throw clientError(api, `${key}: expected one of (${allowed[key].join("|")})`);
+        input[key] = value;
+      }
+      await invoke("page.emulateMedia", this._mainFrame._call(api, 0), {
+        page: await this._brand(api),
+        ...input
+      });
+    }
     addScriptTag(options = {}) {
       return this._mainFrame._addTag("page.addScriptTag", "page.addScriptTag", options);
     }
@@ -9587,7 +9615,6 @@ Timeout: ${timeout}ms`);
       clearConsoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
       clearPageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
       consoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
-      emulateMedia: "media emulation is not available in Neo",
       evaluateHandle: NO_HANDLES,
       exposeBinding: "pages cannot call back into the script; read state with page.evaluate()",
       exposeFunction: "pages cannot call back into the script; read state with page.evaluate()",

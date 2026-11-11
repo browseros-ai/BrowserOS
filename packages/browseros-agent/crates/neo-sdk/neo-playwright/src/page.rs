@@ -35,6 +35,8 @@ mod frame_routes;
 pub(crate) mod frame_tree;
 pub(crate) use frame_routes::FrameRoutes;
 mod load_state;
+mod media_emulation;
+mod media_sessions;
 mod navigation;
 mod op_page;
 mod page_handle;
@@ -56,6 +58,8 @@ pub(crate) mod world_call;
 
 pub(crate) use context_op::ContextOp;
 pub(crate) use load_state::LoadState;
+pub(crate) use media_emulation::MediaState;
+pub(crate) use media_sessions::MediaSessions;
 pub(crate) use op_page::{FRAME_BUDGET, OpPage};
 pub(crate) use page_handle::PageHandle;
 pub(crate) use page_op::PageOp;

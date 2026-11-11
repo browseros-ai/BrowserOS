@@ -102,6 +102,13 @@ impl<'op> OpPage<'op> {
     ) -> Result<Self, PlaywrightError> {
         let admitted = scope.admit(pw.browser(), page).await?;
         let state = pw.pages().page(pw.browser(), admitted).await;
+        let session = pw
+            .browser()
+            .protocol_session(admitted.session.session_id.clone());
+        pw.media()
+            .ensure_root(&admitted.core_page, &session, state.media())
+            .await
+            .map_err(|error| scope.core_error(&error))?;
         Ok(Self {
             pw,
             admitted,
@@ -224,6 +231,13 @@ impl<'op> OpPage<'op> {
         endpoint: &Endpoint,
         place: Place,
     ) -> Result<SealedWorld, ProbeFailure> {
+        // A new OOPIF may be discovered before its attachment event is replayed. Synchronize
+        // its page preferences before its first frame query or main-world script.
+        self.pw
+            .media()
+            .ensure(&endpoint.session, self.state.media())
+            .await
+            .map_err(ProbeFailure::from_core)?;
         let installer = Installer {
             sessions: self.pw.sessions(),
             epoch: self.pw.epoch(),
