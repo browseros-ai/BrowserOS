@@ -1125,3 +1125,50 @@ async fn tests_that_a_click_waits_for_the_navigation_it_requested() -> TestResul
     run.close_page(&page).await;
     Ok(())
 }
+
+/// A locator that never matches logs only `waiting for <locator>`, as upstream's does: an
+/// attempt's lines wait until the element is found, and no "detached" retry is logged for an
+/// element that was never there (zuzu G10).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_locator_matching_nothing_logs_only_its_wait() -> TestResult {
+    let run = LiveRun::connect().await?;
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/page.html")).await?;
+    let nope = at(&page, "#nope");
+    let call = |api: &str| json!({ "api": api, "timeoutMs": 400 });
+    let tries = [
+        (
+            "locator.click",
+            action("locator.click", &nope, json!({}), 400),
+        ),
+        (
+            "locator.fill",
+            json!({ "call": call("locator.fill"), "target": nope, "strict": "strict",
+                    "value": "x", "options": {} }),
+        ),
+        (
+            "locator.focus",
+            json!({ "call": call("locator.focus"), "target": nope, "strict": "strict" }),
+        ),
+        (
+            "locator.scrollIntoViewIfNeeded",
+            json!({ "call": call("locator.scrollIntoViewIfNeeded"), "target": nope,
+                    "strict": "strict" }),
+        ),
+    ];
+    for (op, input) in tries {
+        let error = run
+            .invoke(op, input)
+            .await
+            .err()
+            .ok_or(format!("{op}: #nope never matches"))?;
+        assert_eq!(
+            error.message(),
+            format!("{op}: Timeout 400ms exceeded.\nCall log:\n  - waiting for locator('#nope')\n"),
+            "{op} logs only the wait"
+        );
+    }
+    run.close_page(&page).await;
+    Ok(())
+}

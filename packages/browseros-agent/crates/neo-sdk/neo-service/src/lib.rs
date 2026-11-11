@@ -65,6 +65,7 @@ mod response_id;
 mod router;
 mod screenshot_taker;
 mod service;
+mod tab_routes;
 mod tab_stamps;
 mod takeover_routes;
 mod wire;

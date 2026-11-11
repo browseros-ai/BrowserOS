@@ -33,7 +33,9 @@ pub(crate) fn run_description(registry: &Registry) -> String {
     let mut lines = vec![
         USAGE.to_owned(),
         format!(
-            "`timeout` is in milliseconds: {} by default, at most {}. The returned value is at most {} KiB of JSON.",
+            "`timeout` is in milliseconds: {} by default, at most {}. The returned value is at most {} KiB of JSON; \
+             bytes in it (a `Buffer`, such as a `screenshot` or `pdf`) that would take it over come back as \
+             `{{\"$neo\":\"blob\",\"id\",\"size\"}}`, which the host reads, so return large text as `Buffer.from(text)`.",
             Defaults::RUN_TIMEOUT.as_millis(),
             Defaults::RUN_TIMEOUT_MAX.as_millis(),
             Defaults::MAX_RESULT_BYTES / 1024

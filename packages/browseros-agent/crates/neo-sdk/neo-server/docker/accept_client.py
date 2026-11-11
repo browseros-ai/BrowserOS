@@ -9,6 +9,8 @@ one JSON object on stdout; accept.sh decides PASS or FAIL from it.
   downloads <mcp-url> <socket> <token-file>
                                          a click that downloads, `path()` and `saveAs()`, the
                                          bytes over the host socket, then the same path uploaded
+  blobs <mcp-url> <socket> <token-file>  a full-page PNG and a PDF too large to return inline,
+                                         read back as blobs; large text still refused
   describe <mcp-url>                     the `run` tool's description, which lists neo.* methods
   host <socket> <token-file|-> <path>    GET a host API path over the Unix socket
   listeners                              the container's listening TCP sockets, from /proc
@@ -287,12 +289,72 @@ def probe(host_name: str, port: int, scheme: str) -> dict:
     return {"tcp": "accepted", "http": reply.split(b"\r\n", 1)[0].decode(errors="replace")}
 
 
+# A page whose full-page PNG cannot compress below 1.5 MB: 400 coloured rows and a canvas of
+# random pixels, so the screenshot and its PDF are both over the 256 KiB inline limit.
+BLOBS_CODE = """\
+const rows = Array.from({ length: 400 }, (_, i) =>
+  `<tr style="background:hsl(${(i * 47) % 360} 70% 60%)"><td>${i}</td><td>row ${i} of the statement</td></tr>`).join('');
+await page.setContent(`<title>rows</title><canvas id=c width=1000 height=600></canvas><table>${rows}</table>`);
+await page.evaluate(() => {
+  const canvas = document.getElementById('c');
+  const context = canvas.getContext('2d');
+  const image = context.createImageData(canvas.width, canvas.height);
+  for (let i = 0; i < image.data.length; i++) image.data[i] = (i % 4 === 3) ? 255 : Math.floor(Math.random() * 256);
+  context.putImageData(image, 0, 0);
+});
+const png = await page.screenshot({ type: 'png', fullPage: true });
+const pdf = await page.pdf({ printBackground: true });
+return { png, pdf, small: Buffer.from('inline'), sizes: { png: png.length, pdf: pdf.length } };
+"""
+
+
+def blobs(url: str, socket_path: str, token_file: str) -> dict:
+    """zuzu's full-page screenshot and PDF, which no longer fit in a reply, read back as blobs."""
+    client = connect(url)
+    problems = []
+    got = call_run(client, BLOBS_CODE, {"taskId": "accept-blobs"})
+    value = (got["value"] or {}).get("value") or {}
+    run_id = got["meta"].get("id", "")
+    sizes = value.get("sizes") or {}
+    if got["meta"].get("status") != "ok":
+        problems.append(f"blob run: {got['meta'].get('status')} {got['text'][:200]}")
+    if sizes.get("png", 0) < 1_500_000:
+        problems.append(f"the full-page PNG is {sizes.get('png')} bytes, under 1.5 MB")
+    if value.get("small") != {"$neo": "bytes", "base64": "aW5saW5l"}:
+        problems.append(f"small bytes did not stay inline: {value.get('small')}")
+    read = {}
+    for name, magic in (("png", b"\x89PNG\r\n\x1a\n"), ("pdf", b"%PDF-")):
+        marker = value.get(name) or {}
+        if marker.get("$neo") != "blob" or marker.get("size") != sizes.get(name):
+            problems.append(f"{name} marker: {str(marker)[:120]}")
+            continue
+        raw = host_raw(socket_path, token_file, f"/v1/runs/{run_id}/blobs/{marker.get('id')}")
+        status, _, body = raw if isinstance(raw, tuple) else (raw, {}, b"")
+        if status != 200 or len(body) != marker["size"] or not body.startswith(magic):
+            problems.append(f"{name} blob: {status}, {len(body)} bytes, starts {body[:8]!r}")
+        read[name] = f"{marker.get('id')} {len(body)} B"
+    text = call_run(client, "return 'x'.repeat(300 * 1024);", {"taskId": "accept-blobs"})
+    error = ((text["value"] or {}).get("error") or {})
+    if error.get("code") != "result_too_large" or "Buffer.from" not in error.get("message", ""):
+        problems.append(f"large text: {text['meta'].get('status')} {str(error)[:200]}")
+    return {
+        "ok": not problems,
+        "run": run_id,
+        "blob": (value.get("png") or {}).get("id", ""),
+        "problems": problems,
+        "detail": f"run {run_id}: png {read.get('png')}, pdf {read.get('pdf')} read over the socket; "
+        "small bytes inline; 300 KiB of text result_too_large",
+    }
+
+
 def main() -> None:
     command, args = sys.argv[1], sys.argv[2:]
     if command == "run":
         out = run(*args)
     elif command == "downloads":
         out = downloads(*args)
+    elif command == "blobs":
+        out = blobs(*args)
     elif command == "host":
         out = host(args[0], args[1], urllib.parse.quote(args[2], safe="/?=&"))
     elif command == "describe":

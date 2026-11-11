@@ -94,6 +94,29 @@ return { path: await download.path(), filename: download.suggestedFilename() };
 - A download still being written when the run ended is recorded `in_progress` with no bytes.
   Await `download.path()` before returning when the host needs the file.
 
+## Large results
+
+A `run` reply carries its value inline, at most 256 KiB of JSON. zuzu's `read_output` route for
+bigger outputs (full-page screenshots, PDFs, `DecodeRun`'s fallback) becomes blobs:
+
+- When a returned value would be over the limit, Neo keeps its largest byte values (a `Buffer`
+  or `Uint8Array`, which travel as `{"$neo":"bytes","base64"}`) with the run, largest first until
+  the value fits, and puts `{"$neo":"blob","id":"b0","size":N}` in each one's place. Byte values
+  in a reply that fits stay inline, as before.
+- Read each at `GET /v1/runs/{runId}/blobs/{id}` on the host socket, with the same token
+  (`application/octet-stream`, `size` bytes). The run id is the reply's
+  `_meta["com.browseros.neo/run"].id`. A blob is there as soon as the reply is, and it goes when
+  retention removes the run.
+- Text is never kept as a blob. A value that still does not fit fails `script / result_too_large`,
+  whose message says to return large text as `Buffer.from(text)`.
+- `GET /v1/runs/{runId}` shows the same markers in `result`, and a repeated `requestId` replays
+  them.
+
+```js
+const shot = await page.screenshot({ type: 'png', fullPage: true });
+return { shot };   // {"shot": {"$neo":"blob","id":"b0","size":1505153}} when it is over the limit
+```
+
 ## Error bodies
 
 The body shape is unchanged: `{code, message, requestId}`. The codes are new
