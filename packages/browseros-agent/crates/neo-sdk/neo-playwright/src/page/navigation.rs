@@ -94,14 +94,14 @@ pub(crate) enum Navigation {
     History(i64),
 }
 
-/// What a navigation op returns. `url` refreshes the prelude's synchronous `page.url()`.
+/// The addressed frame's result; only a main-frame URL also changes `page.url()`.
 #[derive(Debug, Serialize)]
 pub(crate) struct NavigationResult {
     pub(crate) response: Option<Response>,
     pub(crate) url: Option<String>,
 }
 
-/// Playwright's `Response` for the main document, from its navigation timing entry.
+/// Playwright's `Response` for the selected document, from its navigation timing entry.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Response {
@@ -144,7 +144,7 @@ fn complete_user_url(url: String) -> String {
     }
 }
 
-/// Runs `navigation` on `page`'s main frame and waits for `wait_until`.
+/// Runs `navigation` on its addressed frame and waits under one operation deadline.
 pub(crate) async fn navigate(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -155,6 +155,7 @@ pub(crate) async fn navigate(
     let admitted = scope.admit(pw.browser(), page).await?;
     let session_id = admitted.session.session_id.clone();
     let session = pw.browser().protocol_session(session_id.clone());
+    let command_session = session.clone();
     let main = main_frame(admitted);
     let frame = match &navigation {
         Navigation::Goto { frame, .. } => frame.clone().unwrap_or_else(|| main.clone()),
@@ -180,10 +181,14 @@ pub(crate) async fn navigate(
         }
     });
     let mut watch = DocumentWatch::new(pw.browser(), session.clone(), session_id, frame.clone());
+    if frame != main {
+        watch.follow_frame_events(main);
+    }
     let target = NavigationFrame {
         pw,
         page,
         id: frame.clone(),
+        command: command_session,
     };
     let drive = drive(scope, &session, &target, &mut watch, navigation, wait_until);
     let response = match scope.within(drive).await {
@@ -240,11 +245,28 @@ async fn drive(
             // Renderer commands can wait behind an uncommitted navigation. Sending the
             // replacement must not depend on their replies: it is what unblocks them.
             // The watch subscribed before both sends, so lifecycle replay cannot lose a commit.
+            // The admitted tab's channel survives child target retirement. frameId routes
+            // this single command; observation follows the child without replaying a write.
+            let retired = watch.session_retired();
+            let setup = async {
+                tokio::select! {
+                    ready = async {
+                        watch.enable_page().await?;
+                        watch.enable_lifecycle().await
+                    } => ready.map(|()| true),
+                    () = retired => Ok(false),
+                }
+            };
             let (enabled, reply) = tokio::join!(
-                watch.enable_lifecycle(),
-                send_navigate(session, &sent, &target.id, &url, referer.as_deref())
+                setup,
+                send_navigate(&target.command, &sent, &target.id, &url, referer.as_deref())
             );
-            enabled.map_err(failed)?;
+            match enabled {
+                Ok(true) => {}
+                Ok(false) => watch.replay_lifecycle(),
+                Err(error) if moved(&error) => watch.replay_lifecycle(),
+                Err(error) => return Err(failed(error)),
+            }
             let reply = reply.map_err(core)?;
             // A download is answered with an error text too, so it goes first, as upstream.
             if reply.is_download {
@@ -332,6 +354,8 @@ struct NavigationFrame<'a> {
     pw: &'a Playwright,
     page: TabId,
     id: FrameId,
+    /// The tab's channel survives retirement of the child's old renderer target.
+    command: ProtocolSession,
 }
 
 impl NavigationFrame<'_> {
@@ -344,17 +368,7 @@ impl NavigationFrame<'_> {
         loop {
             match watch.committed(loader).await {
                 Ok(commit) => return Ok(commit),
-                Err(error) if moved(&error) => {
-                    *watch = self.follow(scope).await?;
-                    if watch
-                        .loader()
-                        .is_some_and(|current| !current.is_empty() && current != loader)
-                    {
-                        return Ok(CommitOutcome::Interrupted(
-                            watch.url().unwrap_or_default().to_owned(),
-                        ));
-                    }
-                }
+                Err(error) if moved(&error) => self.follow(scope, watch).await?,
                 Err(error) => return Err(watch_error(scope, &error)),
             }
         }
@@ -369,32 +383,27 @@ impl NavigationFrame<'_> {
         loop {
             match watch.reached(state).await {
                 Ok(()) => return Ok(()),
-                Err(error) if moved(&error) => *watch = self.follow(scope).await?,
+                Err(error) if moved(&error) => self.follow(scope, watch).await?,
                 Err(error) => return Err(watch_error(scope, &error)),
             }
         }
     }
 
-    async fn follow(&self, scope: &OpScope<'_>) -> Result<DocumentWatch, PlaywrightError> {
+    async fn follow(
+        &self,
+        scope: &OpScope<'_>,
+        watch: &mut DocumentWatch,
+    ) -> Result<(), PlaywrightError> {
         let admitted = scope.admit(self.pw.browser(), self.page).await?;
         let root_id = admitted.session.session_id.clone();
         let root = self.pw.browser().protocol_session(root_id.clone());
-        let (session_id, session) =
+        let (_, session) =
             fresh_frame_host(self.pw, scope, self.page, (root_id, root), &self.id).await?;
-        let mut watch = DocumentWatch::new(self.pw.browser(), session, session_id, self.id.clone());
+        // Native discovery must not replace the cursor that holds pre-dispatch commit facts.
         watch
-            .enable_page()
+            .resume_on(session)
             .await
-            .map_err(|error| watch_error(scope, &error))?;
-        watch
-            .read_current()
-            .await
-            .map_err(|error| watch_error(scope, &error))?;
-        watch
-            .enable_lifecycle()
-            .await
-            .map_err(|error| watch_error(scope, &error))?;
-        Ok(watch)
+            .map_err(|error| watch_error(scope, &error))
     }
 }
 
@@ -418,32 +427,26 @@ pub(crate) async fn wait_for_load_state(
     let frame = input.frame.unwrap_or_else(|| main.clone());
     let root_id = admitted.session.session_id.clone();
     let root = pw.browser().protocol_session(root_id.clone());
-    let (session_id, session) = if frame == main {
-        (root_id, root)
-    } else {
-        frame_host(pw, scope, page, (root_id, root), &frame).await?
-    };
-    let mut watch = DocumentWatch::new(pw.browser(), session, session_id, frame.clone());
     let wait = async {
-        watch.enable_page().await?;
-        watch.read_current().await?;
-        watch.enable_lifecycle().await?;
-        watch.reached(input.state).await
+        // Native resolution, lifecycle setup and subtree readiness share one deadline.
+        let (session_id, session) = if frame == main {
+            (root_id, root)
+        } else {
+            frame_host(pw, scope, page, (root_id, root), &frame).await?
+        };
+        let mut watch = DocumentWatch::new(pw.browser(), session, session_id, frame.clone());
+        let failed = |error| watch_error(scope, &error);
+        watch.enable_page().await.map_err(failed)?;
+        watch.read_current().await.map_err(failed)?;
+        watch.enable_lifecycle().await.map_err(failed)?;
+        watch.reached(input.state).await.map_err(failed)?;
+        if input.state == LoadState::NetworkIdle {
+            subtree_load::network_idle(pw, scope, page, &frame).await?;
+        }
+        Ok::<_, PlaywrightError>(())
     };
     match scope.within(wait).await {
-        Ok(Ok(())) => {
-            if input.state == LoadState::NetworkIdle {
-                match scope
-                    .within(subtree_load::network_idle(pw, scope, page, &frame))
-                    .await
-                {
-                    Ok(result) => result?,
-                    Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
-                }
-            }
-            Ok(json!({}))
-        }
-        Ok(Err(error)) => Err(watch_error(scope, &error)),
+        Ok(result) => result.map(|()| json!({})),
         Err(_expired) => Err(scope.timed_out(ErrorCode::WaitTimeout)),
     }
 }
@@ -526,7 +529,7 @@ struct NavigateReply {
     is_download: bool,
 }
 
-/// Starts a navigation of the main frame.
+/// Starts one browser-routed navigation on the admitted tab's stable session.
 async fn send_navigate(
     session: &ProtocolSession,
     _sent: &Sent<'_>,
@@ -736,6 +739,66 @@ fn status_text(status: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{complete_user_url, status_text};
+    use crate::test_support::TestResult;
+
+    /// A renderer that never answers must not extend a child's requested wait deadline.
+    #[tokio::test]
+    async fn child_load_state_deadline_includes_frame_resolution() -> TestResult {
+        use super::{LoadState, LoadStateInput, wait_for_load_state};
+        use crate::ErrorCode;
+        use crate::op::Op;
+        use crate::op_scope::OpScope;
+        use crate::target::CallHeader;
+        use crate::test_support::{
+            ProbeAnswer, SCRIPTED_CHILD, ScriptedRun, ScriptedTab, TabScript,
+        };
+        use browseros_core::FrameId;
+        use serde_json::Value;
+        use std::time::Duration;
+        use tokio::time;
+
+        struct StalledFrames;
+        impl TabScript for StalledFrames {
+            fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+                panic!("native load-state setup must not install a JavaScript world")
+            }
+            fn child(&self) -> bool {
+                true
+            }
+            fn delay(&self, method: &str) -> Duration {
+                if method == "Page.getFrameTree" {
+                    Duration::from_secs(30)
+                } else {
+                    Duration::ZERO
+                }
+            }
+        }
+        let tab = ScriptedTab::new(StalledFrames);
+        let run = ScriptedRun::over(&tab).await?;
+        let op = Op::from_name("page.waitForLoadState").ok_or("load-state op is registered")?;
+        let scope = OpScope::new(
+            &run.env,
+            op,
+            CallHeader {
+                timeout_ms: Some(100),
+                ..CallHeader::default()
+            },
+        );
+        let input = LoadStateInput {
+            page: run.page,
+            frame: Some(FrameId(SCRIPTED_CHILD.to_owned())),
+            state: LoadState::Load,
+        };
+        let result = time::timeout(
+            Duration::from_secs(1),
+            wait_for_load_state(&run.playwright, &scope, input),
+        )
+        .await?;
+        let error = result.err().ok_or("a stalled frame lookup must time out")?;
+        assert_eq!(error.error_code(), Some(ErrorCode::WaitTimeout));
+        assert_eq!(tab.slowed_in_flight(), 0, "the expired lookup is cancelled");
+        Ok(())
+    }
 
     #[test]
     fn tests_that_goto_normalizes_url_spelling_as_upstream_does() {
