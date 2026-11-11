@@ -1905,9 +1905,20 @@
     "console",
     "pageerror",
     "download",
-    "filechooser"
+    "filechooser",
+    "load",
+    "domcontentloaded",
+    "frameattached",
+    "framenavigated",
+    "framedetached"
   ]);
-  var CONTEXT_EVENTS = new Set(["page"]);
+  var CONTEXT_EVENTS = new Set([
+    "page",
+    "pageload",
+    "frameattached",
+    "framenavigated",
+    "framedetached"
+  ]);
   var UNREPORTED = {
     request: "Neo does not report network events; wait for what the page shows instead",
     response: "Neo does not report network events; wait for what the page shows instead",
@@ -1917,13 +1928,7 @@
     worker: "Neo does not report workers",
     serviceworker: "Neo does not report service workers",
     backgroundpage: "Neo does not report extension background pages",
-    frameattached: "Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits",
-    framedetached: "Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits",
-    framenavigated: "Neo does not report frame events; use page.waitForURL()",
-    load: "Neo does not report load events; use page.waitForLoadState()",
-    domcontentloaded: 'Neo does not report load events; use page.waitForLoadState("domcontentloaded")',
     crash: "Neo does not report crashes; a crashed page fails its next call",
-    pageload: "Neo does not report load events; use page.waitForLoadState()",
     pageclose: 'listen for close on the page itself: page.on("close")',
     weberror: 'listen for pageerror on the page itself: page.on("pageerror")',
     dialogclosed: "Neo does not report closed dialogs"
@@ -2123,6 +2128,28 @@
         case "page":
           this.owner.emit("page", this.page(record.page, record.url));
           return;
+        case "load":
+        case "domcontentloaded": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          page.emit(record.event, page);
+          return;
+        }
+        case "pageload": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          this.owner.emit("pageload", page);
+          return;
+        }
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached": {
+          const page = this.page(record.page);
+          const frame = page._eventFrame(record.seq, record.event, record.frame);
+          const emitter = record.context ? this.owner : page;
+          emitter.emit(record.event, frame);
+          return;
+        }
         case "close":
           this.page(record.page)._closeEvent(record.seq, observed);
           return;
@@ -2159,6 +2186,17 @@
           return this.page(record.popup.page, record.popup.url);
         case "page":
           return this.page(record.page, record.url);
+        case "load":
+        case "domcontentloaded":
+        case "pageload": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          return page;
+        }
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached":
+          return this.page(record.page)._eventFrame(record.seq, record.event, record.frame);
         case "close": {
           const page = this.page(record.page);
           page._closeEvent(record.seq, observed);
@@ -8038,6 +8076,9 @@ ${value.stack}`;
     _working = false;
     _navigationsInFlight = 0;
     #childFrames = new Map;
+    #knownFrames = new Map;
+    #frameEvents = new Map;
+    #frameSequences = new Map;
     constructor(context, tab, url) {
       super();
       this._context = context;
@@ -8351,7 +8392,7 @@ ${value.stack}`;
     }
     _evaluated(frames, at) {
       if (this.#payloadCurrent(at) && Array.isArray(frames))
-        this._applyFrames(frames);
+        this._applyFrames(frames, at);
     }
     async _navigated(api, frame, result, at) {
       if (this.#payloadCurrent(at)) {
@@ -8363,7 +8404,7 @@ ${value.stack}`;
             frame._url = result.url;
         }
         if (Array.isArray(result?.frames))
-          this._applyFrames(result.frames);
+          this._applyFrames(result.frames, at);
         else
           await this._refreshFrames(api);
       } else if (!this._closed) {
@@ -8386,35 +8427,101 @@ ${value.stack}`;
     async _refreshFrames(api) {
       const { value: tree, observed } = await invokeObserved("page.frames", { api, timeoutMs: 0 }, { page: await this._brand(api) });
       if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
-        this._applyFrames(tree.frames);
+        this._applyFrames(tree.frames, observed);
     }
-    _applyFrames(infos) {
+    _applyFrames(infos, at = null) {
+      const current = (id) => !at || (this.#frameSequences.get(id) ?? 0) <= at.events;
+      const remember = (id) => {
+        if (at)
+          this.#frameSequences.set(id, Math.max(at.events, this.#frameSequences.get(id) ?? 0));
+      };
       const main = infos.find((info) => info.parentId === null);
-      if (main) {
+      if (main && current(null)) {
+        remember(null);
         this._url = main.url;
         this.#urlKnown = true;
         this._mainFrame._name = main.name;
       }
       const present = new Map;
       for (const info of infos) {
-        if (info.parentId === null)
+        if (info.parentId === null || !current(info.id))
           continue;
         present.set(info.id, info);
-        let frame = this.#childFrames.get(info.id);
+        remember(info.id);
+        let frame = this.#knownFrames.get(info.id);
         if (!frame) {
           frame = new Frame(this, info.id, this._mainFrame);
-          this.#childFrames.set(info.id, frame);
+          this.#knownFrames.set(info.id, frame);
         }
+        frame._detached = false;
+        this.#childFrames.set(info.id, frame);
         frame._update(info);
       }
       for (const [id, frame] of this.#childFrames) {
+        if (!current(id))
+          continue;
         const info = present.get(id);
         if (!info) {
+          remember(id);
           frame._detached = true;
           this.#childFrames.delete(id);
           continue;
         }
         frame._parentFrame = info.parentId === main?.id ? this._mainFrame : this.#childFrames.get(info.parentId ?? "") ?? this._mainFrame;
+      }
+      this.#pruneFrames();
+    }
+    _eventFrame(seq, event, info) {
+      const delivered = this.#frameEvents.get(seq);
+      if (delivered)
+        return delivered;
+      const id = info.parentId === null ? null : info.id;
+      const current = id === null ? this._mainFrame : this.#knownFrames.get(id);
+      if (current && seq <= (this.#frameSequences.get(id) ?? 0)) {
+        return this.#rememberFrameEvent(seq, current);
+      }
+      this.#frameSequences.set(id, seq);
+      let frame;
+      if (info.parentId === null) {
+        frame = this._mainFrame;
+        this._url = info.url;
+        this.#urlKnown = true;
+      } else {
+        frame = this.#knownFrames.get(info.id) ?? new Frame(this, info.id, this._mainFrame);
+        this.#knownFrames.set(info.id, frame);
+        frame._parentFrame = this.#knownFrames.get(info.parentId) ?? this._mainFrame;
+        if (event === "framedetached") {
+          frame._detached = true;
+          this.#childFrames.delete(info.id);
+        } else {
+          frame._detached = false;
+          this.#childFrames.set(info.id, frame);
+        }
+      }
+      if (event !== "frameattached" || frame.url() === "")
+        frame._update(info);
+      this.#pruneFrames();
+      return this.#rememberFrameEvent(seq, frame);
+    }
+    #rememberFrameEvent(seq, frame) {
+      this.#frameEvents.set(seq, frame);
+      if (this.#frameEvents.size > 1024) {
+        const oldest = this.#frameEvents.keys().next().value;
+        if (oldest !== undefined)
+          this.#frameEvents.delete(oldest);
+      }
+      return frame;
+    }
+    #pruneFrames() {
+      let retained = this.#knownFrames.size - this.#childFrames.size;
+      for (const [id, frame] of this.#knownFrames) {
+        if (retained <= 1024)
+          break;
+        if (frame._detached) {
+          this.#knownFrames.delete(id);
+          this.#frameSequences.delete(id);
+          retained--;
+        }
       }
     }
     _applyFact(fact, at, approved = null) {

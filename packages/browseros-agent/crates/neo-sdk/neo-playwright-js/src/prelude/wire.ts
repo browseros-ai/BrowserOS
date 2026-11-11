@@ -158,6 +158,12 @@ export type EventName =
   | 'pageerror'
   | 'download'
   | 'filechooser'
+  | 'load'
+  | 'domcontentloaded'
+  | 'frameattached'
+  | 'framenavigated'
+  | 'framedetached'
+  | 'pageload'
   | 'page'
 
 export type DialogInfo = {
@@ -200,6 +206,17 @@ export type EventRecord = { seq: number; at: number } & (
   | { event: 'popup'; page: PageBrand; popup: PageEntry }
   | { event: 'page'; page: PageBrand; url: string; opener: PageBrand | null }
   | { event: 'close'; page: PageBrand }
+  | {
+      event: 'load' | 'domcontentloaded' | 'pageload'
+      page: PageBrand
+      frame: FrameInfo
+    }
+  | {
+      event: 'frameattached' | 'framenavigated' | 'framedetached'
+      page: PageBrand
+      frame: FrameInfo
+      context: boolean
+    }
   | { event: 'dialog'; page: PageBrand; dialog: DialogInfo }
   | { event: 'console'; page: PageBrand; message: ConsoleInfo }
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }

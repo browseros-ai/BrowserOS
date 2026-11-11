@@ -52,9 +52,20 @@ const PAGE_EVENTS: ReadonlySet<string> = new Set([
   'pageerror',
   'download',
   'filechooser',
+  'load',
+  'domcontentloaded',
+  'frameattached',
+  'framenavigated',
+  'framedetached',
 ])
 /** Events the context reports. */
-const CONTEXT_EVENTS: ReadonlySet<string> = new Set(['page'])
+const CONTEXT_EVENTS: ReadonlySet<string> = new Set([
+  'page',
+  'pageload',
+  'frameattached',
+  'framenavigated',
+  'framedetached',
+])
 
 /** Playwright events Neo never reports, with what to do instead. */
 const UNREPORTED: Readonly<Record<string, string>> = {
@@ -70,16 +81,7 @@ const UNREPORTED: Readonly<Record<string, string>> = {
   worker: 'Neo does not report workers',
   serviceworker: 'Neo does not report service workers',
   backgroundpage: 'Neo does not report extension background pages',
-  frameattached:
-    'Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits',
-  framedetached:
-    'Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits',
-  framenavigated: 'Neo does not report frame events; use page.waitForURL()',
-  load: 'Neo does not report load events; use page.waitForLoadState()',
-  domcontentloaded:
-    'Neo does not report load events; use page.waitForLoadState("domcontentloaded")',
   crash: 'Neo does not report crashes; a crashed page fails its next call',
-  pageload: 'Neo does not report load events; use page.waitForLoadState()',
   pageclose: 'listen for close on the page itself: page.on("close")',
   weberror: 'listen for pageerror on the page itself: page.on("pageerror")',
   dialogclosed: 'Neo does not report closed dialogs',
@@ -428,6 +430,28 @@ export class EventHub {
       case 'page':
         this.owner.emit('page', this.page(record.page, record.url))
         return
+      case 'load':
+      case 'domcontentloaded': {
+        const page = this.page(record.page)
+        page._eventFrame(record.seq, 'framenavigated', record.frame)
+        page.emit(record.event, page)
+        return
+      }
+      case 'pageload': {
+        const page = this.page(record.page)
+        page._eventFrame(record.seq, 'framenavigated', record.frame)
+        this.owner.emit('pageload', page)
+        return
+      }
+      case 'frameattached':
+      case 'framenavigated':
+      case 'framedetached': {
+        const page = this.page(record.page)
+        const frame = page._eventFrame(record.seq, record.event, record.frame)
+        const emitter = record.context ? this.owner : page
+        emitter.emit(record.event, frame)
+        return
+      }
       case 'close':
         this.page(record.page)._closeEvent(record.seq, observed)
         return
@@ -472,6 +496,21 @@ export class EventHub {
         return this.page(record.popup.page, record.popup.url)
       case 'page':
         return this.page(record.page, record.url)
+      case 'load':
+      case 'domcontentloaded':
+      case 'pageload': {
+        const page = this.page(record.page)
+        page._eventFrame(record.seq, 'framenavigated', record.frame)
+        return page
+      }
+      case 'frameattached':
+      case 'framenavigated':
+      case 'framedetached':
+        return this.page(record.page)._eventFrame(
+          record.seq,
+          record.event,
+          record.frame,
+        )
       case 'close': {
         const page = this.page(record.page)
         page._closeEvent(record.seq, observed)

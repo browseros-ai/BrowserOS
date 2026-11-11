@@ -236,8 +236,36 @@ async fn subscription(
             })
         }
         None if event == "page" => Ok(Subscription::ContextPage),
+        None if PageEventKind::context(event).is_some() => {
+            observe_context(scope).await?;
+            Ok(Subscription::Context(
+                PageEventKind::context(event).ok_or_else(|| context_event(scope, event))?,
+            ))
+        }
         None => Err(context_event(scope, event)),
     }
+}
+
+/// Context listeners observe existing tabs without requiring a prior page action. These are
+/// core-owned observation sessions; event release still maps each returned tab through the run.
+async fn observe_context(scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
+    let setup = async {
+        let listing = scope.view().list_pages().await?;
+        for page in listing.pages {
+            // A tab can close between listing and attachment. The watcher retries live tabs.
+            if let Err(error) = scope.view().page_session(page.page_id).await {
+                scope.log(format!(
+                    "context lifecycle observation will retry attachment: {error}"
+                ));
+            }
+        }
+        Ok::<(), CoreError>(())
+    };
+    scope
+        .within(setup)
+        .await
+        .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?
+        .map_err(|error| scope.core_error(&error))
 }
 
 /// The failure for a context event other than `page`.
@@ -267,6 +295,10 @@ async fn listen(
         let key = match &input.page {
             Some(page) => ListenerKey::Page(page.tab(), page_event(scope, &input.event)?),
             None if input.event == "page" => ListenerKey::ContextPage,
+            None if PageEventKind::context(&input.event).is_some() => ListenerKey::Context(
+                PageEventKind::context(&input.event)
+                    .ok_or_else(|| context_event(scope, &input.event))?,
+            ),
             None => return Err(context_event(scope, &input.event)),
         };
         run.events.unlisten(&key);
@@ -318,7 +350,7 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
         }
         run.events.advance(&read_up_to);
         if !events.is_empty() || lost > 0 {
-            events.sort_by_key(|event| event.seq);
+            events.sort_by_key(Delivered::order);
             return to_output(scope, &Pumped { events, lost });
         }
         changed.await;

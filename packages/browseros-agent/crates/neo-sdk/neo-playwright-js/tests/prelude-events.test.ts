@@ -253,7 +253,7 @@ describe('waitForEvent', () => {
       await runtime.run(`
         const errors = []
         try { await page.waitForEvent('request') } catch (e) { errors.push([e.code, e.message]) }
-        try { page.on('framenavigated', () => {}) } catch (e) { errors.push([e.code, e.message]) }
+        try { page.on('worker', () => {}) } catch (e) { errors.push([e.code, e.message]) }
         try { context.on('dialog', () => {}) } catch (e) { errors.push([e.code, e.message]) }
         return errors
       `),
@@ -263,10 +263,7 @@ describe('waitForEvent', () => {
         'method_unavailable',
         "page.waitForEvent('request'): Neo does not report network events; wait for what the page shows instead",
       ],
-      [
-        'method_unavailable',
-        "page.on('framenavigated'): Neo does not report frame events; use page.waitForURL()",
-      ],
+      ['method_unavailable', "page.on('worker'): Neo does not report workers"],
       [
         'method_unavailable',
         'browserContext.on(\'dialog\'): Neo reports "dialog" on pages: page.on("dialog")',
@@ -274,7 +271,7 @@ describe('waitForEvent', () => {
     ])
     expect(runtime.calls.map((call) => [call.name, call.input.$neo])).toEqual([
       ["page.waitForEvent('request')", 'refused'],
-      ["page.on('framenavigated')", 'refused'],
+      ["page.on('worker')", 'refused'],
       ["browserContext.on('dialog')", 'refused'],
     ])
   })
@@ -546,4 +543,162 @@ describe('listeners and the pump', () => {
       download: 'guid-3',
     })
   })
+})
+
+// The wire delivers independent page/context subscriptions. Their payloads must still share
+// the canonical Frame when a wait and the pump observe the same journal record.
+describe('page lifecycle events', () => {
+  it('keeps frame identity across listeners, waits, snapshots and removal', async () => {
+    let next: ((value: unknown) => void) | undefined
+    const frame = {
+      id: 'child',
+      parentId: 'main',
+      name: 'kid',
+      url: 'https://frame.test/',
+    }
+    const record = (seq: number, event: string, context = false) => ({
+      seq,
+      at: Date.now(),
+      event,
+      page: brand(7),
+      frame,
+      context,
+    })
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) => {
+        if (call.name === 'events.next')
+          return new Promise((resolve) => {
+            next = resolve
+          })
+        if (call.name === 'events.wait') return record(11, 'framedetached')
+        return null
+      },
+    })
+    const pending = runtime.run(`
+      const received = []
+      let attached
+      page.once('frameattached', frame => { attached = frame; received.push(frame.page() === page && frame.parentFrame() === page.mainFrame()) })
+      context.once('frameattached', frame => received.push(frame === attached))
+      const removedListener = () => received.push('unexpected')
+      page.on('frameattached', removedListener)
+      page.off('frameattached', removedListener)
+      await new Promise(resolve => page.once('frameattached', resolve))
+      const detached = await page.waitForEvent('framedetached', { predicate: frame => frame.isDetached() })
+      return { received, same: detached === attached, detached: detached.isDetached(), listed: page.frames().includes(detached) }
+    `)
+    await eventually(() => next !== undefined)
+    next?.({
+      events: [record(10, 'frameattached'), record(10, 'frameattached', true)],
+      lost: 0,
+    })
+    expect(json(await pending)).toEqual({
+      received: [true, true],
+      same: true,
+      detached: true,
+      listed: false,
+    })
+  })
+
+  it('returns Page for load events and retains one deadline across predicate rejection', async () => {
+    let candidate = 0
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) => {
+        if (call.name === 'events.wait')
+          return {
+            seq: ++candidate,
+            at: Date.now(),
+            event: call.input.event,
+            page: brand(7),
+            frame: {
+              id: 'main',
+              parentId: null,
+              name: '',
+              url: 'https://loaded.test/',
+            },
+          }
+        return null
+      },
+    })
+    expect(
+      json(
+        await runtime.run(`
+      let seen = 0
+      const loaded = await page.waitForEvent('load', { predicate: p => { if (p !== page || p.url() !== 'https://loaded.test/') throw new Error('wrong page state'); return ++seen === 2 }, timeout: 500 })
+      const dom = await page.waitForEvent('domcontentloaded')
+      const contextLoad = await context.waitForEvent('pageload')
+      return { seen, same: loaded === page && dom === page && contextLoad === page }
+    `),
+      ),
+    ).toEqual({ seen: 2, same: true })
+    const calls = runtime.calls.filter((call) => call.name === 'events.wait')
+    expect(calls[0]?.input.since).toBe(calls[1]?.input.since)
+    expect(calls[1]?.input.after).toBe(1)
+  })
+})
+
+it('does not let an older frame event resurrect a frame or replace a newer URL', async () => {
+  let candidate = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      if (call.name !== 'events.wait') return null
+      const records = [
+        {
+          seq: 11,
+          event: 'framedetached',
+          frame: {
+            id: 'child',
+            parentId: 'main',
+            name: '',
+            url: 'https://child.test/',
+          },
+        },
+        {
+          seq: 10,
+          event: 'frameattached',
+          frame: { id: 'child', parentId: 'main', name: '', url: '' },
+        },
+        {
+          seq: 15,
+          event: 'framenavigated',
+          frame: {
+            id: 'main',
+            parentId: null,
+            name: '',
+            url: 'https://new.test/',
+          },
+        },
+        {
+          seq: 13,
+          event: 'framenavigated',
+          frame: {
+            id: 'main',
+            parentId: null,
+            name: '',
+            url: 'https://old.test/',
+          },
+        },
+      ]
+      return {
+        ...records[candidate++],
+        page: brand(7),
+        at: Date.now(),
+        context: false,
+      }
+    },
+  })
+  expect(
+    json(
+      await runtime.run(`
+    const detached = await page.waitForEvent('framedetached')
+    const attached = await page.waitForEvent('frameattached')
+    const gone = detached === attached && detached.isDetached() && !page.frames().includes(detached)
+    await page.waitForEvent('framenavigated')
+    await page.waitForEvent('framenavigated')
+    return { gone, url: page.url() }
+  `),
+    ),
+  ).toEqual({ gone: true, url: 'https://new.test/' })
 })
