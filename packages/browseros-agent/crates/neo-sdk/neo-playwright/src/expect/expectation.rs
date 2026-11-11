@@ -7,7 +7,6 @@
 //! owns the timing, the codes and the message, so the trace and the script's error agree.
 
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -243,7 +242,7 @@ pub(crate) enum Poll {
         matches: bool,
         /// What the locator resolved to, for the call log.
         resolved: String,
-        /// The compared value, masked by the seal; `None` is `undefined`.
+        /// The compared value; `None` is `undefined`.
         received: Option<Value>,
         /// The aria snapshot of a poll that failed the matcher, for `matcherResult`.
         aria_snapshot: Option<String>,
@@ -263,9 +262,6 @@ pub(crate) struct Expectation {
     /// What zero matches answers for a matcher of every match: count 0, or an empty list
     /// matching nothing expected.
     nothing_matches: bool,
-    /// A poll compared a password, card or one-time-code field: the op's target is
-    /// sensitive, and the message hides the expected value.
-    sensitive: AtomicBool,
 }
 
 impl Expectation {
@@ -319,7 +315,6 @@ impl Expectation {
             is_not: params.is_not,
             shape: expression.shape(text),
             nothing_matches,
-            sensitive: AtomicBool::new(false),
         })
     }
 
@@ -424,19 +419,13 @@ impl Expectation {
                 matches,
                 resolved,
                 received,
-                sensitive,
                 aria_snapshot,
-            } => {
-                if sensitive.is_some() {
-                    self.sensitive.store(true, Ordering::Relaxed);
-                }
-                Ok(Poll::Ran {
-                    matches,
-                    resolved: resolved.into_line(),
-                    received: received.map(PageText::into_value),
-                    aria_snapshot: aria_snapshot.map(PageText::into_line),
-                })
-            }
+            } => Ok(Poll::Ran {
+                matches,
+                resolved: resolved.into_line(),
+                received: received.map(PageText::into_value),
+                aria_snapshot: aria_snapshot.map(PageText::into_line),
+            }),
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(self.nothing_found()),
             // Upstream throws these from the page, so they end the matcher at once and print
             // as its `Error:` line.
@@ -447,15 +436,6 @@ impl Expectation {
                 message,
                 class: ErrorClass::Script | ErrorClass::Selector,
             } => Err(self.thrown(scope, ErrorCode::InvalidInput, &message)),
-            // The probe refuses only a RegExp, or a case-insensitive match, against a sensitive
-            // field (expect.ts), so the script's pattern is hidden like its string would be.
-            ProbeReply::Error {
-                message,
-                class: ErrorClass::Unsupported,
-            } => {
-                self.sensitive.store(true, Ordering::Relaxed);
-                Err(self.thrown(scope, ErrorCode::Unsupported, &message))
-            }
             other => Err(resolve::refused(scope, other)),
         }
     }
@@ -574,11 +554,7 @@ impl Expectation {
     }
 
     fn message(&self, reported: Reported<'_>, timed_out: Option<Duration>) -> String {
-        let expected = if self.sensitive.load(Ordering::Relaxed) {
-            matcher_message::hidden_expected(&self.args.expected).into()
-        } else {
-            self.args.expected.as_str().into()
-        };
+        let expected = self.args.expected.as_str().into();
         MatcherMessage {
             receiver: self.receiver(),
             is_not: self.is_not,
@@ -959,50 +935,6 @@ mod tests {
         )?;
         assert_eq!(single.strictness(), Strictness::Strict);
         assert!(matches!(single.nothing_found(), Poll::Missing));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn tests_that_a_sensitive_comparison_hides_the_expected_value()
-    -> Result<(), Box<dyn Error>> {
-        let env = TestEnv::new();
-        let scope = locator_scope(&env)?;
-        let value = expectation(
-            &scope,
-            "toHaveValue",
-            json!({ "expression": "to.have.value", "expectedText": [{ "string": "hunter2" }], "isNot": false }),
-        )?;
-        let reply: ProbeReply = serde_json::from_value(json!({
-            "kind": "expect", "matches": false, "resolved": "<input type=\"password\" id=\"pw\"/>",
-            "received": "••••", "sensitive": "password",
-        }))?;
-        let poll = value.poll_of(&scope, reply)?;
-        assert!(env.calls().is_empty(), "reads do not report effects");
-        let error = value.timed_out(&scope, Some(&poll), None);
-        assert_eq!(error.error_code(), Some(ErrorCode::AssertionFailed));
-        assert!(
-            error
-                .message()
-                .contains("Expected: \"••••\"\nReceived: \"••••\"\n"),
-            "{error}"
-        );
-        assert!(!error.message().contains("hunter2"), "{error}");
-
-        let refused = value
-            .poll_of(
-                &scope,
-                serde_json::from_value(
-                    json!({ "kind": "error", "class": "unsupported", "message": "no RegExp here" }),
-                )?,
-            )
-            .err()
-            .ok_or("the probe's refusal ends the op")?;
-        assert_eq!(refused.error_code(), Some(ErrorCode::Unsupported));
-        assert!(
-            refused.message().contains("\nError: no RegExp here\n"),
-            "{refused}"
-        );
-        assert!(env.calls().is_empty(), "reads do not report effects");
         Ok(())
     }
 }

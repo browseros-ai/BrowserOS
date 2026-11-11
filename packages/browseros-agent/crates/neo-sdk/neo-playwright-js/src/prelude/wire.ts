@@ -159,6 +159,12 @@ export type EventName =
   | 'pageerror'
   | 'download'
   | 'filechooser'
+  | 'load'
+  | 'domcontentloaded'
+  | 'frameattached'
+  | 'framenavigated'
+  | 'framedetached'
+  | 'pageload'
   | 'page'
 
 export type DialogInfo = {
@@ -201,6 +207,17 @@ export type EventRecord = { seq: number; at: number } & (
   | { event: 'popup'; page: PageBrand; popup: PageEntry }
   | { event: 'page'; page: PageBrand; url: string; opener: PageBrand | null }
   | { event: 'close'; page: PageBrand }
+  | {
+      event: 'load' | 'domcontentloaded' | 'pageload'
+      page: PageBrand
+      frame: FrameInfo
+    }
+  | {
+      event: 'frameattached' | 'framenavigated' | 'framedetached'
+      page: PageBrand
+      frame: FrameInfo
+      context: boolean
+    }
   | { event: 'dialog'; page: PageBrand; dialog: DialogInfo }
   | { event: 'console'; page: PageBrand; message: ConsoleInfo }
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
@@ -262,6 +279,12 @@ export type ElementStateName =
  * ready to run, or the message of the server-side check upstream fails first, which Rust raises
  * at its point with nothing sent.
  */
+/**
+ * An init script's source as upstream's client builds it (`evaluationScript`), or the path of a
+ * file on Neo's disk that Rust reads as upstream's client reads it, `//# sourceURL` appended.
+ */
+export type InitSource = { source: string } | { path: string }
+
 export type PageScript =
   | {
       run: {
@@ -473,8 +496,12 @@ export type OpInputs = {
   'page.setViewportSize': PageArgs & {
     viewportSize: { width: number; height: number }
   }
+  'page.addInitScript': PageArgs & { script: InitSource }
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
+  'context.addInitScript': { script: InitSource }
+  /** The id an `addInitScript` returned. */
+  'disposable.dispose': { id: number }
   /**
    * `since` is the script's `Date.now()` when it attached the listener (or removed it). The
    * event ops name no target the door resolves, so their page always has its tab: the
@@ -593,8 +620,12 @@ export type OpOutputs = {
   'page.screenshot': unknown
   'page.pdf': unknown
   'page.setViewportSize': Done
+  /** The id `disposable.dispose` takes. */
+  'page.addInitScript': { id: number }
   'context.pages': { pages: PageEntry[] }
   'context.newPage': PageEntry
+  'context.addInitScript': { id: number }
+  'disposable.dispose': Done
   'events.listen': Done
   'events.next': Pumped
   'events.wait': EventRecord

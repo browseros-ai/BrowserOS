@@ -1,28 +1,23 @@
 use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
 
 use browseros_cdp::CdpError;
 use browseros_core::CoreError;
 use neo_trace::ErrorOwner;
 use serde_json::{Value, json};
-use tokio::time::Instant;
 
 use super::{
     ArgText, Called, EvaluateGuard, FIRST_POLL, MainWorldCall, NAVIGATED, Outcome, RemoteObject,
     Reply, SETTLED, Script, Serialized, Subject, decode, not_run, parsed, returned,
 };
 use crate::op_scope::OpScope;
-use crate::page::{FRAME_BUDGET, OpPage};
-use crate::probe::ProbeFailure;
 use crate::target::{CallHeader, PageRef};
 use crate::test_env::{self, TestEnv};
 use crate::test_support::{
     ProbeAnswer, RecordingHooks, SCRIPTED_DOCUMENT, ScriptedRun, ScriptedTab, TabScript,
 };
-use crate::world::Place;
-use crate::{ErrorCode, Op, Playwright, resolve};
+use crate::{ErrorCode, Op, Playwright};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -319,82 +314,6 @@ async fn tests_that_the_guard_lets_in_only_a_declared_op_and_a_script_to_run() -
         env.calls().is_empty(),
         "no op rechecked or marked anything sent"
     );
-    Ok(())
-}
-
-/// A call header with Playwright's timeout of `millis`.
-fn timeout_ms(millis: u64) -> CallHeader {
-    CallHeader {
-        api: None,
-        timeout_ms: Some(millis),
-    }
-}
-
-/// How long a slow renderer takes to answer: past a frame's 1 s budget.
-const LATE: Duration = Duration::from_millis(1_200);
-
-/// A tab whose renderer answers its first `slow` hidden-root scans only after [`LATE`]: a new
-/// world's install misses its budget at the scan.
-struct LateScan {
-    slow: usize,
-    scans: AtomicUsize,
-}
-
-impl TabScript for LateScan {
-    fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
-        ProbeAnswer::unexpected()
-    }
-
-    fn delay(&self, method: &str) -> Duration {
-        if method == "DOM.describeNode" && self.scans.fetch_add(1, Ordering::SeqCst) < self.slow {
-            LATE
-        } else {
-            Duration::ZERO
-        }
-    }
-}
-
-/// An install whose scan of the document's closed shadow roots misses the frame's budget left no
-/// world, so it is installed again while the op's deadline has room for it; late on the last
-/// try it fails as one late install did, with Neo's message on why.
-#[tokio::test(start_paused = true)]
-async fn tests_that_an_install_late_at_its_scan_is_tried_again_inside_the_deadline() -> TestResult {
-    for (slow, timeout, installed) in [(1, 5_000, true), (usize::MAX, 2_500, false)] {
-        let tab = ScriptedTab::new(LateScan {
-            slow,
-            scans: AtomicUsize::new(0),
-        });
-        let run = ScriptedRun::over(&tab).await?;
-        let op = Op::from_name("locator.textContent").ok_or("an op")?;
-        let scope = OpScope::new(&run.env, op, timeout_ms(timeout));
-        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
-        let started = Instant::now();
-        let world = page.world(&page.main_endpoint(), Place::Main).await;
-        let took = started.elapsed();
-        match world {
-            Ok(_) => assert!(
-                installed && took >= FRAME_BUDGET && took < FRAME_BUDGET * 2,
-                "installed on the second try: {took:?}"
-            ),
-            Err(failure @ ProbeFailure::Late) => {
-                assert!(
-                    !installed && took >= FRAME_BUDGET * 2 && took <= Duration::from_millis(2_500),
-                    "late on both tries the 2.5 s had room for: {took:?}"
-                );
-                let error = resolve::failed(&scope, failure);
-                assert_eq!(
-                    (error.error_code(), error.message()),
-                    (
-                        Some(ErrorCode::Unsupported),
-                        "locator.textContent: a frame did not answer Neo's privacy scan within \
-                         1000ms, so Neo cannot see every shadow root of its page and refuses the \
-                         op; try again once the frame responds"
-                    )
-                );
-            }
-            Err(failure) => return Err(failure.to_string().into()),
-        }
-    }
     Ok(())
 }
 

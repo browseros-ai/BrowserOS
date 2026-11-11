@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { corpus, sha256, source, verifySource } from '../js/prepare.mjs'
 import { clawDefaults } from './claw-context-options.mjs'
 import { prepareCuration } from './curation.mjs'
+import { EXPECT_TIMEOUT } from './product-expect.mjs'
 
 export function materialize(
   root,
@@ -95,7 +96,7 @@ export function materialize(
     edits.push({
       file: pageFile,
       reason:
-        'test-only expectLoop import seam; preserve extended expect and all other exports',
+        'assertion import seam; preserve extended expect and all other exports',
       beforeSha256: sha256(pageOriginal),
       afterSha256: sha256(fs.readFileSync(path.join(root, pageFile))),
     })
@@ -155,7 +156,7 @@ export function materialize(
     repeatEach: 1,
     timeout:
       process.platform === 'darwin' && process.arch === 'x64' ? 60_000 : 30_000,
-    expect: { timeout: 10_000 },
+    expect: { timeout: EXPECT_TIMEOUT },
     forbidOnly: true,
     fullyParallel: false,
     updateSnapshots: 'none',

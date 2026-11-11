@@ -16,6 +16,11 @@ listed_enum! {
         PageError,
         Download,
         FileChooser,
+        Load,
+        DomContentLoaded,
+        FrameAttached,
+        FrameNavigated,
+        FrameDetached,
     }
 }
 
@@ -30,6 +35,22 @@ impl PageEventKind {
             Self::PageError => "pageerror",
             Self::Download => "download",
             Self::FileChooser => "filechooser",
+            Self::Load => "load",
+            Self::DomContentLoaded => "domcontentloaded",
+            Self::FrameAttached => "frameattached",
+            Self::FrameNavigated => "framenavigated",
+            Self::FrameDetached => "framedetached",
+        }
+    }
+
+    /// Context mirrors in Playwright 1.64.1; `DOMContentLoaded` is page-only.
+    pub(crate) fn context(name: &str) -> Option<Self> {
+        match name {
+            "pageload" => Some(Self::Load),
+            "frameattached" => Some(Self::FrameAttached),
+            "framenavigated" => Some(Self::FrameNavigated),
+            "framedetached" => Some(Self::FrameDetached),
+            _ => None,
         }
     }
 
@@ -40,13 +61,6 @@ impl PageEventKind {
             return Ok(kind);
         }
         let hint = match name {
-            "load" | "domcontentloaded" => Some(format!(
-                "page.on('{name}') is not available in Neo; use page.waitForLoadState('{name}')"
-            )),
-            "framenavigated" | "frameattached" | "framedetached" => Some(format!(
-                "page.on('{name}') is not available in Neo; read page.frames() or use \
-                 page.waitForURL()"
-            )),
             "request" | "requestfailed" | "requestfinished" | "response" | "websocket" => Some(
                 format!("page.on('{name}') is not available in Neo: network events are not in v1"),
             ),
@@ -79,6 +93,8 @@ pub(crate) enum Subscription {
     },
     /// `context.on('page')`: every new tab of the context.
     ContextPage,
+    /// A lifecycle event forwarded from every page in the context.
+    Context(PageEventKind),
 }
 
 /// What `page.off` and `context.off` name: a subscription without its target, which may have
@@ -89,6 +105,8 @@ pub(crate) enum ListenerKey {
     Page(TabId, PageEventKind),
     /// The context's `page` event.
     ContextPage,
+    /// A lifecycle event forwarded from every page in the context.
+    Context(PageEventKind),
 }
 
 impl Subscription {
@@ -97,6 +115,7 @@ impl Subscription {
         match self {
             Self::Page { tab, event, .. } => ListenerKey::Page(*tab, *event),
             Self::ContextPage => ListenerKey::ContextPage,
+            Self::Context(event) => ListenerKey::Context(*event),
         }
     }
 
@@ -104,7 +123,9 @@ impl Subscription {
     pub(crate) fn matches(&self, event: &PageEvent) -> bool {
         match (self, event) {
             (Self::ContextPage, PageEvent::Opened(_)) => true,
-            (Self::ContextPage, _) => false,
+            (Self::Context(event), PageEvent::FrameLifecycle(frame)) => frame.kind == *event,
+            (Self::Context(event), PageEvent::Load { kind, .. }) => kind == event,
+            (Self::ContextPage | Self::Context(_), _) => false,
             (Self::Page { target, event, .. }, recorded) => recorded.concerns(*event, target),
         }
     }
@@ -113,7 +134,7 @@ impl Subscription {
     pub(crate) fn page_event(&self) -> Option<(&TargetId, PageEventKind)> {
         match self {
             Self::Page { target, event, .. } => Some((target, *event)),
-            Self::ContextPage => None,
+            Self::ContextPage | Self::Context(_) => None,
         }
     }
 }
@@ -131,10 +152,10 @@ mod tests {
 
     #[test]
     fn tests_that_a_playwright_event_neo_lacks_says_what_to_use() {
-        let Err(Unknown::Unsupported(hint)) = PageEventKind::parse("load") else {
-            panic!("load is a Playwright event Neo lacks");
+        let Err(Unknown::Unsupported(hint)) = PageEventKind::parse("request") else {
+            panic!("request is a Playwright event Neo lacks");
         };
-        assert!(hint.contains("page.waitForLoadState('load')"), "{hint}");
+        assert!(hint.contains("network events"), "{hint}");
         assert_eq!(PageEventKind::parse("clicked"), Err(Unknown::NotAnEvent));
     }
 }

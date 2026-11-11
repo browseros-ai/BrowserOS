@@ -75,7 +75,7 @@ listed_enum! {
         /// op's input may already have landed, but the script chose to stop it, so it is not
         /// one of Playwright's timeouts: the prelude throws `AbortError`.
         Aborted,
-        /// A Neo bug: a stale engine asset, a probe reply Rust cannot read, a missing seal.
+        /// A Neo bug: a stale engine asset, or a probe reply Rust cannot read.
         Internal,
     }
 }

@@ -252,8 +252,33 @@ async fn subscription(
             })
         }
         None if event == "page" => Ok(Subscription::ContextPage),
+        None if PageEventKind::context(event).is_some() => Ok(Subscription::Context(
+            PageEventKind::context(event).ok_or_else(|| context_event(scope, event))?,
+        )),
         None => Err(context_event(scope, event)),
     }
+}
+
+/// Context listeners observe existing tabs without requiring a prior page action. These are
+/// core-owned observation sessions; event release still maps each returned tab through the run.
+async fn observe_context(scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
+    let setup = async {
+        let listing = scope.view().list_pages().await?;
+        for page in listing.pages {
+            // A tab can close between listing and attachment. The watcher retries live tabs.
+            if let Err(error) = scope.view().page_session(page.page_id).await {
+                scope.log(format!(
+                    "context lifecycle observation will retry attachment: {error}"
+                ));
+            }
+        }
+        Ok::<(), CoreError>(())
+    };
+    scope
+        .within(setup)
+        .await
+        .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?
+        .map_err(|error| scope.core_error(&error))
 }
 
 /// The failure for a context event other than `page`.
@@ -283,6 +308,10 @@ async fn listen(
         let key = match &input.page {
             Some(page) => ListenerKey::Page(page.tab(), page_event(scope, &input.event)?),
             None if input.event == "page" => ListenerKey::ContextPage,
+            None if PageEventKind::context(&input.event).is_some() => ListenerKey::Context(
+                PageEventKind::context(&input.event)
+                    .ok_or_else(|| context_event(scope, &input.event))?,
+            ),
             None => return Err(context_event(scope, &input.event)),
         };
         run.events.unlisten(&key);
@@ -292,8 +321,14 @@ async fn listen(
     let since = input.since.unwrap_or_else(now_ms);
     let hub = pw.events();
     hub.bind(run);
+    let observes_context = matches!(subscription, Subscription::Context(_));
     run.events
         .listen(subscription, since, hub.position_at(since));
+    // Register before asynchronous observation setup: an off arriving during setup removes
+    // the actual listener and cannot be undone when this on finishes.
+    if observes_context {
+        observe_context(scope).await?;
+    }
     // A pump that already read past an event this listener should get reads again.
     hub.wake();
     Ok(json!({}))
@@ -312,11 +347,22 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
         let mut lost = 0;
         let mut read_up_to = Vec::new();
         let mut tabs = Tabs::default();
-        for (subscription, listening) in run.events.listeners() {
-            let read = hub.read_after(listening.after);
-            lost += read.lost;
+        let listeners = run.events.listeners();
+        let after = listeners
+            .iter()
+            .map(|(_, listening)| listening.after)
+            .min()
+            .unwrap_or_else(|| hub.head());
+        // All audiences share one journal cut. Appends during a tab lookup belong to the
+        // next batch for everyone, so page/context mirrors cannot split across batches.
+        let read = hub.read_after(after);
+        for (subscription, listening) in listeners {
+            lost += read
+                .lost
+                .saturating_sub(listening.after.saturating_sub(after));
             for record in &read.records {
-                if receives(&subscription, listening.since_ms, record)
+                if record.seq > listening.after
+                    && receives(&subscription, listening.since_ms, record)
                     && let Some(event) = deliver(
                         pw,
                         scope,
@@ -334,7 +380,7 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
         }
         run.events.advance(&read_up_to);
         if !events.is_empty() || lost > 0 {
-            events.sort_by_key(|event| event.seq);
+            events.sort_by_key(Delivered::order);
             // After the sort, so a run's download index is the order its script receives them.
             hand_downloads(pw, scope, &events);
             return to_output(scope, &Pumped { events, lost });
@@ -370,6 +416,9 @@ async fn wait(
     pw.events().bind(run);
     // While it waits, the watcher records and holds what this wait could receive.
     let _waiting = run.events.waiting(subscription.clone());
+    if matches!(subscription, Subscription::Context(_)) {
+        observe_context(scope).await?;
+    }
     let found = first_event(
         pw,
         scope,

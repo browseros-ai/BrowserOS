@@ -15,11 +15,15 @@ use tokio::time;
 
 use crate::op_scope::OpScope;
 use crate::page::screenshot_masks::{MaskLocator, ScreenshotMasks};
-use crate::page::{FRAME_BUDGET, OpPage, frame_tree, world_call};
+use crate::page::{OpPage, frame_tree, world_call};
 use crate::resolve::{self, HandleSite};
 use crate::target::Target;
 use crate::world::SealedWorld;
 use crate::{ErrorCode, PlaywrightError};
+
+/// How long preparation waits on one frame (its world, its script) before skipping it as
+/// stalled, as upstream's non-stalling evaluation skips a frame that does not answer.
+const FRAME_STALL: Duration = Duration::from_secs(1);
 
 const PREPARE: &str = include_str!("../../assets/screenshot-prepare.js");
 const RESTORE: &str = "function() { window.__pwCleanupScreenshot?.(); }";
@@ -72,7 +76,7 @@ impl ScreenshotPreparation {
         let main = page.main_endpoint().frame;
         let mut ids = vec![main.clone()];
         if let Ok(Ok(tree)) = time::timeout(
-            FRAME_BUDGET,
+            FRAME_STALL,
             frame_tree::read(page.browser(), page.core_page(), &page.root_session()),
         )
         .await
@@ -80,7 +84,7 @@ impl ScreenshotPreparation {
             ids.extend(tree.ids().filter(|id| **id != main).cloned());
         }
         let worlds = future::join_all(ids.iter().map(|id| async move {
-            time::timeout(FRAME_BUDGET, world_call::frame_world(page, scope, Some(id)))
+            time::timeout(FRAME_STALL, world_call::frame_world(page, scope, Some(id)))
                 .await
                 .ok()
                 .and_then(Result::ok)
@@ -91,7 +95,7 @@ impl ScreenshotPreparation {
         // though its script already changed the document.
         future::join_all(self.worlds.iter().map(|world| async {
             let _prepared =
-                time::timeout(FRAME_BUDGET, world.call_for_screenshot(PREPARE, &options)).await;
+                time::timeout(FRAME_STALL, world.call_for_screenshot(PREPARE, &options)).await;
         }))
         .await;
     }

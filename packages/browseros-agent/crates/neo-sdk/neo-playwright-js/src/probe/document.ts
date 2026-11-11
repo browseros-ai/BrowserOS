@@ -1,9 +1,8 @@
 /**
- * The document as a whole. `page.title()` and `page.content()` read it here rather than in
- * the main world, so that every field value the serialization reads comes through the seal
- * (`value="••••"`). `page.setContent` replaces it here too, as upstream does from its utility
- * world. A failed `expect` that found nothing reads the body's aria snapshot here, as upstream
- * reads it from its utility world.
+ * The document as a whole. `page.title()` and `page.content()` read it here, in the engine's
+ * isolated world, and `page.setContent` replaces it here, as upstream does each from its
+ * utility world. A failed `expect` that found nothing reads the body's aria snapshot here, as
+ * upstream reads it from its utility world.
  */
 import type {
   DocumentRequest,
@@ -39,8 +38,8 @@ function content(document: Document): string {
 }
 
 /**
- * The doctype as XMLSerializer prints it (DOM Parsing, "serializing a DocumentType"). Upstream
- * calls XMLSerializer, which the seal deletes from this world.
+ * The doctype as XMLSerializer prints it (DOM Parsing, "serializing a DocumentType"), which is
+ * what upstream calls.
  */
 function doctypeMarkup(doctype: DocumentType): string {
   let markup = `<!DOCTYPE ${doctype.name}`
@@ -60,9 +59,6 @@ function doctypeMarkup(doctype: DocumentType): string {
  * upstream's frame keeps its seq and the next snapshot's refs keep their prefix (`e5`, not
  * `f1e5`). Every pin and ref from before names an element document.open() removed, so it reads
  * as detached or stale, never as an element of the new content.
- *
- * document.open() also removes every event listener of the document, the seal's journal
- * listeners among them; `watch` adds them back.
  */
 export function replaceDocument(
   world: World,
@@ -74,7 +70,6 @@ export function replaceDocument(
     document.write(request.html)
   } finally {
     document.close()
-    world.seal.watch(document)
   }
   return { kind: 'replaced' }
 }

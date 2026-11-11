@@ -275,27 +275,6 @@ pub(crate) enum KeyEvent {
 }
 
 impl KeyEvent {
-    /// Whether this is a key down that copies or cuts the selection on `platform`, which
-    /// design D14 refuses in a password, card or one-time-code field: Meta+C and Meta+X on a
-    /// Mac; Control+C, Control+X, Control+Insert and Shift+Delete elsewhere. Read from the
-    /// event, with the modifiers held when it goes down, so a chord split across calls
-    /// (`keyboard.down('Control')`, then `type('c')`) counts too.
-    pub(crate) fn copies(&self, platform: Platform) -> bool {
-        let Self::Down { key, modifiers, .. } = self else {
-            return false;
-        };
-        match platform {
-            Platform::Mac => {
-                modifiers.contains(Modifier::Meta) && matches!(key.code, "KeyC" | "KeyX")
-            }
-            Platform::Linux | Platform::Windows => {
-                (modifiers.contains(Modifier::Control)
-                    && matches!(key.code, "KeyC" | "KeyX" | "Insert"))
-                    || (modifiers.contains(Modifier::Shift) && key.code == "Delete")
-            }
-        }
-    }
-
     /// The key this event presses or lets go, by its code.
     pub(crate) fn hold(&self) -> Hold {
         match self {
@@ -360,11 +339,6 @@ impl Keyboard {
     /// The modifiers held now. Mouse events carry them too.
     pub(crate) fn modifiers(&self) -> Modifiers {
         self.modifiers
-    }
-
-    /// The browser's platform, which decides what copies (`KeyEvent::copies`).
-    pub(crate) fn platform(&self) -> Platform {
-        self.platform
     }
 
     /// Upstream's `resolveSmartModifier` for an action's `modifiers` option: `ControlOrMeta` by

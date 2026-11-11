@@ -118,8 +118,8 @@ impl PageInput {
 
     /// A copy of the tab's keyboard and mouse to build a burst on. The tab keeps its own state
     /// until the burst goes out ([`PageInput::send_planned`], [`PageInput::resume`]), so a
-    /// burst refused before it went out (an unknown key, a copy in a sensitive field, a refused
-    /// recheck) leaves nothing pressed or moved. Nothing else hands out the tab's devices.
+    /// burst refused before it went out (an unknown key, a refused recheck) leaves nothing
+    /// pressed or moved. Nothing else hands out the tab's devices.
     pub(crate) fn plan(&self) -> InputDevices {
         self.tab.devices.clone()
     }

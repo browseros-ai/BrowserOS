@@ -281,7 +281,6 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       },
     },
   ],
-  focused: [{ op: 'focused' }],
   matchUrl: [
     {
       op: 'matchUrl',
@@ -349,13 +348,6 @@ const REPLY_EXAMPLES: {
       kind: 'element',
       pin: 3,
       preview: '<button>Go</button>',
-      sensitive: null,
-    },
-    {
-      kind: 'element',
-      pin: 5,
-      preview: '<input id="pw" type="password" value="••••"/>',
-      sensitive: 'password',
     },
   ],
   frame: [
@@ -378,7 +370,6 @@ const REPLY_EXAMPLES: {
       point: POINT,
       inView: true,
       transformed: false,
-      sensitive: null,
     },
   ],
   covered: [
@@ -402,7 +393,7 @@ const REPLY_EXAMPLES: {
   ],
   value: [
     { kind: 'value', value: 'Welcome' },
-    { kind: 'value', value: '••••' },
+    { kind: 'value', value: 'Ada' },
     { kind: 'value', value: null },
     { kind: 'value', value: RECT },
     { kind: 'value', value: ['r', 'g'] },
@@ -412,30 +403,25 @@ const REPLY_EXAMPLES: {
     { kind: 'value', value: true },
   ],
   read: [
-    { kind: 'read', value: 'Welcome', sensitive: null },
-    { kind: 'read', value: '••••', sensitive: 'password' },
-    { kind: 'read', value: null, sensitive: null },
-    { kind: 'read', value: RECT, sensitive: null },
+    { kind: 'read', value: 'Welcome' },
+    { kind: 'read', value: null },
+    { kind: 'read', value: RECT },
     {
       kind: 'read',
       value: { x: 8, y: 120, scaleX: 1, scaleY: 1 },
-      sensitive: null,
     },
-    { kind: 'read', value: 'rotated', sensitive: null },
+    { kind: 'read', value: 'rotated' },
     {
       kind: 'read',
       value: { checked: true, radio: true },
-      sensitive: null,
     },
     {
       kind: 'read',
       value: { pin: 7, target: 8, takesPaths: true },
-      sensitive: null,
     },
     {
       kind: 'read',
       value: { pin: 6, preview: '<li>One</li>', visible: true, count: 2 },
-      sensitive: null,
     },
   ],
   values: [
@@ -471,48 +457,31 @@ const REPLY_EXAMPLES: {
       matches: true,
       resolved: '<h1 id="greeting">Hello</h1>',
       received: 'Hello',
-      sensitive: null,
     },
     {
       kind: 'expect',
       matches: false,
       resolved: '3 elements',
       received: ['one', 'two', 'three'],
-      sensitive: null,
     },
     {
       kind: 'expect',
       matches: false,
       resolved: '<input id="name"/>',
       received: null,
-      sensitive: null,
-    },
-    {
-      kind: 'expect',
-      matches: false,
-      resolved: '<input type="password" id="pw"/>',
-      received: '••••',
-      sensitive: 'password',
     },
     {
       kind: 'expect',
       matches: false,
       resolved: '<div id="x">…</div>',
-      sensitive: null,
     },
     {
       kind: 'expect',
       matches: false,
       resolved: '<h1 id="greeting">Hello</h1>',
       received: 'Hello',
-      sensitive: null,
       ariaSnapshot: '- heading "Hello" [level=1]',
     },
-  ],
-  focused: [
-    { kind: 'focused', sensitive: true, iframe: null, host: null },
-    { kind: 'focused', sensitive: false, iframe: 9, host: null },
-    { kind: 'focused', sensitive: false, iframe: null, host: 4 },
   ],
   urlMatch: [
     { kind: 'urlMatch', matches: true, url: 'https://example.com/done' },
@@ -521,7 +490,7 @@ const REPLY_EXAMPLES: {
     { kind: 'documentText', text: 'Pay' },
     {
       kind: 'documentText',
-      text: '<!DOCTYPE html><html><head></head><body><input type="password" value="••••"></body></html>',
+      text: '<!DOCTYPE html><html><head></head><body><input type="password" value="hunter2"></body></html>',
     },
   ],
   replaced: [{ kind: 'replaced' }],

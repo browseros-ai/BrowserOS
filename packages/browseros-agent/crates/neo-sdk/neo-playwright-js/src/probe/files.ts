@@ -15,7 +15,7 @@ import type { World } from './world'
 
 /**
  * Elements a directory upload armed, with whether their `input` came. Module state is this
- * world's: the bundle is evaluated once per sealed world.
+ * world's: the bundle is evaluated once per isolated world.
  */
 const armed = new WeakMap<Element, { arrived: boolean }>()
 

@@ -259,6 +259,14 @@ impl RunService {
         // file; and before the end record, which drops the run state that lists the downloads.
         builtins::keep_downloads(&run, self.store.outputs()).await;
         let end = keep_blobs(run.id(), end, self.store.outputs()).await;
+        // A run's init scripts end with it: removed before the reply, so the next run's first
+        // navigation, or the owner's, loads without them. A renderer that does not answer within
+        // the grace leaves the rest to the run state's drop, which removes them in the background.
+        let _removed = time::timeout(
+            Defaults::TEARDOWN_GRACE,
+            builtins::remove_init_scripts(&run),
+        )
+        .await;
         // The run's end record is built from its reply, so the trace and a `requestId` replay keep
         // exactly what the caller got.
         let reply = Arc::new(RunReply::build(&run, end));

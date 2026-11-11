@@ -7,10 +7,11 @@ use std::time::Duration;
 use browseros_core::TargetId;
 use serde::Serialize;
 
-use crate::events::Subscription;
 use crate::events::event_hub::EventRecord;
 use crate::events::file_chooser::FileChooser;
+use crate::events::frame_lifecycle::{EventFrame, FrameLifecycle};
 use crate::events::page_event::{DialogId, Location, OpenedPage, PageEvent, WindowKind};
+use crate::events::{PageEventKind, Subscription};
 use crate::op_scope::OpScope;
 use crate::page::PageHandle;
 use crate::{ErrorCode, Playwright, PlaywrightError};
@@ -35,6 +36,20 @@ pub(crate) struct Delivered {
     payload: Payload,
 }
 
+impl Delivered {
+    /// Page listeners precede the context mirror of the same frame transition, irrespective
+    /// of the listener map's iteration order (Playwright's client emits in this order).
+    pub(crate) fn order(&self) -> (u64, bool) {
+        let context = matches!(
+            &self.payload,
+            Payload::FrameAttached { context: true, .. }
+                | Payload::FrameNavigated { context: true, .. }
+                | Payload::FrameDetached { context: true, .. }
+        );
+        (self.seq, context)
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "event")]
 enum Payload {
@@ -50,6 +65,30 @@ enum Payload {
     },
     #[serde(rename = "close")]
     Close { page: PageHandle },
+    #[serde(rename = "load")]
+    Load { page: PageHandle, frame: EventFrame },
+    #[serde(rename = "domcontentloaded")]
+    DomContentLoaded { page: PageHandle, frame: EventFrame },
+    #[serde(rename = "pageload")]
+    PageLoad { page: PageHandle, frame: EventFrame },
+    #[serde(rename = "frameattached")]
+    FrameAttached {
+        page: PageHandle,
+        frame: EventFrame,
+        context: bool,
+    },
+    #[serde(rename = "framenavigated")]
+    FrameNavigated {
+        page: PageHandle,
+        frame: EventFrame,
+        context: bool,
+    },
+    #[serde(rename = "framedetached")]
+    FrameDetached {
+        page: PageHandle,
+        frame: EventFrame,
+        context: bool,
+    },
     #[serde(rename = "dialog")]
     Dialog { page: PageHandle, dialog: Dialog },
     #[serde(rename = "console")]
@@ -203,9 +242,117 @@ pub(crate) async fn deliver(
     let listener = match subscription {
         Subscription::Page { tab, .. } => Some(PageHandle::new(*tab)),
         Subscription::ContextPage => None,
+        Subscription::Context(_) => {
+            let target = match &record.event {
+                PageEvent::FrameLifecycle(frame) => &frame.target,
+                PageEvent::Load { target, .. } => target,
+                _ => return Ok(None),
+            };
+            tabs.new_tab(scope, target).await?
+        }
     };
+    let context = matches!(subscription, Subscription::Context(_));
     report_navigation(scope, listener.as_ref(), &record.event);
-    let payload = match (&record.event, listener) {
+    let payload = if let Some(payload) = lifecycle_payload(&record.event, listener.clone(), context)
+    {
+        payload
+    } else if let Some(payload) = ordinary_payload(
+        pw,
+        scope,
+        &record.event,
+        record.seq,
+        listener,
+        tabs,
+        windows,
+    )
+    .await?
+    {
+        payload
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(Delivered {
+        seq: record.seq,
+        at: record.at_ms,
+        payload,
+    }))
+}
+
+/// Public lifecycle values need no browser read: their metadata belongs to the event.
+fn lifecycle_payload(
+    event: &PageEvent,
+    listener: Option<PageHandle>,
+    context: bool,
+) -> Option<Payload> {
+    let payload = match (event, listener) {
+        (PageEvent::FrameLifecycle(FrameLifecycle { kind, frame, .. }), Some(page)) => {
+            let frame = frame.clone();
+            match kind {
+                PageEventKind::FrameAttached => Payload::FrameAttached {
+                    page,
+                    frame,
+                    context,
+                },
+                PageEventKind::FrameNavigated => Payload::FrameNavigated {
+                    page,
+                    frame,
+                    context,
+                },
+                PageEventKind::FrameDetached => Payload::FrameDetached {
+                    page,
+                    frame,
+                    context,
+                },
+                _ => return None,
+            }
+        }
+        (
+            PageEvent::Load {
+                kind: PageEventKind::Load,
+                frame,
+                ..
+            },
+            Some(page),
+        ) => {
+            if context {
+                Payload::PageLoad {
+                    page,
+                    frame: frame.clone(),
+                }
+            } else {
+                Payload::Load {
+                    page,
+                    frame: frame.clone(),
+                }
+            }
+        }
+        (
+            PageEvent::Load {
+                kind: PageEventKind::DomContentLoaded,
+                frame,
+                ..
+            },
+            Some(page),
+        ) => Payload::DomContentLoaded {
+            page,
+            frame: frame.clone(),
+        },
+        _ => return None,
+    };
+    Some(payload)
+}
+
+/// Non-lifecycle values may adopt a new tab or a native file chooser through the run's view.
+async fn ordinary_payload(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    event: &PageEvent,
+    seq: u64,
+    listener: Option<PageHandle>,
+    tabs: &mut Tabs,
+    windows: WindowPopup,
+) -> Result<Option<Payload>, PlaywrightError> {
+    let payload = match (event, listener) {
         (PageEvent::Opened(opened), Some(page)) => {
             let Some(popup) = popup_tab(scope, opened, tabs, windows).await? else {
                 return Ok(None);
@@ -234,7 +381,7 @@ pub(crate) async fn deliver(
             }
         }
         (PageEvent::Closed(target), Some(page)) => {
-            scope.report_close(page.tab(), target, record.seq);
+            scope.report_close(page.tab(), target, seq);
             Payload::Close { page }
         }
         (PageEvent::Dialog(dialog), Some(page)) => Payload::Dialog {
@@ -279,9 +426,13 @@ pub(crate) async fn deliver(
             };
             Payload::FileChooser { page, chooser }
         }
-        // Internal navigation facts are never public events; the context receives only new tabs.
+        // Navigation waiters consume loader facts; public lifecycles were handled above.
         (
-            PageEvent::Navigation(_) | PageEvent::FrameDetached(_) | PageEvent::FrameSwapped(_),
+            PageEvent::Navigation(_)
+            | PageEvent::FrameDetached(_)
+            | PageEvent::FrameSwapped(_)
+            | PageEvent::FrameLifecycle(_)
+            | PageEvent::Load { .. },
             _,
         )
         | (
@@ -294,18 +445,16 @@ pub(crate) async fn deliver(
             None,
         ) => return Ok(None),
     };
-    Ok(Some(Delivered {
-        seq: record.seq,
-        at: record.at_ms,
-        payload,
-    }))
+    Ok(Some(payload))
 }
 
 /// A console/dialog/etc. can follow renderer-initiated navigation. Delivery synchronizes
 /// `page.url()` even when no SDK navigation ran, while a close carries its own terminal facts.
 fn report_navigation(scope: &OpScope<'_>, page: Option<&PageHandle>, event: &PageEvent) {
     if let Some(page) = page
-        && !matches!(event, PageEvent::Closed(_))
+        // Lifecycle records already carry their event-time state. A fresh browser read here
+        // both overwrites it and can delay a navigation event past the action that caused it.
+        && !matches!(event, PageEvent::Closed(_) | PageEvent::FrameLifecycle(_) | PageEvent::Load { .. })
     {
         scope.report_navigation(page.tab());
     }
