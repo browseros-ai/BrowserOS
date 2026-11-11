@@ -181,7 +181,6 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
-        // The facade keeps the startup config's upload deny list for its whole lifetime.
         let playwright = PlaywrightFacade::start(Arc::clone(&browser));
 
         // One solver for the process: its paid-task budget and page reservations are its own.

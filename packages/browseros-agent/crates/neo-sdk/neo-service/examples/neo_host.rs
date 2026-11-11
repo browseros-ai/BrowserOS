@@ -1,5 +1,5 @@
 //! Serves the host API on a Unix socket the way claw-sdk will, with nothing from the app: a
-//! trace store, its writer with the screenshot queue, `Privacy`, a `BrowserSession` over the
+//! trace store, its writer with the screenshot queue, a `BrowserSession` over the
 //! browser's CDP port, `Service::start`, and `host_service` behind a token file. It is the real
 //! surface for checking the routes and the camera by hand, or from the Neo container harness:
 //!
