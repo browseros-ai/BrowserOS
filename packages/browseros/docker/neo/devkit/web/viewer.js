@@ -3,7 +3,7 @@
 //
 // The browser cannot put `Authorization` on a WebSocket, so the socket goes to the gateway on
 // this page's origin, which opens the upstream display with the bearer header and relays its
-// close code. Close codes are claw-sdk's (4001, 4002, 1008, 1003, 1011) or the gateway's
+// close code. Close codes are claw-sdk's (4002, 1008, 1003, 1011) or the gateway's
 // (4000 + HTTP status for a refused upgrade, 4502 for claw-sdk unreachable); see gateway.ts.
 
 import RFB from "/novnc/core/rfb.js";
@@ -25,11 +25,9 @@ const want = {
 /**
  * How a display ended, by close code, and what the viewer does next: `retry` reconnects after
  * RETRY_MS, `toView` drops a control display's mode and release first (its takeover is over).
- * 4409 carries two different refusals, told apart by the error code at the start of the reason.
+ * A refused takeover upgrade carries 4409 and the host API error in its reason.
  */
 const ENDS = [
-  { code: 4001, retry: true, words: "Paused: the owner has control, or a private tab is in front. Retrying." },
-  { code: 4409, when: "display_paused", retry: true, words: "Paused: the owner has control, or a private tab is in front. Retrying." },
   { code: 4002, retry: true, toView: true, words: "Released: the takeover ended. Back to view." },
   { code: 4409, when: "takeover_released", retry: true, toView: true, words: "That takeover is already released. Back to view." },
   { code: 4404, retry: false, toView: true, words: "No takeover has that release id. Switched to view; connect again." },

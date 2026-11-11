@@ -8,14 +8,15 @@ use neo_trace::ErrorOwner;
 use serde_json::{Value, json};
 
 use super::{
-    ArgText, Called, EvaluateGuard, FIRST_POLL, MainWorldCall, NAVIGATED, Outcome, RemoteObject,
-    Reply, SETTLED, Script, Serialized, Subject, decode, not_run, parsed, returned,
+    ArgText, Called, EvaluateGuard, FIRST_POLL, MainWorldCall, NAVIGATED, OTHER_WORLD, Outcome,
+    RemoteObject, Reply, SETTLED, Script, Serialized, Subject, THROUGH_EVALUATOR, decode, not_run,
+    parsed, returned,
 };
 use crate::op_scope::OpScope;
 use crate::target::{CallHeader, PageRef};
-use crate::test_env::{self, TestEnv};
+use crate::test_env::{self, EnvCall, TestEnv};
 use crate::test_support::{ProbeAnswer, SCRIPTED_DOCUMENT, ScriptedRun, ScriptedTab, TabScript};
-use crate::{ErrorCode, Op, Playwright};
+use crate::{ErrorCode, Op, Playwright, Refusal};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -444,6 +445,107 @@ async fn tests_that_a_wait_a_navigation_cut_off_polls_again_in_the_next_document
         tab.script().log(),
         ["build", "build", "first poll", "settled"],
         "the poller built again after the cut-off call, with nothing else sent to the probe"
+    );
+    Ok(())
+}
+
+/// A tab whose main frame's document is in another context than the session's default one, as
+/// a same-process child frame's is: Chromium refuses a call through the evaluator before anything
+/// runs, and the direct call answers. Logs each call into the document.
+#[derive(Default)]
+struct OtherWorld {
+    log: Mutex<Vec<&'static str>>,
+}
+
+impl OtherWorld {
+    fn log(&self) -> Vec<&'static str> {
+        self.log
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl TabScript for OtherWorld {
+    fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+        ProbeAnswer::unexpected()
+    }
+
+    fn main_world(&self, object: &str, function: &str) -> Option<Result<Value, &'static str>> {
+        if object != SCRIPTED_DOCUMENT {
+            return None;
+        }
+        let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+        if function == THROUGH_EVALUATOR {
+            log.push("through the evaluator");
+            return Some(Err(OTHER_WORLD));
+        }
+        log.push("direct");
+        Some(Ok(json!({ "result": { "type": "string", "value": "7" } })))
+    }
+}
+
+fn evaluate_input(run: &ScriptedRun) -> Result<Value, serde_json::Error> {
+    Ok(json!({ "page": serde_json::to_value(&run.page)?,
+               "script": { "run": { "expression": "() => 7", "isFunction": true,
+                                    "arg": r#"{"v":"undefined"}"# } } }))
+}
+
+/// A refused evaluator ran nothing, so the direct call goes out, and only after a recheck of
+/// its own (STYLE P6): one recheck per send.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_refused_evaluator_falls_back_after_a_fresh_recheck() -> TestResult {
+    let tab = ScriptedTab::new(OtherWorld::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
+    let answered = run
+        .playwright
+        .invoke(&run.env, op, evaluate_input(&run)?)
+        .await?;
+    assert_eq!(answered["value"], json!(7));
+    assert_eq!(tab.script().log(), ["through the evaluator", "direct"]);
+    let rechecks = run
+        .env
+        .calls()
+        .iter()
+        .filter(|call| matches!(call, EnvCall::Recheck))
+        .count();
+    assert_eq!(rechecks, 2, "the fallback was rechecked before it went out");
+    Ok(())
+}
+
+/// A host that takes the tab between the refused evaluator and the fallback stops the fallback:
+/// nothing runs in the page after the refusal.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_host_refusal_before_the_fallback_sends_nothing() -> TestResult {
+    let tab = ScriptedTab::new(OtherWorld::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let refusal = Refusal {
+        owner: ErrorOwner::Host,
+        code: "owner_has_control".to_owned(),
+        message: "The owner is using this tab.".to_owned(),
+        host_code: None,
+    };
+    let run = ScriptedRun {
+        env: run.env.with_refusal_after(1, refusal),
+        ..run
+    };
+    let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
+    let refused = run
+        .playwright
+        .invoke(&run.env, op, evaluate_input(&run)?)
+        .await
+        .err()
+        .ok_or("the host's refusal stops the fallback")?;
+    assert!(
+        refused.message().contains("The owner is using this tab."),
+        "{}",
+        refused.message()
+    );
+    assert_eq!(
+        tab.script().log(),
+        ["through the evaluator"],
+        "no direct call after the refusal"
     );
     Ok(())
 }

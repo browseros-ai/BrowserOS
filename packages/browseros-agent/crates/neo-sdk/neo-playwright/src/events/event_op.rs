@@ -9,7 +9,7 @@ use std::path::{self, Path, PathBuf};
 use std::pin::pin;
 use std::{io, slice};
 
-use browseros_core::{CoreError, ProtocolSession};
+use browseros_core::{CoreError, ProtocolSession, TabId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::fs;
@@ -91,7 +91,7 @@ impl EventOp {
 /// `page.off(event)` once its last listener goes (`on: false`); without `page`, the context's
 /// `page` event. `since` is the script's `Date.now()` when it attached the listener.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ListenInput {
     #[serde(default)]
     page: Option<PageRef>,
@@ -99,6 +99,10 @@ struct ListenInput {
     on: bool,
     #[serde(default)]
     since: Option<u64>,
+    /// Internal worker bookkeeping can end after its page closed. This names only a key
+    /// in this run's subscription table, without resolving or acting on the retired tab.
+    #[serde(default)]
+    retired_tab: Option<TabId>,
 }
 
 /// `events.wait { page?, event, since, after? }`: `page.waitForEvent(event)` and
@@ -308,6 +312,17 @@ async fn listen(
     input: ListenInput,
 ) -> Result<Value, PlaywrightError> {
     let run = scope.run_state();
+    if let Some(tab) = input.retired_tab {
+        if input.on || input.page.is_some() || input.event != "workerstate" {
+            return Err(scope.fail(
+                ErrorCode::InvalidInput,
+                "retiredTab only removes internal worker bookkeeping without a page target",
+            ));
+        }
+        run.events
+            .unlisten(&ListenerKey::Page(tab, PageEventKind::WorkerState));
+        return Ok(json!({}));
+    }
     if !input.on {
         let key = match &input.page {
             Some(page) => ListenerKey::Page(page.tab(), page_event(scope, &input.event)?),

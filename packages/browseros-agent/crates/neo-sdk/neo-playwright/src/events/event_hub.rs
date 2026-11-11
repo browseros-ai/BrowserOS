@@ -26,6 +26,8 @@ pub(crate) const LOG_CAPACITY: usize = 1024;
 pub(crate) struct EventHub {
     /// A std mutex: every holder copies or appends and lets go, never across an await.
     log: Mutex<EventLog>,
+    /// Live worker endpoints are separate from the bounded event journal.
+    pub(crate) workers: super::worker_table::WorkerTable,
     /// Woken after every record, and when a run adds a listener, so readers re-read.
     changed: Notify,
     /// Runs that used an event op, weakly: a run's state dies with the run. Pruned as it goes.
@@ -191,7 +193,7 @@ impl EventHub {
         }
     }
 
-    /// Whether a live run needs lifecycle observation for all of the context's tabs.
+    /// Whether a run explicitly requested lifecycle events on every context page.
     pub(crate) fn wants_context_lifecycle(&self) -> bool {
         self.runs
             .lock()

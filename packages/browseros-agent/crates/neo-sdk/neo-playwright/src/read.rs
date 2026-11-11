@@ -1,4 +1,4 @@
-//! Playwright's reads of elements: resolved and read in one sealed-world call. Reads never mark
+//! Playwright's reads of elements: resolved and read in one isolated-world call. Reads never mark
 //! their op sent.
 //!
 //! ```text

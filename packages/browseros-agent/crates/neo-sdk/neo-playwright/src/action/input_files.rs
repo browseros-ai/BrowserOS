@@ -15,12 +15,12 @@
 //!    paths    access(F_OK) each ─ `<api>: ENOENT: … access '<abs>'`  ┐ a locator retries,
 //!             not type=file    ─ Chromium's Protocol error          ┘ a handle fails
 //!             the input's remote object, in the op's object group
-//!    directory: armInput on the element named, a sealed-world listener the page cannot see
+//!    directory: armInput on the element named, a isolated-world listener the page cannot see
 //!    send_effect()                                                            Sent
 //!    paths, directory   DOM.setFileInputFiles { objectId, files }: Chromium reads the files,
 //!                       and the page sees trusted `input` and `change`
 //!    directory          inputArrived, polled on Rust's clock until `input` or the timeout
-//!    payloads, []       edit { setFiles }: upstream's injected setInputFiles, sealed world
+//!    payloads, []       edit { setFiles }: upstream's injected setInputFiles, isolated world
 //! ```
 //!
 //! No relative path reaches CDP: `DOM.setFileInputFiles` crashes the target on one, and turns
@@ -140,7 +140,7 @@ enum InputFiles {
     Paths(Vec<HostPath>),
     /// One directory, for a `webkitdirectory` input.
     Directory(HostPath),
-    /// Built in the sealed world by upstream's injected script.
+    /// Built in the isolated world by upstream's injected script.
     Payloads(Vec<FilePayload>),
 }
 
@@ -327,7 +327,7 @@ impl InputFiles {
     /// Recheck each path Chromium will open: Node's resolution folds `..` without following
     /// symlinks, and a file can disappear while the locator waits. Then check `type=file`
     /// before sending to Chromium. A locator retries either error, while a handle fails
-    /// immediately. A directory's `input` listener is armed in the sealed world, where the page
+    /// immediately. A directory's `input` listener is armed in the isolated world, where the page
     /// cannot see it.
     async fn ready(
         &self,
@@ -436,7 +436,7 @@ impl Ready<'_> {
     }
 }
 
-/// Upstream's injected `setInputFiles(node, payloads)` from the sealed world. What it threw
+/// Upstream's injected `setInputFiles(node, payloads)` from the isolated world. What it threw
 /// (a payload's text that `atob` refuses) is upstream's `<api>: DOMException`.
 async fn set_payloads(
     scope: &OpScope<'_>,

@@ -253,7 +253,6 @@ describe('waitForEvent', () => {
       await runtime.run(`
         const errors = []
         try { await page.waitForEvent('request') } catch (e) { errors.push([e.code, e.message]) }
-        try { page.on('worker', () => {}) } catch (e) { errors.push([e.code, e.message]) }
         try { context.on('dialog', () => {}) } catch (e) { errors.push([e.code, e.message]) }
         return errors
       `),
@@ -263,7 +262,6 @@ describe('waitForEvent', () => {
         'method_unavailable',
         "page.waitForEvent('request'): Neo does not report network events; wait for what the page shows instead",
       ],
-      ['method_unavailable', "page.on('worker'): Neo does not report workers"],
       [
         'method_unavailable',
         'browserContext.on(\'dialog\'): Neo reports "dialog" on pages: page.on("dialog")',
@@ -271,7 +269,6 @@ describe('waitForEvent', () => {
     ])
     expect(runtime.calls.map((call) => [call.name, call.input.$neo])).toEqual([
       ["page.waitForEvent('request')", 'refused'],
-      ["page.on('worker')", 'refused'],
       ["browserContext.on('dialog')", 'refused'],
     ])
   })
@@ -1046,4 +1043,121 @@ it('delivers an automatically closed dialog to waits without answering it again'
       (call) => call.name === 'dialog.accept' || call.name === 'dialog.dismiss',
     ),
   ).toBe(false)
+})
+
+it('delivers worker console before snapshot closure and preserves the worker entry URL', async () => {
+  const worker = { id: 'worker-1', url: 'https://a.example/entry.js' }
+  let release = () => {}
+  const ready = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let pulled = false
+  const runtime = loadPrelude({
+    seed: {
+      ...SEED,
+      pages: [{ tab: 1007, url: 'https://a.example/', workers: [worker] }],
+    },
+    now: 1000,
+    answer: (call) => {
+      if (call.name === 'events.next') {
+        if (pulled) return never
+        pulled = true
+        return ready.then(() => ({
+          ok: {
+            events: [
+              {
+                seq: 1,
+                at: 1001,
+                event: 'console',
+                page: brand(7),
+                message: {
+                  type: 'log',
+                  text: 'last message',
+                  worker,
+                  location: {
+                    url: 'https://a.example/imported.js',
+                    lineNumber: 0,
+                    columnNumber: 0,
+                  },
+                  timestamp: 1001,
+                },
+              },
+              {
+                seq: 2,
+                at: 1001,
+                event: 'workerstate',
+                page: brand(7),
+                worker,
+                closed: true,
+              },
+            ],
+            lost: 0,
+          },
+          pages: [{ tab: 1007, workers: [] }],
+          observed: { seq: 2, events: 2 },
+        }))
+      }
+      if (call.name === 'page.evaluate') {
+        release()
+        return { value: { v: 'undefined' } }
+      }
+      return null
+    },
+  })
+  const result = json(
+    await runtime.run(`
+    const worker = page.workers()[0]
+    const order = []
+    worker.on('console', message => order.push(message.worker() === worker && message.worker().url()))
+    worker.on('close', () => order.push('close'))
+    const message = worker.waitForEvent('console')
+    const filtered = worker.waitForEvent('console', message => message.text() === 'last message')
+    await page.evaluate(() => undefined)
+    return { text: (await message).text(), filtered: (await filtered).text(), order, count: page.workers().length }
+  `),
+  )
+  expect(result).toEqual({
+    text: 'last message',
+    filtered: 'last message',
+    order: [worker.url, 'close'],
+    count: 0,
+  })
+})
+
+it('releases internal worker bookkeeping once when a page closes', async () => {
+  let sequence = 0
+  const runtime = loadPrelude({
+    seed: { ...SEED, pages: [{ tab: 1007, closed: false, workers: [] }] },
+    answer: (call) => {
+      if (call.name === 'events.next') return never
+      if (call.name === 'page.close' || call.name === 'page.title')
+        return {
+          ok: call.name === 'page.title' ? { title: 'closed' } : {},
+          observed: { seq: ++sequence, events: sequence },
+          pages: [{ tab: 1007, closed: true, workers: [] }],
+        }
+      return null
+    },
+  })
+  await runtime.run('await page.close(); await page.title()')
+  await eventually(() =>
+    runtime
+      .sent('events.listen')
+      .some(
+        (call) => call.input.event === 'workerstate' && call.input.on === false,
+      ),
+  )
+  expect(
+    [...runtime.startCalls, ...runtime.calls]
+      .filter(
+        (call) =>
+          call.name === 'events.listen' && call.input.event === 'workerstate',
+      )
+      .map((call) => call.input.on),
+  ).toEqual([true, false])
+  const cleanup = runtime
+    .sent('events.listen')
+    .find((call) => call.input.on === false)
+  expect(cleanup?.input.page).toBeNull()
+  expect(cleanup?.input.retiredTab).toBe(1007)
 })

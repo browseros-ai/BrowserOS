@@ -1,10 +1,10 @@
 //! Playwright's actions on one element: its two retry levels run on Rust's clock, its
-//! actionability checks run in the element's sealed world, and the input is trusted CDP input
+//! actionability checks run in the element's isolated world, and the input is trusted CDP input
 //! on the page's root session, sent only after `OpScope::send_effect`.
 //!
 //! Each action family has a runner in its `*_action.rs`. A runner finds the element, waits
 //! until it is ready, retries, and plans the input. `PageInput` sends trusted device input;
-//! form and element actions also use edits in the page's sealed world.
+//! form and element actions also use edits in the page's isolated world.
 //!
 //! ```text
 //!  ops                                what to do     runner           sent by
@@ -19,7 +19,7 @@
 //! ```
 //!
 //! A fill uses `PageInput` only when the page asks for typing. `setInputFiles` uses
-//! `DOM.setFileInputFiles` or a sealed-world edit.
+//! `DOM.setFileInputFiles` or a isolated-world edit.
 //!
 //! Every outer pass, and every inner retry after the first attempt, starts with the page's
 //! locator-handler checkpoint (`locator_handler.rs`), unless `force` skips it: an overlay the

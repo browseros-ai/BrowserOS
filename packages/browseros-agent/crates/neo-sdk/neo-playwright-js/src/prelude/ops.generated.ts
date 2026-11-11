@@ -343,6 +343,11 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'worker.evaluate': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'locator.evaluate': {
     effect: 'write',
     target: 'target',

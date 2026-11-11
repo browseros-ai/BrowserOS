@@ -1,4 +1,4 @@
-//! What each CDP session needs once before the first world on it is sealed.
+//! What each CDP session needs once before the first engine world is installed.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -55,7 +55,7 @@ impl SessionSetup {
         }
     }
 
-    /// Enables context events for sealed worlds, the first time only. CDP keeps this setting
+    /// Enables context events for isolated worlds, the first time only. CDP keeps this setting
     /// for the session's lifetime; a failed or cancelled attempt leaves the cell empty to retry.
     pub(crate) async fn ensure(
         &self,
@@ -64,7 +64,7 @@ impl SessionSetup {
     ) -> Result<(), ProbeFailure> {
         let Some(id) = session.session_id() else {
             return Err(ProbeFailure::Broken(
-                "a sealed world needs a target session".to_owned(),
+                "an isolated world needs a target session".to_owned(),
             ));
         };
         let done = {
@@ -85,7 +85,7 @@ impl SessionSetup {
     }
 
     /// A watch over the connection's `Runtime` context events, for an install to take right
-    /// before it creates its world (`SealedWorld::install`).
+    /// before it creates its world (`IsolatedWorld::install`).
     pub(crate) fn watch_contexts(&self) -> ContextWatch {
         ContextWatch::new(self.connection.events())
     }

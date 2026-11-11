@@ -72,6 +72,7 @@ const ANSWERS: Record<string, unknown> = {
   'page.frames': FRAMES,
   'page.opener': { opener: null },
   'page.evaluate': { value: null },
+  'worker.evaluate': { value: 1 },
   'page.addScriptTag': { element: ELEMENT },
   'page.addStyleTag': { element: ELEMENT },
   'page.waitForFunction': { value: true, preview: 'true' },
@@ -98,8 +99,17 @@ function everyOpAnswer(): (call: Call) => unknown {
   let pulled = false
   let triggered = false
   return (call) => {
-    if (call.name === 'events.wait')
+    if (call.name === 'events.wait') {
+      if (call.input.event === 'worker')
+        return {
+          seq: 4,
+          at: RECORDED_AT,
+          event: 'worker',
+          page: { $neo: 'page', tab: 1007 },
+          worker: { id: 'worker-1', url: 'https://a.example/worker.js' },
+        }
       return call.input.event === 'dialog' ? DIALOG : DOWNLOAD
+    }
     if (call.name === 'events.next') {
       if (pulled) return new Promise(() => {})
       pulled = true
@@ -167,6 +177,7 @@ const EVERY_OP = `
   page.off('filechooser', chooserListener)
   const dialog = await page.waitForEvent('dialog'); await dialog.accept(); await dialog.dismiss()
   const download = await page.waitForEvent('download'); await download.path(); await download.saveAs('/out/f.csv')
+  const worker = await page.waitForEvent('worker'); await worker.evaluate(() => 1)
   await tab.close()
 `
 

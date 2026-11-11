@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeSet, HashMap},
-    convert::Infallible,
     sync::Arc,
 };
 use tokio::sync::broadcast;
@@ -1202,14 +1201,32 @@ impl BrowserView {
             None => nav,
         })
     }
+    /// Captures under this view's target admission and checks freshness before returning pixels.
     pub async fn screenshot(
         &self,
         page: PageId,
         o: ScreenshotCaptureOptions,
     ) -> Result<ScreenshotCaptureResult, CoreError> {
-        let Ok(capture) = self
-            .screenshot_checked(page, o, || Ok::<(), Infallible>(()))
-            .await?;
+        if self.epoch_guard()?.is_none() {
+            let session = self.session.pages.get_session(page.clone()).await?;
+            let observer = self.session.observe(page).await;
+            return crate::screenshot::capture_screenshot_with_annotations(
+                session.session,
+                observer,
+                o,
+            )
+            .await;
+        }
+        let access = self
+            .page_access(page.clone())
+            .await?
+            .ok_or_else(|| cdp_policy::unsupported("Page.captureScreenshot"))?;
+        let session = access.session().await?;
+        let observer = Arc::new(self.session.observe(page).await.with_access(access.clone()));
+        let capture =
+            crate::screenshot::capture_screenshot_with_annotations(session.session, observer, o)
+                .await?;
+        access.fresh().await?;
         Ok(capture)
     }
 
@@ -1259,45 +1276,6 @@ impl BrowserView {
         let session = access.session().await?;
         crate::screenshot::ScreenshotCapture::acquire(session.session, Some(access), background)
             .await
-    }
-
-    /// [`Self::screenshot`] with the caller's last word on the capture: `before_capture` runs
-    /// after the page is admitted, inside the session's capture lock, once the pointer is
-    /// hidden, with no await before `Page.captureScreenshot`. A privacy check placed before this
-    /// call would miss a page that turned private during those waits. A refusal sends no capture
-    /// and comes back as `Ok(Err(refusal))`.
-    pub async fn screenshot_checked<E>(
-        &self,
-        page: PageId,
-        o: ScreenshotCaptureOptions,
-        before_capture: impl FnOnce() -> Result<(), E>,
-    ) -> Result<Result<ScreenshotCaptureResult, E>, CoreError> {
-        if self.epoch_guard()?.is_none() {
-            let session = self.session.pages.get_session(page.clone()).await?;
-            let observer = self.session.observe(page).await;
-            return crate::screenshot::capture_screenshot_checked(
-                session.session,
-                observer,
-                o,
-                before_capture,
-            )
-            .await;
-        }
-        let access = self
-            .page_access(page.clone())
-            .await?
-            .ok_or_else(|| cdp_policy::unsupported("Page.captureScreenshot"))?;
-        let session = access.session().await?;
-        let observer = Arc::new(self.session.observe(page).await.with_access(access.clone()));
-        let capture = crate::screenshot::capture_screenshot_checked(
-            session.session,
-            observer,
-            o,
-            before_capture,
-        )
-        .await?;
-        access.fresh().await?;
-        Ok(capture)
     }
 
     pub async fn active_page(&self) -> Result<Option<PageInfo>, CoreError> {

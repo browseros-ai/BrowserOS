@@ -8,7 +8,7 @@ file, never printed), so it works without the gateway, and writes:
     runs.json                 every RunSummary, all pages, newest first
     runs/<runId>.json         each full Run with its operations
     screenshots/<opId>.jpg    each operation's picture, where it has one
-    screenshots/index.json    per operation: saved, or withheld/expired with Neo's reason
+    screenshots/index.json    per operation: saved, or missing/expired with Neo's reason
     events.json               the events Neo still holds (its last 1024)
     cli-runs.jsonl            a copy of dev.sh run's own log, joined by requestId
 
@@ -66,17 +66,16 @@ def list_runs(host: Host) -> list[dict]:
 
 
 def save_screenshot(host: Host, operation_id: str, folder: Path) -> dict:
-    """Saves one operation's JPEG. A 410 is Neo withholding it (the tab was
-    private) or retention having dropped it: an answer to record, not a failure."""
+    """Saves one operation's JPEG, recording missing or expired images from older rows."""
     try:
         with host.open(f"/v1/operations/{urllib.parse.quote(operation_id)}/screenshot") as reply:
             (folder / f"{operation_id}.jpg").write_bytes(reply.read())
         return {"status": "saved"}
     except urllib.error.HTTPError as error:
-        if error.code != 410:
+        if error.code not in (404, 410):
             raise
         body = json.loads(error.read() or b"{}")
-        return {"status": body.get("code", "withheld"), "message": body.get("message")}
+        return {"status": body.get("code", "not_found" if error.code == 404 else "expired"), "message": body.get("message")}
 
 
 def sse(host: Host, last_event_id: str) -> Generator[tuple[str, str, dict], None, None]:
@@ -177,7 +176,7 @@ def export(host: Host, traces: Path) -> Path:
 
     saved = sum(1 for shot in shots.values() if shot["status"] == "saved")
     print(
-        f"{len(runs)} runs, {saved} screenshots ({len(shots) - saved} withheld), "
+        f"{len(runs)} runs, {saved} screenshots ({len(shots) - saved} not saved), "
         f"{len(events['events'])} events{'' if events['complete'] else ' (incomplete)'}"
     )
     if unfinished:

@@ -1,8 +1,7 @@
 /**
  * Renders the snapshot ops' result as the YAML `ariaSnapshot()` returns.
  *
- * Rust stitches every frame's JSON, applies Neo's naming rule and masks it with every frame's
- * sweep; the text is made here, in the agent runtime, as upstream makes it in its server and
+ * Rust stitches every frame's JSON and applies Neo's naming rule; the text is made here, in the agent runtime, as upstream makes it in its server and
  * never in a page. Rendering in the root frame's world would copy cross-site frames' text into
  * the embedding site's renderer process. The YAML is the vendored renderer's, byte for byte;
  * Neo adds only one comment per frame it could not read, under that frame's iframe line:

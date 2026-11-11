@@ -1,6 +1,6 @@
 # Retiring the old differential tiers
 
-Every former tier-1 file is accounted for below. The new upstream suite retains expected values and invokes the real product. Neo policy and additional frame regressions use direct assertions in `tests/behavior/`, without an oracle or normalized output.
+Every former tier-1 file is accounted for below. The new upstream suite retains expected values and invokes the real product. Neo tab ownership and additional frame regressions use direct assertions in `tests/behavior/`, without an oracle or normalized output.
 
 This is a migration map, not a claim that each new check has already passed. Validation evidence belongs to the build result and Linux reports. A selected upstream id below is an actual runnable row from the pinned inventory.
 
@@ -10,7 +10,7 @@ This is a migration map, not a claim that each new check has already passed. Val
 | actions-click.js | Upstream `tests/page/page-click-react.spec.ts › should timeout when click opens alert` and the remaining assertions in that selected spec |
 | actions-hover-dblclick.js | Upstream locator-misc-1.spec.ts › should hover @smoke; locator-click.spec.ts › should double click the button |
 | captures.js | captures-and-popups.js plus conformance/screenshots/screenshots.spec.ts |
-| console-events.js | navigation-and-scripts.js (hosted console suppression) |
+| console-events.js | Retired: console suppression is no longer a product requirement |
 | context-pages.js | ownership-and-refusals.js |
 | covered-f9-nested-frame.js | covered-and-unreadable.js |
 | dialogs-beforeunload.js | beforeunload.js |
@@ -48,13 +48,13 @@ This is a migration map, not a claim that each new check has already passed. Val
 | refusals.js | ownership-and-refusals.js |
 | set-content.js | navigation-and-scripts.js |
 | set-input-files-upstream.js | Upstream `tests/page/page-set-input-files.spec.ts › should upload the file` and the remaining assertions in that selected spec |
-| set-input-files.js | uploads_browseros.rs::an_upload_of_neos_host_token_is_refused_and_an_ordinary_file_uploads (retained real-MCP regression) plus selected upstream upload assertions |
-| shadow-roots.js | refs-and-privacy.js |
-| snapshot-ai.js | refs-and-privacy.js and nested-frames.js |
-| snapshot-default.js | refs-and-privacy.js |
-| snapshot-locator.js | refs-and-privacy.js |
-| snapshot-ref-lifetime.js | refs-and-privacy.js |
-| snapshot-sensitive.js | refs-and-privacy.js |
+| set-input-files.js | uploads_browseros.rs::host_owned_paths_and_payloads_upload_and_an_empty_list_clears_the_input (retained real-MCP regression) plus selected upstream upload assertions |
+| shadow-roots.js | refs-and-values.js |
+| snapshot-ai.js | refs-and-values.js and nested-frames.js |
+| snapshot-default.js | refs-and-values.js |
+| snapshot-locator.js | refs-and-values.js |
+| snapshot-ref-lifetime.js | refs-and-values.js |
+| snapshot-sensitive.js | refs-and-values.js (raw field values and surrounding text) |
 | strict-mode.js | Upstream locator-any-frame.spec.ts › should fail click upon strict mode violation inside a single frame |
 | wait-for-function.js | dialogs.js |
 | wait-for-load-state.js | navigation-and-scripts.js |

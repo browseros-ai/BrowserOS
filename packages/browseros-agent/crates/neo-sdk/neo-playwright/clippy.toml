@@ -12,7 +12,7 @@ allow-indexing-slicing-in-tests = true
 # `mem::take` and `io::Error`; three (`std::mem::take`) must be imported.
 absolute-paths-max-segments = 2
 
-# Google: enums over bool params. One bool can read clearly (`set_private(true)`); two never do
+# Google: enums over bool params. One bool can read clearly (`set_enabled(true)`); two never do
 # (`fill(true, false)`).
 max-fn-params-bools = 1
 
@@ -31,13 +31,6 @@ await-holding-invalid-types = [
 ]
 
 disallowed-methods = [
-    # sdk-privacy's invariant: no claw-sdk code returns a form-control value to the agent. Page
-    # reads go through neo-playwright's sealed world. A direct core script can read
-    # `input.value`, so each use carries an `#[expect]` saying why its result cannot hold one.
-    { path = "browseros_core::page_js::PageJs::eval", reason = "page reads go through the sealed world (sdk-privacy)" },
-    { path = "browseros_core::page_js::PageJs::eval_value", reason = "page reads go through the sealed world (sdk-privacy)" },
-    { path = "browseros_core::page_js::PageJs::call", reason = "page reads go through the sealed world (sdk-privacy)" },
-    { path = "browseros_core::page_js::PageJs::call_once", reason = "page reads go through the sealed world (sdk-privacy)" },
     # A blocking sleep stalls a tokio worker and every run scheduled on it.
     { path = "std::thread::sleep", reason = "blocks a tokio worker", replacement = "tokio::time::sleep" },
 ]

@@ -2,7 +2,7 @@
 //! (`locator.evaluate`, `evaluateAll`, `elementHandle.evaluate`, `$eval`, `$$eval`), their
 //! `frame.*` forms, `page.setContent`'s document write, whose HTML's scripts run in the main
 //! world (`document_write`), and the answer to a binding call (`bindingCall.resolve`). They run as Playwright's do, and their results come back as the page
-//! answered them. One of the three files in core's `tests/page_js_guard.rs` ALLOWED list: the only
+//! answered them. One of the files in core's `tests/page_js_guard.rs` ALLOWED list: the only
 //! code that sends script to a page's main world, and so the gateway of `Capability::MainWorld`.
 //!
 //! ```text
@@ -26,7 +26,7 @@
 //!
 //! The script runs on the main-world document node, never on an execution context id: context
 //! ids are per-renderer counters, and after a cross-process navigation a cached one can name a
-//! context of another world (measured, see `probe_call`). The sealed world names its document by
+//! context of another world (measured, see `probe_call`). The isolated world names its document by
 //! handle, and `DOM.resolveNode` without a context id resolves that node in its main world. The
 //! elements a script receives reach that world the same way, by backend node id, so they are
 //! objects of the document's own context, which a call on the document takes as arguments.
@@ -38,6 +38,8 @@
 //! deviation with upstream's adoption error.
 
 use std::slice;
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use browseros_cdp::CdpError;
 use browseros_core::{CoreError, FrameId, ProtocolSession};
@@ -54,7 +56,7 @@ use crate::page::world_call::{self, with_world};
 use crate::probe::{NAVIGATED_OR_CLOSED, ProbeFailure, Ran};
 use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, PageRef};
-use crate::world::{BackendNodeId, Endpoint, FrameSeq, Place, SealedWorld, SeqLookup};
+use crate::world::{BackendNodeId, Endpoint, FrameSeq, IsolatedWorld, Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 mod document_write;
@@ -69,7 +71,28 @@ pub(crate) use document_write::DocumentWrite;
 /// travels with every call, so nothing of Neo stays in the page. `eval` works in it even under a
 /// page CSP that forbids it, because Chromium allows code generation inside a call from the
 /// inspector (measured on BrowserOS with `script-src 'self'`).
-const MAIN_WORLD_JS: &str = include_str!("../../assets/main-world.js");
+pub(crate) const MAIN_WORLD_JS: &str = include_str!("../../assets/main-world.js");
+
+/// [`MAIN_WORLD_JS`] as one document's evaluator: an object whose `run(target, args)` applies
+/// the main-world function to `target`, made by `Runtime.evaluate` as upstream makes its
+/// `UtilityScript` ([`Evaluator`]). Making it runs no page code: it reads no global, so a page's
+/// getter cannot run before the host's recheck; the call reads what the function reads, after.
+static EVALUATOR_JS: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "(() => {{ const main = ({MAIN_WORLD_JS}); \
+         return {{ run(target, args) {{ return main.apply(target, args); }} }}; }})()"
+    )
+});
+
+/// A main-world call through the document's evaluator, as upstream's
+/// `(utilityScript, ...args) => utilityScript.evaluate(...args)`: the document is `this`, and
+/// the evaluator's own `run` property is read, which no page prototype can shadow.
+const THROUGH_EVALUATOR: &str =
+    "function (evaluator, ...args) { return evaluator.run(this, args); }";
+
+/// Chromium's refusal of a call whose argument lives in another context than its target: the
+/// evaluator was made in the session's root frame and the document is a same-process child's.
+const OTHER_WORLD: &str = "Argument should belong to the same JavaScript world as target object";
 
 /// A poller's next poll: the predicate called again, judged in the page.
 const POLL: &str = "function () { return this(); }";
@@ -85,8 +108,8 @@ const SETTLED: &str = "function () { return this.last; }";
 const BINDING_CALLER: &str =
     "(...args) => globalThis[kBindingsControllerProperty].callBinding(name, ...args)";
 
-/// Names the document from the sealed world, by handle, so `DOM.describeNode` can name its node.
-const SEALED_DOCUMENT: &str = "function () { return document; }";
+/// Names the document from the isolated world, by handle, so `DOM.describeNode` can name its node.
+const ISOLATED_DOCUMENT: &str = "function () { return document; }";
 
 /// upstream's message for a handle argument from another document (`kUnableToAdoptErrorMessage`).
 pub(crate) const UNABLE_TO_ADOPT: &str = "Unable to adopt element handle from a different document";
@@ -362,6 +385,28 @@ struct BoundScript {
     /// document, so the next run builds it again in the new one, as upstream retries its wait
     /// across a navigation.
     poller: Option<String>,
+    /// The document's evaluator. Dropped with the document, whose context it lives in.
+    evaluator: Evaluator,
+}
+
+/// The main-world function compiled once for a document, by `Runtime.evaluate`, the way upstream
+/// compiles its `UtilityScript`. Chromium compiles a `Runtime.callFunctionOn` declaration as an
+/// inspector script it treats as cross-origin, and what such a script evaluates is muted too:
+/// a callback the agent's script left behind (a timer, a promise) that throws later reaches the
+/// page's `error` event and CDP's `Runtime.exceptionThrown` as a sanitized error, with the text
+/// alone and no exception object, so `pageerror` lost the error's name and its value (measured on
+/// BrowserOS; ER-004 through ER-008). Code `Runtime.evaluate` compiled is not muted, nor is
+/// what it evaluates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Evaluator {
+    /// Not made for the document yet.
+    Unmade,
+    /// By handle, in the op's object group and the document's context.
+    At(String),
+    /// Unavailable for this document: `Runtime.evaluate` reaches only the session's root frame,
+    /// so a same-process child frame's document ([`OTHER_WORLD`]), or the make failed. The
+    /// main-world function then goes as each call's own declaration, muted as before.
+    Absent,
 }
 
 impl BoundScript {
@@ -370,6 +415,7 @@ impl BoundScript {
     fn leave_document(&mut self) {
         self.document = None;
         self.poller = None;
+        self.evaluator = Evaluator::Unmade;
     }
 }
 
@@ -416,6 +462,7 @@ impl<'op> EvaluateGuard<'op> {
                 handles: binding.handles,
                 document: None,
                 poller: None,
+                evaluator: Evaluator::Unmade,
             },
         })
     }
@@ -435,6 +482,11 @@ impl<'op> EvaluateGuard<'op> {
         let session = self.frame.endpoint.session.clone();
         let group = scope.object_group(&session).to_owned();
         let script = &mut self.script;
+        // Beside the document's naming, before the host's recheck: making it runs no page code,
+        // and nothing may await between the recheck and the script's send (STYLE P6).
+        if script.evaluator == Evaluator::Unmade {
+            script.evaluator = make_evaluator(&session, &group).await;
+        }
         let objects = if script.mode == CallMode::Poll && script.poller.is_some() {
             Some(Vec::new())
         } else {
@@ -446,15 +498,31 @@ impl<'op> EvaluateGuard<'op> {
             script.leave_document();
             return Ok(Outcome::NotRun);
         };
-        let sent = scope.send_effect()?;
-        let call = MainCall {
-            session: &session,
-            group: &group,
-            _sent: &sent,
-        };
-        let called = match script.mode {
-            CallMode::Once | CallMode::Truthy => call.evaluate(&document, script, &objects).await,
-            CallMode::Poll => script.poll(&call, &document, &objects).await,
+        // At most twice: Chromium refuses an evaluator of another context before anything runs,
+        // and the direct call then goes out after a recheck of its own (STYLE P6).
+        let called = loop {
+            let evaluator = match &script.evaluator {
+                Evaluator::At(handle) => Some(handle.clone()),
+                Evaluator::Unmade | Evaluator::Absent => None,
+            };
+            let sent = scope.send_effect()?;
+            let call = MainCall {
+                session: &session,
+                group: &group,
+                evaluator: evaluator.as_deref(),
+                other_world: AtomicBool::new(false),
+                _sent: &sent,
+            };
+            let called = match script.mode {
+                CallMode::Once | CallMode::Truthy => {
+                    call.evaluate(&document, script, &objects).await
+                }
+                CallMode::Poll => script.poll(&call, &document, &objects).await,
+            };
+            if !call.other_world.load(Ordering::Relaxed) {
+                break called;
+            }
+            script.evaluator = Evaluator::Absent;
         };
         let outcome = called.map_err(|error| scope.core_error(&error))?;
         if matches!(
@@ -544,6 +612,18 @@ fn parsed(scope: &OpScope<'_>, serialized: Serialized) -> Result<PageValue, Play
     })
 }
 
+/// The same result boundary for worker scripts: enforce the depth and tagged-value
+/// contract before the host records the value or the prelude revives it.
+pub(crate) fn evaluation_result(
+    scope: &OpScope<'_>,
+    text: Option<String>,
+) -> Result<Value, PlaywrightError> {
+    returned(
+        scope,
+        parsed(scope, text.map_or(Serialized::Undefined, Serialized::Text))?,
+    )
+}
+
 /// A result upstream's server cannot send back: one holding a `{fn}`, which it reads as a
 /// binding's caller and then refuses to serialize, with the caller's own source in the message
 /// (measured on BrowserOS neo, spike `__pw_fn_`).
@@ -618,24 +698,23 @@ struct Resolved {
 /// The main-world document of `world`'s frame, by handle in the op's object group.
 pub(super) async fn main_world_document(
     scope: &OpScope<'_>,
-    world: SealedWorld,
+    world: IsolatedWorld,
 ) -> Result<String, ProbeFailure> {
     let session = world.session();
     let group = scope.object_group(session).to_owned();
     let named: Named = session
         .send(
             "Runtime.callFunctionOn",
-            json!({ "objectId": world.global(), "functionDeclaration": SEALED_DOCUMENT,
+            json!({ "objectId": world.global(), "functionDeclaration": ISOLATED_DOCUMENT,
                     "objectGroup": group }),
         )
         .await
         .map_err(ProbeFailure::from_core)?;
-    let sealed = named
-        .result
-        .object_id
-        .ok_or_else(|| ProbeFailure::Broken("the sealed world returned no document".to_owned()))?;
+    let isolated = named.result.object_id.ok_or_else(|| {
+        ProbeFailure::Broken("the isolated world returned no document".to_owned())
+    })?;
     let described: Described = session
-        .send("DOM.describeNode", json!({ "objectId": sealed }))
+        .send("DOM.describeNode", json!({ "objectId": isolated }))
         .await
         .map_err(ProbeFailure::from_core)?;
     // No `executionContextId`: the node resolves in its own document's main world.
@@ -657,6 +736,11 @@ pub(super) async fn main_world_document(
 struct MainCall<'a> {
     session: &'a ProtocolSession,
     group: &'a str,
+    /// The document's evaluator, when it has one.
+    evaluator: Option<&'a str>,
+    /// Set when the evaluator turned out to live in another context than the document: the
+    /// call ran nothing, and `run` sends it again without the evaluator.
+    other_world: AtomicBool,
     _sent: &'a Sent<'a>,
 }
 
@@ -715,9 +799,8 @@ impl MainCall<'_> {
         objects: &[String],
     ) -> Result<Outcome, CoreError> {
         let called = self
-            .send(
+            .main_world(
                 document,
-                MAIN_WORLD_JS,
                 arguments(
                     if script.mode == CallMode::Truthy {
                         "truthy"
@@ -749,9 +832,8 @@ impl MainCall<'_> {
         objects: &[String],
     ) -> Result<Called<String>, CoreError> {
         let called = self
-            .send(
+            .main_world(
                 document,
-                MAIN_WORLD_JS,
                 arguments("poller", script, objects),
                 Shape::BuildPoller,
             )
@@ -767,6 +849,37 @@ impl MainCall<'_> {
             Some(poller) => Called::Value(poller),
             None => Called::Ended(Outcome::Answered(Answer::Returned(Serialized::Unreadable))),
         })
+    }
+
+    /// The main-world function on `document` with `arguments`: through the document's evaluator
+    /// when it has one, else as the call's own declaration. Chromium refuses an evaluator of
+    /// another context before anything runs: that sets [`Self::other_world`] and answers that
+    /// nothing ran, and `EvaluateGuard::run` sends again the direct way after a fresh recheck.
+    async fn main_world(
+        &self,
+        document: &str,
+        arguments: Value,
+        shape: Shape,
+    ) -> Result<Called<Reply>, CoreError> {
+        let Some(evaluator) = self.evaluator else {
+            return self.send(document, MAIN_WORLD_JS, arguments, shape).await;
+        };
+        let through: Vec<Value> = [json!({ "objectId": evaluator })]
+            .into_iter()
+            .chain(arguments.as_array().cloned().unwrap_or_default())
+            .collect();
+        match self
+            .send(document, THROUGH_EVALUATOR, Value::Array(through), shape)
+            .await
+        {
+            Err(CoreError::Cdp(CdpError::Protocol { message, .. }))
+                if message.contains(OTHER_WORLD) =>
+            {
+                self.other_world.store(true, Ordering::Relaxed);
+                Ok(Called::Ended(Outcome::NotRun))
+            }
+            sent => sent,
+        }
     }
 
     /// A poll's answer: `function` called on the poller, its result read by value.
@@ -1023,7 +1136,7 @@ async fn place(
             Placed {
                 frame,
                 follow,
-                document: world.as_ref().map(SealedWorld::seq),
+                document: world.as_ref().map(IsolatedWorld::seq),
                 subject: Bound::Frame,
             }
         }
@@ -1121,6 +1234,26 @@ fn not_run<T>(error: CoreError) -> Result<Called<T>, CoreError> {
         None if message.contains(OBJECT_GONE) => Outcome::NotRun,
         None => return Err(error),
     }))
+}
+
+/// Makes the document's [`Evaluator`] in the session's default context, the main world of the
+/// session's root frame. A same-process child frame's document lives in another context, which
+/// the first call through it finds ([`MainCall::main_world`]).
+async fn make_evaluator(session: &ProtocolSession, group: &str) -> Evaluator {
+    let made = session
+        .send_value(
+            "Runtime.evaluate",
+            json!({ "expression": &*EVALUATOR_JS, "objectGroup": group, "silent": true }),
+        )
+        .await;
+    match made
+        .ok()
+        .and_then(|reply| decode::<Named>(reply).ok())
+        .and_then(|named| named.result.object_id)
+    {
+        Some(handle) => Evaluator::At(handle),
+        None => Evaluator::Absent,
+    }
 }
 
 /// `Runtime.callFunctionOn`'s reply.
@@ -1241,7 +1374,7 @@ mod tests;
 /// A final browser round trip orders asynchronously reported inline CSP errors before success.
 pub(super) async fn insert_tag(
     scope: &OpScope<'_>,
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     document: &str,
     params: Value,
     _sent: &Sent<'_>,

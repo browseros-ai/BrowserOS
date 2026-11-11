@@ -8,7 +8,7 @@ use crate::op_scope::{AdmittedPage, OpScope};
 use crate::page::PageState;
 use crate::probe::ProbeFailure;
 use crate::target::PageRef;
-use crate::world::{Endpoint, FrameWorlds, Installer, Place, SealedWorld, SessionKind};
+use crate::world::{Endpoint, FrameWorlds, Installer, IsolatedWorld, Place, SessionKind};
 use crate::{Playwright, PlaywrightError};
 
 /// The page an op acts on. Admission (the run view's profile and window check) happens once,
@@ -75,7 +75,7 @@ impl<'op> OpPage<'op> {
         &self.admitted.core_page
     }
 
-    /// The tab's sealed worlds.
+    /// The tab's isolated worlds.
     pub(crate) fn frames(&self) -> &FrameWorlds {
         self.state.frames()
     }
@@ -137,7 +137,7 @@ impl<'op> OpPage<'op> {
         &self,
         endpoint: &Endpoint,
         place: Place,
-    ) -> Result<SealedWorld, ProbeFailure> {
+    ) -> Result<IsolatedWorld, ProbeFailure> {
         // A new OOPIF may be discovered before its attachment event is replayed. Synchronize
         // its page preferences before its first frame query or main-world script.
         self.pw

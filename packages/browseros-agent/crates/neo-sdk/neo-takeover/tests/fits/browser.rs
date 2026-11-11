@@ -96,8 +96,7 @@ struct State {
     /// Methods whose calls never answer.
     hung: Vec<String>,
     /// The tab `Browser.activateTab` last brought to the front, as [`FakeBrowser::active`] reads
-    /// it. `Browser.getTabs` still reports every tab inactive, so a view's admission never finds
-    /// a private tab in front here: decision 34 is the display tests' own.
+    /// it. Display admission is covered by the display tests.
     active: Option<i64>,
     calls: Vec<Call>,
 }

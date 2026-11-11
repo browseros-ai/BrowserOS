@@ -303,7 +303,12 @@ impl RunService {
                 let pages = pages
                     .iter()
                     .zip(observation.infos)
-                    .map(|(page, info)| PageFact::in_view(page, info, run.view()))
+                    .zip(observation.workers)
+                    .map(|((page, info), workers)| {
+                        let mut fact = PageFact::in_view(page, info, run.view());
+                        fact.workers = workers;
+                        fact
+                    })
                     .collect();
                 PageFacts {
                     pages,

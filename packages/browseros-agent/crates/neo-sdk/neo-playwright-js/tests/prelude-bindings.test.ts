@@ -165,6 +165,54 @@ describe('answering a call', () => {
   })
 })
 
+it('tests that a call with a known frame runs its callback as the pump dispatches it, before the next record', async () => {
+  // Upstream's client calls the function as it dispatches the call, so whatever the pump
+  // dispatches after it (here a console listener) runs after the callback.
+  let release = () => {}
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let pulled = false
+  const run = loadPrelude({
+    seed: SEED,
+    answer: (sent: Call) => {
+      if (sent.name === 'events.next') {
+        if (pulled) return never
+        pulled = true
+        return released.then(() => ({
+          events: [
+            call('f', []),
+            {
+              seq: 10,
+              at: Date.now() + 60_000,
+              event: 'console',
+              page: { $neo: 'page', tab: 1007 },
+              message: {
+                type: 'log',
+                text: 'x',
+                location: { url: '', lineNumber: 0, columnNumber: 0 },
+                timestamp: 0,
+              },
+            },
+          ],
+          lost: 0,
+        }))
+      }
+      if (sent.name === 'events.listen') release()
+      if (sent.name === 'page.exposeBinding') return { id: 3 }
+      return {}
+    },
+  })
+  const order = await run.run(`
+    const order = []
+    await page.exposeFunction('f', () => { order.push('callback') })
+    page.on('console', () => order.push('console'))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    return order
+  `)
+  expect(order).toEqual(['callback', 'console'])
+})
+
 it('tests that disposing twice does not remove the same name exposed again since', async () => {
   const run = runtime([call('f', [])])
   await run.run(`

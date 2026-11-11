@@ -3,8 +3,8 @@
 //! A higher `user_version`, any unknown applied migration, and session-era S1/S2 files are
 //! refused. Fresh/S5 files and the additive S3/S4 shapes are adopted atomically. Every future
 //! migration must bump USER_VERSION_FENCE in the same change: older Neo then replaces the file
-//! fail closed, losing live trace/request history and making open tabs private again. That
-//! rollback tradeoff is deliberate; this build never reads forward or lowers the fence.
+//! instead of reading forward, losing live trace/request history. That rollback tradeoff is
+//! deliberate; this build never reads forward or lowers the fence.
 
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, DbErr, Statement, TransactionTrait};
 use sea_orm_migration::prelude::{MigrationTrait, MigratorTrait, async_trait};

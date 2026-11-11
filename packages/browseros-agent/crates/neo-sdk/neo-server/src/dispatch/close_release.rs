@@ -121,6 +121,7 @@ mod tests {
             &claims,
             &[PageFact {
                 viewport_size: None,
+                workers: None,
                 tab,
                 url: None,
                 title: None,
