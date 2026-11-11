@@ -54,16 +54,24 @@ use crate::events::page_event::{
 use crate::events::{PageEventKind, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
-/// Events that establish a dialog's target and lifetime. Attachment must precede opening even
-/// when core is still attaching the page, and target closure must follow earlier dialog events.
-const DIALOG_LIFECYCLE: &[&str] = &[
+/// Keep this watcher's lifecycle events in wire order: attachment establishes the session for
+/// frames, dialogs and choosers, and closure ends their lifetime. Chatty console/error messages
+/// remain on the broadcast; adding a lifecycle handler below also needs an entry here.
+const LIFECYCLE_EVENTS: &[&str] = &[
     "Target.targetCreated",
     "Target.targetInfoChanged",
     "Target.targetDestroyed",
     "Target.attachedToTarget",
     "Target.detachedFromTarget",
+    "Page.frameAttached",
+    "Page.frameDetached",
+    "Page.frameNavigated",
+    "Page.navigatedWithinDocument",
     "Page.javascriptDialogOpening",
     "Page.javascriptDialogClosed",
+    "Page.fileChooserOpened",
+    "Browser.downloadWillBegin",
+    "Browser.downloadProgress",
 ];
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
@@ -107,7 +115,7 @@ impl TargetWatcher {
             // Keep opening/closing in one ordered queue outside the lossy broadcast ring.
             // Discovery can await replies while another tab floods that ring; losing or
             // reordering these events could strand a dialog or close the wrong generation.
-            let dialogs = browser.connection().observe_events(DIALOG_LIFECYCLE);
+            let dialogs = browser.connection().observe_events(LIFECYCLE_EVENTS);
             let events = browser.cdp_events();
             browser.page_signals.delegate_dialog_handling();
             let (watcher, found) = Watcher::new(browser, writer, attach_log);
@@ -325,7 +333,7 @@ impl Watcher {
                 },
                 received = events.recv() => match received {
                     Ok(event) => {
-                        if !observed_dialogs || !DIALOG_LIFECYCLE.contains(&event.method.as_str()) {
+                        if !observed_dialogs || !LIFECYCLE_EVENTS.contains(&event.method.as_str()) {
                             self.handle(event).await;
                         }
                     },
