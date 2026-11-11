@@ -18,6 +18,10 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
   `injectedScript.ts`, `roleUtils.ts`, `roleSelectorEngine.ts`, `selectorEvaluator.ts`,
   `selectorGenerator.ts`, `selectorUtils.ts`, `domUtils.ts`, `layoutSelectorUtils.ts`,
   `xpathSelectorEngine.ts`, `ariaSnapshot.ts`, `ariaSnapshotDistiller.ts`, `utilityScript.ts`.
+- `packages/injected/src/bindingsController.ts`. The page side of `exposeBinding`: the
+  controller a binding's stub calls, which posts each call to the CDP binding and settles it
+  when Neo delivers the agent's answer. Neo builds it into `assets/bindings-controller.js`,
+  which runs in the page's main world, as upstream injects it there.
 - `packages/isomorphic/`. The 12 shared helpers the engine and the agent runtime use:
   `selectorParser.ts`, `cssParser.ts`, `cssTokenizer.ts`, `locatorUtils.ts`,
   `locatorGenerators.ts`, `stringUtils.ts`, `ariaSnapshot.ts`, `ariaSnapshotRenderer.ts`,

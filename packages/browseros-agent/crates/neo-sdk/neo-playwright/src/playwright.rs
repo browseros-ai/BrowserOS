@@ -79,6 +79,12 @@ impl Playwright {
         &self.events
     }
 
+    /// The page event log, shared, for a run that keeps it past one op (its bindings' later
+    /// adds, `page/init_script.rs`).
+    pub(crate) fn event_hub(&self) -> &Arc<EventHub> {
+        &self.events
+    }
+
     /// The newest event recorded for this browser connection.
     #[must_use]
     pub fn event_head(&self) -> u64 {

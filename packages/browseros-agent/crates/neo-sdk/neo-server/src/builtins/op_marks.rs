@@ -311,7 +311,10 @@ mod tests {
             served("page.waitForFunction", &[MainWorld]),
             served("locator.waitForFunction", &[MainWorld]),
             served("page.addInitScript", &[MainWorld, HostFiles]),
+            served("page.exposeBinding", &[MainWorld]),
+            served("bindingCall.resolve", &[MainWorld]),
             served("context.addInitScript", &[MainWorld, HostFiles]),
+            served("context.exposeBinding", &[MainWorld]),
         ];
         let placed: Vec<Row> = Op::all()
             .map(Op::spec)
@@ -494,6 +497,24 @@ mod tests {
             op: "page.addStyleTag",
             file: "main_world_browseros.rs",
             test: "tags_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.exposeBinding",
+            file: "init_scripts_browseros.rs",
+            test: "pages_call_back_into_the_script_until_the_run_ends",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "context.exposeBinding",
+            file: "init_scripts_browseros.rs",
+            test: "pages_call_back_into_the_script_until_the_run_ends",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "bindingCall.resolve",
+            file: "init_scripts_browseros.rs",
+            test: "pages_call_back_into_the_script_until_the_run_ends",
             proves: Proves::Served,
         },
         BrowserosCase {

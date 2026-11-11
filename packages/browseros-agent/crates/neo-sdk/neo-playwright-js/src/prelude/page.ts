@@ -9,6 +9,7 @@
  * first, and the reply's `defaultPage` binds this object to that tab (`BrowserContext`).
  */
 import type { UrlPattern } from '../probe/protocol'
+import { type BindingCallback, exposeOnPage } from './bindings'
 import { invoke, invokeObserved, sleep } from './bridge'
 import type { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
@@ -48,7 +49,7 @@ import {
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
-import { checkInitOptions, Disposable, initSource } from './init-script'
+import { addInitScript, type Disposable } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
 import { markHandle, pick } from './options'
@@ -156,6 +157,8 @@ export class Page extends EventEmitter {
   readonly #frameEvents = new Map<number, Frame>()
   /** Per-frame journal watermarks prevent a late pull from undoing a newer event or snapshot. */
   readonly #frameSequences = new Map<string | null, number>()
+  /** The bindings this page exposed (`exposeBinding`), which a page's calls are answered by. */
+  readonly _exposed = new Map<string, BindingCallback>()
 
   constructor(context: BrowserContext, tab: number | null, url?: string) {
     super()
@@ -724,20 +727,62 @@ export class Page extends EventEmitter {
    * page loads from now on, before the page's own scripts, until the run ends or the returned
    * disposable is disposed. The document already loaded does not run it.
    */
-  async addInitScript(
+  addInitScript(
     script: unknown,
     arg?: unknown,
     options?: unknown,
   ): Promise<Disposable> {
     const api = 'page.addInitScript'
-    checkInitOptions(api, script, options)
-    const source = initSource(api, script, arg)
-    const { id } = await invoke(
-      'page.addInitScript',
-      { api, timeoutMs: 0 },
-      { page: await this._brand(api), script: source },
+    return addInitScript(
+      api,
+      {
+        register: async (source) =>
+          (
+            await invoke(
+              'page.addInitScript',
+              { api, timeoutMs: 0 },
+              { page: await this._brand(api), script: source },
+            )
+          ).id,
+        expose: (name, callback) =>
+          exposeOnPage(this, api, name, callback, true),
+      },
+      script,
+      arg,
+      options,
     )
-    return new Disposable(id)
+  }
+
+  /**
+   * upstream's `page.exposeBinding`: `window[name]` in every document of this page, the loaded
+   * ones included, calls `callback({ context, page, frame }, ...args)` in the script and returns
+   * its result, until the run ends or the returned disposable is disposed.
+   */
+  exposeBinding(name: string, callback: BindingCallback): Promise<Disposable> {
+    return exposeOnPage(this, 'page.exposeBinding', name, callback)
+  }
+
+  /** upstream's `page.exposeFunction`: [`exposeBinding`] without the source argument. */
+  exposeFunction(
+    name: string,
+    callback: (...args: unknown[]) => unknown,
+  ): Promise<Disposable> {
+    return exposeOnPage(this, 'page.exposeFunction', name, (_source, ...args) =>
+      Reflect.apply(callback, undefined, args),
+    )
+  }
+
+  /**
+   * The frame a binding call came from: the main frame for `null`, else the child frame of that
+   * id, the frame tree read again when the call names one the cache does not have yet. A frame
+   * gone by then is answered as the main frame's.
+   */
+  async _bindingFrame(id: string | null): Promise<Frame> {
+    if (id === null) return this._mainFrame
+    const known = this.#childFrames.get(id)
+    if (known) return known
+    await this._refreshFrames('page.exposeBinding').catch(() => {})
+    return this.#childFrames.get(id) ?? this._mainFrame
   }
 
   waitForFunction(

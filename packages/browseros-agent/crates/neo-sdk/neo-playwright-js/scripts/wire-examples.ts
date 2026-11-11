@@ -37,6 +37,20 @@ const DOWNLOAD = {
     suggestedFilename: 'f.csv',
   },
 }
+/** One call of `add`, which the script exposes first: the pump's first answer carries it. */
+const BINDING_CALL = {
+  seq: 3,
+  at: RECORDED_AT,
+  event: 'binding',
+  page: { $neo: 'page', tab: 1007 },
+  frame: null,
+  executionContext: 3,
+  payload: JSON.stringify({
+    name: 'add',
+    seq: 1,
+    serializedArgs: [1, 2],
+  }),
+}
 /** The main frame and one child, so the script can drive the frame forms of page ops. */
 const FRAMES = {
   frames: [
@@ -69,18 +83,34 @@ const ANSWERS: Record<string, unknown> = {
   'download.path': { path: '/runs/r/f.csv', failure: null },
   'page.addInitScript': { id: 1 },
   'context.addInitScript': { id: 2 },
+  'page.exposeBinding': { id: 3 },
+  'context.exposeBinding': { id: 4 },
 }
 
-/** A plausible result for each op, so the script runs to its end. The pump idles forever. */
-function everyOpAnswer(call: Call): unknown {
-  if (call.name === 'events.wait')
-    return call.input.event === 'dialog' ? DIALOG : DOWNLOAD
-  if (call.name === 'events.next') return new Promise(() => {})
-  return ANSWERS[call.name] ?? null
+/**
+ * A plausible result for each op, so the script runs to its end. The pump's first pull answers
+ * one binding call, which makes the prelude send `bindingCall.resolve`; it idles after that.
+ */
+function everyOpAnswer(): (call: Call) => unknown {
+  let pulled = false
+  return (call) => {
+    if (call.name === 'events.wait')
+      return call.input.event === 'dialog' ? DIALOG : DOWNLOAD
+    if (call.name === 'events.next') {
+      if (pulled) return new Promise(() => {})
+      pulled = true
+      return { events: [BINDING_CALL], lost: 0 }
+    }
+    return ANSWERS[call.name] ?? null
+  }
 }
 
 /** Every method that reaches Rust, once; `context.pages()` is synchronous and sends nothing. */
 const EVERY_OP = `
+  // exposeFunctions names its callbacks at random; a fixed draw keeps the recording stable.
+  Math.random = () => 0.25
+  await page.exposeFunction('add', (a, b) => a + b)
+  await page.exposeBinding('source', (source, a) => a); await context.exposeFunction('c', () => 1)
   const l = page.getByRole('button')
   await l.click(); await l.dblclick(); await l.hover(); await l.check(); await l.uncheck()
   await l.drop({ data: { 'text/plain': 'external' } });
@@ -117,6 +147,7 @@ const EVERY_OP = `
   const script = await page.addInitScript((a) => { window.a = a }, 1)
   // Rust reads a path before any page work, so the offline decode needs a file that exists.
   await page.addInitScript({ path: 'Cargo.toml' }); await context.addInitScript('window.b = 1')
+  await page.addInitScript(({ cb }) => cb(1), { cb: () => 2 }, { exposeFunctions: true })
   await script.dispose()
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})
@@ -132,7 +163,7 @@ const EVERY_OP = `
 export async function recordEveryOp(prelude?: string): Promise<Call[]> {
   const runtime = loadPrelude({
     seed: SEED,
-    answer: everyOpAnswer,
+    answer: everyOpAnswer(),
     now: RECORDED_AT,
     ...(prelude === undefined ? {} : { prelude }),
   })

@@ -12,8 +12,8 @@ use crate::op_spec::{Capability, OpSpec, PAGE, TARGET};
 use crate::page::document_watch::decode;
 use crate::page::navigation::{GotoInput, NavigateInput, Navigation};
 use crate::page::{
-    PageHandle, add_tag, document_op, element_evaluate, evaluate, frame_tree, init_script,
-    media_emulation, navigation, pdf, save_screenshot, screenshot, viewport_size,
+    PageHandle, add_tag, document_op, element_evaluate, evaluate, evaluate_guard, frame_tree,
+    init_script, media_emulation, navigation, pdf, save_screenshot, screenshot, viewport_size,
     wait_for_navigation, wait_for_url,
 };
 use crate::probe::DocumentPart;
@@ -50,6 +50,8 @@ listed_enum! {
         Pdf,
         SetViewportSize,
         AddInitScript,
+        ExposeBinding,
+        ResolveBinding,
     }
 }
 
@@ -169,6 +171,8 @@ impl PageOp {
             }
             Self::Pdf => OpSpec::read("page.pdf", PAGE, "print the page to PDF"),
             Self::AddInitScript => ADD_INIT_SCRIPT,
+            Self::ExposeBinding => EXPOSE_BINDING,
+            Self::ResolveBinding => RESOLVE_BINDING,
         }
     }
 }
@@ -181,6 +185,25 @@ const ADD_INIT_SCRIPT: OpSpec = OpSpec::write(
     "run a script in the main world of every new document of the page, until the run ends",
 )
 .using(&[Capability::MainWorld, Capability::HostFiles])
+.policed();
+
+/// `page.exposeBinding`'s registration (also `exposeFunction`): its stub and the controller run
+/// in the page's main world (`page/init_script.rs`).
+const EXPOSE_BINDING: OpSpec = OpSpec::write(
+    "page.exposeBinding",
+    PAGE,
+    "let the page call a function of the script, until the run ends",
+)
+.using(&[Capability::MainWorld])
+.policed();
+
+/// The answer to one binding call, run in the main-world context that made it.
+const RESOLVE_BINDING: OpSpec = OpSpec::write(
+    "bindingCall.resolve",
+    PAGE,
+    "answer a page's call of an exposed binding with the script's result or error",
+)
+.using(&[Capability::MainWorld])
 .policed();
 
 /// Runs one page op. The ops that run in the page's sealed world (title, content, setContent,
@@ -233,6 +256,12 @@ pub(crate) async fn invoke(
         PageOp::SaveScreenshot => save_screenshot::save(scope, args.decode(scope)?).await,
         PageOp::Pdf => pdf::print(pw, scope, args.decode(scope)?).await,
         PageOp::AddInitScript => init_script::add_to_page(pw, scope, args.decode(scope)?).await,
+        PageOp::ExposeBinding => {
+            Box::pin(init_script::expose_on_page(pw, scope, args.decode(scope)?)).await
+        }
+        PageOp::ResolveBinding => {
+            evaluate_guard::resolve_binding(pw, scope, args.decode(scope)?).await
+        }
         // Boxed, as the other families box their leaves: a script's guard and its polls are the
         // largest state a page op holds, and every op's future is as large as its largest leaf.
         PageOp::Evaluate => Box::pin(evaluate::evaluate(pw, scope, args.decode(scope)?)).await,
