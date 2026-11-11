@@ -8,7 +8,7 @@ mod fake_gateway;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use browseros_decide::{
-    client::Question,
+    client::{JevError, Question},
     pursue::Oracle,
     writer::{Field, Writer},
 };
@@ -207,4 +207,59 @@ fn hosted_servers_have_no_worker_and_dev_servers_use_the_local_one() {
         );
         assert!(Decisions::for_build(false, false).url().is_none());
     }
+}
+
+fn one_question() -> BTreeMap<String, Question> {
+    let mut asked = BTreeMap::new();
+    asked.insert(
+        "operation".to_string(),
+        Question::Noul {
+            instructions: json!("is this a page?"),
+            criteria: None,
+        },
+    );
+    asked
+}
+
+#[tokio::test]
+async fn a_paused_worker_comes_back_as_a_server_error() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (_gateway, billing) = ultrafast_billing(dir.path()).await?;
+    let worker = FakeDecisions::start().await?;
+    worker.script(JEV_ROUTE, 503, json!({ "code": "paused" }));
+    let oracle = Decisions::new(Some(worker.url()?))
+        .oracle(billing)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no oracle"))?;
+
+    let refused = oracle
+        .ask_within(&json!({}), &one_question(), Duration::from_secs(10))
+        .await;
+
+    assert!(
+        matches!(refused, Err(JevError::ServerError { status: 503 })),
+        "{refused:?}"
+    );
+    assert_eq!(worker.requests().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_plan_without_ultrafast_is_refused_once_and_not_retried() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (_gateway, billing) = ultrafast_billing(dir.path()).await?;
+    let worker = FakeDecisions::start().await?;
+    worker.script(JEV_ROUTE, 403, json!({ "code": "not_entitled" }));
+    let oracle = Decisions::new(Some(worker.url()?))
+        .oracle(billing)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no oracle"))?;
+
+    let refused = oracle
+        .ask_within(&json!({}), &one_question(), Duration::from_secs(10))
+        .await;
+
+    assert!(refused.is_err());
+    assert_eq!(worker.requests().len(), 1);
+    Ok(())
 }
