@@ -7,6 +7,7 @@ import type { ViewerInfo } from '../shared/api'
 import { apiRouteTable, isLocalRequest } from './api/api-routes'
 import type { ViewerConfig } from './config'
 import { TaskStore } from './log/task-store'
+import { containerUp, runCommand } from './neo-container'
 import { buildPage, type PageFile } from './page'
 import { handleMcp, type McpProxyDeps } from './proxy/mcp-proxy'
 import { ClientNames } from './tasks/client-names'
@@ -43,12 +44,19 @@ export async function startViewer(
   ])
   // The proxy needs the bound port (for the process lookup) before the first request.
   let proxy: McpProxyDeps | null = null
-  const info: ViewerInfo = {
+  const info: Omit<ViewerInfo, 'container'> = {
     mcpUrl: '',
     upstreamUrl: config.upstream.href,
     dataDir: config.dataDir,
     startedAt: new Date(now()).toISOString(),
   }
+  const container = config.container ?? null
+  const currentInfo = async (): Promise<ViewerInfo> => ({
+    ...info,
+    container: container
+      ? { ...container, up: await containerUp(runCommand) }
+      : null,
+  })
 
   const server = Bun.serve({
     hostname: '127.0.0.1',
@@ -57,7 +65,7 @@ export async function startViewer(
     idleTimeout: 0,
     routes: {
       ...pageRoutes(page),
-      ...apiRouteTable(store, info),
+      ...apiRouteTable(store, currentInfo),
     },
     fetch(req, server) {
       const { pathname } = new URL(req.url)

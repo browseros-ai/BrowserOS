@@ -18,25 +18,54 @@ Viewer C v2 screen come in the next PRs, on the same API.
 
 ## Start it
 
-Start a Neo SDK image the way [its README](../../crates/neo-sdk/neo-server/docker/README.md) shows,
-with `NEO_MCP_REMOTE=true` and port 9010 published on 127.0.0.1:
+From `packages/browseros-agent`:
 
 ```sh
-docker network create neo-sdk-only
-docker run -d --name neo-sdk --network neo-sdk-only --shm-size=1g -e NEO_MCP_REMOTE=true \
-  -p 127.0.0.1:9010:9010 -v "$PWD/neo-data:/data" "$TAG"
+bun run neo:viewer
 ```
 
-Then, from `packages/browseros-agent`:
+That is the whole loop. It works out this checkout's Neo SDK image the way `build.sh` names it
+(`neo-sdk:<browser>-<commit>[-dirty]-<arch>`), builds it with `build.sh` when it is not on the
+machine or the checkout's uncommitted build inputs changed since the viewer built it, starts it
+fresh, and prints what follows. A first build takes about 7 minutes; a new commit that leaves the
+server alone rebuilds from Docker's cache in seconds, and uncommitted changes outside the image's
+build inputs (this tool, say) reuse the commit's image:
 
-```sh
-bun run neo:viewer                      # http://127.0.0.1:7310, forwards to http://127.0.0.1:9010/mcp
-bun run neo:viewer -- --port 7311 --upstream http://127.0.0.1:19010/mcp --data-dir /tmp/viewer
-claude mcp add --transport http neo-viewer http://127.0.0.1:7310/mcp
+```text
+  Viewer:         http://127.0.0.1:7310
+  Agent MCP URL:  http://127.0.0.1:7310/mcp
+  Claude Code:    claude mcp add --transport http neo-viewer http://127.0.0.1:7310/mcp
 ```
 
-The same settings come from `NEO_VIEWER_PORT`, `NEO_VIEWER_UPSTREAM` and `NEO_VIEWER_DATA_DIR`. The
-viewer listens on 127.0.0.1 only. Open `http://127.0.0.1:7310` to see the runs.
+Ctrl-C stops the viewer and removes the container and network it started. Each start begins
+clean: it removes what the previous start left (the container, network and data) and, after a new
+build, the image the previous build made.
+
+| Flag | |
+|---|---|
+| `--keep-data` | keep the browser profile (logins) and the run history between starts |
+| `--no-build` | use the newest `neo-sdk` image already on this machine |
+| `--image <tag>` | use this image |
+| `--upstream <url>` | forward to a Neo MCP endpoint you started yourself; no container |
+| `--port <port>` | the viewer's port (7310) |
+| `--data-dir <dir>` | the viewer's state (below) |
+
+Pass flags after `--`: `bun run neo:viewer -- --keep-data`. The same settings come from
+`NEO_VIEWER_PORT`, `NEO_VIEWER_UPSTREAM` and `NEO_VIEWER_DATA_DIR`. The viewer listens on 127.0.0.1
+only.
+
+The container is started as [the image's README](../../crates/neo-sdk/neo-server/docker/README.md)
+shows for a standalone start: its own Docker network, `NEO_MCP_REMOTE=true`, and the host API over
+the development option `CLAW_HOST_TCP` with a token file the command writes (mode 0600) in the
+viewer's state folder; both ports are published on 127.0.0.1 at ports Docker picks. Inside the
+container `CLAW_HOST_TCP` binds `0.0.0.0:9300`: bound to `127.0.0.1` the published port answers
+nothing, since Docker's port forward arrives from outside the container's loopback.
+
+It touches only what it created: the container `neo-viewer-sdk`, the network `neo-viewer-sdk-net`
+and the volume `neo-viewer-sdk-data`, each carrying the label `com.browseros.neo-viewer`, and the
+image its own last build recorded in `start-state.json`. A same-named thing without the label
+stops the start instead. `GET /api/info` reports the image in use and whether the container is up;
+the command is the only control.
 
 ## What the proxy changes
 
@@ -86,7 +115,8 @@ line describes the task; then one line per thing as it happened (`run-start` wit
 as sent and as forwarded, `run-end` with the reply body as received, its text, structured content
 and `_meta`, `tools-list` with the size of the tool list the client read). A restart reads every
 file back, so nothing written is lost; a run that had started but not ended when the viewer stopped
-shows as `lost`. Tokens are estimates, characters divided by four, always shown with "≈".
+shows as `lost`. `bun run neo:viewer` clears the history at each start, as it does the browser
+profile, unless given `--keep-data` (or `--upstream`, which starts no container). Tokens are estimates, characters divided by four, always shown with "≈".
 
 ## The API
 
@@ -94,7 +124,7 @@ shows as `lost`. Tokens are estimates, characters divided by four, always shown 
 
 | Route | Answer |
 |---|---|
-| `GET /api/info` | `ViewerInfo`: the MCP URL, the upstream, the data folder |
+| `GET /api/info` | `ViewerInfo`: the MCP URL, the upstream, the data folder, and the container the command started (`container: {name, image, up}`, null with `--upstream`) |
 | `GET /api/tasks` | `TasksResponse`: every `TaskSummary`, newest first, with totals |
 | `GET /api/tasks/:taskId/runs` | `TaskRunsResponse`: the task and its `RunSummary` list, in order |
 | `GET /api/runs/:runId` | `RunResponse`: one `RunDetail`, request and reply as they crossed |

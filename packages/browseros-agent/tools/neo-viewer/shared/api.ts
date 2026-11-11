@@ -206,6 +206,19 @@ export interface ViewerInfo {
   /** Where each task's JSONL log lives. */
   dataDir: string
   startedAt: string
+  /**
+   * The Neo SDK container `bun run neo:viewer` started (read-only: the command is the control).
+   * Null when the viewer forwards to an `--upstream` it did not start.
+   */
+  container: ContainerInfo | null
+}
+
+export interface ContainerInfo {
+  name: string
+  /** The image tag in use, e.g. `neo-sdk:0.52.1.2-d6b008abb-arm64`. */
+  image: string
+  /** Whether the container is running now. */
+  up: boolean
 }
 
 /**
