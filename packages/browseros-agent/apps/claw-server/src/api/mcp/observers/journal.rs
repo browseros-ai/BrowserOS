@@ -23,8 +23,7 @@ pub fn apply(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<(
         if call.tool().name != "run" || context.cancelled || call.identity.is_none() {
             return Ok(());
         }
-        // Hosted servers never offer ultrafast skills, so their scripts have no reason to be kept.
-        if !crate::services::flow::ULTRAFAST_ENABLED || call.state.config.mode.is_hosted() {
+        if !call.state.ultrafast_enabled() {
             return Ok(());
         }
         let Some(code) = call.raw_args.get("code").and_then(Value::as_str) else {
@@ -61,4 +60,41 @@ pub fn apply(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<(
         .await??;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use browseros_mcp::ToolResult;
+    use serde_json::json;
+
+    async fn observe_run(call: &crate::api::mcp::dispatch::ToolCall) -> anyhow::Result<()> {
+        let result = ToolResult::text("done", Some(json!({ "value": 1 })));
+        apply(ToolObserverContext {
+            call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 3,
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn run_scripts_are_kept_only_while_ultrafast_is_on() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call(
+            "run",
+            json!({ "code": "return await browser.tabs();" }),
+        )
+        .await?;
+        let dir = call.state.config.browserclaw_dir.clone();
+        let session = call.session_id.as_str().to_string();
+
+        observe_run(&call).await?;
+        assert!(run_journal::read(&dir, &session).is_empty());
+
+        call.state.ultrafast.store(true, Ordering::Relaxed);
+        observe_run(&call).await?;
+        assert_eq!(run_journal::read(&dir, &session).len(), 1);
+        Ok(())
+    }
 }

@@ -139,6 +139,34 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
+                name: "daily tool usage report",
+                handle: tokio::spawn({
+                    let state = state.clone();
+                    let cancel = shutdown.child_token();
+                    async move {
+                        let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
+                        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                _ = ticker.tick() => {
+                                    if let Err(error) =
+                                        crate::services::tool_usage::flush_finished_days(
+                                            &state.tool_calls_daily,
+                                            &state.analytics,
+                                            crate::clock::now_epoch_ms(),
+                                        )
+                                        .await
+                                    {
+                                        warn!(error = %error, "daily tool usage report failed");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
                 name: "recording payload migration",
                 handle: state
                     .recordings
@@ -159,6 +187,18 @@ impl AppRuntime {
                             Err(error) => {
                                 warn!(error = %error, "session efficiency reconciliation failed");
                             }
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
+                name: "skill file sync",
+                handle: tokio::spawn({
+                    let skills = state.skills.clone();
+                    let enabled = state.ultrafast_enabled();
+                    async move {
+                        if let Err(error) = skills.sync_skill_md(enabled).await {
+                            warn!(error = %error, "skill file sync failed");
                         }
                     }
                 }),

@@ -1368,6 +1368,17 @@ impl ServerHandler for ClawMcpService {
             result,
         )
         .await;
+        if !self.mode().is_hosted() {
+            crate::services::tool_usage::record_tool_call(
+                &self.state.tool_calls_daily,
+                &self.state.analytics,
+                &tool_name,
+                started.session.client_name(),
+                !matches!(&finished, Ok(result) if !result.is_error.unwrap_or(false)),
+                crate::clock::now_epoch_ms(),
+            )
+            .await;
+        }
         let mut result = session_handle::attach(finished, modern_handle, presented_handle)?;
         // The tip asks the agent to close the group the server made for it, so it has no place
         // where the server makes none.
@@ -3194,7 +3205,6 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
-        expected.push(RUN_SKILL_TOOL_NAME.to_string());
         expected.push(REQUEST_HELP_TOOL_NAME.to_string());
         expected.push(AWAIT_HELP_TOOL_NAME.to_string());
         assert_eq!(names, expected);
@@ -3415,7 +3425,6 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
-        expected.push(RUN_SKILL_TOOL_NAME.to_string());
         for declare_agent_name in [false, true] {
             assert_eq!(tool_names(&service, declare_agent_name), expected);
         }
@@ -3808,6 +3817,70 @@ mod tests {
         assert_eq!(updated.view.model.description, "Check the inbox and reply");
         assert!(updated.body.contains("Draft and send"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_skill_and_flow_fields_follow_the_ultrafast_switch() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let offered = |service: &ClawMcpService| {
+            let names = tool_names(service, false);
+            let save = service
+                .get_tool(SAVE_SKILL_TOOL_NAME)
+                .map(|tool| tool.input_schema["properties"].get("flow").is_some());
+            (
+                names.contains(&RUN_SKILL_TOOL_NAME.to_string()),
+                service.get_tool(RUN_SKILL_TOOL_NAME).is_some(),
+                save,
+            )
+        };
+
+        assert_eq!(offered(&service), (false, false, Some(false)));
+        call.state
+            .ultrafast
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(offered(&service), (true, true, Some(true)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn save_skill_saves_in_one_call_while_ultrafast_is_off() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let session = call
+            .identity
+            .as_ref()
+            .map(|identity| identity.session.clone())
+            .ok_or_else(|| anyhow::anyhow!("session missing"))?;
+        let service = ClawMcpService::new(call.state.clone());
+        let started = StartedSession {
+            session,
+            agent_label: "codex".to_string(),
+        };
+
+        let result = service
+            .call_save_skill(
+                &started,
+                &json!({
+                    "name": "shop-add",
+                    "description": "Add a product to the cart",
+                    "steps": ["Open the search", "Add the first match"]
+                }),
+                CancellationToken::new(),
+            )
+            .await;
+
+        assert_ne!(result.is_error, Some(true), "{result:?}");
+        let text = result
+            .content
+            .first()
+            .and_then(|block| block.as_text())
+            .map(|text| text.text.clone())
+            .unwrap_or_default();
+        assert_eq!(text, "saved skill /neo-shop-add");
+        let saved = call.state.skills.get("neo-shop-add").await?;
+        assert!(!saved.body.contains("run_skill"), "{}", saved.body);
+        assert!(call.state.skills.flow_row("neo-shop-add").await?.is_none());
         Ok(())
     }
 
