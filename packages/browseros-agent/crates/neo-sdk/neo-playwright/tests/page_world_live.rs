@@ -1152,11 +1152,12 @@ async fn tests_that_frame_wait_for_url_follows_its_frame_out_of_process() -> Tes
 async fn tests_that_a_url_wait_rejects_when_its_page_closes() -> TestResult {
     on_page("/login.html", |run, _server, page| async move {
         let result = async {
-            let waiting = run.invoke(
+            // Both native operations retain state while pending; box the wait before joining.
+            let waiting = Box::pin(run.invoke(
                 "page.waitForURL",
                 json!({ "call": { "timeoutMs": 2000 }, "page": brand(&page),
                         "url": { "glob": "**/never" }, "waitUntil": "load" }),
-            );
+            ));
             let (waited, closed) = tokio::join!(waiting, async {
                 time::sleep(Duration::from_millis(50)).await;
                 run.invoke("page.close", json!({ "page": brand(&page) }))
