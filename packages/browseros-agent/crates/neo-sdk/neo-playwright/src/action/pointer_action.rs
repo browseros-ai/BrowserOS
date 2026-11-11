@@ -29,7 +29,7 @@ use crate::action::arm_guard::ArmGuard;
 use crate::action::attempt_log::AttemptLog;
 use crate::action::frame_projection::{self, Projection};
 use crate::action::pointer_quads::{self, Placement as QuadPlacement};
-use crate::action::requested_navigations::RequestedNavigations;
+use crate::action::requested_navigations::{NavigationCut, RequestedNavigations};
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::input::{
@@ -203,6 +203,8 @@ pub(crate) struct PointerRunner<'a> {
     strictness: Strictness,
     /// Something matched at least once, so a timeout is `not_actionable`, not `no_match`.
     matched: bool,
+    /// Correlates completed input with its independently published navigation events.
+    navigation_cut: Option<NavigationCut>,
 }
 
 impl<'a> PointerRunner<'a> {
@@ -220,12 +222,18 @@ impl<'a> PointerRunner<'a> {
             subject: Subject::new(page, scope, target, strictness),
             strictness,
             matched: false,
+            navigation_cut: None,
         }
     }
 
     /// Runs `action` to completion, a definite failure, or the op's timeout.
     pub(crate) async fn run(&mut self, action: &PointerAction) -> Result<(), PlaywrightError> {
         self.run_holding(action, None).await
+    }
+
+    /// A journal cut only when this action actually committed a requested navigation.
+    pub(crate) fn navigation_cut(&self) -> Option<NavigationCut> {
+        self.navigation_cut
     }
 
     /// `dragTo`: `phases.down` on this runner's element, then `phases.up` on `to`'s, both under
@@ -748,9 +756,19 @@ impl<'a> PointerRunner<'a> {
                 .log("  waiting for scheduled navigations to finish".to_owned());
             if let Some(navigations) =
                 navigations.filter(|_| action.wait_after == WaitAfter::Navigations)
-                && navigations.settle(self.scope).await.is_err()
             {
-                return Err(self.scope.timed_out(ErrorCode::WaitTimeout));
+                let settled = navigations
+                    .settle(self.scope)
+                    .await
+                    .map_err(|_expired| self.scope.timed_out(ErrorCode::WaitTimeout))?;
+                self.navigation_cut = settled
+                    .publication(
+                        self.scope,
+                        self.pw.events(),
+                        self.page.target_id(),
+                        dialogs_from,
+                    )
+                    .await?;
             }
             self.scope.log("  navigations have finished".to_owned());
             return Ok(Inner::Done);

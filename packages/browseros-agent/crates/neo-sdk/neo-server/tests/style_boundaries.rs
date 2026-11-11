@@ -16,7 +16,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use syn::visit::{self, Visit};
-use syn::{AttrStyle, Attribute, Fields, File, Item, ItemEnum, ItemStruct, ItemUse, UseTree};
+use syn::{AttrStyle, Attribute, File, Item, ItemUse, UseTree};
 use toml::{Table, Value};
 
 /// A crate that only one subtree of `src/` may name.
@@ -48,11 +48,6 @@ const BROWSER_CRATES: &[&str] = &[
 /// other way round: a door that named a built-in could reach it around its own registry.
 const DOOR: &str = "dispatch";
 const BEHIND_THE_DOOR: &[&str] = &["builtins", "host"];
-
-/// STYLE.md P4: types that hold a secret or a raw field value. A type with such a field must not
-/// derive `Debug` or `Serialize`; it writes a `Debug` that prints a fixed mask.
-const SECRET_TYPES: &[&str] = &["Zeroizing", "SecretValue", "FieldValues", "SecretString"];
-const LEAKING_DERIVES: &[&str] = &["Debug", "Serialize"];
 
 /// Leaf files whose primary item is legitimately not named after the file, with the reason.
 /// Google allows exceptions; each one is written down here instead of being argued in review.
@@ -106,12 +101,6 @@ pub(crate) fn check_crate(manifest_dir: &Path) -> Result<Vec<String>, Box<dyn Er
         check_module_doc(&shown, &module, &file, &mut violations);
         check_non_leaf_items(&shown, &module, &file, &mut violations);
         check_leaf_name(&shown, &module, &file, &mut violations);
-
-        let mut secrets = SecretDerives {
-            file: &shown,
-            violations: &mut violations,
-        };
-        secrets.visit_file(&file);
     }
     Ok(violations)
 }
@@ -389,91 +378,6 @@ fn joined_with(prefix: &[String], last: &str) -> String {
     } else {
         format!("{}::{last}", prefix.join("::"))
     }
-}
-
-/// STYLE.md P4: finds structs and enums that hold a secret type and derive `Debug` or `Serialize`.
-struct SecretDerives<'a> {
-    file: &'a str,
-    violations: &'a mut Vec<String>,
-}
-
-impl SecretDerives<'_> {
-    fn check(&mut self, ident: &syn::Ident, attrs: &[Attribute], fields: &[&Fields]) {
-        let holds_secret = fields.iter().any(|fields| {
-            fields.iter().any(|field| {
-                let mut segments = SegmentNames::default();
-                segments.visit_type(&field.ty);
-                SECRET_TYPES
-                    .iter()
-                    .any(|secret| segments.names.contains(*secret))
-            })
-        });
-        if !holds_secret {
-            return;
-        }
-        let derives = match derived_names(attrs) {
-            Ok(derives) => derives,
-            Err(error) => {
-                self.violations.push(format!(
-                    "{}: `{ident}`: derive list did not parse: {error}",
-                    self.file
-                ));
-                return;
-            }
-        };
-        for derive in derives {
-            if LEAKING_DERIVES.contains(&derive.as_str()) {
-                self.violations.push(format!(
-                    "{}: `{ident}` holds a secret and derives `{derive}`; write a Debug that prints a fixed mask, and never Serialize it (STYLE.md P4)",
-                    self.file
-                ));
-            }
-        }
-    }
-}
-
-impl<'ast> Visit<'ast> for SecretDerives<'_> {
-    fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
-        self.check(&node.ident, &node.attrs, &[&node.fields]);
-        visit::visit_item_struct(self, node);
-    }
-
-    fn visit_item_enum(&mut self, node: &'ast ItemEnum) {
-        let fields: Vec<&Fields> = node
-            .variants
-            .iter()
-            .map(|variant| &variant.fields)
-            .collect();
-        self.check(&node.ident, &node.attrs, &fields);
-        visit::visit_item_enum(self, node);
-    }
-}
-
-/// The last segment of every path inside a type: `Zeroizing<String>` gives `Zeroizing`, `String`.
-#[derive(Default)]
-struct SegmentNames {
-    names: BTreeSet<String>,
-}
-
-impl<'ast> Visit<'ast> for SegmentNames {
-    fn visit_path_segment(&mut self, node: &'ast syn::PathSegment) {
-        self.names.insert(node.ident.to_string());
-        visit::visit_path_segment(self, node);
-    }
-}
-
-/// Names in every `#[derive(...)]` on an item, by their last segment (`serde::Serialize` -> `Serialize`).
-fn derived_names(attrs: &[Attribute]) -> syn::Result<Vec<String>> {
-    let mut names = Vec::new();
-    for attr in attrs.iter().filter(|attr| attr.path().is_ident("derive")) {
-        attr.parse_nested_meta(|meta| {
-            if let Some(last) = meta.path.segments.last() {
-                names.push(last.ident.to_string());
-            }
-            Ok(())
-        })?;
-    }
-    Ok(names)
 }
 
 fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Box<dyn Error>> {

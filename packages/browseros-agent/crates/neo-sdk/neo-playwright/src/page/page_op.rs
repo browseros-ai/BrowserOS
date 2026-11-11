@@ -104,7 +104,7 @@ impl PageOp {
             Self::Content => OpSpec::read(
                 "page.content",
                 PAGE,
-                "the document's HTML, read in the sealed world so field values are masked",
+                "the document's HTML, read in the engine's isolated world",
             ),
             Self::SetContent => OpSpec::write(
                 "page.setContent",
@@ -214,7 +214,7 @@ const RESOLVE_BINDING: OpSpec = OpSpec::write(
 .using(&[Capability::MainWorld])
 .policed();
 
-/// Runs one page op. The ops that run in the page's sealed world (title, content, setContent,
+/// Runs one page op. The ops that run in the page's isolated world (title, content, setContent,
 /// waitForURL) or its main world (evaluate, waitForFunction, the element scripts) are built with
 /// those worlds.
 #[expect(
@@ -230,9 +230,10 @@ pub(crate) async fn invoke(
     match op {
         PageOp::SetViewportSize => viewport_size::set(pw, scope, args.decode(scope)?).await,
         PageOp::Goto => {
-            let (page, navigation, wait_until) = args.decode::<GotoInput>(scope)?.into_parts();
+            let (page, navigation, wait_until, publication) =
+                args.decode::<GotoInput>(scope)?.into_parts();
             let page = page.tab();
-            navigation::navigate(pw, scope, page, navigation, wait_until).await
+            navigation::navigate(pw, scope, page, navigation, wait_until, publication).await
         }
         PageOp::Reload => renavigate(pw, scope, args, Navigation::Reload).await,
         PageOp::GoBack => renavigate(pw, scope, args, Navigation::History(-1)).await,
@@ -338,9 +339,9 @@ async fn renavigate(
     args: OpArgs,
     navigation: Navigation,
 ) -> Result<Value, PlaywrightError> {
-    let (page, wait_until) = args.decode::<NavigateInput>(scope)?.into_parts();
+    let (page, wait_until, publication) = args.decode::<NavigateInput>(scope)?.into_parts();
     let page = page.tab();
-    navigation::navigate(pw, scope, page, navigation, wait_until).await
+    navigation::navigate(pw, scope, page, navigation, wait_until, publication).await
 }
 
 /// `page.close({ runBeforeUnload })`.

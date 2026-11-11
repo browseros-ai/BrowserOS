@@ -254,7 +254,7 @@ impl Observer {
     }
 
     /// Resolves a ref, rerun once on a fresh page session under the same rule as
-    /// [`Self::capture`]. Acting and the audit layer's sensitive-field check both start here, so
+    /// [`Self::capture`]. Acting and desktop's audit checks both start here, so
     /// a ref that failed on a dead session would fail the act or, worse, let a password fill
     /// through unredacted once the act itself re-attached.
     pub async fn resolve_ref(&self, ref_id: &Ref) -> Result<ResolvedElement, CoreError> {

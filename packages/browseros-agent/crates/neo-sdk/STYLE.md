@@ -6,9 +6,9 @@ plus the project rules below. Tools check most of it, and `check.sh` runs them a
 | Tool | Checks |
 |---|---|
 | `Cargo.toml` `[lints]` | panics on input, docs on exported items, imports, `#[expect]` with a reason, clippy pedantic |
-| `clippy.toml` | no tokio lock across an await, no direct core `PageJs` script, no blocking sleep, path depth |
+| `clippy.toml` | no tokio lock across an await, no blocking sleep, path depth |
 | `check.sh` | Google's rustfmt options, forbidden dependencies, the CI toolchain |
-| `tests/style_boundaries.rs` | P1, P2 (entry points, the door's dependencies), P4 (derives), G7, D2 (presence), lint-table drift |
+| `tests/style_boundaries.rs` | P1, P2 (entry points, the door's dependencies), G7, D2 (presence), lint-table drift |
 
 This file is what review checks. Each rule has an id for review comments ("P3").
 
@@ -50,35 +50,6 @@ let title = op.invoke("page.title", json!({ "page": page })).await?;
 use crate::builtins::solve_captcha::SolveCaptcha;
 // Good, in builtins/: the built-in names the door and registers into it
 use crate::dispatch::{Method, MethodSpec, RegistryBuilder};
-```
-
-### P3. No code returns a form field's value to the agent
-
-Page reads go through neo-playwright's sealed world, which masks password, card and code
-fields at the source. A direct core `PageJs` script is a clippy error unless it carries a reason
-its result cannot hold a field value.
-
-```rust
-// Bad: `input.value` can be a password
-PageJs::isolated(session).eval::<String>("document.activeElement.value").await
-// Good
-#[expect(clippy::disallowed_methods, reason = "`document.title` is never a form-control value")]
-```
-
-### P4. Secrets never print, serialize or log
-
-A type that holds a secret or a raw field value (`Zeroizing`, `SecretValue`, `FieldValues`) has no
-`Serialize` or `Display`, and its `Debug` prints a fixed mask. Never log CDP params or results of
-calls that carry values (`Input.insertText`, `Runtime.evaluate`), nor VNC client bytes.
-
-```rust
-// Bad
-#[derive(Debug, Serialize)] pub struct SecretValue(Zeroizing<String>);
-// Good
-pub struct SecretValue(Zeroizing<String>);
-impl fmt::Debug for SecretValue {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { formatter.write_str("[secret]") }
-}
 ```
 
 ### P5. Every failure names its owner where the cause is known
@@ -302,7 +273,7 @@ gets a short block comment or ASCII diagram there.
 ```rust
 //! The operation dispatcher: the one path every SDK call takes.
 //!
-//! agent JS ─▶ bridge ─▶ Dispatcher::submit ─▶ rules ─▶ Method::call ─▶ mask ─▶ JSON envelope
+//! agent JS ─▶ bridge ─▶ Dispatcher::submit ─▶ rules ─▶ Method::call ─▶ JSON envelope
 //!
 //! It owns delivery (from `OperationGuard`) and the trace record; methods report facts.
 ```

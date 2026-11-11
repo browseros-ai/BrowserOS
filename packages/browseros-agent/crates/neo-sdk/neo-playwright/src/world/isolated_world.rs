@@ -1,4 +1,4 @@
-//! One sealed world, and the install that makes it. One of the three files in core's
+//! One isolated world, and the install that makes it. One of the three files in core's
 //! `tests/page_js_guard.rs` ALLOWED list: it creates the `browseros-engine` world and runs the
 //! engine there, apart from the page's main world.
 
@@ -20,7 +20,7 @@ use crate::world::{ContextId, Epoch, FrameSeq};
 /// for its whole life; the engine reading through them would read `••••` and select a masked
 /// length. A document only an earlier build numbered is therefore not re-keyed here; the random
 /// seq base of pages already open (`PageRegistry`) keeps its old refs from naming a new document.
-pub(crate) const SEALED_WORLD: &str = "browseros-engine";
+pub(crate) const ENGINE_WORLD: &str = "browseros-engine";
 
 /// The object group of every world's handles, its global's and its document's. Never released:
 /// they die with their context, and an op's own group (`OpScope`) holds only the objects that
@@ -31,12 +31,12 @@ const WORLD_GROUP: &str = "browseros-sdk-world";
 /// BrowserOS: an unknown id, and a world whose document moved to another renderer).
 const UNIQUE_CONTEXT_GONE: &str = "uniqueContextId not found";
 
-/// A live sealed world: where a probe call goes. Only [`SealedWorld::install`] makes one, so
+/// A live isolated world: where a probe call goes. Only [`IsolatedWorld::install`] makes one, so
 /// holding one means the engine ran in that world, an isolated world the page's own scripts
 /// cannot reach. Cheap to clone. It may go stale at any time (the document navigates); a call
 /// on it then fails `Gone`.
 #[derive(Clone, Debug)]
-pub(crate) struct SealedWorld {
+pub(crate) struct IsolatedWorld {
     /// A raw session, without per-message admission: the page's own, an OOPIF's, or for a
     /// same-process child frame its nearest target ancestor's.
     session: ProtocolSession,
@@ -47,7 +47,7 @@ pub(crate) struct SealedWorld {
     global: String,
     /// The world's execution context id, kept for one CDP method that takes nothing else:
     /// `DOM.resolveNode`, which wraps an element handle's node in this world. Its result is
-    /// only ever passed as an argument to a call on [`SealedWorld::global`], which V8 refuses
+    /// only ever passed as an argument to a call on [`IsolatedWorld::global`], which V8 refuses
     /// across worlds, so an id another context has since taken carries nothing anywhere.
     context: ContextId,
 }
@@ -55,7 +55,7 @@ pub(crate) struct SealedWorld {
 /// What an install leaves: the world, and the seq its boot took over from, if it did.
 #[derive(Debug)]
 pub(crate) struct Installed {
-    pub(crate) world: SealedWorld,
+    pub(crate) world: IsolatedWorld,
     /// The seq the world's probe held before this boot renumbered it. From another
     /// `Playwright` (a restart's re-key) it names a document that old refs may still print, so
     /// the page must never hand it out again (`FrameWorlds`).
@@ -69,7 +69,7 @@ pub(crate) struct Installed {
 /// before `Page.createIsolatedWorld` is sent: the browser reports a new world's
 /// `executionContextCreated` before the create's reply (measured on the main frame, a
 /// same-process child and an OOPIF), and a broadcast receiver sees only what is sent after it
-/// subscribed. Taking one by value is what makes [`SealedWorld::install`] unable to start late.
+/// subscribed. Taking one by value is what makes [`IsolatedWorld::install`] unable to start late.
 #[derive(Debug)]
 pub(crate) struct ContextWatch {
     events: broadcast::Receiver<CdpEvent>,
@@ -156,7 +156,7 @@ struct Handle {
     object_id: Option<String>,
 }
 
-impl SealedWorld {
+impl IsolatedWorld {
     /// Creates (or finds, by name) the frame's `browseros-engine` world and installs the engine
     /// there, or re-keys the probe already there. `candidate` is the seq for a new
     /// document; the reply's seq wins, because a world this `Playwright` already booted keeps
@@ -201,13 +201,13 @@ impl SealedWorld {
     ) -> Result<Installed, ProbeFailure> {
         let Some(session_id) = session.session_id().cloned() else {
             return Err(ProbeFailure::Broken(
-                "a sealed world needs a target session".to_owned(),
+                "an isolated world needs a target session".to_owned(),
             ));
         };
         let created: CreatedWorld = session
             .send(
                 "Page.createIsolatedWorld",
-                json!({ "frameId": frame.as_str(), "worldName": SEALED_WORLD }),
+                json!({ "frameId": frame.as_str(), "worldName": ENGINE_WORLD }),
             )
             .await
             .map_err(ProbeFailure::from_core)?;
@@ -384,7 +384,7 @@ async fn global_of(session: &ProtocolSession, named: &Named) -> Result<String, P
             _ => ProbeFailure::from_core(error),
         })?;
     evaluated.result.object_id.ok_or_else(|| {
-        ProbeFailure::Broken("the sealed world returned no handle to its global".to_owned())
+        ProbeFailure::Broken("the isolated world returned no handle to its global".to_owned())
     })
 }
 
@@ -444,13 +444,13 @@ impl Reported {
                 if context.id != id.0 {
                     return Ok(Self::Nothing);
                 }
-                let ours = context.name == SEALED_WORLD
+                let ours = context.name == ENGINE_WORLD
                     && context.aux_data.kind.as_deref() == Some("isolated")
                     && context.aux_data.frame_id.as_deref() == Some(frame.as_str());
                 match (ours, context.unique_id) {
                     (true, Some(unique)) => Ok(Self::Created(unique)),
                     (true, None) => Err(ProbeFailure::Broken(
-                        "the browser reported the sealed world without a uniqueId, so its handle \
+                        "the browser reported the isolated world without a uniqueId, so its handle \
                          cannot be taken safely"
                             .to_owned(),
                     )),
@@ -481,7 +481,7 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::sync::{broadcast, mpsc};
 
-    use super::{ContextWatch, Installed, SEALED_WORLD, SealedWorld};
+    use super::{ContextWatch, ENGINE_WORLD, Installed, IsolatedWorld};
     use crate::probe::{PROBE_PROTOCOL, ProbeFailure};
     use crate::world::{Epoch, FrameSeq};
 
@@ -599,7 +599,7 @@ mod tests {
     }
 
     fn our_world() -> Value {
-        created(CONTEXT, SEALED_WORLD, "isolated", FRAME)
+        created(CONTEXT, ENGINE_WORLD, "isolated", FRAME)
     }
 
     /// `Runtime.evaluate`'s reply: the global's handle.
@@ -618,7 +618,7 @@ mod tests {
     }
 
     /// An install as `FrameWorlds` runs it: the watch subscribed first.
-    async fn install(browser: &Arc<Browser>) -> Result<SealedWorld, ProbeFailure> {
+    async fn install(browser: &Arc<Browser>) -> Result<IsolatedWorld, ProbeFailure> {
         install_reporting(browser)
             .await
             .map(|installed| installed.world)
@@ -628,7 +628,7 @@ mod tests {
         let connection = Arc::clone(browser) as Arc<dyn CdpConnection>;
         let watch = ContextWatch::new(connection.events());
         let session = ProtocolSession::for_session(connection, SessionId::from(SESSION));
-        SealedWorld::install(
+        IsolatedWorld::install(
             session,
             FrameId(FRAME.to_owned()),
             FrameSeq(3),
@@ -658,7 +658,7 @@ mod tests {
         let called = browser.calls("Runtime.callFunctionOn")?;
         assert_eq!(
             called[0].params["objectId"], "1.7.1",
-            "the seal and the engine go to the handle the unique id gave"
+            "the engine go to the handle the unique id gave"
         );
         assert_eq!(world.seq(), FrameSeq(3));
         Ok(())
@@ -669,8 +669,8 @@ mod tests {
     -> TestResult {
         for (name, kind, frame) in [
             ("", "default", FRAME),
-            (SEALED_WORLD, "isolated", "another frame"),
-            (SEALED_WORLD, "default", FRAME),
+            (ENGINE_WORLD, "isolated", "another frame"),
+            (ENGINE_WORLD, "default", FRAME),
             ("another world", "isolated", FRAME),
         ] {
             let browser = Browser::new();
@@ -729,7 +729,7 @@ mod tests {
             );
             assert!(
                 swapped.calls("Runtime.callFunctionOn")?.is_empty(),
-                "{event}: the seal and the engine never reach a handle taken across churn"
+                "{event}: the engine never reach a handle taken across churn"
             );
         }
         Ok(())
@@ -769,7 +769,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_a_sealed_world_reported_without_a_unique_id_is_broken() -> TestResult {
+    async fn tests_that_a_isolated_world_reported_without_a_unique_id_is_broken() -> TestResult {
         let browser = Browser::new();
         let mut world = our_world();
         if let Some(context) = world["context"].as_object_mut() {

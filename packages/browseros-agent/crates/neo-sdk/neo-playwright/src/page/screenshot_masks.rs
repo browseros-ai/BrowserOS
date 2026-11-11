@@ -23,12 +23,12 @@ use crate::page::OpPage;
 use crate::probe::{self, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget};
 use crate::resolve::Resolver;
 use crate::target::{LocatorTarget, Strictness};
-use crate::world::SealedWorld;
+use crate::world::IsolatedWorld;
 
 /// Worlds remembered before applying any overlay, so a lost reply cannot lose its cleanup.
 #[derive(Default)]
 pub(super) struct ScreenshotMasks {
-    worlds: Vec<SealedWorld>,
+    worlds: Vec<IsolatedWorld>,
 }
 
 impl ScreenshotMasks {

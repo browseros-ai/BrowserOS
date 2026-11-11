@@ -24,10 +24,6 @@ pub(crate) struct FileChooser {
 impl FileChooser {
     /// A disappeared frame or input produces no chooser, as upstream's async adoption does.
     /// Nothing is reselected by CSS: a chooser always keeps the exact input Chromium named.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the native input's multiple flag is metadata, never a file path or form-control value"
-    )]
     pub(crate) async fn adopt(
         pw: &Playwright,
         scope: &OpScope<'_>,

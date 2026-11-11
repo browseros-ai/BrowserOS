@@ -30,6 +30,8 @@ pub(crate) struct TestEnv {
     view: BrowserView,
     run_state: Arc<RunState>,
     refusal: Option<Refusal>,
+    /// How many `recheck`s pass before `refusal` applies; 0 refuses from the first.
+    passing_rechecks: usize,
     calls: Mutex<Vec<EnvCall>>,
 }
 
@@ -45,6 +47,7 @@ impl TestEnv {
             view,
             run_state: Arc::default(),
             refusal: None,
+            passing_rechecks: 0,
             calls: Mutex::default(),
         }
     }
@@ -57,6 +60,16 @@ impl TestEnv {
     pub(crate) fn with_refusal(self, refusal: Refusal) -> Self {
         Self {
             refusal: Some(refusal),
+            ..self
+        }
+    }
+
+    /// The same env, letting `passing` rechecks through and refusing every later one with
+    /// `refusal`: a host that took the tab while an op was between two sends.
+    pub(crate) fn with_refusal_after(self, passing: usize, refusal: Refusal) -> Self {
+        Self {
+            refusal: Some(refusal),
+            passing_rechecks: passing,
             ..self
         }
     }
@@ -88,6 +101,14 @@ impl OpEnv for TestEnv {
 
     fn recheck(&self) -> Result<(), Refusal> {
         self.record(EnvCall::Recheck);
+        let rechecks = self
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, EnvCall::Recheck))
+            .count();
+        if rechecks <= self.passing_rechecks {
+            return Ok(());
+        }
         self.refusal.clone().map_or(Ok(()), Err)
     }
 

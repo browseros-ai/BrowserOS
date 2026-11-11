@@ -32,6 +32,7 @@ import { readyChoosers } from './chooser-setup'
 import { shapeBridgeError, unsupportedError, withAbortCause } from './errors'
 import { host, refuser } from './host'
 import type { OpName } from './ops.generated'
+import { completedPublications } from './publication'
 import type { SignalLike } from './signal'
 import type {
   CallHeader,
@@ -162,6 +163,7 @@ function countPumps(): void {
   if (countingPumps) return
   countingPumps = true
   host().onReply((envelope) => {
+    completedPublications(field(envelope, 'completedNavigations'))
     const pumped = field(envelope, 'pumped')
     if (typeof pumped === 'number' && pumped > pumpsNeeded) pumpsNeeded = pumped
   })

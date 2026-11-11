@@ -47,7 +47,7 @@ pub struct Run {
     /// The script, bounded for storage. Stored when the run ends, so it is absent while the run is `running`. Older runs may also have no stored code.
     #[serde(rename = "code", skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
-    /// Neo stopped before the run ended, so its code was never stored.
+    /// Restart marker: Neo stopped before the run ended, so its code was never stored. The field name is retained for compatibility; new runs do not withhold code for field contents.
     #[serde(rename = "codeWithheld", skip_serializing_if = "Option::is_none")]
     pub code_withheld: Option<String>,
     /// The script's return value, bounded for storage. A byte value the reply could not carry inline is `{\"$neo\":\"blob\",\"id\",\"size\"}` here too; read it at `GET /v1/runs/{runId}/blobs/{blobId}`.

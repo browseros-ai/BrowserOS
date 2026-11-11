@@ -5,7 +5,7 @@
  *   agent's arg ─ client serializeValue (its checks and errors) ─ the channel's validator
  *               ─ server parseSerializedValue ─ serializeAsCallArgument (the page's format)
  *               ─ JSON text on the wire
- *   result      ─ Rust's masked value in the page's format ─ parseEvaluationResultValue
+ *   result      ─ Rust's value in the page's format ─ parseEvaluationResultValue
  *
  * Neo's client and the server's value work both run here, in QuickJS, with the vendored
  * modules, so the page receives exactly what upstream's page receives and the agent gets
@@ -326,7 +326,7 @@ export function fromInPageArgument(value: unknown): unknown {
 }
 
 /**
- * The op's masked result, in the page's format, as the agent's value: the vendored
+ * The op's result, in the page's format, as the agent's value: the vendored
  * `parseEvaluationResultValue`. Rust already applied upstream's server-to-client step (an
  * ArrayBuffer is `{}`), so this one walk gives what upstream's three do.
  *

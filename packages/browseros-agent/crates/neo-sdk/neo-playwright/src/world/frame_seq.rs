@@ -1,4 +1,4 @@
-//! The identities a sealed world is known by: which `Playwright` booted it, which document of
+//! The identities an isolated world is known by: which `Playwright` booted it, which document of
 //! a page it serves, and which node in it.
 
 use serde::{Deserialize, Serialize};
@@ -37,7 +37,7 @@ pub(crate) struct FrameSeq(pub(crate) u32);
 pub(crate) struct BackendNodeId(pub(crate) i64);
 
 /// CDP's `Runtime.ExecutionContextId`: a small per-renderer counter, so it may name another
-/// context once its document is gone. Only `DOM.resolveNode` gets one (`SealedWorld`).
+/// context once its document is gone. Only `DOM.resolveNode` gets one (`IsolatedWorld`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ContextId(pub(crate) i64);
 

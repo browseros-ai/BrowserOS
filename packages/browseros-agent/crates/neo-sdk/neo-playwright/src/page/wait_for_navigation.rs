@@ -195,10 +195,7 @@ async fn complete_navigation(
     } else {
         None
     };
-    Ok(Some(NavigationResult {
-        response,
-        url: Some(event.url),
-    }))
+    Ok(Some(NavigationResult::observed(response, event.url)))
 }
 
 /// Report frame facts under the same native timeout as the navigation; the prelude need not

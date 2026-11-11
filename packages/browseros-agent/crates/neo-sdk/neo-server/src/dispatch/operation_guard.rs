@@ -52,7 +52,7 @@ pub(super) struct OpStart {
     /// writer clips it.
     pub(super) name: String,
     pub(super) spec: MethodSpec,
-    /// The raw input. The trace writer masks and bounds it at the operation's end.
+    /// The raw input. The trace writer bounds it at the operation's end.
     pub(super) args: Value,
     /// The tab the call named, before the door checks it.
     pub(super) tab: StartTab,
@@ -67,7 +67,7 @@ struct Unsent {
     parent: Option<OperationId>,
     name: String,
     effect: Effect,
-    /// The raw input. The trace writer masks and bounds it at the operation's end.
+    /// The raw input. The trace writer bounds it at the operation's end.
     args: Value,
     /// When the door opened the op, however late its record is sent.
     at: EpochMillis,
@@ -344,6 +344,7 @@ fn settle(
         observed,
         default_page,
         pumped,
+        completed_publications: state.take_publications(),
     });
 }
 

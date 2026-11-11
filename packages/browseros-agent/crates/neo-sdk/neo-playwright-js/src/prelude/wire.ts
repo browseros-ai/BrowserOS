@@ -139,7 +139,15 @@ export type NavigationResult = {
   response?: ResponseInfo | null
   url?: string | null
   frames?: FrameInfo[]
+  /** Native navigation already attempted its bounded snapshot; absence means keep cached facts. */
+  frameSnapshotAttempted?: boolean
 }
+
+/** The frame-event journal cut reached by one pointer action's actual navigations. */
+/** Run-local completion identity; acknowledgments keep the host receipt ledger bounded by in-flight work. */
+export type NavigationPublication = { id: number; acknowledged: number[] }
+
+export type NavigationCut = { seq: number; at: number }
 
 /** `page.frames`: every frame of the tab, the main frame first, each parent before its children. */
 export type FrameTree = { frames: FrameInfo[] }
@@ -152,7 +160,7 @@ export type Done = Record<string, never>
 
 /** A frame Rust could not read within its budget; it keeps its iframe line and gets a comment. */
 export type PartialFrame = { ref: string; frame: string; reason: string }
-/** A stitched, masked aria snapshot. The prelude renders it as YAML. */
+/** A stitched aria snapshot. The prelude renders it as YAML. */
 export type SnapshotResult = { json: AriaSnapshotJSON; partial: PartialFrame[] }
 
 /** The Playwright events Neo reports. `page` is the context's; the rest are a page's. */
@@ -478,13 +486,23 @@ export type OpInputs = {
   }
   'mouse.wheel': PageArgs & { deltaX: number; deltaY: number }
   'page.goto': FrameArgs & {
+    publication?: NavigationPublication
     url: string
     waitUntil: LoadState
     referer?: string
   }
-  'page.reload': PageArgs & { waitUntil: LoadState }
-  'page.goBack': PageArgs & { waitUntil: LoadState }
-  'page.goForward': PageArgs & { waitUntil: LoadState }
+  'page.reload': PageArgs & {
+    publication?: NavigationPublication
+    waitUntil: LoadState
+  }
+  'page.goBack': PageArgs & {
+    publication?: NavigationPublication
+    waitUntil: LoadState
+  }
+  'page.goForward': PageArgs & {
+    publication?: NavigationPublication
+    waitUntil: LoadState
+  }
   /** Matched in the page with vendored `urlMatches`, so globs and RegExps keep JS semantics. */
   'page.waitForNavigation': FrameArgs & {
     url?: UrlPattern
@@ -600,7 +618,7 @@ export type OpInputs = {
  */
 export type OpOutputs = {
   'events.interceptFileChooser': Done
-  'locator.click': null
+  'locator.click': { navigation: NavigationCut } | null
   'locator.dblclick': null
   'locator.hover': null
   'locator.check': null
@@ -666,12 +684,12 @@ export type OpOutputs = {
   'page.close': Done
   'page.opener': { opener: PageBrand | null }
   'page.frames': Partial<FrameTree>
-  /** The script's result in Playwright's in-page format, masked. */
+  /** The script's result in Playwright's in-page format. */
   'worker.evaluate': { value: SerializedValue }
   'page.evaluate': { value: SerializedValue; frames?: FrameInfo[] }
   'locator.evaluate': SerializedValue
   'locator.evaluateAll': SerializedValue
-  /** The predicate's truthy value, masked, and upstream's preview of it (`toString()`). */
+  /** The predicate's truthy value and upstream's preview of it (`toString()`). */
   'page.waitForFunction': { value: SerializedValue; preview: string }
   'locator.waitForFunction': null
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */

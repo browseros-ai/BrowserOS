@@ -245,7 +245,7 @@ impl DocumentWatch {
     /// session core enabled it already, and a second enable changes nothing. Sent before the
     /// watch reads the frame, so a navigation between that read and the wait is still seen.
     ///
-    /// It lives here, under the op's timeout, rather than in a sealed world's session setup,
+    /// It lives here, under the op's timeout, rather than in an isolated world's session setup,
     /// whose calls spend a frame's install budget.
     pub(crate) async fn enable_page(&self) -> Result<(), WatchError> {
         self.session.send_value("Page.enable", json!({})).await?;

@@ -1,13 +1,13 @@
 //! The parent frames between the page and a target's frame.
 
 use crate::probe::{ParsedSelector, ProbeTarget};
-use crate::world::{LinkedParent, Pin, SealedWorld};
+use crate::world::{IsolatedWorld, LinkedParent, Pin};
 
 /// One parent frame of the target's frame: the parent's world, and how to find the
 /// `<iframe>` there that holds the next frame down.
 #[derive(Clone, Debug)]
 pub(crate) struct Hop {
-    pub(crate) parent: SealedWorld,
+    pub(crate) parent: IsolatedWorld,
     pub(crate) iframe: HopIframe,
 }
 
