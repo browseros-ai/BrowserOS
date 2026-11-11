@@ -28,6 +28,8 @@ export interface TestDom {
   settle(): Promise<void>
   /** Runs a user action (a click, a key, typing) inside `act`, then settles. */
   interact(action: () => void): Promise<void>
+  /** Every path fetched, in order (with its query). */
+  fetched: string[]
   restore(): Promise<void>
 }
 
@@ -60,8 +62,11 @@ export async function installDom(
   // for `oninput` on the document; linkedom has none, and React's fallback needs IE's
   // `attachEvent`. Declaring it keeps controlled inputs on the ordinary `input` path.
   Object.assign(dom.document, { oninput: null })
+  const fetched: string[] = []
   const fetch = async (input: string | URL) => {
-    const id = decodeURIComponent(String(input).split('/').at(-1) ?? '')
+    fetched.push(String(input))
+    const path = String(input).split('?')[0] ?? ''
+    const id = decodeURIComponent(path.split('/').at(-1) ?? '')
     const run = details.get(id)
     return run
       ? Response.json({ run })
@@ -103,6 +108,7 @@ export async function installDom(
       await settle()
     },
     settle,
+    fetched,
     async interact(action) {
       await act(async () => action())
       await settle()

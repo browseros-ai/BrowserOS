@@ -24,6 +24,8 @@ export function apiRouteTable(
   store: RunStore,
   info: () => Promise<ViewerInfo>,
   exportRuns: () => Promise<ExportResponse>,
+  /** Waits, bounded, for Neo's record of a run that just ended (`?wait=neo`). */
+  awaitNeoRecord: (runId: string) => Promise<void>,
 ) {
   const snapshot = (): RunsResponse => ({
     log: store.summary(),
@@ -35,7 +37,9 @@ export function apiRouteTable(
       Response.json((await info()) satisfies ViewerInfo),
     ),
     [apiRoutes.runs]: local(() => Response.json(snapshot())),
-    '/api/runs/:runId': local((req: RouteRequest<'runId'>) => {
+    '/api/runs/:runId': local(async (req: RouteRequest<'runId'>) => {
+      if (new URL(req.url).searchParams.get('wait') === 'neo')
+        await awaitNeoRecord(req.params.runId)
       const run = store.run(req.params.runId)
       return run
         ? Response.json({ run } satisfies RunResponse)

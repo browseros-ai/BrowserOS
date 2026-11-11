@@ -89,8 +89,15 @@ describe('one run as Markdown', () => {
   test('a run Neo has no record of says so, and still shows its code and reply', () => {
     const run = detailWith(3, { text: '1', neo: null })
     const markdown = runMarkdown(run, EXPORT)
-    expect(markdown.split('\n')[0]).toContain(' · method calls unknown · ')
+    // Neo answered (it named the run), but its record was not read in time.
+    expect(markdown.split('\n')[0]).toContain(
+      " · Neo's record had not arrived · ",
+    )
+    expect(markdown.split('\n')[0]).not.toContain('unknown')
     expect(markdown).toContain('No record from Neo for this run')
+    // No Neo run at all (an HTTP error, a lost run): nothing to wait for, so unknown.
+    const none = runMarkdown({ ...run, neoRunId: null }, EXPORT)
+    expect(none.split('\n')[0]).toContain(' · method calls unknown · ')
     expect(markdown).toContain('```js\n')
     expect(markdown).toContain('1 char, ≈0 tok.')
   })

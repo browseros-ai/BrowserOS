@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -9,7 +9,9 @@ import {
   type ViewerEvent,
   type ViewerInfo,
 } from '../../shared/api'
+import { runMarkdown } from '../../shared/run-markdown'
 import { runResult, sseEvent, startFakeNeo } from '../test-support/fake-neo'
+import { FAKE_TOKEN } from '../test-support/fake-neo-host'
 import { startViewer } from '../viewer-server'
 
 const cleanups: Array<() => Promise<unknown>> = []
@@ -138,4 +140,111 @@ test('the API lists tasks, a task with its runs, one run in full, and streams ea
     headers: { host: 'attacker.example' },
   })
   expect(foreign.status).toBe(403)
+})
+
+/** A viewer whose Neo answers a run at once and whose host API gives its record after `recordDelayMs`. */
+async function viewerWithSlowRecord(recordDelayMs: number, waitMs: number) {
+  const neo = startFakeNeo(() => ({
+    chunks: [sseEvent(runResult(1, '1', { value: 1 }))],
+  }))
+  cleanups.push(() => neo.stop())
+  const record = {
+    id: '01a1cc18-ed14-78b3-a30d-2cb4ef81d9f4',
+    status: 'ok',
+    startedAt: 1_000,
+    endedAt: 1_300,
+    complete: true,
+    tabs: [7],
+    operations: [
+      {
+        id: 'x.1',
+        name: 'page.goto',
+        kind: 'builtin',
+        effect: 'write',
+        site: { line: 1, column: 7 },
+        startedAt: 1_010,
+        durationMs: 250,
+        outcome: 'ok',
+      },
+    ],
+  }
+  const dataDir = await mkdtemp(join(tmpdir(), 'neo-viewer-api-wait-'))
+  cleanups.push(() => rm(dataDir, { recursive: true, force: true }))
+  const tokenFile = join(dataDir, 'host-token')
+  await writeFile(tokenFile, FAKE_TOKEN, { mode: 0o600 })
+  // Neo's host API, answering `GET /v1/runs/{id}` (the only call the joiner makes) after the delay.
+  const slow = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(req) {
+      if (req.headers.get('authorization') !== `Bearer ${FAKE_TOKEN}`)
+        return new Response('unauthorized', { status: 401 })
+      if (!new URL(req.url).pathname.startsWith('/v1/runs/'))
+        return new Response('not found', { status: 404 })
+      await Bun.sleep(recordDelayMs)
+      return Response.json(record)
+    },
+  })
+  cleanups.push(async () => slow.stop(true))
+  const viewer = await startViewer(
+    {
+      port: 0,
+      upstream: new URL(neo.url),
+      dataDir,
+      hostApi: { url: new URL(`http://127.0.0.1:${slow.port}`), tokenFile },
+    },
+    { neoRecordWaitMs: waitMs },
+  )
+  cleanups.push(() => viewer.stop())
+  await fetch(viewer.mcpUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'run',
+        arguments: { code: "await page.goto('https://example.com')" },
+      },
+    }),
+  }).then((response) => response.text())
+  const runId = viewer.store.list()[0]?.id ?? ''
+  return { viewer, runId }
+}
+
+test('?wait=neo: a run that just ended is answered once Neo’s record has joined', async () => {
+  const { viewer, runId } = await viewerWithSlowRecord(400, 3_000)
+  // Without the wait the record is not there yet.
+  const plain = (await (
+    await fetch(`${viewer.url}${apiRoutes.run(runId)}`)
+  ).json()) as RunResponse
+  expect(plain.run.neo).toBeNull()
+  const started = Date.now()
+  const waited = (await (
+    await fetch(`${viewer.url}${apiRoutes.run(runId, { waitForNeo: true })}`)
+  ).json()) as RunResponse
+  expect(Date.now() - started).toBeLessThan(2_000)
+  expect(waited.run.operationCount).toBe(1)
+  expect(runMarkdown(waited.run, { replyChars: null })).toContain(
+    '- L1 page.goto: +10 ms, 250 ms, ok',
+  )
+})
+
+test('?wait=neo is bounded: a record that does not come in time is copied as not arrived', async () => {
+  const { viewer, runId } = await viewerWithSlowRecord(2_000, 300)
+  const started = Date.now()
+  const waited = (await (
+    await fetch(`${viewer.url}${apiRoutes.run(runId, { waitForNeo: true })}`)
+  ).json()) as RunResponse
+  const took = Date.now() - started
+  expect(took).toBeGreaterThanOrEqual(250)
+  expect(took).toBeLessThan(1_500)
+  expect(waited.run.neo).toBeNull()
+  expect(
+    runMarkdown(waited.run, { replyChars: null }).split('\n')[0],
+  ).toContain("Neo's record had not arrived")
 })

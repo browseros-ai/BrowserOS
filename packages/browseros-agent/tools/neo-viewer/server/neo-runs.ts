@@ -140,7 +140,11 @@ const DRAIN_MS = 3000
 export function joinNeoRuns(
   store: RunRecords,
   read = readNeoRun,
-): { settled: (maxMs: number) => Promise<void>; stop: () => Promise<void> } {
+): {
+  settled: (maxMs: number) => Promise<void>
+  settledFor: (runId: string, maxMs: number) => Promise<void>
+  stop: () => Promise<void>
+} {
   const reading = new Map<string, Promise<void>>()
   const join = async (runId: string, neoRunId: string) => {
     for (let attempt = 1; attempt <= MAX_READS; attempt++) {
@@ -174,6 +178,14 @@ export function joinNeoRuns(
      */
     async settled(maxMs) {
       await inFlight(maxMs)
+    },
+    /**
+     * Waits (at most `maxMs`) for the read of one run's record, if one is in flight: Copy of a
+     * run that just ended then holds its methods. Returns at once when nothing is being read.
+     */
+    async settledFor(runId, maxMs) {
+      const pending = reading.get(runId)
+      if (pending) await Promise.race([pending, Bun.sleep(maxMs)])
     },
     /**
      * Stops joining and waits (at most `DRAIN_MS`) for reads in flight, so a run that ended just

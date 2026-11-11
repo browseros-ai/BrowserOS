@@ -89,6 +89,8 @@ describe('Copy on a run row', () => {
     expect(row(1).querySelector('[data-copy-run]')).toBeNull()
     await dom.interact(() => fire(copyButton(1), 'click'))
     expect(written).toHaveLength(1)
+    // It asks the server to wait for Neo's record of a run that just ended.
+    expect(dom.fetched).toEqual(['/api/runs/run-1?wait=neo'])
     const text = await written[0]
     expect(text).toBe(runMarkdown(first, { replyChars: null }))
     expect(text.startsWith('# Run 001 · ')).toBe(true)
