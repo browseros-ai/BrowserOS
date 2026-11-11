@@ -132,8 +132,13 @@ profile, unless given `--keep-data` (or `--upstream`, which starts no container)
 | `GET /api/runs/:runId` | `RunResponse`: one `RunDetail`, request and reply as they crossed |
 | `GET /api/events` | SSE: one `ViewerEvent` (`{type:'task'}` or `{type:'run'}`) per change |
 
-`RunSummary.neoRunId` is the reply's `_meta["com.browseros.neo/run"].id`, the key to join Neo's
-run record (`GET /v1/runs/{id}`) when the host API arrives.
+Once a run's reply is in, the viewer reads Neo's record of it through the host API
+(`GET /v1/runs/{id}?wait=10`, joined by the reply's `_meta["com.browseros.neo/run"].id`, which is
+`RunSummary.neoRunId`) and keeps it in the task log. `RunDetail.neo` holds it: the run's status,
+Neo time and error, and each operation's name, kind, effect, script site `{line, column}`, start
+offset, duration, args, result, notes, delivery and error (`NeoRunRecord`, `NeoOperation` in
+`shared/api.ts`). `RunSummary` gains `neoDurationMs` and `operationCount`. Neo bounds stored args
+(4 KiB) and results (2 KiB); the full reply the model read is the proxy's `reply.text`.
 
 ## Neo's host API
 

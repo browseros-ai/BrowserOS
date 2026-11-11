@@ -159,6 +159,79 @@ export interface RunSummary {
   /** `_meta["com.browseros.neo/run"].status` and `.effects`, as Neo reported them. */
   neoStatus: string | null
   neoEffects: string | null
+  /** Time Neo spent on the run (its record's `endedAt − startedAt`); null until the record is joined. */
+  neoDurationMs: number | null
+  /** How many operations Neo recorded; null until the record is joined. */
+  operationCount: number | null
+}
+
+/**
+ * Neo's own record of a run, read from its host API (`GET /v1/runs/{id}`, openapi.yaml `Run`)
+ * once the reply is in, and joined to the proxy's record by `neoRunId`. Neo stores operation
+ * args at most 4 KiB and results 2 KiB; the reply the model read is the proxy's `reply.text`.
+ */
+export interface NeoRunRecord {
+  /** `running`, `ok`, `error`, `cancelled`, `timeout`, `interrupted` (extensible). */
+  status: string
+  effects: string | null
+  /** Epoch ms. */
+  startedAt: number
+  endedAt: number | null
+  /** `endedAt − startedAt`: the time Neo spent on the run. */
+  durationMs: number | null
+  /** False when some operation had not ended when the record was read. */
+  complete: boolean
+  /** The tabs its operations targeted. */
+  tabs: number[]
+  error: NeoOperationError | null
+  /** In start order. */
+  operations: NeoOperation[]
+}
+
+/** One SDK call the script made (or one made inside it), as Neo recorded it (openapi.yaml `Operation`). */
+export interface NeoOperation {
+  /** `<runId>.<seq>`. */
+  id: string
+  /** Its place in the run, from 1, in start order. */
+  seq: number
+  /** The operation this one ran inside; null for the script's own calls. */
+  parentId: string | null
+  /** e.g. `page.goto`, `locator.click`. */
+  name: string
+  /** `builtin`, `defined`, `next`, `host_call`, `protected` (extensible). */
+  kind: string
+  /** `read` or `write`. */
+  effect: string
+  /** The script line and column that called it (1-based); null for nested calls and old records. */
+  site: { line: number; column: number } | null
+  /** Ms from the run's start to this operation's start. */
+  startOffsetMs: number
+  durationMs: number | null
+  tabId: number | null
+  /** Bounded by Neo; null while running. */
+  args: unknown
+  argsTruncated: boolean
+  result: unknown
+  resultTruncated: boolean
+  /** `ok`, `error`, `cancelled`; null while running. */
+  outcome: string | null
+  /** `not_sent`, `done`, `unknown`; null while running. */
+  delivery: string | null
+  error: NeoOperationError | null
+  /** Its call-log lines, oldest first. */
+  notes: string[]
+  hasScreenshot: boolean
+}
+
+/** openapi.yaml `OperationError`. */
+export interface NeoOperationError {
+  /** Whose behavior must change: `neo`, `script`, `website`, `host`. */
+  owner: string
+  code: string
+  message: string
+  retryable: boolean
+  hostCode?: string
+  operationId?: string
 }
 
 export interface JsonRpcError {
@@ -169,6 +242,8 @@ export interface JsonRpcError {
 
 /** One run in full: the request and reply exactly as they crossed the proxy, and what was read from them. */
 export interface RunDetail extends RunSummary {
+  /** Neo's record of the run, joined by `neoRunId`; null until read, or when there is no host API. */
+  neo: NeoRunRecord | null
   request: {
     /** The HTTP body the agent sent, byte for byte (UTF-8). */
     raw: string

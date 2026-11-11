@@ -13,6 +13,7 @@ import { liveScreen } from './live-screen/live-routes'
 import { socketSessions } from './live-screen/socket-session'
 import { TaskStore } from './log/task-store'
 import { containerUp, runCommand } from './neo-container'
+import { joinNeoRuns } from './neo-runs'
 import { buildPage, type PageFile } from './page'
 import { handleMcp, type McpProxyDeps } from './proxy/mcp-proxy'
 import { ClientNames } from './tasks/client-names'
@@ -55,6 +56,8 @@ export async function startViewer(
   const live = liveScreen(seams.liveHost ?? viewerHost)
   // The proxy needs the bound port (for the process lookup) before the first request.
   let proxy: McpProxyDeps | null = null
+  // Neo's record of each run, read through the host API once its reply is in.
+  const joiner = joinNeoRuns(store)
   const info: Omit<ViewerInfo, 'container'> = {
     mcpUrl: '',
     upstreamUrl: config.upstream.href,
@@ -117,6 +120,7 @@ export async function startViewer(
       // WebSocket itself, as the display relay does; a local Bun can be older, and Ctrl+C
       // must still exit.
       await Promise.race([server.stop(true), Bun.sleep(STOP_WAIT_MS)])
+      await joiner.stop()
       await store.flush()
     },
   }
