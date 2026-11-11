@@ -1167,20 +1167,22 @@ export class Frame extends EventEmitter {
       throw clientError(api, `url: expected string, got ${typeof url}`)
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
-    const args = await this._frameArgs(api)
-    const { value: result, observed } = await invokeObserved(
-      'page.goto',
-      this._call(api, this._navigationTimeout(options)),
-      {
-        ...args,
-        url,
-        waitUntil,
-        ...pick(options, ['referer']),
-      },
-      undefined,
-      signal,
-    )
-    return await this._page._navigated(api, this, result, observed)
+    return await this._page._navigating(async () => {
+      const args = await this._frameArgs(api)
+      const { value: result, observed } = await invokeObserved(
+        'page.goto',
+        this._call(api, this._navigationTimeout(options)),
+        {
+          ...args,
+          url,
+          waitUntil,
+          ...pick(options, ['referer']),
+        },
+        undefined,
+        signal,
+      )
+      return await this._page._navigated(api, this, result, observed)
+    })
   }
 
   async _waitForLoadState(

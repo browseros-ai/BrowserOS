@@ -132,6 +132,37 @@ it('tests that waitForTimeout reads the frames of each working page once, and of
   ])
 })
 
+it('tests that a wait skips a page whose navigation is in flight, which Chromium would not answer, and reads it again once it ends', async () => {
+  let land: () => void = () => {}
+  const landed = new Promise<void>((resolve) => {
+    land = resolve
+  })
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: async (call) => {
+      if (call.name === 'page.frames') return TREE
+      if (call.name === 'page.goto') {
+        await landed
+        return { response: null, url: 'https://a.example/next' }
+      }
+      return null
+    },
+  })
+  await runtime.run(`
+    globalThis.navigation = page.goto('https://a.example/next')
+    await page.waitForTimeout(1)
+  `)
+  expect(reads(runtime.calls)).toEqual([])
+  land()
+  await runtime.run(`
+    await globalThis.navigation
+    await page.waitForTimeout(1)
+  `)
+  expect(reads(runtime.calls).map(([, api]) => api)).toContain(
+    'page.waitForTimeout',
+  )
+})
+
 it('tests that a wait reads nothing for a lazy page or a listed tab the script never touched', async () => {
   const runtime = loadPrelude({
     seed: {

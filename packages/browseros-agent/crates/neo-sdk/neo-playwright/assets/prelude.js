@@ -6811,14 +6811,16 @@ ${value.stack}`;
         throw clientError(api, `url: expected string, got ${typeof url}`);
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      const args = await this._frameArgs(api);
-      const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
-        ...args,
-        url,
-        waitUntil,
-        ...pick(options, ["referer"])
-      }, undefined, signal);
-      return await this._page._navigated(api, this, result, observed);
+      return await this._page._navigating(async () => {
+        const args = await this._frameArgs(api);
+        const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
+          ...args,
+          url,
+          waitUntil,
+          ...pick(options, ["referer"])
+        }, undefined, signal);
+        return await this._page._navigated(api, this, result, observed);
+      });
     }
     async _waitForLoadState(api, state, options = {}) {
       const verified = loadState(api, "state", state ?? "load");
@@ -7492,6 +7494,7 @@ ${value.stack}`;
     #closeEvent = 0;
     #approvedClose = null;
     _working = false;
+    _navigationsInFlight = 0;
     #childFrames = new Map;
     constructor(context, tab, url) {
       super();
@@ -7793,6 +7796,14 @@ ${value.stack}`;
       const brand = elementBrand(value);
       return brand ? new ElementHandle(this, brand) : null;
     }
+    async _navigating(work) {
+      this._navigationsInFlight++;
+      try {
+        return await work();
+      } finally {
+        this._navigationsInFlight--;
+      }
+    }
     async _navigated(api, frame, result, at) {
       if (this.#payloadCurrent(at)) {
         if (typeof result?.url === "string") {
@@ -7977,8 +7988,10 @@ ${value.stack}`;
     async#history(api, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil }, undefined, signal);
-      return await this._navigated(api, this._mainFrame, result, observed);
+      return await this._navigating(async () => {
+        const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil }, undefined, signal);
+        return await this._navigated(api, this._mainFrame, result, observed);
+      });
     }
   }
 
@@ -8071,7 +8084,7 @@ ${value.stack}`;
       return page;
     }
     async _refreshWorkingFrames(api) {
-      const working = this.pages().filter((page) => page._working && page._tab !== null);
+      const working = this.pages().filter((page) => page._working && page._tab !== null && page._navigationsInFlight === 0);
       await Promise.all(working.map((page) => page._refreshFrames(api).catch(() => {
         return;
       })));
