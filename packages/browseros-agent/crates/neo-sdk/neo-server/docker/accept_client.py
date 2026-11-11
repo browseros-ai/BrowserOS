@@ -6,6 +6,7 @@ it reuses) and runs one command per call, as whichever uid the check needs. Each
 one JSON object on stdout; accept.sh decides PASS or FAIL from it.
 
   run <mcp-url> <task-id> <request-id>   a `run` that drives a real page, with the host's _meta
+  describe <mcp-url>                     the `run` tool's description, which lists neo.* methods
   host <socket> <token-file|-> <path>    GET a host API path over the Unix socket
   listeners                              the container's listening TCP sockets, from /proc
   probe <host> <port> http|https         GET /system/ready from another container
@@ -31,7 +32,7 @@ return {{ title: await page.title(), heading: await page.locator('#h').textConte
 """
 
 
-def run(url: str, task_id: str, request_id: str) -> dict:
+def connect(url: str):
     # Imported here so `probe` runs from stdin in a container that has only this file.
     from smoke import PROTOCOL, McpClient
 
@@ -45,6 +46,16 @@ def run(url: str, task_id: str, request_id: str) -> dict:
         },
     )
     client.notify("notifications/initialized")
+    return client
+
+
+def describe(url: str) -> dict:
+    tools = connect(url).tools()
+    return {"description": next(t.get("description", "") for t in tools if t["name"] == "run")}
+
+
+def run(url: str, task_id: str, request_id: str) -> dict:
+    client = connect(url)
     tools = [tool["name"] for tool in client.tools()]
     meta = {"requestId": request_id, "taskId": task_id, "hostData": {"check": "accept"}}
     result = client.call(
@@ -131,6 +142,8 @@ def probe(host_name: str, port: int, scheme: str) -> dict:
     """What a peer outside the container's loopback gets from the browser's MCP proxy."""
     try:
         raw = socket.create_connection((host_name, port), timeout=10)
+    except TimeoutError:
+        return {"tcp": "timeout"}
     except OSError as error:
         return {"tcp": "refused", "error": str(error)}
     try:
@@ -141,6 +154,9 @@ def probe(host_name: str, port: int, scheme: str) -> dict:
             raw = context.wrap_socket(raw, server_hostname=host_name)
         raw.sendall(f"GET /system/ready HTTP/1.1\r\nHost: {host_name}\r\nConnection: close\r\n\r\n".encode())
         reply = raw.recv(4096)
+    except TimeoutError:
+        # Neither an answer nor a close: a firewall drop, or a hung listener.
+        return {"tcp": "accepted", "http": "timeout"}
     except (OSError, ssl.SSLError) as error:
         return {"tcp": "accepted", "http": "closed", "error": error.__class__.__name__}
     finally:
@@ -156,6 +172,8 @@ def main() -> None:
         out = run(*args)
     elif command == "host":
         out = host(args[0], args[1], urllib.parse.quote(args[2], safe="/?=&"))
+    elif command == "describe":
+        out = describe(args[0])
     elif command == "listeners":
         out = listeners()
     elif command == "probe":

@@ -285,8 +285,8 @@ class HostSocketTest(unittest.TestCase):
     def prepare(
         self, kind: str, host_gid: str = "", caller_socket: str | None = None
     ) -> tuple[subprocess.CompletedProcess, Path, list[list[str]], str | None]:
-        """prepare_host_socket's result, its directory, the chown calls it made, and the
-        CLAW_HOST_SOCKET a child process (the browser, then claw-sdk) inherits."""
+        """prepare_host_socket's result, its directory, the chown and setpriv calls it made,
+        and the CLAW_HOST_SOCKET a child process (the browser, then claw-sdk) inherits."""
         directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
         socket_dir, chowns, seen = directory / "run-neo", directory / "chowns", directory / "seen"
         caller = (
@@ -297,6 +297,9 @@ class HostSocketTest(unittest.TestCase):
             # Outside the container there is no neo user; 1000 is the image's default gid.
             + "id() { [ \"$*\" = '-g neo' ] && echo 1000; }\n"
             + f"chown() {{ local IFS=$'\\t'; echo \"$*\" >> '{chowns}'; }}\n"
+            # Records the identity it was asked for, then runs the command as this user.
+            + f"setpriv() {{ local IFS=$'\\t'; echo \"setpriv\t$*\" >> '{chowns}'; "
+            + 'while [ "$1" != --clear-groups ]; do shift; done; shift; "$@"; }\n'
             + f"NEO_HOST_GID={shlex.quote(host_gid)} HOST_SOCKET_DIR='{socket_dir}'\n"
             + caller
             + shell_function("prepare_host_socket")
@@ -313,7 +316,15 @@ class HostSocketTest(unittest.TestCase):
         result, socket_dir, chowns, inherited = self.prepare("claw-sdk", host_gid="2005")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(chowns, [["neo:2005", str(socket_dir)]])
+        # The chmod runs in the host's group: without CAP_FSETID, Linux would drop the setgid
+        # bit for a process outside it.
+        self.assertEqual(
+            chowns,
+            [
+                ["neo:2005", str(socket_dir)],
+                ["setpriv", "--regid", "2005", "--clear-groups", "chmod", "2750", str(socket_dir)],
+            ],
+        )
         # setgid: the socket claw-sdk binds inside takes the directory's group.
         self.assertEqual(socket_dir.stat().st_mode & 0o7777, 0o2750)
         self.assertEqual(inherited, f"{socket_dir}/host.sock")
@@ -321,7 +332,8 @@ class HostSocketTest(unittest.TestCase):
     def test_without_a_host_group_the_socket_stays_with_neos_group(self):
         _, socket_dir, chowns, _ = self.prepare("claw-sdk")
 
-        self.assertEqual(chowns, [["neo:1000", str(socket_dir)]])
+        self.assertEqual(chowns[0], ["neo:1000", str(socket_dir)])
+        self.assertEqual(chowns[1][:3], ["setpriv", "--regid", "1000"])
 
     def test_a_callers_socket_path_wins(self):
         _, socket_dir, _, inherited = self.prepare(

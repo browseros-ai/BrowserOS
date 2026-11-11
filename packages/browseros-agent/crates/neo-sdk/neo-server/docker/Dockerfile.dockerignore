@@ -10,3 +10,7 @@
 # Only Cargo's output at the root: `**/target` would also drop source modules such as
 # browseros-core/src/target/.
 target
+# This folder's scripts and docs are not build inputs, so editing them leaves the server stage
+# cached. The browser pin is.
+crates/neo-sdk/neo-server/docker
+!crates/neo-sdk/neo-server/docker/browser.lock

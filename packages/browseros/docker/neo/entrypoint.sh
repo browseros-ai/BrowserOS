@@ -222,9 +222,12 @@ prepare_host_socket() {
   [ -n "$gid" ] || gid=$(id -g neo)
   [[ "$gid" =~ ^[0-9]+$ ]] || die "NEO_HOST_GID must be numeric"
   mkdir -p "$HOST_SOCKET_DIR"
-  # chown first: a change of owner can clear the setgid bit.
+  # chown first: a change of owner can clear the setgid bit. Then chmod as a
+  # member of the group: without CAP_FSETID, which zuzu's cells do not grant,
+  # Linux silently drops a setgid bit set by a process outside the directory's
+  # group, and the socket would get neo's group instead of the host's.
   chown "neo:$gid" "$HOST_SOCKET_DIR"
-  chmod 2750 "$HOST_SOCKET_DIR"
+  setpriv --regid "$gid" --clear-groups chmod 2750 "$HOST_SOCKET_DIR"
   # spawn_as_neo keeps the environment, and Chromium passes it on to claw-sdk.
   export CLAW_HOST_SOCKET="${CLAW_HOST_SOCKET:-$HOST_SOCKET_DIR/host.sock}"
 }

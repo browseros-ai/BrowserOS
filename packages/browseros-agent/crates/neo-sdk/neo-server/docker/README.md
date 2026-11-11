@@ -37,9 +37,9 @@ crates/neo-sdk/neo-server/docker/accept.sh "$TAG"
 
 It boots the image in throwaway containers on a private `--internal` network, drives a real page through
 `run`, and checks the host contract below, the stop, persistence, a browser restart and a kill of every
-process at once. The header of `accept.sh` lists each check. An image for another architecture than the
-Docker engine's gets the static `identity` check only, because booting it would be emulated.
-`.github/workflows/neo-sdk-image.yml` runs both scripts on a native amd64 runner on request.
+process at once, all under only the capabilities listed below. The header of `accept.sh` lists each check.
+An image for another architecture than the Docker engine's gets the static `identity` check only, because
+booting it would be emulated.
 
 ## The contract
 
@@ -52,7 +52,7 @@ Docker engine's gets the static `identity` check only, because booting it would 
 | `CLAW_HOST_SOCKET` | `/run/neo/host.sock` | Moves the socket. Keep it off a Docker Desktop file share, which cannot hold a socket. |
 | `CLAW_HOST_TCP` | unset | Development only: also serves the host API on this TCP address, token only. |
 | `NEO_MCP_REMOTE` | `false` | `false`: the browser's MCP ports refuse every peer but loopback. `true` is needed to publish 9010, and admits every peer that can route to the container. |
-| `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | `/home/neo/.config/browseros/captcha/capsolver-api-key`, `…/2captcha-api-key` | CAPTCHA provider keys, read if the files exist. The image ships none (below). |
+| `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | `/home/neo/.config/browseros/captcha/capsolver-api-key`, `…/2captcha-api-key` | CAPTCHA provider keys, read if the files exist. The image ships none ([CAPTCHA keys](#captcha-keys)). |
 | `NEO_SCREEN`, `NEO_SANDBOX`, `NEO_SOFTWARE_GRAPHICS`, `NEO_DISABLE_BROWSEROS_EXTENSIONS`, `NEO_ARGS`, `NEO_DOWNLOAD_DIR`, `TZ` | as the Neo image | The same meaning as in [the Neo image's README](../../../../../browseros/docker/neo/README.md). |
 | `BROWSERCLAW_HOSTED_MODE` | `1` | Must stay `1`. |
 
@@ -128,8 +128,15 @@ flight at shutdown is cut.
 
 ## CAPTCHA keys
 
-The image is keyless. `neo.solveCaptcha` works once the host puts a key file at one of the two paths
-above, readable by Neo's uid, before Neo starts. Without one, the method is unlisted.
+The image is keyless. `neo.solveCaptcha` is offered to scripts once a key file is readable by Neo's uid
+when Neo starts; without one, the method is unlisted. A host provides a key in one of two ways:
+
+- **Write it as a file** at the default path before starting the entrypoint, as root:
+  `install -D -m 0400 -o <PUID> -g <PGID> <key> /home/neo/.config/browseros/captcha/capsolver-api-key`.
+- **Mount it read-only outside `/home/neo`** and point the variable at it:
+  `-v ./capsolver.key:/run/neo-keys/capsolver-api-key:ro -e BROWSEROS_CAPSOLVER_API_KEY_FILE=/run/neo-keys/capsolver-api-key`.
+  Not inside `/home/neo`: the entrypoint gives that whole tree to Neo's uid at every start, and a
+  read-only mount there stops the container.
 
 To bake keys into an image instead, as the Neo image does, pass them to `build.sh`:
 
@@ -174,7 +181,7 @@ values from the release's `release.json`:
 
 ```sh
 v=0.52.1.2
-curl -fsSL "https://cdn.browseros.com/releases/browserclaw/$v/release.json" \
+curl -fsSL "https://cdn.browseros.com/releases/browserclaw/$v/linux/release.json" \
   | jq '.artifacts | {amd64: .x64_deb, arm64: .arm64_deb} | map_values({url, sha256})'
 ```
 

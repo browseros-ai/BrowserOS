@@ -17,7 +17,8 @@
 #   check            what passes
 #   identity         claw-sdk marker; server sha256 = provenance.json; browser recorded; no noVNC
 #                    or websockify; python3 present; CAPTCHA keys present only when baked
-#   boot             healthy within 90 s with a host group and token; listeners as README "Ports"
+#   boot             healthy within 90 s with a host group and token, under only the capabilities
+#                    README.md documents and no-new-privileges; listeners as README "Ports"
 #   mcp              smoke_sdk.py; a `run` with the host's _meta fills a page; a repeat replays
 #   host-api         group + token: 200; wrong token: 401; no group, with or without the
 #                    token: EACCES at connect
@@ -28,6 +29,8 @@
 #   persist          a new container on the same /data reads the run and replays its requestId
 #   kill-all         SIGKILL of the whole Neo tree (zuzu's OOM cgroup.kill) and a restart loop:
 #                    healthy again, socket recreated, the run readable and replayed
+#   captcha-keys     neo.solveCaptcha is listed only with a key: none in a keyless image, and
+#                    listed once the host mounts a key file read-only and points the variable at it
 set -uo pipefail
 
 usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
@@ -58,7 +61,12 @@ secrets=$(mktemp -d)
 # The token is mounted read-only for neo (uid PUID) and the test uids, so the folder is 0755.
 chmod 0755 "$secrets"
 od -An -tx1 -N24 /dev/urandom | tr -d ' \n' > "$secrets/host-token"
-chmod 0644 "$secrets/host-token"
+printf 'accept-dummy-capsolver-key' > "$secrets/capsolver-api-key"
+chmod 0644 "$secrets/host-token" "$secrets/capsolver-api-key"
+# The capabilities README.md says the entrypoint needs, and no more: zuzu's cells grant a set
+# this small (no CAP_FSETID among them), so Docker's wider default would hide a missing one.
+host_caps=(--cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add CHOWN --cap-add FOWNER
+  --cap-add DAC_OVERRIDE --cap-add KILL --security-opt no-new-privileges)
 
 declare -a results=()
 failed=0
@@ -96,7 +104,7 @@ data_mount() { if [ -n "$data_dir" ]; then echo "$data_dir:/data"; else echo "$v
 start_neo() { # name [docker run args...] [-- command...]
   local name=$1; shift
   docker run -d --name "$name" --network "$network" --shm-size=1g --stop-timeout 25 \
-    --label neo-sdk-accept="$run_id" \
+    --label neo-sdk-accept="$run_id" "${host_caps[@]}" \
     -v "$(data_mount)" -v "$secrets:/run/neo-accept:ro" \
     -e CLAW_HOST_TOKEN_FILE=/run/neo-accept/host-token -e NEO_HOST_GID=$host_gid \
     "$@" >/dev/null
@@ -148,6 +156,10 @@ run_ok() { # json from run_call: status ok and the page really filled
     && [ "$(jget "$1" 'd["value"]["value"]["title"]')" = neo-sdk-accept ]
 }
 runs_for() { jget "$(host_get "$1" "/v1/runs?requestId=$2")" 'len(d["body"]["items"])'; }
+lists_captcha() { # name: whether the run tool offers neo.solveCaptcha
+  jget "$(client "$1" python3 accept_client.py describe http://127.0.0.1:9010/mcp)" \
+    '"neo.solveCaptcha(page)" in d["description"]'
+}
 
 # --- identity --------------------------------------------------------------------------------
 image_arch=$(docker image inspect -f '{{.Architecture}}' "$image")
@@ -185,7 +197,7 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api mcp-remote restart-browser stop persist kill-all; do
+  for check in boot mcp host-api mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   done
   printf '\n'; printf '%s\n' "${results[@]}"
@@ -218,6 +230,8 @@ else
 fi
 
 if [ "$booted" = 1 ]; then
+  main_captcha=$(lists_captcha "$main")
+
   # --- mcp -----------------------------------------------------------------------------------
   task="accept-$run_id" request="req-$run_id"
   smoke=$(client "$main" python3 smoke_sdk.py --mcp-port 9010 2>&1); smoke_status=$?
@@ -340,7 +354,7 @@ for pid in pids:
   # --- mcp-remote, remote-on half --------------------------------------------------------------
   open="$prefix-remote" open_http='{}' open_tls='{}'
   docker run -d --name "$open" --network "$network" --shm-size=1g --tmpfs /data:rw,size=1g \
-    --label neo-sdk-accept="$run_id" -e NEO_MCP_REMOTE=true "$image" >/dev/null
+    --label neo-sdk-accept="$run_id" "${host_caps[@]}" -e NEO_MCP_REMOTE=true "$image" >/dev/null
   if wait_healthy "$open" 90 >/dev/null; then
     open_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$open")
     open_http=$(probe "$open_ip" 9010 http) open_tls=$(probe "$open_ip" 9011 https)
@@ -351,8 +365,25 @@ for pid in pids:
   else
     result FAIL mcp-remote "tls=$tls off: $remote_http $remote_tls; on: $open_http $open_tls"
   fi
+  remove "$open"
+
+  # --- captcha-keys --------------------------------------------------------------------------
+  # Mounted outside /home/neo: the entrypoint re-owns that tree, which a read-only mount refuses.
+  keyed="$prefix-keys" keyed_captcha=""
+  docker run -d --name "$keyed" --network "$network" --shm-size=1g --tmpfs /data:rw,size=1g \
+    --label neo-sdk-accept="$run_id" "${host_caps[@]}" \
+    -v "$secrets/capsolver-api-key:/run/neo-keys/capsolver-api-key:ro" \
+    -e BROWSEROS_CAPSOLVER_API_KEY_FILE=/run/neo-keys/capsolver-api-key "$image" >/dev/null
+  if wait_healthy "$keyed" 90 >/dev/null && install_client "$keyed"; then keyed_captcha=$(lists_captcha "$keyed"); fi
+  want_main=False
+  [ "$keys_label" != baked ] || want_main=True
+  if [ "$main_captcha" = "$want_main" ] && [ "$keyed_captcha" = True ]; then
+    result PASS captcha-keys "listed: image's own keys $main_captcha, a host's read-only key file $keyed_captcha"
+  else
+    result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
+  fi
 else
-  for check in mcp host-api mcp-remote restart-browser stop persist kill-all; do
+  for check in mcp host-api mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi
