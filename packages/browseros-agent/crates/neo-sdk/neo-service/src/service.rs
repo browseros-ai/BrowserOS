@@ -134,12 +134,7 @@ impl Service {
             sink.clone(),
             store.clone(),
         );
-        let takeovers = Takeovers::new(
-            Arc::clone(&locks),
-            Arc::clone(&fits),
-            Arc::clone(&displays),
-            browser.clone(),
-        );
+        let takeovers = Takeovers::new(Arc::clone(&locks), Arc::clone(&fits), browser.clone());
         events.follow_takeovers(takeovers.subscribe());
         let front = displays.front();
         // A Neo restart in the middle of a fit drops the fit, but would leave Xvnc at the
