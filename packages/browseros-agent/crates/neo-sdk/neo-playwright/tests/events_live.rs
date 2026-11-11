@@ -173,7 +173,7 @@ async fn tests_that_every_popup_kind_names_its_opener_and_a_window_is_refused() 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_the_context_reports_new_tabs_and_a_page_reports_its_close() -> TestResult {
-    with_page(|run, _server, page| async move {
+    with_page(|run, server, page| async move {
         let result = async {
             let since = now_ms()?;
             let (opened, other) = tokio::join!(wait_for(&run, None, "page", since), async {
@@ -216,15 +216,18 @@ async fn tests_that_the_context_reports_new_tabs_and_a_page_reports_its_close() 
                 "events.wait stamps the close with its record time: {closed}"
             );
 
-            let error = wait_for(&run, Some(&page), "load", now_ms()?)
-                .await
-                .err()
-                .ok_or("page.waitForEvent('load') is not a Neo event")?;
-            assert_eq!(error.error_code(), Some(ErrorCode::Unsupported));
-            assert!(
-                error.message().contains("page.waitForLoadState('load')"),
-                "{error}"
-            );
+            // Lifecycle events are supported too: subscribe before navigating so this
+            // checks the emitted load rather than replaying the document already loaded.
+            let since = now_ms()?;
+            let (loaded, navigating) =
+                tokio::join!(wait_for(&run, Some(&page), "load", since), async {
+                    time::sleep(Duration::from_millis(50)).await;
+                    open(&run, &page, &server.url("/popups.html")).await
+                });
+            navigating?;
+            let loaded = loaded?;
+            assert_eq!(loaded["event"], json!("load"));
+            assert_eq!(loaded["page"], brand(&page));
             let error = wait_for(&run, Some(&page), "close", now_ms()?)
                 .await
                 .err()
