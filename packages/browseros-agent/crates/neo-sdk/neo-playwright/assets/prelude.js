@@ -7607,15 +7607,15 @@ ${value.stack}`;
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/bindings.ts
   async function exposeOnPage(page, api, name, callback, noGlobal = false) {
-    if (page._bindings.has(name))
+    if (page._exposed.has(name))
       throw clientError(api, `Function "${name}" has been already registered`);
-    if (page._context._bindings.has(name))
+    if (page._context._exposed.has(name))
       throw clientError(api, `Function "${name}" has been already registered in the browser context`);
-    page._bindings.set(name, callback);
+    page._exposed.set(name, callback);
     const events = page._context._events;
     events.bindingAdded();
     const forget = once(() => {
-      page._bindings.delete(name);
+      page._exposed.delete(name);
       events.bindingRemoved();
     });
     try {
@@ -7631,14 +7631,14 @@ ${value.stack}`;
     }
   }
   async function exposeOnContext(context, api, name, callback, noGlobal = false) {
-    if (context._bindings.has(name))
+    if (context._exposed.has(name))
       throw clientError(api, `Function "${name}" has been already registered`);
-    if (context.pages().some((page) => page._bindings.has(name)))
+    if (context.pages().some((page) => page._exposed.has(name)))
       throw clientError(api, `Function "${name}" has been already registered in one of the pages`);
-    context._bindings.set(name, callback);
+    context._exposed.set(name, callback);
     context._events.bindingAdded();
     const forget = once(() => {
-      context._bindings.delete(name);
+      context._exposed.delete(name);
       context._events.bindingRemoved();
     });
     try {
@@ -7668,7 +7668,7 @@ ${value.stack}`;
     const { name, seq } = payload;
     if (typeof name !== "string")
       return;
-    const callback = page._bindings.get(name) ?? page._context._bindings.get(name);
+    const callback = page._exposed.get(name) ?? page._context._exposed.get(name);
     if (!callback)
       return;
     let answer;
@@ -8384,7 +8384,7 @@ ${value.stack}`;
     _working = false;
     _navigationsInFlight = 0;
     #childFrames = new Map;
-    _bindings = new Map;
+    _exposed = new Map;
     constructor(context, tab, url) {
       super();
       this._context = context;
@@ -9022,7 +9022,7 @@ ${value.stack}`;
   class BrowserContext extends EventEmitter {
     _timeoutSettings = new TimeoutSettings;
     _events;
-    _bindings = new Map;
+    _exposed = new Map;
     _browser = null;
     #byTab = new Map;
     #unopened = null;

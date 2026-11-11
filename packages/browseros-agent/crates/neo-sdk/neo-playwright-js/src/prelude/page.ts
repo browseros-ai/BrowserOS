@@ -150,7 +150,7 @@ export class Page extends EventEmitter {
   _navigationsInFlight = 0
   readonly #childFrames = new Map<string, Frame>()
   /** The bindings this page exposed (`exposeBinding`), which a page's calls are answered by. */
-  readonly _bindings = new Map<string, BindingCallback>()
+  readonly _exposed = new Map<string, BindingCallback>()
 
   constructor(context: BrowserContext, tab: number | null, url?: string) {
     super()

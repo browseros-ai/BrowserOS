@@ -33,7 +33,7 @@ export class BrowserContext extends EventEmitter {
   readonly _timeoutSettings = new TimeoutSettings()
   readonly _events: EventHub
   /** The bindings the context exposed, which a page's calls fall back to. */
-  readonly _bindings = new Map<string, BindingCallback>()
+  readonly _exposed = new Map<string, BindingCallback>()
   _browser: Browser | null = null
   readonly #byTab = new Map<number, Page>()
   /** The run's `page` while it has no tab; the reply that names its tab clears it. */

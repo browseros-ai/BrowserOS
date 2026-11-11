@@ -48,18 +48,18 @@ export async function exposeOnPage(
   callback: BindingCallback,
   noGlobal = false,
 ): Promise<Disposable> {
-  if (page._bindings.has(name))
+  if (page._exposed.has(name))
     throw clientError(api, `Function "${name}" has been already registered`)
-  if (page._context._bindings.has(name))
+  if (page._context._exposed.has(name))
     throw clientError(
       api,
       `Function "${name}" has been already registered in the browser context`,
     )
-  page._bindings.set(name, callback)
+  page._exposed.set(name, callback)
   const events = page._context._events
   events.bindingAdded()
   const forget = once(() => {
-    page._bindings.delete(name)
+    page._exposed.delete(name)
     events.bindingRemoved()
   })
   try {
@@ -87,17 +87,17 @@ export async function exposeOnContext(
   callback: BindingCallback,
   noGlobal = false,
 ): Promise<Disposable> {
-  if (context._bindings.has(name))
+  if (context._exposed.has(name))
     throw clientError(api, `Function "${name}" has been already registered`)
-  if (context.pages().some((page) => page._bindings.has(name)))
+  if (context.pages().some((page) => page._exposed.has(name)))
     throw clientError(
       api,
       `Function "${name}" has been already registered in one of the pages`,
     )
-  context._bindings.set(name, callback)
+  context._exposed.set(name, callback)
   context._events.bindingAdded()
   const forget = once(() => {
-    context._bindings.delete(name)
+    context._exposed.delete(name)
     context._events.bindingRemoved()
   })
   try {
@@ -145,7 +145,7 @@ export async function answerBindingCall(
   }
   const { name, seq } = payload
   if (typeof name !== 'string') return
-  const callback = page._bindings.get(name) ?? page._context._bindings.get(name)
+  const callback = page._exposed.get(name) ?? page._context._exposed.get(name)
   if (!callback) return
   let answer: Record<string, unknown>
   try {
