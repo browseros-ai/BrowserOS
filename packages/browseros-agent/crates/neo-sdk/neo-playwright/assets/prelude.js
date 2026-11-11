@@ -8647,11 +8647,10 @@ ${value.stack}`;
         let record;
         let observed = null;
         try {
-          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }, undefined, signal));
+          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }, (received) => this.saw(received.seq), signal));
         } catch (error) {
           throw deadline.named(error);
         }
-        this.saw(record.seq);
         if (record.event === "close" && this.batch?.closes.has(record.seq))
           await this.batch.done;
         let value;

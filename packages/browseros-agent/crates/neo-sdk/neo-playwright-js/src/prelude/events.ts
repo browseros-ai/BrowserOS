@@ -332,13 +332,14 @@ export class EventHub {
           'events.wait',
           { api, timeoutMs: left },
           { page: target, event, since, after },
-          undefined,
+          // As the reply is decoded, before any other reply's callbacks: a listener the pump
+          // runs before this wait resumes must not see this record as new.
+          (received) => this.saw(received.seq),
           signal,
         ))
       } catch (error) {
         throw deadline.named(error)
       }
-      this.saw(record.seq)
       // The bootstrap registers a batch before resolving either consumer. A duplicate
       // wait must let that batch reach the close before running its own predicate.
       if (record.event === 'close' && this.batch?.closes.has(record.seq))
@@ -463,16 +464,16 @@ export class EventHub {
     }
   }
 
-  /**
-   * One pump reply's records, in log order, so earlier callbacks observe the page before its
-   * close, even within the same reply. Its host-approved closes are staged first, before waits
-   * can consume them, and settled after.
-   */
   /** The script received the record logged as `seq` (`newestSeen`). */
   private saw(seq: number): void {
     if (this.newestSeen === null || seq > this.newestSeen) this.newestSeen = seq
   }
 
+  /**
+   * One pump reply's records, in log order, so earlier callbacks observe the page before its
+   * close, even within the same reply. Its host-approved closes are staged first, before waits
+   * can consume them, and settled after.
+   */
   private deliverBatch(
     events: EventRecord[],
     observed: Observation | null,
