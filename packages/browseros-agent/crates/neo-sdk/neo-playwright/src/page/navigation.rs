@@ -187,14 +187,25 @@ pub(crate) async fn navigate(
     };
     let drive = async {
         let response = drive(scope, &session, &target, &mut watch, navigation, wait_until).await?;
-        if wait_until == LoadState::NetworkIdle {
+        // Restoration supplies readiness for the cached document and its entire subtree;
+        // fresh watches would wait for lifecycle events Chromium will not emit again.
+        if wait_until == LoadState::NetworkIdle && !watch.restored_from_cache() {
             subtree_load::network_idle(pw, scope, page, &frame).await?;
         }
         Ok::<_, PlaywrightError>(response)
     };
     let response = match scope.within(drive).await {
         Ok(response) => response?,
-        Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
+        Err(_expired) => {
+            // Once Chromium reported a fully loaded restore, a remaining timeout is our
+            // observer failing to finish, not the website failing to load.
+            let code = if watch.restored_from_cache() {
+                ErrorCode::NavigationObservationTimeout
+            } else {
+                ErrorCode::WaitTimeout
+            };
+            return Err(scope.timed_out(code));
+        }
     };
     let result = NavigationResult {
         response,

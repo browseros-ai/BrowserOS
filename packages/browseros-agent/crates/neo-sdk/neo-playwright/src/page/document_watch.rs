@@ -13,6 +13,8 @@
 //! subscription is taken before the command is sent, so an event that races the reply is never
 //! missed. `Page.setLifecycleEventsEnabled` replays the load states the current document already
 //! reached each time it is called (measured), which is how `waitForLoadState` learns them.
+//! A back-forward-cache restore does not fire those lifecycle events: its navigation event
+//! supplies all reached states for the restored loader instead.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter;
@@ -85,6 +87,9 @@ struct WatchedFrame {
     /// A later navigation has started but not committed. Renderer metadata reads can block
     /// behind it; a completed navigation must not wait for that replacement's response.
     pending: bool,
+    /// The current document was restored already loaded. Missing subsequent observer work
+    /// belongs to Neo; the website has no new load events to produce for this document.
+    cache_restore: bool,
 }
 
 /// A document the frame committed.
@@ -161,6 +166,11 @@ impl DocumentWatch {
     /// The document last read or committed on this frame.
     pub(crate) fn loader(&self) -> Option<&str> {
         self.frame.current.as_deref()
+    }
+
+    /// Chromium restored the current document with every load state already reached.
+    pub(crate) fn restored_from_cache(&self) -> bool {
+        self.frame.cache_restore
     }
 
     /// The current endpoint, which a child navigation can replace when its renderer swaps.
@@ -360,21 +370,17 @@ impl WatchedFrame {
                 }
             }
             "Page.frameNavigated" => {
-                if let Some(FrameNavigated { frame }) = parse(&event.params)
+                if let Some(FrameNavigated { frame, kind }) = parse(&event.params)
                     && frame.id == frame_id.as_str()
                 {
-                    self.commit(Commit {
-                        loader: frame.loader_id,
-                        url: with_fragment(frame.url, frame.url_fragment.as_deref()),
-                        unreachable: frame.unreachable_url,
-                    });
+                    self.commit_event(frame, kind.as_deref() == Some("BackForwardCacheRestore"));
                 }
             }
             // `document.open()` (setContent) keeps the loader but starts the document over:
             // Chromium fires `init`, `DOMContentLoaded` and `load` again under that loader
             // (measured), never `networkIdle`.
             "Page.documentOpened" => {
-                if let Some(FrameNavigated { frame }) = parse(&event.params)
+                if let Some(FrameNavigated { frame, .. }) = parse(&event.params)
                     && frame.id == frame_id.as_str()
                 {
                     self.reopen(frame.loader_id);
@@ -416,7 +422,28 @@ impl WatchedFrame {
         }
     }
 
+    /// A cached document resumes without `DOMContentLoaded`, load or `networkIdle` events.
+    /// Keep these facts under its loader so another document cannot borrow its readiness.
+    fn commit_event(&mut self, frame: FrameFields, restored: bool) {
+        let loader = frame.loader_id;
+        self.commit(Commit {
+            loader: loader.clone(),
+            url: with_fragment(frame.url, frame.url_fragment.as_deref()),
+            unreachable: frame.unreachable_url,
+        });
+        if restored {
+            self.cache_restore = true;
+            self.reached.entry(loader).or_default().extend([
+                LoadState::Commit,
+                LoadState::DomContentLoaded,
+                LoadState::Load,
+                LoadState::NetworkIdle,
+            ]);
+        }
+    }
+
     fn commit(&mut self, commit: Commit) {
+        self.cache_restore = false;
         self.pending = false;
         self.unreachable.clone_from(&commit.unreachable);
         self.reached
@@ -434,6 +461,7 @@ impl WatchedFrame {
 
     /// The frame's document was opened for writing: the same loader, a new document's states.
     fn reopen(&mut self, loader: String) {
+        self.cache_restore = false;
         self.reached
             .insert(loader.clone(), HashSet::from([LoadState::Commit]));
         self.current = Some(loader);
@@ -459,6 +487,8 @@ struct Detached {
 #[derive(Deserialize)]
 struct FrameNavigated {
     frame: FrameFields,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
 }
 
 /// The fields of CDP's `Page.Frame` the crate reads. CDP adds fields over time, so unknown ones
@@ -577,6 +607,31 @@ mod tests {
             url: "https://a.test/#x".to_owned(),
             unreachable: None,
         }
+    }
+
+    #[test]
+    fn cached_restore_reaches_every_state_without_lifecycle_events() {
+        let main = FrameId("M".to_owned());
+        let mut frame = WatchedFrame::default();
+        let mut restored = navigated("M", "cached", None);
+        restored.params["type"] = json!("BackForwardCacheRestore");
+        frame.apply(&restored, &main);
+        assert!(frame.cache_restore);
+        for state in [
+            LoadState::Commit,
+            LoadState::DomContentLoaded,
+            LoadState::Load,
+            LoadState::NetworkIdle,
+        ] {
+            assert!(frame.has_reached(state), "{state}");
+        }
+        frame.apply(&navigated("M", "next", None), &main);
+        assert!(!frame.cache_restore);
+        assert!(!frame.has_reached(LoadState::Load));
+        frame.apply(&restored, &main);
+        frame.reopen("cached".to_owned());
+        assert!(!frame.cache_restore);
+        assert!(!frame.has_reached(LoadState::Load));
     }
 
     #[test]
