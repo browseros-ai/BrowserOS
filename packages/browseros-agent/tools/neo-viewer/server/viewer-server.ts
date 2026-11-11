@@ -48,7 +48,7 @@ export async function startViewer(
   // The proxy needs the bound port (for the process lookup) before the first request.
   let proxy: McpProxyDeps | null = null
   // Neo's record of each run, read through the host API once its reply is in.
-  const stopJoining = joinNeoRuns(store)
+  const joiner = joinNeoRuns(store)
   const info: Omit<ViewerInfo, 'container'> = {
     mcpUrl: '',
     upstreamUrl: config.upstream.href,
@@ -103,8 +103,8 @@ export async function startViewer(
     mcpUrl: info.mcpUrl,
     store,
     async stop() {
-      stopJoining()
       await server.stop(true)
+      await joiner.stop()
       await store.flush()
     },
   }
