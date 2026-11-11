@@ -376,6 +376,13 @@ export type OpInputs = {
   'locator.selectText': TargetArgs & { force?: boolean }
   'locator.focus': TargetArgs
   'locator.blur': TargetArgs
+  'locator.drop': TargetArgs & {
+    files?:
+      | { paths: { path: string; mimeType: string }[] }
+      | { payloads: { name: string; mimeType: string; buffer: string }[] }
+    data: { mimeType: string; value: string }[]
+    position?: { x: number; y: number }
+  }
   'locator.setInputFiles': TargetArgs & { files: FilesInput }
   'locator.dispatchEvent': TargetArgs & { type: string; eventInit: unknown }
   'locator.scrollIntoViewIfNeeded': TargetArgs
@@ -566,6 +573,7 @@ export type OpOutputs = {
   'locator.selectText': null
   'locator.focus': null
   'locator.blur': null
+  'locator.drop': null
   'locator.setInputFiles': null
   'locator.dispatchEvent': null
   'locator.scrollIntoViewIfNeeded': null

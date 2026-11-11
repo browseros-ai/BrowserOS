@@ -23,7 +23,7 @@ import {
   fromPageValue,
   pageCall,
 } from './evaluation'
-import { inputFiles, withClientErrors } from './files'
+import { dropFiles, inputFiles, withClientErrors } from './files'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import type { OpName } from './ops.generated'
 import {
@@ -897,6 +897,34 @@ export class Frame extends EventEmitter {
       options.strict,
       this._wait(api, options),
       pick(options, ['force']),
+    )
+  }
+
+  async _drop(
+    selector: string,
+    payload: { files?: unknown; data?: Record<string, string> },
+    options: TimeoutOption &
+      SignalOption & { position?: { x: number; y: number } },
+  ): Promise<void> {
+    const api = 'locator.drop'
+    const files =
+      payload.files === undefined ? undefined : dropFiles(api, payload.files)
+    await withClientErrors(api, () =>
+      this._selectorOp(
+        'locator.drop',
+        api,
+        selector,
+        true,
+        this._wait(api, options),
+        {
+          files,
+          data: Object.entries(payload.data ?? {}).map(([mimeType, value]) => ({
+            mimeType,
+            value,
+          })),
+          position: options.position,
+        },
+      ),
     )
   }
 

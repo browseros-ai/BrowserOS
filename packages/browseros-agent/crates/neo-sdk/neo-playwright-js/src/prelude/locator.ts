@@ -341,6 +341,15 @@ export class Locator {
     })
   }
 
+  /** External files and MIME data use the same pointer checks as upstream's drop. */
+  drop(
+    payload: { files?: unknown; data?: Record<string, string> },
+    options: TimeoutOption &
+      SignalOption & { position?: { x: number; y: number } } = {},
+  ): Promise<void> {
+    return this._frame._drop(this._selector, payload, options)
+  }
+
   setInputFiles(files: unknown, options: TimeoutOption = {}): Promise<void> {
     return this._frame._setInputFiles(
       'locator.setInputFiles',

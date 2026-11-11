@@ -38,6 +38,11 @@ export const OPS = {
     target: 'target',
     lifetime: 'operation',
   },
+  'locator.drop': {
+    effect: 'write',
+    target: 'target',
+    lifetime: 'operation',
+  },
   'locator.fill': {
     effect: 'write',
     target: 'target',

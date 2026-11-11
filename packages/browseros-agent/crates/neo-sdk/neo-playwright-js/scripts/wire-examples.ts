@@ -83,6 +83,7 @@ function everyOpAnswer(call: Call): unknown {
 const EVERY_OP = `
   const l = page.getByRole('button')
   await l.click(); await l.dblclick(); await l.hover(); await l.check(); await l.uncheck()
+  await l.drop({ data: { 'text/plain': 'external' } });
   await l.dragTo(page.locator('#b')); await l.fill('x'); await l.press('a'); await l.pressSequentially('ab')
   await l.selectOption('a'); await l.selectText(); await l.focus(); await l.blur()
   // Rust stats paths before any page work, so the offline decode needs one that exists: '.'.

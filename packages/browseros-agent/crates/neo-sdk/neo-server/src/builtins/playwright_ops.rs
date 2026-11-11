@@ -67,7 +67,7 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `count`, `isVisible`, `page.content()`, `page.title()`), actions that wait until the \
     element is actionable (`click`, `dblclick`, `hover`, `fill`, `clear`, `press`, \
     `pressSequentially`, `check`, `uncheck`, `setChecked`, `selectOption`, `selectText`, \
-    `focus`, `blur`, `dragTo`, `dispatchEvent`, `scrollIntoViewIfNeeded`; no `tap`), \
+    `focus`, `blur`, `dragTo`, `drop`, `dispatchEvent`, `scrollIntoViewIfNeeded`; no `tap`), \
     `page.keyboard` (`press`, `type`, `insertText`, `down`, `up`), `page.mouse` (`move`, \
     `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `waitForURL`, \
     `waitForLoadState`), scripts in the page's main world (`page.evaluate`, \
