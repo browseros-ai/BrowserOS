@@ -3,7 +3,8 @@
  * the viewer's relay the way noVNC does, while an "agent" sends `run` calls through the viewer's
  * MCP proxy. It proves view and follow, control (a click and typing reach the page), take over
  * (the agent's run on that tab fails with `owner_has_control`) and give back (Neo closes the
- * owner's display with 4002 and the agent runs again).
+ * owner's display with 4002 and the agent runs again). The agent names no task, so the screen
+ * follows its tab; then one run names its task, and the screen follows that task.
  *
  * Start an image with its host API on TCP (`CLAW_HOST_TCP=0.0.0.0:9300`, a token file in
  * `CLAW_HOST_TOKEN_FILE`, both ports published on 127.0.0.1), then:
@@ -129,8 +130,10 @@ describeReal('the live screen on a real image', () => {
   let dataDir: string
   const task = `live-real-${Date.now()}`
 
+  /** A `run` through the viewer's MCP proxy; with `taskId`, the agent names its own task. */
   async function run(
     code: string,
+    taskId?: string,
   ): Promise<{ text: string; isError: boolean }> {
     const response = await fetch(viewer.mcpUrl, {
       method: 'POST',
@@ -146,7 +149,7 @@ describeReal('the live screen on a real image', () => {
         params: {
           name: 'run',
           arguments: { code },
-          _meta: { 'com.browseros.neo/run': { taskId: task } },
+          ...(taskId ? { _meta: { 'com.browseros.neo/run': { taskId } } } : {}),
         },
       }),
     })
@@ -162,6 +165,12 @@ describeReal('the live screen on a real image', () => {
       text: body.result.content.map((block) => block.text).join('\n'),
       isError: body.result.isError === true,
     }
+  }
+
+  async function liveStatus(): Promise<LiveStatus> {
+    return (await (
+      await fetch(`${viewer.url}${liveRoutes.status}`)
+    ).json()) as LiveStatus
   }
 
   function post(path: string, body: unknown): Promise<Response> {
@@ -219,14 +228,15 @@ describeReal('the live screen on a real image', () => {
         )
       ).text,
     ).toBe('"ready"')
-    const status = (await (
-      await fetch(`${viewer.url}${liveRoutes.status}?task=${task}`)
-    ).json()) as LiveStatus
+    const status = await liveStatus()
     expect(status.host).toEqual({ state: 'up' })
-    expect(status.tab?.title).toBe('clicks 0')
+    // The agent named no task: the screen follows the tab its latest run acted on.
+    expect(status.agent?.tab.title).toBe('clicks 0')
+    expect(status.agent?.taskId).toBeNull()
+    const agentTab = status.agent?.tab.tabId as number
 
-    // Follow agent.
-    const view = RfbClient.open(viewer, `mode=view&followTask=${task}`)
+    // Follow agent, by tab.
+    const view = RfbClient.open(viewer, `mode=view&followTab=${agentTab}`)
     const screen = await view.handshake()
     expect(screen.width).toBeGreaterThan(0)
     view.close()
@@ -247,10 +257,13 @@ describeReal('the live screen on a real image', () => {
 
     // Take over: the agent's calls on the tab fail; the owner's display still works.
     // As the panel does: Neo's own screen size, so Neo fits and brings the tab forward.
-    const taken = await post(liveRoutes.takeovers, { task, viewer: screen })
+    const taken = await post(liveRoutes.takeovers, {
+      tabId: agentTab,
+      viewer: screen,
+    })
     expect(taken.status).toBe(200)
     const { takeover } = (await taken.json()) as TakeoverResponse
-    expect(takeover.tabId).toBe(status.tab?.tabId as number)
+    expect(takeover.tabId).toBe(agentTab)
     const held = await run(READ_PAGE)
     expect(held.isError).toBe(true)
     expect(held.text).toContain('owner_has_control')
@@ -266,5 +279,21 @@ describeReal('the live screen on a real image', () => {
       title: 'clicks 2',
       value: 'neo',
     })
+
+    // A run that names its own task: the screen follows that task (its tab, and wherever it goes).
+    expect(
+      (
+        await run(
+          "await page.setContent('<title>tasked</title>'); return 'ok'",
+          task,
+        )
+      ).text,
+    ).toBe('"ok"')
+    const tasked = await liveStatus()
+    expect(tasked.agent?.taskId).toBe(task)
+    expect(tasked.agent?.tab.title).toBe('tasked')
+    const byTask = RfbClient.open(viewer, `mode=view&followTask=${task}`)
+    expect((await byTask.handshake()).width).toBe(screen.width)
+    byTask.close()
   })
 })

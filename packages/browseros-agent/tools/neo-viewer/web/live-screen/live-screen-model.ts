@@ -4,7 +4,8 @@
  * the owner's clicks, the display socket opening and closing); `LiveScreen.tsx` renders it.
  *
  * Three ways to look at Neo's screen, one display at a time:
- *   follow   view display with `followTask`: watch, and Neo keeps the agent's tab in front
+ *   follow   view display that keeps the agent's tab in front: `followTask` when the agent's
+ *            latest run named its own task, else `followTab` with the tab it last acted on
  *   control  control display: the owner clicks and types; the front tab stops following,
  *            the agent is not blocked
  *   taken    control display bound to a takeover (`release=`): the agent's calls on that tab
@@ -14,6 +15,7 @@
 import {
   type DisplayRequest,
   displayClose,
+  type Follow,
   type LiveStatus,
   type LiveTakeover,
   type ScreenSize,
@@ -49,6 +51,11 @@ export interface LiveScreenState {
   actionError: string | null
   /** Neo's screen size, from the last display that opened; a takeover fits its tab to it. */
   screen: ScreenSize | null
+  /**
+   * What "Follow agent" follows, from the last status that reached Neo. It is kept while Neo is
+   * unreachable, so a lost status does not reopen the display on nothing and back.
+   */
+  follow: Follow | null
 }
 
 export type LiveScreenAction =
@@ -72,6 +79,7 @@ export const initialLiveScreen: LiveScreenState = {
   busy: false,
   actionError: null,
   screen: null,
+  follow: null,
 }
 
 /** 0.5 s, 1 s, 2 s, 4 s, then every 5 s: quick after a blip, calm while a container is down. */
@@ -99,7 +107,14 @@ export function liveScreenReducer(
 ): LiveScreenState {
   switch (action.type) {
     case 'status': {
-      const next = { ...state, status: action.status }
+      const next = {
+        ...state,
+        status: action.status,
+        follow:
+          action.status.host.state === 'up'
+            ? followOf(action.status, state.follow)
+            : state.follow,
+      }
       // A reloaded page learns from the viewer that it still holds a takeover.
       if (action.status.takeover && !state.takeover && !state.busy)
         return reopen({
@@ -177,14 +192,33 @@ function closed(
   }
 }
 
+/**
+ * The agent's own task when its latest run named one: Neo then follows the task to a new tab by
+ * itself. Otherwise the tab it last acted on, which the status poll moves when the agent does.
+ * The same target keeps its object, so an unchanged status opens no new display.
+ */
+function followOf(status: LiveStatus, current: Follow | null): Follow | null {
+  const agent = status.agent
+  if (!agent) return null
+  const next: Follow = agent.taskId
+    ? { taskId: agent.taskId }
+    : { tabId: agent.tab.tabId }
+  return current && sameFollow(current, next) ? current : next
+}
+
+function sameFollow(a: Follow, b: Follow): boolean {
+  return 'taskId' in a
+    ? 'taskId' in b && a.taskId === b.taskId
+    : 'tabId' in b && a.tabId === b.tabId
+}
+
 /** The display the panel should have open now. */
-export function displayRequestFor(
-  state: LiveScreenState,
-  task: string | null,
-): DisplayRequest {
+export function displayRequestFor(state: LiveScreenState): DisplayRequest {
   if (state.takeover) return { mode: 'control', release: state.takeover.id }
   if (state.mode === 'control') return { mode: 'control' }
-  return task ? { mode: 'view', followTask: task } : { mode: 'view' }
+  return state.follow
+    ? { mode: 'view', follow: state.follow }
+    : { mode: 'view' }
 }
 
 export interface TakeOverAvailability {
@@ -196,7 +230,6 @@ export interface TakeOverAvailability {
 
 export function takeOverAvailability(
   state: LiveScreenState,
-  task: string | null,
 ): TakeOverAvailability {
   if (state.takeover)
     return {
@@ -206,10 +239,10 @@ export function takeOverAvailability(
     }
   const disabled = (hint: string) =>
     ({ label: 'Take over', enabled: false, hint }) as const
-  if (!task) return disabled('Pick a task to take over its tab.')
   if (state.status && state.status.host.state !== 'up')
     return disabled('Neo is not reachable.')
-  if (!state.status?.tab) return disabled('This task has no open tab yet.')
+  if (!state.status?.agent)
+    return disabled('The agent has no open tab yet: nothing to take over.')
   return {
     label: 'Take over',
     enabled: !state.busy,
@@ -249,11 +282,12 @@ export function screenNotice(state: LiveScreenState): ScreenNotice | null {
 }
 
 /** One line under the screen: what the owner's clicks do now, and whether the agent is held. */
-export function modeLine(state: LiveScreenState, task: string | null): string {
+export function modeLine(state: LiveScreenState): string {
   if (state.takeover)
     return 'You have the agent’s tab. Its calls on this tab fail with owner_has_control until you give it back.'
   if (state.mode === 'control')
     return 'Control: your clicks and keys reach the browser. The agent is not held; the front tab stops following it.'
-  if (!task) return 'Watching the screen. Pick a task to follow its tab.'
+  if (!state.follow)
+    return 'Watching the screen. It follows the agent once the agent acts on a tab.'
   return 'Following the agent’s tab. Control lets you click and type; Take over also holds the agent on this tab.'
 }

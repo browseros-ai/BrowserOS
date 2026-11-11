@@ -18,8 +18,8 @@ import { useViewer } from './use-viewer'
 
 export function App() {
   const { info, runs, log, clear, error } = useViewer()
-  // No task to follow: the live screen shows the front tab and takes over the agent's latest.
-  const live = useLiveScreen(null)
+  // Follows the agent's latest run: its tab, or the task it named.
+  const live = useLiveScreen()
   const [popped, setPopped] = useState(false)
   return (
     <div className="mx-auto flex max-w-6xl items-start gap-6 p-6 font-sans text-sm text-zinc-900">

@@ -232,7 +232,7 @@ test('only the viewer’s own page may open a display, with a query Neo would ac
   for (const query of [
     'mode=view&release=tk_1',
     'mode=control&followTask=t1',
-    'mode=view&followTab=3',
+    'mode=view&followTab=three',
     'mode=bogus',
     `mode=view&followTask=${'x'.repeat(129)}`,
   ]) {
