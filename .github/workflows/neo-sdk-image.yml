@@ -46,6 +46,34 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
+      # The image's apt steps resolve Ubuntu's archive from inside a build container, through the
+      # resolver the runner hands Docker. On 2026-11-11 seven runs in a row failed there with
+      # "Could not resolve 'archive.ubuntu.com'" while the archive itself was up, so nothing was
+      # tested. This asks from inside a container first and, only when that fails, points the
+      # Docker engine at public resolvers. It changes the runner for this job, never the image:
+      # the Dockerfile and its package sources stay as they are.
+      - name: Make sure containers can resolve Ubuntu's archive
+        run: |
+          resolves() { docker run --rm ubuntu:24.04 getent hosts archive.ubuntu.com >/dev/null 2>&1; }
+          if resolves; then
+            echo "containers resolve archive.ubuntu.com with the runner's own resolver"
+            exit 0
+          fi
+          echo "::warning::containers cannot resolve archive.ubuntu.com; pointing Docker at public resolvers"
+          sed 's/^/host resolv.conf: /' /etc/resolv.conf || true
+          getent hosts archive.ubuntu.com | sed 's/^/host lookup: /' || echo "host lookup: failed as well"
+          config=/etc/docker/daemon.json
+          [ -s "$config" ] || echo '{}' | sudo tee "$config" >/dev/null
+          sudo jq '. + {dns: ["1.1.1.1", "8.8.8.8"]}' "$config" | sudo tee "$config.new" >/dev/null
+          sudo mv "$config.new" "$config"
+          sudo systemctl restart docker
+          for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+          if ! resolves; then
+            echo "::error::containers still cannot resolve archive.ubuntu.com with public resolvers"
+            exit 1
+          fi
+          echo "containers resolve archive.ubuntu.com through 1.1.1.1 / 8.8.8.8"
+
       # build.sh names the image after the checked-out commit; logs go outside the checkout so
       # they cannot mark the build dirty.
       - name: Build the image
