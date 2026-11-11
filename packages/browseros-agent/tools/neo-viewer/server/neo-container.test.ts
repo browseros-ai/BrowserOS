@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { launchOptionsFrom } from './config'
 import {
   type CommandResult,
+  createNetwork,
   imageTag,
   NAMES,
   planImage,
@@ -154,4 +155,28 @@ test('launch options: no arguments starts a container; --upstream starts none', 
     launchOptionsFrom(['--upstream', 'http://127.0.0.1:19010/mcp'], {}).upstream
       ?.href,
   ).toBe('http://127.0.0.1:19010/mcp')
+})
+
+test('a machine whose Docker address pools are used up still gets a network, on an explicit subnet', async () => {
+  const docker = fakeDocker((args) => {
+    if (!args.includes('--subnet'))
+      return {
+        code: 1,
+        stdout: '',
+        stderr: 'all predefined address pools have been fully subnetted',
+      }
+    return args.includes('10.213.0.0/24')
+      ? {
+          code: 1,
+          stdout: '',
+          stderr: 'Pool overlaps with other one on this address space',
+        }
+      : ok()
+  })
+  await createNetwork(docker.run, 'com.browseros.neo-viewer=1')
+  expect(docker.calls.map((call) => call.at(-2))).toEqual([
+    'com.browseros.neo-viewer=1',
+    '10.213.0.0/24',
+    '10.213.1.0/24',
+  ])
 })

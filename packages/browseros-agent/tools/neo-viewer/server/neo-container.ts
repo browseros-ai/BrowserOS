@@ -314,17 +314,7 @@ export async function startContainer(
   options: { image: string; tokenFile: string },
 ): Promise<RunningContainer> {
   const label = `${LABEL}=1`
-  const network = await run('docker', [
-    'network',
-    'create',
-    '--label',
-    label,
-    NAMES.network,
-  ])
-  if (network.code !== 0)
-    throw new Error(
-      `neo-viewer: docker network create failed: ${network.stderr.trim()}`,
-    )
+  await createNetwork(run, label)
   const volume = await run('docker', [
     'volume',
     'create',
@@ -372,6 +362,48 @@ export async function startContainer(
     mcpUrl: new URL(`http://${await publishedAddress(run, MCP_PORT)}/mcp`),
     hostApiUrl: new URL(`http://${await publishedAddress(run, HOST_API_PORT)}`),
   }
+}
+
+/** Explicit subnets tried when Docker's own pools are used up: 10.213.0.0/24 … 10.213.255.0/24. */
+const FALLBACK_SUBNETS = Array.from(
+  { length: 256 },
+  (_, n) => `10.213.${n}.0/24`,
+)
+
+/**
+ * The container's own network, as the image's README asks for with `NEO_MCP_REMOTE=true`. A
+ * machine with many Docker networks can use up Docker's default address pools ("all predefined
+ * address pools have been fully subnetted"); then a /24 is named explicitly, and Docker refuses
+ * any that overlaps a network it already has.
+ */
+export async function createNetwork(run: Runner, label: string): Promise<void> {
+  const create = (extra: string[]) =>
+    run('docker', [
+      'network',
+      'create',
+      '--label',
+      label,
+      ...extra,
+      NAMES.network,
+    ])
+  const first = await create([])
+  if (first.code === 0) return
+  if (!/fully subnetted|address pools/i.test(first.stderr)) {
+    throw new Error(
+      `neo-viewer: docker network create failed: ${first.stderr.trim()}`,
+    )
+  }
+  for (const subnet of FALLBACK_SUBNETS) {
+    if ((await create(['--subnet', subnet])).code === 0) {
+      console.log(
+        `Docker's address pools are used up; the network uses ${subnet}`,
+      )
+      return
+    }
+  }
+  throw new Error(
+    `neo-viewer: Docker has no free network addresses (${first.stderr.trim()}); remove networks you no longer use`,
+  )
 }
 
 /** Waits for the image's HEALTHCHECK (entrypoint done, `/system/ready` answers). */
