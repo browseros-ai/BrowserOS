@@ -401,6 +401,12 @@ impl BrowserView {
     pub fn current_viewport(&self, page: &PageId) -> Option<crate::viewport::ViewportRequest> {
         self.viewports.as_ref()?.current(page)
     }
+    /// The script's configured viewport, independent of a temporary owner fit. It stays
+    /// with the tab across runs; a tab with no Playwright override returns `None`.
+    #[must_use]
+    pub fn playwright_viewport(&self, page: &PageId) -> Option<crate::viewport::Size> {
+        self.viewports.as_ref()?.playwright_size(page)
+    }
     /// Holds the page without changing anything, for work outside a page operation that must
     /// not overlap viewport changes, such as a background screenshot: a capture
     /// rewrites the page's emulation until it finishes.

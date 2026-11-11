@@ -290,7 +290,7 @@ impl RunService {
                 let pages = pages
                     .iter()
                     .zip(observation.infos)
-                    .map(|(page, info)| PageFact::new(page, info))
+                    .map(|(page, info)| PageFact::in_view(page, info, run.view()))
                     .collect();
                 PageFacts {
                     pages,

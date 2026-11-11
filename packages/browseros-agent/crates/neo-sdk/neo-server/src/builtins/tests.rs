@@ -535,6 +535,45 @@ async fn a_closed_page_names_who_closed_it() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn a_viewport_write_is_refused_before_cdp_while_the_owner_locks_the_tab()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let page = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let lock = harness.lock(page.tab, Reads::Allow).await?;
+    let before = harness.fake.calls().len();
+    let refused = failure(
+        harness
+            .submit(
+                &run,
+                "page.setViewportSize",
+                json!({
+                    "page": handle(&page), "viewportSize": { "width": 640, "height": 480 }
+                }),
+            )
+            .await,
+    )?;
+    assert_eq!(
+        refused.delivery,
+        Delivery::NotSent,
+        "a viewport change is an agent action on the locked tab"
+    );
+    assert!(
+        harness
+            .fake
+            .calls()
+            .iter()
+            .skip(before)
+            .all(|call| call.method != "Emulation.setDeviceMetricsOverride"),
+        "the owner's fit must keep its metrics override"
+    );
+    harness.locks.unlock_host(lock.id)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn concurrent_calls_on_the_lazy_page_open_one_tab() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let (run, _guard) = harness.run()?;

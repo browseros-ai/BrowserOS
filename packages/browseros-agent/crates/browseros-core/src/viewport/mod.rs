@@ -42,12 +42,15 @@ pub enum ViewportMode {
 
 /// A validated request. Zoom is a percentage of the mobile preview and exists only for mobile;
 /// a size replaces a fixed mode's device size. Leaving either out means the mode's own value,
-/// never the tab's previous one.
+/// never the tab's previous one. [`Self::playwright`] instead uses the desktop context's
+/// metrics profile and Chromium's full dimension range; fits retain that profile on restore.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewportRequest {
     mode: ViewportMode,
     zoom: Option<f64>,
     size: Option<Size>,
+    /// Playwright uses its desktop context defaults, rather than a hosted device preset.
+    playwright: bool,
 }
 
 impl ViewportRequest {
@@ -57,6 +60,7 @@ impl ViewportRequest {
                 mode,
                 zoom: Some(DEFAULT_ZOOM),
                 size: None,
+                playwright: false,
             }),
             (ViewportMode::Mobile, Some(zoom))
                 if zoom.is_finite() && (MIN_ZOOM..=MAX_ZOOM).contains(&zoom) =>
@@ -65,6 +69,7 @@ impl ViewportRequest {
                     mode,
                     zoom: Some(zoom),
                     size: None,
+                    playwright: false,
                 })
             }
             (ViewportMode::Mobile, Some(_)) => Err(format!(
@@ -75,8 +80,26 @@ impl ViewportRequest {
                 mode,
                 zoom: None,
                 size: None,
+                playwright: false,
             }),
         }
+    }
+
+    /// A page's Playwright viewport, using Chromium's own 0..=10,000,000 metric bounds.
+    /// Kept as a request so an owner's fit records and restores the exact same override.
+    pub fn playwright(size: Size) -> Result<Self, String> {
+        if ![size.width, size.height]
+            .iter()
+            .all(|side| (0..=10_000_000).contains(side))
+        {
+            return Err("width and height must be from 0 to 10000000".to_owned());
+        }
+        Ok(Self {
+            mode: ViewportMode::Desktop,
+            zoom: None,
+            size: Some(size),
+            playwright: true,
+        })
     }
 
     #[must_use]
@@ -116,6 +139,9 @@ impl ViewportRequest {
     }
 
     fn fixed(self) -> Option<Fixed> {
+        if self.playwright {
+            return self.size.map(|size| Fixed::Playwright { size });
+        }
         match self.mode {
             ViewportMode::Mobile => Some(Fixed::Mobile {
                 zoom: self.zoom.unwrap_or(DEFAULT_ZOOM),
@@ -169,6 +195,9 @@ pub struct Size {
 #[derive(Default)]
 pub struct Viewports {
     tabs: Mutex<HashMap<PageId, Tab>>,
+    /// Agent configuration survives a temporary fit and run teardown. Fits replace `tabs`,
+    /// but must not change what the next run's synchronous `page.viewportSize()` reports.
+    playwright_sizes: Mutex<HashMap<PageId, Size>>,
     /// One lock per tab: its mode changes and its fixed operations hold it alone, captures and
     /// default operations share it.
     pages: Mutex<HashMap<PageId, Arc<RwLock<()>>>>,
@@ -237,6 +266,14 @@ impl Viewports {
         self.tab(page).map(|tab| tab.request)
     }
 
+    pub(crate) fn playwright_size(&self, page: &PageId) -> Option<Size> {
+        self.playwright_sizes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(page)
+            .copied()
+    }
+
     pub(crate) async fn set(
         &self,
         view: &BrowserView,
@@ -296,8 +333,9 @@ impl Viewports {
             view.send_at_capture(method, params, Some(&session)).await?;
         }
         let metrics = device::settle(&admitted.session, &page, fixed).await?;
-        let (method, params) = fixed.pin();
-        view.send_at_capture(method, params, Some(&session)).await?;
+        if let Some((method, params)) = fixed.pin() {
+            view.send_at_capture(method, params, Some(&session)).await?;
+        }
         self.applied(&page, &session, generation);
         view.page(page.clone()).await?;
         Ok(report(&page, request, metrics))
@@ -348,8 +386,9 @@ impl Viewports {
             view.send_at_capture(method, params, Some(&session)).await?;
         }
         device::settle(&admitted.session, &page, tab.fixed).await?;
-        let (method, params) = tab.fixed.pin();
-        view.send_at_capture(method, params, Some(&session)).await?;
+        if let Some((method, params)) = tab.fixed.pin() {
+            view.send_at_capture(method, params, Some(&session)).await?;
+        }
         self.applied(&page, &session, generation);
         Ok(lease)
     }
@@ -392,6 +431,14 @@ impl Viewports {
     /// under.
     fn begin(&self, page: &PageId, request: ViewportRequest, fixed: Fixed) -> u64 {
         let generation = self.next_generation();
+        if request.playwright
+            && let Some(size) = request.size
+        {
+            self.playwright_sizes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(page.clone(), size);
+        }
         self.tabs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -453,6 +500,10 @@ impl Viewports {
     async fn forget_closed(&self, view: &BrowserView) {
         let open = view.known_page_ids().await;
         self.tabs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|page, _| open.contains(page));
+        self.playwright_sizes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|page, _| open.contains(page));

@@ -45,6 +45,7 @@ mod screenshot_geometry;
 mod screenshot_preparation;
 pub(crate) mod site_sweep;
 mod sweep_scope;
+mod viewport_size;
 mod wait_for_navigation;
 mod wait_for_url;
 pub(crate) mod world_call;
