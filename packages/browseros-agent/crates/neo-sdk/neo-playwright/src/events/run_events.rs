@@ -3,12 +3,14 @@
 //! the run wants an event, to decide what to record and which dialogs to hold.
 
 use std::collections::{HashMap, VecDeque};
+use std::mem;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use browseros_core::file_transfers::FileChooserInterception;
 use browseros_core::{TabId, TargetId};
 
 use crate::events::event_hub::LOG_CAPACITY;
+use crate::events::page_event::BindingCalled;
 use crate::events::{ListenerKey, PageEventKind, Subscription};
 
 /// Behind `RunState`. A std mutex, held for a map update and never across an await.
@@ -26,8 +28,30 @@ struct Inner {
     /// `waitForEvent` ops in flight, by what they wait for. Counted, because two may wait for
     /// the same thing at once.
     waiting: HashMap<Subscription, usize>,
+    /// Binding calls the watcher handed this run, oldest first, until its pump takes them. Kept
+    /// apart from the bounded log: each is a request the page may be waiting on.
+    calls: VecDeque<QueuedCall>,
+    /// Calls dropped because [`QUEUED_CALLS`] were already waiting, since the pump last took
+    /// them: the pump reports them in its `lost` count.
+    dropped_calls: u64,
     /// View-approved identities remain usable by retained events after the tab disappears.
     known_pages: VecDeque<KnownPage>,
+}
+
+/// How many binding calls wait for one run's pump at most. A page calls faster than the realm
+/// answers only in a flood; past this many the oldest unread stay and the rest are counted lost,
+/// so a page cannot grow Neo's memory without bound while the run is busy.
+pub(crate) const QUEUED_CALLS: usize = 4_096;
+
+/// A page's call of a binding this run exposed, as the watcher handed it over.
+#[derive(Clone, Debug)]
+pub(crate) struct QueuedCall {
+    /// The log's head when the call came: the pump orders it after the records before it.
+    pub(crate) seq: u64,
+    pub(crate) at_ms: u64,
+    /// The run's tab for the call's page.
+    pub(crate) tab: TabId,
+    pub(crate) call: BindingCalled,
 }
 
 /// Historical native identity, admitted by this run rather than guessed from a dead target.
@@ -114,6 +138,38 @@ impl RunEvents {
             events: self,
             subscription,
         }
+    }
+
+    /// Queues a binding call for the pump, or counts it lost when [`QUEUED_CALLS`] wait already.
+    pub(crate) fn queue_call(&self, call: QueuedCall) {
+        let mut inner = self.lock();
+        if inner.calls.len() < QUEUED_CALLS {
+            inner.calls.push_back(call);
+        } else {
+            inner.dropped_calls += 1;
+        }
+    }
+
+    /// The binding calls queued since the pump last took them, and how many were dropped.
+    pub(crate) fn take_calls(&self) -> (Vec<QueuedCall>, u64) {
+        let mut inner = self.lock();
+        let dropped = mem::take(&mut inner.dropped_calls);
+        (inner.calls.drain(..).collect(), dropped)
+    }
+
+    /// The tab this run exposes bindings on whose target is `target`.
+    pub(crate) fn binding_tab(&self, target: &TargetId) -> Option<TabId> {
+        self.lock()
+            .listening
+            .keys()
+            .find_map(|subscription| match subscription {
+                Subscription::Page {
+                    tab,
+                    target: listened,
+                    event: PageEventKind::Binding,
+                } if listened == target => Some(*tab),
+                _ => None,
+            })
     }
 
     /// Whether the run listens for, or waits on, `event` on the tab whose target is `target`.

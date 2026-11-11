@@ -126,7 +126,14 @@ The script's `page`, `context`, `browser` and `expect` behave as Playwright 1.64
 - A script lasts as long as the run that registered it. Neo's tabs outlive a run, so when the run ends, however it ends, Neo removes the script and the tab's later documents no longer run it. Within the run it survives every navigation, and the returned disposable removes it sooner.
 - Neo's context is the owner's whole profile, so a context's script does not go to every tab at once. It reaches each tab at the run's first write to that tab, after the door's rules on the tab, before the write: every document the run loads runs it, and a popup's first document, which loads before the run acts on the popup, does not.
 - Neo adds a script to the tab's page session, which covers the main frame and its same-process frames. A cross-site iframe has a session of its own and runs without it.
-- `exposeFunctions` is refused as `script / method_unavailable`.
+- `exposeFunctions` passes the script's functions to the page as bindings, below.
+
+`page.exposeBinding`, `page.exposeFunction`, their `context` forms and `addInitScript`'s `exposeFunctions` let the page call a function of the script and get its result back, as Playwright's do. The page's call goes to CDP's `__playwright__binding__` (in the main world only), Neo records it, the prelude's event pump runs the function in the run's realm, and Neo answers in the execution context that called. They differ in these ways:
+
+- A binding lasts as long as the run that exposed it, since the realm that answers it ends with the run. When the run ends Neo removes it from the tab's later documents and from the ones loaded then, so the page can no longer call into a run that is gone. `dispose()` does the same sooner.
+- A context's binding reaches each tab as a context's init script does, at the run's first write to it. A cross-site iframe has no bindings.
+- A call reaches the script through the event pump, which is not ordered against op replies. A call the page awaits (`await page.evaluate(() => window.add(1, 2))`) answers before the op returns; one the page fires and does not await, such as from an event handler, can run after the op that caused it returned.
+- A binding answers with values; a handle in its result fails the page's call. `evaluate`'s `exposeFunctions` is refused as `script / method_unavailable`.
 
 A `requestId` never runs twice. A repeat while its run is going joins it and gets the same reply. A repeat within 10 minutes of the end gets the stored reply, from memory or from the trace store, so this holds across a restart. Later repeats are refused as `host / duplicate_request`, naming the first run. If the store cannot be read, Neo refuses the call as `neo / trace_unavailable` rather than risk a second run. Neo notices a gone client at the next SSE keep-alive, within 5 seconds. A run with a `requestId` then keeps going for 15 seconds, so a retry can join it. A run without one stops at once.
 

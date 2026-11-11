@@ -11,7 +11,7 @@ import {
   InjectedScript,
 } from '../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript'
 import type { RefMap } from './aria-ref'
-import type { ErrorClass, ErrorReply, Pin } from './protocol'
+import type { ErrorClass, Pin } from './protocol'
 
 /** The state a boot builds. A boot with another epoch builds a new one (see index.ts). */
 export type World = {
@@ -23,13 +23,6 @@ export type World = {
   readonly pins: Pins
   readonly refs: RefMap
 }
-
-/** The answer of every request (or request kind) a later unit implements. */
-export const notBuilt = (): ErrorReply => ({
-  kind: 'error',
-  class: 'internal',
-  message: 'not built yet',
-})
 
 /**
  * A failure the probe classifies itself. Probe code throws only these, because index.ts reads

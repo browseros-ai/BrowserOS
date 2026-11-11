@@ -1,7 +1,7 @@
 //! The main-world gateway: `page.evaluate`, `page.waitForFunction`, the element forms
 //! (`locator.evaluate`, `evaluateAll`, `elementHandle.evaluate`, `$eval`, `$$eval`), their
-//! `frame.*` forms, and `page.setContent`'s document write, whose HTML's scripts run in the main
-//! world (`document_write`). They run as Playwright's do, and their results come back as the page
+//! `frame.*` forms, `page.setContent`'s document write, whose HTML's scripts run in the main
+//! world (`document_write`), and the answer to a binding call (`bindingCall.resolve`). They run as Playwright's do, and their results come back as the page
 //! answered them. One of the three files in core's `tests/page_js_guard.rs` ALLOWED list: the only
 //! code that sends script to a page's main world, and so the gateway of `Capability::MainWorld`.
 //!
@@ -118,6 +118,69 @@ pub(crate) const NAVIGATED: &str =
 const OUTSIDE_FORMAT: &str = "the page answered with a value outside Playwright's serialized \
                               format, as a page that replaced the globals its serializer uses \
                               would, so Neo withheld it";
+
+/// upstream's answer to a binding call (`PageBinding.dispatch`): the controller settles the
+/// call's promise with the agent's result or error.
+const DELIVER_BINDING_RESULT: &str =
+    "arg => globalThis['__playwright__binding__controller__'].deliverBindingResult(arg)";
+
+/// `bindingCall.resolve`: `{ page, context, arg }`, the answer to one call of a binding the run
+/// exposed (`page/init_script.rs`). `arg` is `{ name, seq, result }` or `{ name, seq, error }` in
+/// Playwright's in-page format, as the prelude serialized the agent's function's outcome.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResolveBindingInput {
+    page: PageRef,
+    /// The execution context `Runtime.bindingCalled` named, on the tab's page session.
+    context: i64,
+    arg: String,
+}
+
+/// Answers a binding call where it was made: upstream's `deliverBindingResult` in the execution
+/// context that called, as upstream's `PageBinding.dispatch` evaluates it there, after the door's
+/// rules on the tab. A context gone by now (its document was replaced) has nobody waiting, so
+/// that answer is dropped, as upstream's is; the page reads nothing back.
+pub(crate) async fn resolve_binding(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ResolveBindingInput,
+) -> Result<Value, PlaywrightError> {
+    scope.require(Capability::MainWorld)?;
+    let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
+    let session = pw
+        .browser()
+        .protocol_session(admitted.session.session_id.clone());
+    let sent = scope.send_effect()?;
+    deliver_binding_result(&session, input.context, &input.arg, &sent).await;
+    Ok(json!({}))
+}
+
+/// The main-world function's `evaluate` with [`DELIVER_BINDING_RESULT`] and `arg`, in `context`.
+async fn deliver_binding_result(
+    session: &ProtocolSession,
+    context: i64,
+    arg: &str,
+    _sent: &Sent<'_>,
+) {
+    let _delivered = session
+        .send_value(
+            "Runtime.callFunctionOn",
+            json!({
+                "executionContextId": context,
+                "functionDeclaration": MAIN_WORLD_JS,
+                "arguments": [
+                    { "value": "evaluate" },
+                    { "value": true },
+                    { "value": DELIVER_BINDING_RESULT },
+                    { "value": 1 },
+                    { "value": arg },
+                ],
+                "returnByValue": true,
+                "awaitPromise": true,
+            }),
+        )
+        .await;
+}
 
 /// The agent's script as the prelude built it (`wire.ts` `PageScript`). No `Debug`: the
 /// argument may hold a password the agent was given, and no log line may carry it (STYLE P4).

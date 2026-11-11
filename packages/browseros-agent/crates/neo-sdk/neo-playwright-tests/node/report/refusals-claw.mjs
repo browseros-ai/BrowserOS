@@ -216,7 +216,7 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
-    hint: 'read a finished download with download.saveAs(path)',
+    hint: 'Neo gives a script the saved file, not its bytes: await download.path() and upload it with setInputFiles; the host reads the bytes from the run',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
@@ -337,10 +337,6 @@ const hints = [
   {
     hint: 'pages cannot call back into the script in Neo; return what the page computed instead',
     sources: ['neo-playwright-js/src/prelude/evaluation.ts'],
-  },
-  {
-    hint: 'pages cannot call back into the script in Neo; pass values the page can use instead',
-    sources: ['neo-playwright-js/src/prelude/init-script.ts'],
   },
   {
     hint: 'an op cannot be aborted from the script in Neo; pass timeout instead',

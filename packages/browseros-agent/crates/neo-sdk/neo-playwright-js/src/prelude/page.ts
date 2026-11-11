@@ -8,6 +8,8 @@
  * `{"$neo":"page","tab": null}`, claw-sdk's door opens one tab for them however many race to be
  * first, and the reply's `defaultPage` binds this object to that tab (`BrowserContext`).
  */
+import type { UrlPattern } from '../probe/protocol'
+import { type BindingCallback, exposeOnPage } from './bindings'
 import { invoke, invokeObserved, sleep } from './bridge'
 import type { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
@@ -47,7 +49,7 @@ import {
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
-import { checkInitOptions, Disposable, initSource } from './init-script'
+import { addInitScript, type Disposable } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
 import { markHandle, pick } from './options'
@@ -124,6 +126,8 @@ export class Page extends EventEmitter {
   #viewportSet = false
   /** The newest host read applied to this tab. */
   #observedSeq = 0
+  /** Frame removal fences include closed observations, independently of live-page admission. */
+  #observedHead = 0
   /** Close events recorded through the last live observation belong to its earlier life. */
   #liveHead = 0
   /** A close can reach both a waiter and the event pump, including after re-admission. */
@@ -153,6 +157,8 @@ export class Page extends EventEmitter {
   readonly #frameEvents = new Map<number, Frame>()
   /** Per-frame journal watermarks prevent a late pull from undoing a newer event or snapshot. */
   readonly #frameSequences = new Map<string | null, number>()
+  /** The bindings this page exposed (`exposeBinding`), which a page's calls are answered by. */
+  readonly _exposed = new Map<string, BindingCallback>()
 
   constructor(context: BrowserContext, tab: number | null, url?: string) {
     super()
@@ -721,20 +727,62 @@ export class Page extends EventEmitter {
    * page loads from now on, before the page's own scripts, until the run ends or the returned
    * disposable is disposed. The document already loaded does not run it.
    */
-  async addInitScript(
+  addInitScript(
     script: unknown,
     arg?: unknown,
     options?: unknown,
   ): Promise<Disposable> {
     const api = 'page.addInitScript'
-    checkInitOptions(api, script, options)
-    const source = initSource(api, script, arg)
-    const { id } = await invoke(
-      'page.addInitScript',
-      { api, timeoutMs: 0 },
-      { page: await this._brand(api), script: source },
+    return addInitScript(
+      api,
+      {
+        register: async (source) =>
+          (
+            await invoke(
+              'page.addInitScript',
+              { api, timeoutMs: 0 },
+              { page: await this._brand(api), script: source },
+            )
+          ).id,
+        expose: (name, callback) =>
+          exposeOnPage(this, api, name, callback, true),
+      },
+      script,
+      arg,
+      options,
     )
-    return new Disposable(id)
+  }
+
+  /**
+   * upstream's `page.exposeBinding`: `window[name]` in every document of this page, the loaded
+   * ones included, calls `callback({ context, page, frame }, ...args)` in the script and returns
+   * its result, until the run ends or the returned disposable is disposed.
+   */
+  exposeBinding(name: string, callback: BindingCallback): Promise<Disposable> {
+    return exposeOnPage(this, 'page.exposeBinding', name, callback)
+  }
+
+  /** upstream's `page.exposeFunction`: [`exposeBinding`] without the source argument. */
+  exposeFunction(
+    name: string,
+    callback: (...args: unknown[]) => unknown,
+  ): Promise<Disposable> {
+    return exposeOnPage(this, 'page.exposeFunction', name, (_source, ...args) =>
+      Reflect.apply(callback, undefined, args),
+    )
+  }
+
+  /**
+   * The frame a binding call came from: the main frame for `null`, else the child frame of that
+   * id, the frame tree read again when the call names one the cache does not have yet. A frame
+   * gone by then is answered as the main frame's.
+   */
+  async _bindingFrame(id: string | null): Promise<Frame> {
+    if (id === null) return this._mainFrame
+    const known = this.#childFrames.get(id)
+    if (known) return known
+    await this._refreshFrames('page.exposeBinding').catch(() => {})
+    return this.#childFrames.get(id) ?? this._mainFrame
   }
 
   waitForFunction(
@@ -978,10 +1026,10 @@ export class Page extends EventEmitter {
     await this._refreshFrames('page.frames').catch(() => undefined)
   }
 
-  async _refreshFrames(api: string): Promise<void> {
+  async _refreshFrames(api: string, timeoutMs = 0): Promise<void> {
     const { value: tree, observed } = await invokeObserved(
       'page.frames',
-      { api, timeoutMs: 0 },
+      { api, timeoutMs },
       { page: await this._brand(api) },
     )
     // A reply without a tree leaves the caches as they were rather than failing the
@@ -1107,6 +1155,51 @@ export class Page extends EventEmitter {
     }
   }
 
+  /** A confirmed removal has no successful tree reply to retire the cached Frame objects. */
+  #detachFrame(frame: Frame): void {
+    const pending = [frame]
+    for (const removed of pending) {
+      pending.push(...removed.childFrames())
+      if (removed._id === null) continue
+      removed._detached = true
+      this.#childFrames.delete(removed._id)
+      this.#frameSequences.set(
+        removed._id,
+        Math.max(
+          this.#observedHead,
+          this.#frameSequences.get(removed._id) ?? 0,
+        ),
+      )
+    }
+    this.#pruneFrames()
+  }
+
+  /** A session swap can report Frame was detached too; only a fresh tree confirms removal. */
+  async #frameWaitFailed(
+    api: string,
+    frame: Frame,
+    error: unknown,
+  ): Promise<void> {
+    if (
+      frame._id === null ||
+      !(error instanceof Error) ||
+      Reflect.get(error, 'code') !== 'target_closed'
+    )
+      return
+    if (
+      this._closed ||
+      error.message.startsWith(`${api}: Navigating frame was detached!`)
+    ) {
+      this.#detachFrame(frame)
+      return
+    }
+    if (!error.message.startsWith(`${api}: Frame was detached`)) return
+    // Preserve the original rejection even if this optional read cannot finish. Its native
+    // deadline prevents a failed wait from starting an unbounded renderer read during cleanup.
+    await this._refreshFrames(api, 1_000).catch(() => undefined)
+    if (this._closed) this.#detachFrame(frame)
+  }
+
   /** Host refreshes preserve the cached object when dimensions agree, as upstream does. */
   #applyViewport(size: PageFact['viewportSize']): void {
     if (this.#viewportSet || size === undefined) return
@@ -1135,6 +1228,7 @@ export class Page extends EventEmitter {
     }
     if (at.seq < this.#observedSeq) return
     this.#observedSeq = at.seq
+    this.#observedHead = Math.max(this.#observedHead, at.events)
     this.#applyViewport(fact.viewportSize)
     if (fact.url !== undefined) {
       this._url = fact.url
@@ -1226,6 +1320,25 @@ export class Page extends EventEmitter {
     signal: SignalLike | undefined,
   ): Promise<void> {
     const args = await frame._frameArgs(api)
+    const nativeWait = async <T>(work: () => Promise<T>): Promise<T> => {
+      try {
+        return await work()
+      } catch (error) {
+        await this.#frameWaitFailed(api, frame, error)
+        throw error
+      }
+    }
+    const wait = (pattern: UrlPattern, until: LoadState, budget: number) =>
+      nativeWait(() =>
+        invokeObserved(
+          'page.waitForURL',
+          frame._call(api, budget),
+          { ...args, url: pattern, waitUntil: until },
+          undefined,
+          signal,
+        ),
+      )
+
     if (typeof url !== 'function') {
       const pattern =
         typeof url === 'string'
@@ -1235,16 +1348,10 @@ export class Page extends EventEmitter {
             : undefined
       if (!pattern)
         throw clientError(api, 'url: expected a string, a RegExp or a function')
-      const { value: result, observed } = await invokeObserved(
-        'page.waitForURL',
-        frame._call(api, timeout),
-        {
-          ...args,
-          url: pattern,
-          waitUntil,
-        },
-        undefined,
-        signal,
+      const { value: result, observed } = await wait(
+        pattern,
+        waitUntil,
+        timeout,
       )
       await this._navigated(api, frame, result, observed)
       return
@@ -1261,25 +1368,18 @@ export class Page extends EventEmitter {
       const elapsed = Date.now() - started
       const remaining = timeout === 0 ? 0 : Math.max(1, timeout - elapsed)
       if (matched) {
-        await frame._waitForLoadState(api, waitUntil, {
-          timeout: remaining,
-          signal,
-        })
+        await nativeWait(() =>
+          frame._waitForLoadState(api, waitUntil, {
+            timeout: remaining,
+            signal,
+          }),
+        )
         return
       }
-      const { value: result, observed } = await invokeObserved(
-        'page.waitForURL',
-        frame._call(api, remaining),
-        {
-          ...args,
-          url: {
-            regexSource: `^(?!${escapeRegExp(current)}$)`,
-            regexFlags: '',
-          },
-          waitUntil: 'commit',
-        },
-        undefined,
-        signal,
+      const { value: result, observed } = await wait(
+        { regexSource: `^(?!${escapeRegExp(current)}$)`, regexFlags: '' },
+        'commit',
+        remaining,
       )
       await this._navigated(api, frame, result, observed)
     }
