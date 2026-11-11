@@ -15,17 +15,24 @@
 import type { NeoOperation, NeoRunRecord } from '../../shared/api'
 
 export interface PlacedOperations {
-  /** Script line (1-based) → the operations it called, in start order. */
+  /** Display line (1-based) → the operations its code called, in start order. */
   byLine: Map<number, NeoOperation[]>
-  /** No site, or a site past the script's last line. */
+  /** No site, or a site outside the script. */
   unplaced: NeoOperation[]
   /** The time the bars are drawn in: the run's, or as far as its operations reach. */
   spanMs: number
 }
 
+/**
+ * `lineOfSite` maps Neo's site (the script as sent) to a display line: the formatted layout's
+ * (`shared/code-format.ts`), or the line itself.
+ */
 export function placeOperations(
   record: NeoRunRecord,
   lineCount: number,
+  lineOfSite: (site: { line: number; column: number }) => number | null = (
+    site,
+  ) => site.line,
 ): PlacedOperations {
   const byLine = new Map<number, NeoOperation[]>()
   const unplaced: NeoOperation[] = []
@@ -33,8 +40,8 @@ export function placeOperations(
     (a, b) => a.startOffsetMs - b.startOffsetMs || a.seq - b.seq,
   )
   for (const operation of ordered) {
-    const line = operation.site?.line
-    if (line === undefined || line < 1 || line > lineCount) {
+    const line = operation.site ? lineOfSite(operation.site) : null
+    if (line === null || line < 1 || line > lineCount) {
       unplaced.push(operation)
       continue
     }

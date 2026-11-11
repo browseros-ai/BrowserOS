@@ -7,7 +7,9 @@
  * the rows answers "which call was expensive".
  */
 
+import { useMemo } from 'react'
 import type { RunSummary, TextSize } from '../../shared/api'
+import { firstStatement, formatCode } from '../../shared/code-format'
 import { useRunDetail } from '../use-viewer'
 import { type BarScale, barScale, type RunTotals } from './measures'
 import { RunBlock } from './RunBlock'
@@ -127,8 +129,8 @@ function Legend() {
   return (
     <div className="flex h-6 items-center gap-[18px] overflow-hidden whitespace-nowrap border-line border-b bg-panel px-4 text-[11px] text-ink-2 leading-[14px]">
       <span>
-        <b className="font-semibold text-ink">Code tok</b>: the script the agent
-        sent in run(), what the model wrote.
+        <b className="font-semibold text-ink">Code tok</b>: the script as the
+        agent sent it in run(), what the model wrote.
       </span>
       <span>
         <b className="font-semibold text-ink">Reply tok</b>: what run() returned
@@ -160,10 +162,19 @@ function RunEntry({
   const fetched = useRunDetail(run, open)
   // The hook keeps the last run it fetched; only this run's own detail counts.
   const detail = fetched?.id === run.id ? fetched : null
+  // Laid out once per script: the row redraws every 250 ms while a run is running.
+  const code = useMemo(
+    () => ({
+      formatted: formatCode(run.code),
+      first: firstStatement(run.code),
+    }),
+    [run.code],
+  )
   return (
     <>
       <RunRow
         run={run}
+        code={code}
         detail={detail}
         scale={scale}
         open={open}
@@ -174,6 +185,7 @@ function RunEntry({
       {open && (
         <RunBlock
           run={run}
+          formatted={code.formatted}
           detail={detail}
           selected={selected}
           onOpenFull={() => onOpenFull(run)}

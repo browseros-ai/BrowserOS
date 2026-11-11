@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import type { RunDetail, RunSummary } from '../../shared/api'
+import { formatCode } from '../../shared/code-format'
 import { fire, installDom, type TestDom } from '../test-support/dom'
 import { operation, record } from '../test-support/operations'
 import { runDetail, runSummary } from '../test-support/runs'
@@ -63,7 +64,13 @@ describe("an open run's methods", () => {
 
   const show = (run: RunSummary, detail: RunDetail | null) =>
     dom.render(
-      <RunBlock run={run} detail={detail} selected onOpenFull={() => {}} />,
+      <RunBlock
+        run={run}
+        formatted={formatCode(run.code)}
+        detail={detail}
+        selected
+        onOpenFull={() => {}}
+      />,
     )
   const methods = () =>
     [...dom.container.querySelectorAll('button[data-operation]')].map((row) =>
@@ -156,6 +163,40 @@ describe("an open run's methods", () => {
     expect(error).toContain("getByRole('button') resolved to 2 elements")
     // One method open at a time.
     expect(row.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('lays a one-line minified script out by statement, each with its own methods', async () => {
+    // What agents send: everything on line 1. Neo's sites point at each method's name.
+    const minified =
+      "const p=await context.newPage();await p.goto('https://example.com');const t=await p.title();return t;"
+    const at = (name: string) => ({
+      line: 1,
+      startOffsetMs: minified.indexOf(name),
+      site: { line: 1, column: minified.indexOf(name) + 1 },
+    })
+    const run = runSummary(1, { code: minified })
+    await show(
+      run,
+      detailWith(
+        run,
+        record(
+          [
+            operation(1, 'context.newPage', at('newPage')),
+            operation(2, 'page.goto', at('goto')),
+            operation(3, 'page.title', at('title')),
+          ],
+          100,
+        ),
+      ),
+    )
+    expect(methods()).toEqual([
+      'context.newPage on line 1',
+      'page.goto on line 2',
+      'page.title on line 3',
+    ])
+    const text = dom.container.textContent ?? ''
+    expect(text).toContain('2await p.goto(')
+    expect(text).toContain('4return t;')
   })
 
   it("shows the code alone when Neo's record is missing or the run is still running", async () => {
