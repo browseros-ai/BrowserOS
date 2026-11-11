@@ -127,6 +127,20 @@ struct Frame {
     id: String,
 }
 
+/// A caller-normalized CDP screenshot, serialized with all other captures on this session.
+/// The SDK owns image geometry; core owns the capture queue and agent pointer lifecycle.
+pub(crate) async fn capture_cdp(
+    session: &ProtocolSession,
+    params: Value,
+) -> Result<String, CoreError> {
+    run_exclusive_screenshot_capture(session, || async {
+        let Ok(data) =
+            capture_without_pointer(session, params, || Ok::<(), Infallible>(())).await?;
+        Ok(data)
+    })
+    .await
+}
+
 pub async fn capture_screenshot_with_annotations(
     page_session: ProtocolSession,
     observer: Arc<Observer>,

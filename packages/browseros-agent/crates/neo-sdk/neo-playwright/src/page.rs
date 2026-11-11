@@ -43,13 +43,14 @@ mod page_state;
 mod page_value;
 mod pdf;
 mod screenshot;
+mod screenshot_geometry;
 mod screenshot_preparation;
 pub(crate) mod site_sweep;
 mod subtree_load;
 mod sweep_scope;
 mod wait_for_navigation;
 mod wait_for_url;
-mod world_call;
+pub(crate) mod world_call;
 
 pub(crate) use context_op::ContextOp;
 pub(crate) use evaluate_guard::FRAME_BUDGET;

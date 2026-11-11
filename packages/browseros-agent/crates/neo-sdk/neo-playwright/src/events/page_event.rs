@@ -4,12 +4,13 @@
 //! Console messages and page errors are turned into Playwright's text here, as upstream does on
 //! its server (`renderPreview`, `exceptionToError`), so each reader gets the same string.
 
-use browseros_core::{FrameId, TargetId};
+use browseros_core::{FrameId, SessionId, TargetId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::events::PageEventKind;
 use crate::events::navigation_event::NavigationEvent;
+use crate::world::BackendNodeId;
 
 /// One recorded event.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +34,8 @@ pub(crate) enum PageEvent {
     PageError(PageError),
     /// A download started.
     Download(DownloadStarted),
+    /// A native chooser intercepted by core before an agent-created tab is exposed.
+    FileChooser(FileChooserOpened),
 }
 
 impl PageEvent {
@@ -47,9 +50,20 @@ impl PageEvent {
             (PageEventKind::Download, Self::Download(download)) => {
                 download.page.as_ref() == Some(target)
             }
+            (PageEventKind::FileChooser, Self::FileChooser(chooser)) => chooser.target == *target,
             _ => false,
         }
     }
+}
+
+/// The chooser's originating session and node. Readers adopt it in its frame's current
+/// document, and drop it if that frame disappeared, as Playwright's Chromium delegate does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileChooserOpened {
+    pub(crate) target: TargetId,
+    pub(crate) session: SessionId,
+    pub(crate) frame: FrameId,
+    pub(crate) node: BackendNodeId,
 }
 
 /// A tab that a page, the owner or `context.newPage` opened.

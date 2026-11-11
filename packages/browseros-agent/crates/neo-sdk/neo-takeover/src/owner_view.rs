@@ -12,7 +12,7 @@ use crate::limits::{MAX_KEYBOARD_BOXES, MAX_SCANNED_FIELDS, POPUP_CLOSE_POLL, PO
 use crate::{BrowserBar, BrowserTabs, Keyboard, PartError, ScreenSize};
 use browseros_core::pages::PageInfo;
 use browseros_core::{PageJs, ProtocolSession, TabId, TargetId};
-use neo_trace::{EpochMillis, SecretSet};
+use neo_trace::EpochMillis;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::time::Instant;
@@ -35,7 +35,6 @@ pub(crate) struct OwnerView {
 /// opened before the owner arrived stays where it is.
 pub(crate) async fn read(
     browser: &BrowserTabs,
-    secrets: &SecretSet,
     tab: TabId,
     mode: FitMode,
     screen: ScreenSize,
@@ -60,10 +59,10 @@ pub(crate) async fn read(
         at: EpochMillis::now(),
     });
     let bar = match mode {
-        FitMode::Mobile => Some(bar(&session, secrets).await?),
+        FitMode::Mobile => Some(bar(&session).await?),
         FitMode::Desktop => None,
     };
-    let popups = popups(browser, secrets, &pages, page, mode, known).await?;
+    let popups = popups(browser, &pages, page, mode, known).await?;
     Ok(OwnerView {
         keyboard,
         bar,
@@ -142,15 +141,13 @@ async fn history(session: &ProtocolSession) -> Result<History, PartError> {
         .map_err(PartError::Browser)
 }
 
-/// The tab's place for the owner page's bar. Its URL goes through the known secrets mask, as
-/// every other read a host gets does: an address can carry what the owner typed into a form.
-async fn bar(session: &ProtocolSession, secrets: &SecretSet) -> Result<BrowserBar, PartError> {
+/// The tab's current URL and available history for the owner page's browser bar.
+async fn bar(session: &ProtocolSession) -> Result<BrowserBar, PartError> {
     let history = history(session).await?;
-    let mut url = history
+    let url = history
         .current()
         .map(|entry| entry.url.clone())
         .unwrap_or_default();
-    secrets.mask_str(&mut url);
     let next = history.current_index.saturating_add(1);
     Ok(BrowserBar {
         url,
@@ -174,7 +171,6 @@ enum PullIn {
 /// that could not be pulled in stays, and is not tried again.
 async fn popups(
     browser: &BrowserTabs,
-    secrets: &SecretSet,
     pages: &[PageInfo],
     fitted: &PageInfo,
     mode: FitMode,
@@ -195,9 +191,6 @@ async fn popups(
             Ok(PullIn::Moved | PullIn::Later) => {}
             Ok(PullIn::Stays) => stay.push(opened.target),
             Err(error) => {
-                // A failed load's error names the address, which can carry a known secret.
-                let mut error = error.to_string();
-                secrets.mask_str(&mut error);
                 tracing::debug!(%error, "a page the fitted tab opened could not be pulled in");
                 stay.push(opened.target);
             }

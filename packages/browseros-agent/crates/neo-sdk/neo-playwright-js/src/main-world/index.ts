@@ -9,7 +9,10 @@
  * PW:25672-25722). What it adds is the transport. Values cross CDP as JSON text in Playwright's
  * serialized format, both ways, so a message stays flat however deep its value: browseros-cdp
  * drops a reply nested deeper than 128 levels. Rust parses that text strictly and masks it by its
- * structure before anything leaves the op (`page/page_value.rs`).
+ * structure before anything leaves the op (`page/page_value.rs`). json-text.ts reads and writes
+ * the text, not the page's `JSON`, and the arguments are walked by index, not with the array
+ * methods: the page owns those globals and may have replaced them, and upstream, whose values
+ * cross CDP by value, never touches them.
  *
  * Nothing of Neo stays in the page. The bundle travels with every call, and the poller lives only
  * in the op's CDP object group, which Rust releases when the op ends.
@@ -27,6 +30,7 @@ import {
   parseEvaluationResultValue,
   type SerializedValue,
 } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
+import { readJson, writeJson } from './json-text'
 
 /** What a poll answers: keep waiting, or the settled value's serialized text. */
 type PollOutcome = [false] | [true, string | undefined]
@@ -51,7 +55,7 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> =>
  * gives it for a value it drops (a function), and CDP reports it as no value.
  */
 const asText = (value: SerializedValue | undefined): string | undefined =>
-  value === undefined ? undefined : JSON.stringify(value)
+  value === undefined ? undefined : writeJson(value)
 
 export default function neoMainWorld(
   mode: 'evaluate' | 'poller',
@@ -60,9 +64,11 @@ export default function neoMainWorld(
   argCount: number,
   ...argTextsThenHandles: unknown[]
 ): unknown {
-  const args = (argTextsThenHandles.slice(0, argCount) as string[]).map(
-    (text) => JSON.parse(text) as SerializedValue,
-  )
+  const args: SerializedValue[] = []
+  for (let index = 0; index < argCount; index++)
+    args[index] = readJson(
+      argTextsThenHandles[index] as string,
+    ) as SerializedValue
   const handles = argTextsThenHandles.slice(argCount)
   const utility = new UtilityScript(globalThis, false)
   if (mode === 'evaluate') {
@@ -82,9 +88,8 @@ export default function neoMainWorld(
   // expression on every poll), the argument is parsed once, so a predicate that keeps state in
   // its argument sees it on the next poll, and the page judges truthiness. A truthy thenable
   // settles the wait with whatever it resolves to, as upstream's `fulfill(success)` does.
-  const [arg] = args.map((serialized) =>
-    parseEvaluationResultValue(serialized, handles),
-  )
+  const arg =
+    argCount > 0 ? parseEvaluationResultValue(args[0], handles) : undefined
   let evaledExpression: unknown
   const predicate = (): unknown => {
     // biome-ignore lint/security/noGlobalEval: the agent's script, evaluated in the page's global scope as upstream's predicate does.

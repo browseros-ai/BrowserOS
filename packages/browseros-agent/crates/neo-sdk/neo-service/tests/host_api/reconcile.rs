@@ -1,29 +1,25 @@
 //! A reconcile as the app runs it when the browser link reconnects: a fence, a listing of the
 //! open tabs, then `Service::retain_tabs`, with a host changing a tab that opened after the
-//! listing in between, through the routes or through the owner's first input on a control
-//! display. A lock can be requested for a tab that closes while the route waits on a
+//! listing in between, through the routes. A lock can be requested for a tab that closes while
+//! the route waits on a
 //! reconcile, or before the route answers.
 
-use crate::display::{self, Display, Open};
 use crate::support::{self, BoxError, Harness, Op, Reply, Start, TestResult};
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
-use futures_util::{SinkExt, StreamExt};
 use neo_takeover::LockTarget;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationId, PrivacyRecord, PrivacyStore, PrivateReason,
     TraceError, TraceSink,
 };
 use serde_json::Value;
-use std::path::Path;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tokio_tungstenite::tungstenite::Message;
 
 fn agent_may_write(h: &Harness, tab: i64) -> bool {
     h.service
@@ -141,29 +137,19 @@ async fn a_reconcile_keeps_a_fit_and_a_takeover_a_host_began_on_tabs_newer_than_
     Ok(())
 }
 
-/// Which of a tab's two privacy writes a `HeldStore` holds.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Held {
-    /// The commit of its flag.
-    Commit,
-    /// The delete of its flag.
-    Forget,
-}
-
-/// The trace store as a `PrivacyStore`, except that the `held` write on `tab` waits until the
+/// The trace store as a `PrivacyStore`, except that forgetting `tab` waits until the
 /// test opens `gate`. `began` reads true once it waits.
 struct HeldStore {
     store: TraceSink,
     tab: TabId,
-    held: Held,
     began: watch::Sender<bool>,
     gate: watch::Receiver<bool>,
 }
 
 impl HeldStore {
-    /// Returns at once, unless `write` on `tab` is the held one: then once the gate opens.
-    async fn pass(&self, tab: TabId, write: Held) {
-        if tab != self.tab || write != self.held {
+    /// A reconcile forgetting the named tab waits for the test to open its gate.
+    async fn pass(&self, tab: TabId) {
+        if tab != self.tab {
             return;
         }
         self.began.send_replace(true);
@@ -179,15 +165,12 @@ impl PrivacyStore for HeldStore {
         tab: TabId,
         record: PrivacyRecord,
     ) -> BoxFuture<'_, Result<(), TraceError>> {
-        Box::pin(async move {
-            self.pass(tab, Held::Commit).await;
-            self.store.persist_private(tab, record).await
-        })
+        Box::pin(async move { self.store.persist_private(tab, record).await })
     }
 
     fn forget_private(&self, tab: TabId) -> BoxFuture<'_, Result<(), TraceError>> {
         Box::pin(async move {
-            self.pass(tab, Held::Forget).await;
+            self.pass(tab).await;
             self.store.forget_private(tab).await
         })
     }
@@ -198,30 +181,22 @@ async fn a_lock_a_host_asks_for_while_a_reconcile_hands_its_tabs_to_the_parts_is
 {
     use futures_util::FutureExt;
 
-    let (open, gate) = watch::channel(false);
-    let (began, mut commit_began) = watch::channel(false);
-    // A takeover start on 3 holds the takeovers' start mutex while its commit waits, and a
-    // reconcile's first part waits for that mutex.
-    let h = support::harness_with(move |sink| {
-        Arc::new(HeldStore {
-            store: sink.clone(),
-            tab: TabId(3),
-            held: Held::Commit,
-            began,
-            gate,
-        })
-    })
-    .await?;
+    let h = support::harness().await?;
     h.browser.open_tab(3);
     let fence = h.service.tab_fence();
     let listing = [TabId(3)];
     h.browser.open_tab(77);
+    let run = support::start_run(&h.sink, Start::default());
+    let click = OperationId::new(run, 1);
+    support::op_started(&h.sink, click, Op::write(3, 1));
+    h.sink.flush().await?;
     let start = spawn_post(&h, "/v1/takeovers", r#"{"tabId":3}"#);
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        commit_began.wait_for(|began| *began),
-    )
-    .await??;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while agent_may_write(&h, 3) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
 
     let mut reconcile = pin!(h.service.retain_tabs(&listing, fence));
     assert!(
@@ -231,7 +206,7 @@ async fn a_lock_a_host_asks_for_while_a_reconcile_hands_its_tabs_to_the_parts_is
     let lock = spawn_post(&h, "/v1/locks", r#"{"tabId":77,"ttlSeconds":60}"#);
     // Time for the lock to reach the locks' table, unless something makes it wait.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    open.send_replace(true);
+    support::op_ended(&h.sink, click, Delivery::Done, None);
     tokio::time::timeout(Duration::from_secs(10), reconcile).await?;
 
     let lock = tokio::time::timeout(Duration::from_secs(5), lock).await???;
@@ -254,7 +229,6 @@ async fn a_tab_that_closes_while_its_lock_waits_on_a_reconcile_gets_no_lock() ->
         Arc::new(HeldStore {
             store: sink.clone(),
             tab: TabId(9),
-            held: Held::Forget,
             began,
             gate,
         })
@@ -328,132 +302,4 @@ async fn a_tab_that_closes_while_its_lock_is_settling_keeps_no_lock() -> TestRes
     );
     lock.assert_error(StatusCode::NOT_FOUND, "tab_not_found");
     Ok(())
-}
-
-/// A control display that has sent the owner's first key.
-struct OwnersKey {
-    display: Display,
-    /// The display's connection to the fake Xvnc, where the key arrives once every open tab is
-    /// private.
-    connection: usize,
-}
-
-/// Opens a control display and sends the owner's first key, which reaches Xvnc only once every
-/// open tab is private.
-async fn owners_first_key(h: &Harness, socket: &Path) -> Result<OwnersKey, BoxError> {
-    let connection = h.xvnc.connections();
-    let (mut display, _) = display::handshake(socket, Open::new("mode=control")).await?;
-    display
-        .send(Message::binary(display::QEMU_A.to_vec()))
-        .await?;
-    Ok(OwnersKey {
-        display,
-        connection,
-    })
-}
-
-/// Waits until the owner's first key reaches Xvnc on `connection`.
-async fn key_reached_the_screen(h: &Harness, connection: usize) -> TestResult {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while !h
-            .xvnc
-            .received(connection)
-            .contains(&display::QEMU_A.to_vec())
-        {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await?;
-    Ok(())
-}
-
-/// The flag used by display coordination survives reconciliation in memory and on disk.
-async fn assert_still_private(h: &Harness, tab: i64) -> TestResult {
-    assert_eq!(
-        h.privacy.is_private(TabId(tab)).map(|record| record.reason),
-        Some(PrivateReason::DisplayInput),
-        "{tab} was stamped by the first input, after the reconcile's fence, so the reconcile \
-         keeps its flag although its listing lacks the tab"
-    );
-    assert!(
-        h.store.private_tabs().await?.contains_key(&TabId(tab)),
-        "the reconcile kept {tab}'s flag, so it never deleted the flag's row either"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_reconcile_keeps_the_flag_the_owners_first_input_set_on_a_tab_newer_than_its_listing()
--> TestResult {
-    let h = support::harness().await?;
-    h.browser.open_tab(5);
-    let socket = display::serve(&h)?;
-    let fence = h.service.tab_fence();
-    let listing = [TabId(5)];
-    h.browser.open_tab(77);
-    let OwnersKey {
-        display: mut control,
-        connection,
-    } = owners_first_key(&h, &socket.path).await?;
-    key_reached_the_screen(&h, connection).await?;
-
-    h.service.retain_tabs(&listing, fence).await;
-
-    assert_still_private(&h, 77).await?;
-    // Neo answers the owner's close once the display has ended. From then on, only 77's flag
-    // keeps a spectator from seeing it.
-    control.close(None).await?;
-    let answer = tokio::time::timeout(Duration::from_secs(5), control.next()).await?;
-    assert!(
-        matches!(answer, Some(Ok(Message::Close(_)))),
-        "the owner's close was not answered: {answer:?}"
-    );
-    h.browser.bring_to_front(77);
-    assert_eq!(
-        display::refused(&socket.path, Open::new("mode=view")).await?,
-        (409, "display_paused".to_owned()),
-        "no view while 77 is in front"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_reconcile_that_runs_while_the_owners_first_input_commits_keeps_its_flag() -> TestResult {
-    let (open, gate) = watch::channel(false);
-    let (began, mut commit_began) = watch::channel(false);
-    let h = support::harness_with(move |sink| {
-        Arc::new(HeldStore {
-            store: sink.clone(),
-            tab: TabId(77),
-            held: Held::Commit,
-            began,
-            gate,
-        })
-    })
-    .await?;
-    h.browser.open_tab(5);
-    let socket = display::serve(&h)?;
-    let fence = h.service.tab_fence();
-    let listing = [TabId(5)];
-    h.browser.open_tab(77);
-    let OwnersKey {
-        display: _control,
-        connection,
-    } = owners_first_key(&h, &socket.path).await?;
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        commit_began.wait_for(|began| *began),
-    )
-    .await??;
-
-    // 77's flag is set in memory, and its commit waits for the gate until the reconcile is done.
-    tokio::time::timeout(
-        Duration::from_secs(10),
-        h.service.retain_tabs(&listing, fence),
-    )
-    .await?;
-    open.send_replace(true);
-    key_reached_the_screen(&h, connection).await?;
-
-    assert_still_private(&h, 77).await
 }

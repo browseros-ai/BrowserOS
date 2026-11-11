@@ -1,6 +1,6 @@
 //! What the fit logs, in its own binary so tracing callsite caches cannot race other tests. A
-//! navigation that fails logs core's error, which names the address, and an address can carry a
-//! registered secret: a token in a link, or what the owner typed into a form.
+//! failed navigation records core's original error so the host can diagnose both a browser-bar
+//! navigation failure and a popup that could not be pulled into the fitted tab.
 
 #[allow(
     dead_code,
@@ -14,7 +14,6 @@ use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
 use neo_takeover::testing::FakeXvnc;
 use neo_takeover::{BarAction, BarOutcome, BrowserTabs, Fits, ScreenSize};
-use neo_trace::{SecretSet, SecretSetConfig, SecretSource, SecretValue};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,7 +27,7 @@ const PHONE: ScreenSize = ScreenSize {
     width: 390,
     height: 844,
 };
-const SECRET: &str = "SECRETTOKEN_9f3a";
+const QUERY_VALUE: &str = "typed-value";
 
 /// Everything logged on the test's thread, which runs the fits loop too.
 #[derive(Clone, Default)]
@@ -76,7 +75,7 @@ async fn until(done: impl Fn() -> Result<bool, BoxError>) -> Result<(), BoxError
 }
 
 #[tokio::test]
-async fn a_navigation_that_fails_logs_its_address_masked() -> Result<(), BoxError> {
+async fn failed_navigations_log_their_original_addresses() -> Result<(), BoxError> {
     let log = Log::default();
     let _logging = tracing::subscriber::set_default(
         tracing_subscriber::fmt()
@@ -87,21 +86,14 @@ async fn a_navigation_that_fails_logs_its_address_masked() -> Result<(), BoxErro
     );
     let xvnc = Arc::new(FakeXvnc::start(HOME).await?);
     let browser = FakeBrowser::new(Arc::clone(&xvnc), &[3]);
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-    let _registration = secrets.register_from(
-        SecretValue::new(SECRET.to_owned()),
-        None,
-        SecretSource::Page,
-    );
     let fits = Fits::new(
         BrowserTabs::new(
             BrowserSession::new(browser.clone(), BrowserSessionHooks::default()),
             Arc::new(Viewports::default()),
         ),
         xvnc.xvnc(HOME),
-        Arc::clone(&secrets),
     );
-    let address = format!("https://down.example/?code={SECRET}");
+    let address = format!("https://down.example/?code={QUERY_VALUE}");
     browser.unreachable(&address);
     let fit = fits.fit(TabId(3), PHONE).await?;
 
@@ -114,7 +106,6 @@ async fn a_navigation_that_fails_logs_its_address_masked() -> Result<(), BoxErro
     until(|| Ok(log.text()?.matches(failed).count() >= 2)).await?;
 
     let text = log.text()?;
-    assert!(!text.contains(SECRET), "the log holds the secret: {text}");
     for line in [
         "the owner's browser bar did not move the tab",
         "a page the fitted tab opened could not be pulled in",
@@ -122,9 +113,9 @@ async fn a_navigation_that_fails_logs_its_address_masked() -> Result<(), BoxErro
         assert!(text.contains(line), "the fit logged \"{line}\": {text}");
     }
     assert_eq!(
-        text.matches("down.example/?code=[private] failed").count(),
+        text.matches(&format!("{address} failed")).count(),
         2,
-        "both failures name the address, masked: {text}"
+        "both failures name the original address: {text}"
     );
     Ok(())
 }
