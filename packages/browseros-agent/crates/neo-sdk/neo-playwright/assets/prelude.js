@@ -3756,7 +3756,21 @@ ${value.stack}`;
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/page.ts
   var PAGE_OPTION_KEYS = {};
-  var PAGE_SEND = {};
+  var PAGE_SEND = {
+    "page.goto": (site, call, input, signal) => invoke("page.goto", site, call, input, signal),
+    "page.reload": (site, call, input, signal) => invoke("page.reload", site, call, input, signal),
+    "page.goBack": (site, call, input, signal) => invoke("page.goBack", site, call, input, signal),
+    "page.goForward": (site, call, input, signal) => invoke("page.goForward", site, call, input, signal),
+    "page.waitForNavigation": (site, call, input, signal) => invoke("page.waitForNavigation", site, call, input, signal),
+    "page.waitForURL": (site, call, input, signal) => invoke("page.waitForURL", site, call, input, signal),
+    "page.waitForLoadState": (site, call, input, signal) => invoke("page.waitForLoadState", site, call, input, signal),
+    "page.title": (site, call, input, signal) => invoke("page.title", site, call, input, signal),
+    "page.content": (site, call, input, signal) => invoke("page.content", site, call, input, signal),
+    "page.setContent": (site, call, input, signal) => invoke("page.setContent", site, call, input, signal),
+    "page.close": (site, call, input, signal) => invoke("page.close", site, call, input, signal),
+    "page.opener": (site, call, input, signal) => invoke("page.opener", site, call, input, signal),
+    "page.frames": (site, call, input, signal) => invoke("page.frames", site, call, input, signal)
+  };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/context.ts
   var CONTEXT_OPTION_KEYS = {};
@@ -7558,7 +7572,8 @@ ${value.stack}`;
     async title() {
       const site = captureSite();
       const api = "frame.title";
-      return await invoke("page.title", site, this._call(api, 0), await this._frameArgs(api));
+      const { page, frame } = await this._frameArgs(api);
+      return await send["page.title"](site, this._call(api, 0), { page, frame });
     }
     content() {
       return this._content("frame.content");
@@ -7874,7 +7889,8 @@ ${value.stack}`;
     }
     async _content(api) {
       const site = captureSite();
-      return await invoke("page.content", site, this._call(api, 0), await this._frameArgs(api));
+      const { page, frame } = await this._frameArgs(api);
+      return await send["page.content"](site, this._call(api, 0), { page, frame });
     }
     async _addTag(api, op, options) {
       const site = captureSite();
@@ -10001,7 +10017,7 @@ ${value.stack}`;
     async title() {
       const site = captureSite();
       const api = "page.title";
-      const title = await invoke("page.title", site, { api, timeoutMs: 0 }, { page: await this._brand(api) });
+      const title = await send["page.title"](site, { api, timeoutMs: 0 }, { page: await this._brand(api) });
       return title;
     }
     content() {
@@ -10123,7 +10139,7 @@ ${value.stack}`;
       const site = captureSite();
       const api = "page.opener";
       const target = await this._brand(api);
-      const { opener } = await invoke("page.opener", site, { api, timeoutMs: 0 }, { page: target });
+      const { opener } = await send["page.opener"](site, { api, timeoutMs: 0 }, { page: target });
       const page = this._context._pageFromResult(opener);
       return page && !page.isClosed() ? page : null;
     }
@@ -10136,10 +10152,7 @@ ${value.stack}`;
       }
       const page = await this._brand(api);
       try {
-        await invoke("page.close", site, { api, timeoutMs: 0 }, {
-          page,
-          ...options.runBeforeUnload ? { runBeforeUnload: true } : {}
-        });
+        await send["page.close"](site, { api, timeoutMs: 0 }, { page, runBeforeUnload: options.runBeforeUnload ? true : undefined });
       } catch (error) {
         if (!["target_closed", "page_closed"].includes(String(Reflect.get(Object(error), "code"))) || options.runBeforeUnload)
           throw error;

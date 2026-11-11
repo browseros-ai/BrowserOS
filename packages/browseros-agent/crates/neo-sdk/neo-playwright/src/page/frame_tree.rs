@@ -16,14 +16,15 @@ use std::time::Duration;
 
 use browseros_core::{BrowserSession, CoreError, FrameId, PageId, ProtocolSession, TabId};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::time;
+use ts_rs::TS;
 
-use crate::op_output::to_output;
 use crate::op_scope::OpScope;
 use crate::page::document_watch::{DocumentWatch, FrameTreeNode, FrameTreeReply, decode};
 use crate::page::frame_routes::{FrameRoute, RootAttachment};
 use crate::target::PageRef;
+use crate::wire::options;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// Loading can mean an uncommitted navigation that blocks renderer reads, or just a child
@@ -37,10 +38,23 @@ const LOADING_SNAPSHOT: Duration = Duration::from_millis(100);
 const SNAPSHOT_BUDGET: Duration = Duration::from_secs(1);
 
 /// `page.frames()`: `{ page }`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FramesInput {
     page: PageRef,
+}
+options!(FramesInput);
+
+/// `page.frames()`'s answer: the tab's frames, the main frame first, each parent before its
+/// children. Absent when the bounded read did not finish, so the prelude keeps the frames it
+/// has.
+// A plain optional field where a flattened `Option<FrameTree>` was (ts-rs cannot print a
+// flattened `Option`): the same JSON, pinned by `tests::tests_that_the_frame_answer_keeps_its_bytes`.
+#[derive(Debug, Serialize, TS)]
+pub(crate) struct PageFrames {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    frames: Option<Vec<FrameInfo>>,
 }
 
 /// A page's frames, each parent before its children; the first is the main frame.
@@ -64,9 +78,9 @@ struct HostedTree {
 }
 
 /// One frame, as Playwright's `Frame` reports it.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-struct FrameInfo {
+pub(crate) struct FrameInfo {
     id: FrameId,
     /// `None` for the main frame.
     parent_id: Option<FrameId>,
@@ -95,6 +109,11 @@ struct IframeTarget {
 }
 
 impl FrameTree {
+    /// The frames as the prelude reads them, main frame first; the sessions stay behind.
+    pub(crate) fn into_frames(self) -> Vec<FrameInfo> {
+        self.frames
+    }
+
     /// The documents under `root`, including itself, in stable identity order. A replacement
     /// document must reach its own lifecycle state even if its Frame object was retained.
     pub(crate) fn documents(&self, root: &FrameId) -> Vec<FrameDocument> {
@@ -228,17 +247,14 @@ pub(crate) async fn frames(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: FramesInput,
-) -> Result<Value, PlaywrightError> {
-    #[derive(Serialize)]
-    struct Snapshot {
-        #[serde(flatten)]
-        frames: Option<FrameTree>,
-    }
+) -> Result<PageFrames, PlaywrightError> {
     let frames = match scope.within(snapshot(pw, scope, input.page.tab())).await {
         Ok(result) => result?,
         Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
     };
-    to_output(scope, &Snapshot { frames })
+    Ok(PageFrames {
+        frames: frames.map(FrameTree::into_frames),
+    })
 }
 
 /// Cache metadata must not become a renderer barrier. Bound discovery even after loading has
@@ -370,13 +386,57 @@ async fn oopif_tree(
     })
 }
 
+/// Two frames, the main one and a named child, for the answers' byte tests.
+#[cfg(test)]
+pub(crate) fn sample_tree() -> Result<FrameTree, serde_json::Error> {
+    let page: FrameTreeReply = serde_json::from_value(json!({ "frameTree": {
+        "frame": { "id": "main", "loaderId": "L", "url": "https://main.test/" },
+        "childFrames": [{ "frame": {
+            "id": "child", "parentId": "main", "name": "ad", "loaderId": "L",
+            "url": "https://child.test/",
+        } }],
+    } }))?;
+    let mut tree = FrameTree::default();
+    tree.add(page.frame_tree, None);
+    Ok(tree)
+}
+
 #[cfg(test)]
 mod tests {
     use browseros_core::FrameId;
+    use serde::Serialize;
     use serde_json::json;
 
-    use super::FrameTree;
+    use super::{FrameTree, PageFrames, sample_tree};
     use crate::page::document_watch::FrameTreeReply;
+
+    /// `page.frames()` answers the bytes the flattened `Option<FrameTree>` it replaced wrote,
+    /// key order included, with frames and without: a later edit cannot drift unseen.
+    #[test]
+    fn tests_that_the_frame_answer_keeps_its_bytes() -> Result<(), serde_json::Error> {
+        #[derive(Serialize)]
+        struct Before {
+            #[serde(flatten)]
+            frames: Option<FrameTree>,
+        }
+        let with = serde_json::to_string(&PageFrames {
+            frames: Some(sample_tree()?.into_frames()),
+        })?;
+        assert_eq!(
+            with,
+            serde_json::to_string(&Before {
+                frames: Some(sample_tree()?)
+            })?
+        );
+        assert_eq!(
+            with,
+            r#"{"frames":[{"id":"main","parentId":null,"name":"","url":"https://main.test/"},{"id":"child","parentId":"main","name":"ad","url":"https://child.test/"}]}"#
+        );
+        let without = serde_json::to_string(&PageFrames { frames: None })?;
+        assert_eq!(without, serde_json::to_string(&Before { frames: None })?);
+        assert_eq!(without, "{}", "no frames read is no key at all");
+        Ok(())
+    }
 
     #[test]
     fn tests_that_an_oopif_hangs_under_the_frame_that_embeds_it() -> Result<(), serde_json::Error> {

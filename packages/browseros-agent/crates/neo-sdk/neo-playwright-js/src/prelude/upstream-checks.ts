@@ -484,50 +484,6 @@ export type UpstreamChecks = {
       never
     >
   >
-  // publication correlates host navigation receipts with the action that produced them.
-  'page.goto': Assert<
-    UpstreamCheck<
-      'page.goto',
-      OpInputs['page.goto'],
-      pw.FrameGotoParams,
-      'publication',
-      never,
-      never
-    >
-  >
-  // publication correlates host navigation receipts with the action that produced them.
-  'page.reload': Assert<
-    UpstreamCheck<
-      'page.reload',
-      OpInputs['page.reload'],
-      pw.PageReloadParams,
-      'publication',
-      never,
-      never
-    >
-  >
-  // publication correlates host navigation receipts with the action that produced them.
-  'page.goBack': Assert<
-    UpstreamCheck<
-      'page.goBack',
-      OpInputs['page.goBack'],
-      pw.PageGoBackParams,
-      'publication',
-      never,
-      never
-    >
-  >
-  // publication correlates host navigation receipts with the action that produced them.
-  'page.goForward': Assert<
-    UpstreamCheck<
-      'page.goForward',
-      OpInputs['page.goForward'],
-      pw.PageGoForwardParams,
-      'publication',
-      never,
-      never
-    >
-  >
   'page.requestGC': Assert<
     UpstreamCheck<
       'page.requestGC',
@@ -535,27 +491,6 @@ export type UpstreamChecks = {
       pw.PageRequestGCParams,
       never,
       never,
-      never
-    >
-  >
-  'page.title': Assert<
-    UpstreamCheck<
-      'page.title',
-      OpInputs['page.title'],
-      pw.FrameTitleParams,
-      never,
-      never,
-      never
-    >
-  >
-  // Neo returns document HTML; shadow-root serialization (includeShadow) is not exposed.
-  'page.content': Assert<
-    UpstreamCheck<
-      'page.content',
-      OpInputs['page.content'],
-      pw.FrameContentParams,
-      never,
-      'includeShadow',
       never
     >
   >
@@ -588,27 +523,6 @@ export type UpstreamChecks = {
       pw.FrameAddStyleTagParams,
       'path',
       never,
-      never
-    >
-  >
-  'page.setContent': Assert<
-    UpstreamCheck<
-      'page.setContent',
-      OpInputs['page.setContent'],
-      pw.FrameSetContentParams,
-      never,
-      never,
-      never
-    >
-  >
-  // The host owns the runBeforeUnload close policy; upstream reason has no Neo wire field.
-  'page.close': Assert<
-    UpstreamCheck<
-      'page.close',
-      OpInputs['page.close'],
-      pw.PageCloseParams,
-      'runBeforeUnload',
-      'reason',
       never
     >
   >
@@ -864,11 +778,6 @@ export type UpstreamChecks = {
 type NeoOnlyOps = {
   'locator.allTextContents': 'Upstream evaluates all matches in the client; Neo performs a probe read.'
   'locator.allInnerTexts': 'Upstream evaluates all matches in the client; Neo performs a probe read.'
-  'page.waitForNavigation': 'Neo waits on its navigation journal instead of upstream frame events.'
-  'page.waitForURL': 'Neo combines URL matching with a navigation wait.'
-  'page.waitForLoadState': 'Neo waits on its lifecycle journal instead of upstream frame events.'
-  'page.opener': 'Neo queries its tab bookkeeping instead of upstream initializer state.'
-  'page.frames': 'Neo reads the frame tree instead of upstream client-side frame objects.'
   'locator.waitForFunction': 'Neo probes the element predicate; upstream composes evaluation and waiting.'
   'page.saveScreenshot': 'Host-side file write after capture; upstream performs this in its client.'
   'page.locatorHandlerTriggered': 'Neo background pull replacing upstream locatorHandlerTriggered events.'

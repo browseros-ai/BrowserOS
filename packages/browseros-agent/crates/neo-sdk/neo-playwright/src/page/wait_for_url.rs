@@ -28,9 +28,8 @@ use std::time::Duration;
 use browseros_cdp::CdpError;
 use browseros_core::{CoreError, FrameId};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use ts_rs::TS;
 
-use crate::op_output::to_output;
 use crate::op_scope::OpScope;
 use crate::page::document_watch::{DocumentWatch, WatchError};
 use crate::page::evaluate_guard::{self, TreeFrame};
@@ -39,6 +38,7 @@ use crate::page::{LoadState, OpPage, navigation, subtree_load};
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, UrlPattern};
 use crate::resolve::failed;
 use crate::target::PageRef;
+use crate::wire::options;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// Upstream's navigation waiter's failure for a frame the page removed mid-wait.
@@ -51,21 +51,26 @@ const MOVING: Duration = Duration::from_millis(50);
 /// `page.waitForURL(url, { waitUntil })`: `{ page, frame?, url, waitUntil? }`. The prelude
 /// sends a string as `{ glob }` (one without wildcards matches exactly, as upstream) and a
 /// `RegExp` as `{ regexSource, regexFlags }`, the probe's own pattern.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct WaitForUrlInput {
     page: PageRef,
     #[serde(default)]
+    #[ts(optional)]
     frame: Option<FrameId>,
+    #[ts(type = "import('../../../probe/protocol').UrlPattern")]
     url: UrlPattern,
     #[serde(default)]
     wait_until: LoadState,
 }
+options!(WaitForUrlInput);
 
-/// What `waitForURL` returns: the frame's URL, for the prelude's synchronous `url()`.
-#[derive(Debug, Serialize)]
-struct UrlResult {
+/// What `waitForURL` returns: the frame's URL, for the prelude's synchronous `url()`; absent
+/// when the frame has no committed document to name.
+#[derive(Debug, Serialize, TS)]
+pub(crate) struct UrlResult {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     url: Option<String>,
 }
 
@@ -82,7 +87,7 @@ pub(crate) async fn wait_for_url(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: WaitForUrlInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<UrlResult, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &input.page).await?;
     let waiting = format!(
         "waiting for navigation{} until \"{}\"",
@@ -153,7 +158,7 @@ pub(crate) async fn wait_for_url(
         Ok(waited) => waited?,
         Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
     };
-    to_output(scope, &UrlResult { url })
+    Ok(UrlResult { url })
 }
 
 /// The waited frame: where its world lives now, and the watch on the session that hosts it.

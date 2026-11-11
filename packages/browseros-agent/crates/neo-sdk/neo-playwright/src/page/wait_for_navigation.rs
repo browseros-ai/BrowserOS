@@ -5,44 +5,51 @@
 
 use browseros_core::FrameId;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
+use ts_rs::TS;
 
 use crate::events::{NavigationEvent, PageEvent};
-use crate::op_output::to_output;
 use crate::op_scope::OpScope;
 use crate::page::document_watch::WatchError;
-use crate::page::frame_tree::{self, FrameTree};
-use crate::page::navigation::{self, NavigationResult};
+use crate::page::frame_tree::{self, FrameInfo};
+use crate::page::navigation::{self, NavigationResult, Response};
 use crate::page::{LoadState, OpPage, subtree_load, wait_for_url};
 use crate::probe::{ProbeFailure, UrlPattern};
 use crate::target::PageRef;
+use crate::wire::options;
 use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
 
 /// The prelude stamps `since` and `after` before its first await. Predicates stay in the
 /// agent realm and send the last returned cursor when they ask for another navigation.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct WaitForNavigationInput {
     page: PageRef,
     #[serde(default)]
+    #[ts(optional)]
     frame: Option<FrameId>,
     #[serde(default)]
+    #[ts(optional, type = "import('../../../probe/protocol').UrlPattern")]
     url: Option<UrlPattern>,
     #[serde(default)]
     wait_until: LoadState,
     since: u64,
     after: u64,
 }
+options!(WaitForNavigationInput);
 
 /// A bounded wait returns its cursor and complete frame facts together, so the client can
 /// refresh synchronous accessors without an additional untimed browser operation.
-#[derive(Serialize)]
+// The fields are spelled out in the order the two flattened structs they replace wrote them (a
+// navigation result, then a frame tree): ts-rs would print both structs' `frames` as one
+// object's duplicate key. The JSON is the same, pinned by `tests::tests_that_the_reply_keeps_its_bytes`.
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-struct NavigationReply {
-    #[serde(flatten)]
-    navigation: NavigationResult,
-    #[serde(flatten)]
-    frames: FrameTree,
+pub(crate) struct NavigationReply {
+    response: Option<Response>,
+    url: Option<String>,
+    frame_snapshot_attempted: bool,
+    frames: Vec<FrameInfo>,
     navigation_seq: u64,
 }
 
@@ -51,7 +58,7 @@ pub(crate) async fn wait_for_navigation(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: WaitForNavigationInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<NavigationReply, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &input.page).await?;
     let main = page.main_endpoint();
     let frame = input.frame.as_ref().unwrap_or(&main.frame);
@@ -130,7 +137,7 @@ pub(crate) async fn wait_for_navigation(
         }
     };
     match scope.within(wait).await {
-        Ok(result) => to_output(scope, &result?),
+        Ok(result) => result,
         Err(_expired) => Err(scope.timed_out(ErrorCode::WaitTimeout)),
     }
 }
@@ -216,9 +223,13 @@ async fn navigation_reply(
     .await
     .map_err(|error| scope.core_error(&error))?;
     frames.remember(pw, scope, page.tab(), &page.main_endpoint().session, since);
+    // The wait's own result never carries frames (`NavigationResult::observed`); the tree just
+    // read is the reply's.
     Ok(NavigationReply {
-        navigation,
-        frames,
+        response: navigation.response,
+        url: navigation.url,
+        frame_snapshot_attempted: navigation.frame_snapshot_attempted,
+        frames: frames.into_frames(),
         navigation_seq,
     })
 }
@@ -248,4 +259,59 @@ async fn enable_frame(
         .await
         .map_err(|error| scope.core_error(&error))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Serialize;
+
+    use super::NavigationReply;
+    use crate::page::frame_tree::{FrameTree, sample_tree};
+    use crate::page::navigation::{NavigationResult, Response};
+    use crate::test_support::TestResult;
+
+    /// The reply is the bytes the two flattened structs it replaced wrote, a navigation result
+    /// and then a frame tree, key order included: a later edit cannot drift unseen.
+    #[test]
+    fn tests_that_the_reply_keeps_its_bytes() -> TestResult {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Before {
+            #[serde(flatten)]
+            navigation: NavigationResult,
+            #[serde(flatten)]
+            frames: FrameTree,
+            navigation_seq: u64,
+        }
+        let url = "https://main.test/".to_owned();
+        for response in [Some(Response::sample()), None] {
+            let answered = response.is_some();
+            let before = Before {
+                navigation: NavigationResult::observed(response, url.clone()),
+                frames: sample_tree()?,
+                navigation_seq: 7,
+            };
+            let reply = NavigationReply {
+                response: answered.then(Response::sample),
+                url: Some(url.clone()),
+                frame_snapshot_attempted: true,
+                frames: sample_tree()?.into_frames(),
+                navigation_seq: 7,
+            };
+            let json = serde_json::to_string(&reply)?;
+            assert_eq!(json, serde_json::to_string(&before)?);
+            let response = if answered {
+                r#"{"url":"https://main.test/","status":200,"statusText":"OK","ok":true,"headers":{}}"#
+            } else {
+                "null"
+            };
+            assert_eq!(
+                json,
+                format!(
+                    r#"{{"response":{response},"url":"https://main.test/","frameSnapshotAttempted":true,"frames":[{{"id":"main","parentId":null,"name":"","url":"https://main.test/"}},{{"id":"child","parentId":"main","name":"ad","url":"https://child.test/"}}],"navigationSeq":7}}"#
+                )
+            );
+        }
+        Ok(())
+    }
 }

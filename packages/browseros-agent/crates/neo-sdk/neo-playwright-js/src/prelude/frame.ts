@@ -597,12 +597,8 @@ export class Frame extends EventEmitter {
   async title(): Promise<string> {
     const site = captureSite()
     const api = 'frame.title'
-    return await invoke(
-      'page.title',
-      site,
-      this._call(api, 0),
-      await this._frameArgs(api),
-    )
+    const { page, frame } = await this._frameArgs(api)
+    return await send['page.title'](site, this._call(api, 0), { page, frame })
   }
 
   content(): Promise<string> {
@@ -1466,12 +1462,8 @@ export class Frame extends EventEmitter {
 
   async _content(api: string): Promise<string> {
     const site = captureSite()
-    return await invoke(
-      'page.content',
-      site,
-      this._call(api, 0),
-      await this._frameArgs(api),
-    )
+    const { page, frame } = await this._frameArgs(api)
+    return await send['page.content'](site, this._call(api, 0), { page, frame })
   }
 
   /** Page delegates here so frame routing, errors and returned node ownership stay identical. */
