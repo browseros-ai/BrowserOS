@@ -114,14 +114,13 @@ impl RunEvents {
 
 #[cfg(test)]
 mod tests {
-    use browseros_core::{PageId, TabId, TargetId};
+    use browseros_core::{TabId, TargetId};
 
     use super::RunEvents;
     use crate::events::{ListenerKey, PageEventKind, Subscription};
 
     fn dialogs(page: u32, target: &str) -> Subscription {
         Subscription::Page {
-            page: PageId(page),
             tab: TabId(i64::from(page)),
             target: TargetId(target.to_owned()),
             event: PageEventKind::Dialog,
@@ -167,7 +166,7 @@ mod tests {
         events.listen(dialogs(1, "T"), 0, 0);
         events.listen(dialogs(2, "U"), 0, 0);
         events.listen(Subscription::ContextPage, 0, 0);
-        events.unlisten(&ListenerKey::Page(PageId(1), PageEventKind::Dialog));
+        events.unlisten(&ListenerKey::Page(TabId(1), PageEventKind::Dialog));
         assert!(!events.wants(&TargetId("T".to_owned()), PageEventKind::Dialog));
         assert!(events.wants(&TargetId("U".to_owned()), PageEventKind::Dialog));
         events.unlisten(&ListenerKey::ContextPage);

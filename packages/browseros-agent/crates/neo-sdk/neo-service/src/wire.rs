@@ -561,17 +561,11 @@ fn count(value: u64) -> i64 {
 }
 
 fn page_ref(page: &PageState) -> Option<api::PageRef> {
-    let PageState {
-        page_id,
-        tab_id,
-        url,
-        title,
-    } = page;
-    if page_id.is_none() && tab_id.is_none() && url.is_none() && title.is_none() {
+    let PageState { tab_id, url, title } = page;
+    if tab_id.is_none() && url.is_none() && title.is_none() {
         return None;
     }
     Some(api::PageRef {
-        page_id: page_id.and_then(|id| i32::try_from(id).ok()),
         tab_id: tab_id.map(|tab| tab.0),
         url: url.clone(),
         title: title.clone(),

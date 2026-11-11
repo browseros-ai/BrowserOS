@@ -27,12 +27,12 @@ const TIMEOUT: Duration = Duration::from_millis(2_000);
 async fn tests_that_an_op_ends_at_its_timeout_while_its_frames_world_never_installs() -> TestResult
 {
     let connection = TestConnection::new([]);
-    let test_support::OneTab { browser, page } = test_support::one_tab(&connection).await?;
+    let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
     // The session's setup for its worlds answers, and the world itself never installs.
     connection.always("Runtime.addBinding", json!({}))?;
     connection.always("Page.createIsolatedWorld", testing::cdp_pending())?;
     let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
-    let brand = json!({ "$neo": "page", "id": page.0, "tab": 7 });
+    let brand = json!({ "$neo": "page", "tab": 7 });
     let script = json!({ "run": { "expression": "() => true", "isFunction": true,
                                   "arg": r#"{"v":"undefined"}"# } });
     let millis = TIMEOUT.as_millis();

@@ -376,7 +376,7 @@ pub(crate) async fn hold(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
 ) -> Result<PageInput, PlaywrightError> {
-    let scale = scope.view().pointer_scale(page.id());
+    let scale = scope.view().pointer_scale(page.core_page());
     let held = PageInput::hold(Arc::clone(page.state().input()), page.root_session(), scale);
     scope
         .within(held)

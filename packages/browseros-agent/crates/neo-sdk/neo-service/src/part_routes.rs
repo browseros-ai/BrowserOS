@@ -26,7 +26,7 @@ pub(crate) async fn create_lock(
     // check, since the stamp may wait on a reconcile while the tab closes (`tab_stamps`).
     service.stamps.stamp(tab).await;
     // A lock on a tab that is not open would refuse nothing now, and could refuse a tab that
-    // later opens with the same id: Chromium numbers tabs from 1 again after a restart.
+    // later opens with the same id: tab numbers may be reused after a browser restart.
     service.browser.page(tab).await?;
     let lock = service.locks.lock(tab, reads, ttl, LockBinding::Host).await;
     // And again: if the tab closed since the check, its close may have ended its locks before

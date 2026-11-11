@@ -133,14 +133,14 @@ async fn a_tab_closed_by_someone_else_drops_its_slots() -> Result<(), Box<dyn Er
     })
     .await?;
     let page = page_for(&link, owners_tab).await?;
-    tabs.touched(&page, None);
+    tabs.touched(&page, tabs.seen(), None);
     let slot = tabs
         .slot::<Marker>(&page)
         .ok_or("a touched tab has slots")?;
     let mut closes = tabs.subscribe_closed();
 
     assert!(fake.close_tab(owners_tab), "the fake had the tab");
-    eventually(Duration::from_secs(5), || tabs.tab_of(&page.id).is_none()).await?;
+    eventually(Duration::from_secs(5), || !tabs.is_open(page.tab)).await?;
     assert_eq!(
         Arc::strong_count(&slot),
         1,
@@ -152,7 +152,7 @@ async fn a_tab_closed_by_someone_else_drops_its_slots() -> Result<(), Box<dyn Er
         "subscribers hear which tab closed"
     );
     assert!(
-        link.cached_page(&page.id).await.is_none(),
+        link.page(page.tab).await.is_none(),
         "core forgot the page too"
     );
     Ok(())
@@ -171,7 +171,7 @@ async fn a_reconnect_renews_discovery_and_catches_tabs_closed_meanwhile()
     .await?;
     let first = link.view().ok_or("linked")?.epoch;
     let page = page_for(&link, tab).await?;
-    tabs.touched(&page, None);
+    tabs.touched(&page, tabs.seen(), None);
 
     fake.drop_connection();
     assert!(!link.is_ready(), "a dropped socket is not ready");
@@ -193,7 +193,7 @@ async fn a_reconnect_renews_discovery_and_catches_tabs_closed_meanwhile()
         Some(second),
         "the link reports the new epoch"
     );
-    eventually(Duration::from_secs(5), || tabs.tab_of(&page.id).is_none()).await?;
+    eventually(Duration::from_secs(5), || !tabs.is_open(page.tab)).await?;
     let discovered: Vec<u64> = fake
         .calls()
         .iter()

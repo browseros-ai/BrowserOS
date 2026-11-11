@@ -22,12 +22,23 @@ pub type OnSessionAttached = Arc<
         + Send
         + Sync,
 >;
-pub type OnPageDetached = Arc<dyn Fn(PageId) + Send + Sync>;
+/// A page removed from the cache, with its native tab and target captured before removal.
+/// The hook runs after the cache lock is released. Its captured target lets consumers
+/// distinguish a delayed detach from a replacement binding on the same tab.
+pub type OnPageDetached = Arc<dyn Fn(PageId, TabId, TargetId) + Send + Sync>;
+
+/// Deferred notifications and destruction after cache removal releases its lock.
+pub type AfterPageRemoved = Box<dyn FnOnce() + Send>;
+/// Retires consumer bookkeeping atomically with cache removal. Called under the cache lock,
+/// so it must not re-enter the cache or perform blocking work. Return notifications and
+/// destruction as deferred work, which runs after unlocking and before on_page_detached.
+pub type OnPageRemoved = Arc<dyn Fn(&PageInfo) -> AfterPageRemoved + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct PageManagerHooks {
     pub on_session_attached: Option<OnSessionAttached>,
     pub on_page_detached: Option<OnPageDetached>,
+    pub on_page_removed: Option<OnPageRemoved>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -186,7 +197,8 @@ impl PageManager {
                 if let Some(info) = info {
                     state.sessions.remove(&info.target_id);
                     state.agent_created.remove(&page_id);
-                    detached.push(page_id);
+                    let after = self.hooks.on_page_removed.as_ref().map(|hook| hook(&info));
+                    detached.push((page_id, info.tab_id, info.target_id, after));
                 }
             }
         }
@@ -194,9 +206,12 @@ impl PageManager {
         let mut pages = state.pages.values().cloned().collect::<Vec<_>>();
         pages.sort_by_key(|page| page.page_id.0);
         drop(state);
-        for page_id in detached {
+        for (page_id, tab, target, after) in detached {
+            if let Some(after) = after {
+                after();
+            }
             if let Some(callback) = &self.hooks.on_page_detached {
-                callback(page_id);
+                callback(page_id, tab, target);
             }
         }
         Ok(pages)
@@ -288,6 +303,18 @@ impl PageManager {
 
     pub async fn get_info(&self, page_id: PageId) -> Option<PageInfo> {
         self.state.lock().await.pages.get(&page_id).cloned()
+    }
+
+    /// Looks up a native tab in the current cache without refreshing it or contacting CDP.
+    /// SDK callers retain the returned core id only for the admitted operation.
+    pub async fn get_info_by_tab(&self, tab: TabId) -> Option<PageInfo> {
+        self.state
+            .lock()
+            .await
+            .pages
+            .values()
+            .find(|info| info.tab_id == tab)
+            .cloned()
     }
 
     pub async fn get_tab_id(&self, page_id: PageId) -> Option<TabId> {
@@ -637,12 +664,25 @@ impl PageManager {
             .send("Browser.closeTab", json!({ "tabId": info.tab_id.0 }))
             .await?;
         let mut state = self.state.lock().await;
-        state.pages.remove(&page_id);
-        state.sessions.remove(&info.target_id);
+        // The awaited transport can overlap a cache rebind. Only the entry actually
+        // removed here owns the session and detach notification. A concurrent prune may
+        // already have removed it and delivered its cleanup.
+        let Some(removed) = state.pages.remove(&page_id) else {
+            return Ok(());
+        };
+        state.sessions.remove(&removed.target_id);
         state.agent_created.remove(&page_id);
+        let after = self
+            .hooks
+            .on_page_removed
+            .as_ref()
+            .map(|hook| hook(&removed));
         drop(state);
+        if let Some(after) = after {
+            after();
+        }
         if let Some(callback) = &self.hooks.on_page_detached {
-            callback(page_id);
+            callback(page_id, removed.tab_id, removed.target_id);
         }
         Ok(())
     }
@@ -941,6 +981,7 @@ fn find_by_tab(pages: &HashMap<PageId, PageInfo>, tab_id: TabId) -> Option<PageI
 #[cfg(test)]
 mod tests {
     use super::{NewPageOptions, PageManager, PageManagerHooks};
+    use crate::CdpConnection;
     use crate::testing::TestConnection;
     use serde_json::{Value, json};
     use std::error::Error;
@@ -1038,6 +1079,198 @@ mod tests {
                 .any(|call| call.method == "Emulation.setFocusEmulationEnabled"),
             "adopted tab must not get focus emulation"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tab_lookup_tracks_target_replacement_without_listing() -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([
+            ("Browser.getTabs", json!({ "tabs": [tab_json(7, "first")] })),
+            (
+                "Browser.getTabs",
+                json!({ "tabs": [tab_json(7, "replacement")] }),
+            ),
+        ]);
+        let manager = PageManager::new(connection.clone(), PageManagerHooks::default());
+        assert!(manager.get_info_by_tab(crate::TabId(7)).await.is_none());
+        let original = manager.list().await?.remove(0);
+        assert_eq!(
+            manager.get_info_by_tab(crate::TabId(7)).await,
+            Some(original.clone())
+        );
+        assert_eq!(
+            connection.calls()?.len(),
+            1,
+            "the lookup must stay cache-only"
+        );
+        manager.list().await?;
+        let replaced = manager
+            .get_info_by_tab(crate::TabId(7))
+            .await
+            .ok_or("tab missing")?;
+        assert_eq!(
+            replaced.page_id, original.page_id,
+            "the core id survives target replacement"
+        );
+        assert_eq!(replaced.target_id.0, "replacement");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detach_reports_tab_for_pruning_and_explicit_close() -> Result<(), Box<dyn Error>> {
+        use std::sync::{Arc, Mutex};
+        let removed = Arc::new(Mutex::new(Vec::new()));
+        let hook_removed = Arc::clone(&removed);
+        let hooks = PageManagerHooks {
+            on_page_detached: Some(Arc::new(move |page, tab, target| {
+                if let Ok(mut events) = hook_removed.lock() {
+                    events.push((page, tab, target));
+                }
+            })),
+            ..PageManagerHooks::default()
+        };
+        let mut excluded = tab_json(7, "first");
+        excluded["url"] = json!("chrome-extension://excluded/page.html");
+        let connection = TestConnection::new([
+            ("Browser.getTabs", json!({ "tabs": [tab_json(7, "first")] })),
+            ("Browser.getTabs", json!({ "tabs": [excluded] })),
+            (
+                "Browser.getTabs",
+                json!({ "tabs": [tab_json(7, "returned")] }),
+            ),
+            ("Browser.closeTab", json!({})),
+        ]);
+        let manager = PageManager::new(connection, hooks);
+        let first = manager.list().await?.remove(0);
+        assert!(manager.list().await?.is_empty());
+        assert!(manager.get_info_by_tab(crate::TabId(7)).await.is_none());
+        let returned = manager.list().await?.remove(0);
+        manager.close(returned.page_id.clone()).await?;
+        assert!(manager.get_info_by_tab(crate::TabId(7)).await.is_none());
+        assert_eq!(
+            *removed.lock().map_err(|_| "hook mutex poisoned")?,
+            vec![
+                (first.page_id, crate::TabId(7), first.target_id),
+                (returned.page_id, crate::TabId(7), returned.target_id),
+            ]
+        );
+        Ok(())
+    }
+
+    /// Holds the close reply while another listing replaces or removes the cached binding.
+    struct ClosingConnection {
+        inner: std::sync::Arc<TestConnection>,
+        sent: tokio::sync::Notify,
+        resume: tokio::sync::Notify,
+    }
+
+    impl crate::CdpConnection for ClosingConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a crate::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
+            if method != "Browser.closeTab" {
+                return self.inner.send(method, params, session);
+            }
+            Box::pin(async move {
+                self.sent.notify_one();
+                self.resume.notified().await;
+                Ok(json!({}))
+            })
+        }
+        fn send_raw_json<'a>(
+            &'a self,
+            method: &'a str,
+            params: &'a str,
+            session: Option<&'a crate::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<String, browseros_cdp::CdpError>> {
+            self.inner.send_raw_json(method, params, session)
+        }
+        fn events(&self) -> tokio::sync::broadcast::Receiver<browseros_cdp::CdpEvent> {
+            self.inner.events()
+        }
+        fn events_targeted(
+            &self,
+            method: &str,
+        ) -> tokio::sync::mpsc::UnboundedReceiver<browseros_cdp::CdpEvent> {
+            self.inner.events_targeted(method)
+        }
+        fn is_connected(&self) -> bool {
+            self.inner.is_connected()
+        }
+        fn connection_epoch(&self) -> u64 {
+            self.inner.connection_epoch()
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_close_retires_the_binding_removed_after_its_transport()
+    -> Result<(), Box<dyn Error>> {
+        use crate::TargetId;
+        use std::sync::{Arc, Mutex};
+        for present in [true, false] {
+            let second = if present {
+                vec![tab_json(7, "T2")]
+            } else {
+                vec![]
+            };
+            let connection = Arc::new(ClosingConnection {
+                inner: TestConnection::new([
+                    ("Browser.getTabs", json!({"tabs":[tab_json(7,"T1")]})),
+                    ("Browser.getTabs", json!({"tabs":second})),
+                ]),
+                sent: tokio::sync::Notify::new(),
+                resume: tokio::sync::Notify::new(),
+            });
+            let removed = Arc::new(Mutex::new(Vec::new()));
+            let before = Arc::clone(&removed);
+            let after = Arc::clone(&removed);
+            let manager = PageManager::new(
+                connection.clone(),
+                PageManagerHooks {
+                    on_page_removed: Some(Arc::new(move |info| {
+                        before
+                            .lock()
+                            .unwrap()
+                            .push(("removed", info.target_id.clone()));
+                        Box::new(|| {})
+                    })),
+                    on_page_detached: Some(Arc::new(move |_, _, target| {
+                        after.lock().unwrap().push(("detached", target));
+                    })),
+                    ..PageManagerHooks::default()
+                },
+            );
+            let first = manager.list().await?.remove(0);
+            let replace = async {
+                connection.sent.notified().await;
+                let current = manager.list().await?;
+                if let Some(info) = current.first() {
+                    assert_eq!(info.page_id, first.page_id);
+                    manager
+                        .state
+                        .lock()
+                        .await
+                        .sessions
+                        .insert(info.target_id.clone(), "current-session".into());
+                }
+                connection.resume.notify_one();
+                Ok::<_, crate::CoreError>(())
+            };
+            let (closed, changed) = tokio::join!(manager.close(first.page_id.clone()), replace);
+            closed?;
+            changed?;
+            let target = TargetId(if present { "T2" } else { "T1" }.into());
+            assert_eq!(
+                *removed.lock().unwrap(),
+                [("removed", target.clone()), ("detached", target.clone())]
+            );
+            assert!(manager.get_info_by_tab(crate::TabId(7)).await.is_none());
+            assert!(!manager.state.lock().await.sessions.contains_key(&target));
+            assert!(connection.is_connected());
+        }
         Ok(())
     }
 }

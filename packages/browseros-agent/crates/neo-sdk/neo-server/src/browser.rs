@@ -21,8 +21,8 @@
 //! Views are unbound. On BrowserOS 0.51.1.3 and later a bound capture costs 4 to 6 CDP round
 //! trips per run and hides other profiles' tabs, and hosted Neo has one profile. An unbound view
 //! silently follows a reconnect, so each run keeps the epoch its view was taken at and the
-//! dispatcher refuses once it moves. Handles carry the tab id beside core's page id
-//! ([`PageRef`]), because core's page ids restart at 1 with Neo and tab ids do not.
+//! dispatcher refuses once it moves. Handles carry only the browser tab id; no handle outlives
+//! its run, and the run cannot cross a connection epoch.
 
 mod browser_link;
 mod page_ref;
@@ -33,5 +33,5 @@ mod tests;
 
 pub(crate) use browser_link::{BrowserLink, LinkStatus, RunView};
 pub(crate) use page_ref::PageRef;
-pub(crate) use tab_registry::TabRegistry;
+pub(crate) use tab_registry::{Seen, TabRegistry};
 pub(crate) use tab_watch::{TabEvent, TabListing, Watched};

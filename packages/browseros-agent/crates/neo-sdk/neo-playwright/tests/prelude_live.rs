@@ -27,6 +27,7 @@ mod live_run;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use browseros_core::TabId;
 use fixture_server::{FixtureServer, Page};
 use futures_util::future::BoxFuture;
 use js_runner::OpHost;
@@ -94,7 +95,7 @@ async fn tests_that_the_prelude_builds_playwrights_locators_in_quickjs() -> Test
         .ok_or("the goldens list their cases")?;
     let codes: Vec<&Value> = cases.iter().filter_map(|case| case.get("code")).collect();
     let host: Arc<dyn OpHost> = Arc::new(NoOps);
-    let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
+    let init = json!({ "page": { "$neo": "page", "tab": 1007 } });
     // A direct eval, so each golden sees the agent's `page` parameter.
     let script = format!(
         "const built = {codes}.map((code) => {{\n\
@@ -129,7 +130,7 @@ async fn tests_that_the_prelude_builds_playwrights_locators_in_quickjs() -> Test
 #[tokio::test]
 async fn tests_that_an_uncaught_expect_failure_settles_as_its_ops_failure() -> TestResult {
     let host: Arc<dyn OpHost> = Arc::new(NoOps);
-    let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
+    let init = json!({ "page": { "$neo": "page", "tab": 1007 } });
     let script = "await expect(page.locator('#total')).toHaveText('nope', { timeout: 50 })";
     let settled = js_runner::run_script(&host, &init, script).await;
     assert_eq!(
@@ -146,7 +147,7 @@ async fn tests_that_an_uncaught_expect_failure_settles_as_its_ops_failure() -> T
 
 /// The run page a seeded run starts on.
 fn seeded() -> Value {
-    json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } })
+    json!({ "page": { "$neo": "page", "tab": 1007 } })
 }
 
 /// FR/RC: a refusal the script leaves uncaught settles the run as the refusal's op, whose
@@ -217,6 +218,16 @@ impl OpHost for Recording {
                     format!("{name}: the owner has control of this tab"),
                 )),
             }
+        })
+    }
+
+    // This mock serves page payloads, so it supplies the identity facts that the real
+    // door observes with them. Otherwise the prelude must reject their unstamped state.
+    fn page_facts(&self, tabs: Vec<TabId>) -> BoxFuture<'_, Vec<Value>> {
+        Box::pin(async move {
+            tabs.into_iter()
+                .map(|tab| json!({ "tab": tab, "closed": false }))
+                .collect()
         })
     }
 
@@ -303,7 +314,7 @@ async fn tests_that_a_refused_frames_read_still_starts_the_run() -> TestResult {
 async fn tests_that_context_pages_lists_the_tabs_the_run_init_names() -> TestResult {
     let host: Arc<dyn OpHost> = Arc::new(NoOps);
     let init = json!({
-        "page": { "$neo": "page", "id": 7, "tab": 1007 },
+        "page": { "$neo": "page", "tab": 1007 },
         "pages": [
             { "id": 7, "tab": 1007, "url": "https://shop.example/cart", "title": "Cart", "closed": false },
             { "id": 9, "tab": 1009, "url": "https://mail.example/", "title": "Mail", "closed": false },
@@ -315,8 +326,8 @@ async fn tests_that_context_pages_lists_the_tabs_the_run_init_names() -> TestRes
     assert_eq!(
         listed,
         json!([
-            { "url": "https://shop.example/cart", "brand": { "$neo": "page", "id": 7, "tab": 1007 }, "run": true },
-            { "url": "https://mail.example/", "brand": { "$neo": "page", "id": 9, "tab": 1009 }, "run": false },
+            { "url": "https://shop.example/cart", "brand": { "$neo": "page", "tab": 1007 }, "run": true },
+            { "url": "https://mail.example/", "brand": { "$neo": "page", "tab": 1009 }, "run": false },
         ]),
         "every tab the init lists, with no op sent"
     );
@@ -335,7 +346,7 @@ async fn tests_that_buffer_text_of_megabytes_fits_in_claw_sdks_heap() -> TestRes
                     fromUtf8: Buffer.from('\u{e9}\u{1d11e}x'.repeat(512 * 1024)).length,\n\
                   }";
     let host: Arc<dyn OpHost> = Arc::new(NoOps);
-    let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
+    let init = json!({ "page": { "$neo": "page", "tab": 1007 } });
     let lengths = js_runner::run_script(&host, &init, script).await?;
     assert_eq!(
         lengths,
@@ -386,7 +397,7 @@ async fn tests_that_a_payload_under_neos_limit_reaches_the_op_whole_in_claw_sdks
                   }";
     let uploads = Arc::new(Uploads::default());
     let host: Arc<dyn OpHost> = Arc::<Uploads>::clone(&uploads);
-    let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
+    let init = json!({ "page": { "$neo": "page", "tab": 1007 } });
     let refused = js_runner::run_script(&host, &init, script).await?;
     assert_eq!(
         refused,
@@ -455,7 +466,7 @@ async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_brows
            const fromPage = new Promise((resolve) => page.once('popup', resolve))\n\
            const fromContext = new Promise((resolve) => context.once('page', resolve))\n\
            const opened = page.waitForEvent('popup')\n\
-           const failed = await __neo_test_gesture(page._id, page._tab, \"void window.open('/prelude/popup.html')\")\n\
+           const failed = await __neo_test_gesture(page._tab, \"void window.open('/prelude/popup.html')\")\n\
            if (failed) throw new Error(failed)\n\
            const popup = await opened\n\
            const pumped = (await fromPage) === popup && (await fromContext) === popup\n\

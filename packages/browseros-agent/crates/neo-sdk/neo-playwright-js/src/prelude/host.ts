@@ -9,7 +9,14 @@
 export type RefusalCode = 'method_unavailable' | 'invalid_input'
 
 export type Bootstrap = {
-  invoke(name: string, input?: unknown): Promise<unknown>
+  invoke(
+    name: string,
+    input?: unknown,
+    options?: {
+      observed?: boolean
+      onResult?: (value: unknown, observed: unknown) => void
+    },
+  ): Promise<unknown>
   brands: {
     register(brand: string, fromJson: (json: object) => unknown): void
   }

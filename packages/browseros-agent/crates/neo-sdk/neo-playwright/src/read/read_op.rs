@@ -390,7 +390,7 @@ async fn every_match(
     };
     let values = match mask {
         ReadMask::Site(site) => {
-            let site = site.values(pw, scope, page.id(), sweep)?;
+            let site = site.values(pw, scope, page.tab(), sweep)?;
             values.into_iter().map(|value| site.mask(value)).collect()
         }
         // The count sends no values.

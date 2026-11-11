@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use browseros_core::sensitive_fields::{JOURNAL_BINDING, SEALED_WORLD};
-use browseros_core::{CdpConnection, PageId, ProtocolSession, SessionId};
+use browseros_core::{CdpConnection, ProtocolSession, SessionId, TabId};
 use serde_json::{Value, json};
 use tokio::sync::OnceCell;
 
@@ -58,7 +58,7 @@ struct SetupInner {
 }
 
 struct SessionEntry {
-    page: PageId,
+    tab: TabId,
     /// Single-flight: concurrent first worlds on a session share one setup. A failed setup
     /// leaves it empty for the next caller.
     done: Arc<OnceCell<()>>,
@@ -78,11 +78,11 @@ impl SessionSetup {
     }
 
     /// Sets `session` up for sealed worlds, the first time only, and records that it belongs
-    /// to `page`. Idempotent: CDP keeps both settings for the session's lifetime.
+    /// to `tab`. Idempotent: CDP keeps both settings for the session's lifetime.
     pub(crate) async fn ensure(
         &self,
         session: &ProtocolSession,
-        page: &PageId,
+        tab: TabId,
         kind: SessionKind,
     ) -> Result<(), ProbeFailure> {
         let Some(id) = session.session_id() else {
@@ -96,7 +96,7 @@ impl SessionSetup {
                 .sessions
                 .entry(id.clone())
                 .or_insert_with(|| SessionEntry {
-                    page: page.clone(),
+                    tab,
                     done: Arc::default(),
                 });
             Arc::clone(&entry.done)
@@ -127,12 +127,9 @@ impl SessionSetup {
         ContextWatch::new(self.connection.events())
     }
 
-    /// The page `session` was set up for, for the journal.
-    pub(crate) fn page_of(&self, session: &SessionId) -> Option<PageId> {
-        self.lock()
-            .sessions
-            .get(session)
-            .map(|entry| entry.page.clone())
+    /// The tab `session` was set up for, for the journal.
+    pub(crate) fn tab_of(&self, session: &SessionId) -> Option<TabId> {
+        self.lock().sessions.get(session).map(|entry| entry.tab)
     }
 
     /// The table, emptied first if the connection moved to a new epoch since it was filled.

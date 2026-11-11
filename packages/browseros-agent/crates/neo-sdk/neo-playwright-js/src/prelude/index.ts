@@ -47,7 +47,7 @@ const browser = new Browser(context)
 const expect = createExpect()
 
 // Page and element handles in op results come back as Page and ElementHandle objects, one
-// Page per page id.
+// Page per native tab.
 registerBrand('page', (json) => context._pageFromResult(json))
 registerBrand('element', (json) => {
   const brand = elementBrand(json)

@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use browseros_core::{BrowserSession, PageId};
+use browseros_core::{BrowserSession, TabId};
 use serde_json::Value;
 
 use crate::action::action_op;
@@ -88,6 +88,18 @@ impl Playwright {
         &self.events
     }
 
+    /// The newest event recorded for this browser connection.
+    #[must_use]
+    pub fn event_head(&self) -> u64 {
+        self.events.head()
+    }
+
+    /// The newest retained close of a native target, for the host's cache-liveness check.
+    #[must_use]
+    pub fn closed_target(&self, target: &browseros_core::TargetId) -> Option<u64> {
+        self.events.closed_at(target)
+    }
+
     /// The browser connection, for what an op does after it admitted its page: raw sessions,
     /// frame sessions, core's frame registry and events.
     pub(crate) fn browser(&self) -> &BrowserSession {
@@ -108,7 +120,7 @@ impl Playwright {
     pub(crate) fn capture_allowed(
         &self,
         scope: &OpScope<'_>,
-        page: PageId,
+        page: TabId,
     ) -> Result<(), PlaywrightError> {
         scope.require(Capability::Capture)?;
         self.hooks
@@ -168,7 +180,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use browseros_core::PageId;
+    use browseros_core::TabId;
     use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
     use serde_json::{Value, json};
     use tokio::time;
@@ -180,9 +192,9 @@ mod tests {
     struct NoHooks;
 
     impl PlaywrightHooks for NoHooks {
-        fn field_entered(&self, _page: PageId, _entry: JournalEntry, _by: TypedBy) {}
-        fn values_swept(&self, _page: PageId, _values: &FieldValues) {}
-        fn capture_allowed(&self, _page: PageId) -> Result<(), Refusal> {
+        fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
+        fn values_swept(&self, _page: TabId, _values: &FieldValues) {}
+        fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
             Ok(())
         }
     }

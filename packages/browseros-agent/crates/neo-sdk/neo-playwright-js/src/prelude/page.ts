@@ -5,10 +5,10 @@
  * caches here. They are refreshed by the host's page facts after every op, by the URL and
  * frame tree each navigation or wait returns, and by events (a close, a popup). The run's
  * own page may not have a tab yet (a new task). Its ops then name it as
- * `{"$neo":"page","id":null}`, claw-sdk's door opens one tab for them however many race to be
+ * `{"$neo":"page","tab": null}`, claw-sdk's door opens one tab for them however many race to be
  * first, and the reply's `defaultPage` binds this object to that tab (`BrowserContext`).
  */
-import { invoke, sleep } from './bridge'
+import { invoke, invokeObserved, sleep } from './bridge'
 import type { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
 import { EventEmitter } from './emitter'
@@ -55,6 +55,7 @@ import type {
   KeyOptions,
   LoadState,
   NavigationResult,
+  Observation,
   PageBrand,
   PageFact,
   PageHandle,
@@ -80,18 +81,26 @@ const PDF_KEYS = [
 ] as const
 
 export class Page extends EventEmitter {
-  /** Core's page id; null until a reply names the tab the door opened for the run's page. */
-  _id: number | null
   /** The browser's tab id, which the page's brand carries; null until a fact or result names it. */
-  _tab: number | null = null
+  _tab: number | null
   readonly _context: BrowserContext
   readonly _timeoutSettings: TimeoutSettings
   readonly _mainFrame: Frame
   readonly keyboard: Keyboard
   readonly mouse: Mouse
   _url: string
+  /** Historical opening events fill an unknown URL once. Live observations keep it current. */
+  #urlKnown: boolean
   _title = ''
   _closed = false
+  /** The newest host read applied to this tab. */
+  #observedSeq = 0
+  /** Close events recorded through the last live observation belong to its earlier life. */
+  #liveHead = 0
+  /** A close can reach both a waiter and the event pump, including after re-admission. */
+  #closeEvent = 0
+  /** Host-approved close, deferred until that record's position in its own reply. */
+  #approvedClose: { seq: number; observed: number } | null = null
   /**
    * Whether `waitForTimeout` reads this page's frame tree again (FR-1): the run's page, a page
    * the run opened or learned of after it started, and a tab the run's init listed once the
@@ -100,11 +109,12 @@ export class Page extends EventEmitter {
   _working = false
   readonly #childFrames = new Map<string, Frame>()
 
-  constructor(context: BrowserContext, id: number | null, url = 'about:blank') {
+  constructor(context: BrowserContext, tab: number | null, url?: string) {
     super()
     this._context = context
-    this._id = id
-    this._url = url
+    this._tab = tab
+    this._url = url ?? 'about:blank'
+    this.#urlKnown = url !== undefined
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings)
     this._mainFrame = new Frame(this, null, null)
     this.keyboard = new Keyboard(this)
@@ -172,10 +182,10 @@ export class Page extends EventEmitter {
    * (`neo.solveCaptcha(page)`), the handle the prelude's own ops send. A page whose tab no
    * reply named carries `tab: null`, which the door refuses with a hint.
    */
-  toJSON(): PageHandle | { $neo: 'page'; id: number; tab: null } {
-    return this._id === null
-      ? { $neo: 'page', id: null }
-      : { $neo: 'page', id: this._id, tab: this._tab }
+  toJSON(): PageHandle {
+    return this._tab === null
+      ? { $neo: 'page', tab: null }
+      : { $neo: 'page', tab: this._tab }
   }
 
   // ---- builders ---------------------------------------------------------------------------
@@ -560,7 +570,7 @@ export class Page extends EventEmitter {
       { api, timeoutMs: 0 },
       { page: await this._brand(api) },
     )
-    this._title = title
+    // Reply facts own the cached title, so an older result cannot replace a newer read.
     return title
   }
 
@@ -653,10 +663,11 @@ export class Page extends EventEmitter {
 
   async opener(): Promise<Page | null> {
     const api = 'page.opener'
+    const target = await this._brand(api)
     const { opener } = await invoke(
       'page.opener',
       { api, timeoutMs: 0 },
-      { page: await this._brand(api) },
+      { page: target },
     )
     const page = this._context._pageFromResult(opener)
     return page && !page.isClosed() ? page : null
@@ -664,8 +675,8 @@ export class Page extends EventEmitter {
 
   async close(options: CloseOptions = {}): Promise<void> {
     const api = 'page.close'
-    if (this._id === null) {
-      this._didClose()
+    if (this._tab === null) {
+      this.#close()
       return
     }
     // Outside the try: the catch reads the code the door gave the op, and a refused brand's
@@ -690,7 +701,6 @@ export class Page extends EventEmitter {
       )
         throw error
     }
-    if (!options.runBeforeUnload) this._didClose()
   }
 
   waitForEvent(
@@ -725,27 +735,21 @@ export class Page extends EventEmitter {
   // ---- internals ------------------------------------------------------------------------
 
   /**
-   * The page's handle for an op whose page the door resolves (at `page` or `target.page`):
-   * the unopened brand while the run's page has no tab, so the door opens it. Every fact,
-   * result and event the host sends names the tab; a page whose tab nothing named yet is
-   * refused here rather than sent half-branded.
+   * The handle for an operation on this page. The run's unopened page carries `tab: null`,
+   * which asks the door to open its default tab. Once bound, the handle carries the native
+   * tab supplied by the host's facts, results or events.
    */
   async _brand(api: string): Promise<PageHandle> {
-    if (this._id === null) {
+    if (this._tab === null) {
       if (this._closed)
         throw clientError(
           api,
           'Target page, context or browser has been closed',
         )
-      return { $neo: 'page', id: null }
+      return { $neo: 'page', tab: null }
     }
-    if (this._tab === null)
-      throw clientError(
-        api,
-        'Neo has no tab id for this page; get the page again from context.pages()',
-      )
     this._working = true
-    return { $neo: 'page', id: this._id, tab: this._tab }
+    return { $neo: 'page', tab: this._tab }
   }
 
   /**
@@ -754,9 +758,9 @@ export class Page extends EventEmitter {
    * `page.frames`, as its first op of any kind would; the reply binds it.
    */
   async _openedBrand(api: string): Promise<PageBrand> {
-    if (this._id === null) await this._refreshFrames(api)
+    if (this._tab === null) await this._refreshFrames(api)
     const brand = await this._brand(api)
-    if (brand.id === null)
+    if (brand.tab === null)
       throw new Error(`${api}: Neo opened no tab for the run's page`)
     return brand
   }
@@ -773,16 +777,35 @@ export class Page extends EventEmitter {
     api: string,
     frame: Frame,
     result: NavigationResult | null,
+    at: Observation | null,
   ): Promise<Response | null> {
-    if (typeof result?.url === 'string') {
-      if (frame === this._mainFrame) this._url = result.url
-      else frame._url = result.url
+    if (this.#payloadCurrent(at)) {
+      if (typeof result?.url === 'string') {
+        if (frame === this._mainFrame) {
+          this._url = result.url
+          this.#urlKnown = true
+        } else frame._url = result.url
+      }
+      if (Array.isArray(result?.frames)) this._applyFrames(result.frames)
+      else await this._refreshFrames(api)
+    } else if (!this._closed) {
+      // Keep the original operation's return value even if a fresh read of the replacement
+      // binding fails. The stale payload never becomes the replacement's cached state.
+      await this._refreshFrames(api).catch(() => undefined)
     }
-    if (Array.isArray(result?.frames)) this._applyFrames(result.frames)
-    else await this._refreshFrames(api)
     return typeof result?.response?.status === 'number'
       ? new Response(frame, result.response)
       : null
+  }
+
+  /** Both the payload's admitted binding and this Page's newest fact must agree. */
+  #payloadCurrent(at: Observation | null): boolean {
+    return (
+      !this._closed &&
+      at !== null &&
+      at.payloadCurrent === true &&
+      at.seq === this.#observedSeq
+    )
   }
 
   /**
@@ -793,19 +816,20 @@ export class Page extends EventEmitter {
    * script's own first op meets the same refusal (sdk-skeleton's A4).
    */
   async _readInitialFrames(): Promise<void> {
-    if (this._id === null || this._tab === null) return
+    if (this._tab === null) return
     await this._refreshFrames('page.frames').catch(() => undefined)
   }
 
   async _refreshFrames(api: string): Promise<void> {
-    const tree = await invoke(
+    const { value: tree, observed } = await invokeObserved(
       'page.frames',
       { api, timeoutMs: 0 },
       { page: await this._brand(api) },
     )
     // A reply without a tree leaves the caches as they were rather than failing the
     // navigation that already succeeded. The main frame's entry refreshes `url()`.
-    if (Array.isArray(tree?.frames)) this._applyFrames(tree.frames)
+    if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
+      this._applyFrames(tree.frames)
   }
 
   /**
@@ -817,6 +841,7 @@ export class Page extends EventEmitter {
     const main = infos.find((info) => info.parentId === null)
     if (main) {
       this._url = main.url
+      this.#urlKnown = true
       this._mainFrame._name = main.name
     }
     const present = new Map<string, FrameInfo>()
@@ -844,14 +869,70 @@ export class Page extends EventEmitter {
     }
   }
 
-  _applyFact(fact: PageFact): void {
+  _applyFact(
+    fact: PageFact,
+    at: Observation | null,
+    approved: number | null = null,
+  ): void {
     if (fact.tab !== undefined) this._tab = fact.tab
-    if (fact.url !== undefined) this._url = fact.url
+    if (at === null) {
+      if (fact.url !== undefined && !this.#urlKnown) {
+        this._url = fact.url
+        this.#urlKnown = true
+      }
+      return
+    }
+    if (at.seq < this.#observedSeq) return
+    this.#observedSeq = at.seq
+    if (fact.url !== undefined) {
+      this._url = fact.url
+      this.#urlKnown = true
+    }
     if (fact.title !== undefined) this._title = fact.title
-    if (fact.closed) this._didClose()
+    if (fact.closed === true) {
+      this.#approvedClose =
+        approved === null ? null : { seq: approved, observed: at.seq }
+      if (approved === null) this.#close()
+      return
+    }
+    // A bound init page or result brand can carry identity without a liveness fact.
+    if (fact.closed !== false) return
+    this.#approvedClose = null
+    if (this._closed && at.events < this.#closeEvent) return
+    this.#liveHead = at.events
+    this._closed = false
   }
 
-  _didClose(): void {
+  _closeEvent(seq: number, at: Observation | null = null): void {
+    // Concurrent waits can receive the same event in successive observations. Any of
+    // them may consume that still-approved record before running its predicate. A later
+    // live fact clears the approval, so an older wait cannot close a re-admitted page.
+    if (this.#approvedClose?.seq === seq) {
+      this.#closeEvent = Math.max(this.#closeEvent, seq)
+      this.#approvedClose = null
+      this.#close()
+      return
+    }
+    if (at !== null && at.seq < this.#observedSeq) return
+    if (this.#approvedClose !== null) {
+      this.#closeEvent = Math.max(this.#closeEvent, seq)
+      return
+    }
+    if (seq <= this.#closeEvent) return
+    this.#closeEvent = seq
+    if (seq <= this.#liveHead) return
+    this.#close()
+  }
+
+  /** Finish only this reply's pending approval, including if a listener interrupted delivery. */
+  _settleClose(at: Observation | null): void {
+    if (at === null || this.#approvedClose?.observed !== at.seq) return
+    this.#closeEvent = Math.max(this.#closeEvent, this.#approvedClose.seq)
+    this.#approvedClose = null
+    this.#close()
+  }
+
+  #close(): void {
     if (this._closed) return
     this._closed = true
     this.emit('close', this)
@@ -883,7 +964,7 @@ export class Page extends EventEmitter {
             : undefined
       if (!pattern)
         throw clientError(api, 'url: expected a string, a RegExp or a function')
-      const result = await invoke(
+      const { value: result, observed } = await invokeObserved(
         'page.waitForURL',
         frame._call(api, timeout),
         {
@@ -892,7 +973,7 @@ export class Page extends EventEmitter {
           waitUntil,
         },
       )
-      await this._navigated(api, frame, result)
+      await this._navigated(api, frame, result, observed)
       return
     }
     const started = Date.now()
@@ -910,7 +991,7 @@ export class Page extends EventEmitter {
         await frame._waitForLoadState(api, waitUntil, { timeout: remaining })
         return
       }
-      const result = await invoke(
+      const { value: result, observed } = await invokeObserved(
         'page.waitForURL',
         frame._call(api, remaining),
         {
@@ -922,7 +1003,7 @@ export class Page extends EventEmitter {
           waitUntil: 'commit',
         },
       )
-      await this._navigated(api, frame, result)
+      await this._navigated(api, frame, result, observed)
     }
   }
 
@@ -931,11 +1012,11 @@ export class Page extends EventEmitter {
     options: NavigateOptions = {},
   ): Promise<Response | null> {
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
-    const result = await invoke(
+    const { value: result, observed } = await invokeObserved(
       api,
       this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),
       { page: await this._brand(api), waitUntil },
     )
-    return await this._navigated(api, this._mainFrame, result)
+    return await this._navigated(api, this._mainFrame, result, observed)
   }
 }

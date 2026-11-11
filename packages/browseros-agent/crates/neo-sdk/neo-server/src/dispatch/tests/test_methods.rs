@@ -423,7 +423,8 @@ impl Method for Close {
     async fn call(&self, op: &OpCtx<Self>, _input: OnPage) -> Result<Value, LeafError> {
         let page = op.page()?;
         send(op)?;
-        op.race(op.run().view().close_page(page.id.clone())).await?;
+        op.race(op.run().view().close_page(op.core_page()?.clone()))
+            .await?;
         op.report_page(page, PageChange::Closed);
         Ok(json!({}))
     }
@@ -453,7 +454,7 @@ impl Method for Lease {
             LeafError::from(OperationError::neo(ErrorCode::INTERNAL_ERROR, error))
         })?;
         let view = op.run().view().clone();
-        let id = page.id.clone();
+        let id = op.core_page()?.clone();
         let change = tokio::spawn(async move {
             let cancel = CancellationToken::new();
             view.set_viewport(id, request, &cancel).await

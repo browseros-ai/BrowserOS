@@ -21,16 +21,19 @@
 //!
 //! Ops run as tokio tasks on their run's `JoinSet`, never inside the JS runtime: a method's
 //! panic stays in its own task and still answers, ops progress while the script computes, and
-//! no lock is held across an await, so overlapping calls never wait on each other.
+//! overlapping method calls progress independently. Only the final cache observations share
+//! a lock across their reads, so the reply serial orders complete fact batches.
 //!
 //! [`RunCtx`] lives here because every op belongs to one, and [`RunCtx::start`] records the
 //! run, so an op can never run outside a recorded run. A stopped run's write-once
 //! [`StopReason`] names the owner of every op it cut short, but for a background pull: the
 //! run's end is how a pull ends, so a stop retires it with no error.
 
+mod close_release;
 mod dispatcher;
 mod held_values;
 mod method;
+mod observation;
 mod op_ctx;
 mod operation_error;
 mod operation_guard;
@@ -43,9 +46,12 @@ mod run_mask;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use dispatcher::{Call, CallSite, Caller, Dispatcher, OpReply, PageFact, PendingReply};
+pub(crate) use dispatcher::{
+    Call, CallSite, Caller, Dispatcher, OpReply, PageFact, PageFacts, PendingReply,
+};
 pub(crate) use held_values::{Held, HeldValues, HeldWatch, WITHHELD};
 pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, Output, PageScript, Visibility};
+pub(crate) use observation::{ActedTarget, Claim, EventLog, Observation, Observer};
 pub(crate) use op_ctx::{OpCtx, PageChange, StandingRefusal};
 pub(crate) use operation_error::{Answer, ErrorCode, LeafError, OpFailure, OperationError};
 pub(crate) use page_target::PageTarget;

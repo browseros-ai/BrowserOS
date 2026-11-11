@@ -113,9 +113,9 @@ impl<'op> OpPage<'op> {
     pub(crate) async fn admit(
         pw: &'op Playwright,
         scope: &'op OpScope<'_>,
-        page: &PageId,
+        page: TabId,
     ) -> Result<Self, PlaywrightError> {
-        let admitted = scope.admit(page).await?;
+        let admitted = scope.admit(pw.browser(), page).await?;
         let state = pw.pages().page(pw.browser(), admitted).await;
         Ok(Self {
             pw,
@@ -125,15 +125,14 @@ impl<'op> OpPage<'op> {
         })
     }
 
-    /// Admits the page a target's brand names, once its tab checks out
-    /// ([`PageRef::checked`]).
+    /// Admits the native tab named by a target's page brand.
     pub(crate) async fn admit_handle(
         pw: &'op Playwright,
         scope: &'op OpScope<'_>,
         handle: &PageRef,
     ) -> Result<Self, PlaywrightError> {
-        let page = handle.checked(pw.browser(), scope).await?;
-        Self::admit(pw, scope, &page).await
+        let page = handle.tab();
+        Self::admit(pw, scope, page).await
     }
 
     /// The tab whose page target is `main`, which a script on this op's page reaches through
@@ -149,31 +148,32 @@ impl<'op> OpPage<'op> {
     ) -> Result<Option<AdmittedPage>, CoreError> {
         let pages = &self.pw.browser().pages;
         let on_main = |target: &TargetId| target.as_str() == main.as_str();
-        let mut id = None;
+        let mut matched = None;
         for known in pages.known_page_ids().await {
-            if pages
-                .get_info(known.clone())
-                .await
-                .is_some_and(|info| on_main(&info.target_id))
+            if let Some(info) = pages.get_info(known).await
+                && on_main(&info.target_id)
             {
-                id = Some(known);
+                matched = Some(info);
                 break;
             }
         }
-        if id.is_none() {
+        if matched.is_none() {
             // A popup core has not listed yet.
-            id = pages
+            matched = pages
                 .list()
                 .await?
                 .into_iter()
-                .find(|info| on_main(&info.target_id))
-                .map(|info| info.page_id);
+                .find(|info| on_main(&info.target_id));
         }
-        let Some(id) = id else {
+        let Some(info) = matched else {
             return Ok(None);
         };
-        let session = pages.get_session(id.clone()).await?;
-        Ok(on_main(&session.target_id).then_some(AdmittedPage { id, session }))
+        let session = pages.get_session(info.page_id.clone()).await?;
+        Ok(on_main(&session.target_id).then_some(AdmittedPage {
+            tab: info.tab_id,
+            core_page: info.page_id,
+            session,
+        }))
     }
 
     /// The browser's tab on each of `mains`, a tab's page target, in order, for the host's rules
@@ -221,8 +221,13 @@ impl<'op> OpPage<'op> {
     }
 
     /// The tab.
-    pub(crate) fn id(&self) -> &PageId {
-        &self.admitted.id
+    pub(crate) fn tab(&self) -> TabId {
+        self.admitted.tab
+    }
+
+    /// The core cache id, held only for this operation and passed directly to core.
+    pub(crate) fn core_page(&self) -> &PageId {
+        &self.admitted.core_page
     }
 
     /// The tab's sealed worlds.
@@ -313,7 +318,7 @@ impl<'op> OpPage<'op> {
         let installer = Installer {
             sessions: self.pw.sessions(),
             epoch: self.pw.epoch(),
-            page: self.id(),
+            page: self.tab(),
         };
         let retry = self.late_retry();
         let mut cut = TryCut::default();

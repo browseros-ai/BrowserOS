@@ -154,7 +154,7 @@ async fn poll_selector(
                 sweep,
             } => {
                 element_read::mark_sensitive(scope, sensitive);
-                let value = site.with_own(pw, page.id(), sweep).mask(value);
+                let value = site.with_own(pw, page.tab(), sweep).mask(value);
                 element_read::read_value(scope, value)?
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {

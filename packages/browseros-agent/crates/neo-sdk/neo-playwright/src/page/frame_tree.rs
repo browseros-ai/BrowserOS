@@ -114,12 +114,12 @@ pub(crate) async fn frames(
     scope: &OpScope<'_>,
     input: FramesInput,
 ) -> Result<Value, PlaywrightError> {
-    let page = input.page.checked(pw.browser(), scope).await?;
-    let admitted = scope.admit(&page).await?;
+    let page = input.page.tab();
+    let admitted = scope.admit(pw.browser(), page).await?;
     let root = pw
         .browser()
         .protocol_session(admitted.session.session_id.clone());
-    let tree = read(pw.browser(), &page, &root)
+    let tree = read(pw.browser(), &admitted.core_page, &root)
         .await
         .map_err(|error| scope.core_error(&error))?;
     to_output(scope, &tree)

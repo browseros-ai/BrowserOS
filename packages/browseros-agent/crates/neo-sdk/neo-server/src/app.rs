@@ -27,7 +27,7 @@ use crate::builtins::{
     self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor,
 };
 use crate::config::{AppConfig, Defaults, HostedMode, SecretFiles};
-use crate::dispatch::{Dispatcher, RegistryBuilder};
+use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
 use crate::host::{FlagRecovery, HostApi, HostInputs, TakeoverLock};
 use crate::http::agent_router;
 use crate::mcp::McpServer;
@@ -217,7 +217,7 @@ impl App {
         let deps = BuiltinDeps {
             solver,
             claims: Arc::clone(&claims),
-            playwright,
+            playwright: Arc::clone(&playwright),
         };
         builtins::builtin_set(&mut methods, deps)
             .map_err(|error| StartError::Methods(error.to_string()))?;
@@ -233,6 +233,7 @@ impl App {
             hooks.typed(),
             Arc::clone(&browser),
             Arc::clone(&tabs),
+            Observer::new(playwright),
         ));
         let shutdown = CancellationToken::new();
         let runs = RunService::new(RunServiceParts {

@@ -101,7 +101,8 @@ impl Method for SolveCaptcha {
             .try_claim(page.tab, op.id())
             .map_err(|holder| LeafError::definite(captcha_claims::busy(holder)))?;
         // A tab that closed since the door resolved it fails here, with nothing sent.
-        op.race(op.run().view().page(page.id.clone())).await?;
+        op.race(op.run().view().page(op.core_page()?.clone()))
+            .await?;
         // Held across the solve, as claw-server holds it, so no viewport change lands mid-solve.
         let _viewport = op.viewport(&page).await?;
         op.recheck()?;
@@ -110,7 +111,7 @@ impl Method for SolveCaptcha {
         // Boxed: the solver's future is about 25 KiB, and the op's own would carry it inline.
         let solve = Box::pin(solver.solve(
             op.run().view().clone(),
-            page.id.clone(),
+            op.core_page()?.clone(),
             op.cancel_token().clone(),
             HumanHelp::Unavailable,
         ));

@@ -141,7 +141,7 @@ pub enum LockEnd {
     Released,
     /// Its TTL passed.
     Expired,
-    /// Its tab closed. Chromium numbers tabs from 1 again after a restart, so a lock never
+    /// Its tab closed. The browser may reuse tab numbers after a restart, so a lock never
     /// outlives its tab.
     TabClosed,
 }

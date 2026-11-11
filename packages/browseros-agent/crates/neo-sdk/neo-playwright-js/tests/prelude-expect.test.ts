@@ -150,17 +150,13 @@ describe('retrying matchers', () => {
       await expect(page).toHaveURL(/cart$/)
     `)
     expect(sent.map((op) => [op.name, op.page, op.expected])).toEqual([
-      ['expect.page', { $neo: 'page', id: 7, tab: 1007 }, 'Expected: "Cart"'],
+      ['expect.page', { $neo: 'page', tab: 1007 }, 'Expected: "Cart"'],
       [
         'expect.page',
-        { $neo: 'page', id: 7, tab: 1007 },
+        { $neo: 'page', tab: 1007 },
         'Expected: "https://shop.example/"',
       ],
-      [
-        'expect.page',
-        { $neo: 'page', id: 7, tab: 1007 },
-        'Expected pattern: /cart$/',
-      ],
+      ['expect.page', { $neo: 'page', tab: 1007 }, 'Expected pattern: /cart$/'],
     ])
   })
 

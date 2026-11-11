@@ -520,7 +520,7 @@ async fn tests_that_every_matcher_passes_and_fails_as_scripts_write_it() -> Test
          }}\n\
          try {{\n\
            await page.goto(URL)\n\
-           const failed = await __neo_test_gesture(page._id, page._tab, \"document.querySelector('#name').focus()\")\n\
+           const failed = await __neo_test_gesture(page._tab, \"document.querySelector('#name').focus()\")\n\
            if (failed) throw new Error(failed)\n\
            {checks}\
            return results\n\

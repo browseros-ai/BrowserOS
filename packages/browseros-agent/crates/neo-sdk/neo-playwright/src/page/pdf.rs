@@ -179,8 +179,8 @@ pub(crate) async fn print(
     let params = input
         .params()
         .map_err(|message| scope.fail(ErrorCode::InvalidInput, &message))?;
-    let page = input.page.checked(pw.browser(), scope).await?;
-    let admitted = scope.admit(&page).await?;
+    let page = input.page.tab();
+    let admitted = scope.admit(pw.browser(), page).await?;
     let session = pw
         .browser()
         .protocol_session(admitted.session.session_id.clone());
@@ -218,7 +218,7 @@ mod tests {
     use crate::{Op, Playwright};
 
     fn params(options: &serde_json::Value) -> Result<serde_json::Value, Box<dyn Error>> {
-        let mut input = json!({ "page": { "$neo": "page", "id": 1, "tab": 1 } });
+        let mut input = json!({ "page": { "$neo": "page", "tab": 1 } });
         if let (Some(input), Some(options)) = (input.as_object_mut(), options.as_object()) {
             input.extend(options.clone());
         }
@@ -283,15 +283,12 @@ mod tests {
     #[tokio::test]
     async fn tests_that_only_an_op_declaring_capture_is_printed() -> Result<(), Box<dyn Error>> {
         let connection = TestConnection::new([]);
-        let test_support::OneTab { browser, page } = test_support::one_tab(&connection).await?;
+        let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
         connection.always("Page.printToPDF", json!({ "data": "JVBERi0=" }))?;
         let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
         let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
-        let input = || {
-            serde_json::from_value::<PdfInput>(
-                json!({ "page": { "$neo": "page", "id": page.0, "tab": 7 } }),
-            )
-        };
+        let input =
+            || serde_json::from_value::<PdfInput>(json!({ "page": { "$neo": "page", "tab": 7 } }));
         let pdf = Op::from_name("page.pdf").ok_or("page.pdf is an op")?;
         let declared = OpScope::new(&env, pdf, CallHeader::default());
         print(&playwright, &declared, input()?).await?;
@@ -335,7 +332,7 @@ mod tests {
         let title = Op::from_name("page.title").ok_or("page.title is an op")?;
         let undeclared = OpScope::new(&env, title, CallHeader::default());
         let input: PdfInput =
-            serde_json::from_value(json!({ "page": { "$neo": "page", "id": 1, "tab": 7 } }))?;
+            serde_json::from_value(json!({ "page": { "$neo": "page", "tab": 7 } }))?;
         let error = print(&playwright, &undeclared, input)
             .await
             .err()

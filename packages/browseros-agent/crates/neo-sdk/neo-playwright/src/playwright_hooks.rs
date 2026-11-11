@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use browseros_core::PageId;
+use browseros_core::TabId;
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
 
 use crate::Refusal;
@@ -14,18 +14,18 @@ pub trait PlaywrightHooks: Send + Sync {
     /// The sealed world's journal saw a value entered into a sensitive field of `page`; `by`
     /// says whether an agent input op on that page was typing at the time. The host decides
     /// what to keep, so the privacy policy lives in one place.
-    fn field_entered(&self, page: PageId, entry: JournalEntry, by: TypedBy);
+    fn field_entered(&self, page: TabId, entry: JournalEntry, by: TypedBy);
 
     /// A main-world script ran on `page`, a snapshot read one of its frames, or `title()` or
     /// `content()` read its document, while these sensitive values were on it. The crate has
     /// already masked the result with them; the host registers them as secrets. A snapshot
     /// reports each frame's values as it reads it.
-    fn values_swept(&self, page: PageId, values: &FieldValues);
+    fn values_swept(&self, page: TabId, values: &FieldValues);
 
     /// May `page`'s pixels be captured now? Asked right before `Page.captureScreenshot` and
     /// `Page.printToPDF`, after the dispatcher's own entry checks passed, because a page can
     /// turn private while an op waits.
-    fn capture_allowed(&self, page: PageId) -> Result<(), Refusal>;
+    fn capture_allowed(&self, page: TabId) -> Result<(), Refusal>;
 
     /// Neo's own secret files, which `setInputFiles` never uploads: absolute paths, each a
     /// file or a directory, and a directory denies everything inside it. claw-sdk names its

@@ -491,7 +491,7 @@ impl<'a> PointerRunner<'a> {
             // when the caller holds it (a drag, from its press to its release). ──
             let root = self.page.root_session();
             let root_id = root.session_id().cloned();
-            let scale = self.scope.view().pointer_scale(self.page.id());
+            let scale = self.scope.view().pointer_scale(self.page.core_page());
             let mut own = None;
             let input = match drag.as_deref_mut() {
                 Some(drag) => &mut drag.input,
@@ -680,7 +680,7 @@ impl<'a> PointerRunner<'a> {
 
     /// The tab's input lock, in arrival order, within the op's timeout.
     async fn hold(&self) -> Result<PageInput, PlaywrightError> {
-        let scale = self.scope.view().pointer_scale(self.page.id());
+        let scale = self.scope.view().pointer_scale(self.page.core_page());
         let input = Arc::clone(self.page.state().input());
         let held = PageInput::hold(input, self.page.root_session(), scale);
         self.scope
@@ -698,7 +698,7 @@ impl<'a> PointerRunner<'a> {
         let touch = self
             .scope
             .view()
-            .current_viewport(self.page.id())
+            .current_viewport(self.page.core_page())
             .is_some_and(|viewport| viewport.mode() == ViewportMode::Mobile);
         located.world().session_id() != root && hit != HitAction::Drag && !touch
     }

@@ -1,10 +1,12 @@
 //! The door.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::{Mutex, PoisonError};
 
+use crate::browser::Seen;
 use browseros_core::pages::PageInfo;
 use browseros_core::{PageId, TabId};
 use neo_trace::{Delivery, Effect, OperationId, OperationReached, PageState, SecretSet, TraceSink};
@@ -12,14 +14,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
+use super::close_release::close_release;
 use super::op_ctx::{OpCore, OpState, PageChange, PageReport};
 use super::operation_guard::{Ending, OpName, OpStart, OperationGuard, StartTab};
 use super::page_target::TargetHandle;
 use super::refusal_brand::RefusalBrand;
 use super::registry::DecodedCall;
 use super::{
-    Answer, ErrorCode, HeldValues, LeafError, MethodSpec, OpFailure, OperationError, PageScript,
-    PageTarget, Policy, PolicyCheck, Registry, ResultHold, RunCtx, RunMask, Visibility,
+    ActedTarget, Answer, Claim, ErrorCode, HeldValues, LeafError, MethodSpec, Observation,
+    Observer, OpFailure, OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry,
+    ResultHold, RunCtx, RunMask, Visibility,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 
@@ -60,6 +64,7 @@ pub(crate) struct Dispatcher {
     held: Arc<dyn HeldValues>,
     browser: Arc<BrowserLink>,
     tabs: Arc<TabRegistry>,
+    observer: Observer,
     /// Every reach this door told the trace, oldest first. The writer drops a repeat, the op's
     /// own tab and an empty list unseen, so only what the door sent shows it never sends them.
     #[cfg(test)]
@@ -107,6 +112,8 @@ pub(crate) struct OpReply {
     pub(crate) outcome: Result<Value, OpFailure>,
     /// The target first, then the pages the op reported.
     pub(crate) pages: Vec<PageFact>,
+    /// Orders this fact batch, absent when the operation completed no observation.
+    pub(crate) observed: Option<Observation>,
     /// Set when the op resolved the run's default page, so the script's `page` learns its id.
     pub(crate) default_page: Option<PageRef>,
 }
@@ -115,8 +122,6 @@ pub(crate) struct OpReply {
 /// bootstrap never revives a fact into a `Page` object. A plain data bag.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct PageFact {
-    /// Core's process-local page id.
-    pub(crate) id: PageId,
     /// The browser's tab id.
     pub(crate) tab: TabId,
     /// `None` once closed.
@@ -152,9 +157,17 @@ struct OpenedPage {
     page: PageTarget,
 }
 
+/// The associated identities and liveness ticket from one core-cache admission.
+struct ResolvedPage {
+    page: PageRef,
+    /// Core identity is an op-local adapter, never part of a brand or retained tab state.
+    core_page: PageId,
+    seen: Seen,
+}
+
 /// An op's target after the door checked it.
 struct Resolved {
-    page: Option<PageRef>,
+    target: Option<ResolvedPage>,
     /// The run's default page, when the target was it.
     default_page: Option<PageRef>,
 }
@@ -203,6 +216,10 @@ impl fmt::Display for CallSite {
 impl Dispatcher {
     /// Builds the door. `policies` is in its fixed order.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the application assembles the dispatcher dependencies once"
+    )]
     pub(crate) fn new(
         registry: Registry,
         policies: Vec<Arc<dyn Policy>>,
@@ -211,6 +228,7 @@ impl Dispatcher {
         held: Arc<dyn HeldValues>,
         browser: Arc<BrowserLink>,
         tabs: Arc<TabRegistry>,
+        observer: Observer,
     ) -> Self {
         Self {
             registry,
@@ -220,6 +238,7 @@ impl Dispatcher {
             held,
             browser,
             tabs,
+            observer,
             #[cfg(test)]
             reaches_told: Mutex::default(),
         }
@@ -242,6 +261,11 @@ impl Dispatcher {
     #[must_use]
     pub(crate) fn held(&self) -> &Arc<dyn HeldValues> {
         &self.held
+    }
+
+    /// Shares one observation order between operation replies and run initialization.
+    pub(crate) fn observer(&self) -> &Observer {
+        &self.observer
     }
 
     /// The trace writer every run and op records through.
@@ -316,8 +340,8 @@ impl Dispatcher {
             .map_err(|failure| failure.error)?;
         match serde_json::from_value::<OpenedPage>(opened) {
             Ok(OpenedPage {
-                page: PageTarget(TargetHandle::Page { id, tab }),
-            }) => Ok(PageRef { id, tab }),
+                page: PageTarget(TargetHandle::Page { tab }),
+            }) => Ok(PageRef { tab }),
             Ok(OpenedPage {
                 page: PageTarget(TargetHandle::RunDefault),
             }) => Err(OperationError::neo(
@@ -453,7 +477,7 @@ impl Dispatcher {
                 (pending, Some(admitted))
             }
             Err(refusal) => {
-                guard.finish(Ending::Refused(refusal), Vec::new(), None);
+                guard.finish(Ending::Refused(refusal), Vec::new(), None, None);
                 (pending, None)
             }
         }
@@ -473,30 +497,33 @@ impl Dispatcher {
         // A stopped run admits nothing. A replaced connection means the browser may have
         // restarted, so the run's view no longer describes it: refuse, never retarget.
         if let Some(reason) = run.stop_reason() {
-            return guard.finish(Ending::Stopped(reason), Vec::new(), None);
+            return guard.finish(Ending::Stopped(reason), Vec::new(), None, None);
         }
         if !self.browser.is_current(run.epoch()) {
-            return guard.finish(Ending::Refused(disconnected()), Vec::new(), None);
+            return guard.finish(Ending::Refused(disconnected()), Vec::new(), None, None);
         }
-        let Resolved { page, default_page } = match self.resolve_target(&run, target.as_ref()).await
-        {
+        let Resolved {
+            target,
+            default_page,
+        } = match self.resolve_target(&run, target.as_ref()).await {
             Ok(resolved) => resolved,
-            Err(ending) => return guard.finish(ending, Vec::new(), None),
+            Err(ending) => return guard.finish(ending, Vec::new(), None, None),
         };
-        guard.started_on(page.as_ref().map(|page| page.tab));
-        if let (Caller::Script, Some(page)) = (caller, &page) {
-            self.tabs.touched(page, run.task_id());
+        let page = target.as_ref().map(|target| &target.page);
+        guard.started_on(page.map(|page| page.tab));
+        if let (Caller::Script, Some(target)) = (caller, &target) {
+            self.tabs.touched(&target.page, target.seen, run.task_id());
         }
         // The rules see the checked tab: the handle's, once verified, or the default page's,
         // once open.
         let check = PolicyCheck {
             method: &spec,
             caller,
-            tab: page.as_ref().map(|page| page.tab),
+            tab: page.map(|page| page.tab),
             operation: state.id(),
         };
         if let Err(refusal) = self.check(&check) {
-            return guard.finish(Ending::Refused(refusal), Vec::new(), default_page);
+            return guard.finish(Ending::Refused(refusal), Vec::new(), default_page, None);
         }
         let holds: Vec<ResultHold> = self
             .policies
@@ -507,7 +534,8 @@ impl Dispatcher {
             run: Arc::clone(&run),
             dispatcher: Arc::clone(&self),
             state: Arc::clone(&state),
-            page: page.clone(),
+            page: page.cloned(),
+            core_page: target.as_ref().map(|target| target.core_page.clone()),
             spec,
             caller,
             cancel: run.cancel_token().child_token(),
@@ -533,11 +561,11 @@ impl Dispatcher {
         // would. A window the script opened itself joins the set once the crate names it to
         // `recheck_reach` after the send, before it hands back the answer; until it does, a lock
         // on that window before release goes unseen here.
-        let ending = if released_past_the_rules(&spec, &ending) {
-            let read = MethodSpec {
-                effect: Effect::Read,
-                ..spec
-            };
+        let read = MethodSpec {
+            effect: Effect::Read,
+            ..spec
+        };
+        let mut ending = if released_past_the_rules(&spec, &ending) {
             let release = PolicyCheck {
                 method: &read,
                 ..check
@@ -561,8 +589,19 @@ impl Dispatcher {
         } else {
             ending
         };
-        let pages = self.page_facts(&run, page.as_ref(), &state).await;
-        guard.finish(ending, pages, default_page);
+        let facts = self
+            .page_facts(
+                &run,
+                page,
+                &state,
+                PolicyCheck {
+                    method: &read,
+                    ..check
+                },
+                &mut ending,
+            )
+            .await;
+        guard.finish(ending, facts.pages, default_page, facts.observed);
     }
 
     async fn resolve_target(
@@ -572,13 +611,13 @@ impl Dispatcher {
     ) -> Result<Resolved, Ending> {
         match target.map(|target| &target.0) {
             None => Ok(Resolved {
-                page: None,
+                target: None,
                 default_page: None,
             }),
-            Some(TargetHandle::Page { id, tab }) => {
-                let page = self.resolve(run, id, *tab).await.map_err(Ending::Refused)?;
+            Some(TargetHandle::Page { tab }) => {
+                let target = self.resolve(run, *tab).await.map_err(Ending::Refused)?;
                 Ok(Resolved {
-                    page: Some(page),
+                    target: Some(target),
                     default_page: None,
                 })
             }
@@ -594,13 +633,13 @@ impl Dispatcher {
                 };
                 // Checked like any handle, so a default page closed earlier in the run is
                 // `page_closed` too.
-                let page = self
-                    .resolve(run, &default.id, default.tab)
+                let target = self
+                    .resolve(run, default.tab)
                     .await
                     .map_err(Ending::Refused)?;
                 Ok(Resolved {
-                    page: Some(page.clone()),
-                    default_page: Some(page),
+                    default_page: Some(target.page.clone()),
+                    target: Some(target),
                 })
             }
         }
@@ -608,19 +647,17 @@ impl Dispatcher {
 
     /// Checks a handle against core's cache, with no CDP call, and names the owner of a dead
     /// one: this script if it closed the page itself, Neo otherwise.
-    async fn resolve(
-        &self,
-        run: &RunCtx,
-        id: &PageId,
-        tab: TabId,
-    ) -> Result<PageRef, OperationError> {
-        match self.browser.cached_page(id).await {
-            Some(info) if info.tab_id == tab => Ok(PageRef::from(&info)),
-            Some(_) => Err(OperationError::script(
-                ErrorCode::STALE_PAGE,
-                "this page handle is from before Neo restarted; get the page again from context.pages()",
-            )),
-            None if run.closed_it(id) => Err(OperationError::script(
+    async fn resolve(&self, run: &RunCtx, tab: TabId) -> Result<ResolvedPage, OperationError> {
+        // Sample immediately before the cache read. A detach after this read invalidates the
+        // registry write even if its close record was evicted before the write resumes.
+        let seen = self.tabs.seen();
+        match self.browser.page(tab).await {
+            Some(info) => Ok(ResolvedPage {
+                page: PageRef::from(&info),
+                core_page: info.page_id,
+                seen,
+            }),
+            None if run.closed_it(tab) => Err(OperationError::script(
                 ErrorCode::PAGE_CLOSED,
                 "this script closed the page",
             )),
@@ -646,55 +683,156 @@ impl Dispatcher {
         run: &RunCtx,
         target: Option<&PageRef>,
         state: &OpState,
-    ) -> Vec<PageFact> {
+        check: PolicyCheck<'_>,
+        ending: &mut Ending,
+    ) -> PageFacts {
         let reports = state.take_reports();
         let mut pages: Vec<PageRef> = target.into_iter().cloned().collect();
-        let mut refreshed: Vec<&PageId> = Vec::new();
+        let mut refreshed: Vec<TabId> = Vec::new();
+        let mut claims: HashMap<TabId, Vec<Claim>> = HashMap::new();
+        let mut acted = None;
+        let mut withheld = HashSet::new();
         for PageReport { page, change } in &reports {
             match change {
-                PageChange::Opened => self.tabs.opened_by_agent(page, run.task_id()),
-                PageChange::Navigated if !refreshed.contains(&&page.id) => {
-                    refreshed.push(&page.id);
-                    refresh(run, &page.id).await;
+                PageChange::Opened => {
+                    let seen = self.tabs.seen();
+                    if self.browser.page(page.tab).await.is_some() {
+                        self.tabs.opened_by_agent(page, seen, run.task_id());
+                    }
                 }
-                PageChange::Navigated => {}
-                PageChange::Closed => run.record_closed(&page.id),
+                PageChange::Navigated if !refreshed.contains(&page.tab) => {
+                    refreshed.push(page.tab);
+                    refresh(run, &self.browser, page.tab).await;
+                }
+                PageChange::Navigated | PageChange::Linked => {}
+                PageChange::Gone { target, seq } => {
+                    claims.entry(page.tab).or_default().push(Claim {
+                        target: target.clone(),
+                        seq: *seq,
+                        released: true,
+                    });
+                }
+                PageChange::WithheldClose { seq } => {
+                    withheld.insert((page.tab, *seq));
+                }
+                PageChange::Acted { target } => {
+                    acted = Some(ActedTarget {
+                        tab: page.tab,
+                        target: target.clone(),
+                    });
+                }
+                PageChange::Closed => run.record_closed(page.tab),
             }
             if !pages.contains(page) {
                 pages.push(page.clone());
             }
         }
-        let closed: Vec<&PageId> = reports
+        for (tab, delivered) in &mut claims {
+            for claim in delivered {
+                claim.released = !withheld.contains(&(*tab, claim.seq));
+            }
+        }
+        let closed: Vec<TabId> = reports
             .iter()
             .filter(|report| report.change == PageChange::Closed)
-            .map(|report| &report.page.id)
+            .map(|report| report.page.tab)
             .collect();
+        if pages.is_empty() {
+            return PageFacts {
+                pages: Vec::new(),
+                observed: None,
+            };
+        }
+        let reads: Vec<TabId> = pages
+            .iter()
+            .filter(|page| !closed.contains(&page.tab))
+            .map(|page| page.tab)
+            .collect();
+        let observation = self
+            .observer
+            .observe(&self.browser, &self.tabs, &reads, &claims, acted.as_ref())
+            .await;
+        let mut infos = observation.infos.into_iter();
         let mut facts = Vec::with_capacity(pages.len());
         for page in pages {
-            let info = if closed.contains(&&page.id) {
+            let info = if closed.contains(&page.tab) {
                 None
             } else {
-                self.browser.cached_page(&page.id).await
+                infos.next().flatten()
             };
-            facts.push(PageFact::new(page, info));
+            facts.push(PageFact::new(&page, info));
+        }
+        let mut released = self.release_facts(
+            PageFacts {
+                pages: facts,
+                observed: Some(observation.observed),
+            },
+            &observation.withheld,
+            check,
+            &claims,
+            ending,
+        );
+        if acted.is_some_and(|source| !released.pages.iter().any(|fact| fact.tab == source.tab))
+            && let Some(observed) = &mut released.observed
+        {
+            observed.payload_current = None;
+        }
+        released
+    }
+
+    /// Facts and their reported close records cross policy together, after the async cache
+    /// observation. A close cannot outlive the withheld cutoff that made its delivery safe.
+    fn release_facts(
+        &self,
+        mut facts: PageFacts,
+        withheld: &[TabId],
+        check: PolicyCheck<'_>,
+        claims: &HashMap<TabId, Vec<Claim>>,
+        ending: &mut Ending,
+    ) -> PageFacts {
+        let mut refusals = HashMap::new();
+        facts.pages.retain(|page| {
+            match self.check(&PolicyCheck {
+                tab: Some(page.tab),
+                ..check
+            }) {
+                Ok(()) => !withheld.contains(&page.tab),
+                Err(error) => {
+                    refusals.insert(page.tab, error);
+                    false
+                }
+            }
+        });
+        if let Some(observed) = &mut facts.observed {
+            observed
+                .closes
+                .retain(|close| facts.pages.iter().any(|fact| fact.tab == close.tab));
+        }
+        close_release(ending, claims, &facts.pages, &refusals);
+        if facts.pages.is_empty() {
+            facts.observed = None;
         }
         facts
     }
 }
 
+/// A fact batch and the host observation that orders it in each run's prelude.
+pub(crate) struct PageFacts {
+    pub(crate) pages: Vec<PageFact>,
+    pub(crate) observed: Option<Observation>,
+}
+
 impl PageFact {
-    fn new(page: PageRef, info: Option<PageInfo>) -> Self {
-        let PageRef { id, tab } = page;
+    pub(crate) fn new(page: &PageRef, info: Option<PageInfo>) -> Self {
+        let PageRef { tab } = *page;
         match info {
             Some(info) => Self {
-                id,
                 tab,
                 url: Some(info.url),
                 title: Some(info.title),
                 closed: false,
             },
             None => Self {
-                id,
                 tab,
                 url: None,
                 title: None,
@@ -713,7 +851,6 @@ impl PageFact {
     /// The fact as the trace's `page_after`. The writer masks and clips it.
     pub(super) fn page_state(&self) -> PageState {
         PageState {
-            page_id: Some(self.id.0),
             tab_id: Some(self.tab),
             url: self.url.clone(),
             title: self.title.clone(),
@@ -724,7 +861,7 @@ impl PageFact {
 /// An open tab, as core's cache describes it.
 impl From<PageInfo> for PageFact {
     fn from(info: PageInfo) -> Self {
-        Self::new(PageRef::from(&info), Some(info))
+        Self::new(&PageRef::from(&info), Some(info))
     }
 }
 
@@ -753,6 +890,7 @@ impl PendingReply {
                     operation,
                 }),
                 pages: Vec::new(),
+                observed: None,
                 default_page: None,
             }
         })
@@ -796,13 +934,16 @@ fn ending_of(run: &RunCtx, state: &OpState, result: Result<Value, LeafError>) ->
 
 /// One `Browser.getTabInfo` so core's cache matches the page after an unbound navigation.
 /// Raced with the stop: a stopping run does not wait on it.
-async fn refresh(run: &RunCtx, page: &PageId) {
+async fn refresh(run: &RunCtx, browser: &BrowserLink, tab: TabId) {
+    let Some(info) = browser.page(tab).await else {
+        return;
+    };
     tokio::select! {
         biased;
         () = run.cancel_token().cancelled() => {}
-        refreshed = run.view().refresh_page(page.clone()) => {
+        refreshed = run.view().refresh_page(info.page_id) => {
             if let Err(error) = refreshed {
-                tracing::debug!(%error, %page, "could not refresh a navigated page; its facts may be stale");
+                tracing::debug!(%error, tab = tab.0, "could not refresh a navigated page; its facts may be stale");
             }
         }
     }

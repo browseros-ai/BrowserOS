@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, ProtocolSession, SessionId,
-    TabId,
+    TabId, TargetId,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
@@ -23,6 +23,8 @@ pub(crate) enum EnvCall {
     MarkSent,
     MarkSensitiveTarget,
     Note(String),
+    /// The close evidence handed to the host with a delivered event.
+    ReportClose(TabId, TargetId, u64),
 }
 
 /// An `OpEnv` that records every call and refuses `recheck`, or `recheck_reach`, when built
@@ -110,6 +112,10 @@ impl OpEnv for TestEnv {
 
     fn mark_sensitive_target(&self) {
         self.record(EnvCall::MarkSensitiveTarget);
+    }
+
+    fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
+        self.record(EnvCall::ReportClose(tab, target.clone(), seq));
     }
 
     fn note(&self, line: String) {

@@ -312,8 +312,7 @@
   }
 
   const replyListeners = []
-
-  async function invoke(name, input) {
+  async function invoke(name, input, options) {
     // Before the first await, while the agent's frame is still on the stack.
     const site = callSite()
     const envelope = JSON.parse(
@@ -327,7 +326,12 @@
       genuine.set(error, envelope.err.operationId)
       throw error
     }
-    return revive(envelope.ok)
+    const value = revive(envelope.ok)
+    // A consumer may reserve ordered delivery before any awaiting continuation runs.
+    options?.onResult?.(value, envelope.observed ?? null)
+    return options?.observed === true
+      ? { value, observed: envelope.observed ?? null }
+      : value
   }
 
   // Refusals whose answer has not reached the realm yet. The door records a refusal at the call

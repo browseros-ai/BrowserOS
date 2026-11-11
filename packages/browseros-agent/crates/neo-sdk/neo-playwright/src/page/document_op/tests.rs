@@ -14,7 +14,7 @@ use crate::{ErrorCode, Op, Playwright};
 type TestResult = Result<(), Box<dyn Error>>;
 
 fn input(frame: Option<&str>) -> Result<SetContentInput, serde_json::Error> {
-    serde_json::from_value(json!({ "page": { "$neo": "page", "id": 1, "tab": 7 },
+    serde_json::from_value(json!({ "page": { "$neo": "page", "tab": 7 },
                                    "frame": frame, "html": "<script>window.ran = 1</script>" }))
 }
 

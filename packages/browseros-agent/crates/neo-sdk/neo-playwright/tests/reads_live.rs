@@ -302,7 +302,7 @@ async fn tests_that_a_containers_text_never_carries_a_sensitive_textarea_raw() -
         live.hooks
             .swept()
             .iter()
-            .any(|swept| swept.page == page.id && swept.value == PREFILLED_VALUE),
+            .any(|swept| swept.page == page.tab && swept.value == PREFILLED_VALUE),
         "the host is handed the value to register"
     );
     live.close(&page).await

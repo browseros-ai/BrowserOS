@@ -2,10 +2,13 @@
 
 use std::sync::Arc;
 
+use browseros_core::TargetId;
+
 use neo_playwright::{Playwright, PlaywrightHooks};
 use tokio::sync::OnceCell;
 
 use crate::browser::BrowserLink;
+use crate::dispatch::EventLog;
 
 /// neo-playwright's `Playwright` for this process. The crate wants one per browser
 /// connection, and Neo has exactly one: the link's session, which exists from the first
@@ -47,5 +50,17 @@ impl PlaywrightFacade {
                 Playwright::new(self.link.linked().await, Arc::clone(&self.hooks))
             })
             .await
+    }
+}
+
+impl EventLog for PlaywrightFacade {
+    fn head(&self) -> u64 {
+        self.playwright.get().map_or(0, |pw| pw.event_head())
+    }
+
+    fn closed(&self, target: &TargetId) -> Option<u64> {
+        self.playwright
+            .get()
+            .and_then(|pw| pw.closed_target(target))
     }
 }

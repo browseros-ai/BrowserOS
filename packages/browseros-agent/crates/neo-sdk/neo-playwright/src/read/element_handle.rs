@@ -66,7 +66,7 @@ struct DescribedNode {
 }
 
 /// The handle for the element `pin` names in `world`: wire.ts's `ElementBrand`,
-/// `{"$neo":"element","page":{"$neo":"page","id":7,"tab":1234},"seq":4,"node":1234,
+/// `{"$neo":"element","page":{"$neo":"page","tab":1234},"seq":4,"node":1234,
 /// "display":"<button>Save</button>"}`, which `ElementTarget` reads back. It names the document
 /// and the node's backend id, so it never depends on the pin staying in the probe's table, and
 /// carries the op's page brand, so the host's door finds and checks the page of a later op on
@@ -215,7 +215,7 @@ pub(crate) async fn query_one(
             sweep,
         } => {
             element_read::mark_sensitive(scope, sensitive);
-            let value = site.with_own(pw, page.id(), sweep).mask(value);
+            let value = site.with_own(pw, page.tab(), sweep).mask(value);
             let located: Located = element_read::read_value(scope, value)?;
             let brand =
                 element_brand(scope, &target.page, &world, located.pin, &located.preview).await?;
@@ -263,7 +263,7 @@ pub(crate) async fn query_all(
     else {
         return Err(site.refused(scope, reply));
     };
-    let site = site.with_own(pw, page.id(), sweep);
+    let site = site.with_own(pw, page.tab(), sweep);
     let mut handles = Vec::with_capacity(values.len());
     for value in values {
         let PinnedMatch { pin, preview } = element_read::read_value(scope, site.mask(value))?;

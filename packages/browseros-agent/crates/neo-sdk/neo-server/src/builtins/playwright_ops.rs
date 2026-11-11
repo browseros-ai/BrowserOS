@@ -20,7 +20,7 @@
 use std::future::{self, Future};
 use std::sync::{Arc, LazyLock};
 
-use browseros_core::{BrowserView, PageId, TabId};
+use browseros_core::{BrowserView, TabId, TargetId};
 use neo_playwright::{
     Answer, ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Refusal, RunState, TimedOut,
 };
@@ -214,7 +214,7 @@ impl Method for PlaywrightOp {
 /// acts on, and the rest left as JSON for the crate, which decodes it once itself, with
 /// `deny_unknown_fields`.
 struct OpInput {
-    /// The page brand `{"$neo":"page","id","tab"}` the op acts on (adapter contract, point 1).
+    /// The page brand `{"$neo":"page","tab"}` the op acts on (adapter contract, point 1).
     page: Option<PageTarget>,
     json: Map<String, Value>,
 }
@@ -293,14 +293,14 @@ impl OpInput {
     }
 
     /// The input as the crate gets it (adapter contract, point 2; decision 25, input 2). The
-    /// lazy brand `{"$neo":"page","id":null}` names the run's page wherever it sits, so once the
+    /// lazy brand `{"$neo":"page","tab": null}` names the run's page wherever it sits, so once the
     /// door resolved that page for this op, every one of them becomes it: `dragTo`'s `to.page`,
-    /// a screenshot's `page` and `target.page`. The crate refuses `id: null` on purpose: it acts
+    /// a screenshot's `page` and `target.page`. The crate refuses `tab: null` on purpose: it acts
     /// on the very tab the door's rules checked, which a second lookup of its own could disagree
     /// with (two lazy pages, a tab that changed in between). For the same reason a lazy brand
     /// beside another page's target is left for the crate to refuse: the door checked that other
     /// tab, not the run's page. A target that names its tab needs nothing written back, since
-    /// the door resolves it to the same id and tab.
+    /// the door resolves it to the same tab.
     fn resolved(self, page: Option<&PageRef>) -> Value {
         let Self { page: target, json } = self;
         let mut json = Value::Object(json);
@@ -320,9 +320,11 @@ impl OpInput {
 /// so the page is refreshed once first (one `Browser.getTabInfo`).
 async fn refused_reload<M>(
     op: &OpCtx<M>,
-    page: &PageRef,
+    _page: &PageRef,
 ) -> Result<Option<OperationError>, LeafError> {
-    let shown = op.race(op.run().view().page(page.id.clone())).await?;
+    let shown = op
+        .race(op.run().view().page(op.core_page()?.clone()))
+        .await?;
     Ok(match url_scheme(&shown.url) {
         Some(scheme) if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) => None,
         Some(scheme) => Some(not_navigable(&format!(
@@ -396,6 +398,8 @@ enum PageEffect {
     Untracked,
     /// `context.newPage`: the tab in the result is agent-opened.
     Opens,
+    /// The result names a related tab whose current fact belongs in the reply.
+    Links,
     /// A navigation: the target's URL may have changed, whatever the outcome.
     Navigates,
     /// `page.reload`: a navigation too, to the URL the target is on, which the door checks
@@ -411,6 +415,7 @@ impl PageEffect {
     fn of(name: &str) -> Self {
         match name {
             "context.newPage" => Self::Opens,
+            "page.opener" => Self::Links,
             "page.goto" | "page.goBack" | "page.goForward" => Self::Navigates,
             "page.reload" => Self::Reloads,
             "page.close" => Self::Closes,
@@ -426,7 +431,12 @@ impl PageEffect {
     fn of_call(self, input: &OpInput) -> Self {
         match self {
             Self::Closes if input.runs_before_unload() => Self::Untracked,
-            Self::Untracked | Self::Opens | Self::Navigates | Self::Reloads | Self::Closes => self,
+            Self::Untracked
+            | Self::Opens
+            | Self::Links
+            | Self::Navigates
+            | Self::Reloads
+            | Self::Closes => self,
         }
     }
 
@@ -444,18 +454,32 @@ impl PageEffect {
                     "context.newPage returned no page brand; the janitor will never close its tab"
                 ),
             },
+            (Self::Links, Ok(value), _) => {
+                #[derive(Deserialize)]
+                struct Linked {
+                    opener: Option<OpenedBrand>,
+                }
+                if let Ok(Linked { opener: Some(page) }) = Linked::deserialize(value) {
+                    op.report_page(
+                        &PageRef {
+                            tab: TabId(page.tab),
+                        },
+                        PageChange::Linked,
+                    );
+                }
+            }
             (Self::Navigates | Self::Reloads, _, Some(page)) => {
                 op.report_page(page, PageChange::Navigated);
             }
             (Self::Closes, Ok(_), Some(page)) => op.report_page(page, PageChange::Closed),
             (Self::Untracked, ..)
-            | (Self::Opens | Self::Closes, Err(_), _)
+            | (Self::Opens | Self::Links | Self::Closes, Err(_), _)
             | (Self::Navigates | Self::Reloads | Self::Closes, _, None) => {}
         }
     }
 }
 
-/// `context.newPage`'s result, `{ page: {"$neo":"page","id","tab"}, url }`: the tab it opened.
+/// `context.newPage`'s result, `{ page: {"$neo":"page","tab"}, url }`: the tab it opened.
 #[derive(Deserialize)]
 struct OpenedPage {
     page: OpenedBrand,
@@ -463,14 +487,12 @@ struct OpenedPage {
 
 #[derive(Deserialize)]
 struct OpenedBrand {
-    id: u32,
     tab: i64,
 }
 
 impl OpenedPage {
     fn page(&self) -> PageRef {
         PageRef {
-            id: PageId(self.page.id),
             tab: TabId(self.page.tab),
         }
     }
@@ -538,6 +560,25 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
 
     fn note(&self, line: String) {
         self.op.note(line);
+    }
+
+    fn report_target(&self, tab: TabId, target: &TargetId) {
+        self.op.report_page(
+            &PageRef { tab },
+            PageChange::Acted {
+                target: target.clone(),
+            },
+        );
+    }
+
+    fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
+        self.op.report_page(
+            &PageRef { tab },
+            PageChange::Gone {
+                target: target.clone(),
+                seq,
+            },
+        );
     }
 }
 
@@ -630,7 +671,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::error::Error;
 
-    use browseros_core::{PageId, TabId};
+    use browseros_core::TabId;
     use neo_playwright::{ErrorCode as PlaywrightCode, Op, PlaywrightError, Refusal};
     use neo_trace::ErrorOwner;
     use serde_json::{Value, json};
@@ -649,8 +690,8 @@ mod tests {
 
     #[test]
     fn the_page_is_read_from_page_or_from_the_targets_page() -> Result<(), Box<dyn Error>> {
-        let page = json!({ "$neo": "page", "id": 7, "tab": 1007 });
-        let lazy = json!({ "$neo": "page", "id": null });
+        let page = json!({ "$neo": "page", "tab": 1007 });
+        let lazy = json!({ "$neo": "page", "tab": null });
         let locator = |page: &Value| json!({ "$neo": "locator", "page": page, "frame": null, "chunks": [], "display": "x" });
         let cases = [
             (json!({ "page": page }), Some(&page)),
@@ -696,12 +737,9 @@ mod tests {
     #[test]
     fn the_resolved_page_replaces_the_scripts_brand_and_nothing_else() -> Result<(), Box<dyn Error>>
     {
-        let resolved = PageRef {
-            id: PageId(9),
-            tab: TabId(1009),
-        };
-        let brand = json!({ "$neo": "page", "id": 9, "tab": 1009 });
-        let lazy = json!({ "$neo": "page", "id": null });
+        let resolved = PageRef { tab: TabId(1009) };
+        let brand = json!({ "$neo": "page", "tab": 1009 });
+        let lazy = json!({ "$neo": "page", "tab": null });
         let input = json!({
             "call": { "api": "locator.click", "timeoutMs": 5000 },
             "target": { "$neo": "locator", "page": lazy, "frame": null, "chunks": [], "display": "x" },
@@ -724,12 +762,9 @@ mod tests {
     #[test]
     fn every_lazy_brand_in_the_input_becomes_the_page_the_door_resolved()
     -> Result<(), Box<dyn Error>> {
-        let resolved = PageRef {
-            id: PageId(9),
-            tab: TabId(1009),
-        };
-        let brand = json!({ "$neo": "page", "id": 9, "tab": 1009 });
-        let lazy = json!({ "$neo": "page", "id": null });
+        let resolved = PageRef { tab: TabId(1009) };
+        let brand = json!({ "$neo": "page", "tab": 1009 });
+        let lazy = json!({ "$neo": "page", "tab": null });
         let locator = |page: &Value| json!({ "$neo": "locator", "page": page, "frame": null, "chunks": [], "display": "x" });
         // `locator.dragTo`: the locator dragged and the one it is dropped on.
         let drag = json!({ "target": locator(&lazy), "to": locator(&lazy), "strict": "strict" });
@@ -739,7 +774,7 @@ mod tests {
         assert_eq!(
             decoded(drag)?.resolved(Some(&resolved)),
             expected,
-            "the crate refuses `id: null`, so the drop target needs the tab too"
+            "the crate refuses `tab: null`, so the drop target needs the tab too"
         );
         // An element screenshot names the page, and the element on it.
         let shot = json!({ "page": lazy, "target": locator(&lazy), "type": "png" });
@@ -761,14 +796,11 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         // The run's page has no tab yet, so the lazy brand names a page the door did not resolve
         // for this op; the target's tab would be the wrong page for it.
-        let other = PageRef {
-            id: PageId(4),
-            tab: TabId(1004),
-        };
-        let lazy = json!({ "$neo": "page", "id": null });
+        let other = PageRef { tab: TabId(1004) };
+        let lazy = json!({ "$neo": "page", "tab": null });
         let locator = |page: &Value| json!({ "$neo": "locator", "page": page, "frame": null, "chunks": [], "display": "x" });
         let drag = json!({
-            "target": locator(&json!({ "$neo": "page", "id": 4, "tab": 1004 })),
+            "target": locator(&json!({ "$neo": "page", "tab": 1004 })),
             "to": locator(&lazy),
         });
         assert_eq!(
@@ -781,7 +813,7 @@ mod tests {
 
     #[test]
     fn a_navigation_is_allowed_by_its_scheme_however_it_is_spelled() -> Result<(), Box<dyn Error>> {
-        let page = json!({ "$neo": "page", "id": 7, "tab": 1007 });
+        let page = json!({ "$neo": "page", "tab": 1007 });
         for (url, allowed) in [
             ("https://bank.example/file:///etc/hosts", true),
             ("HTTP://bank.example/", true),

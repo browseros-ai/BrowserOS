@@ -17,8 +17,8 @@
 //! Pixels a guard admits were produced before the bump. That is why visuals from before a tab
 //! went private are kept, and why nothing here waits for in-flight captures.
 //!
-//! A flag is keyed by the browser's own tab id, and Chromium numbers tabs from 1 again after it
-//! restarts. So a flag is forgotten when its tab closes ([`Privacy::tab_closed`]) and, when the
+//! A flag is keyed by the browser's own tab id, whose number may be reused after a browser
+//! restart. So a flag is forgotten when its tab closes ([`Privacy::tab_closed`]) and, when the
 //! browser link connects, for every tab that is not open ([`Privacy::retain_tabs`]). A flag
 //! that outlives its tab by mistake only over-protects the next tab with that id.
 //!
@@ -295,7 +295,7 @@ impl Privacy {
 
     /// The browser link connected with `open` tabs. Every flag of a tab that is not open is
     /// forgotten as [`Privacy::tab_closed`] does: the tab closed while Neo was not watching,
-    /// or the browser restarted and numbers its tabs from 1 again.
+    /// or the browser restarted and may reuse a tab number.
     pub async fn retain_tabs(&self, open: &[TabId]) {
         let stale = self
             .lock()

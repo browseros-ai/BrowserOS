@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use browseros_core::{BrowserSession, PageId, TargetId};
+use browseros_core::{BrowserSession, TabId, TargetId};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::OnceCell;
@@ -20,7 +20,7 @@ const REOPENED_BASE_MIN: u32 = 100_000;
 /// How many bases there are to pick from: 100000 to 999999.
 const REOPENED_BASES: u32 = 900_000;
 
-/// The page states of one `Playwright`, by page id. An entry stays while the instance lives
+/// The page states of one `Playwright`, by tab id. An entry stays while the instance lives
 /// (see `PageState` for why).
 ///
 /// Where a page's seqs start depends on whether the tab was open when this `Playwright`
@@ -36,7 +36,7 @@ const REOPENED_BASES: u32 = 900_000;
 /// to overlap, about 1e-5 per restarted page with this many bases (decisions.md, M1 review).
 #[derive(Debug)]
 pub(crate) struct PageRegistry {
-    pages: Mutex<HashMap<PageId, Arc<PageState>>>,
+    pages: Mutex<HashMap<TabId, Arc<PageState>>>,
     /// The targets open when this instance started, read once.
     open_at_start: OnceCell<OpenAtStart>,
     /// The first seq of a tab that was already open.
@@ -102,7 +102,7 @@ impl PageRegistry {
         browser: &BrowserSession,
         admitted: &AdmittedPage,
     ) -> Arc<PageState> {
-        if let Some(page) = self.get(&admitted.id) {
+        if let Some(page) = self.get(admitted.tab) {
             return page;
         }
         let first = if self
@@ -117,18 +117,18 @@ impl PageRegistry {
         let platform = self.platform(browser).await;
         Arc::clone(
             self.lock()
-                .entry(admitted.id.clone())
+                .entry(admitted.tab)
                 .or_insert_with(|| Arc::new(PageState::new(first, platform))),
         )
     }
 
     /// The state of `page`, if an op has acted on it.
-    pub(crate) fn get(&self, page: &PageId) -> Option<Arc<PageState>> {
-        self.lock().get(page).map(Arc::clone)
+    pub(crate) fn get(&self, page: TabId) -> Option<Arc<PageState>> {
+        self.lock().get(&page).map(Arc::clone)
     }
 
     /// Who typed a value the journal saw on `page` just now.
-    pub(crate) fn typed_by(&self, page: &PageId) -> TypedBy {
+    pub(crate) fn typed_by(&self, page: TabId) -> TypedBy {
         self.get(page)
             .map_or(TypedBy::NotAgent, |state| state.typed_by())
     }
@@ -174,7 +174,7 @@ impl PageRegistry {
             .await
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<PageId, Arc<PageState>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<TabId, Arc<PageState>>> {
         self.pages.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }

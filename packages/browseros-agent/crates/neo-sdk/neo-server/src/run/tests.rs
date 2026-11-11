@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io};
 
-use browseros_core::PageId;
+use browseros_core::TabId;
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
 use neo_playwright::{PlaywrightHooks, TypedBy};
 use neo_trace::{
@@ -64,8 +64,7 @@ fn keystroke(value: &str) -> JournalEntry {
 fn type_into(rig: &TestRig, page: &PageRef, value: &str, by: TypedBy) {
     for end in 1..=value.len() {
         let typed = value.get(..end).unwrap_or(value);
-        rig.hooks
-            .field_entered(page.id.clone(), keystroke(typed), by);
+        rig.hooks.field_entered(page.tab, keystroke(typed), by);
     }
 }
 
@@ -809,7 +808,7 @@ fn context_pages_lists_a_tab_opened_before_the_run_in_its_first_statement() -> R
         assert_eq!(
             reply.value,
             json!([{
-                "brand": { "$neo": "page", "id": owner.id.0, "tab": owner.tab.0 },
+                "brand": { "$neo": "page", "tab": owner.tab.0 },
                 "url": masked,
             }]),
             "every open tab before any op, its URL masked before the script sees it"
@@ -917,7 +916,7 @@ fn a_value_typed_during_the_run_is_masked_in_its_reply_before_its_field_goes_qui
         let rig = TestRig::new().await?;
         for value in ["hunt", "hunte", "hunter", "hunter2"] {
             rig.typed
-                .note(PageId(1), None, keystroke(value), TypedBy::NotAgent);
+                .note(TabId(1), keystroke(value), TypedBy::NotAgent);
         }
         let code = "return 'hunte or hunter2?';";
         let reply = rig
@@ -940,7 +939,7 @@ fn a_run_that_ends_while_another_field_is_typed_registers_none_of_it() -> Result
         // The owner is typing a password into another tab while an unrelated run goes on.
         for value in ["hunt", "hunte"] {
             rig.typed
-                .note(PageId(1), None, keystroke(value), TypedBy::NotAgent);
+                .note(TabId(1), keystroke(value), TypedBy::NotAgent);
         }
         let reply = rig
             .run_service(GRACE)
@@ -958,7 +957,7 @@ fn a_run_that_ends_while_another_field_is_typed_registers_none_of_it() -> Result
         );
         for value in ["hunter", "hunter2"] {
             rig.typed
-                .note(PageId(1), None, keystroke(value), TypedBy::NotAgent);
+                .note(TabId(1), keystroke(value), TypedBy::NotAgent);
         }
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
         assert_eq!(
@@ -991,7 +990,7 @@ fn a_prefix_read_mid_typing_stays_masked_in_the_reply_after_a_later_key_supersed
         within(Duration::from_secs(10), rig.gate.wait()).await?;
         for value in ["hunter", "hunter2"] {
             rig.hooks
-                .field_entered(page.id.clone(), keystroke(value), TypedBy::NotAgent);
+                .field_entered(page.tab, keystroke(value), TypedBy::NotAgent);
         }
         within(Duration::from_secs(10), rig.gate.wait()).await?;
         let reply = run.await?;
@@ -1178,11 +1177,11 @@ fn a_run_that_loses_a_value_it_read_past_the_cap_withholds_its_output() -> Resul
         // The owner types on, which supersedes `hunte`. Then another page raises input events on
         // its own field, each one superseding the last, until `hunte` is the one past the cap.
         rig.hooks
-            .field_entered(page.id.clone(), keystroke("hunter"), TypedBy::NotAgent);
+            .field_entered(page.tab, keystroke("hunter"), TypedBy::NotAgent);
         for pair in 0..=Defaults::MAX_SUPERSEDED {
             for value in [format!("v{pair:03}a"), format!("v{pair:03}ab")] {
                 rig.typed
-                    .note(PageId(999), None, keystroke(&value), TypedBy::NotAgent);
+                    .note(TabId(999), keystroke(&value), TypedBy::NotAgent);
             }
         }
         within(Duration::from_secs(10), rig.gate.wait()).await?;
@@ -1247,7 +1246,7 @@ fn a_run_that_lost_a_value_the_set_refused_stores_its_code_and_host_data_masked(
         // test knows the set refused the value before the run ends.
         let witness = Arc::clone(&rig.typed).watch(RunId::new());
         rig.hooks
-            .values_swept(PageId(1), &FieldValues::new([value.to_owned().into()]));
+            .values_swept(TabId(1), &FieldValues::new([value.to_owned().into()]));
         within(Duration::from_secs(10), async {
             while witness.held().withheld().is_none() {
                 time::sleep(Duration::from_millis(10)).await;

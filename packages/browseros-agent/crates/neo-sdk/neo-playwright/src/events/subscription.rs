@@ -1,6 +1,6 @@
 //! What a run can listen for, parsed from Playwright's event names once, at the op boundary.
 
-use browseros_core::{PageId, TabId, TargetId};
+use browseros_core::{TabId, TargetId};
 
 use crate::events::page_event::PageEvent;
 use crate::listed_enum::listed_enum;
@@ -67,12 +67,11 @@ pub(crate) enum Unknown {
 }
 
 /// One thing a run listens for or waits on. Page events are keyed by the page's target id,
-/// which is what the watcher's raw records carry; the `PageId` rides along for the output.
+/// which is what the watcher's raw records carry; the tab id rides along for the output.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Subscription {
     /// A page event on one page.
     Page {
-        page: PageId,
         /// The tab the listener's page handle named, for the handles its events carry.
         tab: TabId,
         target: TargetId,
@@ -87,7 +86,7 @@ pub(crate) enum Subscription {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ListenerKey {
     /// A page event on one page.
-    Page(PageId, PageEventKind),
+    Page(TabId, PageEventKind),
     /// The context's `page` event.
     ContextPage,
 }
@@ -96,7 +95,7 @@ impl Subscription {
     /// The listener this subscription is, without its target.
     pub(crate) fn key(&self) -> ListenerKey {
         match self {
-            Self::Page { page, event, .. } => ListenerKey::Page(page.clone(), *event),
+            Self::Page { tab, event, .. } => ListenerKey::Page(*tab, *event),
             Self::ContextPage => ListenerKey::ContextPage,
         }
     }

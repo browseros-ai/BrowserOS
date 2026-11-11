@@ -8,7 +8,7 @@
  * the script passes `{ strict: true }`. A child frame's wire id is the one Rust reported in the
  * page's frame tree; the main frame sends none.
  */
-import { invoke, sleep } from './bridge'
+import { invoke, invokeObserved, sleep } from './bridge'
 import type { ElementHandle } from './element-handle'
 import { EventEmitter } from './emitter'
 import { clientError, plainError, unsupportedError } from './errors'
@@ -1123,7 +1123,7 @@ export class Frame extends EventEmitter {
       throw clientError(api, `url: expected string, got ${typeof url}`)
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const args = await this._frameArgs(api)
-    const result = await invoke(
+    const { value: result, observed } = await invokeObserved(
       'page.goto',
       this._call(api, this._navigationTimeout(options)),
       {
@@ -1133,7 +1133,7 @@ export class Frame extends EventEmitter {
         ...pick(options, ['referer']),
       },
     )
-    return await this._page._navigated(api, this, result)
+    return await this._page._navigated(api, this, result, observed)
   }
 
   async _waitForLoadState(
@@ -1142,12 +1142,12 @@ export class Frame extends EventEmitter {
     options: TimeoutOption = {},
   ): Promise<void> {
     const verified = loadState(api, 'state', state ?? 'load')
-    const result = await invoke(
+    const { value: result, observed } = await invokeObserved(
       'page.waitForLoadState',
       this._call(api, this._navigationTimeout(options)),
       { ...(await this._frameArgs(api)), state: verified },
     )
-    await this._page._navigated(api, this, result)
+    await this._page._navigated(api, this, result, observed)
   }
 
   async _content(api: string): Promise<string> {
@@ -1164,12 +1164,12 @@ export class Frame extends EventEmitter {
     options: NavigateOptions = {},
   ): Promise<void> {
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
-    const result = await invoke(
+    const { value: result, observed } = await invokeObserved(
       'page.setContent',
       this._call(api, this._navigationTimeout(options)),
       { ...(await this._frameArgs(api)), html, waitUntil },
     )
-    await this._page._navigated(api, this, result)
+    await this._page._navigated(api, this, result, observed)
   }
 
   /** upstream's `Frame.evaluate` after its argument count: the client's checks, then the op. */

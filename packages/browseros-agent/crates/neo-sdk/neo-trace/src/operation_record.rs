@@ -140,9 +140,6 @@ pub struct RedactionPolicy {
 /// The tab an operation acted on, as it was after the operation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PageState {
-    /// Core's page id, kept as information only: it is process-local and means nothing after a
-    /// Neo restart, so nothing is keyed by it.
-    pub page_id: Option<u32>,
     /// The browser's tab id.
     pub tab_id: Option<TabId>,
     /// The page's URL; masked and clipped before storage.

@@ -12,7 +12,8 @@ use tokio::time::{self, Duration, Instant};
 use super::{LogLevel, RunLogs};
 use crate::browser::PageRef;
 use crate::dispatch::{
-    Call, CallSite, Dispatcher, OpFailure, OpReply, PageFact, PendingReply, RunCtx, StopReason,
+    Call, CallSite, Dispatcher, Observation, OpFailure, OpReply, PageFact, PendingReply, RunCtx,
+    StopReason,
 };
 
 /// How many failed ops a run remembers for its own error. A script's uncaught `NeoError` is
@@ -43,12 +44,16 @@ enum Envelope<'a> {
     Ok {
         ok: &'a Value,
         pages: &'a [PageFact],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        observed: Option<&'a Observation>,
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
         default_page: Option<DefaultPage>,
     },
     Err {
         err: ErrBody<'a>,
         pages: &'a [PageFact],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        observed: Option<&'a Observation>,
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
         default_page: Option<DefaultPage>,
     },
@@ -73,7 +78,6 @@ struct ErrBody<'a> {
 /// instead of reviving a second object for it.
 #[derive(Serialize)]
 struct DefaultPage {
-    id: u32,
     tab: i64,
 }
 
@@ -167,11 +171,13 @@ fn envelope(reply: &OpReply) -> String {
         Ok(ok) => Envelope::Ok {
             ok,
             pages: &reply.pages,
+            observed: reply.observed.as_ref(),
             default_page,
         },
         Err(failure) => Envelope::Err {
             err: ErrBody::from(failure),
             pages: &reply.pages,
+            observed: reply.observed.as_ref(),
             default_page,
         },
     };
@@ -205,10 +211,7 @@ impl<'a> From<&'a OpFailure> for ErrBody<'a> {
 
 impl From<&PageRef> for DefaultPage {
     fn from(page: &PageRef) -> Self {
-        Self {
-            id: page.id.0,
-            tab: page.tab.0,
-        }
+        Self { tab: page.tab.0 }
     }
 }
 

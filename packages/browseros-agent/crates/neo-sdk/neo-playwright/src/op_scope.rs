@@ -33,7 +33,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use browseros_core::pages::PageSession;
-use browseros_core::{BrowserView, CoreError, PageId, ProtocolSession, TabId};
+use browseros_core::{
+    BrowserSession, BrowserView, CoreError, PageId, ProtocolSession, TabId, TargetId,
+};
 use neo_trace::Effect;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
@@ -73,7 +75,9 @@ pub(crate) struct OpScope<'env> {
 /// on it.
 #[derive(Debug)]
 pub(crate) struct AdmittedPage {
-    pub(crate) id: PageId,
+    pub(crate) tab: TabId,
+    /// Core cache identity: private to this admission and never serialized.
+    pub(crate) core_page: PageId,
     pub(crate) session: PageSession,
 }
 
@@ -178,25 +182,49 @@ impl<'env> OpScope<'env> {
         self.env.run_state()
     }
 
-    /// Admits `page` for this op through the run's view, the first time only. One op acts on
-    /// one page; a second one is a Neo bug.
-    pub(crate) async fn admit(&self, page: &PageId) -> Result<&AdmittedPage, PlaywrightError> {
+    /// Carries delivered-close evidence to the host before the operation returns its value.
+    pub(crate) fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
+        self.env.report_close(tab, target, seq);
+    }
+
+    /// Resolves a native tab in core's cache, listing once only on a miss, then performs the
+    /// existing view admission. Core's id lives only in this operation's admitted handle.
+    pub(crate) async fn admit(
+        &self,
+        browser: &BrowserSession,
+        tab: TabId,
+    ) -> Result<&AdmittedPage, PlaywrightError> {
         if self.page.get().is_none() {
+            let mut info = browser.pages.get_info_by_tab(tab).await;
+            if info.is_none() {
+                self.view()
+                    .resolve_tab_ids(&[tab])
+                    .await
+                    .map_err(|error| self.core_error(&error))?;
+                info = browser.pages.get_info_by_tab(tab).await;
+            }
+            let info =
+                info.ok_or_else(|| self.fail(ErrorCode::TargetClosed, "the tab was closed"))?;
             let session = self
-                .env
                 .view()
-                .page_session(page.clone())
+                .page_session(info.page_id.clone())
                 .await
                 .map_err(|error| self.core_error(&error))?;
-            // A concurrent admit inside the same op may have won; the check below decides.
             let _ = self.page.set(AdmittedPage {
-                id: page.clone(),
+                tab,
+                core_page: info.page_id,
                 session,
             });
         }
         match self.page.get() {
-            Some(admitted) if admitted.id == *page => Ok(admitted),
-            _ => Err(self.fail(ErrorCode::Internal, "one operation acts on one page")),
+            Some(admitted) if admitted.tab == tab => {
+                // Navigation and frame-tree reads admit directly, without OpPage. Report at
+                // this common boundary so every payload names its actual source binding.
+                // Opener-linked sweep pages bypass admission and never replace this source.
+                self.env.report_target(tab, &admitted.session.target_id);
+                Ok(admitted)
+            }
+            _ => Err(self.fail(ErrorCode::Internal, "one operation acts on one tab")),
         }
     }
 
@@ -383,7 +411,7 @@ mod tests {
     use std::time::Duration;
 
     use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
-    use browseros_core::{BrowserView, CdpConnection, PageId, ProtocolSession, SessionId, TabId};
+    use browseros_core::{BrowserView, CdpConnection, ProtocolSession, SessionId, TabId};
     use futures_util::future::BoxFuture;
     use neo_trace::ErrorOwner;
     use serde_json::{Value, json};
@@ -395,7 +423,7 @@ mod tests {
     use crate::op::Op;
     use crate::op_spec::Capability;
     use crate::target::CallHeader;
-    use crate::test_env::{EnvCall, TestEnv};
+    use crate::test_env::{self, EnvCall, TestEnv};
     use crate::{Answer, ErrorCode, OpEnv, Refusal, RunState, TimedOut};
 
     fn op(name: &str) -> Result<Op, Box<dyn Error>> {
@@ -762,7 +790,7 @@ mod tests {
         let env = TestEnv::new();
         let scope = OpScope::new(&env, op("locator.click")?, CallHeader::default());
         let error = scope
-            .admit(&PageId(7))
+            .admit(&test_env::offline_session(), TabId(7))
             .await
             .err()
             .ok_or("no browser, no page")?;
@@ -880,6 +908,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             [Some(SessionId::from("A")), Some(SessionId::from("B"))],
             "released once on each session that holds one of the op's objects"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_unknown_tab_lists_once_and_sends_nothing() -> Result<(), Box<dyn Error>> {
+        use browseros_core::testing::TestConnection;
+        use browseros_core::{BrowserSession, BrowserSessionHooks};
+        let connection =
+            TestConnection::new([("Browser.getTabs", serde_json::json!({ "tabs": [] }))]);
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+        let scope = OpScope::new(&env, op("locator.click")?, CallHeader::default());
+        let error = scope
+            .admit(&browser, TabId(999))
+            .await
+            .err()
+            .ok_or("unknown tab must fail")?;
+        assert_eq!(error.error_code(), Some(ErrorCode::TargetClosed));
+        assert_eq!(connection.calls()?.len(), 1, "one listing on a cache miss");
+        assert!(
+            !env.calls().contains(&EnvCall::MarkSent),
+            "no input before admission"
         );
         Ok(())
     }

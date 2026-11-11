@@ -151,7 +151,6 @@ fn op_ended(
         result,
         error: None,
         page_after: Some(PageState {
-            page_id: Some(3),
             tab_id: Some(TabId(77)),
             url: Some("https://x.example/done".into()),
             title: Some("Done".into()),
@@ -234,7 +233,6 @@ fn new_page(sink: &TraceSink, id: OperationId, tab: TabId, millis: i64) {
         },
     );
     let page = PageState {
-        page_id: Some(4),
         tab_id: Some(tab),
         url: Some("about:blank".into()),
         title: None,
@@ -1968,7 +1966,6 @@ async fn a_records_also_mask_masks_every_text_it_stores_and_registers_nothing()
     h.sink.op_ended(OperationEnded {
         result: Some(json!({"title": format!("Welcome {HELD}")})),
         page_after: Some(PageState {
-            page_id: Some(3),
             tab_id: Some(TabId(3)),
             url: Some(format!("https://b.test/welcome?name={HELD}")),
             title: Some(format!("Welcome {HELD}")),
@@ -2189,7 +2186,6 @@ async fn a_held_value_the_size_cut_falls_on_is_masked_before_the_cut()
     h.sink.op_ended(OperationEnded {
         result: Some(json!({"text": across(json_cut, 'r')})),
         page_after: Some(PageState {
-            page_id: Some(3),
             tab_id: Some(TabId(3)),
             url: None,
             title: Some(across(limits.text - MARKER_ROOM, 't')),

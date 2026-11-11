@@ -297,7 +297,7 @@ async fn tests_that_only_an_op_declaring_host_files_reaches_the_page() -> TestRe
     let env = TestEnv::new();
     let input = || {
         serde_json::from_value::<SetInputFilesInput>(json!({
-            "target": { "$neo": "locator", "page": { "$neo": "page", "id": 7, "tab": 1007 },
+            "target": { "$neo": "locator", "page": { "$neo": "page", "tab": 1007 },
                         "display": "getByRef('f7e3')",
                         "chunks": [{ "parts": [{ "name": "aria-ref", "body": "f7e3",
                                                  "source": "f7e3" }] }] },
@@ -338,7 +338,7 @@ async fn tests_that_only_an_op_declaring_host_files_reaches_the_page() -> TestRe
 /// `locator('#f').setInputFiles(files)` as the prelude sends it.
 fn upload_of(files: &Value) -> Result<SetInputFilesInput, serde_json::Error> {
     serde_json::from_value(json!({
-        "target": { "$neo": "locator", "page": { "$neo": "page", "id": 7, "tab": 1007 },
+        "target": { "$neo": "locator", "page": { "$neo": "page", "tab": 1007 },
                     "display": "locator('#f')",
                     "chunks": [{ "parts": [{ "name": "css", "body": "#f", "source": "#f" }] }] },
         "strict": "strict",

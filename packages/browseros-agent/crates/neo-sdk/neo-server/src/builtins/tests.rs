@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
-use browseros_core::{NativeCapabilities, PageId, TabId};
+use browseros_core::{NativeCapabilities, TabId, TargetId};
 use futures_util::future::{self, Either};
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig};
@@ -28,17 +28,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::sync::Notify;
+use tokio::task;
 use tokio::time::{self, Instant};
 
+use super::event_release::EventRelease;
 use super::op_marks::Hold;
 use super::playwright_ops::{self, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::config::{Defaults, SecretFiles};
 use crate::dispatch::{
-    Call, Dispatcher, ErrorCode, LeafError, Lifetime, Listing, Method, MethodSpec, OpCtx,
-    OpFailure, OpReply, OperationError, PageScript, PageTarget, PendingReply, Policy, PolicyCheck,
-    RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart, StopReason, Visibility,
+    Call, Dispatcher, ErrorCode, EventLog, LeafError, Lifetime, Listing, Method, MethodSpec,
+    Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageScript, PageTarget,
+    PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart,
+    StopReason, Visibility,
 };
 use crate::host::{FlagRecovery, TakeoverLock};
 use crate::test_support::{FakeCdp, test_config};
@@ -139,6 +142,7 @@ impl Harness {
             hooks.typed(),
             Arc::clone(&link),
             Arc::clone(&tabs),
+            Observer::new(Arc::clone(&playwright) as _),
         ));
         Ok(Self {
             fake,
@@ -256,6 +260,7 @@ impl Harness {
             self.hooks.typed(),
             Arc::clone(&self.link),
             Arc::clone(&self.tabs),
+            Observer::new(Arc::clone(&self.playwright) as _),
         )))
     }
 
@@ -319,7 +324,7 @@ fn solve(page: &PageRef) -> Call {
 
 /// The page brand a script sends for `page`.
 fn handle(page: &PageRef) -> Value {
-    json!({ "$neo": "page", "id": page.id.0, "tab": page.tab.0 })
+    json!({ "$neo": "page", "tab": page.tab.0 })
 }
 
 fn value(reply: OpReply) -> Result<Value, Box<dyn Error>> {
@@ -337,16 +342,10 @@ fn failure(reply: OpReply) -> Result<OpFailure, Box<dyn Error>> {
 
 /// The page a `context.newPage` entry `{ page, url }` names.
 fn page_of(entry: &Value) -> Result<PageRef, Box<dyn Error>> {
-    let id = entry["page"]["id"]
-        .as_u64()
-        .ok_or("a page brand has an id")?;
     let tab = entry["page"]["tab"]
         .as_i64()
         .ok_or("a page brand has a tab")?;
-    Ok(PageRef {
-        id: PageId(u32::try_from(id)?),
-        tab: TabId(tab),
-    })
+    Ok(PageRef { tab: TabId(tab) })
 }
 
 /// One keystroke as the seal's journal reports it: the field's whole value.
@@ -568,7 +567,7 @@ async fn concurrent_calls_on_the_lazy_page_open_one_tab() -> Result<(), Box<dyn 
         .map(|_| {
             let call = Call::script(
                 "page.opener".to_owned(),
-                json!({ "page": { "$neo": "page", "id": null } }),
+                json!({ "page": { "$neo": "page", "tab": null } }),
                 None,
             );
             harness.dispatcher.submit(&run, call)
@@ -615,7 +614,7 @@ async fn a_goto_that_opens_the_lazy_page_is_recorded_on_its_tab_and_holds_a_lock
     let before = harness.fake.tabs();
     let goto = json!({
         "call": { "api": "page.goto", "timeoutMs": 30000 },
-        "page": { "$neo": "page", "id": null },
+        "page": { "$neo": "page", "tab": null },
         "url": "https://bank.example/",
         "waitUntil": "load",
     });
@@ -1355,7 +1354,7 @@ async fn no_tab_is_captured_until_neo_made_up_for_lost_private_flags() -> Result
 {
     let harness = Harness::new().await?;
     let owners = harness.owner_tab("https://bank.example/").await?;
-    harness.tabs.touched(&owners, None);
+    harness.tabs.touched(&owners, harness.tabs.seen(), None);
     // A replaced trace store, before the host API has made the open tabs private.
     let dir = tempfile::tempdir()?;
     let recovery = FlagRecovery::before_replacing(&dir.path().join("trace.db")).await?;
@@ -1368,7 +1367,7 @@ async fn no_tab_is_captured_until_neo_made_up_for_lost_private_flags() -> Result
     );
     assert_eq!(
         hooks
-            .capture_allowed(owners.id.clone())
+            .capture_allowed(owners.tab)
             .err()
             .map(|refusal| refusal.code),
         Some("page_private".to_owned()),
@@ -1376,7 +1375,7 @@ async fn no_tab_is_captured_until_neo_made_up_for_lost_private_flags() -> Result
     );
     recovery.recover(&harness.privacy, &[]).await;
     assert!(
-        hooks.capture_allowed(owners.id.clone()).is_ok(),
+        hooks.capture_allowed(owners.tab).is_ok(),
         "once the open tabs are private, a tab that is not may be captured"
     );
     Ok(())
@@ -2960,7 +2959,7 @@ async fn the_crate_gets_the_page_the_door_resolved_never_the_lazy_one() -> Resul
     let (run, _guard) = harness.run()?;
     let listen = json!({
         "call": { "api": "page.on", "timeoutMs": 0 },
-        "page": { "$neo": "page", "id": null },
+        "page": { "$neo": "page", "tab": null },
         "event": "dialog",
         "on": true,
         "since": 0,
@@ -2989,7 +2988,7 @@ async fn a_locator_whose_page_is_a_bare_id_is_the_scripts_invalid_input()
     let harness = Harness::new().await?;
     let page = harness.owner_tab("https://example.com/").await?;
     let (run, _guard) = harness.run()?;
-    let input = json!({ "target": locator(&json!(page.id.0)), "strict": "strict" });
+    let input = json!({ "target": locator(&json!(page.tab.0)), "strict": "strict" });
     let failure = failure(harness.submit(&run, "locator.click", input).await)?;
     assert_eq!(
         (
@@ -3067,7 +3066,7 @@ async fn a_field_typed_a_key_at_a_time_masks_its_final_value_and_no_prefix()
     for value in ["h", "hu", "hun", "hunt", "hunte", "hunter", "hunter2"] {
         harness
             .hooks
-            .field_entered(page.id.clone(), keystroke(value), TypedBy::NotAgent);
+            .field_entered(page.tab, keystroke(value), TypedBy::NotAgent);
     }
     time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
     // Read by a run that begins now. A run going while the field was typed holds each prefix it
@@ -3094,17 +3093,16 @@ async fn a_read_between_two_keystrokes_registers_no_prefix() -> Result<(), Box<d
     let page = harness.listed(tab).await?;
     harness
         .hooks
-        .field_entered(page.id.clone(), keystroke("hunt"), TypedBy::NotAgent);
+        .field_entered(page.tab, keystroke("hunt"), TypedBy::NotAgent);
     // A read sweeps the field before the journal reports the next key. The read masked what it
     // found out of its own result already.
-    harness.hooks.values_swept(
-        page.id.clone(),
-        &FieldValues::new(["hunte".to_owned().into()]),
-    );
+    harness
+        .hooks
+        .values_swept(page.tab, &FieldValues::new(["hunte".to_owned().into()]));
     for value in ["hunter", "hunter2"] {
         harness
             .hooks
-            .field_entered(page.id.clone(), keystroke(value), TypedBy::NotAgent);
+            .field_entered(page.tab, keystroke(value), TypedBy::NotAgent);
     }
     time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
     // A run that begins after the field went quiet holds none of its prefixes, so its read shows
@@ -3155,10 +3153,9 @@ async fn a_value_swept_while_an_op_runs_masks_that_ops_page_facts_in_its_reply_a
         }
     })
     .await?;
-    harness.hooks.values_swept(
-        page.id.clone(),
-        &FieldValues::new([value.to_owned().into()]),
-    );
+    harness
+        .hooks
+        .values_swept(page.tab, &FieldValues::new([value.to_owned().into()]));
     harness.fake.release_held();
     let reply = pending.wait().await;
     let masked = (
@@ -3185,5 +3182,1041 @@ async fn a_value_swept_while_an_op_runs_masks_that_ops_page_facts_in_its_reply_a
         !harness.privacy.secrets().mask_str(&mut learned),
         "the value is still held, so the run's held set masked both, not the process's set"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn opener_facts_name_the_linked_tab_without_acquiring_it() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let opener = harness.owner_tab("https://opener.example/").await?;
+    let popup = harness.owner_tab("https://popup.example/").await?;
+    let target = harness
+        .link
+        .page(opener.tab)
+        .await
+        .ok_or("opener cached")?
+        .target_id;
+    harness.fake.answer(
+        "Target.getTargetInfo",
+        json!({ "targetInfo": { "openerId": target } }),
+    );
+    let (run, _guard) = harness.run()?;
+    let before = harness.tabs.is_open(opener.tab);
+    let reply = harness
+        .submit(&run, "page.opener", json!({ "page": handle(&popup) }))
+        .await;
+    assert!(reply.outcome.is_ok(), "{:?}", reply.outcome);
+    assert_eq!(
+        reply.pages.iter().map(|fact| fact.tab).collect::<Vec<_>>(),
+        [popup.tab, opener.tab]
+    );
+    assert!(reply.pages.iter().all(|fact| !fact.closed));
+    assert!(reply.observed.is_some());
+    assert_eq!(harness.tabs.is_open(opener.tab), before);
+    Ok(())
+}
+
+/// Models the independent watcher recording a close while the core cache remains live.
+struct RecordedClose(TargetId);
+impl EventLog for RecordedClose {
+    fn head(&self) -> u64 {
+        7
+    }
+    fn closed(&self, target: &TargetId) -> Option<u64> {
+        (target == &self.0).then_some(7)
+    }
+}
+
+/// An already-delivered event entering the door's normal post-operation fact observation.
+struct DeliveredClose;
+#[derive(Deserialize)]
+struct CloseInput {
+    page: PageTarget,
+}
+impl Method for DeliveredClose {
+    type Input = CloseInput;
+    type Output = Value;
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("events.wait", Effect::Read)
+    }
+    fn target(input: &CloseInput) -> Option<&PageTarget> {
+        Some(&input.page)
+    }
+    fn call(
+        &self,
+        op: &OpCtx<Self>,
+        _input: CloseInput,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        future::ready(
+            op.page()
+                .map(|page| json!({ "seq": 7, "event": "close", "page": handle(page) })),
+        )
+    }
+}
+
+#[tokio::test]
+async fn a_delivered_close_has_a_closed_fact_while_core_still_lists_its_target()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.owner_tab("https://lag.example/").await?;
+    let target = harness
+        .link
+        .page(page.tab)
+        .await
+        .ok_or("tab cached")?
+        .target_id;
+    let mut registry = RegistryBuilder::default();
+    registry.define(DeliveredClose)?;
+    let door = Arc::new(Dispatcher::new(
+        registry.build(),
+        Vec::new(),
+        Arc::new(SecretSet::new(SecretSetConfig::default())),
+        harness.sink.clone(),
+        harness.hooks.typed(),
+        Arc::clone(&harness.link),
+        Arc::clone(&harness.tabs),
+        Observer::new(Arc::new(RecordedClose(target))),
+    ));
+    let (run, _guard) = harness.run()?;
+    let reply = door
+        .submit(
+            &run,
+            Call::script("events.wait".into(), json!({ "page": handle(&page) }), None),
+        )
+        .wait()
+        .await;
+    assert!(
+        harness.link.page(page.tab).await.is_some(),
+        "the independent core cache is still live"
+    );
+    assert_eq!(
+        reply.outcome.as_ref().ok().and_then(|v| v.get("event")),
+        Some(&json!("close"))
+    );
+    assert_eq!(reply.pages.len(), 1);
+    assert!(reply.pages[0].closed);
+    assert_eq!(reply.observed.map(|at| at.events), Some(7));
+    Ok(())
+}
+
+/// Pauses after the real crate copied and reported its close, before the door observes core.
+struct InFlightClose {
+    name: &'static str,
+    playwright: Arc<PlaywrightFacade>,
+    copied: Arc<Notify>,
+    resume: Arc<Notify>,
+}
+#[derive(Deserialize)]
+struct EventDeliveryInput {
+    page: Option<PageTarget>,
+}
+impl Method for InFlightClose {
+    type Input = EventDeliveryInput;
+    type Output = Value;
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new(self.name, Effect::Read)
+    }
+    fn target(input: &EventDeliveryInput) -> Option<&PageTarget> {
+        input.page.as_ref()
+    }
+    async fn call(&self, op: &OpCtx<Self>, _input: EventDeliveryInput) -> Result<Value, LeafError> {
+        let args = if self.name == "events.wait" {
+            json!({ "call": {"api":"page.waitForEvent", "timeoutMs":10000},
+                "page":handle(op.page()?), "event":"close", "since":0 })
+        } else {
+            json!({ "call": {"api":"events.next", "timeoutMs":0} })
+        };
+        let operation = Op::from_name(self.name).ok_or_else(|| {
+            LeafError::definite(OperationError::neo(
+                ErrorCode::INTERNAL_ERROR,
+                "missing event operation",
+            ))
+        })?;
+        let env = OpCtxEnv::new(op);
+        let value = self
+            .playwright
+            .get()
+            .await
+            .invoke(&env, operation, args)
+            .await
+            .map_err(|error| leaf_error(&error))?;
+        let value = EventRelease::of(self.name).release(op, value)?;
+        self.copied.notify_one();
+        self.resume.notified().await;
+        Ok(value)
+    }
+}
+
+/// Fills the page-event ring while preserving every event on the fake CDP transport.
+async fn fill_event_ring(
+    harness: &Harness,
+    noise: &PageRef,
+    close_seq: u64,
+) -> Result<(), Box<dyn Error>> {
+    let pw = harness.playwright.get().await;
+    // The generic fake returns an empty Target.getTargetInfo for opener reads. Supply the
+    // attachment event that a real browser uses to bind this console stream to its target.
+    let noise_target = harness
+        .link
+        .page(noise.tab)
+        .await
+        .ok_or("noise cached")?
+        .target_id;
+    assert!(harness.fake.page_event(
+        noise.tab,
+        "Target.attachedToTarget",
+        json!({
+            "sessionId": format!("session-{}", noise_target.as_str()),
+            "targetInfo": {"targetId":noise_target, "type":"page", "url":"https://noise.example/"}
+        })
+    ));
+    for batch in 1..=64 {
+        for _ in 0..16 {
+            assert!(harness.fake.page_event(
+                noise.tab,
+                "Runtime.consoleAPICalled",
+                json!({
+                    "type":"log", "args":[{"type":"string","value":"noise"}],
+                    "executionContextId":1, "timestamp":0
+                })
+            ));
+        }
+        // Backpressure the fake's transport so this tests event-log eviction, with every
+        // record delivered to the watcher, independently of transport-ring capacity.
+        within(async {
+            while pw.event_head() < close_seq + batch * 16 {
+                time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+/// Two URL-ready fake tabs and their real watcher subscriptions. A plain data bag.
+struct EventTabs {
+    page: PageRef,
+    noise: PageRef,
+    target: TargetId,
+}
+
+async fn prepare_event_tabs(
+    harness: &Harness,
+    run: &Arc<RunCtx>,
+) -> Result<EventTabs, Box<dyn Error>> {
+    // The generic fake supplies only Browser.getTabs. Complete the watcher's separate
+    // discovery exchange before creating the tabs whose events this test exercises.
+    harness
+        .fake
+        .answer("Target.getTargets", json!({"targetInfos":[]}));
+    let pw = harness.playwright.get().await;
+    within(async {
+        while harness.fake.count("Browser.setDownloadBehavior") == 0 {
+            time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await?;
+    let page = harness.owner_tab("https://closing.example/").await?;
+    let noise = harness.owner_tab("https://noise.example/").await?;
+    let target = harness
+        .link
+        .page(page.tab)
+        .await
+        .ok_or("cached target")?
+        .target_id;
+    for tab in [&page, &noise] {
+        let info = harness.link.page(tab.tab).await.ok_or("cached event tab")?;
+        assert!(harness.fake.page_event(
+            tab.tab,
+            "Target.targetInfoChanged",
+            json!({
+                "targetInfo": {"targetId":info.target_id,"type":"page","url":info.url}
+            })
+        ));
+    }
+    within(async {
+        while pw.event_head() < 2 {
+            time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await?;
+    for (tab, event) in [(&page, "close"), (&noise, "console")] {
+        let answer = harness
+            .submit(
+                run,
+                "events.listen",
+                json!({
+                    "call":{"api":"page.on","timeoutMs":0}, "page":handle(tab),
+                    "event":event, "on":true, "since":0
+                }),
+            )
+            .await;
+        value(answer)?;
+    }
+    Ok(EventTabs {
+        page,
+        noise,
+        target,
+    })
+}
+
+async fn evicted_close_case(name: &'static str, rebind: bool) -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let EventTabs {
+        page,
+        noise,
+        target,
+    } = prepare_event_tabs(&harness, &run).await?;
+    let pw = harness.playwright.get().await;
+    let copied = Arc::new(Notify::new());
+    let resume = Arc::new(Notify::new());
+    let door = harness.dispatcher_with(Vec::new(), |registry| {
+        registry.define(InFlightClose {
+            name,
+            playwright: Arc::clone(&harness.playwright),
+            copied: Arc::clone(&copied),
+            resume: Arc::clone(&resume),
+        })
+    })?;
+    let input = if name == "events.wait" {
+        json!({"page":handle(&page)})
+    } else {
+        json!({})
+    };
+    let pending = door.submit(&run, Call::script(name.into(), input, None));
+    // The target watcher sees the destroy while the fake Browser.getTabs still lists T.
+    // This reproduces independent CDP consumers without relying on scheduling duration.
+    assert!(harness.fake.page_event(
+        page.tab,
+        "Target.targetDestroyed",
+        json!({"targetId":target})
+    ));
+    within(copied.notified()).await?;
+    let close_seq = pw
+        .closed_target(&target)
+        .ok_or("copied close is retained")?;
+    fill_event_ring(&harness, &noise, close_seq).await?;
+    assert_eq!(
+        pw.closed_target(&target),
+        None,
+        "the copied close left the ring"
+    );
+    if rebind {
+        assert!(harness.fake.replace_target(page.tab));
+        harness.listed(page.tab).await?;
+        within(async {
+            while harness
+                .link
+                .page(page.tab)
+                .await
+                .is_some_and(|info| info.target_id == target)
+            {
+                time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await?;
+    }
+    resume.notify_one();
+    let reply = pending.wait().await;
+    assert!(reply.outcome.is_ok(), "{:?}", reply.outcome);
+    if name == "events.next" {
+        assert_eq!(
+            reply.outcome.as_ref().ok().and_then(|v| v.get("lost")),
+            Some(&json!(0))
+        );
+    }
+    let fact = reply
+        .pages
+        .iter()
+        .find(|fact| fact.tab == page.tab)
+        .ok_or("delivered tab fact")?;
+    assert_eq!(fact.closed, !rebind);
+    let observed = reply.observed.as_ref().ok_or("event observation")?;
+    assert!(observed.events >= close_seq + 1024);
+    assert_eq!(observed.closes.len(), usize::from(!rebind));
+    assert_eq!(
+        harness.tabs.gone_target(page.tab),
+        (!rebind).then(|| target.clone())
+    );
+    let later = harness
+        .submit(&run, "page.opener", json!({"page":handle(&page)}))
+        .await;
+    assert_eq!(later.pages.first().map(|fact| fact.closed), Some(!rebind),);
+    assert!(harness.fake.close_tab(page.tab));
+    within(async {
+        while harness.link.page(page.tab).await.is_some() {
+            time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await?;
+    assert_eq!(
+        harness.tabs.gone_target(page.tab),
+        None,
+        "core detach cleaned the binding"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn evicted_wait_close_keeps_the_lagging_binding_closed() -> Result<(), Box<dyn Error>> {
+    evicted_close_case("events.wait", false).await
+}
+#[tokio::test]
+async fn evicted_pump_close_keeps_the_lagging_binding_closed() -> Result<(), Box<dyn Error>> {
+    evicted_close_case("events.next", false).await
+}
+#[tokio::test]
+async fn evicted_wait_close_respects_a_replacement_target() -> Result<(), Box<dyn Error>> {
+    evicted_close_case("events.wait", true).await
+}
+#[tokio::test]
+async fn evicted_pump_close_respects_a_replacement_target() -> Result<(), Box<dyn Error>> {
+    evicted_close_case("events.next", true).await
+}
+
+/// The event ring no longer retains either close copied into the pending pump reply.
+struct EvictedCloses;
+impl EventLog for EvictedCloses {
+    fn head(&self) -> u64 {
+        1026
+    }
+    fn closed(&self, _target: &TargetId) -> Option<u64> {
+        None
+    }
+}
+
+/// A pump can report multiple target-bound subscriptions for the same browser tab.
+struct TwoTargetCloses {
+    page: PageRef,
+    targets: [TargetId; 2],
+}
+
+/// Holds a real page payload between crate sampling and the door's fact observation.
+struct InFlightPayload {
+    name: &'static str,
+    playwright: Arc<PlaywrightFacade>,
+    copied: Arc<Notify>,
+    resume: Arc<Notify>,
+}
+
+impl Method for InFlightPayload {
+    type Input = CloseInput;
+    type Output = Value;
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new(
+            self.name,
+            if self.name == "page.goto" {
+                Effect::Write
+            } else {
+                Effect::Read
+            },
+        )
+    }
+    fn target(input: &CloseInput) -> Option<&PageTarget> {
+        Some(&input.page)
+    }
+    async fn call(&self, op: &OpCtx<Self>, _input: CloseInput) -> Result<Value, LeafError> {
+        let mut args =
+            json!({"page":handle(op.page()?), "call":{"api":self.name,"timeoutMs":5000}});
+        if self.name == "page.goto" {
+            args["url"] = json!("https://same.example/");
+            args["waitUntil"] = json!("commit");
+        }
+        let operation = Op::from_name(self.name).ok_or_else(|| {
+            LeafError::definite(OperationError::neo(
+                ErrorCode::INTERNAL_ERROR,
+                "missing payload operation",
+            ))
+        })?;
+        let env = OpCtxEnv::new(op);
+        let result = self
+            .playwright
+            .get()
+            .await
+            .invoke(&env, operation, args)
+            .await
+            .map_err(|error| leaf_error(&error))?;
+        self.copied.notify_one();
+        self.resume.notified().await;
+        Ok(result)
+    }
+}
+
+#[tokio::test]
+async fn real_payload_reports_its_binding_before_a_same_url_rebind() -> Result<(), Box<dyn Error>> {
+    for name in ["page.goto", "page.frames"] {
+        for rebind in [false, true] {
+            let harness = Harness::new().await?;
+            let page = harness.owner_tab("https://same.example/").await?;
+            let target = harness
+                .link
+                .page(page.tab)
+                .await
+                .ok_or("cached page")?
+                .target_id;
+            harness.fake.answer("Page.getFrameTree", json!({ "frameTree": {"frame":{"id":target,"url":"https://same.example/","loaderId":"initial"}} }));
+            harness
+                .fake
+                .answer("Target.getTargets", json!({"targetInfos":[]}));
+            let copied = Arc::new(Notify::new());
+            let resume = Arc::new(Notify::new());
+            let door = harness.dispatcher_with(Vec::new(), |registry| {
+                registry.define(InFlightPayload {
+                    name,
+                    playwright: Arc::clone(&harness.playwright),
+                    copied: Arc::clone(&copied),
+                    resume: Arc::clone(&resume),
+                })
+            })?;
+            let (run, _guard) = harness.run()?;
+            let pending = door.submit(
+                &run,
+                Call::script(name.into(), json!({"page":handle(&page)}), None),
+            );
+            if name == "page.goto" {
+                within(async {
+                    while harness.fake.count("Page.navigate") == 0 {
+                        task::yield_now().await;
+                    }
+                })
+                .await?;
+                assert!(harness.fake.page_event(page.tab, "Page.frameNavigated", json!({"frame":{"id":target,"url":"https://same.example/","loaderId":"navigated"}})));
+            }
+            within(copied.notified()).await?;
+            if rebind {
+                assert!(harness.fake.replace_target(page.tab));
+                harness.listed(page.tab).await?;
+            }
+            resume.notify_one();
+            let reply = pending.wait().await;
+            assert!(reply.outcome.is_ok(), "{:?}", reply.outcome);
+            assert_eq!(reply.pages[0].url.as_deref(), Some("https://same.example/"));
+            assert!(!reply.pages[0].closed);
+            assert_eq!(
+                reply.observed.ok_or("payload observation")?.payload_current,
+                Some(!rebind),
+                "{name}, rebind={rebind}"
+            );
+        }
+    }
+    Ok(())
+}
+impl Method for TwoTargetCloses {
+    type Input = Value;
+    type Output = Value;
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("events.next", Effect::Read)
+    }
+    fn target(_input: &Value) -> Option<&PageTarget> {
+        None
+    }
+    fn call(
+        &self,
+        op: &OpCtx<Self>,
+        _input: Value,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        for (index, target) in self.targets.iter().enumerate() {
+            op.report_page(
+                &self.page,
+                PageChange::Gone {
+                    target: target.clone(),
+                    seq: index as u64 + 1,
+                },
+            );
+        }
+        future::ready(Ok(json!({"events":[
+            {"event":"close","seq":1,"page":handle(&self.page)},
+            {"event":"close","seq":2,"page":handle(&self.page)}
+        ],"lost":0})))
+    }
+}
+
+#[tokio::test]
+async fn a_pump_keeps_all_target_claims_after_eviction_in_either_report_order()
+-> Result<(), Box<dyn Error>> {
+    for reversed in [false, true] {
+        let harness = Harness::new().await?;
+        let page = harness.owner_tab("https://replacement.example/").await?;
+        let current = harness
+            .link
+            .page(page.tab)
+            .await
+            .ok_or("current binding")?
+            .target_id;
+        let old = TargetId("previous-target".into());
+        let targets = if reversed {
+            [old, current.clone()]
+        } else {
+            [current.clone(), old]
+        };
+        let mut registry = RegistryBuilder::default();
+        registry.define(TwoTargetCloses {
+            page: page.clone(),
+            targets,
+        })?;
+        let door = Arc::new(Dispatcher::new(
+            registry.build(),
+            Vec::new(),
+            Arc::new(SecretSet::new(SecretSetConfig::default())),
+            harness.sink.clone(),
+            harness.hooks.typed(),
+            Arc::clone(&harness.link),
+            Arc::clone(&harness.tabs),
+            Observer::new(Arc::new(EvictedCloses)),
+        ));
+        let (run, _guard) = harness.run()?;
+        let reply = door
+            .submit(&run, Call::script("events.next".into(), json!({}), None))
+            .wait()
+            .await;
+        assert!(reply.outcome.is_ok());
+        assert_eq!(reply.pages.first().map(|fact| fact.closed), Some(true));
+        let observed = reply.observed.ok_or("observation is present")?;
+        assert_eq!(observed.events, 1026);
+        assert_eq!(
+            serde_json::to_value(&observed)?["closes"],
+            json!([{ "tab": page.tab, "seq": if reversed { 2 } else { 1 } }])
+        );
+        assert_eq!(harness.tabs.gone_target(page.tab), Some(current));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_native_pump_retains_both_target_bound_subscriptions_after_eviction()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let EventTabs {
+        page,
+        noise,
+        target: old,
+    } = prepare_event_tabs(&harness, &run).await?;
+    let pw = harness.playwright.get().await;
+    assert!(harness.fake.replace_target(page.tab));
+    harness.listed(page.tab).await?;
+    let current = harness
+        .link
+        .page(page.tab)
+        .await
+        .ok_or("replacement")?
+        .target_id;
+    assert_ne!(current, old);
+    assert!(harness.fake.page_event(
+        page.tab,
+        "Target.targetInfoChanged",
+        json!({
+            "targetInfo":{"targetId":current,"type":"page","url":"https://replacement.example/"}
+        })
+    ));
+    within(async {
+        while pw.closed_target(&old).is_none() {
+            time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await?;
+    value(
+        harness
+            .submit(
+                &run,
+                "events.listen",
+                json!({
+                    "call":{"api":"page.on","timeoutMs":0}, "page":handle(&page),
+                    "event":"close", "on":true, "since":0
+                }),
+            )
+            .await,
+    )?;
+    assert!(harness.fake.page_event(
+        page.tab,
+        "Target.targetDestroyed",
+        json!({"targetId":current})
+    ));
+    within(async {
+        while pw.closed_target(&current).is_none() {
+            time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await?;
+    let copied = Arc::new(Notify::new());
+    let resume = Arc::new(Notify::new());
+    let door = harness.dispatcher_with(Vec::new(), |registry| {
+        registry.define(InFlightClose {
+            name: "events.next",
+            playwright: Arc::clone(&harness.playwright),
+            copied: Arc::clone(&copied),
+            resume: Arc::clone(&resume),
+        })
+    })?;
+    let pending = door.submit(&run, Call::script("events.next".into(), json!({}), None));
+    within(copied.notified()).await?;
+    let head = pw.event_head();
+    fill_event_ring(&harness, &noise, head).await?;
+    assert!(pw.closed_target(&old).is_none() && pw.closed_target(&current).is_none());
+    resume.notify_one();
+    let reply = pending.wait().await;
+    let events = reply
+        .outcome
+        .as_ref()
+        .ok()
+        .and_then(|value| value.get("events"))
+        .and_then(Value::as_array)
+        .ok_or("pump events")?;
+    assert_eq!(
+        events.len(),
+        2,
+        "both target-bound subscriptions survive in the pump snapshot"
+    );
+    assert_eq!(reply.pages.first().map(|fact| fact.closed), Some(true));
+    assert_eq!(harness.tabs.gone_target(page.tab), Some(current));
+    Ok(())
+}
+
+#[tokio::test]
+async fn related_opener_facts_obey_the_openers_read_lock() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let opener = harness.owner_tab("https://private.example/secret").await?;
+    let popup = harness.owner_tab("https://public.example/").await?;
+    let target = harness
+        .link
+        .page(opener.tab)
+        .await
+        .ok_or("opener cached")?
+        .target_id;
+    harness.fake.answer(
+        "Target.getTargetInfo",
+        json!({"targetInfo":{"openerId":target}}),
+    );
+    let (run, _guard) = harness.run()?;
+    let lock = harness.lock(opener.tab, Reads::Block).await?;
+    let reply = harness
+        .submit(&run, "page.opener", json!({"page":handle(&popup)}))
+        .await;
+    assert_eq!(
+        reply
+            .outcome
+            .as_ref()
+            .ok()
+            .and_then(|value| value.get("opener")),
+        Some(&handle(&opener))
+    );
+    assert!(reply.pages.iter().all(|fact| fact.tab != opener.tab));
+    assert!(!serde_json::to_string(&reply.pages)?.contains("secret"));
+    harness.locks.unlock_host(lock.id)?;
+    let reply = harness
+        .submit(&run, "page.opener", json!({"page":handle(&popup)}))
+        .await;
+    assert_eq!(
+        reply
+            .pages
+            .iter()
+            .find(|fact| fact.tab == opener.tab)
+            .and_then(|fact| fact.url.as_deref()),
+        Some("https://private.example/secret")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn withheld_close_keeps_internal_evidence_without_releasing_lifecycle()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let EventTabs {
+        page,
+        noise,
+        target,
+    } = prepare_event_tabs(&harness, &run).await?;
+    let lock = harness.lock(page.tab, Reads::Block).await?;
+    let noise_target = harness
+        .link
+        .page(noise.tab)
+        .await
+        .ok_or("noise cached")?
+        .target_id;
+    assert!(harness.fake.page_event(
+        noise.tab,
+        "Target.attachedToTarget",
+        json!({
+            "sessionId":format!("session-{}",noise_target.as_str()),
+            "targetInfo":{"targetId":noise_target,"type":"page","url":"https://noise.example/"}
+        })
+    ));
+    let pw = harness.playwright.get().await;
+    let head = pw.event_head();
+    assert!(
+        harness
+            .fake
+            .page_event(noise.tab, "Runtime.consoleAPICalled", console_log("before"))
+    );
+    assert!(harness.fake.page_event(
+        page.tab,
+        "Target.targetDestroyed",
+        json!({"targetId":target})
+    ));
+    assert!(
+        harness
+            .fake
+            .page_event(noise.tab, "Runtime.consoleAPICalled", console_log("after"))
+    );
+    within(async {
+        while pw.event_head() < head + 3 {
+            task::yield_now().await;
+        }
+    })
+    .await?;
+    let reply = harness
+        .submit(
+            &run,
+            "events.next",
+            json!({"call":{"api":"events.next","timeoutMs":0}}),
+        )
+        .await;
+    let batch = reply
+        .outcome
+        .as_ref()
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(batch["withheld"], json!(1));
+    let events = batch["events"].as_array().ok_or("event batch")?;
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event["message"]["text"].as_str())
+            .collect::<Vec<_>>(),
+        [Some("before"), Some("after")]
+    );
+    assert!(reply.pages.iter().all(|fact| fact.tab != page.tab));
+    assert!(
+        reply
+            .observed
+            .as_ref()
+            .is_none_or(|at| at.closes.is_empty())
+    );
+    assert_eq!(harness.tabs.gone_target(page.tab), Some(target.clone()));
+    fill_event_ring(&harness, &noise, pw.event_head()).await?;
+    assert!(pw.closed_target(&target).is_none());
+    harness.locks.unlock_host(lock.id)?;
+    let later = harness
+        .submit(&run, "page.opener", json!({"page":handle(&page)}))
+        .await;
+    assert_eq!(later.pages.first().map(|fact| fact.closed), Some(true));
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_close_cleans_a_replacement_with_delivered_dead_evidence()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let EventTabs { page, .. } = prepare_event_tabs(&harness, &run).await?;
+    // Keep the native tab around until the controlled reply, allowing a target swap
+    // while PageManager::close holds the old pre-transport PageInfo.
+    harness.fake.answer("Browser.closeTab", json!({}));
+    harness.fake.hold_next("Browser.closeTab");
+    let pending = harness.dispatcher.submit(
+        &run,
+        Call::script("page.close".into(), json!({"page":handle(&page)}), None),
+    );
+    within(async {
+        while harness.fake.count("Browser.closeTab") == 0 {
+            task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(harness.fake.replace_target(page.tab));
+    harness.listed(page.tab).await?;
+    let replacement = harness
+        .link
+        .page(page.tab)
+        .await
+        .ok_or("replacement cached")?
+        .target_id;
+    assert!(harness.fake.page_event(
+        page.tab,
+        "Target.targetInfoChanged",
+        json!({
+            "targetInfo":{"targetId":replacement,"type":"page","url":"https://replacement.example/"}
+        })
+    ));
+    value(
+        harness
+            .submit(
+                &run,
+                "events.listen",
+                json!({
+                    "call":{"api":"page.on","timeoutMs":0}, "page":handle(&page),
+                    "event":"close", "on":true, "since":0
+                }),
+            )
+            .await,
+    )?;
+    assert!(harness.fake.page_event(
+        page.tab,
+        "Target.targetDestroyed",
+        json!({"targetId":replacement})
+    ));
+    let pw = harness.playwright.get().await;
+    within(async {
+        while pw.closed_target(&replacement).is_none() {
+            task::yield_now().await;
+        }
+    })
+    .await?;
+    let delivered = harness
+        .submit(
+            &run,
+            "events.next",
+            json!({"call":{"api":"events.next","timeoutMs":0}}),
+        )
+        .await;
+    assert!(delivered.outcome.is_ok());
+    assert_eq!(delivered.pages.first().map(|fact| fact.closed), Some(true));
+    assert_eq!(harness.tabs.gone_target(page.tab), Some(replacement));
+    harness.fake.release_held();
+    value(within(pending.wait()).await?)?;
+    assert!(harness.link.page(page.tab).await.is_none());
+    assert_eq!(harness.tabs.gone_target(page.tab), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn withholding_target_facts_cannot_change_the_operations_trace_tab()
+-> Result<(), Box<dyn Error>> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct LinkedReply {
+        related: PageRef,
+        blocked: Arc<AtomicBool>,
+    }
+    impl Method for LinkedReply {
+        type Input = CloseInput;
+        type Output = Value;
+        fn spec(&self) -> MethodSpec {
+            MethodSpec::new("test.related", Effect::Read)
+        }
+        fn target(input: &CloseInput) -> Option<&PageTarget> {
+            Some(&input.page)
+        }
+        fn call(
+            &self,
+            op: &OpCtx<Self>,
+            _: CloseInput,
+        ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+            op.report_page(&self.related, PageChange::Linked);
+            self.blocked.store(true, Ordering::SeqCst);
+            future::ready(Ok(json!({})))
+        }
+    }
+    struct Denied {
+        tab: TabId,
+        blocked: Arc<AtomicBool>,
+    }
+    impl Policy for Denied {
+        fn check(&self, check: &PolicyCheck<'_>) -> Result<(), OperationError> {
+            if check.tab == Some(self.tab) && self.blocked.load(Ordering::SeqCst) {
+                return Err(OperationError::neo(
+                    ErrorCode::OWNER_HAS_CONTROL,
+                    "reads blocked",
+                ));
+            }
+            Ok(())
+        }
+    }
+    let harness = Harness::new().await?;
+    let target = harness.owner_tab("https://target.example/").await?;
+    let related = harness.owner_tab("https://related.example/").await?;
+    let blocked = Arc::new(AtomicBool::new(false));
+    let door = harness.dispatcher_with(
+        vec![Arc::new(Denied {
+            tab: target.tab,
+            blocked: Arc::clone(&blocked),
+        })],
+        |registry| {
+            registry.define(LinkedReply {
+                related: related.clone(),
+                blocked,
+            })
+        },
+    )?;
+    let (run, _guard) = harness.run()?;
+    let pending = door.submit(
+        &run,
+        Call::script("test.related".into(), json!({"page":handle(&target)}), None),
+    );
+    let operation = pending.operation();
+    let reply = pending.wait().await;
+    assert!(reply.outcome.is_err());
+    assert_eq!(
+        reply.pages.iter().map(|fact| fact.tab).collect::<Vec<_>>(),
+        [related.tab]
+    );
+    let row = harness.row(operation).await?;
+    assert_eq!(row.tab, Some(target.tab));
+    assert_eq!(
+        row.page.tab_id, None,
+        "the withheld target has no released after-state"
+    );
+    assert_eq!(row.page.url, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_late_read_lock_withholds_the_close_and_its_binding_fact() -> Result<(), Box<dyn Error>> {
+    for rebind in [false, true] {
+        let harness = Harness::new().await?;
+        let (run, _guard) = harness.run()?;
+        let EventTabs { page, target, .. } = prepare_event_tabs(&harness, &run).await?;
+        let copied = Arc::new(Notify::new());
+        let resume = Arc::new(Notify::new());
+        let claims = Arc::new(CaptchaClaims::default());
+        let door = harness.dispatcher_with(
+            super::door_rules(&harness.takeover, &harness.hooks, &claims),
+            |registry| {
+                registry.define(InFlightClose {
+                    name: "events.next",
+                    playwright: Arc::clone(&harness.playwright),
+                    copied: Arc::clone(&copied),
+                    resume: Arc::clone(&resume),
+                })
+            },
+        )?;
+        let pending = door.submit(&run, Call::script("events.next".into(), json!({}), None));
+        assert!(harness.fake.page_event(
+            page.tab,
+            "Target.targetDestroyed",
+            json!({"targetId":target})
+        ));
+        // InFlightClose pauses after the actual early EventRelease policy has passed.
+        within(copied.notified()).await?;
+        if rebind {
+            assert!(harness.fake.replace_target(page.tab));
+            harness.listed(page.tab).await?;
+        }
+        let lock = harness.lock(page.tab, Reads::Block).await?;
+        resume.notify_one();
+        let reply = within(pending.wait()).await?;
+        let value = reply
+            .outcome
+            .as_ref()
+            .map_err(|error| format!("{error:?}"))?;
+        assert_eq!(value["events"], json!([]));
+        assert_eq!(value["withheld"], json!(1));
+        assert!(reply.pages.iter().all(|fact| fact.tab != page.tab));
+        assert!(
+            reply
+                .observed
+                .as_ref()
+                .is_none_or(|observed| observed.closes.is_empty())
+        );
+        assert_eq!(
+            harness.tabs.gone_target(page.tab),
+            (!rebind).then_some(target)
+        );
+        harness.locks.unlock_host(lock.id)?;
+        let next = harness
+            .submit(&run, "page.opener", json!({"page":handle(&page)}))
+            .await;
+        assert_eq!(next.pages.first().map(|fact| fact.closed), Some(!rebind));
+    }
     Ok(())
 }

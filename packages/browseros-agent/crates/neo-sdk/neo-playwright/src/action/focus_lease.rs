@@ -83,7 +83,7 @@ pub(crate) async fn lease(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
 ) -> Result<Option<FocusLeaseGuard>, PlaywrightError> {
-    if scope.view().is_agent_created(page.id()).await {
+    if scope.view().is_agent_created(page.core_page()).await {
         return Ok(None);
     }
     let root = page.root_session();

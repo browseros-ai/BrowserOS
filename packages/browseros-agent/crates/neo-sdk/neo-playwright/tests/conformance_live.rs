@@ -53,8 +53,8 @@ const skip = __conformance.needs(source)
 if (skip !== null) return { skipped: skip }
 Object.assign(globalThis, { console, setTimeout, clearTimeout, expect, Buffer })
 const pageEval = async (target, expression) => {
-  if (target?._id == null) throw new Error('harness.pageEval: the page is not open yet')
-  const reply = JSON.parse(await __neo_test_eval(target._id, target._tab, String(expression)))
+  if (target?._tab == null) throw new Error('harness.pageEval: the page is not open yet')
+  const reply = JSON.parse(await __neo_test_eval(target._tab, String(expression)))
   if ('err' in reply) throw new Error(reply.err)
   return reply.ok
 }

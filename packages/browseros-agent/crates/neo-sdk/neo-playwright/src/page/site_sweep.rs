@@ -37,7 +37,7 @@
 //! A frame of another site is never swept: its script cannot reach the read frame's
 //! documents, so whatever it holds can only arrive by a message the frame chose to send.
 
-use browseros_core::PageId;
+use browseros_core::TabId;
 use browseros_core::sensitive_fields::FieldValues;
 use serde_json::Value;
 
@@ -71,7 +71,7 @@ impl SiteSweep {
         self,
         pw: &Playwright,
         scope: &OpScope<'_>,
-        page: &PageId,
+        page: TabId,
         own: FieldValues,
     ) -> Result<SiteValues, PlaywrightError> {
         self.values_or_gone(pw, scope, page, own)?
@@ -88,7 +88,7 @@ impl SiteSweep {
         self,
         pw: &Playwright,
         scope: &OpScope<'_>,
-        page: &PageId,
+        page: TabId,
         own: FieldValues,
     ) -> Result<Result<SiteValues, ProbeFailure>, PlaywrightError> {
         let Found {
@@ -96,7 +96,7 @@ impl SiteSweep {
         } = self.0;
         let values = own.union(values);
         if !values.is_empty() {
-            pw.hooks().values_swept(page.clone(), &values);
+            pw.hooks().values_swept(page, &values);
         }
         match unswept {
             None => Ok(Ok(SiteValues(values))),
@@ -149,7 +149,7 @@ impl ReadMask {
         self,
         pw: &Playwright,
         scope: &OpScope<'_>,
-        page: &PageId,
+        page: TabId,
         own: FieldValues,
         value: PageText,
     ) -> Result<Value, PlaywrightError> {
@@ -214,11 +214,11 @@ impl SiteValues {
 
     /// These values and `own`, the sweep a reply came with: the read frame's own fields as the
     /// call found them, after this site's sweep. Any of them go to the host as well.
-    pub(crate) fn with_own(self, pw: &Playwright, page: &PageId, own: FieldValues) -> Self {
+    pub(crate) fn with_own(self, pw: &Playwright, page: TabId, own: FieldValues) -> Self {
         if own.is_empty() {
             return self;
         }
-        pw.hooks().values_swept(page.clone(), &own);
+        pw.hooks().values_swept(page, &own);
         Self(self.0.union(own))
     }
 
@@ -269,7 +269,7 @@ pub(crate) async fn refused(
         ReadMask::Site(site) => site,
         ReadMask::Textless => SiteSweep::of(page, world).await,
     };
-    match site.values(pw, scope, page.id(), FieldValues::default()) {
+    match site.values(pw, scope, page.tab(), FieldValues::default()) {
         Ok(values) => values.refused(scope, ProbeReply::Strict { message }),
         Err(withheld) => withheld,
     }
@@ -288,5 +288,5 @@ pub(crate) async fn swept_now(
 ) -> Result<SiteValues, PlaywrightError> {
     SiteSweep::of(page, world)
         .await
-        .values(page.playwright(), scope, page.id(), own)
+        .values(page.playwright(), scope, page.tab(), own)
 }

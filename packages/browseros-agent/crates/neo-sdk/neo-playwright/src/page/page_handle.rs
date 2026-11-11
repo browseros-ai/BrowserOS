@@ -1,17 +1,14 @@
 //! The page handle ops hand back to the prelude, the output twin of `target::PageRef`.
 
-use browseros_core::{PageId, TabId};
+use browseros_core::TabId;
 use serde::Serialize;
 
-/// `{"$neo":"page","id":7,"tab":1234}` in an op's output, the skeleton's page brand. The
-/// prelude's `page` brand turns it into the one `Page` object it keeps for that id, so a popup,
-/// `context.pages()` and `page.opener()` that name the same tab give the script the same object.
-/// `tab` lets a later op that names the page be refused once the id names another tab.
+/// A tab-only output brand. The prelude caches one `Page` per tab, so popup events,
+/// `context.pages()` and `page.opener()` agree on object identity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct PageHandle {
     #[serde(rename = "$neo")]
     brand: Brand,
-    id: PageId,
     tab: TabId,
 }
 
@@ -23,11 +20,15 @@ enum Brand {
 }
 
 impl PageHandle {
-    /// The handle for tab `tab`, which core calls `id`.
-    pub(crate) fn new(id: PageId, tab: TabId) -> Self {
+    /// The browser identity needed by host-side event reporting.
+    pub(crate) fn tab(&self) -> TabId {
+        self.tab
+    }
+
+    /// The handle for the browser tab.
+    pub(crate) fn new(tab: TabId) -> Self {
         Self {
             brand: Brand::Page,
-            id,
             tab,
         }
     }

@@ -98,13 +98,17 @@ pub(crate) async fn capture(
             scale: 1.0,
         }),
     };
-    let page = input.page.checked(pw.browser(), scope).await?;
+    let page = input.page.tab();
     // Core runs the gateway inside its capture lock, after admission and the pointer hide, with
     // no await before `Page.captureScreenshot`. Run here instead, the host's verdict would be
     // stale by the time the pixels are read.
     let shot = scope
         .view()
-        .screenshot_checked(page.clone(), options, || pw.capture_allowed(scope, page))
+        .screenshot_checked(
+            scope.admit(pw.browser(), page).await?.core_page.clone(),
+            options,
+            || pw.capture_allowed(scope, page),
+        )
         .await
         .map_err(|error| scope.core_error(&error))??;
     to_output(scope, &Bytes::from_base64(shot.data))
@@ -117,7 +121,7 @@ mod tests {
 
     use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
     use browseros_core::testing::{TestCall, TestConnection};
-    use browseros_core::{BrowserView, PageId};
+    use browseros_core::{BrowserView, TabId};
     use neo_trace::ErrorOwner;
     use serde_json::json;
 
@@ -143,11 +147,11 @@ mod tests {
     }
 
     impl PlaywrightHooks for PrivateOncePrepared {
-        fn field_entered(&self, _page: PageId, _entry: JournalEntry, _by: TypedBy) {}
+        fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
 
-        fn values_swept(&self, _page: PageId, _values: &FieldValues) {}
+        fn values_swept(&self, _page: TabId, _values: &FieldValues) {}
 
-        fn capture_allowed(&self, _page: PageId) -> Result<(), Refusal> {
+        fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
             let prepared = self
                 .connection
                 .calls()
@@ -169,7 +173,7 @@ mod tests {
     async fn tests_that_a_page_turning_private_during_preparation_is_never_captured()
     -> Result<(), Box<dyn Error>> {
         let connection = TestConnection::new([]);
-        let test_support::OneTab { browser, page } = test_support::one_tab(&connection).await?;
+        let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
         connection.always("Page.captureScreenshot", json!({ "data": "cG5n" }))?;
         let hooks = PrivateOncePrepared {
             connection: Arc::clone(&connection),
@@ -178,11 +182,7 @@ mod tests {
         let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
         let op = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
         let error = playwright
-            .invoke(
-                &env,
-                op,
-                json!({ "page": { "$neo": "page", "id": page.0, "tab": 7 } }),
-            )
+            .invoke(&env, op, json!({ "page": { "$neo": "page", "tab": 7 } }))
             .await
             .err()
             .ok_or("a page that turned private is not captured")?;
@@ -208,13 +208,13 @@ mod tests {
     #[tokio::test]
     async fn tests_that_only_an_op_declaring_capture_is_captured() -> Result<(), Box<dyn Error>> {
         let connection = TestConnection::new([]);
-        let test_support::OneTab { browser, page } = test_support::one_tab(&connection).await?;
+        let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
         connection.always("Page.captureScreenshot", json!({ "data": "cG5n" }))?;
         let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
         let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
         let input = || {
             serde_json::from_value::<ScreenshotInput>(
-                json!({ "page": { "$neo": "page", "id": page.0, "tab": 7 } }),
+                json!({ "page": { "$neo": "page", "tab": 7 } }),
             )
         };
         let screenshot = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
@@ -263,7 +263,7 @@ mod tests {
         let evaluate = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
         let undeclared = OpScope::new(&env, evaluate, CallHeader::default());
         let input: ScreenshotInput =
-            serde_json::from_value(json!({ "page": { "$neo": "page", "id": 1, "tab": 7 } }))?;
+            serde_json::from_value(json!({ "page": { "$neo": "page", "tab": 7 } }))?;
         let error = capture(&playwright, &undeclared, input)
             .await
             .err()

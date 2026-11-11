@@ -711,7 +711,6 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             result: None,
             error: None,
             page_after: Some(PageState {
-                page_id: None,
                 tab_id: Some(tab),
                 url: None,
                 title: None,
@@ -792,7 +791,6 @@ async fn record_fake_runs(sink: TraceSink) {
                 result: (effect == Effect::Read).then(|| json!("Example Domain")),
                 error: None,
                 page_after: Some(PageState {
-                    page_id: Some(1),
                     tab_id: Some(TabId(1)),
                     url: Some("https://example.com/".into()),
                     title: Some("Example Domain".into()),

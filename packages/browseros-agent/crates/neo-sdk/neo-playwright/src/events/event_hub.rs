@@ -158,6 +158,18 @@ impl EventHub {
         self.lock_log().last_seq
     }
 
+    /// The newest close of this target still retained by the bounded event log.
+    pub(crate) fn closed_at(&self, target: &TargetId) -> Option<u64> {
+        self.lock_log()
+            .records
+            .iter()
+            .rev()
+            .find_map(|record| match &record.event {
+                PageEvent::Closed(closed) if closed == target => Some(record.seq),
+                _ => None,
+            })
+    }
+
     /// The type of a dialog recorded on `target` after seq `after` that is still open, if
     /// any. An action whose input such a dialog blocks names it when it times out: Chromium
     /// acknowledges no input and answers no page call until the dialog closes (measured).
@@ -250,6 +262,7 @@ pub(crate) fn receives(subscription: &Subscription, since_ms: u64, record: &Even
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::sync::Arc;
 
     use browseros_core::TargetId;
@@ -331,12 +344,52 @@ mod tests {
         hub.bind(&listening);
         hub.bind(&idle);
         let _waiting = listening.events.waiting(Subscription::Page {
-            page: browseros_core::PageId(1),
             tab: browseros_core::TabId(1),
             target: target.clone(),
             event: PageEventKind::Dialog,
         });
         assert_eq!(hub.listeners(&target, PageEventKind::Dialog).len(), 1);
         assert!(hub.listeners(&target, PageEventKind::Console).is_empty());
+    }
+
+    #[test]
+    fn closed_at_tracks_only_retained_closes_of_the_requested_target() {
+        let (hub, mut writer) = EventHub::new();
+        writer.record(closed("A"));
+        writer.record(closed("B"));
+        let latest = writer.record(closed("A"));
+        assert_eq!(hub.closed_at(&TargetId("A".into())), Some(latest));
+        assert_eq!(hub.closed_at(&TargetId("never".into())), None);
+        for _ in 0..LOG_CAPACITY {
+            writer.record(closed("B"));
+        }
+        assert_eq!(hub.closed_at(&TargetId("A".into())), None);
+    }
+
+    #[test]
+    fn an_already_read_close_can_outlive_ring_evidence_without_a_lost_signal()
+    -> Result<(), Box<dyn Error>> {
+        let (hub, mut writer) = EventHub::new();
+        let close = writer.record(closed("A"));
+        let read = hub.read_after(0);
+        let pending = read
+            .records
+            .first()
+            .ok_or("the waiter read its close")?
+            .clone();
+        assert_eq!(read.lost, 0);
+        assert_eq!(hub.closed_at(&TargetId("A".into())), Some(close));
+        for _ in 0..LOG_CAPACITY {
+            writer.record(closed("B"));
+        }
+        assert_eq!(
+            pending.seq, close,
+            "the waiter can still deliver the copied record"
+        );
+        assert_eq!(hub.closed_at(&TargetId("A".into())), None);
+        assert!(hub.head() >= pending.seq);
+        assert_eq!(read.lost, 0, "the copied response still reports no loss");
+        assert!(hub.read_after(0).lost > 0, "a new read sees the eviction");
+        Ok(())
     }
 }

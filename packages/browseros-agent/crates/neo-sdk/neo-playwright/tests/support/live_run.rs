@@ -305,11 +305,11 @@ struct LiveHooks {
 }
 
 impl PlaywrightHooks for LiveHooks {
-    fn field_entered(&self, _page: PageId, entry: JournalEntry, _by: TypedBy) {
+    fn field_entered(&self, _page: TabId, entry: JournalEntry, _by: TypedBy) {
         lock(&self.journaled).push(entry.value.to_string());
     }
 
-    fn values_swept(&self, _page: PageId, values: &FieldValues) {
+    fn values_swept(&self, _page: TabId, values: &FieldValues) {
         lock(&self.heard).push(Heard::Swept(
             values.registrable().map(str::to_owned).collect(),
         ));
@@ -319,7 +319,7 @@ impl PlaywrightHooks for LiveHooks {
             .extend(values.registrable().map(str::to_owned));
     }
 
-    fn capture_allowed(&self, _page: PageId) -> Result<(), Refusal> {
+    fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
         self.capture
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -332,10 +332,9 @@ impl PlaywrightHooks for LiveHooks {
     }
 }
 
-/// A tab a test drives, as a page handle names it: core's page id and the browser's tab id.
+/// A test-owned native tab. Core IDs are resolved only when a fixture needs raw CDP.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TestPage {
-    pub(crate) id: PageId,
     pub(crate) tab: TabId,
 }
 
@@ -440,6 +439,31 @@ impl LiveRun {
     /// The methods sent since [`LiveRun::record_methods`], in order; recording stops.
     pub(crate) fn recorded_methods(&self) -> Vec<String> {
         lock(&self.tap.methods).take().unwrap_or_default()
+    }
+
+    /// The event head sampled before Runner N reads its page facts.
+    pub(crate) fn event_head(&self) -> u64 {
+        self.playwright.event_head()
+    }
+
+    /// Mirrors the door's cache observation for live tests, including watcher/core lag.
+    pub(crate) async fn page_facts(&self, tabs: Vec<TabId>) -> Vec<Value> {
+        let mut facts = Vec::new();
+        for tab in tabs {
+            let info = self
+                .browser
+                .pages
+                .get_info_by_tab(tab)
+                .await
+                .filter(|info| self.playwright.closed_target(&info.target_id).is_none());
+            facts.push(match info {
+                Some(info) => {
+                    json!({ "tab": tab.0, "url": info.url, "title": info.title, "closed": false })
+                }
+                None => json!({ "tab": tab.0, "url": null, "title": null, "closed": true }),
+            });
+        }
+        facts
     }
 
     /// Runs op `name` with `input`, as claw-sdk's handler does.
@@ -612,10 +636,7 @@ impl LiveRun {
             .into_iter()
             .find(|info| info.target_id.as_str() == target)
             .ok_or("the tab is not listed")?;
-        let page = TestPage {
-            id: info.page_id,
-            tab: info.tab_id,
-        };
+        let page = TestPage { tab: info.tab_id };
         for _ in 0..100 {
             if self.eval(&page, "document.readyState").await? == json!("complete") {
                 return Ok(page);
@@ -712,39 +733,39 @@ impl LiveRun {
         lock(&self.env.heard).clone()
     }
 
-    /// The page's attached session, the one core and the crate use.
-    async fn session(&self, page: &TestPage) -> TestResult<ProtocolSession> {
+    /// Resolves the fixture's tab only at a raw core call; test handles retain no core ID.
+    pub(crate) async fn core_page(&self, page: &TestPage) -> TestResult<PageId> {
         Ok(self
             .browser
             .pages
-            .get_session(page.id.clone())
-            .await?
-            .session)
+            .get_info_by_tab(page.tab)
+            .await
+            .ok_or("the fixture tab is not open")?
+            .page_id)
+    }
+
+    /// The page's attached session, the one core and the crate use.
+    async fn session(&self, page: &TestPage) -> TestResult<ProtocolSession> {
+        let core_page = self.core_page(page).await?;
+        Ok(self.browser.pages.get_session(core_page).await?.session)
     }
 }
 
-/// `{"$neo":"page","id":7,"tab":1234}` for `page`.
+/// `{"$neo":"page","tab":1234}` for `page`.
 pub(crate) fn brand(page: &TestPage) -> Value {
-    json!({ "$neo": "page", "id": page.id.0, "tab": page.tab.0 })
+    json!({ "$neo": "page", "tab": page.tab.0 })
 }
 
-/// The page a `{"$neo":"page","id":7,"tab":1234}` handle names.
+/// The page a `{"$neo":"page","tab":1234}` handle names.
 pub(crate) fn test_page(handle: &Value) -> TestResult<TestPage> {
     if handle.get("$neo").and_then(Value::as_str) != Some("page") {
         return Err(format!("not a page handle: {handle}").into());
     }
-    let id = handle
-        .get("id")
-        .and_then(Value::as_u64)
-        .ok_or("a page id is a number")?;
     let tab = handle
         .get("tab")
         .and_then(Value::as_i64)
         .ok_or("a page handle carries its tab")?;
-    Ok(TestPage {
-        id: PageId(u32::try_from(id)?),
-        tab: TabId(tab),
-    })
+    Ok(TestPage { tab: TabId(tab) })
 }
 
 /// A value in Playwright's in-page format as plain JSON: arrays and objects unwrapped, a

@@ -21,7 +21,7 @@ const api: Api = JSON.parse(
 
 const ELEMENT = {
   $neo: 'element',
-  page: { $neo: 'page', id: 7, tab: 1007 },
+  page: { $neo: 'page', tab: 1007 },
   seq: 0,
   node: 5,
   display: '<body></body>',
@@ -137,7 +137,7 @@ describe('unsupported members', () => {
             ? {
                 seq: 1,
                 event: 'console',
-                page: { $neo: 'page', id: 7, tab: 1007 },
+                page: { $neo: 'page', tab: 1007 },
                 message: {
                   type: 'log',
                   text: 'x',
@@ -149,7 +149,7 @@ describe('unsupported members', () => {
               ? {
                   seq: 2,
                   event: 'download',
-                  page: { $neo: 'page', id: 7, tab: 1007 },
+                  page: { $neo: 'page', tab: 1007 },
                   download: {
                     id: 'guid-1',
                     url: 'https://a.example/f',

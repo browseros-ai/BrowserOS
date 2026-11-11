@@ -314,7 +314,11 @@ async fn tests_that_reads_mask_a_password_typed_into_a_closed_root_before_neo_to
                 json!(true),
                 "the closed root's field takes the focus, so typed text goes there"
             );
-            let session = run.browser().pages.get_session(page.id.clone()).await?;
+            let session = run
+                .browser()
+                .pages
+                .get_session(run.core_page(&page).await?)
+                .await?;
             session
                 .session
                 .send_value("Input.insertText", json!({ "text": secret }))
@@ -448,7 +452,11 @@ async fn tests_that_reads_mask_a_password_typed_into_a_closed_root_the_page_then
                     json!(true),
                     "the new closed root's field takes the focus, so typed text goes there"
                 );
-                let session = run.browser().pages.get_session(page.id.clone()).await?;
+                let session = run
+                    .browser()
+                    .pages
+                    .get_session(run.core_page(&page).await?)
+                    .await?;
                 session
                     .session
                     .send_value("Input.insertText", json!({ "text": secret }))
@@ -496,7 +504,11 @@ async fn tests_that_reads_mask_a_password_typed_into_a_closed_root_the_page_then
 /// of its handles had their turn.
 async fn collect_garbage(run: &LiveRun, page: &TestPage) -> TestResult {
     time::sleep(Duration::from_millis(100)).await;
-    let session = run.browser().pages.get_session(page.id.clone()).await?;
+    let session = run
+        .browser()
+        .pages
+        .get_session(run.core_page(page).await?)
+        .await?;
     session
         .session
         .send_value("HeapProfiler.collectGarbage", json!({}))

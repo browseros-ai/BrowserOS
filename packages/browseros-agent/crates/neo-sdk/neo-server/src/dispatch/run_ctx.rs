@@ -7,7 +7,7 @@ use std::mem;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
-use browseros_core::{BrowserView, PageId, TabId};
+use browseros_core::{BrowserView, TabId};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, Outcome, RequestId, RunEffects,
     RunEnded, RunId, RunStarted, RunStatus, SecretSet, TaskId, TraceSink,
@@ -148,7 +148,7 @@ struct RunLedger {
     unknown: Vec<OpLine>,
     not_awaited: Vec<OpLine>,
     /// Pages this run closed, so a later use is the script's mistake, not Neo's.
-    closed_by_run: HashSet<PageId>,
+    closed_by_run: HashSet<TabId>,
 }
 
 /// The run's op tasks. Closed at teardown; a closed set admits nothing.
@@ -411,13 +411,13 @@ impl RunCtx {
     }
 
     /// This run closed `page`.
-    pub(super) fn record_closed(&self, page: &PageId) {
-        self.lock_ledger().closed_by_run.insert(page.clone());
+    pub(super) fn record_closed(&self, page: TabId) {
+        self.lock_ledger().closed_by_run.insert(page);
     }
 
     /// Whether this run closed `page`, which decides who owns `page_closed`.
-    pub(super) fn closed_it(&self, page: &PageId) -> bool {
-        self.lock_ledger().closed_by_run.contains(page)
+    pub(super) fn closed_it(&self, page: TabId) -> bool {
+        self.lock_ledger().closed_by_run.contains(&page)
     }
 
     fn lock_ledger(&self) -> MutexGuard<'_, RunLedger> {

@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 use std::{future, mem};
 
+use browseros_core::TabId;
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
-use browseros_core::{PageId, TabId};
 use neo_playwright::TypedBy;
 use neo_trace::{Registration, RunId, SecretSet, SecretSetConfig, SecretSource, SecretValue};
 use tokio::sync::broadcast::error::RecvError;
@@ -184,9 +184,8 @@ enum Standing {
 
 /// One field's latest value and where it was typed or read. A plain data bag.
 struct Typed {
-    page: PageId,
-    /// The page's tab when an op had touched it, so that the tab's close registers the value.
-    tab: Option<TabId>,
+    /// Native identity remains usable even when the close arrived before this journal entry.
+    tab: TabId,
     /// Who put the value in its field.
     origin: Origin,
     /// Zeroed when dropped.
@@ -288,9 +287,8 @@ impl TypedValues {
     }
 
     /// Holds `entry`, the whole value of a field on `page` that just got input, which `by` typed.
-    pub(crate) fn note(&self, page: PageId, tab: Option<TabId>, entry: JournalEntry, by: TypedBy) {
+    pub(crate) fn note(&self, tab: TabId, entry: JournalEntry, by: TypedBy) {
         let typed = Typed {
-            page,
             tab,
             origin: Origin::from(by),
             value: entry.value,
@@ -300,11 +298,10 @@ impl TypedValues {
     }
 
     /// Holds what a read found in the sensitive fields of `page`: each field's whole value.
-    pub(crate) fn swept(&self, page: &PageId, tab: Option<TabId>, values: &FieldValues) {
+    pub(crate) fn swept(&self, tab: TabId, values: &FieldValues) {
         let swept = values
             .registrable()
             .map(|value| Typed {
-                page: page.clone(),
                 tab,
                 origin: Origin::Page,
                 value: Zeroizing::new(value.to_owned()),
@@ -328,7 +325,7 @@ impl TypedValues {
         self.promote(|pending, _| {
             pending
                 .values
-                .extract_if(.., |typed| typed.tab == Some(tab))
+                .extract_if(.., |typed| typed.tab == tab)
                 .collect()
         });
     }
@@ -572,7 +569,7 @@ impl Pending {
     fn note(&mut self, mut typed: Typed, now: Instant, quiet: Duration) -> Option<Typed> {
         let value = typed.value.as_str();
         let backspace = self.values.last().is_some_and(|last| {
-            last.page == typed.page
+            last.tab == typed.tab
                 && last
                     .value
                     .strip_prefix(value)
@@ -585,7 +582,7 @@ impl Pending {
         let typed_past: Vec<Typed> = self
             .values
             .extract_if(.., |held| {
-                held.page == typed.page && value.starts_with(held.value.as_str())
+                held.tab == typed.tab && value.starts_with(held.value.as_str())
             })
             .collect();
         for prefix in typed_past {
@@ -656,7 +653,7 @@ impl Pending {
     fn standing(&self, typed: &Typed) -> Standing {
         let mut standing = Standing::New;
         for known in self.values.iter().chain(self.promotions.learned()) {
-            if known.page != typed.page {
+            if known.tab != typed.tab {
                 continue;
             }
             if known.value.as_str() == typed.value.as_str() {
@@ -669,7 +666,7 @@ impl Pending {
         let refused = self
             .promotions
             .refused()
-            .any(|known| known.page == typed.page && known.value.starts_with(typed.value.as_str()));
+            .any(|known| known.tab == typed.tab && known.value.starts_with(typed.value.as_str()));
         if refused { Standing::Under } else { standing }
     }
 
@@ -935,8 +932,8 @@ mod tests {
     use std::time::{Duration, Instant};
     use std::{io, thread};
 
+    use browseros_core::TabId;
     use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
-    use browseros_core::{PageId, TabId};
     use neo_playwright::TypedBy;
     use neo_trace::{
         ErrorOwner, Registration, RunId, SecretSet, SecretSetConfig, SecretSource, SecretValue,
@@ -991,7 +988,7 @@ mod tests {
     }
 
     /// What a read of a page with `count` sensitive fields reports: each field's whole value.
-    fn read_fields(values: &TypedValues, page: &PageId, tab: TabId, count: usize) {
+    fn read_fields(values: &TypedValues, page: TabId, tab: TabId, count: usize) {
         let fields: Vec<String> = (0..count)
             .map(|field| format!("page-field-{field:02}"))
             .collect();
@@ -1024,7 +1021,7 @@ mod tests {
         assert_eq!(host, Registration::Registered, "the set had room");
         type_into(
             &values,
-            &PageId(9),
+            TabId(9),
             TabId(9),
             "agent-earlier-7Qx",
             TypedBy::Agent,
@@ -1072,20 +1069,20 @@ mod tests {
     }
 
     /// What a read of `page` reports: each sensitive field's whole value.
-    fn read(values: &TypedValues, page: &PageId, tab: TabId, fields: &[&str]) {
+    fn read(values: &TypedValues, _page: TabId, tab: TabId, fields: &[&str]) {
         let found = FieldValues::new(fields.iter().map(|field| (*field).to_owned().into()));
-        values.swept(page, Some(tab), &found);
+        values.swept(tab, &found);
     }
 
     /// What the journal reports as `by` enters `value`, a field's whole value, in a field of
     /// `page` in `tab`.
-    fn enter(values: &TypedValues, page: &PageId, tab: TabId, value: &str, by: TypedBy) {
-        values.note(page.clone(), Some(tab), keystroke(value), by);
+    fn enter(values: &TypedValues, _page: TabId, tab: TabId, value: &str, by: TypedBy) {
+        values.note(tab, keystroke(value), by);
     }
 
     /// What the journal reports as `by` types `typed` into a field of `page`, a key at a time:
     /// the field's whole value after each key.
-    fn type_into(values: &TypedValues, page: &PageId, tab: TabId, typed: &str, by: TypedBy) {
+    fn type_into(values: &TypedValues, page: TabId, tab: TabId, typed: &str, by: TypedBy) {
         for end in 1..=typed.len() {
             let prefix = typed.get(..end).unwrap_or(typed);
             enter(values, page, tab, prefix, by);
@@ -1094,7 +1091,7 @@ mod tests {
 
     /// A page that keeps raising input events on its own fields: each `…ab` supersedes its `…a`,
     /// so each pair supersedes one value.
-    fn supersede_pairs(values: &TypedValues, page: &PageId, pairs: Range<usize>) {
+    fn supersede_pairs(values: &TypedValues, page: TabId, pairs: Range<usize>) {
         for pair in pairs {
             for value in [format!("v{pair:04}a"), format!("v{pair:04}ab")] {
                 enter(values, page, TabId(1), &value, TypedBy::NotAgent);
@@ -1126,12 +1123,12 @@ mod tests {
             Promotion::ReadPastTheCap => Defaults::MAX_TYPED,
         };
         if promotion != Promotion::ReadPastTheCap {
-            enter(values, &PageId(1), TabId(1), "hunter2", TypedBy::NotAgent);
+            enter(values, TabId(1), TabId(1), "hunter2", TypedBy::NotAgent);
         }
         for page in (2_u32..).take(filler) {
             enter(
                 values,
-                &PageId(page),
+                TabId(i64::from(page)),
                 TabId(2),
                 &format!("filler-{page:03}"),
                 TypedBy::NotAgent,
@@ -1148,23 +1145,17 @@ mod tests {
             Promotion::TabClosed => values.register_tab(TabId(1)),
             Promotion::Everything => values.register_all(),
             Promotion::KeystrokePastTheCap => {
-                enter(
-                    values,
-                    &PageId(999),
-                    TabId(2),
-                    "one-more",
-                    TypedBy::NotAgent,
-                );
+                enter(values, TabId(999), TabId(2), "one-more", TypedBy::NotAgent);
             }
-            Promotion::ReadPastTheCap => read(values, &PageId(1), TabId(1), &["hunter2"]),
+            Promotion::ReadPastTheCap => read(values, TabId(1), TabId(1), &["hunter2"]),
         }
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_field_typed_a_key_at_a_time_is_learned_once_quiet_and_its_prefixes_never() {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
+        let page = TabId(1);
+        type_into(&values, page, TabId(1), "hunter2", TypedBy::NotAgent);
         assert_eq!(
             masked(&secrets, "hunter2"),
             "hunter2",
@@ -1180,10 +1171,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn each_keystroke_starts_the_quiet_period_again() {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunter", TypedBy::NotAgent);
+        let page = TabId(1);
+        type_into(&values, page, TabId(1), "hunter", TypedBy::NotAgent);
         time::sleep(Defaults::TYPED_QUIET.saturating_sub(Duration::from_millis(100))).await;
-        enter(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
+        enter(&values, page, TabId(1), "hunter2", TypedBy::NotAgent);
         time::sleep(Duration::from_millis(200)).await;
         assert_eq!(
             masked(&secrets, "hunter"),
@@ -1197,20 +1188,20 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_backspace_replaces_the_value_and_another_field_is_kept_beside_it() {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunter22", TypedBy::NotAgent);
-        enter(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
+        let page = TabId(1);
+        type_into(&values, page, TabId(1), "hunter22", TypedBy::NotAgent);
+        enter(&values, page, TabId(1), "hunter2", TypedBy::NotAgent);
         // The security code starts like the card number, and is kept beside it.
         type_into(
             &values,
-            &page,
+            page,
             TabId(1),
             "4242424242424242",
             TypedBy::NotAgent,
         );
-        enter(&values, &page, TabId(1), "4242", TypedBy::NotAgent);
+        enter(&values, page, TabId(1), "4242", TypedBy::NotAgent);
         // Digits that extend the code, on another page, are another field's.
-        type_into(&values, &PageId(2), TabId(2), "42424", TypedBy::NotAgent);
+        type_into(&values, TabId(2), TabId(2), "42424", TypedBy::NotAgent);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         for (text, expected) in [
             ("hunter2", "[private]"),
@@ -1225,14 +1216,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_closed_tab_registers_its_values_at_once() {
         let (secrets, values, closes) = typed_values();
-        type_into(&values, &PageId(1), TabId(1), "hunter2", TypedBy::NotAgent);
-        type_into(
-            &values,
-            &PageId(2),
-            TabId(2),
-            "swordfish",
-            TypedBy::NotAgent,
-        );
+        type_into(&values, TabId(1), TabId(1), "hunter2", TypedBy::NotAgent);
+        type_into(&values, TabId(2), TabId(2), "swordfish", TypedBy::NotAgent);
         closes.send(TabId(1)).ok();
         time::sleep(Duration::from_millis(1)).await;
         assert_eq!(
@@ -1252,13 +1237,7 @@ mod tests {
             None,
             SecretSource::Host,
         );
-        type_into(
-            &values,
-            &PageId(1),
-            TabId(1),
-            "hunter2!!",
-            TypedBy::NotAgent,
-        );
+        type_into(&values, TabId(1), TabId(1), "hunter2!!", TypedBy::NotAgent);
         assert_eq!(
             reply_masked(&secrets, &run.held(), "new: hunter2!!, old: hunter2"),
             "new: [private], old: [private]"
@@ -1273,12 +1252,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn what_was_superseded_since_a_run_began_masks_its_reply_and_never_what_was_before() {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunt", TypedBy::NotAgent);
+        let page = TabId(1);
+        type_into(&values, page, TabId(1), "hunt", TypedBy::NotAgent);
         let early = run(&values);
         // Typed past, then a key too many taken back: every value in between was held a moment.
         for value in ["hunte", "hunter", "hunter2", "hunter22", "hunter2"] {
-            enter(&values, &page, TabId(1), value, TypedBy::NotAgent);
+            enter(&values, page, TabId(1), value, TypedBy::NotAgent);
         }
         assert_eq!(
             reply_masked(
@@ -1307,7 +1286,7 @@ mod tests {
     async fn a_superseded_value_masks_a_run_that_saw_it_for_as_long_as_the_run_goes() {
         let (secrets, values, _closes) = typed_values();
         let long = run(&values);
-        type_into(&values, &PageId(1), TabId(1), "hunter2", TypedBy::NotAgent);
+        type_into(&values, TabId(1), TabId(1), "hunter2", TypedBy::NotAgent);
         // Longer than any run may last: what keeps the prefixes is the run going, not a clock.
         time::sleep(Defaults::RUN_TIMEOUT_MAX * 2).await;
         assert_eq!(
@@ -1325,25 +1304,19 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_read_that_raced_the_typing_erases_nothing_and_registers_no_prefix() {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
+        let page = TabId(1);
+        type_into(&values, page, TabId(1), "hunter2", TypedBy::NotAgent);
         // A read of the password from before its last key, and a security code that starts like
         // its card number: two fields, read at once.
         read(
             &values,
-            &page,
+            page,
             TabId(1),
             &["hunter", "4242", "4242424242424242"],
         );
         // A read of another password from before a backspace: longer than the field now is.
-        type_into(
-            &values,
-            &PageId(2),
-            TabId(2),
-            "swordfish",
-            TypedBy::NotAgent,
-        );
-        read(&values, &PageId(2), TabId(2), &["swordfish!"]);
+        type_into(&values, TabId(2), TabId(2), "swordfish", TypedBy::NotAgent);
+        read(&values, TabId(2), TabId(2), &["swordfish!"]);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         for text in ["hunter2", "4242", "4242424242424242", "swordfish"] {
             assert_eq!(masked(&secrets, text), "[private]", "{text}");
@@ -1359,9 +1332,9 @@ mod tests {
     async fn past_the_cap_a_run_that_may_have_read_the_value_forgotten_is_lost_and_none_registered()
     {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
+        let page = TabId(1);
         let early = run(&values);
-        supersede_pairs(&values, &page, 0..Defaults::MAX_SUPERSEDED);
+        supersede_pairs(&values, page, 0..Defaults::MAX_SUPERSEDED);
         assert!(
             matches!(early.held(), Held::Kept(_)),
             "every value superseded so far is kept"
@@ -1370,7 +1343,7 @@ mod tests {
         let late = run(&values);
         supersede_pairs(
             &values,
-            &page,
+            page,
             Defaults::MAX_SUPERSEDED..Defaults::MAX_SUPERSEDED + 1,
         );
         assert!(
@@ -1396,7 +1369,7 @@ mod tests {
         let next = run(&values);
         supersede_pairs(
             &values,
-            &page,
+            page,
             Defaults::MAX_SUPERSEDED + 1..Defaults::MAX_SUPERSEDED + 2,
         );
         assert!(
@@ -1408,11 +1381,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_page_read_again_and_again_still_goes_quiet() {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
+        let page = TabId(1);
+        type_into(&values, page, TabId(1), "hunter2", TypedBy::NotAgent);
         for _ in 0..3 {
             time::sleep(Defaults::TYPED_QUIET / 2).await;
-            read(&values, &page, TabId(1), &["hunter2"]);
+            read(&values, page, TabId(1), &["hunter2"]);
         }
         assert_eq!(
             masked(&secrets, "hunter2"),
@@ -1430,17 +1403,17 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_union_reported_before_each_send_restarts_no_quiet_period() {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
+        let page = TabId(1);
         // The run of the op that reports: its sweeps keep coming for as long as it goes.
         let _reporting = run(&values);
         // The op's first sweep finds the field mid-typing; then the page types its last key.
-        read(&values, &page, TabId(1), &["hunte"]);
+        read(&values, page, TabId(1), &["hunte"]);
         time::sleep(Duration::from_millis(100)).await;
-        enter(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
+        enter(&values, page, TabId(1), "hunter2", TypedBy::NotAgent);
         let last_key = time::Instant::now();
         for _ in 0..3 {
             time::sleep(Duration::from_millis(200)).await;
-            read(&values, &page, TabId(1), &["hunte", "hunter2"]);
+            read(&values, page, TabId(1), &["hunte", "hunter2"]);
         }
         assert_eq!(
             masked(&secrets, "hunter2"),
@@ -1454,17 +1427,11 @@ mod tests {
             "the reports restarted nothing, and the prefix they repeated never became a secret"
         );
         // The op goes on reporting the same union while another field is typed.
-        enter(
-            &values,
-            &PageId(2),
-            TabId(2),
-            "swordfish",
-            TypedBy::NotAgent,
-        );
+        enter(&values, TabId(2), TabId(2), "swordfish", TypedBy::NotAgent);
         let other_key = time::Instant::now();
         for _ in 0..3 {
             time::sleep(Duration::from_millis(200)).await;
-            read(&values, &page, TabId(1), &["hunte", "hunter2"]);
+            read(&values, page, TabId(1), &["hunte", "hunter2"]);
         }
         time::sleep_until(other_key + Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         assert_eq!(
@@ -1490,11 +1457,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_read_of_a_learned_value_typed_further_registers_the_new_value() {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
+        let page = TabId(1);
         let _reporting = run(&values);
-        enter(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
+        enter(&values, page, TabId(1), "hunter2", TypedBy::NotAgent);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
-        read(&values, &page, TabId(1), &["hunter2", "hunter2!x"]);
+        read(&values, page, TabId(1), &["hunter2", "hunter2!x"]);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         assert_eq!(
             masked(&secrets, "hunter2 or hunter2!x"),
@@ -1510,23 +1477,23 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn past_the_cap_on_what_was_learned_a_report_registers_no_prefix() {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
+        let page = TabId(1);
         let early = run(&values);
-        read(&values, &page, TabId(1), &["hunte"]);
-        enter(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
+        read(&values, page, TabId(1), &["hunte"]);
+        enter(&values, page, TabId(1), "hunter2", TypedBy::NotAgent);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         // As many other fields as the cap keeps, each learned once quiet: `hunter2` goes first.
         for other in (2_u32..).take(Defaults::MAX_LEARNED) {
             enter(
                 &values,
-                &PageId(other),
+                TabId(i64::from(other)),
                 TabId(2),
                 &format!("learned-{other:04}"),
                 TypedBy::NotAgent,
             );
             time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         }
-        read(&values, &page, TabId(1), &["hunte", "hunter2"]);
+        read(&values, page, TabId(1), &["hunte", "hunter2"]);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         assert_eq!(
             masked(&secrets, "hunte"),
@@ -1540,7 +1507,7 @@ mod tests {
         );
         drop(early);
         let _late = run(&values);
-        read(&values, &PageId(2000), TabId(2), &["swordfish"]);
+        read(&values, TabId(2000), TabId(2), &["swordfish"]);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         assert_eq!(
             masked(&secrets, "swordfish"),
@@ -1552,12 +1519,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_page_read_more_often_than_the_cap_costs_its_run_nothing() {
         let (secrets, values, _closes) = typed_values();
-        let page = PageId(1);
+        let page = TabId(1);
         let polling = run(&values);
-        type_into(&values, &page, TabId(1), "separatePWX", TypedBy::NotAgent);
+        type_into(&values, page, TabId(1), "separatePWX", TypedBy::NotAgent);
         // A second field whose value the first's extends, read over and over.
         for _ in 0..=Defaults::MAX_SUPERSEDED {
-            read(&values, &page, TabId(1), &["separatePWX", "separatePW"]);
+            read(&values, page, TabId(1), &["separatePWX", "separatePW"]);
         }
         let held = polling.held();
         assert!(
@@ -1577,15 +1544,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_value_the_agent_typed_registers_as_the_agents() {
         let (secrets, values, _closes) = typed_values_keeping(4);
-        type_into(
-            &values,
-            &PageId(1),
-            TabId(1),
-            "agent-pw-7Qx",
-            TypedBy::Agent,
-        );
+        type_into(&values, TabId(1), TabId(1), "agent-pw-7Qx", TypedBy::Agent);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
-        read_fields(&values, &PageId(2), TabId(2), 8);
+        read_fields(&values, TabId(2), TabId(2), 8);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         assert_eq!(
             masked(&secrets, "page-field-00 page-field-07"),
@@ -1606,52 +1567,34 @@ mod tests {
     async fn a_field_the_agent_typed_in_stays_the_agents_whoever_enters_it_after() {
         let (secrets, values, _closes) = typed_values_keeping(4);
         // The page echoes the agent's value back.
-        type_into(
-            &values,
-            &PageId(1),
-            TabId(1),
-            "agent-pw-7Qx",
-            TypedBy::Agent,
-        );
+        type_into(&values, TabId(1), TabId(1), "agent-pw-7Qx", TypedBy::Agent);
         enter(
             &values,
-            &PageId(1),
+            TabId(1),
             TabId(1),
             "agent-pw-7Qx",
             TypedBy::NotAgent,
         );
         // The page appends to it.
-        type_into(
-            &values,
-            &PageId(2),
-            TabId(2),
-            "agent-pw-8Rz",
-            TypedBy::Agent,
-        );
+        type_into(&values, TabId(2), TabId(2), "agent-pw-8Rz", TypedBy::Agent);
         enter(
             &values,
-            &PageId(2),
+            TabId(2),
             TabId(2),
             "agent-pw-8Rz!",
             TypedBy::NotAgent,
         );
         // The page takes its last character back.
-        type_into(
-            &values,
-            &PageId(3),
-            TabId(3),
-            "agent-pw-9Sy!",
-            TypedBy::Agent,
-        );
+        type_into(&values, TabId(3), TabId(3), "agent-pw-9Sy!", TypedBy::Agent);
         enter(
             &values,
-            &PageId(3),
+            TabId(3),
             TabId(3),
             "agent-pw-9Sy",
             TypedBy::NotAgent,
         );
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
-        read_fields(&values, &PageId(4), TabId(4), 8);
+        read_fields(&values, TabId(4), TabId(4), 8);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         assert_eq!(
             masked(&secrets, "agent-pw-7Qx agent-pw-8Rz! agent-pw-9Sy"),
@@ -1666,10 +1609,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_swept_value_or_one_the_agent_did_not_type_registers_as_the_pages() {
         let (secrets, values, _closes) = typed_values_keeping(4);
-        read(&values, &PageId(1), TabId(1), &["page-pw-7Qx"]);
+        read(&values, TabId(1), TabId(1), &["page-pw-7Qx"]);
         type_into(
             &values,
-            &PageId(2),
+            TabId(2),
             TabId(2),
             "other-pw-7Qx",
             TypedBy::NotAgent,
@@ -1680,7 +1623,7 @@ mod tests {
             "[private] [private]",
             "both fields went quiet"
         );
-        read_fields(&values, &PageId(3), TabId(3), 4);
+        read_fields(&values, TabId(3), TabId(3), 4);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         assert_eq!(
             masked(&secrets, "page-pw-7Qx other-pw-7Qx"),
@@ -1700,13 +1643,7 @@ mod tests {
     async fn a_value_the_set_refuses_loses_every_run_that_held_it() {
         let (secrets, values) = full_of_host_and_agent_values().await;
         let before = run(&values);
-        type_into(
-            &values,
-            &PageId(1),
-            TabId(1),
-            "agent-pw-7Qx",
-            TypedBy::Agent,
-        );
+        type_into(&values, TabId(1), TabId(1), "agent-pw-7Qx", TypedBy::Agent);
         let during = run(&values);
         assert_eq!(
             withheld(&*during),
@@ -1734,7 +1671,7 @@ mod tests {
             None,
             "a run that began after the refusal never held the value"
         );
-        read(&values, &PageId(1), TabId(1), &["agent-pw-7Qx"]);
+        read(&values, TabId(1), TabId(1), &["agent-pw-7Qx"]);
         let held = late.held();
         assert_eq!(
             reply_masked(&secrets, &held, "agent-pw-7Qx"),
@@ -1759,17 +1696,11 @@ mod tests {
     async fn a_refused_value_read_again_masks_its_reader_and_is_never_offered_again() {
         let (secrets, values) = full_of_host_and_agent_values().await;
         let early = run(&values);
-        type_into(
-            &values,
-            &PageId(1),
-            TabId(1),
-            "agent-pw-7Qx",
-            TypedBy::Agent,
-        );
+        type_into(&values, TabId(1), TabId(1), "agent-pw-7Qx", TypedBy::Agent);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         assert!(withheld(&*early).is_some(), "the set refused the value");
         let late = run(&values);
-        read(&values, &PageId(1), TabId(1), &["agent-pw", "agent-pw-7Qx"]);
+        read(&values, TabId(1), TabId(1), &["agent-pw", "agent-pw-7Qx"]);
         assert_eq!(
             reply_masked(&secrets, &late.held(), "agent-pw or agent-pw-7Qx"),
             "[private] or [private]",
@@ -1798,13 +1729,7 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         let runtime = Handle::current();
         let (secrets, values) = full_of_host_and_agent_values().await;
-        enter(
-            &values,
-            &PageId(1),
-            TabId(1),
-            "agent-pw-7Qx",
-            TypedBy::Agent,
-        );
+        enter(&values, TabId(1), TabId(1), "agent-pw-7Qx", TypedBy::Agent);
         let late = thread::scope(|scope| -> Result<Box<dyn HeldWatch>, Box<dyn Error>> {
             // Dropped as this returns, so the promotion never waits on a test that failed.
             let paused = values.pause_next_promotion();
@@ -1836,7 +1761,7 @@ mod tests {
     async fn a_value_too_short_to_be_a_secret_loses_no_run() {
         let (_secrets, values) = full_of_host_and_agent_values().await;
         let going = run(&values);
-        enter(&values, &PageId(1), TabId(1), "pin", TypedBy::Agent);
+        enter(&values, TabId(1), TabId(1), "pin", TypedBy::Agent);
         values.register_all();
         assert_eq!(
             withheld(&*going),
@@ -1857,16 +1782,10 @@ mod tests {
             Arc::clone(&values).watch(first),
             Arc::clone(&values).watch(second),
         );
+        enter(&values, TabId(1), TabId(1), "agent-pw-7Qx", TypedBy::Agent);
         enter(
             &values,
-            &PageId(1),
-            TabId(1),
-            "agent-pw-7Qx",
-            TypedBy::Agent,
-        );
-        enter(
-            &values,
-            &PageId(2),
+            TabId(2),
             TabId(2),
             "page-pw-8Rz",
             TypedBy::NotAgent,
@@ -1963,7 +1882,7 @@ mod tests {
         let (_closes, closed) = broadcast::channel(16);
         let values = TypedValues::start(Arc::clone(&secrets), Defaults::TYPED_QUIET, closed);
         let going = run(&values);
-        enter(&values, &PageId(1), TabId(1), "hunter2", TypedBy::NotAgent);
+        enter(&values, TabId(1), TabId(1), "hunter2", TypedBy::NotAgent);
         let fields: Vec<String> = (0..SecretSetConfig::default().max_entries + Defaults::MAX_TYPED)
             .map(|field| format!("field-{field:05}"))
             .collect();
@@ -1974,7 +1893,7 @@ mod tests {
             let paused = values.pause_next_promotion();
             scope.spawn(|| {
                 let _runtime = runtime.enter();
-                read(&values, &PageId(2), TabId(2), &found);
+                read(&values, TabId(2), TabId(2), &found);
             });
             paused.reached.recv_timeout(Duration::from_secs(10))?;
             let reply = reply_masked(&secrets, &going.held(), &everything_held);
@@ -2007,11 +1926,11 @@ mod tests {
     async fn held_set_build_cost() {
         let (_secrets, values, _closes) = typed_values();
         let full = run(&values);
-        supersede_pairs(&values, &PageId(1), 0..Defaults::MAX_SUPERSEDED);
+        supersede_pairs(&values, TabId(1), 0..Defaults::MAX_SUPERSEDED);
         for page in (2_u32..).take(Defaults::MAX_TYPED) {
             enter(
                 &values,
-                &PageId(page),
+                TabId(i64::from(page)),
                 TabId(1),
                 &format!("Pw-{page:05}-x7!Qz"),
                 TypedBy::NotAgent,

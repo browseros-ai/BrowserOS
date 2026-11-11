@@ -1,5 +1,6 @@
 //! The orchestration of one run.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::future;
 use std::sync::Arc;
@@ -19,7 +20,8 @@ use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
 use crate::browser::{BrowserLink, PageRef, RunView, TabRegistry};
 use crate::config::Defaults;
 use crate::dispatch::{
-    Dispatcher, ErrorCode, OperationError, PageFact, RunCtx, RunMask, RunStart, StopReason,
+    Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunMask, RunStart,
+    StopReason,
 };
 use crate::runtime::{Script, run_script};
 
@@ -207,7 +209,10 @@ impl RunService {
         let page = self.default_page(meta.task_id.as_ref(), &view).await;
         if let Some(page) = &page {
             // In use from now on, so the idle-tab janitor leaves it, and the task's tab.
-            self.tabs.touched(page, meta.task_id.as_ref());
+            let seen = self.tabs.seen();
+            if self.browser.page(page.tab).await.is_some() {
+                self.tabs.touched(page, seen, meta.task_id.as_ref());
+            }
         }
         let RunMeta {
             request_id,
@@ -230,8 +235,18 @@ impl RunService {
         #[cfg(test)]
         self.crash_if_asked();
         let script = async {
-            let pages = self.open_pages(&run).await;
-            run_script(&run, &self.dispatcher, Script { code, page, pages }).await
+            let facts = self.open_pages(&run).await;
+            run_script(
+                &run,
+                &self.dispatcher,
+                Script {
+                    code,
+                    page,
+                    pages: facts.pages,
+                    observed: facts.observed,
+                },
+            )
+            .await
         };
         let end = tokio::select! {
             end = script => end,
@@ -270,26 +285,49 @@ impl RunService {
     /// shows it masked (decision 35b). A listing that fails leaves the list empty, and replies
     /// then name the tabs the script touches. Raced with the run's stop, inside the race with its
     /// deadline.
-    async fn open_pages(&self, run: &RunCtx) -> Vec<PageFact> {
+    async fn open_pages(&self, run: &RunCtx) -> PageFacts {
         let listing = tokio::select! {
             biased;
-            () = run.cancel_token().cancelled() => return Vec::new(),
+            () = run.cancel_token().cancelled() => return PageFacts { pages: Vec::new(), observed: None },
             listing = run.view().list_pages() => listing,
         };
-        let mask = RunMask::of(&self.secrets, &run.held_values());
         match listing {
-            Ok(listing) => listing
-                .pages
-                .into_iter()
-                .map(|info| {
-                    let mut fact = PageFact::from(info);
-                    fact.mask(&mask);
-                    fact
-                })
-                .collect(),
+            Ok(listing) => {
+                let pages: Vec<PageRef> = listing.pages.iter().map(PageRef::from).collect();
+                if pages.is_empty() {
+                    return PageFacts {
+                        pages: Vec::new(),
+                        observed: None,
+                    };
+                }
+                let tabs: Vec<_> = pages.iter().map(|page| page.tab).collect();
+                let observation = self
+                    .dispatcher
+                    .observer()
+                    .observe(&self.browser, &self.tabs, &tabs, &HashMap::new(), None)
+                    .await;
+                // New held values may arrive while observation waits for its cache reads.
+                let mask = RunMask::of(&self.secrets, &run.held_values());
+                let pages = pages
+                    .iter()
+                    .zip(observation.infos)
+                    .map(|(page, info)| {
+                        let mut fact = PageFact::new(page, info);
+                        fact.mask(&mask);
+                        fact
+                    })
+                    .collect();
+                PageFacts {
+                    pages,
+                    observed: Some(observation.observed),
+                }
+            }
             Err(error) => {
                 tracing::debug!(%error, "could not list the tabs for the run's init; context.pages() starts empty");
-                Vec::new()
+                PageFacts {
+                    pages: Vec::new(),
+                    observed: None,
+                }
             }
         }
     }
@@ -327,10 +365,7 @@ impl RunService {
             }
         };
         match view.view.resolve_tab_ids(&[tab]).await {
-            Ok(pages) => pages.get(&tab).map(|id| PageRef {
-                id: id.clone(),
-                tab,
-            }),
+            Ok(pages) => pages.get(&tab).map(|_| PageRef { tab }),
             Err(error) => {
                 tracing::debug!(%error, %task, "the task's last tab is gone; the run opens a fresh one");
                 None
@@ -361,5 +396,86 @@ async fn drain(ops: &mut JoinSet<()>) {
         {
             tracing::error!(%error, "an operation's task panicked; its guard settled it");
         }
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::time;
+
+    #[test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the test pauses observations while the separate core task prunes the tab"
+    )]
+    fn init_facts_recheck_a_tab_pruned_after_listing() -> Result<(), TestError> {
+        on_neo_runtime(async {
+            let rig = TestRig::new().await?;
+            let page = rig.owner_tab("https://closing.example/").await?;
+            let live = rig
+                .owner_tab("https://live.example/?token=held-after-list")
+                .await?;
+            let service = rig.run_service(Duration::ZERO);
+            let (run, _guard) = rig.run(Duration::from_secs(30), None)?;
+            let held = service.dispatcher.observer().hold().await;
+            // Publish a distinct cache value only through this listing. Counting the CDP
+            // request alone can race its reply and let the close precede the snapshot.
+            rig.fake.hold_events();
+            let listed_url = "https://live.example/?token=held-after-list&snapshot=ready";
+            assert!(rig.fake.navigate_tab(live.tab, listed_url, "Live"));
+            let pending_service = Arc::clone(&service);
+            let pending = tokio::spawn(async move { pending_service.open_pages(&run).await });
+            within(Duration::from_secs(2), async {
+                while rig
+                    .link
+                    .page(live.tab)
+                    .await
+                    .is_none_or(|page| page.url != listed_url)
+                {
+                    time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await?;
+            assert!(
+                !pending.is_finished(),
+                "the observation waits behind the held serial"
+            );
+            rig.hold("held-after-list");
+            assert!(rig.fake.close_tab(page.tab));
+            rig.fake.release_events();
+            within(Duration::from_secs(2), async {
+                while rig.link.page(page.tab).await.is_some() {
+                    time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await?;
+            drop(held);
+            let facts = pending.await?;
+            assert!(facts.observed.is_some());
+            assert_eq!(facts.pages.len(), 2, "the listing had named both tabs");
+            let closed = facts
+                .pages
+                .iter()
+                .find(|fact| fact.tab == page.tab)
+                .ok_or("closed tab fact")?;
+            assert!(
+                closed.closed,
+                "observation rechecked the cache after pruning"
+            );
+            let live = facts
+                .pages
+                .iter()
+                .find(|fact| fact.tab == live.tab)
+                .ok_or("live tab fact")?;
+            assert_eq!(
+                live.url.as_deref(),
+                Some("https://live.example/?token=[private]&snapshot=ready"),
+                "values held during the async observation are masked before initialization"
+            );
+            Ok(())
+        })
     }
 }

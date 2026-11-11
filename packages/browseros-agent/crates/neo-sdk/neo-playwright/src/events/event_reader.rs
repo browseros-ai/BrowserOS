@@ -1,5 +1,5 @@
 //! What a run gets for each record it receives: the script's event, with the run's own
-//! `PageId`s. A new tab's target id is mapped through the run's view, so a run only ever sees
+//! tab ids. A new tab's target id is mapped through the run's view, so a run only ever sees
 //! tabs its view admits.
 
 use std::time::Duration;
@@ -161,7 +161,7 @@ impl Tabs {
                 listing
                     .pages
                     .into_iter()
-                    .map(|page| (page.target_id, PageHandle::new(page.page_id, page.tab_id)))
+                    .map(|page| (page.target_id, PageHandle::new(page.tab_id)))
                     .collect(),
             );
         }
@@ -184,7 +184,7 @@ pub(crate) async fn deliver(
     windows: WindowPopup,
 ) -> Result<Option<Delivered>, PlaywrightError> {
     let listener = match subscription {
-        Subscription::Page { page, tab, .. } => Some(PageHandle::new(page.clone(), *tab)),
+        Subscription::Page { tab, .. } => Some(PageHandle::new(*tab)),
         Subscription::ContextPage => None,
     };
     let payload = match (&record.event, listener) {
@@ -217,7 +217,10 @@ pub(crate) async fn deliver(
                 opener,
             }
         }
-        (PageEvent::Closed(_), Some(page)) => Payload::Close { page },
+        (PageEvent::Closed(target), Some(page)) => {
+            scope.report_close(page.tab(), target, record.seq);
+            Payload::Close { page }
+        }
         (PageEvent::Dialog(dialog), Some(page)) => Payload::Dialog {
             page,
             dialog: Dialog {
@@ -296,7 +299,7 @@ async fn popup_tab(
 mod tests {
     use std::error::Error;
 
-    use browseros_core::{PageId, TabId, TargetId};
+    use browseros_core::{TabId, TargetId};
     use serde_json::json;
 
     use super::{ConsoleMessage, Delivered, NewTab, Payload, Tabs, WindowPopup};
@@ -307,11 +310,11 @@ mod tests {
     use crate::op_scope::OpScope;
     use crate::page::PageHandle;
     use crate::target::CallHeader;
-    use crate::test_env::TestEnv;
+    use crate::test_env::{EnvCall, TestEnv};
 
     /// Page `id` on tab `id * 100`.
     fn handle(id: u32) -> PageHandle {
-        PageHandle::new(PageId(id), TabId(i64::from(id) * 100))
+        PageHandle::new(TabId(i64::from(id) * 100))
     }
 
     /// The prelude's `EventRecord` (wire.ts) reads these exact shapes.
@@ -330,8 +333,8 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_value(&popup)?,
-            json!({ "seq": 8, "at": 1_700_000_000_008_u64, "event": "popup", "page": { "$neo": "page", "id": 7, "tab": 700 },
-                    "popup": { "page": { "$neo": "page", "id": 30, "tab": 3000 }, "url": "https://login.test/" } })
+            json!({ "seq": 8, "at": 1_700_000_000_008_u64, "event": "popup", "page": { "$neo": "page", "tab": 700 },
+                    "popup": { "page": { "$neo": "page", "tab": 3000 }, "url": "https://login.test/" } })
         );
         let tab = Delivered {
             seq: 8,
@@ -344,8 +347,8 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_value(&tab)?,
-            json!({ "seq": 8, "at": 1_700_000_000_008_u64, "event": "page", "page": { "$neo": "page", "id": 30, "tab": 3000 },
-                    "url": "https://login.test/", "opener": { "$neo": "page", "id": 7, "tab": 700 } })
+            json!({ "seq": 8, "at": 1_700_000_000_008_u64, "event": "page", "page": { "$neo": "page", "tab": 3000 },
+                    "url": "https://login.test/", "opener": { "$neo": "page", "tab": 700 } })
         );
         let console = Delivered {
             seq: 9,
@@ -362,7 +365,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_value(&console)?,
-            json!({ "seq": 9, "at": 1_700_000_000_009_u64, "event": "console", "page": { "$neo": "page", "id": 7, "tab": 700 },
+            json!({ "seq": 9, "at": 1_700_000_000_009_u64, "event": "console", "page": { "$neo": "page", "tab": 700 },
                     "message": { "type": "log", "text": "hi", "timestamp": 5.0,
                                  "location": { "url": "", "lineNumber": 0, "columnNumber": 0 } } })
         );
@@ -378,7 +381,6 @@ mod tests {
         let scope = OpScope::new(&env, op, CallHeader::default());
         let target = TargetId("T".to_owned());
         let subscription = Subscription::Page {
-            page: PageId(7),
             tab: TabId(700),
             target: target.clone(),
             event: PageEventKind::Close,
@@ -386,7 +388,7 @@ mod tests {
         let record = EventRecord {
             seq: 3,
             at_ms: 1_700_000_000_123,
-            event: PageEvent::Closed(target),
+            event: PageEvent::Closed(target.clone()),
         };
         let delivered = super::deliver(
             &scope,
@@ -397,10 +399,14 @@ mod tests {
         )
         .await?
         .ok_or("a page's own close reaches its listener")?;
+        assert!(
+            env.calls()
+                .contains(&EnvCall::ReportClose(TabId(700), target, 3))
+        );
         assert_eq!(
             serde_json::to_value(&delivered)?,
             json!({ "seq": 3, "at": 1_700_000_000_123_u64, "event": "close",
-                    "page": { "$neo": "page", "id": 7, "tab": 700 } })
+                    "page": { "$neo": "page", "tab": 700 } })
         );
         Ok(())
     }
