@@ -17,7 +17,7 @@
  * in a run's detail, so none of it can reach an export; a test greps every file for the token.
  */
 
-import { mkdir, realpath, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises'
 import {
   basename,
   dirname,
@@ -272,8 +272,11 @@ async function canonical(path: string): Promise<string> {
 
 /** A new folder, never an existing one: two exports in one second get `-2`, `-3`. */
 async function newFolder(parent: string, name: string): Promise<string> {
-  // Only this user reads an export: it holds pages' text and the agent's code.
-  await mkdir(parent, { recursive: true, mode: 0o700 })
+  // Only this user reads an export: it holds pages' text and the agent's code. Each folder is
+  // checked before anything is made inside it, so a linked one never receives even a folder.
+  await mkdir(dirname(dirname(parent)), { recursive: true })
+  await privateFolder(dirname(parent))
+  await privateFolder(parent)
   for (let attempt = 1; ; attempt++) {
     const dir = join(parent, attempt === 1 ? name : `${name}-${attempt}`)
     try {
@@ -284,6 +287,34 @@ async function newFolder(parent: string, name: string): Promise<string> {
         throw error
     }
   }
+}
+
+/**
+ * `/tmp` is shared: another user could have made `/tmp/neo-viewer` first and, owning it, swap the
+ * export's folder for one of theirs while it is written. So each folder the export path runs
+ * through below `/tmp` must be a real folder (not a link), this user's, and writable by no one else.
+ */
+async function privateFolder(dir: string): Promise<void> {
+  try {
+    await mkdir(dir, { mode: 0o700 })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  }
+  await requirePrivate(dir)
+}
+
+async function requirePrivate(dir: string): Promise<void> {
+  const info = await lstat(dir)
+  const uid = process.getuid?.()
+  if (
+    !info.isDirectory() ||
+    info.isSymbolicLink() ||
+    (uid !== undefined && info.uid !== uid) ||
+    (info.mode & 0o022) !== 0
+  )
+    throw new Error(
+      `${dir} is not a private folder of this user (owner ${info.uid}, mode ${(info.mode & 0o777).toString(8)}); remove it, then export again`,
+    )
 }
 
 /** `20261111-224501`, local time, as the folder name. */

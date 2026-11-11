@@ -186,8 +186,7 @@ function RunEntry({
           onClick={() => onRow(run)}
           nowMs={nowMs}
         />
-        {/* A closed row's detail is a cache that stopped refreshing: Copy fetches the run afresh. */}
-        <CopyRunButton run={run} detail={open ? detail : null} open={open} />
+        <CopyRunButton run={run} open={open} />
       </div>
       {open && (
         <RunBlock

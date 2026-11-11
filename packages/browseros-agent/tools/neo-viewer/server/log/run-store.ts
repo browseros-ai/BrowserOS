@@ -97,9 +97,11 @@ export class RunStore {
     rawLog: Promise<string>
   } {
     return {
-      runs: this.list()
-        .map((run) => this.run(run.id))
-        .filter((run) => run !== null),
+      // One pass over the list: `run()` would rebuild every summary once per run.
+      runs: this.list().flatMap((view) => {
+        const run = this.byId.get(view.id)
+        return run ? [detailRun(run, view)] : []
+      }),
       log: this.summary(),
       toolsList: this.toolsListResult,
       rawLog: this.log.read(),

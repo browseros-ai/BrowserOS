@@ -107,7 +107,7 @@ export function runMarkdown(
     ...(options.allOperations && detail.neo && placed
       ? everyOperation(detail.neo.operations, placed)
       : []),
-    ...(options.allOperations ? consoleSection(detail) : []),
+    ...(options.allOperations ? consoleSection(detail, options) : []),
     ...errorSection(detail, options),
     ['## What the model read', '', ...modelRead(detail, options)],
   ]
@@ -230,12 +230,16 @@ function everyOperation(
   return sections
 }
 
-function consoleSection(detail: RunDetail): string[][] {
+/** The console lines, cut at the inline limit like the reply they are part of. */
+function consoleSection(
+  detail: RunDetail,
+  options: RunMarkdownOptions,
+): string[][] {
   if (detail.reply.text === null) return []
   const { console } = replyParts(detail.reply.text)
   return console.length === 0
     ? []
-    : [['## Console', '', fenced(console.join('\n'), 'text')]]
+    : [['## Console', '', ...bounded(console.join('\n'), options)]]
 }
 
 /** Why the run failed, in Neo's words: the error the model read, Neo's own, or the transport's. */

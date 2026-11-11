@@ -37,6 +37,7 @@ import {
   otherInstanceStates,
   portFree,
   readViewerFile,
+  writeFileAtomically,
 } from './running-viewer'
 import { type RunningViewer, startViewer } from './viewer-server'
 
@@ -223,7 +224,8 @@ async function chooseImage(launch: LaunchOptions): Promise<string> {
     console.log(`Removed the image an earlier build made: ${imageLabel(image)}`)
   for (const image of settled.kept)
     console.log(`Kept ${imageLabel(image)}: ${image.reason}`)
-  await writeFile(statePath, JSON.stringify(settled.state, null, 2))
+  // Other instances read this file to tell which images are theirs: never half-written.
+  await writeFileAtomically(statePath, JSON.stringify(settled.state, null, 2))
   return plan.tag
 }
 
