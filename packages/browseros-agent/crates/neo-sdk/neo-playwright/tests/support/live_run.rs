@@ -5,7 +5,6 @@
 //! connection passes through a [`Tap`], so a test can step in at one CDP command of an op.
 
 use std::error::Error;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use std::{env, future};
@@ -292,16 +291,13 @@ fn op(name: &str) -> Result<Op, PlaywrightError> {
 }
 
 /// The host's privacy layer: every capture is allowed until a test refuses them, and every value
-/// the evaluate guard swept or the journal reported is kept, as the host would register it. It
-/// names no secret files until a test names some, so every path a test uploads is served, as
-/// real Playwright serves it.
+/// the evaluate guard swept or the journal reported is kept, as the host would register it.
 #[derive(Default)]
 struct LiveHooks {
     capture: Mutex<Option<Refusal>>,
     swept: Mutex<Vec<String>>,
     heard: Arc<Mutex<Vec<Heard>>>,
     journaled: Mutex<Vec<String>>,
-    secrets: Mutex<Vec<PathBuf>>,
 }
 
 impl PlaywrightHooks for LiveHooks {
@@ -325,10 +321,6 @@ impl PlaywrightHooks for LiveHooks {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
             .map_or(Ok(()), Err)
-    }
-
-    fn secret_paths(&self) -> Option<Vec<PathBuf>> {
-        Some(lock(&self.secrets).clone())
     }
 }
 
@@ -580,11 +572,6 @@ impl LiveRun {
     /// The values the seal's journal reported so far, as entered into sensitive fields.
     pub(crate) fn journaled(&self) -> Vec<String> {
         lock(&self.hooks.journaled).clone()
-    }
-
-    /// Names `secrets` as Neo's secret files from the next `setInputFiles` on.
-    pub(crate) fn name_secrets(&self, secrets: Vec<PathBuf>) {
-        *lock(&self.hooks.secrets) = secrets;
     }
 
     /// Every capture from now on is refused with `refusal`.

@@ -11,7 +11,6 @@ pub(crate) mod fixture_server;
 
 use std::env;
 use std::error::Error;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -45,25 +44,14 @@ pub(crate) struct Journaled {
     pub(crate) by: TypedBy,
 }
 
-/// Hooks that remember what the journal reported and every value a sweep told the host. They
-/// name no secret files unless built with [`RecordingHooks::naming_secrets`], so path uploads
-/// are refused, as a host's default.
+/// Hooks that remember what the journal reported and every value a sweep told the host.
 #[derive(Default)]
 pub(crate) struct RecordingHooks {
     journaled: Mutex<Vec<Journaled>>,
     swept: Mutex<Vec<String>>,
-    secrets: Option<Vec<PathBuf>>,
 }
 
 impl RecordingHooks {
-    /// Hooks that name `secrets` as Neo's secret files.
-    pub(crate) fn naming_secrets(secrets: Vec<PathBuf>) -> Self {
-        Self {
-            secrets: Some(secrets),
-            ..Self::default()
-        }
-    }
-
     pub(crate) fn journaled(&self) -> Vec<Journaled> {
         self.journaled
             .lock()
@@ -113,10 +101,6 @@ impl PlaywrightHooks for RecordingHooks {
 
     fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
         Ok(())
-    }
-
-    fn secret_paths(&self) -> Option<Vec<PathBuf>> {
-        self.secrets.clone()
     }
 }
 
