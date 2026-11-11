@@ -15,7 +15,7 @@ function call(name: string, serializedArgs: unknown, seq = 1) {
     event: 'binding',
     page: { $neo: 'page', tab: 1007 },
     frame: null,
-    context: 4,
+    executionContext: 4,
     payload: JSON.stringify({ name, seq, serializedArgs }),
   }
 }

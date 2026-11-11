@@ -44,7 +44,7 @@ const BINDING_CALL = {
   event: 'binding',
   page: { $neo: 'page', tab: 1007 },
   frame: null,
-  context: 3,
+  executionContext: 3,
   payload: JSON.stringify({
     name: 'add',
     seq: 1,

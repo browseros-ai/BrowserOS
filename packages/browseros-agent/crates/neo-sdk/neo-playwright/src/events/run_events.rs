@@ -154,6 +154,16 @@ impl RunEvents {
         inner.listening.keys().any(wanted) || inner.waiting.keys().any(wanted)
     }
 
+    /// Context lifecycle interest requires observing tabs the script has never acted on.
+    pub(crate) fn wants_context_lifecycle(&self) -> bool {
+        let inner = self.lock();
+        inner
+            .listening
+            .keys()
+            .chain(inner.waiting.keys())
+            .any(|subscription| matches!(subscription, Subscription::Context(_)))
+    }
+
     /// The listeners and their places, for one pass of the pump.
     pub(crate) fn listeners(&self) -> Vec<(Subscription, Listening)> {
         self.lock()

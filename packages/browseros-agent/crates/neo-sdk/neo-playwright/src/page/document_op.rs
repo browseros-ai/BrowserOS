@@ -1,8 +1,7 @@
 //! A frame's document as a whole, in its sealed world: the main frame's, or that of the child
-//! frame a `frame.*` form names. `page.title()` and `page.content()` read it there, so every
-//! field value the serialization touches comes through the seal (`value="••••"`), never through
-//! the page's own getters. `page.setContent()` replaces it from there, through the main-world
-//! gateway (`DocumentWrite`), because the HTML's scripts run in the page's main world.
+//! frame a `frame.*` form names. `page.title()` and `page.content()` read it there, as upstream
+//! reads it from its utility world. `page.setContent()` replaces it from there, through the
+//! main-world gateway (`DocumentWrite`), because the HTML's scripts run in the page's main world.
 
 use browseros_core::FrameId;
 use serde::Deserialize;
@@ -39,8 +38,7 @@ pub(crate) struct SetContentInput {
     wait_until: LoadState,
 }
 
-/// Reads `part` of the frame's document, through the seal, which masks the fields the markup
-/// serializes.
+/// Reads `part` of the frame's document.
 pub(crate) async fn read(
     pw: &Playwright,
     scope: &OpScope<'_>,

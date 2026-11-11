@@ -156,13 +156,11 @@ pub(crate) enum ProbeRequest {
         frame_visible: bool,
         params: ExpectParams,
     },
-    /// The focused element: a sensitive field? An iframe (pinned, to hop into)?
-    Focused,
     /// The vendored `urlMatches(pattern, url)`: the page is JavaScript's regex engine.
     MatchUrl { pattern: UrlPattern, url: String },
     /// The pinned element itself, by handle (`returnByValue: false`).
     Pinned { pin: Pin },
-    /// The document's title, or its doctype and root markup, read through the seal.
+    /// The document's title, or its doctype and root markup.
     Document { part: DocumentPart },
     /// `document.open`, `write` and `close` with `html`. The Document and this world outlive
     /// the write, so the world keeps its engine and its seq.
@@ -349,8 +347,7 @@ pub(crate) enum QueryState {
     Unchecked,
 }
 
-/// What a `read` reads from its element. Values come through the seal, so a sensitive field
-/// reads `••••`.
+/// What a `read` reads from its element.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Read {
@@ -512,7 +509,6 @@ mod tests {
             "screenshotMaskCleanup",
             "snapshot",
             "expect",
-            "focused",
             "matchUrl",
             "pinned",
             "document",

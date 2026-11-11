@@ -3,7 +3,7 @@
  * crate's vendored Playwright (third_party/playwright, never edited):
  *
  *   assets/injected.js   page side: src/probe/index.ts with Playwright's InjectedScript, one
- *                        IIFE whose only global is __neoProbe, evaluated in the sealed world
+ *                        IIFE whose only global is __neoProbe, evaluated in the isolated world
  *   assets/prelude.js    agent side: src/prelude/index.ts, the vendored isomorphic helpers, one
  *                        IIFE for QuickJS that defines no global (it hands the agent's
  *                        function its parameters through claw-sdk's `__neo.provide`)

@@ -1,8 +1,8 @@
 //! Retrying `expect` matchers on a real browser, through `Playwright::invoke`: every v1 locator
 //! and page matcher passing and failing as scripts write them (the real prelude in QuickJS),
 //! `.not`, a matcher that holds only after the page changes, the timeout message and call log,
-//! `toHaveValue` on a typed password through the seal, a password's `value` attribute compared
-//! as markup after an edit, and a matcher four frames deep.
+//! `toHaveValue` on a typed password, a password's `value` attribute compared as markup after
+//! an edit, and a matcher four frames deep.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
 //! `PORT_BASE=9511 spikes/eval/browser.sh <profile> &`, then
@@ -688,10 +688,10 @@ async fn tests_that_a_timeout_reads_as_playwrights_with_its_call_log() -> TestRe
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_typed_password_is_compared_through_the_seal() -> TestResult {
+async fn tests_that_a_typed_password_is_compared_as_the_page_holds_it() -> TestResult {
     on_page("/expect/page.html", |run, page| async move {
         let result = async {
-            // The page's own world, where the seal is not: what the field holds once typed.
+            // What the field holds once typed, set from the page's own world.
             run.eval(&page, "document.querySelector('#pw').value = 'hunter2'")
                 .await?;
             let password = css_locator(&page, "#pw");
@@ -731,9 +731,9 @@ async fn tests_that_a_typed_password_is_compared_through_the_seal() -> TestResul
             assert_eq!(error.error_code(), Some(ErrorCode::AssertionFailed));
             let message = error.message();
             assert!(
-                message.contains("Expected: \"••••\"\nReceived: \"••••\"\n")
-                    && message.contains("      - unexpected value \"••••\"\n"),
-                "the masked value is what was received: {message}"
+                message.contains("Expected: \"hunter3\"\nReceived: \"hunter2\"\n")
+                    && message.contains("      - unexpected value \"hunter2\"\n"),
+                "the field's value is what was received: {message}"
             );
             let not = on_locator(
                 &password,
@@ -746,13 +746,8 @@ async fn tests_that_a_typed_password_is_compared_through_the_seal() -> TestResul
             assert!(
                 error
                     .message()
-                    .contains("Expected: not \"••••\"\nReceived: \"••••\"\n"),
+                    .contains("Expected: not \"hunter2\"\nReceived: \"hunter2\"\n"),
                 "{error}"
-            );
-            let seen = format!("{:?}", run.calls());
-            assert!(
-                !seen.contains("hunter"),
-                "no secret reached the host's notes: {seen}"
             );
             Ok(())
         }
@@ -764,14 +759,12 @@ async fn tests_that_a_typed_password_is_compared_through_the_seal() -> TestResul
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_regexp_against_a_password_is_refused_and_attributes_stay_markup() -> TestResult
-{
+async fn tests_that_a_regexp_matches_a_password_and_attributes_stay_markup() -> TestResult {
     on_page("/expect/page.html", |run, page| async move {
         let result = async {
             run.eval(&page, "document.querySelector('#pw').value = 'hunter2'")
                 .await?;
             let password = css_locator(&page, "#pw");
-            let started = Instant::now();
             let pattern = on_locator(
                 &password,
                 "toHaveValue",
@@ -779,22 +772,10 @@ async fn tests_that_a_regexp_against_a_password_is_refused_and_attributes_stay_m
                 &value_params(&json!({ "regexSource": "^hun", "regexFlags": "" }), false),
                 5000,
             );
-            let error = failure(run.invoke("expect.locator", pattern).await)?;
-            assert!(
-                started.elapsed() < Duration::from_secs(1),
-                "refused at the first poll, not after the timeout"
-            );
             assert_eq!(
-                (error.error_code(), error.owner(), error.timed_out()),
-                (Some(ErrorCode::Unsupported), ErrorOwner::Neo, TimedOut::No)
-            );
-            assert!(
-                error.message().starts_with(
-                    "expect(locator).toHaveValue(expected) failed\n\nLocator: locator('#pw')\n\
-                     Expected pattern: \"••••\"\nError: a RegExp is not matched against a \
-                     password, card or one-time-code field"
-                ),
-                "{error}"
+                run.invoke("expect.locator", pattern).await?,
+                Value::Null,
+                "a RegExp matches a password field as any other"
             );
 
             let prefilled = on_locator(
@@ -874,8 +855,8 @@ async fn tests_that_a_password_value_attribute_is_compared_as_markup_once_the_fi
             assert_eq!(error.error_code(), Some(ErrorCode::AssertionFailed));
             let message = error.message();
             assert!(
-                message.contains("Expected: \"••••\"\nReceived: \"••••\"\n"),
-                "the typed value is not the attribute, and the attribute is received masked: \
+                message.contains("Expected: \"edited-secret\"\nReceived: \"initial-secret\"\n"),
+                "the typed value is not the attribute, which is received as the markup holds it: \
                  {message}"
             );
             let pattern = on_locator(
@@ -885,16 +866,10 @@ async fn tests_that_a_password_value_attribute_is_compared_as_markup_once_the_fi
                 &value_attribute_params(&json!({ "regexSource": "^initial", "regexFlags": "" })),
                 2000,
             );
-            let error = failure(run.invoke("expect.locator", pattern).await)?;
             assert_eq!(
-                (error.error_code(), error.owner(), error.timed_out()),
-                (Some(ErrorCode::Unsupported), ErrorOwner::Neo, TimedOut::No),
-                "a RegExp is still refused: {error}"
-            );
-            let seen = format!("{:?}{message}{error}", run.calls());
-            assert!(
-                !seen.contains("-secret"),
-                "no secret reached a message or the host's notes: {seen}"
+                run.invoke("expect.locator", pattern).await?,
+                Value::Null,
+                "a RegExp matches the attribute"
             );
             Ok(())
         }

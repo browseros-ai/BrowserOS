@@ -64,7 +64,7 @@ pub(crate) use init_script::InitScripts;
 pub(crate) use load_state::LoadState;
 pub(crate) use media_emulation::MediaState;
 pub(crate) use media_sessions::MediaSessions;
-pub(crate) use op_page::{FRAME_BUDGET, OpPage};
+pub(crate) use op_page::OpPage;
 pub(crate) use page_handle::PageHandle;
 pub(crate) use page_op::PageOp;
 pub(crate) use page_registry::PageRegistry;

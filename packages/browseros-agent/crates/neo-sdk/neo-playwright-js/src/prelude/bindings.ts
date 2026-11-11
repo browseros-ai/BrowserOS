@@ -173,6 +173,6 @@ export async function answerBindingCall(
   await invoke(
     'bindingCall.resolve',
     { api, timeoutMs: 0 },
-    { page: await page._brand(api), context: record.context, arg },
+    { page: await page._brand(api), context: record.executionContext, arg },
   ).catch(() => {})
 }

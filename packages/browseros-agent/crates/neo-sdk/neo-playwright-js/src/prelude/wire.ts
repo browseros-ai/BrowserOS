@@ -159,6 +159,12 @@ export type EventName =
   | 'pageerror'
   | 'download'
   | 'filechooser'
+  | 'load'
+  | 'domcontentloaded'
+  | 'frameattached'
+  | 'framenavigated'
+  | 'framedetached'
+  | 'pageload'
   | 'page'
 
 export type DialogInfo = {
@@ -201,6 +207,17 @@ export type EventRecord = { seq: number; at: number } & (
   | { event: 'popup'; page: PageBrand; popup: PageEntry }
   | { event: 'page'; page: PageBrand; url: string; opener: PageBrand | null }
   | { event: 'close'; page: PageBrand }
+  | {
+      event: 'load' | 'domcontentloaded' | 'pageload'
+      page: PageBrand
+      frame: FrameInfo
+    }
+  | {
+      event: 'frameattached' | 'framenavigated' | 'framedetached'
+      page: PageBrand
+      frame: FrameInfo
+      context: boolean
+    }
   | { event: 'dialog'; page: PageBrand; dialog: DialogInfo }
   | { event: 'console'; page: PageBrand; message: ConsoleInfo }
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
@@ -211,14 +228,14 @@ export type EventRecord = { seq: number; at: number } & (
 
 /**
  * A page's call of a binding the run exposed: the stub's JSON `payload` (`{ name, seq,
- * serializedArgs }`), the execution `context` to answer in (`bindingCall.resolve`), and that
+ * serializedArgs }`), the `executionContext` to answer in (`bindingCall.resolve`), and that
  * context's frame id, `null` for the main frame.
  */
 export type BindingRecord = {
   event: 'binding'
   page: PageBrand
   frame: string | null
-  context: number
+  executionContext: number
   payload: string
 }
 

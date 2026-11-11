@@ -1,6 +1,6 @@
 /**
  * The probe protocol: the one contract between neo-playwright's Rust half and Neo's
- * probe in each frame's sealed `browseros-sdk` world.
+ * probe in each frame's isolated `browseros-engine` world.
  *
  * Rust sends one ProbeRequest per `Runtime.callFunctionOn` (CALL_FUNCTION, `returnByValue`)
  * on the world's execution context, or on an element's object id, and decodes one reply.
@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../neo-playwright/third_party/playwri
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 17
+export const PROTOCOL = 18
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -35,9 +35,6 @@ export const CALL_FUNCTION =
 export type Pin = number
 export type Point = { x: number; y: number }
 export type Rect = { x: number; y: number; width: number; height: number }
-
-/** What the seal's `kind(el)` reports for a field that holds a secret. */
-export type SensitiveKind = 'password' | 'card' | 'one_time_code'
 
 /**
  * What a request runs on. A chunk is one frame's part of a locator, already parsed by the
@@ -271,7 +268,6 @@ export type ExpectRequest = {
   frameVisible: boolean
   params: ExpectParams
 }
-export type FocusedRequest = { op: 'focused' }
 /**
  * Vendored `urlMatches(pattern, url)`. Rust names the URL, the one a navigation reported, so
  * the page serves only as JavaScript's regex engine.
@@ -285,7 +281,7 @@ export type MatchUrlRequest = {
 export type PinnedRequest = { op: 'pinned'; pin: Pin }
 /** Which text of the document `page.title()` and `page.content()` read. */
 export type DocumentPart = 'title' | 'content'
-/** The title, or the doctype and the root's outerHTML, read through the seal. */
+/** The title, or the doctype and the root's outerHTML. */
 export type DocumentRequest = { op: 'document'; part: DocumentPart }
 /**
  * `page.setContent`: document.open, write and close, from this world. The Document, its window
@@ -325,7 +321,6 @@ export type ProbeRequest =
   | SelectorRequest
   | SnapshotRequest
   | ExpectRequest
-  | FocusedRequest
   | MatchUrlRequest
   | PinnedRequest
   | DocumentRequest
@@ -361,15 +356,10 @@ export type Described = {
 /** Zero matches. `staleRef` names a ref that can never match here again: fail at once. */
 export type NoMatch = { kind: 'none'; staleRef?: string }
 export type StrictViolation = { kind: 'strict'; message: string }
-/**
- * `sensitive`, here and in `Measured`, is the seal's kind of the field an edit of the element
- * changes: the element, or the control its label names (sensitive.ts `editedKind`).
- */
 export type ResolvedElement = {
   kind: 'element'
   pin: Pin
   preview: string
-  sensitive: SensitiveKind | null
 }
 /**
  * `key` names the iframe in this world's ref map, for the child frame's parent link. A hop
@@ -393,7 +383,6 @@ export type Measured = {
   point: Point
   inView: boolean
   transformed: boolean
-  sensitive: SensitiveKind | null
 }
 export type Covered = { kind: 'covered'; by: string }
 export type Armed = { kind: 'armed'; rect: Rect; point: Point; token: number }
@@ -404,17 +393,10 @@ export type FrameBox = {
   origin: Point | null
   hit: Hit | null
 }
-/** A read or edit result. Values come through the seal, so sensitive fields read `••••`. */
+/** A read or edit result. */
 export type Value = { kind: 'value'; value: unknown }
-/**
- * One element's read, through the seal. `sensitive` is the seal's `kind` of the element the
- * value came from.
- */
-export type ReadValue = {
-  kind: 'read'
-  value: unknown
-  sensitive: SensitiveKind | null
-}
+/** One element's read. */
+export type ReadValue = { kind: 'read'; value: unknown }
 /** Every match's read. */
 export type Values = {
   kind: 'values'
@@ -431,31 +413,17 @@ export type Snapshot = {
 /**
  * What one poll saw. `matches` is the matcher's own result, before `.not`. `resolved` is
  * upstream's call-log text for what the locator resolved to (an element's preview, or
- * `3 elements`). `received` is the value the matcher compared, already masked by the seal;
- * left out when it is `undefined`. `sensitive` is the seal's kind of a field whose value or
- * value attribute was compared through `__clawSeal.valueEquals` or `attributeEquals`, so
- * Rust can mask the expected value in assertion messages.
+ * `3 elements`). `received` is the value the matcher compared; left out when it is
+ * `undefined`.
  */
 export type ExpectPoll = {
   kind: 'expect'
   matches: boolean
   resolved: string
   received?: unknown
-  sensitive: SensitiveKind | null
-}
-/**
- * The focused element: a sensitive field? An iframe (pinned, so Rust can hop into it)? Or an
- * element that may host a closed shadow root this world cannot see into (pinned as `host`,
- * so Rust can ask CDP whether it does)?
- */
-export type Focused = {
-  kind: 'focused'
-  sensitive: boolean
-  iframe: Pin | null
-  host: Pin | null
 }
 export type UrlMatch = { kind: 'urlMatch'; matches: boolean; url: string }
-/** Page text, which the seal already masked where it serializes a field. */
+/** The document's title or markup. */
 export type DocumentText = {
   kind: 'documentText'
   text: string
@@ -486,7 +454,6 @@ export type ProbeReply =
   | GeneratedSelector
   | Snapshot
   | ExpectPoll
-  | Focused
   | UrlMatch
   | DocumentText
   | Replaced
@@ -516,7 +483,6 @@ export const REPLY_KINDS = {
   selector: ['selector', 'none', 'detached'],
   snapshot: ['snapshot', 'none', 'strict', 'detached'],
   expect: ['expect', 'none', 'strict', 'detached'],
-  focused: ['focused'],
   matchUrl: ['urlMatch'],
   document: ['documentText'],
   setContent: ['replaced'],
@@ -540,8 +506,7 @@ export type NeoProbe = {
   /**
    * Builds the engine for this document and returns `described`. Idempotent for the same
    * epoch (the world keeps its seq); another epoch re-keys the world, and the reply names the
-   * seq it held before as `retired`. Throws when the world is not sealed, so an install whose
-   * seal failed never leaves a usable engine behind.
+   * seq it held before as `retired`.
    */
   boot(options: BootOptions): Described
   /**

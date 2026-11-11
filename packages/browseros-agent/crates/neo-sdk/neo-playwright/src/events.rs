@@ -12,8 +12,8 @@
 //!      └─ event_reader: target ids to native tab handles, through the run's own view
 //! ```
 //!
-//! Internal frame navigation facts use the same journal for `waitForNavigation`, retaining
-//! loader identity and renderer swaps across predicate checks without public frame events.
+//! Frame lifecycle records preserve event-time metadata for page/context callbacks. Internal
+//! navigation records keep loader identity and renderer swaps for `waitForNavigation`.
 //!
 //! **One writer.** Only the watcher appends, through the one `EventWriter` the hub hands out,
 //! so the log has a single order and needs nothing beyond a short std mutex and a `Notify`. A
@@ -37,6 +37,7 @@ pub(crate) mod event_hub;
 pub(crate) mod event_op;
 mod event_reader;
 mod file_chooser;
+mod frame_lifecycle;
 mod navigation_event;
 mod page_event;
 mod run_downloads;

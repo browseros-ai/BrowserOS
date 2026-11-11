@@ -179,6 +179,18 @@ impl EventHub {
         true
     }
 
+    /// Whether a live run needs lifecycle observation for all of the context's tabs.
+    pub(crate) fn wants_context_lifecycle(&self) -> bool {
+        self.runs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|run| {
+                run.upgrade()
+                    .is_some_and(|run| run.events.wants_context_lifecycle())
+            })
+    }
+
     /// The seq of the newest record: a reader's place for "from now on".
     pub(crate) fn head(&self) -> u64 {
         self.lock_log().last_seq

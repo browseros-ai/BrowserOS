@@ -6585,6 +6585,7 @@ ${value.stack}`;
     _url = "";
     _parentFrame;
     _detached = false;
+    #eventView = null;
     constructor(page, id, parent) {
       super();
       this._page = page;
@@ -6596,10 +6597,19 @@ ${value.stack}`;
       return this._page;
     }
     name() {
-      return this._name;
+      return this.#eventView?.info.name ?? this._name;
     }
     url() {
-      return this._id === null ? this._page._url : this._url;
+      return this.#eventView?.info.url ?? (this._id === null ? this._page._url : this._url);
+    }
+    _duringEvent(info, event, read) {
+      const previous = this.#eventView;
+      this.#eventView = { info, detached: event === "framedetached" };
+      try {
+        return read();
+      } finally {
+        this.#eventView = previous;
+      }
     }
     parentFrame() {
       return this._parentFrame;
@@ -6608,7 +6618,7 @@ ${value.stack}`;
       return this._page.frames().filter((frame) => frame._parentFrame === this);
     }
     isDetached() {
-      return this._detached;
+      return this.#eventView?.detached ?? this._detached;
     }
     toJSON() {
       return { name: this.name(), url: this.url() };
@@ -7689,7 +7699,7 @@ ${value.stack}`;
       arg = inPageArgument({ name, seq, error });
     }
     const api = "bindingCall.resolve";
-    await invoke("bindingCall.resolve", { api, timeoutMs: 0 }, { page: await page._brand(api), context: record.context, arg }).catch(() => {});
+    await invoke("bindingCall.resolve", { api, timeoutMs: 0 }, { page: await page._brand(api), context: record.executionContext, arg }).catch(() => {});
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/event-deadline.ts
@@ -7898,9 +7908,20 @@ ${value.stack}`;
     "console",
     "pageerror",
     "download",
-    "filechooser"
+    "filechooser",
+    "load",
+    "domcontentloaded",
+    "frameattached",
+    "framenavigated",
+    "framedetached"
   ]);
-  var CONTEXT_EVENTS = new Set(["page"]);
+  var CONTEXT_EVENTS = new Set([
+    "page",
+    "pageload",
+    "frameattached",
+    "framenavigated",
+    "framedetached"
+  ]);
   var UNREPORTED = {
     request: "Neo does not report network events; wait for what the page shows instead",
     response: "Neo does not report network events; wait for what the page shows instead",
@@ -7910,13 +7931,7 @@ ${value.stack}`;
     worker: "Neo does not report workers",
     serviceworker: "Neo does not report service workers",
     backgroundpage: "Neo does not report extension background pages",
-    frameattached: "Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits",
-    framedetached: "Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits",
-    framenavigated: "Neo does not report frame events; use page.waitForURL()",
-    load: "Neo does not report load events; use page.waitForLoadState()",
-    domcontentloaded: 'Neo does not report load events; use page.waitForLoadState("domcontentloaded")',
     crash: "Neo does not report crashes; a crashed page fails its next call",
-    pageload: "Neo does not report load events; use page.waitForLoadState()",
     pageclose: 'listen for close on the page itself: page.on("close")',
     weberror: "the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS",
     dialogclosed: "Neo does not report closed dialogs"
@@ -7947,13 +7962,23 @@ ${value.stack}`;
     nextChooserLease = 0;
     chooserListeners = new Map;
     chooserChanges = new Map;
+    contextChanges = new Map;
+    contextSince = new Map;
     constructor(owner) {
       this.owner = owner;
     }
     listen(page, event, on) {
       const since = Date.now();
       this.listening += on ? 1 : -1;
-      if (event === "filechooser" && page) {
+      if (page === null) {
+        if (on)
+          this.contextSince.set(event, since);
+        else
+          this.contextSince.delete(event);
+        const previous = this.contextChanges.get(event) ?? Promise.resolve();
+        const changed = previous.then(() => this.sendListen(null, event, on, since));
+        this.contextChanges.set(event, changed);
+      } else if (event === "filechooser") {
         const lease = on ? this.intercept(page) : this.chooserListeners.get(page);
         if (on && lease)
           this.chooserListeners.set(page, lease);
@@ -8020,11 +8045,12 @@ ${value.stack}`;
         } finally {
           this.settleCloses(observed);
         }
-        if (!options.predicate)
+        const predicate = options.predicate;
+        if (!predicate)
           return value;
         let accepted;
         try {
-          accepted = await deadline.race(Reflect.apply(options.predicate, undefined, [value]));
+          accepted = await deadline.race(this.duringEvent(record, () => Reflect.apply(predicate, undefined, [value])));
         } catch (error) {
           throw prefixed(api, error);
         }
@@ -8119,6 +8145,13 @@ ${value.stack}`;
         this.page({ $neo: "page", tab: close.tab })._settleClose(observed);
     }
     deliver(record, observed) {
+      if (record.event === "binding") {
+        answerBindingCall(this.page(record.page), record).catch(() => {});
+        return;
+      }
+      const context = record.event === "page" || record.event === "pageload" || "context" in record && record.context;
+      if (context && typeof record.at === "number" && record.at < (this.contextSince.get(record.event) ?? Infinity))
+        return;
       switch (record.event) {
         case "popup":
           this.page(record.page).emit("popup", this.page(record.popup.page, record.popup.url));
@@ -8126,6 +8159,28 @@ ${value.stack}`;
         case "page":
           this.owner.emit("page", this.page(record.page, record.url));
           return;
+        case "load":
+        case "domcontentloaded": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          this.duringEvent(record, () => page.emit(record.event, page));
+          return;
+        }
+        case "pageload": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          this.duringEvent(record, () => this.owner.emit("pageload", page));
+          return;
+        }
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached": {
+          const page = this.page(record.page);
+          const frame = page._eventFrame(record.seq, record.event, record.frame);
+          const emitter = record.context ? this.owner : page;
+          frame._duringEvent(record.frame, record.event, () => emitter.emit(record.event, frame));
+          return;
+        }
         case "close":
           this.page(record.page)._closeEvent(record.seq, observed);
           return;
@@ -8154,9 +8209,22 @@ ${value.stack}`;
           page.emit("filechooser", this.chooser(record.seq, page, record.chooser));
           return;
         }
-        case "binding":
-          answerBindingCall(this.page(record.page), record).catch(() => {});
-          return;
+      }
+    }
+    duringEvent(record, read) {
+      switch (record.event) {
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached": {
+          const frame = this.page(record.page)._eventFrame(record.seq, record.event, record.frame);
+          return frame._duringEvent(record.frame, record.event, read);
+        }
+        case "load":
+        case "domcontentloaded":
+        case "pageload":
+          return this.page(record.page).mainFrame()._duringEvent(record.frame, "framenavigated", read);
+        default:
+          return read();
       }
     }
     value(record, observed) {
@@ -8165,6 +8233,17 @@ ${value.stack}`;
           return this.page(record.popup.page, record.popup.url);
         case "page":
           return this.page(record.page, record.url);
+        case "load":
+        case "domcontentloaded":
+        case "pageload": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          return page;
+        }
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached":
+          return this.page(record.page)._eventFrame(record.seq, record.event, record.frame);
         case "close": {
           const page = this.page(record.page);
           page._closeEvent(record.seq, observed);
@@ -8384,6 +8463,9 @@ ${value.stack}`;
     _working = false;
     _navigationsInFlight = 0;
     #childFrames = new Map;
+    #knownFrames = new Map;
+    #frameEvents = new Map;
+    #frameSequences = new Map;
     _exposed = new Map;
     constructor(context, tab, url) {
       super();
@@ -8414,7 +8496,7 @@ ${value.stack}`;
       return this.frames().find((frame) => frameMatches(frame, selector)) ?? null;
     }
     url() {
-      return this._url;
+      return this._mainFrame.url();
     }
     isClosed() {
       return this._closed;
@@ -8759,7 +8841,7 @@ ${value.stack}`;
     }
     _evaluated(frames, at) {
       if (this.#payloadCurrent(at) && Array.isArray(frames))
-        this._applyFrames(frames);
+        this._applyFrames(frames, at);
     }
     async _navigated(api, frame, result, at) {
       if (this.#payloadCurrent(at)) {
@@ -8771,7 +8853,7 @@ ${value.stack}`;
             frame._url = result.url;
         }
         if (Array.isArray(result?.frames))
-          this._applyFrames(result.frames);
+          this._applyFrames(result.frames, at);
         else
           await this._refreshFrames(api);
       } else if (!this._closed) {
@@ -8794,35 +8876,101 @@ ${value.stack}`;
     async _refreshFrames(api) {
       const { value: tree, observed } = await invokeObserved("page.frames", { api, timeoutMs: 0 }, { page: await this._brand(api) });
       if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
-        this._applyFrames(tree.frames);
+        this._applyFrames(tree.frames, observed);
     }
-    _applyFrames(infos) {
+    _applyFrames(infos, at = null) {
+      const current = (id) => !at || (this.#frameSequences.get(id) ?? 0) <= at.events;
+      const remember = (id) => {
+        if (at)
+          this.#frameSequences.set(id, Math.max(at.events, this.#frameSequences.get(id) ?? 0));
+      };
       const main = infos.find((info) => info.parentId === null);
-      if (main) {
+      if (main && current(null)) {
+        remember(null);
         this._url = main.url;
         this.#urlKnown = true;
         this._mainFrame._name = main.name;
       }
       const present = new Map;
       for (const info of infos) {
-        if (info.parentId === null)
+        if (info.parentId === null || !current(info.id))
           continue;
         present.set(info.id, info);
-        let frame = this.#childFrames.get(info.id);
+        remember(info.id);
+        let frame = this.#knownFrames.get(info.id);
         if (!frame) {
           frame = new Frame(this, info.id, this._mainFrame);
-          this.#childFrames.set(info.id, frame);
+          this.#knownFrames.set(info.id, frame);
         }
+        frame._detached = false;
+        this.#childFrames.set(info.id, frame);
         frame._update(info);
       }
       for (const [id, frame] of this.#childFrames) {
+        if (!current(id))
+          continue;
         const info = present.get(id);
         if (!info) {
+          remember(id);
           frame._detached = true;
           this.#childFrames.delete(id);
           continue;
         }
         frame._parentFrame = info.parentId === main?.id ? this._mainFrame : this.#childFrames.get(info.parentId ?? "") ?? this._mainFrame;
+      }
+      this.#pruneFrames();
+    }
+    _eventFrame(seq, event, info) {
+      const delivered = this.#frameEvents.get(seq);
+      if (delivered)
+        return delivered;
+      const id = info.parentId === null ? null : info.id;
+      const current = id === null ? this._mainFrame : this.#knownFrames.get(id);
+      if (current && seq <= (this.#frameSequences.get(id) ?? 0)) {
+        return this.#rememberFrameEvent(seq, current);
+      }
+      this.#frameSequences.set(id, seq);
+      let frame;
+      if (info.parentId === null) {
+        frame = this._mainFrame;
+        this._url = info.url;
+        this.#urlKnown = true;
+      } else {
+        frame = this.#knownFrames.get(info.id) ?? new Frame(this, info.id, this._mainFrame);
+        this.#knownFrames.set(info.id, frame);
+        frame._parentFrame = this.#knownFrames.get(info.parentId) ?? this._mainFrame;
+        if (event === "framedetached") {
+          frame._detached = true;
+          this.#childFrames.delete(info.id);
+        } else {
+          frame._detached = false;
+          this.#childFrames.set(info.id, frame);
+        }
+      }
+      if (event !== "frameattached" || frame.url() === "")
+        frame._update(info);
+      this.#pruneFrames();
+      return this.#rememberFrameEvent(seq, frame);
+    }
+    #rememberFrameEvent(seq, frame) {
+      this.#frameEvents.set(seq, frame);
+      if (this.#frameEvents.size > 1024) {
+        const oldest = this.#frameEvents.keys().next().value;
+        if (oldest !== undefined)
+          this.#frameEvents.delete(oldest);
+      }
+      return frame;
+    }
+    #pruneFrames() {
+      let retained = this.#knownFrames.size - this.#childFrames.size;
+      for (const [id, frame] of this.#knownFrames) {
+        if (retained <= 1024)
+          break;
+        if (frame._detached) {
+          this.#knownFrames.delete(id);
+          this.#frameSequences.delete(id);
+          retained--;
+        }
       }
     }
     #applyViewport(size) {

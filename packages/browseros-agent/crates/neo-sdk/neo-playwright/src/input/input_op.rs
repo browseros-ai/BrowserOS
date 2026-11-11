@@ -3,16 +3,14 @@
 //! ```text
 //!  keyboard.* / mouse.* ── admit the page ── focus lease (tabs core did not create)
 //!    ── the tab's input lock ── the burst, built on a copy of the tab's devices
-//!    ── keys: where they land (copy_refusal.rs); a copy or cut from a sensitive field
-//!       is refused
 //!    ── send_effect ── the typing window (keys) ── the burst, on the page's root session
 //! ```
 //!
 //! Positions are the page's main-viewport CSS pixels, as in Playwright: the root session hit
 //! tests them through every frame, and keys go to the focused frame, out-of-process ones
 //! included (decisions.md, root-session input). The tab's devices take the copy's state only
-//! when its burst goes out, so a call refused before that (an unknown key, a refused copy, a
-//! refused recheck) leaves nothing held for the next one.
+//! when its burst goes out, so a call refused before that (an unknown key, a refused
+//! recheck) leaves nothing held for the next one.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,8 +19,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::input::{
-    self, BurstFailure, ClickOptions, InputDevices, InputStep, Keyboard, MouseButton, PageInput,
-    Point, Typed, UnknownKey,
+    BurstFailure, ClickOptions, InputDevices, InputStep, Keyboard, MouseButton, PageInput, Point,
+    Typed, UnknownKey,
 };
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
@@ -202,16 +200,6 @@ fn button(wire: Option<WireButton>) -> MouseButton {
     }
 }
 
-/// Which device a burst is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Device {
-    /// Keys and text: the burst first asks where the keys land and refuses a sensitive copy.
-    Keys,
-    /// `keyboard.up`, which never copies and needs no focus walk.
-    KeyUp,
-    Mouse,
-}
-
 /// Runs one keyboard or mouse op. Boxed, as the action family's are: `Playwright::invoke`'s
 /// future is as large as its largest family's.
 pub(crate) async fn invoke(
@@ -232,12 +220,7 @@ async fn run(
     match op {
         InputOp::KeyboardDown | InputOp::KeyboardUp => {
             let input: KeyInput = args.decode(scope)?;
-            let device = if op == InputOp::KeyboardUp {
-                Device::KeyUp
-            } else {
-                Device::Keys
-            };
-            burst(pw, scope, &input.page, device, |devices| {
+            burst(pw, scope, &input.page, |devices| {
                 if op == InputOp::KeyboardUp {
                     devices.keyboard.up(&input.key.0)
                 } else {
@@ -249,7 +232,7 @@ async fn run(
         InputOp::KeyboardPress => {
             let input: PressInput = args.decode(scope)?;
             let delay = millis(input.options.delay);
-            burst(pw, scope, &input.page, Device::Keys, |devices| {
+            burst(pw, scope, &input.page, |devices| {
                 devices.keyboard.press(&input.key.0, delay)
             })
             .await?;
@@ -257,14 +240,14 @@ async fn run(
         InputOp::KeyboardType => {
             let input: TypeInput = args.decode(scope)?;
             let delay = millis(input.options.delay);
-            burst(pw, scope, &input.page, Device::Keys, |devices| {
+            burst(pw, scope, &input.page, |devices| {
                 Ok(devices.keyboard.type_text(&input.text.0, delay))
             })
             .await?;
         }
         InputOp::KeyboardInsertText => {
             let input: InsertTextInput = args.decode(scope)?;
-            burst(pw, scope, &input.page, Device::Keys, |_| {
+            burst(pw, scope, &input.page, |_| {
                 Ok(Keyboard::insert_text(&input.text.0))
             })
             .await?;
@@ -276,7 +259,7 @@ async fn run(
                 y: input.y,
             };
             let steps = input.options.steps.unwrap_or(1);
-            burst(pw, scope, &input.page, Device::Mouse, |devices| {
+            burst(pw, scope, &input.page, |devices| {
                 let held = devices.keyboard.modifiers();
                 Ok(devices.mouse.move_to(to, steps, held))
             })
@@ -286,7 +269,7 @@ async fn run(
             let input: ButtonInput = args.decode(scope)?;
             let pressed = button(input.options.button);
             let count = input.options.click_count.unwrap_or(1);
-            burst(pw, scope, &input.page, Device::Mouse, |devices| {
+            burst(pw, scope, &input.page, |devices| {
                 let held = devices.keyboard.modifiers();
                 Ok(if op == InputOp::MouseDown {
                     devices.mouse.down(pressed, count, held)
@@ -309,7 +292,7 @@ async fn run(
                 x: input.x,
                 y: input.y,
             };
-            burst(pw, scope, &input.page, Device::Mouse, |devices| {
+            burst(pw, scope, &input.page, |devices| {
                 let held = devices.keyboard.modifiers();
                 Ok(devices.mouse.click(at, options, held))
             })
@@ -317,7 +300,7 @@ async fn run(
         }
         InputOp::MouseWheel => {
             let input: WheelInput = args.decode(scope)?;
-            burst(pw, scope, &input.page, Device::Mouse, |devices| {
+            burst(pw, scope, &input.page, |devices| {
                 let held = devices.keyboard.modifiers();
                 Ok(devices.mouse.wheel(input.delta_x, input.delta_y, held))
             })
@@ -333,7 +316,6 @@ async fn burst(
     pw: &Playwright,
     scope: &OpScope<'_>,
     page: &PageRef,
-    device: Device,
     build: impl FnOnce(&mut InputDevices) -> Result<Vec<InputStep>, UnknownKey>,
 ) -> Result<(), PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, page).await?;
@@ -342,15 +324,6 @@ async fn burst(
     let mut planned = input.plan();
     let steps = build(&mut planned)
         .map_err(|unknown| scope.fail(ErrorCode::InvalidInput, &unknown.to_string()))?;
-    if device == Device::Keys {
-        let focus = scope
-            .within(action::focus_of(&page, scope))
-            .await
-            .map_err(|_expired| scope.timed_out(ErrorCode::NotActionable))??;
-        if input::copies(&steps, planned.keyboard.platform()) {
-            action::refuse_copy(scope, focus)?;
-        }
-    }
     let sent = scope.send_effect()?;
     input
         .send_planned(&sent, scope, planned, steps)

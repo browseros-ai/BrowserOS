@@ -52,7 +52,6 @@ pub(crate) mod action_op;
 mod actionability;
 mod arm_guard;
 mod attempt_log;
-mod copy_refusal;
 mod element_action;
 mod focus_lease;
 mod form_action;
@@ -64,6 +63,5 @@ mod requested_navigations;
 mod subject;
 
 pub(crate) use action_op::ActionOp;
-pub(crate) use copy_refusal::{focus_of, refuse_copy};
 pub(crate) use element_action::ElementRunner;
 pub(crate) use focus_lease::{FocusLease, lease};
