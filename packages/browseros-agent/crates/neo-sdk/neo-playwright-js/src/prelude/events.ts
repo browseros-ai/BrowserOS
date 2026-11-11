@@ -138,7 +138,7 @@ type WaitOptions = {
   signal?: SignalLike
 }
 
-type NavigationWait = { page: Page; since: number; done: Promise<void> }
+type NavigationWait = { page: Page | null; since: number; done: Promise<void> }
 type NavigationPublication = {
   page: Page
   cut: NavigationCut
@@ -288,7 +288,7 @@ export class EventHub {
     const lease = event === 'filechooser' && page ? this.intercept(page) : null
     let finish = () => {}
     const publication =
-      page && event === 'framenavigated' && !options.predicate
+      event === 'framenavigated' && !options.predicate
         ? {
             page,
             since,
@@ -337,7 +337,10 @@ export class EventHub {
     signal: SignalLike | undefined,
   ): Promise<void> {
     const waits = [...this.navigationWaits]
-      .filter((wait) => wait.page === page && wait.since <= cut.at)
+      .filter(
+        (wait) =>
+          (wait.page === null || wait.page === page) && wait.since <= cut.at,
+      )
       .map((wait) => wait.done)
     let finish!: () => void
     let fail!: (error: Error) => void

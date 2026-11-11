@@ -80,6 +80,43 @@ it('publishes an earlier unfiltered navigation wait before completing its click'
   expect(json(await result)).toEqual(['navigation', 'click'])
 })
 
+it('publishes an earlier unfiltered context navigation wait before completing its click', async () => {
+  const candidate = deferred<unknown>()
+  const clicked = deferred<void>()
+  const runtime = loadPrelude({
+    seed: SEED,
+    now: 100,
+    answer: ({ name }) => {
+      if (name === 'page.frames') return tree
+      if (name === 'events.wait') return candidate.promise
+      if (name === 'locator.click') {
+        clicked.resolve()
+        return { navigation: { seq: 8, at: 100 } }
+      }
+      return null
+    },
+  })
+  const result = runtime.run(`
+    const order = []
+    const wait = context.waitForEvent('framenavigated').then(() => order.push('navigation'))
+    const click = page.click('a').then(() => order.push('click'))
+    await Promise.all([wait, click])
+    return order
+  `)
+  await clicked.promise
+  // Delay the events.wait reply until the native click reply already arrived.
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  candidate.resolve({
+    seq: 8,
+    at: 100,
+    event: 'framenavigated',
+    page: { $neo: 'page', tab: 1007 },
+    frame,
+    context: true,
+  })
+  expect(json(await result)).toEqual(['navigation', 'click'])
+})
+
 it('does not join a navigation predicate that itself awaits the click', async () => {
   const runtime = loadPrelude({
     seed: SEED,

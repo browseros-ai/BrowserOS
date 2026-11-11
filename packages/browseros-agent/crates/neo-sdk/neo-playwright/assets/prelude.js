@@ -8669,7 +8669,7 @@ ${value.stack}`;
       const signal = signalOf(api, options);
       const lease = event === "filechooser" && page ? this.intercept(page) : null;
       let finish = () => {};
-      const publication = page && event === "framenavigated" && !options.predicate ? {
+      const publication = event === "framenavigated" && !options.predicate ? {
         page,
         since,
         done: new Promise((resolve) => {
@@ -8693,7 +8693,7 @@ ${value.stack}`;
       }
     }
     async publishNavigation(page, cut, api, deadline, signal) {
-      const waits = [...this.navigationWaits].filter((wait) => wait.page === page && wait.since <= cut.at).map((wait) => wait.done);
+      const waits = [...this.navigationWaits].filter((wait) => (wait.page === null || wait.page === page) && wait.since <= cut.at).map((wait) => wait.done);
       let finish;
       let fail;
       const delivered = new Promise((resolve, reject) => {
