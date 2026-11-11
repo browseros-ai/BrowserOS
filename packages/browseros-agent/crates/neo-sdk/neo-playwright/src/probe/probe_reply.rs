@@ -22,7 +22,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 24;
+pub(crate) const PROBE_PROTOCOL: u32 = 25;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -58,6 +58,8 @@ pub(crate) enum ProbeReply {
     Element {
         pin: Pin,
         preview: String,
+        #[serde(default)]
+        resolved: Option<Resolution>,
     },
     /// An `<iframe>` or `<frame>`, pinned. `key` names it in this world's ref map, for the
     /// child frame's parent link. It carries no preview, which a hop never needs.
@@ -76,6 +78,8 @@ pub(crate) enum ProbeReply {
     /// The first state that does not hold.
     State {
         missing: ElementState,
+        #[serde(default)]
+        resolved: Option<Resolution>,
     },
     /// Measured, not armed: frame-local CSS pixels.
     Measured {
@@ -87,6 +91,8 @@ pub(crate) enum ProbeReply {
         /// The original element's border width plus explicit position, not a retarget's rect.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         border_offset: Option<Point>,
+        #[serde(default)]
+        resolved: Option<Resolution>,
     },
     /// Upstream's description of what intercepts pointer events: the page's own markup.
     Covered {
@@ -115,9 +121,11 @@ pub(crate) enum ProbeReply {
     Value {
         value: PageText,
     },
-    /// One element's read.
+    /// One element's read; a file input's names what its chunk resolved to.
     Read {
         value: PageText,
+        #[serde(default)]
+        resolved: Option<Resolution>,
     },
     /// A `readAll`: how many matched, and one value per match where the read has values.
     Values {
@@ -159,12 +167,51 @@ pub(crate) enum ProbeReply {
     Error {
         message: String,
         class: ErrorClass,
+        /// Only from a file input that refused the files: what its chunk resolved to.
+        #[serde(default)]
+        resolved: Option<Resolution>,
     },
     /// The world has no booted probe (its document was replaced, or nothing installed it).
     Uninstalled,
 }
 
+/// What a request's selector chunk resolved to: the first match's preview and how many
+/// matched. Only a reply to a request that targets a chunk carries one.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Resolution {
+    preview: String,
+    count: u32,
+}
+
+impl Resolution {
+    /// Upstream's call-log line for one pass that found the element (frames.ts
+    /// `_retryWithProgressIfNotConnected`).
+    pub(crate) fn log_line(&self) -> String {
+        let Self { preview, count } = self;
+        if *count > 1 {
+            format!(
+                "  locator resolved to {count} elements. Proceeding with the first one: {preview}"
+            )
+        } else {
+            format!("  locator resolved to {preview}")
+        }
+    }
+}
+
 impl ProbeReply {
+    /// What the request's chunk resolved to, on a reply that carries it.
+    pub(crate) fn resolution(&self) -> Option<&Resolution> {
+        match self {
+            Self::Element { resolved, .. }
+            | Self::State { resolved, .. }
+            | Self::Measured { resolved, .. }
+            | Self::Read { resolved, .. }
+            | Self::Error { resolved, .. } => resolved.as_ref(),
+            _ => None,
+        }
+    }
+
     /// The reply's `kind` as protocol.ts spells it, for messages about a reply that did not
     /// fit its request.
     pub(crate) fn kind(&self) -> &'static str {

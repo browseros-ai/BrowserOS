@@ -8069,7 +8069,15 @@ ${value.stack}`;
         kind: "strict",
         message: injected.strictModeViolationError(chunk, elements).message
       };
-    return { kind: "one", element: first };
+    return { kind: "one", element: first, count: elements.length };
+  }
+  function resolutionOf(world, found) {
+    return found.count === undefined ? {} : {
+      resolved: {
+        preview: world.injected.previewNode(found.element),
+        count: found.count
+      }
+    };
   }
   function attachedRoot(root) {
     return root instanceof Element && root.isConnected ? root : undefined;
@@ -8099,7 +8107,8 @@ ${value.stack}`;
       return {
         kind: "element",
         pin: world.pins.add(element),
-        preview: world.injected.previewNode(element)
+        preview: world.injected.previewNode(element),
+        ...resolutionOf(world, found)
       };
     const src = frameSource(element);
     if (src === undefined)
@@ -8163,11 +8172,18 @@ ${value.stack}`;
     const { element } = found;
     const { injected } = world;
     for (const state of request.states) {
-      const result = injected.elementState(element, state, request.frameVisible);
+      let result;
+      try {
+        result = injected.elementState(element, state, request.frameVisible);
+      } catch (error) {
+        if (error instanceof Error)
+          Object.assign(error, resolutionOf(world, found));
+        throw error;
+      }
       if (result.received === "error:notconnected")
         return { kind: "detached" };
       if (!result.matches)
-        return { kind: "state", missing: state };
+        return { kind: "state", missing: state, ...resolutionOf(world, found) };
     }
     const pin = typeof request.target === "object" && "pin" in request.target ? request.target.pin : world.pins.add(element);
     const { arm } = request;
@@ -8180,8 +8196,9 @@ ${value.stack}`;
       return { kind: "detached" };
     const box = rectOf(rect);
     const place = clickPoint(element, request.position);
+    const resolved = resolutionOf(world, found);
     if (!place)
-      return { kind: "state", missing: "visible" };
+      return { kind: "state", missing: "visible", ...resolved };
     const measured = {
       kind: "measured",
       pin,
@@ -8189,7 +8206,8 @@ ${value.stack}`;
       point: place.point,
       inView: place.inView,
       transformed: isTransformed(element),
-      ...place.borderOffset ? { borderOffset: place.borderOffset } : {}
+      ...place.borderOffset ? { borderOffset: place.borderOffset } : {},
+      ...resolved
     };
     if (!arm || !arm.browserMapped && !place.inView)
       return measured;
@@ -8588,7 +8606,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 24;
+  var PROTOCOL = 25;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -8726,7 +8744,16 @@ ${value.stack}`;
     const found = request.read.kind === "fileInput" && request.target === "root" && root instanceof Element ? { kind: "one", element: root } : resolveTarget(world, request.target, request.strictness, root);
     if (found.kind !== "one")
       return found;
-    return { kind: "read", value: reader(world, found.element) };
+    if (request.read.kind !== "fileInput")
+      return { kind: "read", value: reader(world, found.element) };
+    const resolution = resolutionOf(world, found);
+    try {
+      return { kind: "read", value: reader(world, found.element), ...resolution };
+    } catch (error) {
+      if (error instanceof Error)
+        Object.assign(error, resolution);
+      throw error;
+    }
   }
   function readAll(world, request, root) {
     const elements = queryAll(world, request.target, root);
@@ -9114,7 +9141,12 @@ ${value.stack}`;
     return "internal";
   }
   function thrownReply(error) {
-    return errorReply(classify(error), error instanceof Error ? error.message : String(error));
+    const reply = errorReply(classify(error), error instanceof Error ? error.message : String(error));
+    const resolved = error instanceof Error ? Reflect.get(error, "resolved") : undefined;
+    return isResolution(resolved) ? { ...reply, resolved } : reply;
+  }
+  function isResolution(value) {
+    return typeof value === "object" && value !== null && typeof Reflect.get(value, "preview") === "string" && typeof Reflect.get(value, "count") === "number";
   }
   function errorReply(errorClass, message) {
     return { kind: "error", message, class: errorClass };

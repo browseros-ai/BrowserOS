@@ -32,7 +32,7 @@ import type {
   ScrollPlan,
   VerdictRequest,
 } from './protocol'
-import { resolveTarget } from './resolve'
+import { resolutionOf, resolveTarget } from './resolve'
 import { ProbeError, type World } from './world'
 
 /** What `setupHitTargetInterceptor` hands back once armed. */
@@ -117,9 +117,19 @@ export function act(
   const { element } = found
   const { injected } = world
   for (const state of request.states) {
-    const result = injected.elementState(element, state, request.frameVisible)
+    let result: ReturnType<World['injected']['elementState']>
+    try {
+      result = injected.elementState(element, state, request.frameVisible)
+    } catch (error) {
+      // A state the element cannot have (`editable` on a <div>) throws; upstream has logged
+      // what the locator resolved to by then, so the error reply carries it (index.ts).
+      if (error instanceof Error)
+        Object.assign(error, resolutionOf(world, found))
+      throw error
+    }
     if (result.received === 'error:notconnected') return { kind: 'detached' }
-    if (!result.matches) return { kind: 'state', missing: state }
+    if (!result.matches)
+      return { kind: 'state', missing: state, ...resolutionOf(world, found) }
   }
   const pin =
     typeof request.target === 'object' && 'pin' in request.target
@@ -138,7 +148,8 @@ export function act(
   if (!rect) return { kind: 'detached' }
   const box = rectOf(rect)
   const place = clickPoint(element, request.position)
-  if (!place) return { kind: 'state', missing: 'visible' }
+  const resolved = resolutionOf(world, found)
+  if (!place) return { kind: 'state', missing: 'visible', ...resolved }
   const measured = {
     kind: 'measured',
     pin,
@@ -147,6 +158,7 @@ export function act(
     inView: place.inView,
     transformed: isTransformed(element),
     ...(place.borderOffset ? { borderOffset: place.borderOffset } : {}),
+    ...resolved,
   } as const
   if (!arm || (!arm.browserMapped && !place.inView)) return measured
   if (arm.expectRect && !sameRect(box, arm.expectRect)) return measured

@@ -121,6 +121,7 @@ async fn drive(rig: &mut Rig) -> TestResult {
     let ops: Vec<_> = detail
         .operations
         .iter()
+        .filter(|op| !browseros_rig::is_worker_event_record(op))
         .map(|op| (op.name.as_str(), op.effect, op.outcome, op.delivery))
         .collect();
     assert_eq!(
@@ -138,13 +139,6 @@ async fn drive(rig: &mut Rig) -> TestResult {
                 Some(Outcome::Ok),
                 Some(Delivery::Done)
             ),
-            // Playwright's goto reads the frame tree it navigated, for `page.frames()`.
-            (
-                "page.frames",
-                Effect::Read,
-                Some(Outcome::Ok),
-                Some(Delivery::NotSent)
-            ),
             (
                 "page.title",
                 Effect::Read,
@@ -158,7 +152,7 @@ async fn drive(rig: &mut Rig) -> TestResult {
                 Some(Delivery::Done)
             ),
         ],
-        "five ops, once each (the replay ran nothing): writes done once sent, reads never sent"
+        "four script ops, once each (the replay ran nothing): writes done, reads never sent"
     );
     the_load_is_an_op_on_the_new_tab(&store, locked_run, locked_tab).await
 }
@@ -173,6 +167,7 @@ async fn the_load_is_an_op_on_the_new_tab(store: &TraceStore, run: RunId, tab: i
     let ops: Vec<(&str, Option<i64>, bool)> = opened
         .operations
         .iter()
+        .filter(|op| !browseros_rig::is_worker_event_record(op))
         .map(|op| {
             (
                 op.name.as_str(),
@@ -186,7 +181,6 @@ async fn the_load_is_an_op_on_the_new_tab(store: &TraceStore, run: RunId, tab: i
         [
             ("context.newPage", None, false),
             ("page.goto", Some(tab), false),
-            ("page.frames", Some(tab), false),
         ],
         "the load is the script's own op on the new tab, where the door's rules see it"
     );
@@ -356,7 +350,7 @@ async fn a_hosts_lock_ends_when_its_tab_closes(
 }
 
 /// The run as zuzu reads it over the host socket: refused without the bearer token, and with it
-/// the run the trace recorded, with its five ops.
+/// the run the trace recorded, including its four script ops and automatic monitoring reads.
 async fn read_back_over_the_host_socket(rig: &Rig, id: RunId) -> TestResult {
     let refused = rig.host_get(&format!("/v1/runs/{id}"), None).await?;
     assert!(
@@ -382,17 +376,13 @@ async fn read_back_over_the_host_socket(rig: &Rig, id: RunId) -> TestResult {
         .and_then(Value::as_array)
         .ok_or("a run lists its operations")?
         .iter()
+        .filter(|op| !browseros_rig::is_worker_event_operation(op))
         .filter_map(|op| op.get("name").and_then(Value::as_str))
         .collect();
     assert_eq!(
         names,
-        [
-            "context.newPage",
-            "page.goto",
-            "page.frames",
-            "page.title",
-            "page.close"
-        ]
+        ["context.newPage", "page.goto", "page.title", "page.close"],
+        "the host records script operations alongside worker monitoring: {host_run}"
     );
     Ok(())
 }

@@ -647,7 +647,7 @@ pub(crate) fn refused(scope: &OpScope<'_>, reply: ProbeReply) -> PlaywrightError
         ProbeReply::Strict { message } => {
             scope.fail(ErrorCode::StrictModeViolation, &format!("Error: {message}"))
         }
-        ProbeReply::Error { message, class } => match class {
+        ProbeReply::Error { message, class, .. } => match class {
             ErrorClass::Selector => scope.fail(ErrorCode::InvalidInput, &message),
             ErrorClass::Script => scope.fail(ErrorCode::InvalidInput, &format!("Error: {message}")),
             ErrorClass::Unsupported => scope.fail(ErrorCode::Unsupported, &message),

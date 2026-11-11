@@ -18,6 +18,7 @@
 #[path = "support/browseros_rig.rs"]
 pub mod browseros_rig;
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::time::Duration;
 
@@ -103,8 +104,8 @@ async fn the_agent_opens_a_tab(client: &Client) -> Result<(String, i64), Box<dyn
     Ok((id, tab))
 }
 
-/// The host reads run 1 back: its ids, its tab, and four operations whose deliveries match what
-/// the agent did (two writes answered, two reads never sent).
+/// The host reads run 1 back: its ids, observed tabs, and three script operations whose
+/// deliveries match what the agent did. Automatic monitor reads remain in the raw trace.
 async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
     let host_run = read_run(rig, id).await?;
     let field = |name: &str| host_run.get(name).cloned().unwrap_or(Value::Null);
@@ -116,7 +117,6 @@ async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
             field("complete"),
             field("taskId"),
             field("requestId"),
-            field("tabs"),
         ],
         [
             json!(id),
@@ -125,10 +125,10 @@ async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
             json!(true),
             json!(TASK),
             json!("acceptance-1"),
-            json!([tab]),
         ],
         "the host reads the run as the agent ran it: {host_run}"
     );
+    assert_eq!(field("tabs"), json!(observed_tabs(&host_run, tab)?));
     assert_eq!(
         host_run.pointer("/result/title"),
         Some(&json!(FIRST_TITLE)),
@@ -139,15 +139,18 @@ async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
         [
             op_of("context.newPage", "write", "ok", "done", None),
             op_of("page.goto", "write", "ok", "done", Some(tab)),
-            // Playwright's goto reads the frame tree it navigated, for `page.frames()`.
-            op_of("page.frames", "read", "ok", "not_sent", Some(tab)),
             op_of("page.title", "read", "ok", "not_sent", Some(tab)),
         ],
         "every op once, in start order: {host_run}"
     );
 
     let goto = operation_id(&host_run, "page.goto")?;
-    assert_eq!(goto, format!("{id}.2"), "an operation id is <runId>.<seq>");
+    assert!(
+        goto.strip_prefix(&format!("{id}."))
+            .and_then(|seq| seq.parse::<u64>().ok())
+            .is_some_and(|seq| seq > 0),
+        "an operation id is <runId>.<positive seq>: {goto}"
+    );
     let read = rig
         .host(
             "GET",
@@ -233,9 +236,7 @@ async fn a_lock_refuses_the_agent(rig: &Rig, client: &Client, tab: i64) -> TestR
         "the trace records the refused read of the frames and the refused write on the locked \
          tab: {host_run}"
     );
-    let goto = host_run
-        .pointer("/operations/1")
-        .ok_or("the write is the second operation")?;
+    let goto = operation(&host_run, "page.goto")?;
     assert_eq!(
         (goto.pointer("/error/owner"), goto.pointer("/error/code")),
         (Some(&json!("host")), Some(&json!("owner_has_control"))),
@@ -288,8 +289,8 @@ async fn the_write_lands_once_released(
 
 /// Run 3's picture of its tab, as the host finds it. Each write keeps its own screenshot (the
 /// trace writer no longer folds a write's picture into a later read's on the same tab), so the
-/// `page.goto` holds it, not the frame-tree reads around it: the run's page reads its frames
-/// before the script's first statement, and Playwright's goto again after it navigated. The
+/// `page.goto` holds it. The run reads initial frames before its first statement; goto returns
+/// the navigated tree inline in its navigation publication instead of sending another read. The
 /// run's record names that op, and its JPEG is whole.
 async fn the_tab_has_its_picture_after_the_write(rig: &Rig, run: &str, tab: i64) -> TestResult {
     // Held until the run is complete: ended, and every screenshot job answered.
@@ -299,16 +300,13 @@ async fn the_tab_has_its_picture_after_the_write(rig: &Rig, run: &str, tab: i64)
         [
             op_of("page.frames", "read", "ok", "not_sent", Some(tab)),
             op_of("page.goto", "write", "ok", "done", Some(tab)),
-            op_of("page.frames", "read", "ok", "not_sent", Some(tab)),
         ],
         "{host_run}"
     );
-    let write = format!("{run}.2");
+    let write = operation_id(&host_run, "page.goto")?;
+    let op = operation(&host_run, "page.goto")?;
     assert_eq!(
-        (
-            host_run.pointer("/operations/1/id"),
-            host_run.pointer("/operations/1/hasScreenshot"),
-        ),
+        (op.get("id"), op.get("hasScreenshot"),),
         (Some(&json!(write)), Some(&json!(true))),
         "the write holds its own picture of the tab: {host_run}"
     );
@@ -404,6 +402,7 @@ fn operations(run: &Value) -> Result<Vec<Op>, Box<dyn Error>> {
         .and_then(Value::as_array)
         .ok_or("a run lists its operations")?
         .iter()
+        .filter(|op| !browseros_rig::is_worker_event_operation(op))
         .map(|op| {
             (
                 text(op, "name"),
@@ -416,17 +415,42 @@ fn operations(run: &Value) -> Result<Vec<Op>, Box<dyn Error>> {
         .collect())
 }
 
-fn operation_id(run: &Value, name: &str) -> Result<String, Box<dyn Error>> {
+/// A monitor may target the run's initial working tab before the script creates another.
+/// The API includes both: allow only tabs explained by that monitor or the script's own tab.
+fn observed_tabs(run: &Value, script_tab: i64) -> Result<Vec<i64>, Box<dyn Error>> {
+    let ops = run
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or("a run lists operations")?;
+    let mut tabs = BTreeSet::from([script_tab]);
+    tabs.extend(
+        ops.iter()
+            .filter(|op| {
+                op.get("name").and_then(Value::as_str) == Some("events.listen")
+                    && browseros_rig::is_worker_event_operation(op)
+            })
+            .filter_map(|op| op.get("tabId").and_then(Value::as_i64)),
+    );
+    Ok(tabs.into_iter().collect())
+}
+
+/// Background reads consume sequence numbers too; find the script's operation by its name.
+fn operation<'a>(run: &'a Value, name: &str) -> Result<&'a Value, Box<dyn Error>> {
     run.get("operations")
         .and_then(Value::as_array)
         .and_then(|ops| {
             ops.iter()
                 .find(|op| op.get("name").and_then(Value::as_str) == Some(name))
         })
-        .and_then(|op| op.get("id"))
+        .ok_or_else(|| format!("the run has a {name} operation: {run}").into())
+}
+
+fn operation_id(run: &Value, name: &str) -> Result<String, Box<dyn Error>> {
+    operation(run, name)?
+        .get("id")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| format!("the run has a {name} operation: {run}").into())
+        .ok_or_else(|| format!("the {name} operation has an id: {run}").into())
 }
 
 /// The run's returned value.

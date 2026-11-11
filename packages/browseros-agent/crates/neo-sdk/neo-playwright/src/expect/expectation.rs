@@ -482,6 +482,7 @@ impl Expectation {
             ProbeReply::Error {
                 message,
                 class: ErrorClass::Script | ErrorClass::Selector,
+                ..
             } => Err(self.thrown(scope, ErrorCode::InvalidInput, &message)),
             other => Err(resolve::refused(scope, other)),
         }

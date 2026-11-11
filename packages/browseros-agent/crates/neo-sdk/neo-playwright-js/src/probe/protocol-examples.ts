@@ -373,6 +373,12 @@ const REPLY_EXAMPLES: {
       pin: 3,
       preview: '<button>Go</button>',
     },
+    {
+      kind: 'element',
+      pin: 3,
+      preview: '<button>Go</button>',
+      resolved: { preview: '<button>Go</button>', count: 2 },
+    },
   ],
   frame: [
     {
@@ -385,7 +391,14 @@ const REPLY_EXAMPLES: {
   ],
   notFrame: [{ kind: 'notFrame', preview: '<div id="pay">…</div>' }],
   detached: [{ kind: 'detached' }],
-  state: [{ kind: 'state', missing: 'visible' }],
+  state: [
+    { kind: 'state', missing: 'visible' },
+    {
+      kind: 'state',
+      missing: 'enabled',
+      resolved: { preview: '<button disabled>Go</button>', count: 1 },
+    },
+  ],
   measured: [
     {
       kind: 'measured',
@@ -395,6 +408,15 @@ const REPLY_EXAMPLES: {
       inView: true,
       transformed: false,
       borderOffset: { x: 5, y: 5 },
+    },
+    {
+      kind: 'measured',
+      pin: 3,
+      rect: RECT,
+      point: POINT,
+      inView: true,
+      transformed: false,
+      resolved: { preview: '<button>Go</button>', count: 1 },
     },
   ],
   covered: [
@@ -430,6 +452,11 @@ const REPLY_EXAMPLES: {
   ],
   read: [
     { kind: 'read', value: 'Welcome' },
+    {
+      kind: 'read',
+      value: { multiple: false, webkitdirectory: false },
+      resolved: { preview: '<input type="file"/>', count: 1 },
+    },
     { kind: 'read', value: null },
     { kind: 'read', value: RECT },
     {
@@ -537,6 +564,15 @@ const REPLY_EXAMPLES: {
       class: 'unsupported',
       message:
         'toHaveValue(RegExp) is not supported on password, card and one-time-code fields; use an exact string.',
+    },
+    {
+      kind: 'error',
+      class: 'script',
+      message: 'Node is not an HTMLInputElement',
+      resolved: {
+        preview: '<div id="notfile">Not a file input</div>',
+        count: 1,
+      },
     },
     { kind: 'error', class: 'internal', message: 'not built yet' },
   ],
