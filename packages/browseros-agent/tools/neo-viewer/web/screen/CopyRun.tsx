@@ -5,9 +5,11 @@
  *
  * Copy fetches the run at the click, open row or closed: a row's detail is a cache that can lag
  * the run (closed, it stops refreshing; reopened, it shows the old value until its refetch lands),
- * and a copy must hold the reply as it is now. The clipboard is handed a promise of the text
+ * and a copy must hold the reply as it is now. For a run that just ended the server first waits
+ * for Neo's record of it, as Export does. The clipboard is handed a promise of the text
  * (`ClipboardItem`) at the click, so the write keeps the click's user activation however long the
- * fetch takes; a browser without `ClipboardItem` gets `writeText` once the text is ready.
+ * fetch and that wait take; a browser without `ClipboardItem` gets `writeText` once the text is
+ * ready.
  *
  * The button is a sibling of the row's button, laid over the row's end (`RunRow`'s copy slot),
  * not inside it: a button cannot hold a button, and a click on Copy never opens or closes the row.
@@ -23,10 +25,14 @@ function runCopyText(detail: RunDetail): string {
   return runMarkdown(detail, { replyChars: null })
 }
 
+/**
+ * The run as the server holds it, after waiting (about 3 s at most, on the server) for Neo's
+ * record when the run only just ended, so a copy made the moment a run finishes has its methods.
+ */
 async function fetchDetail(runId: string): Promise<RunDetail> {
-  const response = await fetch(apiRoutes.run(runId))
-  if (!response.ok)
-    throw new Error(`${apiRoutes.run(runId)}: HTTP ${response.status}`)
+  const path = apiRoutes.run(runId, { waitForNeo: true })
+  const response = await fetch(path)
+  if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`)
   return ((await response.json()) as RunResponse).run
 }
 

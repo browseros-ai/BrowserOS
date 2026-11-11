@@ -21,14 +21,17 @@ import { handleMcp, type McpProxyDeps } from './proxy/mcp-proxy'
 
 /** The longest `stop` waits for open connections to close. */
 const STOP_WAIT_MS = 2_000
-/** The longest an export waits for Neo's records of runs that just ended. */
-const EXPORT_JOIN_WAIT_MS = 3_000
+/** The longest an export, or a Copy, waits for Neo's records of runs that just ended. */
+const NEO_RECORD_WAIT_MS = 3_000
+/** A run that ended longer ago than this is not waited for: its record is not coming. */
+const RECENT_END_MS = 10_000
 
-/** Seams tests replace: the clock, Neo's host API, and where exports go. */
+/** Seams tests replace: the clock, Neo's host API, where exports go, and the record wait. */
 export interface ViewerSeams {
   now?: () => number
   liveHost?: LiveHost
   exportRoot?: string
+  neoRecordWaitMs?: number
 }
 
 export interface RunningViewer {
@@ -57,6 +60,7 @@ export async function startViewer(
   }
   // Neo's record of each run, read through the host API once its reply is in.
   const joiner = joinNeoRuns(store)
+  const recordWaitMs = seams.neoRecordWaitMs ?? NEO_RECORD_WAIT_MS
   const info: Omit<ViewerInfo, 'container'> = {
     mcpUrl: '',
     upstreamUrl: config.upstream.href,
@@ -82,7 +86,7 @@ export async function startViewer(
     const [viewerInfo, commit] = await Promise.all([
       currentInfo(),
       viewerCommit(),
-      joiner.settled(EXPORT_JOIN_WAIT_MS),
+      joiner.settled(recordWaitMs),
     ])
     const { runs, log, toolsList, rawLog } = store.snapshot()
     const written = await writeExport(
@@ -104,6 +108,14 @@ export async function startViewer(
     return written
   }
 
+  // Copy of a run that just ended: wait for Neo's record of it, as an export does for all of them.
+  const awaitNeoRecord = async (runId: string) => {
+    const run = store.run(runId)
+    if (!run || run.neo || !run.neoRunId || !run.answeredAt) return
+    if (now() - Date.parse(run.answeredAt) > RECENT_END_MS) return
+    await joiner.settledFor(runId, recordWaitMs)
+  }
+
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: config.port,
@@ -111,7 +123,7 @@ export async function startViewer(
     idleTimeout: 0,
     routes: {
       ...pageRoutes(page),
-      ...apiRouteTable(store, currentInfo, exportRuns),
+      ...apiRouteTable(store, currentInfo, exportRuns, awaitNeoRecord),
       ...live.routes,
     },
     // Each upgraded socket carries its own session (the live screen's display relay).

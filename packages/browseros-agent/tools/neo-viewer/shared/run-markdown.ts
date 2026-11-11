@@ -127,12 +127,22 @@ function runHeader(run: RunSummary, width: number): string {
     outcomeWord(run),
     `round trip ${run.roundTripMs === null ? '–' : seconds(run.roundTripMs)}`,
     `Neo ${neo === null ? '–' : seconds(neo)}`,
-    run.operationCount === null
-      ? 'method calls unknown'
-      : plural(run.operationCount, 'method call'),
+    methodCalls(run),
     `code ≈${count(run.codeSize.tokens)} tok`,
     `reply ≈${run.replySize ? count(run.replySize.tokens) : '–'} tok`,
   ].join(' · ')
+}
+
+/**
+ * `4 method calls`; without Neo's record, why: Neo answered (it named the run) but its record of
+ * the run had not been read in time, or there is nothing to know (no host API, no Neo run).
+ */
+function methodCalls(run: RunSummary): string {
+  if (run.operationCount !== null)
+    return plural(run.operationCount, 'method call')
+  return run.neoRunId && run.status !== 'running'
+    ? "Neo's record had not arrived"
+    : 'method calls unknown'
 }
 
 function facts(detail: RunDetail): string[] {

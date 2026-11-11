@@ -9,7 +9,8 @@
  * Routes (JSON unless noted):
  *   GET  /api/info              ViewerInfo
  *   GET  /api/runs              RunsResponse        every run since the last Clear, in order
- *   GET  /api/runs/:runId       RunResponse         one run in full
+ *   GET  /api/runs/:runId       RunResponse         one run in full; `?wait=neo` first waits (about 3 s at
+ *                                                   most) for Neo's record of a run that just ended
  *   POST /api/clear             RunsResponse        starts an empty log (the previous is kept once)
  *   POST /api/export            ExportResponse      writes every run since the last Clear to a new folder
  *   GET  /api/events            text/event-stream of ViewerEvent, one JSON object per `data:`
@@ -19,7 +20,8 @@
 export const apiRoutes = {
   info: '/api/info',
   runs: '/api/runs',
-  run: (runId: string) => `/api/runs/${encodeURIComponent(runId)}`,
+  run: (runId: string, options: { waitForNeo?: boolean } = {}) =>
+    `/api/runs/${encodeURIComponent(runId)}${options.waitForNeo ? '?wait=neo' : ''}`,
   clear: '/api/clear',
   export: '/api/export',
   events: '/api/events',
