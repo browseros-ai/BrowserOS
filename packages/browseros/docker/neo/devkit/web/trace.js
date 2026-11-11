@@ -13,7 +13,6 @@ const EVENT_TYPES = [
   "run.ended",
   "operation.started",
   "operation.ended",
-  "tab.private",
   "tab.closed",
   "lock.state",
   "takeover.state",
@@ -33,7 +32,7 @@ const state = {
   details: new Map(), // runId -> Run, for runs that were selected
   rev: new Map(), // runId -> a counter bumped whenever its Run changes, so the detail re-renders only then
   cli: new Map(), // requestId -> CLI run record (design.md shape 2)
-  shots: new Map(), // operationId -> {state: loading|ok|withheld|expired|missing|error, url?}
+  shots: new Map(), // operationId -> {state: loading|ok|expired|missing|error, url?}
   selected: null,
   follow: true,
   filter: "",
@@ -96,8 +95,8 @@ const loadRun = (run, tries = 0) => ({
 
 /**
  * Screenshot reads for a run's operations. `hasScreenshot` is final once the run is complete,
- * and false both for an operation with no picture and for one on a private tab, so once complete
- * every operation with a tab is asked too: 404 means no picture, 410 means withheld (private).
+ * and false when no image is stored. Once complete, each operation with a tab is checked:
+ * 404 means no image was kept, and 410 means retention deleted it.
  */
 function shotLoads(s, run) {
   const commands = [];
@@ -161,7 +160,6 @@ function apply(s, event) {
       }
       break;
     }
-    case "tab.private":
     case "tab.closed":
     case "lock.state":
     case "takeover.state":
@@ -287,7 +285,7 @@ async function perform(command) {
           const body = await res.json().catch(() => ({}));
           shot =
             res.status === 410
-              ? { state: body.code === "expired" ? "expired" : "withheld" }
+              ? { state: "expired" }
               : { state: res.status === 404 ? "missing" : "error", note: body.message };
         }
         dispatch({ type: "shot.loaded", id: command.id, shot });
@@ -432,7 +430,7 @@ function thumb(op, run) {
   if (shot.state === "ok") {
     return h("div", { class: "thumb" }, h("img", { src: shot.url, alt: `after ${op.name}`, onclick: () => lightbox(shot.url) }));
   }
-  const words = { withheld: "withheld: private", expired: "expired", missing: "no screenshot" }[shot.state] ?? `error: ${shot.note ?? ""}`;
+  const words = { expired: "expired", missing: "no screenshot" }[shot.state] ?? `error: ${shot.note ?? ""}`;
   return h("div", { class: "thumb" }, words);
 }
 
@@ -507,11 +505,11 @@ function renderDetail() {
   if (run.code !== undefined) code = [h("pre", null, run.code)];
   else if (cli?.code !== undefined) {
     code = [
-      run.codeWithheld ? h("div", { class: "notice warn", style: "margin-bottom:6px" }, `claw-sdk withheld this run's code: ${run.codeWithheld}.`) : null,
+      run.codeWithheld === "unavailable" ? h("div", { class: "notice warn", style: "margin-bottom:6px" }, "Neo restarted before saving this run’s code.") : null,
       h("div", { class: "muted", style: "margin-bottom:4px" }, "from the CLI log"),
       h("pre", null, cli.code),
     ];
-  } else if (run.codeWithheld) code = [h("div", { class: "notice warn" }, `claw-sdk withheld this run's code: ${run.codeWithheld}.`)];
+  } else if (run.codeWithheld === "unavailable") code = [h("div", { class: "notice warn" }, "Neo restarted before saving this run’s code.")];
   else if (run.status === "running") code = [h("span", { class: "muted" }, "claw-sdk stores the code when the run ends.")];
   else code = [h("span", { class: "muted" }, run.stub ? "loading..." : "(no code)")];
 
@@ -589,8 +587,6 @@ function renderEvents() {
   const recent = state.neoEvents.slice(-30).reverse();
   const describe = (event) => {
     switch (event.type) {
-      case "tab.private":
-        return event.privacy?.reason ? `reason ${event.privacy.reason}` : "";
       case "lock.state":
         return event.lock ? `${event.lock.id} reads=${event.lock.reads} ${event.lock.releasedAt ? "released" : `until ${clock(event.lock.expiresAt)}`}` : "";
       case "takeover.state":
@@ -603,9 +599,9 @@ function renderEvents() {
     h("b", null, "Neo events"),
     ...(recent.length
       ? recent.map((event) =>
-          h("span", { class: "ev" }, h("span", { class: "muted" }, clock(event.at)), " ", badge(event.type, event.type === "tab.private" ? "warn" : "info"), event.tabId !== undefined ? ` tab ${event.tabId} ` : " ", describe(event)),
+          h("span", { class: "ev" }, h("span", { class: "muted" }, clock(event.at)), " ", badge(event.type, "info"), event.tabId !== undefined ? ` tab ${event.tabId} ` : " ", describe(event)),
         )
-      : [h("span", { class: "muted" }, "none yet (tab.private, tab.closed, lock.state, takeover.state)")]),
+      : [h("span", { class: "muted" }, "none yet (tab.closed, lock.state, takeover.state)")]),
   );
 }
 

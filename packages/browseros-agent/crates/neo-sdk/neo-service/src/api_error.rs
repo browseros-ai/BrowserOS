@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use neo_capture::CaptureError;
 use neo_takeover::PartError;
-use neo_trace::{PrivacyError, TraceError};
+use neo_trace::TraceError;
 use std::borrow::Cow;
 
 /// The contract's error codes (`Error.code`) this service sends.
@@ -19,11 +19,8 @@ pub(crate) enum ErrorCode {
     Unauthorized,
     NotFound,
     TabNotFound,
-    PagePrivate,
-    Withheld,
     Expired,
     TakeoverLock,
-    PrivacyUnavailable,
     BrowserUnavailable,
     InternalError,
     FitRestored,
@@ -40,11 +37,8 @@ impl ErrorCode {
             Self::Unauthorized => "unauthorized",
             Self::NotFound => "not_found",
             Self::TabNotFound => "tab_not_found",
-            Self::PagePrivate => "page_private",
-            Self::Withheld => "withheld",
             Self::Expired => "expired",
             Self::TakeoverLock => "takeover_lock",
-            Self::PrivacyUnavailable => "privacy_unavailable",
             Self::BrowserUnavailable => "browser_unavailable",
             Self::InternalError => "internal_error",
             Self::FitRestored => "fit_restored",
@@ -95,20 +89,6 @@ impl ApiError {
         )
     }
 
-    /// 409 `page_private`: the tab is private, so nothing of it is captured.
-    pub(crate) fn page_private() -> Self {
-        Self::new(
-            StatusCode::CONFLICT,
-            ErrorCode::PagePrivate,
-            "the tab is private; nothing of it is captured",
-        )
-    }
-
-    /// 410 `withheld`: the image was not kept because its tab was private.
-    pub(crate) fn withheld(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(StatusCode::GONE, ErrorCode::Withheld, message)
-    }
-
     /// 410 `expired`: retention deleted the image.
     pub(crate) fn expired(message: impl Into<Cow<'static, str>>) -> Self {
         Self::new(StatusCode::GONE, ErrorCode::Expired, message)
@@ -154,21 +134,6 @@ impl ApiError {
 impl From<TraceError> for ApiError {
     fn from(error: TraceError) -> Self {
         Self::internal(error.to_string())
-    }
-}
-
-/// The flag still holds in memory, so captures stay refused, but it is not on disk: the host
-/// must not act as if the tab were durably private.
-impl From<PrivacyError> for ApiError {
-    fn from(error: PrivacyError) -> Self {
-        Self {
-            cause: Some(error.to_string()),
-            ..Self::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                ErrorCode::PrivacyUnavailable,
-                "the private flag could not be committed",
-            )
-        }
     }
 }
 
@@ -220,29 +185,35 @@ impl From<PartError> for ApiError {
             PartError::DisplayPaused => Self::new(
                 StatusCode::CONFLICT,
                 ErrorCode::DisplayPaused,
-                "view displays are paused while the owner has control or a private tab is in \
-                 front; try again later",
+                "view displays are paused; try again later",
             ),
             PartError::TakeoverReleased => Self::new(
                 StatusCode::CONFLICT,
                 ErrorCode::TakeoverReleased,
                 "the takeover was released",
             ),
-            PartError::Privacy(error) => error.into(),
+            PartError::Privacy(cause) => Self {
+                cause: Some(cause.to_string()),
+                ..Self::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    ErrorCode::InternalError,
+                    "Neo could not start the takeover",
+                )
+            },
         }
     }
 }
 
 /// A live view the capture hub could not open. The hub knows a tab as a "session" whose only
-/// tab is that tab (`live_tabs`), so an unknown session is a tab that is not open, and a
-/// session that is not live is a private tab. Every case is answered before a byte is sent.
+/// tab is that tab (`live_tabs`). Every open tab is live, and an unknown session means no tab
+/// was found. The hub reports these failures before sending any bytes.
 impl From<CaptureError> for ApiError {
     fn from(error: CaptureError) -> Self {
         match error {
             CaptureError::SessionNotFound | CaptureError::NoOpenTab | CaptureError::TabNotFound => {
                 Self::tab_not_found()
             }
-            CaptureError::SessionNotLive => Self::page_private(),
+            CaptureError::SessionNotLive => Self::internal(error.to_string()),
             CaptureError::Browser(cause) => Self {
                 cause: Some(cause.to_string()),
                 ..Self::new(

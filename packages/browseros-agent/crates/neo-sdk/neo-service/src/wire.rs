@@ -4,18 +4,18 @@
 
 use crate::api_error::ApiError;
 use crate::event_log::EventKind;
-use crate::limits::{MAX_NAVIGATE_INPUT, SECRET_TTL_SECONDS, VIEWER_SIDE};
+use crate::limits::{MAX_NAVIGATE_INPUT, VIEWER_SIDE};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_core::TabId;
 use neo_sdk_api as api;
 use neo_takeover::{
     BarAction, BarOutcome, Fit, FitMode, FitState, Fitted, Lock, LockTtl, Reads, ReleaseReason,
-    ScreenSize, Swept, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
+    ScreenSize, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationRow, Page, PageState,
-    PrivacyRecord, RunDetail, RunSummary, SecretValue, ShotState, TaskId, TraceTail,
+    RunDetail, RunSummary, ShotState, TaskId, TraceTail,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -109,7 +109,12 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined) -> api::Run {
         trace_gaps,
         host_data: run.host_data.clone(),
         code: run.code.clone(),
-        code_withheld: run.code_withheld.clone(),
+        // Expose the restart marker. Older runs with sensitive input can have absent code.
+        code_withheld: run
+            .code_withheld
+            .as_ref()
+            .filter(|reason| reason.as_str() == "unavailable")
+            .cloned(),
         result: run.result.clone().map(Some),
         result_truncated: run.result_truncated.then_some(true),
         unknown: (!unknown.is_empty()).then_some(unknown),
@@ -159,13 +164,8 @@ pub(crate) fn operation(op: &OperationRow, inlined: &Inlined) -> api::Operation 
     }
 }
 
-/// `GET /v1/trace`. `visuals` says when an operation's screenshot was withheld because its tab
-/// was private.
+/// `GET /v1/trace`.
 pub(crate) fn trace_tail(tail: &TraceTail, inlined: &Inlined) -> api::TraceTail {
-    let withheld = tail
-        .operations
-        .iter()
-        .any(|op| op.screenshot == Some(ShotState::Withheld));
     api::TraceTail {
         runs: tail.runs.iter().map(run_summary).collect(),
         operations: tail
@@ -174,24 +174,6 @@ pub(crate) fn trace_tail(tail: &TraceTail, inlined: &Inlined) -> api::TraceTail 
             .map(|op| operation(op, inlined))
             .collect(),
         truncated: tail.truncated,
-        visuals: if withheld {
-            "withheld_private_input"
-        } else {
-            "available"
-        }
-        .to_string(),
-    }
-}
-
-/// A tab's privacy: the record of when and why it went private, or not private.
-pub(crate) fn privacy(record: Option<PrivacyRecord>) -> api::Privacy {
-    match record {
-        Some(record) => api::Privacy {
-            private: true,
-            since: Some(record.since.millis()),
-            reason: Some(record.reason.as_str().to_string()),
-        },
-        None => api::Privacy::new(false),
     }
 }
 
@@ -219,18 +201,6 @@ pub(crate) fn operation_event(
     }
 }
 
-/// `tab.private`, once the flag is on disk.
-pub(crate) fn tab_private_event(tab: TabId, record: PrivacyRecord) -> api::Event {
-    api::Event {
-        tab_id: Some(tab.0),
-        privacy: Some(Box::new(privacy(Some(record)))),
-        ..api::Event::new(
-            EventKind::TabPrivate.as_str().to_string(),
-            record.since.millis(),
-        )
-    }
-}
-
 /// `tab.closed`, once the tab's locks ended and its private flag was forgotten.
 pub(crate) fn tab_closed_event(tab: TabId, at: EpochMillis) -> api::Event {
     api::Event {
@@ -255,13 +225,6 @@ pub(crate) fn lock(lock: &Lock) -> api::Lock {
         expires_at: lock.expires_at.millis(),
         released_at: lock.ended.map(|ended| ended.at.millis()),
     }
-}
-
-/// What a sweep added to the known secrets list, and what the list refused: counts, never the
-/// values.
-pub(crate) fn sweep_result(swept: Swept) -> api::SweepResult {
-    let count = |values: usize| i32::try_from(values).unwrap_or(i32::MAX);
-    api::SweepResult::new(count(swept.registered), count(swept.refused))
 }
 
 /// `lock.state`: the lock as it stands, at the moment it was taken or ended.
@@ -296,43 +259,6 @@ pub(crate) fn lock_request(body: &[u8]) -> Result<(TabId, Reads, LockTtl), ApiEr
             ))
         })?;
     Ok((TabId(tab_id), reads, ttl))
-}
-
-/// `POST /v1/tabs/{tabId}/private`'s optional body: none, `{}`, or `{"reason": "host"}`.
-pub(crate) fn private_request(body: &[u8]) -> Result<(), ApiError> {
-    if body.is_empty() {
-        return Ok(());
-    }
-    let request = serde_json::from_slice::<api::MakePrivateRequest>(body)
-        .map_err(|_| not_the_body(r#"{"reason"?: "host"}"#))?;
-    match request.reason.as_deref() {
-        None | Some("host") => Ok(()),
-        Some(_) => Err(ApiError::invalid("`reason` must be `host`")),
-    }
-}
-
-/// `POST /v1/secrets`: the value, already a `SecretValue` (zeroed when dropped), and its TTL.
-/// No error quotes the body, and the generated model, which derives `Debug`, is never printed.
-pub(crate) fn secret_request(body: &[u8]) -> Result<(SecretValue, Option<Duration>), ApiError> {
-    let api::SecretRequest { value, ttl_seconds } = serde_json::from_slice(body)
-        .map_err(|_| not_the_body(r#"{"value": string, "ttlSeconds"?: integer}"#))?;
-    let value = SecretValue::new(value);
-    let ttl = ttl_seconds
-        .map(|seconds| {
-            u64::try_from(seconds)
-                .ok()
-                .filter(|seconds| SECRET_TTL_SECONDS.contains(seconds))
-                .map(Duration::from_secs)
-                .ok_or_else(|| {
-                    ApiError::invalid(format!(
-                        "`ttlSeconds` must be from {} to {}",
-                        SECRET_TTL_SECONDS.start(),
-                        SECRET_TTL_SECONDS.end()
-                    ))
-                })
-        })
-        .transpose()?;
-    Ok((value, ttl))
 }
 
 /// A fit as the contract has it. `fit` is `fitted` or `partial`, never `pending`: the fit

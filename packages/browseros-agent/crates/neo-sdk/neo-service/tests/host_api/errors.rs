@@ -37,6 +37,11 @@ async fn errors_are_the_contracts_body_with_the_same_request_id() -> TestResult 
             .await?
             .assert_error(StatusCode::NOT_FOUND, "not_found");
     }
+    for uri in ["/v1/tabs/3/private", "/v1/tabs/3/sweep", "/v1/secrets"] {
+        h.post(uri, "")
+            .await?
+            .assert_error(StatusCode::NOT_FOUND, "not_found");
+    }
     h.get("/v1/runs?limit=0")
         .await?
         .assert_error(StatusCode::BAD_REQUEST, "invalid_request");
