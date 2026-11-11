@@ -63,7 +63,7 @@ const TALL_PNG_PROGRAM: &str = r#"
                                 const joined=point(image,Math.round(200*density)+1,join-3+row);
                                 const expected=point(reference,1,join-3+row-startRow);
                                 // Independent paints can round a gradient channel by one level. Adjacent
-                                // rows in this ramp differ by at least six levels at these joins.
+                                // ramp changes make a shifted row distinguishable across each six-row block.
                                 const same=joined.every((value,index) => index===3 ? value===expected[index] : Math.abs(value-expected[index])<=1);
                                 if (!same && mismatches.length<6) mismatches.push({join,row,joined,expected});
                                 joinsMatch &&= same;
