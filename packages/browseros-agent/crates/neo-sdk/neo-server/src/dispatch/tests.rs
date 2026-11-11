@@ -26,7 +26,7 @@ use crate::dispatch::{
 
 /// The page brand a script sends for `page`.
 fn handle(page: &PageRef) -> Value {
-    json!({ "$neo": "page", "id": page.id.0, "tab": page.tab.0 })
+    json!({ "$neo": "page", "tab": page.tab.0 })
 }
 
 fn failure(reply: OpReply) -> Result<OpFailure, Box<dyn Error>> {
@@ -166,6 +166,10 @@ async fn a_panicking_method_still_answers_and_is_recorded() -> Result<(), Box<dy
     let (run, _guard) = harness.run()?;
 
     let (_, reply) = harness.submit(&run, "test.panic", json!({})).await;
+    assert!(
+        reply.observed.is_none(),
+        "unwinding has no completed observation"
+    );
     let failure = failure(reply)?;
     assert_eq!(
         owner_and_code(&failure),
@@ -411,12 +415,20 @@ async fn stale_and_closed_handles_name_their_owner() -> Result<(), Box<dyn Error
     let page = harness.page("https://example.com/").await?;
     let (run, _guard) = harness.run()?;
 
-    let stale = json!({ "page": { "$neo": "page", "id": page.id.0, "tab": page.tab.0 + 1000 } });
+    let legacy = json!({ "page": { "$neo": "page", "id": 7, "tab": page.tab.0 } });
+    let refused = failure(harness.submit(&run, "test.read", legacy).await.1)?;
+    assert_eq!(
+        owner_and_code(&refused),
+        (ErrorOwner::Script, ErrorCode::INVALID_INPUT)
+    );
+    assert_eq!(refused.delivery, Delivery::NotSent);
+
+    let stale = json!({ "page": { "$neo": "page", "tab": page.tab.0 + 1000 } });
     let stale = failure(harness.submit(&run, "test.read", stale).await.1)?;
     assert_eq!(
         owner_and_code(&stale),
-        (ErrorOwner::Script, ErrorCode::STALE_PAGE),
-        "the page id now belongs to another tab, as after a Neo restart"
+        (ErrorOwner::Neo, ErrorCode::PAGE_CLOSED),
+        "an unknown tab is a closed page, never a replacement target"
     );
     assert_eq!(stale.delivery, Delivery::NotSent);
 
@@ -513,7 +525,7 @@ async fn concurrent_ops_on_the_lazy_page_open_one_tab() -> Result<(), Box<dyn Er
         .map(|_| {
             let call = Call::script(
                 "test.read".to_owned(),
-                json!({ "page": { "$neo": "page" } }),
+                json!({ "page": { "$neo": "page", "tab": null } }),
                 None,
             );
             harness.dispatcher.submit(&run, call)
@@ -602,11 +614,11 @@ async fn the_rules_see_the_tab_the_door_checked() -> Result<(), Box<dyn Error>> 
     };
     assert_eq!(
         seen,
-        vec![expected; 2],
-        "at entry and at the recheck, on the tab the trace records (sdk-traces keys locks by it)"
+        vec![expected; 3],
+        "at entry, recheck and fact release, on the tab the trace records"
     );
 
-    let stale = json!({ "page": { "$neo": "page", "id": page.id.0, "tab": page.tab.0 + 1 } });
+    let stale = json!({ "page": { "$neo": "page", "tab": page.tab.0 + 1 } });
     let (refused, _) = harness.submit(&run, "test.write", stale).await;
     assert!(
         harness
@@ -717,7 +729,7 @@ async fn a_number_that_spells_a_held_value_leaves_a_main_world_answer_as_its_mas
         "in the op's record"
     );
 
-    let opened = json!({ "page": { "$neo": "page", "id": 2, "tab": 1_734_921 } });
+    let opened = json!({ "page": { "$neo": "page", "tab": 1_734_921 } });
     let (operation, reply) = harness.submit(&run, "test.any", opened.clone()).await;
     assert_eq!(
         reply.outcome,
@@ -1197,5 +1209,76 @@ async fn a_runs_slot_is_shared_by_its_ops_and_goes_when_its_record_ends()
         crashed.upgrade().is_none(),
         "a run that ended without finishing drops it too"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_tab_readmitted_after_an_excluded_url_gets_fresh_feature_state()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.page("https://example.com/one").await?;
+    let (run, _guard) = harness.run()?;
+    let (_, first) = harness
+        .submit(&run, "test.count", json!({ "page": handle(&page) }))
+        .await;
+    assert_eq!(
+        first
+            .outcome
+            .as_ref()
+            .ok()
+            .and_then(|value| value.get("count")),
+        Some(&json!(1))
+    );
+    assert!(harness.fake.navigate_tab(
+        page.tab,
+        "chrome-extension://internal/page.html",
+        "Internal"
+    ));
+    run.view().list_pages().await?;
+    assert!(
+        !harness.tabs.is_open(page.tab),
+        "core's prune hook drops the tab's slots"
+    );
+    assert!(
+        harness
+            .fake
+            .navigate_tab(page.tab, "https://example.com/returned", "Returned")
+    );
+    run.view().list_pages().await?;
+    let (_, returned) = harness
+        .submit(&run, "test.count", json!({ "page": handle(&page) }))
+        .await;
+    assert_eq!(
+        returned
+            .outcome
+            .as_ref()
+            .ok()
+            .and_then(|value| value.get("count")),
+        Some(&json!(1)),
+        "fresh admission recreates slots for the same live tab"
+    );
+    assert!(harness.tabs.is_open(page.tab));
+    Ok(())
+}
+
+#[tokio::test]
+async fn fact_replies_carry_increasing_observations_and_empty_replies_carry_none()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.page("https://example.com/").await?;
+    let (run, _guard) = harness.run()?;
+    let input = json!({ "page": handle(&page) });
+    let (_, first) = harness.submit(&run, "test.read", input.clone()).await;
+    let (_, second) = harness.submit(&run, "test.read", input).await;
+    assert_eq!(first.pages.len(), 1);
+    assert_eq!(second.pages.len(), 1);
+    let first = first.observed.ok_or("first facts are stamped")?;
+    let second = second.observed.ok_or("second facts are stamped")?;
+    assert!(second.seq > first.seq);
+    let (_, empty) = harness
+        .submit(&run, "test.typed", json!({ "outer": { "inner": 1 } }))
+        .await;
+    assert!(empty.pages.is_empty());
+    assert!(empty.observed.is_none());
     Ok(())
 }

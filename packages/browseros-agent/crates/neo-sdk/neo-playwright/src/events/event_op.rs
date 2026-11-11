@@ -183,11 +183,10 @@ async fn subscription(
     match page {
         Some(handle) => {
             let event = page_event(scope, event)?;
-            let page = handle.checked(pw.browser(), scope).await?;
-            let admitted = scope.admit(&page).await?;
+            let page = handle.tab();
+            let admitted = scope.admit(pw.browser(), page).await?;
             Ok(Subscription::Page {
-                page,
-                tab: *handle.tab(),
+                tab: page,
                 target: admitted.session.target_id.clone(),
                 event,
             })
@@ -222,10 +221,7 @@ async fn listen(
     let run = scope.run_state();
     if !input.on {
         let key = match &input.page {
-            Some(page) => ListenerKey::Page(
-                page.checked(pw.browser(), scope).await?,
-                page_event(scope, &input.event)?,
-            ),
+            Some(page) => ListenerKey::Page(page.tab(), page_event(scope, &input.event)?),
             None if input.event == "page" => ListenerKey::ContextPage,
             None => return Err(context_event(scope, &input.event)),
         };
@@ -352,9 +348,7 @@ async fn answer(
         Answer::Accept => "accept",
         Answer::Dismiss => "dismiss",
     };
-    let admitted = scope
-        .admit(&input.page.checked(pw.browser(), scope).await?)
-        .await?;
+    let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
     let target = admitted.session.target_id.clone();
     // From here the dialog is the script's: the grace and the reap leave it to this answer, and
     // `answering` reopens it for them unless the browser acknowledges the answer.

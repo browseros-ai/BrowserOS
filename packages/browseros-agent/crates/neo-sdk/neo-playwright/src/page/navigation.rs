@@ -15,7 +15,7 @@
 
 use std::time::Duration;
 
-use browseros_core::{CoreError, FrameId, PageId, PageJs, ProtocolSession, SessionId};
+use browseros_core::{CoreError, FrameId, PageJs, ProtocolSession, SessionId, TabId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::time;
@@ -174,11 +174,11 @@ fn complete_user_url(url: String) -> String {
 pub(crate) async fn navigate(
     pw: &Playwright,
     scope: &OpScope<'_>,
-    page: &PageId,
+    page: TabId,
     navigation: Navigation,
     wait_until: LoadState,
 ) -> Result<Value, PlaywrightError> {
-    let admitted = scope.admit(page).await?;
+    let admitted = scope.admit(pw.browser(), page).await?;
     // The watch below follows the main frame's documents only, so a child frame's goto would
     // wait on the wrong loader. Refused before anything is sent.
     if let Navigation::Goto {
@@ -308,8 +308,8 @@ pub(crate) async fn wait_for_load_state(
     scope: &OpScope<'_>,
     input: LoadStateInput,
 ) -> Result<Value, PlaywrightError> {
-    let page = input.page.checked(pw.browser(), scope).await?;
-    let admitted = scope.admit(&page).await?;
+    let page = input.page.tab();
+    let admitted = scope.admit(pw.browser(), page).await?;
     let main = main_frame(admitted);
     let frame = input.frame.unwrap_or_else(|| main.clone());
     let root_id = admitted.session.session_id.clone();
@@ -317,7 +317,7 @@ pub(crate) async fn wait_for_load_state(
     let (session_id, session) = if frame == main {
         (root_id, root)
     } else {
-        frame_host(pw, scope, &page, (root_id, root), &frame).await?
+        frame_host(pw, scope, page, (root_id, root), &frame).await?
     };
     let mut watch = DocumentWatch::new(pw.browser(), session, session_id, frame);
     let wait = async {
@@ -338,7 +338,7 @@ pub(crate) async fn wait_for_load_state(
 async fn frame_host(
     pw: &Playwright,
     scope: &OpScope<'_>,
-    page: &PageId,
+    page: TabId,
     root: (SessionId, ProtocolSession),
     frame: &FrameId,
 ) -> Result<(SessionId, ProtocolSession), PlaywrightError> {
@@ -358,7 +358,12 @@ async fn frame_host(
     let target = pw
         .browser()
         .frames()
-        .resolve_frame_target(page.clone(), Some(frame.clone()), None, true)
+        .resolve_frame_target(
+            scope.admit(pw.browser(), page).await?.core_page.clone(),
+            Some(frame.clone()),
+            None,
+            true,
+        )
         .await
         .map_err(|error| scope.core_error(&error))?;
     let session_id = target
@@ -601,7 +606,7 @@ mod tests {
         let goto = Op::from_name("page.goto").ok_or("page.goto is an op")?;
         for frame in [None, Some("child-frame")] {
             let env = TestEnv::new();
-            let input = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 },
+            let input = json!({ "page": { "$neo": "page", "tab": 1007 },
                                 "frame": frame, "url": " JavaScript:void(document.title = 'ran')" });
             let error = playwright
                 .invoke(&env, goto, input)

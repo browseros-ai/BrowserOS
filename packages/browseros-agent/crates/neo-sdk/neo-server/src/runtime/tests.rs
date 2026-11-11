@@ -16,7 +16,9 @@ use tokio::time::{self, Instant};
 use super::install_web_globals::install_web_globals;
 use super::{LogLevel, LogLine, Script, ScriptEnd, ScriptOutcome, run_script};
 use crate::config::Defaults;
-use crate::dispatch::{CallSite, ErrorCode, OperationError, RunCtx, StopReason};
+use crate::dispatch::{
+    CallSite, ErrorCode, Observation, OperationError, PageFact, RunCtx, StopReason,
+};
 use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
 
 /// Far longer than any test here takes, so only the tests about the deadline meet it.
@@ -27,6 +29,7 @@ async fn run_code(rig: &TestRig, run: &Arc<RunCtx>, code: &str) -> ScriptEnd {
         code: code.to_owned(),
         page: None,
         pages: Vec::new(),
+        observed: None,
     };
     run_script(run, &rig.dispatcher, script).await
 }
@@ -668,9 +671,8 @@ fn a_page_brand_revives_into_one_page_object() -> Result<(), TestError> {
         let brand = value.get("brand").ok_or("a brand")?;
         assert_eq!(brand.get("$neo"), Some(&json!("page")));
         assert!(
-            brand.get("id").is_some_and(Value::is_u64)
-                && brand.get("tab").is_some_and(Value::is_i64),
-            "the handle carries core's id and the browser's tab: {brand}"
+            brand.get("id").is_none() && brand.get("tab").is_some_and(Value::is_i64),
+            "the handle carries only the browser's tab: {brand}"
         );
         assert_eq!(
             value.get("url"),
@@ -829,7 +831,7 @@ fn the_run_page_learns_its_tab_from_the_call_that_opened_it() -> Result<(), Test
             return { before, after: page.toJSON(), touched };"#;
         let value = returned(script(&rig, code).await?)?;
         assert_eq!(
-            value.pointer("/before/id"),
+            value.pointer("/before/tab"),
             Some(&Value::Null),
             "no tab until a call needs one"
         );
@@ -1554,6 +1556,59 @@ fn web_parameter_serialization_never_calls_inherited_json_hooks() -> Result<(), 
             json!([&expected, &expected]),
             "private list encoding passes only string pairs; user toJSON getters never run"
         );
+        Ok(())
+    })
+}
+
+#[test]
+fn init_observation_orders_the_seed_before_later_replies() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let page = rig.owner_tab("https://cache.example/").await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let script = Script {
+            code: "await __neo.invoke('test.title', { page }); return page.url();".into(),
+            page: Some(page.clone()),
+            pages: vec![PageFact {
+                tab: page.tab,
+                url: Some("https://seed.example/".into()),
+                title: Some("Seed".into()),
+                closed: false,
+            }],
+            observed: Some(Observation {
+                seq: 100,
+                events: 7,
+                ..Observation::default()
+            }),
+        };
+        assert_eq!(
+            returned(run_script(&run, &rig.dispatcher, script).await)?,
+            json!("https://seed.example/")
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn bridge_serializes_observations_only_with_page_facts() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let page = rig.owner_tab("https://facts.example/").await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let bridge = super::Bridge::new(Arc::clone(&run), Arc::clone(&rig.dispatcher));
+        let input = json!({ "page": page }).to_string();
+        let reply = bridge
+            .answer(bridge.submit("test.title".into(), &input, ""))
+            .await;
+        let wire: Value = serde_json::from_str(&reply)?;
+        assert_eq!(wire["observed"], json!({ "seq": 1, "events": 0 }));
+        assert_eq!(wire["pages"].as_array().map(Vec::len), Some(1));
+        assert!(wire["pages"][0].get("observed").is_none());
+        let reply = bridge
+            .answer(bridge.submit("test.echo".into(), "{}", ""))
+            .await;
+        let wire: Value = serde_json::from_str(&reply)?;
+        assert!(wire.get("observed").is_none());
         Ok(())
     })
 }

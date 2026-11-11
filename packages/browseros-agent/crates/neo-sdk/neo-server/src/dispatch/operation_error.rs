@@ -150,8 +150,6 @@ error_codes! {
     BROWSER_DISCONNECTED = "browser_disconnected";
     /// The target tab is gone.
     PAGE_CLOSED = "page_closed";
-    /// The handle names a page id that now belongs to another tab: it predates a Neo restart.
-    STALE_PAGE = "stale_page";
     /// A bug in Neo.
     INTERNAL_ERROR = "internal_error";
     /// A CDP call got no answer in time.

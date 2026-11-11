@@ -8,7 +8,7 @@
 //!                                                                              │
 //!  events.wait  (waitForEvent) ── reads from the script's `since` ─────────────┤ many readers,
 //!  events.next  (the pump)     ── reads from each listener's own place ────────┘ none writes
-//!      └─ event_reader: target ids to the run's PageIds, through the run's own view
+//!      └─ event_reader: target ids to native tab handles, through the run's own view
 //! ```
 //!
 //! **One writer.** Only the watcher appends, through the one `EventWriter` the hub hands out,
@@ -24,7 +24,7 @@
 //! listener's own stamp. Run state is the host's (`OpEnv::run_state`) and dies with the run.
 //!
 //! **Raw facts, mapped per run.** Records name tabs by CDP target id. A reader maps a new tab to
-//! a `PageId` through its run's view, so a run only ever sees tabs its view admits, and a popup
+//! a tab id through its run's view, so a run only ever sees tabs its view admits, and a popup
 //! that opened as a separate window fails `waitForEvent('popup')` with `neo / unsupported` (D9).
 
 mod dialog_table;

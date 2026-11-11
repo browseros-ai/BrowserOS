@@ -24,7 +24,8 @@ use browseros_core::TabId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::dispatch::{ErrorCode, LeafError, OpCtx, OperationError};
+use crate::browser::PageRef;
+use crate::dispatch::{ErrorCode, LeafError, OpCtx, OperationError, PageChange};
 
 /// Whether a Playwright op's result carries events, whose tabs the door's rules clear one by one
 /// before it is released.
@@ -57,7 +58,10 @@ impl EventRelease {
             Self::None => Ok(result),
             Self::One => match refusal(op, &result) {
                 None => Ok(result),
-                Some(refused) => Err(LeafError::definite(refused)),
+                Some(refused) => {
+                    withhold_close(op, &result);
+                    Err(LeafError::definite(refused))
+                }
             },
             Self::Batch => release_batch(op, result),
         }
@@ -96,6 +100,7 @@ fn release_batch<M>(op: &OpCtx<M>, result: Value) -> Result<Value, LeafError> {
         match refusal(op, &event) {
             None => released.push(event),
             Some(refused) => {
+                withhold_close(op, &event);
                 withheld += 1;
                 first_refusal.get_or_insert(refused);
             }
@@ -114,6 +119,21 @@ fn release_batch<M>(op: &OpCtx<M>, result: Value) -> Result<Value, LeafError> {
     serde_json::to_value(batch).map_err(unreadable)
 }
 
+/// A withheld close still proves its native binding dead, but must not turn into a
+/// callback through reply facts or the prelude's defensive batch settlement.
+fn withhold_close<M>(op: &OpCtx<M>, event: &Value) {
+    if event.get("event").and_then(Value::as_str) != Some("close") {
+        return;
+    }
+    if let Some(seq) = event.get("seq").and_then(Value::as_u64) {
+        let mut tabs = Vec::new();
+        tabs_named(event, &mut tabs);
+        for tab in tabs {
+            op.report_page(&PageRef { tab }, PageChange::WithheldClose { seq });
+        }
+    }
+}
+
 /// The rules' refusal of the first tab `event` names that they refuse, if any. The tabs come
 /// from every page brand in the event (its page, a popup's new tab, a new tab's opener), so an
 /// event kind the crate adds later is covered as well.
@@ -123,7 +143,7 @@ fn refusal<M>(op: &OpCtx<M>, event: &Value) -> Option<OperationError> {
     tabs.into_iter().find_map(|tab| op.check_tab(tab).err())
 }
 
-/// Adds the tab of every page brand in `value`, `{"$neo":"page","id":7,"tab":1234}`, to `tabs`.
+/// Adds the tab of every page brand in `value`, `{"$neo":"page","tab":1234}`, to `tabs`.
 fn tabs_named(value: &Value, tabs: &mut Vec<TabId>) {
     match value {
         Value::Object(fields) => {
@@ -172,7 +192,7 @@ mod tests {
 
     #[test]
     fn an_event_names_every_tab_it_carries() {
-        let page = |tab: i64| json!({ "$neo": "page", "id": tab - 1000, "tab": tab });
+        let page = |tab: i64| json!({ "$neo": "page", "tab": tab });
         let cases = [
             (
                 json!({ "seq": 9, "event": "console", "page": page(1007),

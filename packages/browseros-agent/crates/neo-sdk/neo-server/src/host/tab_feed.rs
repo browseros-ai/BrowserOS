@@ -12,7 +12,7 @@ use crate::browser::{BrowserLink, TabEvent};
 
 /// Drops what the service keeps about every tab that is not open now: tabs that closed while
 /// no socket was watched, flags an earlier Neo left on disk, or every tab of a browser that
-/// restarted and numbers its tabs from 1 again. Returns the watch start its listing covers.
+/// restarted, whose old tab numbers can come back. Returns the watch start its listing covers.
 ///
 /// `Service::retain_tabs` ends the state of every tab its listing lacks, unless a host changed
 /// the tab after the fence. So the fence comes first and the listing here and now, never one

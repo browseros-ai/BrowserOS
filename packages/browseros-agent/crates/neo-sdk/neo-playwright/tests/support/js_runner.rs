@@ -11,16 +11,18 @@
 //! ```
 //!
 //! [`RunDoor`] stands in for claw-sdk's door and `runtime/bridge.rs`, only as far as the
-//! prelude can tell them apart: one reply envelope per op (`{"ok"|"err", "pages": []}`, plus
-//! `defaultPage` once an op opened the run's page), and an op id per op so a thrown op error
-//! names its failure. It reports no page facts, so the prelude learns URLs from results and
-//! events alone.
+//! prelude can tell them apart: one reply envelope per op, cache-derived page facts and
+//! monotonic observation/event counters, plus `defaultPage` when an op opens the run's page.
+//! An op id ties a thrown error to its failure. Nonempty fact batches carry
+//! `payloadCurrent: true`, assuming the payload used the binding those facts describe.
+//! This adapter does not compare admitted targets or approve individual close records.
+//! Production dispatcher tests exercise those binding races and policy-release decisions.
 //!
-//! Two test-only natives stand in for the user. `__neo_test_gesture(page, tab, expression)` runs
+//! Two test-only natives stand in for the user. `__neo_test_gesture(tab, expression)` runs
 //! `expression` in the page's own world with a user gesture, as a trusted click would, so a
 //! script can open a popup before `locator.click` is built (the popup blocker refuses a
 //! `window.open` without one; measured on BrowserOS neo, headless). It resolves to `""`, or to
-//! what failed. `__neo_test_eval(page, tab, expression)` runs it the same way and resolves to
+//! what failed. `__neo_test_eval(tab, expression)` runs it the same way and resolves to
 //! `{"ok": value}` or `{"err": "what failed"}` as JSON text, so a script can read what the page
 //! recorded (conformance's `harness.pageEval`) without `page.evaluate`.
 //!
@@ -35,14 +37,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use browseros_core::{PageId, TabId};
+use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use neo_playwright::{ErrorCode, Op, OpTarget, PRELUDE_JS, PlaywrightError, TimedOut};
 use rquickjs::context::EvalOptions;
 use rquickjs::function::{Async, Func};
 use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Ctx, Function, Object, Promise};
 use serde_json::{Value, json};
-use tokio::sync::OnceCell;
+use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use tokio::time;
 
 use crate::live_run::{LiveRun, TestPage};
@@ -74,6 +76,14 @@ pub(crate) trait OpHost: Send + Sync {
         input: Value,
     ) -> BoxFuture<'a, Result<Value, PlaywrightError>>;
 
+    /// A host without a browser has no event evidence or cache facts.
+    fn event_head(&self) -> u64 {
+        0
+    }
+    fn page_facts(&self, _tabs: Vec<TabId>) -> BoxFuture<'_, Vec<Value>> {
+        Box::pin(async { Vec::new() })
+    }
+
     /// Runs `expression` in `page`'s own world with a user gesture, as the user's click or the
     /// page's own script would, and returns its value by JSON.
     fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>>;
@@ -85,7 +95,33 @@ impl OpHost for LiveRun {
         name: &'a str,
         input: Value,
     ) -> BoxFuture<'a, Result<Value, PlaywrightError>> {
-        Box::pin(LiveRun::invoke(self, name, input))
+        Box::pin(async move {
+            let tab = input
+                .get("page")
+                .and_then(|page| page.get("tab"))
+                .and_then(Value::as_i64)
+                .map(TabId);
+            let outcome = LiveRun::invoke(self, name, input).await;
+            // The production door refreshes navigated tabs before observing their facts.
+            // Without that step this test adapter would overwrite a fresh navigation URL
+            // with the old cache value on the next reply.
+            if matches!(
+                name,
+                "page.goto" | "page.goBack" | "page.goForward" | "page.reload"
+            ) && let Some(tab) = tab
+                && let Some(info) = self.browser().pages.get_info_by_tab(tab).await
+            {
+                let _ = self.browser().pages.refresh(info.page_id).await;
+            }
+            outcome
+        })
+    }
+
+    fn event_head(&self) -> u64 {
+        LiveRun::event_head(self)
+    }
+    fn page_facts(&self, tabs: Vec<TabId>) -> BoxFuture<'_, Vec<Value>> {
+        Box::pin(LiveRun::page_facts(self, tabs))
     }
 
     fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>> {
@@ -215,11 +251,11 @@ fn install(ctx: &Ctx<'_>, door: &Arc<RunDoor>) -> rquickjs::Result<()> {
     globals.set("__neo_sleep", Func::from(Async(sleep)))?;
     let gesture = {
         let door = Arc::clone(door);
-        move |page: u32, tab: f64, expression: String| {
+        move |tab: f64, expression: String| {
             let door = Arc::clone(&door);
             async move {
                 door.host
-                    .gesture(test_page(page, tab), expression)
+                    .gesture(test_page(tab), expression)
                     .await
                     .err()
                     .unwrap_or_default()
@@ -229,10 +265,10 @@ fn install(ctx: &Ctx<'_>, door: &Arc<RunDoor>) -> rquickjs::Result<()> {
     globals.set("__neo_test_gesture", Func::from(Async(gesture)))?;
     let eval = {
         let door = Arc::clone(door);
-        move |page: u32, tab: f64, expression: String| {
+        move |tab: f64, expression: String| {
             let door = Arc::clone(&door);
             async move {
-                let reply = match door.host.gesture(test_page(page, tab), expression).await {
+                let reply = match door.host.gesture(test_page(tab), expression).await {
                     Ok(value) => json!({ "ok": value }),
                     Err(error) => json!({ "err": error }),
                 };
@@ -244,25 +280,24 @@ fn install(ctx: &Ctx<'_>, door: &Arc<RunDoor>) -> rquickjs::Result<()> {
     Ok(())
 }
 
-/// The tab a script names by a page handle's `_id` and `_tab`.
-fn test_page(page: u32, tab: f64) -> TestPage {
+/// The native tab a script names by a page handle's `_tab`.
+fn test_page(tab: f64) -> TestPage {
     // A tab id is an integer the prelude read from a brand; JS hands it over as a number.
     #[expect(clippy::cast_possible_truncation, reason = "tab ids are integers")]
     let tab = TabId(tab as i64);
-    TestPage {
-        id: PageId(page),
-        tab,
-    }
+    TestPage { tab }
 }
 
 /// claw-sdk's door and bridge for one run, as the prelude sees them.
 struct RunDoor {
     host: Arc<dyn OpHost>,
     /// The run's own page brand, opened by the first op whose target names
-    /// `{"$neo":"page","id":null}`. Single-flight, as the door's: racing ops share one tab.
+    /// `{"$neo":"page","tab": null}`. Single-flight, as the door's: racing ops share one tab.
     default_page: OnceCell<Value>,
     /// The last op id handed out; ids read `run.1`, `run.2`, ...
     operations: AtomicU64,
+    /// The test door orders complete cache observations, as the production observer does.
+    observations: AsyncMutex<u64>,
     /// What each failed op said, by op id. The bootstrap settles an uncaught op error as its
     /// id alone, and claw-sdk reports the failure it recorded for that id.
     failures: Mutex<HashMap<String, String>>,
@@ -274,11 +309,16 @@ impl RunDoor {
             host,
             default_page: OnceCell::new(),
             operations: AtomicU64::new(0),
+            observations: AsyncMutex::new(0),
             failures: Mutex::default(),
         }
     }
 
     /// `__neo_invoke`: one op through the door, always answered with an envelope.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Runner N mirrors the host lock around complete cache observations"
+    )]
     async fn invoke(&self, name: &str, input: &str) -> String {
         let operation = format!(
             "run.{}",
@@ -293,14 +333,36 @@ impl RunDoor {
             return refused.envelope(&operation);
         }
         let (outcome, default_page) = match self.default_page(name, &mut input).await {
-            Ok(default_page) => (self.host.invoke(name, input).await, default_page),
+            Ok(default_page) => (self.host.invoke(name, input.clone()).await, default_page),
             Err(error) => (Err(error), None),
         };
         if let Err(error) = &outcome {
             let said = format!("{}: {}", error.code(), error.message());
             lock(&self.failures).insert(operation.clone(), said);
         }
-        envelope(outcome, default_page, &operation)
+        let mut tabs = Vec::new();
+        page_tabs(&input, &mut tabs);
+        if let Ok(value) = &outcome {
+            page_tabs(value, &mut tabs);
+        }
+        let mut serial = self.observations.lock().await;
+        *serial += 1;
+        let events = self.host.event_head();
+        let mut facts = self.host.page_facts(tabs).await;
+        // An unconditional completed close reports Closed before the asynchronous cache catches up.
+        if name == "page.close"
+            && outcome.is_ok()
+            && input.get("runBeforeUnload").and_then(Value::as_bool) != Some(true)
+        {
+            for fact in &mut facts {
+                if let Some(fields) = fact.as_object_mut() {
+                    fields.insert("closed".into(), json!(true));
+                }
+            }
+        }
+        let observed = (!facts.is_empty())
+            .then(|| json!({ "seq": *serial, "events": events, "payloadCurrent": true }));
+        envelope(outcome, default_page, &operation, &facts, observed)
     }
 
     /// The door's lazy default page: an op whose target (`page`, or `target.page`, per the
@@ -328,9 +390,8 @@ impl RunDoor {
             .await?
             .clone();
         substitute(input, &brand);
-        let id = brand.get("id").cloned().unwrap_or(Value::Null);
         let tab = brand.get("tab").cloned().unwrap_or(Value::Null);
-        Ok(Some(json!({ "id": id, "tab": tab })))
+        Ok(Some(json!({ "tab": tab })))
     }
 
     /// Opens the run's page, as the door does through `context.newPage`.
@@ -413,10 +474,10 @@ impl Refused {
     }
 }
 
-/// `{"$neo":"page","id":null}`: the run's page before it has a tab.
+/// `{"$neo":"page","tab": null}`: the run's page before it has a tab.
 fn unopened(value: &Value) -> bool {
     value.get("$neo").and_then(Value::as_str) == Some("page")
-        && value.get("id").is_none_or(Value::is_null)
+        && value.get("tab").is_some_and(Value::is_null)
 }
 
 /// Replaces every unopened page brand in `value` with `brand`.
@@ -440,9 +501,11 @@ fn envelope(
     outcome: Result<Value, PlaywrightError>,
     default_page: Option<Value>,
     operation: &str,
+    facts: &[Value],
+    observed: Option<Value>,
 ) -> String {
     let mut envelope = match outcome {
-        Ok(ok) => json!({ "ok": ok, "pages": [] }),
+        Ok(ok) => json!({ "ok": ok, "pages": facts }),
         Err(error) => json!({
             "err": {
                 "code": error.code(),
@@ -453,13 +516,42 @@ fn envelope(
                 "timeout": error.timed_out() == TimedOut::Yes,
                 "message": error.message(),
             },
-            "pages": [],
+            "pages": facts,
         }),
     };
     if let (Some(page), Some(fields)) = (default_page, envelope.as_object_mut()) {
         fields.insert("defaultPage".to_owned(), page);
     }
+    if let (Some(observed), Some(fields)) = (observed, envelope.as_object_mut()) {
+        fields.insert("observed".into(), observed);
+    }
     envelope.to_string()
+}
+
+/// Collects the public tab brands touched by one test operation, without guessing from numbers.
+fn page_tabs(value: &Value, tabs: &mut Vec<TabId>) {
+    match value {
+        Value::Object(fields) => {
+            if fields.get("$neo").and_then(Value::as_str) == Some("page") {
+                if let Some(tab) = fields.get("tab").and_then(Value::as_i64) {
+                    let tab = TabId(tab);
+                    if !tabs.contains(&tab) {
+                        tabs.push(tab);
+                    }
+                }
+            } else {
+                for value in fields.values() {
+                    page_tabs(value, tabs);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                page_tabs(value, tabs);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

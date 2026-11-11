@@ -13,8 +13,9 @@ use tokio::sync::oneshot;
 
 use super::op_ctx::OpState;
 use super::{
-    Answer, CallSite, Caller, ErrorCode, Held, LeafError, Lifetime, MethodSpec, OpFailure, OpLine,
-    OpReply, OperationError, PageFact, PageScript, RunCtx, RunMask, StopReason, WITHHELD,
+    Answer, CallSite, Caller, ErrorCode, Held, LeafError, Lifetime, MethodSpec, Observation,
+    OpFailure, OpLine, OpReply, OperationError, PageFact, PageScript, RunCtx, RunMask, StopReason,
+    WITHHELD,
 };
 use crate::browser::PageRef;
 
@@ -40,6 +41,8 @@ pub(super) struct OperationGuard {
 
 struct Open {
     state: Arc<OpState>,
+    /// The operation's recorded tab, even when its fact is withheld at release.
+    tab: Option<TabId>,
     /// The start record while it waits for the tab of the run's lazy page ([`StartTab::Lazy`]).
     /// Whatever ends the op first sends it before the end record.
     unsent: Option<Unsent>,
@@ -246,6 +249,10 @@ impl OperationGuard {
         Self {
             open: Some(Open {
                 state,
+                tab: match tab {
+                    StartTab::Named(tab) => tab,
+                    StartTab::Lazy => None,
+                },
                 unsent,
                 spec,
                 site,
@@ -264,6 +271,7 @@ impl OperationGuard {
         if let Some(open) = &mut self.open
             && let Some(unsent) = open.unsent.take()
         {
+            open.tab = tab;
             open.trace
                 .op_started(unsent.sent(tab, &open.run.held_values()));
         }
@@ -275,9 +283,10 @@ impl OperationGuard {
         ending: Ending,
         pages: Vec<PageFact>,
         default_page: Option<PageRef>,
+        observed: Option<Observation>,
     ) {
         if let Some(open) = self.open.take() {
-            settle(open, ending, pages, default_page);
+            settle(open, ending, pages, default_page, observed);
         }
     }
 }
@@ -290,15 +299,22 @@ impl Drop for OperationGuard {
             } else {
                 open.run.stop_reason().map_or(Ending::Lost, Ending::Stopped)
             };
-            settle(open, ending, Vec::new(), None);
+            settle(open, ending, Vec::new(), None, None);
         }
     }
 }
 
 /// Shared by `finish` and `Drop`, so it is sync: channel sends and std locks only.
-fn settle(open: Open, ending: Ending, mut pages: Vec<PageFact>, default_page: Option<PageRef>) {
+fn settle(
+    open: Open,
+    ending: Ending,
+    mut pages: Vec<PageFact>,
+    default_page: Option<PageRef>,
+    observed: Option<Observation>,
+) {
     let Open {
         state,
+        tab,
         unsent,
         spec,
         site,
@@ -346,14 +362,7 @@ fn settle(open: Open, ending: Ending, mut pages: Vec<PageFact>, default_page: Op
         }
         (Settled::Retired(_), _) => (None, None),
     };
-    let page_after = pages.first().map(|page| match withheld {
-        Some(_) => PageState {
-            url: None,
-            title: None,
-            ..page.page_state()
-        },
-        None => page.page_state(),
-    });
+    let page_after = recorded_page_state(&pages, tab, withheld.is_some());
     trace.op_ended(OperationEnded {
         id,
         outcome: settlement.outcome,
@@ -402,7 +411,8 @@ fn settle(open: Open, ending: Ending, mut pages: Vec<PageFact>, default_page: Op
         }
         Caller::Neo => outcome,
     };
-    let answer = OpReply {
+    // A departed caller is normal during teardown.
+    let _ = reply.send(OpReply {
         outcome: outcome.map_err(|error| OpFailure {
             error,
             delivery,
@@ -410,10 +420,27 @@ fn settle(open: Open, ending: Ending, mut pages: Vec<PageFact>, default_page: Op
             operation: id,
         }),
         pages,
+        observed,
         default_page,
-    };
-    // The caller may be gone (teardown dropped the bridge); nobody is owed the answer then.
-    let _ = reply.send(answer);
+    });
+}
+
+/// A missing target fact must not turn a related page into the operation's trace target.
+fn recorded_page_state(
+    pages: &[PageFact],
+    tab: Option<TabId>,
+    withheld: bool,
+) -> Option<PageState> {
+    let page = match tab {
+        Some(tab) => pages.iter().find(|page| page.tab == tab),
+        None => pages.first(),
+    }?;
+    let mut state = page.page_state();
+    if withheld {
+        state.url = None;
+        state.title = None;
+    }
+    Some(state)
 }
 
 impl Unsent {

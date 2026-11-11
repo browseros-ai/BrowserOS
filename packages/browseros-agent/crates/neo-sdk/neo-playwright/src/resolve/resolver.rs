@@ -704,7 +704,7 @@ pub(super) async fn enter_iframe(
         .browser()
         .frames()
         .resolve_frame_target(
-            page.id().clone(),
+            page.core_page().clone(),
             Some(frame.clone()),
             Some(parent.session()),
             cross_process,
@@ -876,9 +876,7 @@ async fn checked_call(
     // The host hears them now: the sweep below can drop this reply or send the request again,
     // and either exit would lose a value only this call saw, which the next document may echo.
     if let Some(own) = own.filter(|own| !own.is_empty()) {
-        page.playwright()
-            .hooks()
-            .values_swept(page.id().clone(), own);
+        page.playwright().hooks().values_swept(page.tab(), own);
     }
     let after = match site_values(page, scope, world).await? {
         Ok(after) => after,
@@ -935,7 +933,7 @@ async fn site_values(
     SiteSweep::of(page, world.clone()).await.values_or_gone(
         page.playwright(),
         scope,
-        page.id(),
+        page.tab(),
         FieldValues::default(),
     )
 }
@@ -1279,7 +1277,7 @@ mod tests {
             .await?;
         let env = live.env();
         let scope = OpScope::new(&env, count_op()?, CallHeader::default());
-        let page = OpPage::admit(&live.playwright, &scope, &tab.page).await?;
+        let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
         let deepest = down(&tab, &["b1", "c2", "a3", "c4"], button())?;
         let resolver = Resolver::new(&page, &scope, &deepest, Strictness::Strict);
         let c4 = resolved(&resolver).await?;
@@ -1340,7 +1338,7 @@ mod tests {
             .await?;
         let env = live.env();
         let scope = OpScope::new(&env, count_op()?, CallHeader::default());
-        let page = OpPage::admit(&live.playwright, &scope, &tab.page).await?;
+        let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
         let a1 = down(&tab, &["a1"], button())?;
         let resolver = Resolver::new(&page, &scope, &a1, Strictness::Strict);
         let before = resolved(&resolver).await?.world;
@@ -1453,7 +1451,7 @@ mod tests {
             .await?;
         let env = live.env();
         let scope = OpScope::new(&env, count_op()?, CallHeader::default());
-        let page = OpPage::admit(&live.playwright, &scope, &tab.page).await?;
+        let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
         let world = page.world(&page.main_endpoint(), Place::Main).await?;
         // The site as each op's sweep finds it before its call. The page's own frame holds no
         // field, so its probe has nothing of its own to add when the user types on in the
@@ -1475,7 +1473,7 @@ mod tests {
             return Err(format!("a located read reads: {reply:?}").into());
         };
         let shown = site
-            .with_own(&live.playwright, page.id(), sweep)
+            .with_own(&live.playwright, page.tab(), sweep)
             .mask(value)
             .to_string();
         assert!(

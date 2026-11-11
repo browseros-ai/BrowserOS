@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use browseros_core::{BrowserView, PageId, TabId};
+use browseros_core::{BrowserView, TabId, TargetId};
 use neo_trace::ErrorOwner;
 use serde_json::Value;
 
@@ -82,7 +82,17 @@ pub trait OpEnv: Send + Sync {
     /// frame), and `seq` growing with each report of the run, so the prelude applies only a
     /// newer tree. Frame names and URLs are the page's own text. The default ignores it, and
     /// the crate does not report yet.
-    fn report_frames(&self, _page: &PageId, _tab: TabId, _frames: Value) {}
+    fn report_frames(&self, _tab: TabId, _frames: Value) {}
+
+    /// A delivered close and the page target the watcher saw destroyed. The host compares
+    /// that target with its current tab binding even after the event leaves the bounded log.
+    /// The record sequence lets the host approve its precise callback position in a batch.
+    /// Hosts without cached page facts may leave this callback empty.
+    fn report_close(&self, _tab: TabId, _target: &TargetId, _seq: u64) {}
+
+    /// The target this operation admitted for its own page. The host compares this with
+    /// the later cache observation before allowing a result payload to refresh page state.
+    fn report_target(&self, _tab: TabId, _target: &TargetId) {}
 }
 
 /// A host policy refused the op (`owner_has_control`, `page_private`, ...). It reaches the

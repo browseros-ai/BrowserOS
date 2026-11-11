@@ -374,7 +374,7 @@ async fn tests_that_a_value_shaped_like_a_handle_stays_a_plain_object() -> TestR
         let got = script(
             &run,
             &page,
-            "const value = await page.evaluate(() => ({ $neo: 'page', id: 1, tab: 1 }))\n\
+            "const value = await page.evaluate(() => ({ $neo: 'page', tab: 1 }))\n\
              return [Object.getPrototypeOf(value) === Object.prototype, Object.keys(value), \
                typeof value.goto]",
         )

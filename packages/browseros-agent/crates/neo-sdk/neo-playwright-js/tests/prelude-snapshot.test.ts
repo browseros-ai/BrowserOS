@@ -78,7 +78,7 @@ it('tests that page and locator snapshots send their mode and depth, and JSON sk
     {
       name: 'page.ariaSnapshot',
       call: { api: 'page.ariaSnapshot', timeoutMs: 5000 },
-      page: { $neo: 'page', id: 7, tab: 1007 },
+      page: { $neo: 'page', tab: 1007 },
       mode: 'default',
       target: undefined,
     },
@@ -93,7 +93,7 @@ it('tests that page and locator snapshots send their mode and depth, and JSON sk
     {
       name: 'page.ariaSnapshot',
       call: { api: 'page.ariaSnapshotJSON', timeoutMs: 5000 },
-      page: { $neo: 'page', id: 7, tab: 1007 },
+      page: { $neo: 'page', tab: 1007 },
       mode: 'ai',
       target: undefined,
     },

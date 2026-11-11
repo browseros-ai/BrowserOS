@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::PageId;
+use browseros_core::TabId;
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
 use neo_playwright::{PlaywrightHooks, Refusal, TypedBy};
 use neo_trace::{ErrorOwner, Privacy, PrivacyRecord};
@@ -26,8 +26,7 @@ use crate::host::FlagRecovery;
 /// nothing here awaits or holds a lock for longer than a lookup.
 pub(crate) struct PrivacyHooks {
     privacy: Arc<Privacy>,
-    /// Page id to tab id, without asking core: the door touched every op's page before the op
-    /// ran, so the registry knows the tab of any page an op captures or types into.
+    /// Admission/close state: pixels fail closed after the tab leaves the registry.
     tabs: Arc<TabRegistry>,
     /// Typed values, until each field is done.
     typed: Arc<TypedValues>,
@@ -79,35 +78,33 @@ impl PlaywrightHooks for PrivacyHooks {
     /// value the agent typed outranks a page's (`TypedValues::note`). A page's privacy is the
     /// takeover's and the host's to decide, so a value entered here never makes the tab private
     /// by itself.
-    fn field_entered(&self, page: PageId, entry: JournalEntry, by: TypedBy) {
-        let tab = self.tabs.tab_of(&page);
-        self.typed.note(page, tab, entry, by);
+    fn field_entered(&self, tab: TabId, entry: JournalEntry, by: TypedBy) {
+        self.typed.note(tab, entry, by);
     }
 
     /// Held until its field is done, as a typed value is: a read between two keystrokes finds a
     /// prefix. The crate masked these values out of the read's own result already.
-    fn values_swept(&self, page: PageId, values: &FieldValues) {
-        let tab = self.tabs.tab_of(&page);
-        self.typed.swept(&page, tab, values);
+    fn values_swept(&self, tab: TabId, values: &FieldValues) {
+        self.typed.swept(tab, values);
     }
 
     /// Refused as `host / page_private` while the tab is private. Pixels taken before the tab
     /// went private stay, as sdk-traces keeps them; this decides only whether to take new ones.
-    fn capture_allowed(&self, page: PageId) -> Result<(), Refusal> {
+    fn capture_allowed(&self, tab: TabId) -> Result<(), Refusal> {
         if self.recovery.is_pending() {
             return Err(page_private(
                 "Neo lost its record of which tabs are private when its trace store was \
                  replaced, so it captures no tab until every open one is private again",
             ));
         }
-        let Some(tab) = self.tabs.tab_of(&page) else {
-            // Only a tab that closed under the op gets here; refusing is the side that cannot
-            // leak a private tab.
+        if !self.tabs.is_open(tab) {
+            // A close or an expired admission ticket leaves no trusted entry. Refusing both
+            // cases prevents captures from bypassing the tab's privacy state.
             return Err(page_private(
                 "Neo does not know this page's tab any more, so it cannot tell whether the tab \
                  is private",
             ));
-        };
+        }
         match self.privacy.is_private(tab) {
             None => Ok(()),
             Some(record) => Err(page_private(&private_tab(record))),

@@ -33,7 +33,7 @@ it("tests that a run on a known tab reads its frames before the script's first s
       name: 'page.frames',
       input: {
         call: { api: 'page.frames', timeoutMs: 0 },
-        page: { $neo: 'page', id: 7, tab: 1007 },
+        page: { $neo: 'page', tab: 1007 },
       },
     },
   ])
@@ -96,7 +96,7 @@ const reads = (calls: Call[]) =>
   calls
     .filter((call) => call.name === 'page.frames')
     .map((call) => [
-      Reflect.get(Object(call.input.page), 'id'),
+      Reflect.get(Object(call.input.page), 'tab'),
       Reflect.get(Object(call.input.call), 'api'),
     ])
 
@@ -105,8 +105,8 @@ it('tests that waitForTimeout reads the frames of each working page once, and of
     seed: {
       ...SEED,
       pages: [
-        { id: 7, tab: 1007, url: 'https://a.example/', title: 'A' },
-        { id: 9, tab: 1009, url: 'https://mail.example/', title: 'Mail' },
+        { tab: 1007, url: 'https://a.example/', title: 'A' },
+        { tab: 1009, url: 'https://mail.example/', title: 'Mail' },
       ],
     },
     // The title's reply names a tab the run had not seen, as one the page opened would be.
@@ -115,9 +115,7 @@ it('tests that waitForTimeout reads the frames of each working page once, and of
         ? TREE
         : {
             ok: 'Mail',
-            pages: [
-              { id: 11, tab: 1011, url: 'https://b.example/', title: 'B' },
-            ],
+            pages: [{ tab: 1011, url: 'https://b.example/', title: 'B' }],
           },
   })
   await runtime.run(`
@@ -125,12 +123,12 @@ it('tests that waitForTimeout reads the frames of each working page once, and of
     await context.pages()[1].title()
     await page.mainFrame().waitForTimeout(1)
   `)
-  expect(reads(runtime.startCalls)).toEqual([[7, 'page.frames']])
+  expect(reads(runtime.startCalls)).toEqual([[1007, 'page.frames']])
   expect(reads(runtime.calls)).toEqual([
-    [7, 'page.waitForTimeout'],
-    [7, 'frame.waitForTimeout'],
-    [9, 'frame.waitForTimeout'],
-    [11, 'frame.waitForTimeout'],
+    [1007, 'page.waitForTimeout'],
+    [1007, 'frame.waitForTimeout'],
+    [1009, 'frame.waitForTimeout'],
+    [1011, 'frame.waitForTimeout'],
   ])
 })
 
@@ -138,9 +136,7 @@ it('tests that a wait reads nothing for a lazy page or a listed tab the script n
   const runtime = loadPrelude({
     seed: {
       page: null,
-      pages: [
-        { id: 9, tab: 1009, url: 'https://mail.example/', title: 'Mail' },
-      ],
+      pages: [{ tab: 1009, url: 'https://mail.example/', title: 'Mail' }],
     },
     answer: (call) => (call.name === 'page.frames' ? TREE : null),
   })

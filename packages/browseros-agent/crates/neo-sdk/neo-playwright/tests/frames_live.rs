@@ -502,7 +502,7 @@ async fn tests_that_the_journal_reports_typing_in_an_oopif_password_field() -> T
         )
         .await?;
     let expected = Journaled {
-        page: page.id.clone(),
+        page: page.tab,
         kind: SensitiveKind::Password,
         value: "journal-oopif".to_owned(),
         by: TypedBy::NotAgent,
@@ -579,7 +579,7 @@ async fn tests_that_frames_attached_after_load_are_listed_after_wait_for_timeout
         "try {{\n\
            await page.goto({top})\n\
            const evaluate = async (expression) =>\n\
-             JSON.parse(await __neo_test_eval(page._id, page._tab, expression)).ok\n\
+             JSON.parse(await __neo_test_eval(page._tab, expression)).ok\n\
            await evaluate(`(() => {{\n\
              const frame = document.createElement('iframe')\n\
              frame.name = 'late'\n\

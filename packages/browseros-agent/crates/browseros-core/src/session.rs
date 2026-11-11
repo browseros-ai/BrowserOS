@@ -1,5 +1,5 @@
 use crate::{
-    CoreError, NativeCapabilities, PageId, SessionId, TargetId,
+    CoreError, NativeCapabilities, PageId, SessionId, TabId, TargetId,
     connection::CdpConnection,
     frames::FrameRegistry,
     input::Input,
@@ -112,16 +112,17 @@ impl BrowserSession {
         let detach_hook = {
             let page_signals = page_signals.clone();
             let user_hook = hooks.page_manager.on_page_detached.clone();
-            Arc::new(move |page_id: PageId| {
+            Arc::new(move |page_id: PageId, tab: TabId, target: TargetId| {
                 page_signals.forget_page(&page_id);
                 if let Some(user_hook) = &user_hook {
-                    user_hook(page_id);
+                    user_hook(page_id, tab, target);
                 }
             })
         };
         let page_hooks = PageManagerHooks {
             on_session_attached: Some(frame_hook),
             on_page_detached: Some(detach_hook),
+            on_page_removed: hooks.page_manager.on_page_removed.clone(),
         };
         let pages = Arc::new(
             PageManager::new(connection.clone(), page_hooks)

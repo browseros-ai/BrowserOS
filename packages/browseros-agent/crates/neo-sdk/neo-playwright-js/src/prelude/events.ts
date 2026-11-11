@@ -18,7 +18,7 @@
  * attached after the pump read past an event still gets it if it is newer than its own stamp.
  * A reply lost when the host cancels the pump at the run's end loses its events with the run.
  */
-import { invoke } from './bridge'
+import { invoke, invokeObserved } from './bridge'
 import type { EventEmitter } from './emitter'
 import { prefixed, unsupportedError } from './errors'
 import { EventDeadline } from './event-deadline'
@@ -26,7 +26,13 @@ import { ConsoleMessage, Dialog, Download, pageError } from './event-values'
 import type { Page } from './page'
 import type { TimeoutSettings } from './timeouts'
 import { timeoutMs } from './timeouts'
-import type { DialogInfo, DownloadInfo, EventName, EventRecord } from './wire'
+import type {
+  DialogInfo,
+  DownloadInfo,
+  EventName,
+  EventRecord,
+  Observation,
+} from './wire'
 
 /** Events a page reports, from Rust's log. */
 const PAGE_EVENTS: ReadonlySet<string> = new Set([
@@ -119,6 +125,12 @@ export class EventHub {
   /** Listened (emitter, event) pairs; the pump runs while there is one. */
   private listening = 0
   private pumping = false
+  /** A decoded pump batch owns its close positions until its earlier records run. */
+  private batch: {
+    closes: Set<number>
+    done: Promise<void>
+    finish: () => void
+  } | null = null
   /** One object per dialog and download, so every listener and wait answers the same one. */
   private readonly dialogs = new Map<number, Dialog>()
   private readonly downloads = new Map<string, Download>()
@@ -177,16 +189,26 @@ export class EventHub {
     for (;;) {
       const left = deadline.left()
       let record: EventRecord
+      let observed: Observation | null = null
       try {
-        record = await invoke(
+        ;({ value: record, observed } = await invokeObserved(
           'events.wait',
           { api, timeoutMs: left },
           { page: target, event, since, after },
-        )
+        ))
       } catch (error) {
         throw deadline.named(error)
       }
-      const value = this.value(record)
+      // The bootstrap registers a batch before resolving either consumer. A duplicate
+      // wait must let that batch reach the close before running its own predicate.
+      if (record.event === 'close' && this.batch?.closes.has(record.seq))
+        await this.batch.done
+      let value: unknown
+      try {
+        value = this.value(record, observed)
+      } finally {
+        this.settleCloses(observed)
+      }
       if (!options.predicate) return value
       let accepted: unknown
       try {
@@ -228,12 +250,28 @@ export class EventHub {
   private async pump(): Promise<void> {
     try {
       while (this.listening > 0) {
-        const { events } = await invoke(
+        const {
+          value: { events },
+          observed,
+        } = await invokeObserved(
           'events.next',
           { api: 'events.next', timeoutMs: 0 },
           {},
+          ({ events }) => this.stageBatch(events),
         )
-        for (const event of events) this.deliver(event)
+        // The listener stages host-approved closes. Delivering records in log order makes
+        // earlier callbacks observe the page before its close, even within the same reply.
+        try {
+          for (const event of events) this.deliver(event, observed)
+        } finally {
+          try {
+            this.settleCloses(observed)
+          } finally {
+            const batch = this.batch
+            this.batch = null
+            batch?.finish()
+          }
+        }
       }
     } catch {
       // The host cancels the pump quietly when the run ends; a pump that failed otherwise
@@ -241,6 +279,21 @@ export class EventHub {
     } finally {
       this.pumping = false
     }
+  }
+
+  /** Runs synchronously as the pump reply is decoded, before waits can consume its closes. */
+  private stageBatch(events: EventRecord[]): void {
+    const closes = new Set(
+      events
+        .filter((event) => event.event === 'close')
+        .map((event) => event.seq),
+    )
+    if (closes.size === 0) return
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    this.batch = { closes, done, finish }
   }
 
   /** The Page an event names; Rust names only pages its run's view admits. */
@@ -251,7 +304,13 @@ export class EventHub {
     return page
   }
 
-  private deliver(record: EventRecord): void {
+  /** Finish this reply's approvals if a record was absent or a callback interrupted the batch. */
+  private settleCloses(observed: Observation | null): void {
+    for (const close of observed?.closes ?? [])
+      this.page({ $neo: 'page', tab: close.tab })._settleClose(observed)
+  }
+
+  private deliver(record: EventRecord, observed: Observation | null): void {
     switch (record.event) {
       case 'popup':
         this.page(record.page).emit(
@@ -263,7 +322,7 @@ export class EventHub {
         this.owner.emit('page', this.page(record.page, record.url))
         return
       case 'close':
-        this.page(record.page)._didClose()
+        this.page(record.page)._closeEvent(record.seq, observed)
         return
       case 'dialog': {
         const page = this.page(record.page)
@@ -295,7 +354,7 @@ export class EventHub {
   }
 
   /** The value `waitForEvent` resolves with for one event. */
-  private value(record: EventRecord): unknown {
+  private value(record: EventRecord, observed: Observation | null): unknown {
     switch (record.event) {
       case 'popup':
         return this.page(record.popup.page, record.popup.url)
@@ -303,7 +362,7 @@ export class EventHub {
         return this.page(record.page, record.url)
       case 'close': {
         const page = this.page(record.page)
-        page._didClose()
+        page._closeEvent(record.seq, observed)
         return page
       }
       case 'dialog':

@@ -19,7 +19,8 @@ info:
     Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's
     `_meta["com.browseros.neo/run"].id`; an operation id is `<runId>.<seq>`, where `seq` counts
     the run's operations in start order; a tab id is the browser's own (`PageRef.tabId`),
-    stable while the tab is open and numbered from 1 again after the browser restarts. A host
+    unique among the browser's tabs until the browser restarts. An old number may then name
+    a different tab. A host
     may send two optional ids of its own with a run
     (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?}`), each at most 128
     bytes. `requestId` names one call. Runs can be looked up by it, and a repeat of it never
@@ -908,10 +909,6 @@ components:
     PageRef:
       type: object
       properties:
-        pageId:
-          type: integer
-          format: int32
-          description: Neo's own page id, which a Neo restart resets. Name a tab by `tabId`.
         tabId:
           type: integer
           format: int64

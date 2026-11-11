@@ -127,7 +127,7 @@ async fn poll_locator(
                 sweep,
             } => {
                 mark_sensitive(scope, sensitive);
-                let value = mask.value(pw, scope, page.id(), sweep, value)?;
+                let value = mask.value(pw, scope, page.tab(), sweep, value)?;
                 return Ok(Reading { value, path });
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {}
@@ -170,7 +170,7 @@ async fn read_handle(
         } => {
             mark_sensitive(scope, sensitive);
             Ok(Some(Reading {
-                value: mask.value(pw, scope, page.id(), sweep, value)?,
+                value: mask.value(pw, scope, page.tab(), sweep, value)?,
                 path: site.path().clone(),
             }))
         }

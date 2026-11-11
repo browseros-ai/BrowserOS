@@ -24,59 +24,28 @@
 
 use std::{fmt, iter};
 
-use browseros_core::{BrowserSession, FrameId, PageId, TabId};
+use browseros_core::{FrameId, TabId};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::{self, RawValue};
 use serde_json::{Value, json};
 
-use crate::op_scope::OpScope;
 use crate::world::{BackendNodeId, FrameSeq};
-use crate::{ErrorCode, PlaywrightError};
 
-/// `{"$neo":"page","id":7,"tab":1234}`: a page handle, the skeleton's page brand. `id` is core's
-/// process-local page id, which restarts at 1 with Neo; `tab` is the browser's tab id, which
-/// does not. Both fields are private so that every op reads the id through
-/// [`PageRef::checked`], which refuses a handle whose id now names another tab.
-///
-/// Every target carries one, so the host's door finds an op's page at `page` or `target.page`
-/// in its input and checks its policies on that tab. The run's lazy default page
-/// (`{"$neo":"page","id":null}`) never reaches the crate: the host substitutes the tab it
-/// resolved before `Playwright::invoke`, and a null id fails to decode here as `invalid_input`,
-/// so the crate never acts on a tab the door did not clear. It serializes back unchanged, as
-/// the page of the element handles an op hands out.
+/// A tab-only page handle. The host resolves a lazy `{tab:null}` before invoking the crate;
+/// null or an obsolete `id` field therefore fails decoding here, before any input is sent.
+/// The admitted core id is looked up for one operation and never retained in this brand.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PageRef {
     #[serde(rename = "$neo")]
     _brand: PageBrand,
-    id: PageId,
     tab: TabId,
 }
 
 impl PageRef {
-    /// The page this handle names, once core's cached page info agrees on its tab; no CDP call.
-    /// A mismatch is a handle from before Neo restarted, refused as `target_closed` (the error
-    /// table's code for a page that is gone) before anything is sent. A page core has not cached
-    /// is left to admission, which fails one that is gone; claw-sdk's dispatcher has already
-    /// refused an uncached handle by then.
-    pub(crate) async fn checked(
-        &self,
-        browser: &BrowserSession,
-        scope: &OpScope<'_>,
-    ) -> Result<PageId, PlaywrightError> {
-        match browser.pages.get_tab_id(self.id.clone()).await {
-            Some(tab) if tab != self.tab => Err(scope.fail(
-                ErrorCode::TargetClosed,
-                "this page handle is from before Neo restarted, and its id now names another \
-                 tab; get the page again from context.pages()",
-            )),
-            Some(_) | None => Ok(self.id.clone()),
-        }
-    }
-
-    /// The tab, for the handles an op hands back.
-    pub(crate) fn tab(&self) -> &TabId {
-        &self.tab
+    /// The browser tab this handle names.
+    pub(crate) fn tab(&self) -> TabId {
+        self.tab
     }
 }
 
@@ -107,7 +76,7 @@ impl Target {
     }
 }
 
-/// `{"$neo":"locator","page":{"$neo":"page","id":7,"tab":1234},"frame":null,"chunks":[...],
+/// `{"$neo":"locator","page":{"$neo":"page","tab":1234},"frame":null,"chunks":[...],
 /// "display":"getByRole('button')"}`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -143,7 +112,7 @@ pub(crate) enum RootHandle {
     Element(ElementTarget),
 }
 
-/// `{"$neo":"element","page":{"$neo":"page","id":7,"tab":1234},"seq":4,"node":1234,
+/// `{"$neo":"element","page":{"$neo":"page","tab":1234},"seq":4,"node":1234,
 /// "display":"<button>Save</button>"}`. Once document `seq` is gone, the handle is detached for
 /// good.
 #[derive(Clone, Debug, Deserialize)]
@@ -354,7 +323,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for NonEmpty<T> {
 mod tests {
     use std::error::Error;
 
-    use browseros_core::{FrameId, PageId, TabId};
+    use browseros_core::{FrameId, TabId};
     use serde_json::{Value, json};
 
     use super::{AriaRefJump, CallHeader, Chunk, PageRef, Strictness, Target};
@@ -504,7 +473,7 @@ mod tests {
     fn tests_that_a_locator_target_decodes_its_frames() -> Result<(), Box<dyn Error>> {
         let target: Target = serde_json::from_value(json!({
             "$neo": "locator",
-            "page": { "$neo": "page", "id": 7, "tab": 1007 },
+            "page": { "$neo": "page", "tab": 1007 },
             "frame": "F1",
             "chunks": [
                 chunk("internal:attr", "[id=\"pay\"s]"),
@@ -515,10 +484,7 @@ mod tests {
         let Target::Locator(locator) = target else {
             panic!("a locator brand is a locator target");
         };
-        assert_eq!(
-            (&locator.page.id, locator.page.tab),
-            (&PageId(7), TabId(1007))
-        );
+        assert_eq!(locator.page.tab, TabId(1007));
         assert_eq!(locator.frame, Some(FrameId("F1".to_owned())));
         let (hops, last) = locator.hops_and_last_bodies();
         assert_eq!(hops, ["[id=\"pay\"s]"], "the iframe chunk is a hop");
@@ -532,7 +498,7 @@ mod tests {
 
     #[test]
     fn tests_that_an_element_target_names_its_document_and_node() -> Result<(), Box<dyn Error>> {
-        let page = json!({ "$neo": "page", "id": 7, "tab": 1007 });
+        let page = json!({ "$neo": "page", "tab": 1007 });
         let target: Target = serde_json::from_value(json!({
             "$neo": "element", "page": page, "seq": 4, "node": 1234, "display": "<button>Save</button>",
         }))?;
@@ -546,13 +512,13 @@ mod tests {
         );
         assert_eq!(
             (
-                element.page.id,
+                element.page.tab,
                 element.seq,
                 element.node,
                 element.display.as_str()
             ),
             (
-                PageId(7),
+                TabId(1007),
                 FrameSeq(4),
                 BackendNodeId(1234),
                 "<button>Save</button>"
@@ -563,7 +529,7 @@ mod tests {
 
     #[test]
     fn tests_that_targets_refuse_what_they_do_not_know() {
-        let page = json!({ "$neo": "page", "id": 7, "tab": 1007 });
+        let page = json!({ "$neo": "page", "tab": 1007 });
         for bad in [
             json!({ "$neo": "locator", "page": page, "chunks": [], "display": "x" }),
             json!({ "$neo": "locator", "page": page, "chunks": [chunk("css", "a")], "display": "x", "steps": [] }),
@@ -584,7 +550,7 @@ mod tests {
     /// pick a tab of its own, so it never decodes, at the top or nested in a target.
     #[test]
     fn tests_that_the_unresolved_default_page_never_decodes() {
-        let lazy = json!({ "$neo": "page", "id": null });
+        let lazy = json!({ "$neo": "page", "tab": null });
         assert!(serde_json::from_value::<PageRef>(lazy.clone()).is_err());
         for target in [
             json!({ "$neo": "locator", "page": lazy, "chunks": [chunk("css", "a")], "display": "x" }),
@@ -598,14 +564,15 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_a_page_handle_carries_its_id_and_tab() -> Result<(), Box<dyn Error>> {
-        let page: PageRef =
-            serde_json::from_value(json!({ "$neo": "page", "id": 7, "tab": 1234 }))?;
-        assert_eq!((page.id, page.tab), (PageId(7), TabId(1234)));
+    fn tests_that_a_page_handle_carries_only_its_tab() -> Result<(), Box<dyn Error>> {
+        let page: PageRef = serde_json::from_value(json!({ "$neo": "page", "tab": 1234 }))?;
+        assert_eq!(page.tab, TabId(1234));
         for bad in [
+            json!({ "$neo": "page", "id": 7, "tab": 1234 }),
+            json!({ "$neo": "page", "tab": null }),
             json!({ "$neo": "locator", "id": 7, "tab": 1234 }),
             json!({ "$neo": "page", "id": 7 }),
-            json!({ "$neo": "page", "id": 7, "tab": 1234, "url": "" }),
+            json!({ "$neo": "page", "tab": 1234, "url": "" }),
         ] {
             assert!(
                 serde_json::from_value::<PageRef>(bad.clone()).is_err(),

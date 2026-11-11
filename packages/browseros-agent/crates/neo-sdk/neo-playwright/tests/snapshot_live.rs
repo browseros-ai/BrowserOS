@@ -859,7 +859,7 @@ async fn tests_that_typed_secrets_echoed_in_page_text_come_back_masked() -> Test
     for value in ["482913", "hunter2-oopif"] {
         assert!(
             swept.contains(&Swept {
-                page: page.id.clone(),
+                page: page.tab,
                 value: value.to_owned(),
             }),
             "the host was told of {value} on its page"

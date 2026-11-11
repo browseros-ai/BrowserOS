@@ -8,8 +8,8 @@ use std::sync::Arc;
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, PrivateReason, RedactionLimits, Redactor, RequestId, RetentionPolicy, RunEffects,
-    RunQuery, RunStatus, SecretSet, SecretSetConfig, ShotRead, ShotState, TailQuery,
+    Outcome, PageState, PrivateReason, RedactionLimits, Redactor, RequestId, RetentionPolicy,
+    RunEffects, RunQuery, RunStatus, SecretSet, SecretSetConfig, ShotRead, ShotState, TailQuery,
     TargetSensitivity, TaskId, TraceError, TraceStore, WriterConfig, spawn_writer,
 };
 use sea_orm::sqlx::sqlite::SqliteConnectOptions;
@@ -718,5 +718,96 @@ async fn a_runs_tabs_come_back_sorted_from_one_statement() -> TestResult {
             .tabs,
         expected
     );
+    Ok(())
+}
+
+/// Dropping the public core ID must neither require a migration nor destroy historical data.
+/// Only native tab identity is reconstructed, and current writes never populate the old column.
+#[tokio::test]
+async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> TestResult {
+    let (_dir, path) = fixture("s5", true).await?;
+    let schema_before = shape(&path).await?;
+    let mut conn = connection(&path).await?;
+    sqlx::query("UPDATE operations SET page_id = 9223372036854775807, tab_id = 9, title = 'old tab' WHERE run_id = ? AND seq = 1")
+        .bind(A).execute(&mut conn).await?;
+    conn.close().await?;
+
+    let store = TraceStore::open(&path).await?;
+    assert_eq!(shape(&path).await?, schema_before);
+    let old = store
+        .operation(OperationId::new(A.parse()?, 1))
+        .await?
+        .ok_or("old operation")?;
+    assert_eq!(
+        old.page,
+        PageState {
+            tab_id: Some(TabId(9)),
+            url: None,
+            title: Some("old tab".into()),
+        }
+    );
+    let sink = spawn_writer(
+        &store,
+        Redactor::new(
+            Arc::new(SecretSet::new(SecretSetConfig::default())),
+            RedactionLimits::default(),
+        ),
+        WriterConfig::default(),
+        None,
+    );
+    let id = OperationId::new(A.parse()?, 4);
+    sink.op_started(OperationStarted {
+        id,
+        parent: None,
+        name: "page.title".into(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Read,
+        tab: Some(TabId(3)),
+        args: Value::Null,
+        policy: Arc::default(),
+        also_mask: None,
+        at: EpochMillis::from_millis(40),
+    });
+    let page = PageState {
+        tab_id: Some(TabId(3)),
+        url: Some("https://example.test/".into()),
+        title: Some("current tab".into()),
+    };
+    sink.op_ended(OperationEnded {
+        id,
+        outcome: Outcome::Ok,
+        delivery: Delivery::NotSent,
+        sent_at: None,
+        result: None,
+        error: None,
+        page_after: Some(page.clone()),
+        target: TargetSensitivity::Ordinary,
+        also_mask: None,
+        at: EpochMillis::from_millis(41),
+    });
+    sink.flush().await?;
+    assert_eq!(
+        store.operation(id).await?.ok_or("new operation")?.page,
+        page
+    );
+
+    let mut conn = connection(&path).await?;
+    let legacy: Option<i64> =
+        sqlx::query_scalar("SELECT page_id FROM operations WHERE run_id = ? AND seq = 1")
+            .bind(A)
+            .fetch_one(&mut conn)
+            .await?;
+    let current: Option<i64> =
+        sqlx::query_scalar("SELECT page_id FROM operations WHERE run_id = ? AND seq = 4")
+            .bind(A)
+            .fetch_one(&mut conn)
+            .await?;
+    assert_eq!(
+        legacy,
+        Some(i64::MAX),
+        "old data is preserved without being interpreted"
+    );
+    assert_eq!(current, None, "new data leaves the legacy column NULL");
+    conn.close().await?;
     Ok(())
 }

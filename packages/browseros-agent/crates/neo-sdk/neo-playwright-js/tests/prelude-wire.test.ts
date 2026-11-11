@@ -18,7 +18,7 @@ type Part = { name: string; source: string; body: unknown }
 type Chunk = { parts: Part[]; capture?: number }
 type LocatorTarget = {
   $neo: 'locator'
-  page: { $neo: 'page'; id: number | null; tab?: number }
+  page: { $neo: 'page'; tab: number | null }
   frame: string | null
   chunks: Chunk[]
   display: string
@@ -58,7 +58,7 @@ describe('locator targets', () => {
           call: { api: 'locator.click', timeoutMs: 5000 },
           target: {
             $neo: 'locator',
-            page: { $neo: 'page', id: 7, tab: 1007 },
+            page: { $neo: 'page', tab: 1007 },
             frame: null,
             chunks: [
               {
@@ -255,7 +255,7 @@ describe('locator targets', () => {
   it('tests that an element handle acts on its pinned element', async () => {
     const element = {
       $neo: 'element',
-      page: { $neo: 'page', id: 7, tab: 1007 },
+      page: { $neo: 'page', tab: 1007 },
       seq: 4,
       node: 1234,
       display: '<button>Save</button>',
@@ -512,6 +512,7 @@ describe('errors', () => {
       answer: (call) =>
         call.name === 'page.close'
           ? {
+              pages: [{ tab: 1007, closed: true }],
               err: {
                 code: 'target_closed',
                 owner: 'neo',
@@ -586,7 +587,7 @@ describe('errors', () => {
         call.name === 'locator.elementHandle'
           ? {
               $neo: 'element',
-              page: { $neo: 'page', id: 7, tab: 1007 },
+              page: { $neo: 'page', tab: 1007 },
               seq: 2,
               node: 41,
               display: '<b>',
@@ -654,7 +655,7 @@ describe('errors', () => {
     ).toEqual([
       {
         call: { api: 'locator.screenshot', timeoutMs: 5000 },
-        page: { $neo: 'page', id: 7, tab: 1007 },
+        page: { $neo: 'page', tab: 1007 },
         target: expect.objectContaining({ display: "locator('#a')" }),
         strict: 'strict',
         type: 'jpeg',
@@ -677,13 +678,11 @@ describe('synchronous state', () => {
               ok: 'Cart',
               pages: [
                 {
-                  id: 7,
                   tab: 1007,
                   url: 'https://shop.example/cart',
                   title: 'Cart',
                 },
                 {
-                  id: 9,
                   tab: 1009,
                   url: 'https://mail.example/',
                   title: 'Mail',
@@ -706,7 +705,7 @@ describe('synchronous state', () => {
       contexts: 1,
     })
     expect(runtime.sent('page.title').map((call) => call.input.page)).toEqual([
-      { $neo: 'page', id: 7, tab: 1007 },
+      { $neo: 'page', tab: 1007 },
     ])
   })
 
@@ -716,14 +715,12 @@ describe('synchronous state', () => {
         ...SEED,
         pages: [
           {
-            id: 7,
             tab: 1007,
             url: 'https://shop.example/cart',
             title: 'Cart',
             closed: false,
           },
           {
-            id: 9,
             tab: 1009,
             url: 'https://mail.example/',
             title: 'Mail',
@@ -741,17 +738,17 @@ describe('synchronous state', () => {
     ).toEqual([
       {
         url: 'https://shop.example/cart',
-        brand: { $neo: 'page', id: 7, tab: 1007 },
+        brand: { $neo: 'page', tab: 1007 },
         run: true,
       },
       {
         url: 'https://mail.example/',
-        brand: { $neo: 'page', id: 9, tab: 1009 },
+        brand: { $neo: 'page', tab: 1009 },
         run: false,
       },
     ])
     expect(runtime.calls.map((call) => [call.name, call.input.page])).toEqual([
-      ['page.title', { $neo: 'page', id: 9, tab: 1009 }],
+      ['page.title', { $neo: 'page', tab: 1009 }],
     ])
   })
 
@@ -767,7 +764,7 @@ describe('synchronous state', () => {
               ok: null,
               pages: [
                 {
-                  id: 7,
+                  tab: 1007,
                   url: 'https://shop.example/pay',
                   title: 'Pay',
                   closed: true,
@@ -862,8 +859,8 @@ describe('synchronous state', () => {
     ])
   })
 
-  const unopened = { $neo: 'page', id: null } as const
-  const opened = { $neo: 'page', id: 12, tab: 1012 } as const
+  const unopened = { $neo: 'page', tab: null } as const
+  const opened = { $neo: 'page', tab: 1012 } as const
 
   /**
    * claw-sdk's door for a run with no tab yet: an op whose target names the unopened page gets
@@ -871,12 +868,12 @@ describe('synchronous state', () => {
    */
   const lazyDoor = (ok: (call: Call) => unknown) => (call: Call) => {
     const target = call.input.target as LocatorTarget | undefined
-    const page = (call.input.page ?? target?.page) as { id?: unknown }
-    return page?.id === null
+    const page = (call.input.page ?? target?.page) as { tab?: unknown }
+    return page?.tab === null
       ? {
           ok: ok(call),
-          defaultPage: { id: 12, tab: 1012 },
-          pages: [{ id: 12, tab: 1012, url: 'about:blank', title: '' }],
+          defaultPage: { tab: 1012 },
+          pages: [{ tab: 1012, url: 'about:blank', title: '' }],
         }
       : { ok: ok(call) }
   }
@@ -912,7 +909,7 @@ describe('synchronous state', () => {
       event: 'popup',
       page: opened,
       popup: {
-        page: { $neo: 'page', id: 13, tab: 1013 },
+        page: { $neo: 'page', tab: 1013 },
         url: 'https://ads.example/',
       },
     }
@@ -937,44 +934,34 @@ describe('synchronous state', () => {
       answer: (call) =>
         call.name === 'context.newPage'
           ? {
-              page: { $neo: 'page', id: 8, tab: 1008 },
+              page: { $neo: 'page', tab: 1008 },
               url: 'about:blank',
             }
           : call.name === 'page.opener'
             ? { opener: { $neo: 'page', id: 9 } }
             : null,
     })
-    const refused = json(
-      await runtime.run(
-        'const opener = await page.opener(); try { await opener.reload() } catch (e) { return { code: e.code, message: e.message } }',
-      ),
+    expect(await runtime.run('return (await page.opener()) === null')).toBe(
+      true,
     )
-    expect(refused).toEqual({
-      code: 'invalid_input',
-      message:
-        'page.reload: Neo has no tab id for this page; get the page again from context.pages()',
-    })
-    expect(runtime.calls.map((call) => call.name)).toEqual([
-      'page.opener',
-      'page.reload',
-    ])
+    expect(runtime.calls.map((call) => call.name)).toEqual(['page.opener'])
     await runtime.run(
       'const tab = await context.newPage(); await page.title(); await tab.title()',
     )
     expect(runtime.sent('page.title').map((call) => call.input.page)).toEqual([
-      { $neo: 'page', id: 7, tab: 1007 },
-      { $neo: 'page', id: 8, tab: 1008 },
+      { $neo: 'page', tab: 1007 },
+      { $neo: 'page', tab: 1008 },
     ])
   })
 
-  it('tests that newPage and opener return Page objects, one per page id', async () => {
+  it('tests that newPage and opener return Page objects, one per browser tab', async () => {
     const runtime = loadPrelude({
       seed: SEED,
       answer: (call) =>
         call.name === 'context.newPage'
-          ? { page: { $neo: 'page', id: 21, tab: 1021 }, url: 'about:blank' }
+          ? { page: { $neo: 'page', tab: 1021 }, url: 'about:blank' }
           : call.name === 'page.opener'
-            ? { opener: { $neo: 'page', id: 7, tab: 1007 } }
+            ? { opener: { $neo: 'page', tab: 1007 } }
             : null,
     })
     expect(
@@ -1000,10 +987,10 @@ describe('the op table', () => {
       const field = op.target
       if (field === null) continue
       // The door reads the page brand at `page`, or at `target.page` for an element op.
-      type Brand = { $neo?: string; id?: unknown }
+      type Brand = { $neo?: string; tab?: unknown }
       const handle = call.input[field] as (Brand & { page?: Brand }) | undefined
       const page = field === 'page' ? handle : handle?.page
-      if (page?.$neo !== 'page' || typeof page.id !== 'number')
+      if (page?.$neo !== 'page' || typeof page.tab !== 'number')
         misplaced.push(`${call.name}: no page brand in ${field}`)
     }
     expect(misplaced).toEqual([])

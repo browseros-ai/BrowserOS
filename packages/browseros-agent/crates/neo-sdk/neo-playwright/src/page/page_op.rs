@@ -149,8 +149,8 @@ pub(crate) async fn invoke(
         PageOp::Goto => {
             let (page, navigation, wait_until) =
                 args.decode::<GotoInput>(scope)?.into_parts(scope)?;
-            let page = page.checked(pw.browser(), scope).await?;
-            navigation::navigate(pw, scope, &page, navigation, wait_until).await
+            let page = page.tab();
+            navigation::navigate(pw, scope, page, navigation, wait_until).await
         }
         PageOp::Reload => renavigate(pw, scope, args, Navigation::Reload).await,
         PageOp::GoBack => renavigate(pw, scope, args, Navigation::History(-1)).await,
@@ -210,8 +210,8 @@ async fn renavigate(
     navigation: Navigation,
 ) -> Result<Value, PlaywrightError> {
     let (page, wait_until) = args.decode::<NavigateInput>(scope)?.into_parts();
-    let page = page.checked(pw.browser(), scope).await?;
-    navigation::navigate(pw, scope, &page, navigation, wait_until).await
+    let page = page.tab();
+    navigation::navigate(pw, scope, page, navigation, wait_until).await
 }
 
 /// `page.close({ runBeforeUnload })`.
@@ -231,8 +231,8 @@ async fn close(
     scope: &OpScope<'_>,
     input: CloseInput,
 ) -> Result<Value, PlaywrightError> {
-    let page = input.page.checked(pw.browser(), scope).await?;
-    let admitted = scope.admit(&page).await?;
+    let page = input.page.tab();
+    let admitted = scope.admit(pw.browser(), page).await?;
     let core = |error| scope.core_error(&error);
     let sent = scope.send_effect()?;
     if input.run_before_unload {
@@ -242,7 +242,11 @@ async fn close(
         close_with_unload(&session, &sent).await.map_err(core)?;
     } else {
         // Through core, so its tab registry forgets the page and the run's view still decides.
-        scope.view().close_page(page).await.map_err(core)?;
+        scope
+            .view()
+            .close_page(admitted.core_page.clone())
+            .await
+            .map_err(core)?;
     }
     Ok(json!({}))
 }
@@ -277,9 +281,7 @@ async fn opener(
         #[serde(default)]
         opener_id: Option<String>,
     }
-    let admitted = scope
-        .admit(&input.page.checked(pw.browser(), scope).await?)
-        .await?;
+    let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
     let core = |error| scope.core_error(&error);
     let info: TargetInfoReply = pw
         .browser()
@@ -300,7 +302,7 @@ async fn opener(
             .pages
             .into_iter()
             .find(|page| page.target_id.as_str() == opener)
-            .map(|page| PageHandle::new(page.page_id, page.tab_id)),
+            .map(|page| PageHandle::new(page.tab_id)),
         None => None,
     };
     to_output(scope, &OpenerResult { opener })

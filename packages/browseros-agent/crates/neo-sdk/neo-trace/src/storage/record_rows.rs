@@ -96,8 +96,8 @@ pub(crate) fn operation_row(row: operations::Model) -> Result<OperationRow, Trac
             "write" => Effect::Write,
             other => return Err(corrupt("effect", other)),
         },
+        // Historical page_id values are deliberately ignored, without rewriting the row.
         page: PageState {
-            page_id: row.page_id.and_then(|page| u32::try_from(page).ok()),
             tab_id: row.tab_id.map(TabId),
             url: row.url,
             title: row.title,

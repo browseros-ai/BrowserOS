@@ -152,6 +152,7 @@ mod tests {
                 code: "return [__neo.parameters(), typeof Intl];".to_owned(),
                 page: None,
                 pages: Vec::new(),
+                observed: None,
             };
             let ScriptOutcome::Returned(value) =
                 run_script(&run, &rig.dispatcher, script).await.outcome

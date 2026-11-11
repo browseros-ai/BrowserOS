@@ -64,6 +64,6 @@ pub(crate) fn locator(page: &TestPage, parts: &[Value], display: &str) -> Value 
         .into_iter()
         .map(|parts| json!({ "parts": parts }))
         .collect();
-    let page = json!({ "$neo": "page", "id": page.id.0, "tab": page.tab.0 });
+    let page = json!({ "$neo": "page", "tab": page.tab.0 });
     json!({ "$neo": "locator", "page": page, "chunks": chunks, "display": display })
 }

@@ -39,7 +39,7 @@ pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 /// One value the journal reported.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Journaled {
-    pub(crate) page: PageId,
+    pub(crate) page: TabId,
     pub(crate) kind: SensitiveKind,
     pub(crate) value: String,
     pub(crate) by: TypedBy,
@@ -92,7 +92,7 @@ impl RecordingHooks {
 }
 
 impl PlaywrightHooks for RecordingHooks {
-    fn field_entered(&self, page: PageId, entry: JournalEntry, by: TypedBy) {
+    fn field_entered(&self, page: TabId, entry: JournalEntry, by: TypedBy) {
         self.journaled
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -104,14 +104,14 @@ impl PlaywrightHooks for RecordingHooks {
             });
     }
 
-    fn values_swept(&self, _page: PageId, values: &FieldValues) {
+    fn values_swept(&self, _page: TabId, values: &FieldValues) {
         self.swept
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .extend(values.registrable().map(str::to_owned));
     }
 
-    fn capture_allowed(&self, _page: PageId) -> Result<(), Refusal> {
+    fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
         Ok(())
     }
 
@@ -213,9 +213,9 @@ pub(crate) struct Tab {
 }
 
 impl Tab {
-    /// `{"$neo":"page","id":7,"tab":1234}`, as a target names this tab.
+    /// `{"$neo":"page","tab":1234}`, as a target names this tab.
     pub(crate) fn brand(&self) -> Value {
-        json!({ "$neo": "page", "id": self.page.0, "tab": self.id.0 })
+        json!({ "$neo": "page", "tab": self.id.0 })
     }
 
     /// The page's own main world, which the seal leaves alone.
@@ -260,7 +260,6 @@ pub(crate) fn count_op() -> TestResult<Op> {
 /// The scripted browser [`one_tab`] builds, and its one tab.
 pub(crate) struct OneTab {
     pub(crate) browser: Arc<BrowserSession>,
-    pub(crate) page: PageId,
 }
 
 /// A browser over `connection` with one tab, tab 7 on `https://example.test/`, scripted to
@@ -284,15 +283,13 @@ pub(crate) async fn one_tab(connection: &Arc<TestConnection>) -> Result<OneTab, 
     connection.always("Runtime.evaluate", json!({ "result": { "value": true } }))?;
     let cdp: Arc<dyn CdpConnection> = Arc::clone(connection) as Arc<dyn CdpConnection>;
     let browser = BrowserSession::new(cdp, BrowserSessionHooks::default());
-    let page = browser
+    browser
         .pages
         .list()
         .await?
         .first()
-        .ok_or("the tab is listed")?
-        .page_id
-        .clone();
-    Ok(OneTab { browser, page })
+        .ok_or("the tab is listed")?;
+    Ok(OneTab { browser })
 }
 
 /// What a [`ScriptedTab`] answers one probe request with, after `after` on the tokio clock.
@@ -793,9 +790,7 @@ impl ScriptedRun {
         );
         let listed = browser.pages.list().await?;
         let listed = listed.first().ok_or("the tab is listed")?;
-        let page = serde_json::from_value(
-            json!({ "$neo": "page", "id": listed.page_id, "tab": listed.tab_id }),
-        )?;
+        let page = serde_json::from_value(json!({ "$neo": "page", "tab": listed.tab_id }))?;
         Ok(Self {
             playwright,
             hooks,

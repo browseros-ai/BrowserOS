@@ -16,7 +16,7 @@ const RECORDED_AT = 1_700_000_000_000
 
 const ELEMENT = {
   $neo: 'element',
-  page: { $neo: 'page', id: 7, tab: 1007 },
+  page: { $neo: 'page', tab: 1007 },
   seq: 0,
   node: 9,
   display: '<button>Go</button>',
@@ -24,13 +24,13 @@ const ELEMENT = {
 const DIALOG = {
   seq: 1,
   event: 'dialog',
-  page: { $neo: 'page', id: 7, tab: 1007 },
+  page: { $neo: 'page', tab: 1007 },
   dialog: { id: 4, type: 'confirm', message: 'Sure?', defaultValue: '' },
 }
 const DOWNLOAD = {
   seq: 2,
   event: 'download',
-  page: { $neo: 'page', id: 7, tab: 1007 },
+  page: { $neo: 'page', tab: 1007 },
   download: {
     id: 'guid-5',
     url: 'https://a.example/f.csv',
@@ -58,7 +58,7 @@ const ANSWERS: Record<string, unknown> = {
   'page.opener': { opener: null },
   'page.waitForFunction': { value: true, preview: 'true' },
   'context.newPage': {
-    page: { $neo: 'page', id: 8, tab: 1008 },
+    page: { $neo: 'page', tab: 1008 },
     url: 'about:blank',
   },
   'download.path': { path: '/runs/r/f.csv', failure: null },

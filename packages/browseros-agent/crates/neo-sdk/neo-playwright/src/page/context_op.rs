@@ -76,7 +76,7 @@ pub(crate) async fn invoke(
                 .pages
                 .into_iter()
                 .map(|page| PageEntry {
-                    page: PageHandle::new(page.page_id, page.tab_id),
+                    page: PageHandle::new(page.tab_id),
                     url: page.url,
                 })
                 .collect();
@@ -106,7 +106,7 @@ pub(crate) async fn invoke(
             to_output(
                 scope,
                 &PageEntry {
-                    page: PageHandle::new(opened.page_id, opened.tab_id),
+                    page: PageHandle::new(opened.tab_id),
                     url: opened.url,
                 },
             )

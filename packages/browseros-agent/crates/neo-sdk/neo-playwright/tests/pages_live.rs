@@ -540,16 +540,14 @@ async fn tests_that_a_popup_names_its_opener() -> TestResult {
     .await
 }
 
-/// Core's page ids restart at 1 with Neo, so a handle kept across a restart can name another
-/// tab. Its `tab` no longer matches core's page info, and the op is refused before anything.
+/// An unknown native tab is refused before any input is sent, after one listing.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_handle_whose_tab_changed_is_refused_as_closed() -> TestResult {
+async fn tests_that_an_unknown_tab_is_refused_as_closed() -> TestResult {
     with_page(|run, _server, page| async move {
         let result = async {
             let stale = TestPage {
-                id: page.id.clone(),
-                tab: TabId(page.tab.0 + 1),
+                tab: TabId(i64::MAX),
             };
             run.clear_calls();
             let error = run
@@ -558,13 +556,35 @@ async fn tests_that_a_handle_whose_tab_changed_is_refused_as_closed() -> TestRes
                 .err()
                 .ok_or("a handle for another tab must fail")?;
             assert_eq!(error.error_code(), Some(ErrorCode::TargetClosed), "{error}");
-            assert!(
-                error.message().contains("from before Neo restarted"),
-                "{error}"
-            );
+            assert!(error.message().contains("tab was closed"), "{error}");
             assert!(run.calls().is_empty(), "refused before the host was asked");
             run.invoke("page.frames", json!({ "page": brand(&page) }))
                 .await?;
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// A fresh SDK instance has no memory of the original core page ID. A serialized native
+/// tab handle must still reach the same surviving browser tab.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn a_tab_handle_survives_a_playwright_restart() -> TestResult {
+    with_page(|run, server, page| async move {
+        let result = async {
+            goto(&run, &page, &server.url("/child.html"), "load").await?;
+            run.eval(&page, "document.title = 'surviving native tab'")
+                .await?;
+            let saved = brand(&page);
+            assert_eq!(saved, json!({ "$neo": "page", "tab": page.tab.0 }));
+            let restarted = LiveRun::connect().await?;
+            let title = restarted
+                .invoke("page.title", json!({ "page": saved }))
+                .await?;
+            assert_eq!(title, "surviving native tab");
             Ok(())
         }
         .await;

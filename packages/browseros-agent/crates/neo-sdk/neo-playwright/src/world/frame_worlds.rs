@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use browseros_core::{FrameId, PageId, ProtocolSession, SessionId};
+use browseros_core::{FrameId, ProtocolSession, SessionId, TabId};
 use tokio::sync::OnceCell;
 
 use crate::probe::ProbeFailure;
@@ -32,7 +32,7 @@ pub(crate) struct Installer<'a> {
     /// The `Playwright` instance's epoch.
     pub(crate) epoch: &'a Epoch,
     /// The page, for the journal's attribution.
-    pub(crate) page: &'a PageId,
+    pub(crate) page: TabId,
 }
 
 /// Which frame of the page an install is for.
@@ -636,6 +636,52 @@ mod tests {
             worlds.by_seq(FrameSeq(500_000)),
             SeqLookup::Retired
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn returning_tab_keeps_state_and_never_restarts_frame_sequences() -> TestResult {
+        use crate::op_scope::AdmittedPage;
+        use crate::page::PageRegistry;
+        use browseros_core::pages::PageSession;
+        use browseros_core::{PageId, TabId, TargetId};
+        use std::sync::Arc;
+        let browser = test_env::offline_session();
+        let registry = PageRegistry::new();
+        let admitted = |id| AdmittedPage {
+            tab: TabId(51),
+            core_page: PageId(id),
+            session: PageSession {
+                target_id: TargetId("tab-51".to_owned()),
+                session_id: SessionId::from("session-51"),
+                session: browser.protocol_session(SessionId::from("session-51")),
+                url: "https://example.test/".to_owned(),
+            },
+        };
+        let before = registry.page(&browser, &admitted(1)).await;
+        let first = install(
+            before.frames(),
+            ("S", "main"),
+            Place::Main,
+            &AtomicU32::new(0),
+        )
+        .await?;
+        let after = registry.page(&browser, &admitted(2)).await;
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "a core cache replacement is the same browser tab"
+        );
+        let next = install(
+            after.frames(),
+            ("S2", "next"),
+            Place::Main,
+            &AtomicU32::new(0),
+        )
+        .await?;
+        assert!(
+            next.seq().0 > first.seq().0,
+            "old refs cannot alias a returning tab's new document"
+        );
         Ok(())
     }
 }

@@ -17,7 +17,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "dialog": 4
@@ -31,7 +30,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "dialog": 4
@@ -74,7 +72,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "event": "console",
@@ -98,7 +95,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "event": "dialog",
@@ -112,7 +108,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "event": "download",
@@ -130,7 +125,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -164,7 +158,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "matcher": "toHaveTitle",
@@ -190,7 +183,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "key": "a"
@@ -204,7 +196,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "text": "ab"
@@ -218,7 +209,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "key": "a",
@@ -233,7 +223,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "text": "ab",
@@ -248,7 +237,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "key": "a"
@@ -264,7 +252,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -293,7 +280,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -322,7 +308,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -353,7 +338,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -383,7 +367,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -413,7 +396,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -444,7 +426,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -473,7 +454,6 @@
           "$neo": "element",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "seq": 0,
@@ -494,7 +474,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -521,7 +500,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": "F1",
@@ -562,7 +540,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -593,7 +570,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -625,7 +601,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -647,7 +622,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -689,7 +663,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -717,7 +690,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -749,7 +721,6 @@
             "$neo": "element",
             "page": {
               "$neo": "page",
-              "id": 7,
               "tab": 1007
             },
             "seq": 0,
@@ -771,7 +742,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -798,7 +768,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -830,7 +799,6 @@
             "$neo": "element",
             "page": {
               "$neo": "page",
-              "id": 7,
               "tab": 1007
             },
             "seq": 0,
@@ -850,7 +818,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -885,7 +852,6 @@
           "$neo": "element",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "seq": 0,
@@ -910,7 +876,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -942,7 +907,6 @@
             "$neo": "element",
             "page": {
               "$neo": "page",
-              "id": 7,
               "tab": 1007
             },
             "seq": 0,
@@ -970,7 +934,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1021,7 +984,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1055,7 +1017,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1087,7 +1048,6 @@
             "$neo": "element",
             "page": {
               "$neo": "page",
-              "id": 7,
               "tab": 1007
             },
             "seq": 0,
@@ -1112,7 +1072,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1160,7 +1119,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1192,7 +1150,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1222,7 +1179,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1253,7 +1209,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1284,7 +1239,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1314,7 +1268,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1344,7 +1297,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1374,7 +1326,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1404,7 +1355,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1434,7 +1384,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1464,7 +1413,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1494,7 +1442,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1524,7 +1471,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1554,7 +1500,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1586,7 +1531,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1618,7 +1562,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1648,7 +1591,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1684,7 +1626,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1714,7 +1655,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1747,7 +1687,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1786,7 +1725,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1816,7 +1754,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1847,7 +1784,6 @@
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -1877,7 +1813,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "x": 1,
@@ -1893,7 +1828,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "options": {}
@@ -1907,7 +1841,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "x": 1,
@@ -1923,7 +1856,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "options": {}
@@ -1937,7 +1869,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "deltaX": 0,
@@ -1952,7 +1883,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "mode": "default"
@@ -1966,7 +1896,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 8,
           "tab": 1008
         }
       }
@@ -1979,7 +1908,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       }
@@ -1992,7 +1920,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "script": {
@@ -2010,7 +1937,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "script": {
@@ -2023,7 +1949,6 @@
                 "$neo": "element",
                 "page": {
                   "$neo": "page",
-                  "id": 7,
                   "tab": 1007
                 },
                 "seq": 0,
@@ -2043,7 +1968,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       },
@@ -2054,7 +1978,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       },
@@ -2065,7 +1988,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       },
@@ -2076,7 +1998,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       },
@@ -2087,7 +2008,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       },
@@ -2098,7 +2018,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       },
@@ -2109,7 +2028,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       },
@@ -2120,7 +2038,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       },
@@ -2131,7 +2048,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       }
@@ -2144,7 +2060,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "waitUntil": "load"
@@ -2158,7 +2073,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "waitUntil": "load"
@@ -2172,7 +2086,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "url": "https://a.example/",
@@ -2185,7 +2098,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "frame": "F1",
@@ -2201,7 +2113,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       }
@@ -2214,7 +2125,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       }
@@ -2227,7 +2137,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "waitUntil": "load"
@@ -2241,7 +2150,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       },
@@ -2252,14 +2160,12 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "target": {
           "$neo": "locator",
           "page": {
             "$neo": "page",
-            "id": 7,
             "tab": 1007
           },
           "frame": null,
@@ -2287,7 +2193,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "html": "<p>hi</p>",
@@ -2302,7 +2207,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         }
       }
@@ -2315,7 +2219,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "script": {
@@ -2335,7 +2238,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "frame": "F1",
@@ -2348,7 +2250,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "state": "load"
@@ -2362,7 +2263,6 @@
         },
         "page": {
           "$neo": "page",
-          "id": 7,
           "tab": 1007
         },
         "url": {

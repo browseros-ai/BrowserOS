@@ -30,16 +30,16 @@ pub(crate) struct TestPage {
 }
 
 impl TestPage {
-    /// `{"$neo":"page","id":7,"tab":1234}`, the brand every target carries for this tab.
+    /// `{"$neo":"page","tab":1234}`, the brand every target carries for this tab.
     pub(crate) fn brand(&self) -> Value {
-        json!({ "$neo": "page", "id": self.id.0, "tab": self.tab.0 })
+        json!({ "$neo": "page", "tab": self.tab.0 })
     }
 }
 
 /// One value the journal reported.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Journaled {
-    pub(crate) page: PageId,
+    pub(crate) page: TabId,
     pub(crate) kind: SensitiveKind,
     pub(crate) value: String,
     pub(crate) by: TypedBy,
@@ -48,7 +48,7 @@ pub(crate) struct Journaled {
 /// One value an op swept from a page and reported to the host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Swept {
-    pub(crate) page: PageId,
+    pub(crate) page: TabId,
     pub(crate) value: String,
 }
 
@@ -88,7 +88,7 @@ impl RecordingHooks {
 }
 
 impl PlaywrightHooks for RecordingHooks {
-    fn field_entered(&self, page: PageId, entry: JournalEntry, by: TypedBy) {
+    fn field_entered(&self, page: TabId, entry: JournalEntry, by: TypedBy) {
         self.journaled
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -100,15 +100,15 @@ impl PlaywrightHooks for RecordingHooks {
             });
     }
 
-    fn values_swept(&self, page: PageId, values: &FieldValues) {
+    fn values_swept(&self, page: TabId, values: &FieldValues) {
         let mut swept = self.swept.lock().unwrap_or_else(PoisonError::into_inner);
         swept.extend(values.registrable().map(|value| Swept {
-            page: page.clone(),
+            page,
             value: value.to_owned(),
         }));
     }
 
-    fn capture_allowed(&self, _page: PageId) -> Result<(), Refusal> {
+    fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
         Ok(())
     }
 }

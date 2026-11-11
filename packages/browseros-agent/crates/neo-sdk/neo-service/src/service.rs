@@ -256,7 +256,7 @@ impl Service {
 
     /// The browser link (re)connected with `open` tabs, listed after `fence` was taken. Whatever
     /// the parts keep about any other tab ends, as if it closed: it closed while Neo was not
-    /// watching, or the browser restarted and numbers its tabs from 1 again. A tab a host changed
+    /// watching, or the browser restarted and may reuse a tab number. A tab a host changed
     /// after `fence` is kept as if it were open, since it may have opened after the listing.
     /// Host changes to tabs wait until every part is done (`tab_stamps`).
     pub async fn retain_tabs(&self, open: &[TabId], fence: TabFence) {

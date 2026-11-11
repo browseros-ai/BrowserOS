@@ -133,7 +133,7 @@ impl FrameStart {
             return Ok(Some(chain.clone()));
         }
         let main = page.main_endpoint();
-        let tree = frame_tree::read(page.browser(), page.id(), &main.session)
+        let tree = frame_tree::read(page.browser(), page.core_page(), &main.session)
             .await
             .map_err(|error| scope.core_error(&error))?;
         let Some(chain) = tree.path_to(&self.frame) else {

@@ -328,6 +328,8 @@ impl TraceBatch {
 
     pub(crate) async fn end_operation(&self, op: OperationEndRow<'_>) -> Result<bool, TraceError> {
         let page = op.page.cloned().unwrap_or_default();
+        // The legacy page_id column stays untouched for old files. New records leave it NULL;
+        // only the native tab ID crosses the trace boundary.
         let mut model = operations::ActiveModel {
             ended_at: Set(Some(op.at.millis())),
             outcome: Set(Some(op.outcome.as_str().to_owned())),
@@ -344,7 +346,6 @@ impl TraceBatch {
                 .then(|| serde_json::to_string(op.notes))
                 .transpose()
                 .map_err(json_error)?),
-            page_id: Set(page.page_id.map(i64::from)),
             tab_id: Set(page.tab_id.map(|tab| tab.0)),
             url: Set(page.url),
             title: Set(page.title),

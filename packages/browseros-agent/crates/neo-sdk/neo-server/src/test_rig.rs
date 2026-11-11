@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use browseros_core::pages::NewPageOptions;
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
-use browseros_core::{NativeCapabilities, PageId, TabId};
+use browseros_core::{NativeCapabilities, TabId};
 use neo_playwright::{PlaywrightHooks, TypedBy};
 use neo_trace::{
     Effect, Privacy, RedactionLimits, Redactor, RunId, SecretSet, SecretSetConfig, TaskId,
@@ -33,8 +33,9 @@ use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::builtins::{PrivacyHooks, TypedValues};
 use crate::config::{Defaults, SecretFiles};
 use crate::dispatch::{
-    Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, OpCtx, OperationError,
-    PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart,
+    Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, Observer, OpCtx,
+    OperationError, PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard,
+    RunStart,
 };
 use crate::host::FlagRecovery;
 use crate::run::{RunService, RunServiceParts};
@@ -238,7 +239,7 @@ impl TestRig {
             kind: SensitiveKind::Password,
             value: value.to_owned().into(),
         };
-        self.typed.note(PageId(0), None, typed, TypedBy::Agent);
+        self.typed.note(TabId(0), typed, TypedBy::Agent);
     }
 
     /// A recorded run with `budget` left and no default page yet.
@@ -314,6 +315,7 @@ fn dispatcher(
         hooks.typed(),
         Arc::clone(link),
         Arc::clone(tabs),
+        Observer::unrecorded(),
     )))
 }
 
@@ -402,7 +404,7 @@ impl Method for Title {
             .map(|info| info.title);
         let found = FieldValues::new(self.fields.on(page.tab).into_iter().map(Zeroizing::new));
         if !found.is_empty() {
-            self.hooks.values_swept(page.id, &found);
+            self.hooks.values_swept(page.tab, &found);
             if let Some(title) = &mut title {
                 found.mask_str(title);
             }

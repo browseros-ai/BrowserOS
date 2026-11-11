@@ -40,7 +40,7 @@ async function eventually(check: () => boolean): Promise<void> {
   throw new Error('the condition never held')
 }
 
-const brand = (id: number) => ({ $neo: 'page', id, tab: 1000 + id })
+const brand = (id: number) => ({ $neo: 'page', tab: 1000 + id })
 
 /** The opener's `popup` event for a tab that opened. */
 const popup = (seq: number, id: number, url: string, opener = 7) => ({
@@ -82,7 +82,7 @@ describe('waitForEvent', () => {
     ])
     expect(runtime.sent('events.wait')[0]?.input).toEqual({
       call: { api: 'page.waitForEvent', timeoutMs: 111 + 5000 - 999 },
-      page: { $neo: 'page', id: 7, tab: 1007 },
+      page: { $neo: 'page', tab: 1007 },
       event: 'popup',
       since: 111,
       after: null,
@@ -107,14 +107,14 @@ describe('waitForEvent', () => {
     expect(runtime.sent('events.wait').map((call) => call.input)).toEqual([
       {
         call: { api: 'page.waitForEvent', timeoutMs: 8000 },
-        page: { $neo: 'page', id: 7, tab: 1007 },
+        page: { $neo: 'page', tab: 1007 },
         event: 'popup',
         since: 500,
         after: null,
       },
       {
         call: { api: 'page.waitForEvent', timeoutMs: 8000 },
-        page: { $neo: 'page', id: 7, tab: 1007 },
+        page: { $neo: 'page', tab: 1007 },
         event: 'popup',
         since: 500,
         after: 5,
@@ -233,6 +233,7 @@ describe('waitForEvent', () => {
   it('tests that the context waits for its page event with no page', async () => {
     const runtime = loadPrelude({
       seed: SEED,
+      now: 1_000,
       answer: () => newTab(6, 30, 'https://new.example/'),
     })
     const listed = await runtime.run(
@@ -295,14 +296,14 @@ describe('listeners and the pump', () => {
     expect(runtime.sent('events.listen').map((call) => call.input)).toEqual([
       {
         call: { api: 'page.on', timeoutMs: 0 },
-        page: { $neo: 'page', id: 7, tab: 1007 },
+        page: { $neo: 'page', tab: 1007 },
         event: 'console',
         on: true,
         since: 2_000,
       },
       {
         call: { api: 'page.off', timeoutMs: 0 },
-        page: { $neo: 'page', id: 7, tab: 1007 },
+        page: { $neo: 'page', tab: 1007 },
         event: 'console',
         on: false,
         since: 3_000,
@@ -343,7 +344,7 @@ describe('listeners and the pump', () => {
     expect(seen).toEqual(['prompt', 'Your name?', 'Ann', true])
     expect(runtime.sent('dialog.accept')[0]?.input).toEqual({
       call: { api: 'dialog.accept', timeoutMs: 0 },
-      page: { $neo: 'page', id: 7, tab: 1007 },
+      page: { $neo: 'page', tab: 1007 },
       dialog: 41,
       promptText: 'Bo',
     })
@@ -435,10 +436,7 @@ describe('listeners and the pump', () => {
       .sent('events.listen')
       .map((call) => [call.input.page, call.input.event])
     expect(listens).toHaveLength(2)
-    expect(listens).toContainEqual([
-      { $neo: 'page', id: 7, tab: 1007 },
-      'popup',
-    ])
+    expect(listens).toContainEqual([{ $neo: 'page', tab: 1007 }, 'popup'])
     expect(listens).toContainEqual([null, 'page'])
   })
 

@@ -89,7 +89,7 @@ pub(crate) async fn read(
     })
     .await
     .map_err(|failure| failed(scope, failure))?;
-    let values = site.values(pw, scope, page.id(), sweep)?;
+    let values = site.values(pw, scope, page.tab(), sweep)?;
     Ok(Value::String(values.mask_text(text)))
 }
 

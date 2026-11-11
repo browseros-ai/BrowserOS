@@ -26,8 +26,8 @@ use crate::browser::PageRef;
 use crate::builtins::PLAYWRIGHT_PRELUDE;
 use crate::config::Defaults;
 use crate::dispatch::{
-    Dispatcher, ErrorCode, OpFailure, OperationError, PageFact, RunCtx, RunMask, StopReason,
-    TEXT_CHARS,
+    Dispatcher, ErrorCode, Observation, OpFailure, OperationError, PageFact, RunCtx, RunMask,
+    StopReason, TEXT_CHARS,
 };
 
 /// The bootstrap: `NeoError`, the codec, envelopes, call sites, console, timers, `__neo.run`.
@@ -68,6 +68,8 @@ pub(crate) struct Script {
     /// way, so `context.pages()`, which is synchronous in Playwright, lists each one before the
     /// script's first op. Empty when the run service could not list them.
     pub(crate) pages: Vec<PageFact>,
+    /// The host observation that produced `pages`, shared with subsequent operation replies.
+    pub(crate) observed: Option<Observation>,
 }
 
 /// How a script ended, and what it logged. A plain data bag with nothing JS-typed in it: the
@@ -206,7 +208,8 @@ async fn evaluate(
     };
     // The prelude's `RunInit`: `page` is the run's own tab, `pages` every tab, whose order is
     // `context.pages()`'s (sdk-playwright's bridge.ts).
-    let init = json!({ "page": script.page, "pages": script.pages }).to_string();
+    let init = json!({ "page": script.page, "pages": script.pages, "observed": script.observed })
+        .to_string();
     let code = script.code;
     let natives = Arc::clone(bridge);
     let evaluation = SliceTimed::new(

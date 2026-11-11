@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_cdp::CdpError;
 use browseros_core::viewport::ViewportLease;
-use browseros_core::{CoreError, PageId, TabId, TargetError};
+use browseros_core::{CoreError, PageId, TabId, TargetError, TargetId};
 use neo_trace::{EpochMillis, OperationId, OperationReached};
 use serde_json::Value;
 use tokio::time::Instant;
@@ -41,19 +41,30 @@ pub(super) struct OpCore {
     pub(super) dispatcher: Arc<Dispatcher>,
     pub(super) state: Arc<OpState>,
     pub(super) page: Option<PageRef>,
+    /// Private core adapter for this operation; never retained in a tab registry or wire value.
+    pub(super) core_page: Option<PageId>,
     pub(super) spec: MethodSpec,
     pub(super) caller: Caller,
     /// A child of the run's token, so a crate given it cannot cancel the whole run.
     pub(super) cancel: CancellationToken,
 }
 
-/// A change a method made to a page, reported so the door does the bookkeeping once, for
-/// every method: agent-opened marks, fresh facts after a navigation, closes this run made.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A page a method changed or observed, reported so the door does bookkeeping and computes
+/// fresh facts once for agent-opened tabs, navigations, closes and delivered events.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PageChange {
     /// The method opened this tab for the agent. The idle-tab janitor may close it later
     /// (core has no public `is_agent_created`), and the reply reports it.
     Opened,
+    /// The result names this tab; report its current fact without changing ownership.
+    Linked,
+    /// A delivered close names this tab's destroyed target. It contributes reply facts
+    /// without changing ownership or treating the event as a close performed by the script.
+    Gone { target: TargetId, seq: u64 },
+    /// The release policy withheld this close record; retain its internal dead evidence.
+    WithheldClose { seq: u64 },
+    /// The binding that produced this operation's page payload.
+    Acted { target: TargetId },
     /// The method changed the page's URL. Core's cache is stale after an unbound navigation,
     /// so the door refreshes the page once (one `Browser.getTabInfo`) before reading facts.
     Navigated,
@@ -92,7 +103,7 @@ pub(super) struct OpState {
     reports: Mutex<Vec<PageReport>>,
     /// Pages whose viewport lease this op holds. Core's leases do not nest, so a child op
     /// inherits its ancestor's lease instead of taking it again and deadlocking.
-    viewports: Mutex<Vec<PageId>>,
+    viewports: Mutex<Vec<TabId>>,
     /// Every other tab a main-world script of this op could act on through its page's opener
     /// links: the union of what each [`OpCtx::recheck_reach`] named, every `waitForFunction` poll
     /// and `setContent` write included, each tab once, in the order first reached, never the op's
@@ -133,7 +144,7 @@ pub(crate) struct PageViewport {
 
 struct HeldViewport {
     _lease: ViewportLease,
-    page: PageId,
+    tab: TabId,
     op: Arc<OpState>,
 }
 
@@ -165,6 +176,16 @@ impl<M> OpCtx<M> {
             LeafError::definite(OperationError::neo(
                 ErrorCode::INTERNAL_ERROR,
                 format_args!("{} declares no target page", self.core.spec.name),
+            ))
+        })
+    }
+
+    /// Core's private page key, resolved alongside the tab when this operation was admitted.
+    pub(crate) fn core_page(&self) -> Result<&PageId, LeafError> {
+        self.core.core_page.as_ref().ok_or_else(|| {
+            LeafError::definite(OperationError::neo(
+                ErrorCode::INTERNAL_ERROR,
+                "this operation has no admitted core page",
             ))
         })
     }
@@ -404,17 +425,22 @@ impl<M> OpCtx<M> {
     /// taken again, when this op or an ancestor already holds it: core's leases do not nest,
     /// so a child taking its parent's page lease would deadlock. Raced like any wait.
     pub(crate) async fn viewport(&self, page: &PageRef) -> Result<PageViewport, LeafError> {
-        if self.core.state.holds_viewport(&page.id) {
+        if self.core.state.holds_viewport(page.tab) {
             return Ok(PageViewport { _held: None });
         }
         let lease = self
-            .race(self.core.run.view().prepare_viewport(page.id.clone()))
+            .race(
+                self.core
+                    .run
+                    .view()
+                    .prepare_viewport(self.core_page()?.clone()),
+            )
             .await?;
-        lock(&self.core.state.viewports).push(page.id.clone());
+        lock(&self.core.state.viewports).push(page.tab);
         Ok(PageViewport {
             _held: Some(HeldViewport {
                 _lease: lease,
-                page: page.id.clone(),
+                tab: page.tab,
                 op: Arc::clone(&self.core.state),
             }),
         })
@@ -531,10 +557,10 @@ impl OpState {
         first_reached
     }
 
-    fn holds_viewport(&self, page: &PageId) -> bool {
+    fn holds_viewport(&self, page: TabId) -> bool {
         let mut op = Some(self);
         while let Some(state) = op {
-            if lock(&state.viewports).contains(page) {
+            if lock(&state.viewports).contains(&page) {
                 return true;
             }
             op = state.parent.as_deref();
@@ -548,7 +574,7 @@ impl Drop for HeldViewport {
     // synchronously on this task, so no child can slip in between.
     fn drop(&mut self) {
         let mut viewports = lock(&self.op.viewports);
-        if let Some(index) = viewports.iter().position(|page| *page == self.page) {
+        if let Some(index) = viewports.iter().position(|page| *page == self.tab) {
             viewports.swap_remove(index);
         }
     }

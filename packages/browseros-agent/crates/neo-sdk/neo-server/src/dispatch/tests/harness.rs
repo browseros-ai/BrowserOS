@@ -19,8 +19,8 @@ use tokio::time::{self, Instant};
 use super::test_methods::{Shared, test_methods};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::dispatch::{
-    Call, Caller, Dispatcher, ErrorCode, Held, HeldValues, HeldWatch, OpReply, OperationError,
-    Policy, PolicyCheck, RegistryBuilder, RunCtx, RunGuard, RunStart,
+    Call, Caller, Dispatcher, ErrorCode, Held, HeldValues, HeldWatch, Observer, OpReply,
+    OperationError, Policy, PolicyCheck, RegistryBuilder, RunCtx, RunGuard, RunStart,
 };
 use crate::test_support::FakeCdp;
 
@@ -194,6 +194,7 @@ impl Harness {
             Arc::clone(&held) as Arc<dyn HeldValues>,
             Arc::clone(&link),
             Arc::clone(&tabs),
+            Observer::unrecorded(),
         ));
         Ok(Self {
             fake,
@@ -264,7 +265,7 @@ impl Harness {
     /// Waits until core forgot `page`, as it does once `tab_watch` saw the tab close.
     pub(super) async fn until_forgotten(&self, page: &PageRef) -> Result<(), Box<dyn Error>> {
         within(Duration::from_secs(5), async {
-            while self.link.cached_page(&page.id).await.is_some() {
+            while self.link.page(page.tab).await.is_some() {
                 time::sleep(Duration::from_millis(5)).await;
             }
         })

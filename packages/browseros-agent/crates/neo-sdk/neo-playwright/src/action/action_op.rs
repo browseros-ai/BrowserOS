@@ -370,7 +370,7 @@ async fn run(
         ActionOp::DragTo => {
             let input: DragInput = args.decode(scope)?;
             // The host's door checks the tab at `target.page` only, so the drop target must
-            // carry the same page brand, id and tab, for that one check to cover both halves.
+            // carry the same page brand and tab, for that one check to cover both halves.
             if input.to.page() != input.target.page() {
                 return Err(scope.fail(
                     ErrorCode::InvalidInput,

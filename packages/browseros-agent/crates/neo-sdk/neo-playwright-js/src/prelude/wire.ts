@@ -25,21 +25,16 @@ import type { AriaSnapshotJSON, ParsedSelector } from './vendored'
 /** Playwright's in-page serialized value (`utilityScriptSerializers.ts`), as JSON. */
 export type { SerializedValue }
 
-/**
- * `{"$neo":"page","id":7,"tab":1234}`, the skeleton's page brand: core's process-local page id
- * and the browser's tab id. Rust refuses a handle whose id now names another tab, as after a
- * Neo restart. Every target carries one whole, so claw-sdk's door finds an op's page at
- * `page` or `target.page` and checks its policies on that tab.
- */
-export type PageBrand = { $neo: 'page'; id: number; tab: number }
+/** A tab-only page brand. The door checks this tab's policies before the crate admits it. */
+export type PageBrand = { $neo: 'page'; tab: number }
 
 /**
- * `{"$neo":"page","id":null}`: the run's own page before any op opened its tab (claw-sdk's
+ * `{"$neo":"page","tab":null}`: the run's own page before any op opened its tab (claw-sdk's
  * lazy default page). The door opens the tab for the first op whose target names it, hands
  * Rust that tab's brand in its place, and the reply's `defaultPage` names it to the prelude.
  * Rust never sees it.
  */
-export type UnopenedPageBrand = { $neo: 'page'; id: null }
+export type UnopenedPageBrand = { $neo: 'page'; tab: null }
 
 /** How an op names its page when the door resolves it: at `page` or at `target.page`. */
 export type PageHandle = PageBrand | UnopenedPageBrand
@@ -89,13 +84,20 @@ export type Strictness = 'strict' | 'firstMatch'
  */
 export type CallHeader = { api: string; timeoutMs: number }
 
+/** The host read serial and the event-log head before that read. */
+export type Observation = {
+  seq: number
+  events: number
+  payloadCurrent?: boolean
+  closes?: { tab: number; seq: number }[]
+}
+
 /**
  * What the host knows about a tab: the run's init, every reply's `pages`, results, events.
  * `tab` is the browser's tab id, which the page's brand carries.
  */
 export type PageFact = {
-  id: number
-  tab?: number
+  tab: number
   url?: string
   title?: string
   closed?: boolean

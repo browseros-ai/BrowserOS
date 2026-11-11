@@ -375,7 +375,6 @@ async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() 
         result: Some(json!({"title": format!("Welcome {held_value}")})),
         error: None,
         page_after: Some(PageState {
-            page_id: Some(3),
             tab_id: Some(TabId(3)),
             url: Some(format!("https://b.test/?name={held_value}")),
             title: Some(format!("Welcome {held_value}")),
@@ -417,6 +416,10 @@ async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() 
     }
     for (channel, body) in &channels {
         let text = body.to_string();
+        assert!(
+            !text.contains("pageId"),
+            "{channel} exposes legacy identity: {text}"
+        );
         assert!(
             !text.contains(held_value),
             "{channel} keeps the held value: {text}"

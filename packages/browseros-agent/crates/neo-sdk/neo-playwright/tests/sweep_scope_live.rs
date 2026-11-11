@@ -606,7 +606,7 @@ async fn held_session(run: &LiveRun, page: &TestPage, frame: FrameId) -> TestRes
     let held = run
         .browser()
         .frames()
-        .resolve_frame_target(page.id.clone(), Some(frame), None, true)
+        .resolve_frame_target(run.core_page(page).await?, Some(frame), None, true)
         .await?;
     Ok(held
         .session
@@ -900,7 +900,7 @@ async fn tests_that_a_same_site_frame_hung_after_set_content_fails_it_closed() -
     // agent's tab whose frame hung at its load first admits the page through core, whose file
     // chooser interception then waits on that frame's session for CDP's 60 s timeout per call,
     // one to three of them (measured, the crate's page.close took 60 s and 179 s).
-    let _ = run.browser().pages.close(page.id.clone()).await;
+    let _ = run.browser().pages.close(run.core_page(&page).await?).await;
     result
 }
 

@@ -690,9 +690,7 @@ impl GuardCore<'_> {
     /// Tells the host every value swept so far (`PlaywrightHooks::values_swept`).
     fn report(&self) {
         if !self.swept.is_empty() {
-            self.pw
-                .hooks()
-                .values_swept(self.page.id().clone(), &self.swept);
+            self.pw.hooks().values_swept(self.page.tab(), &self.swept);
         }
     }
 }
@@ -920,7 +918,7 @@ async fn sweep_site_from(
                 if !found.values.is_empty() {
                     page.playwright()
                         .hooks()
-                        .values_swept(page.id().clone(), &found.values);
+                        .values_swept(page.tab(), &found.values);
                 }
             }
             unswept => {
@@ -1157,7 +1155,7 @@ async fn read_target(
         } else {
             page.browser()
                 .frames()
-                .resolve_frame_target(page.id().clone(), Some(target.clone()), None, true)
+                .resolve_frame_target(page.core_page().clone(), Some(target.clone()), None, true)
                 .await?
                 .session
         };

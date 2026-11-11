@@ -1,6 +1,6 @@
 /**
  * The one browser context a run sees: every tab of the owner's profile, which Neo never closes
- * or recreates. It owns the run's Page objects (one per page id, so identity holds across
+ * or recreates. It owns the run's Page objects (one per tab, so identity holds across
  * popups, facts and handles), the context-level timeout defaults and the run's event hub.
  *
  * `context.pages()` is synchronous, so it lists what the prelude knows: the tabs the run's init
@@ -16,28 +16,22 @@ import { checkReported, EventHub, isReported } from './events'
 import { markHandle } from './options'
 import { Page } from './page'
 import { TimeoutSettings } from './timeouts'
-import type { PageFact } from './wire'
+import type { Observation, PageFact } from './wire'
 
-/** The page an op result names: a revived Page, or a raw `{"$neo":"page","id":7,"tab":1}` brand. */
+/** The page an op result names: a revived Page, or a raw `{"$neo":"page","tab":1}` brand. */
 function pageFact(value: unknown): PageFact | null {
   if (value instanceof Page)
-    return value._id === null
-      ? null
-      : value._tab === null
-        ? { id: value._id }
-        : { id: value._id, tab: value._tab }
+    return value._tab === null ? null : { tab: value._tab }
   if (typeof value !== 'object' || value === null) return null
-  const id: unknown = Reflect.get(value, 'id')
   const tab: unknown = Reflect.get(value, 'tab')
-  if (typeof id !== 'number') return null
-  return typeof tab === 'number' ? { id, tab } : { id }
+  return typeof tab === 'number' ? { tab } : null
 }
 
 export class BrowserContext extends EventEmitter {
   readonly _timeoutSettings = new TimeoutSettings()
   readonly _events: EventHub
   _browser: Browser | null = null
-  readonly #byId = new Map<number, Page>()
+  readonly #byTab = new Map<number, Page>()
   /** The run's `page` while it has no tab; the reply that names its tab clears it. */
   #unopened: Page | null = null
   /** Set once the run's page exists: a page first seen after it is working (`Page._working`). */
@@ -50,7 +44,7 @@ export class BrowserContext extends EventEmitter {
   }
 
   pages(): Page[] {
-    return [...this.#byId.values()].filter((page) => !page.isClosed())
+    return [...this.#byTab.values()].filter((page) => !page.isClosed())
   }
 
   browser(): Browser | null {
@@ -113,23 +107,28 @@ export class BrowserContext extends EventEmitter {
       this._events.listen(null, event, listening)
   }
 
-  /** The page with this id, created on first sight and refreshed from the fact. */
-  _pageFor(fact: PageFact): Page {
-    let page = this.#byId.get(fact.id)
+  /** The page with this tab, created on first sight and refreshed from the fact. */
+  _pageFor(
+    fact: PageFact,
+    at: Observation | null = null,
+    approved: number | null = null,
+  ): Page {
+    let page = this.#byTab.get(fact.tab)
     if (!page) {
-      page = new Page(this, fact.id, fact.url)
+      page = new Page(this, fact.tab, fact.url)
       page._working = this.#started
-      this.#byId.set(fact.id, page)
+      this.#byTab.set(fact.tab, page)
     }
-    page._applyFact(fact)
+    page._applyFact(fact, at, approved)
     return page
   }
 
-  /** A page from an op result (`page.opener`, an event), or null for none; `url` refreshes it. */
+  /** Results and historical events contribute identity and initial metadata. */
   _pageFromResult(value: unknown, url?: string): Page | null {
     const fact = pageFact(value)
     if (!fact) return null
-    return this._pageFor(url === undefined ? fact : { ...fact, url })
+    if (url !== undefined) fact.url = url
+    return this._pageFor(fact)
   }
 
   /**
@@ -139,8 +138,10 @@ export class BrowserContext extends EventEmitter {
    * before any op, and the run's page is the same object as its tab's entry.
    */
   _runPage(init: RunInit): Page {
-    for (const fact of init.pages) this._pageFor(fact)
-    const page = init.page ? this._pageFor(init.page) : new Page(this, null)
+    for (const fact of init.pages) this._pageFor(fact, init.observed)
+    const page = init.page
+      ? this._pageFor(init.page, init.observed)
+      : new Page(this, null)
     if (!init.page) this.#unopened = page
     page._working = true
     this.#started = true
@@ -166,15 +167,18 @@ export class BrowserContext extends EventEmitter {
    * and a result that name that tab find the script's `page` object instead of making a
    * second one.
    */
-  _applyReply({ pages, defaultPage }: Reply): void {
+  _applyReply({ pages, defaultPage, observed }: Reply): void {
     const page = this.#unopened
     if (defaultPage && page) {
       this.#unopened = null
-      page._id = defaultPage.id
       page._tab = defaultPage.tab
-      this.#byId.set(defaultPage.id, page)
+      this.#byTab.set(defaultPage.tab, page)
     }
-    for (const fact of pages) this._pageFor(fact)
+    const approved = new Map<number, number>()
+    for (const close of observed?.closes ?? [])
+      approved.set(close.tab, Math.max(approved.get(close.tab) ?? 0, close.seq))
+    for (const fact of pages)
+      this._pageFor(fact, observed, approved.get(fact.tab) ?? null)
   }
 
   async #openPage(api: string): Promise<Page> {

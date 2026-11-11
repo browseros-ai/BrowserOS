@@ -152,21 +152,42 @@
       throw shapeBridgeError(op, call.api, thrown);
     }
   }
+  async function invokeObserved(op, call, args, onResult) {
+    try {
+      const reply = await host().invoke(op, { call, ...args }, {
+        observed: true,
+        onResult: onResult && ((value, observed) => onResult(value, readObservation(observed)))
+      });
+      return {
+        value: field(reply, "value"),
+        observed: readObservation(field(reply, "observed"))
+      };
+    } catch (thrown) {
+      throw shapeBridgeError(op, call.api, thrown);
+    }
+  }
   function registerBrand(brand, fromJson) {
     host().brands.register(brand, fromJson);
   }
   function onReply(listener) {
-    host().onReply((envelope) => listener({
-      pages: readPageFacts(field(envelope, "pages")),
-      defaultPage: readTab(field(envelope, "defaultPage"))
-    }));
+    host().onReply((envelope) => {
+      const observed = readObservation(field(envelope, "observed"));
+      if (observed && field(envelope, "err") !== undefined)
+        observed.closes = [];
+      listener({
+        observed,
+        pages: readPageFacts(field(envelope, "pages")),
+        defaultPage: readTab(field(envelope, "defaultPage"))
+      });
+    });
   }
   function provide(name, build) {
     host().provide(name, (init) => {
       const page = readTab(field(init, "page"));
       return build({
         page: page ? { $neo: "page", ...page } : null,
-        pages: readPageFacts(field(init, "pages"))
+        pages: readPageFacts(field(init, "pages")),
+        observed: readObservation(field(init, "observed"))
       });
     });
   }
@@ -177,9 +198,29 @@
     return typeof value === "object" && value !== null ? Reflect.get(value, name) : undefined;
   }
   function readTab(value) {
-    const id = field(value, "id");
     const tab = field(value, "tab");
-    return typeof id === "number" && typeof tab === "number" ? { id, tab } : null;
+    return typeof tab === "number" ? { tab } : null;
+  }
+  function readObservation(value) {
+    const seq = field(value, "seq");
+    const events = field(value, "events");
+    if (typeof seq !== "number" || !Number.isFinite(seq) || typeof events !== "number" || !Number.isFinite(events))
+      return null;
+    const result = { seq, events };
+    const payloadCurrent = field(value, "payloadCurrent");
+    if (typeof payloadCurrent === "boolean")
+      result.payloadCurrent = payloadCurrent;
+    const closes = field(value, "closes");
+    if (Array.isArray(closes)) {
+      result.closes = [];
+      for (const close of closes) {
+        const tab = field(close, "tab");
+        const at = field(close, "seq");
+        if (typeof tab === "number" && Number.isFinite(tab) && typeof at === "number" && Number.isFinite(at))
+          result.closes.push({ tab, seq: at });
+      }
+    }
+    return result;
   }
   function readPageFacts(pages) {
     if (!Array.isArray(pages))
@@ -188,13 +229,10 @@
     for (const page of pages) {
       if (typeof page !== "object" || page === null)
         continue;
-      const id = Reflect.get(page, "id");
-      if (typeof id !== "number")
-        continue;
-      const fact = { id };
       const tab = Reflect.get(page, "tab");
-      if (typeof tab === "number")
-        fact.tab = tab;
+      if (typeof tab !== "number")
+        continue;
+      const fact = { tab };
       const url = Reflect.get(page, "url");
       const title = Reflect.get(page, "title");
       const closed = Reflect.get(page, "closed");
@@ -1387,6 +1425,7 @@
     owner;
     listening = 0;
     pumping = false;
+    batch = null;
     dialogs = new Map;
     downloads = new Map;
     constructor(owner) {
@@ -1413,12 +1452,20 @@
       for (;; ) {
         const left = deadline.left();
         let record;
+        let observed = null;
         try {
-          record = await invoke("events.wait", { api, timeoutMs: left }, { page: target, event, since, after });
+          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }));
         } catch (error) {
           throw deadline.named(error);
         }
-        const value = this.value(record);
+        if (record.event === "close" && this.batch?.closes.has(record.seq))
+          await this.batch.done;
+        let value;
+        try {
+          value = this.value(record, observed);
+        } finally {
+          this.settleCloses(observed);
+        }
         if (!options.predicate)
           return value;
         let accepted;
@@ -1446,13 +1493,36 @@
     async pump() {
       try {
         while (this.listening > 0) {
-          const { events } = await invoke("events.next", { api: "events.next", timeoutMs: 0 }, {});
-          for (const event of events)
-            this.deliver(event);
+          const {
+            value: { events },
+            observed
+          } = await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events }) => this.stageBatch(events));
+          try {
+            for (const event of events)
+              this.deliver(event, observed);
+          } finally {
+            try {
+              this.settleCloses(observed);
+            } finally {
+              const batch = this.batch;
+              this.batch = null;
+              batch?.finish();
+            }
+          }
         }
       } catch {} finally {
         this.pumping = false;
       }
+    }
+    stageBatch(events) {
+      const closes = new Set(events.filter((event) => event.event === "close").map((event) => event.seq));
+      if (closes.size === 0)
+        return;
+      let finish;
+      const done = new Promise((resolve) => {
+        finish = resolve;
+      });
+      this.batch = { closes, done, finish };
     }
     page(value, url) {
       const page = this.owner._pageFromResult(value, url);
@@ -1460,7 +1530,11 @@
         throw new Error(`Rust named no page in an event: ${String(value)}`);
       return page;
     }
-    deliver(record) {
+    settleCloses(observed) {
+      for (const close of observed?.closes ?? [])
+        this.page({ $neo: "page", tab: close.tab })._settleClose(observed);
+    }
+    deliver(record, observed) {
       switch (record.event) {
         case "popup":
           this.page(record.page).emit("popup", this.page(record.popup.page, record.popup.url));
@@ -1469,7 +1543,7 @@
           this.owner.emit("page", this.page(record.page, record.url));
           return;
         case "close":
-          this.page(record.page)._didClose();
+          this.page(record.page)._closeEvent(record.seq, observed);
           return;
         case "dialog": {
           const page = this.page(record.page);
@@ -1493,7 +1567,7 @@
         }
       }
     }
-    value(record) {
+    value(record, observed) {
       switch (record.event) {
         case "popup":
           return this.page(record.popup.page, record.popup.url);
@@ -1501,7 +1575,7 @@
           return this.page(record.page, record.url);
         case "close": {
           const page = this.page(record.page);
-          page._didClose();
+          page._closeEvent(record.seq, observed);
           return page;
         }
         case "dialog":
@@ -6676,26 +6750,26 @@ ${value.stack}`;
         throw clientError(api, `url: expected string, got ${typeof url}`);
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const args = await this._frameArgs(api);
-      const result = await invoke("page.goto", this._call(api, this._navigationTimeout(options)), {
+      const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
         ...args,
         url,
         waitUntil,
         ...pick(options, ["referer"])
       });
-      return await this._page._navigated(api, this, result);
+      return await this._page._navigated(api, this, result, observed);
     }
     async _waitForLoadState(api, state, options = {}) {
       const verified = loadState(api, "state", state ?? "load");
-      const result = await invoke("page.waitForLoadState", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified });
-      await this._page._navigated(api, this, result);
+      const { value: result, observed } = await invokeObserved("page.waitForLoadState", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified });
+      await this._page._navigated(api, this, result, observed);
     }
     async _content(api) {
       return await invoke("page.content", this._call(api, 0), await this._frameArgs(api));
     }
     async _setContent(api, html, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
-      const result = await invoke("page.setContent", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil });
-      await this._page._navigated(api, this, result);
+      const { value: result, observed } = await invokeObserved("page.setContent", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil });
+      await this._page._navigated(api, this, result, observed);
     }
     async _evaluate(api, pageFunction, arg, options) {
       const script = pageCall(api, "frame", pageFunction, arg, options);
@@ -7344,23 +7418,28 @@ ${value.stack}`;
   ];
 
   class Page extends EventEmitter {
-    _id;
-    _tab = null;
+    _tab;
     _context;
     _timeoutSettings;
     _mainFrame;
     keyboard;
     mouse;
     _url;
+    #urlKnown;
     _title = "";
     _closed = false;
+    #observedSeq = 0;
+    #liveHead = 0;
+    #closeEvent = 0;
+    #approvedClose = null;
     _working = false;
     #childFrames = new Map;
-    constructor(context, id, url = "about:blank") {
+    constructor(context, tab, url) {
       super();
       this._context = context;
-      this._id = id;
-      this._url = url;
+      this._tab = tab;
+      this._url = url ?? "about:blank";
+      this.#urlKnown = url !== undefined;
       this._timeoutSettings = new TimeoutSettings(context._timeoutSettings);
       this._mainFrame = new Frame(this, null, null);
       this.keyboard = new Keyboard(this);
@@ -7405,7 +7484,7 @@ ${value.stack}`;
       return [];
     }
     toJSON() {
-      return this._id === null ? { $neo: "page", id: null } : { $neo: "page", id: this._id, tab: this._tab };
+      return this._tab === null ? { $neo: "page", tab: null } : { $neo: "page", tab: this._tab };
     }
     locator(selector, options) {
       return this._mainFrame._locator("page.locator", selector, options);
@@ -7552,7 +7631,6 @@ ${value.stack}`;
     async title() {
       const api = "page.title";
       const title = await invoke("page.title", { api, timeoutMs: 0 }, { page: await this._brand(api) });
-      this._title = title;
       return title;
     }
     content() {
@@ -7600,14 +7678,15 @@ ${value.stack}`;
     }
     async opener() {
       const api = "page.opener";
-      const { opener } = await invoke("page.opener", { api, timeoutMs: 0 }, { page: await this._brand(api) });
+      const target = await this._brand(api);
+      const { opener } = await invoke("page.opener", { api, timeoutMs: 0 }, { page: target });
       const page = this._context._pageFromResult(opener);
       return page && !page.isClosed() ? page : null;
     }
     async close(options = {}) {
       const api = "page.close";
-      if (this._id === null) {
-        this._didClose();
+      if (this._tab === null) {
+        this.#close();
         return;
       }
       const page = await this._brand(api);
@@ -7620,8 +7699,6 @@ ${value.stack}`;
         if (Reflect.get(Object(error), "code") !== "target_closed" || options.runBeforeUnload)
           throw error;
       }
-      if (!options.runBeforeUnload)
-        this._didClose();
     }
     waitForEvent(event, optionsOrPredicate = {}) {
       const since = Date.now();
@@ -7635,21 +7712,19 @@ ${value.stack}`;
         this._context._events.listen(this, event, listening);
     }
     async _brand(api) {
-      if (this._id === null) {
+      if (this._tab === null) {
         if (this._closed)
           throw clientError(api, "Target page, context or browser has been closed");
-        return { $neo: "page", id: null };
+        return { $neo: "page", tab: null };
       }
-      if (this._tab === null)
-        throw clientError(api, "Neo has no tab id for this page; get the page again from context.pages()");
       this._working = true;
-      return { $neo: "page", id: this._id, tab: this._tab };
+      return { $neo: "page", tab: this._tab };
     }
     async _openedBrand(api) {
-      if (this._id === null)
+      if (this._tab === null)
         await this._refreshFrames(api);
       const brand = await this._brand(api);
-      if (brand.id === null)
+      if (brand.tab === null)
         throw new Error(`${api}: Neo opened no tab for the run's page`);
       return brand;
     }
@@ -7659,35 +7734,46 @@ ${value.stack}`;
       const brand = elementBrand(value);
       return brand ? new ElementHandle(this, brand) : null;
     }
-    async _navigated(api, frame, result) {
-      if (typeof result?.url === "string") {
-        if (frame === this._mainFrame)
-          this._url = result.url;
+    async _navigated(api, frame, result, at) {
+      if (this.#payloadCurrent(at)) {
+        if (typeof result?.url === "string") {
+          if (frame === this._mainFrame) {
+            this._url = result.url;
+            this.#urlKnown = true;
+          } else
+            frame._url = result.url;
+        }
+        if (Array.isArray(result?.frames))
+          this._applyFrames(result.frames);
         else
-          frame._url = result.url;
+          await this._refreshFrames(api);
+      } else if (!this._closed) {
+        await this._refreshFrames(api).catch(() => {
+          return;
+        });
       }
-      if (Array.isArray(result?.frames))
-        this._applyFrames(result.frames);
-      else
-        await this._refreshFrames(api);
       return typeof result?.response?.status === "number" ? new Response(frame, result.response) : null;
     }
+    #payloadCurrent(at) {
+      return !this._closed && at !== null && at.payloadCurrent === true && at.seq === this.#observedSeq;
+    }
     async _readInitialFrames() {
-      if (this._id === null || this._tab === null)
+      if (this._tab === null)
         return;
       await this._refreshFrames("page.frames").catch(() => {
         return;
       });
     }
     async _refreshFrames(api) {
-      const tree = await invoke("page.frames", { api, timeoutMs: 0 }, { page: await this._brand(api) });
-      if (Array.isArray(tree?.frames))
+      const { value: tree, observed } = await invokeObserved("page.frames", { api, timeoutMs: 0 }, { page: await this._brand(api) });
+      if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
         this._applyFrames(tree.frames);
     }
     _applyFrames(infos) {
       const main = infos.find((info) => info.parentId === null);
       if (main) {
         this._url = main.url;
+        this.#urlKnown = true;
         this._mainFrame._name = main.name;
       }
       const present = new Map;
@@ -7712,17 +7798,67 @@ ${value.stack}`;
         frame._parentFrame = info.parentId === main?.id ? this._mainFrame : this.#childFrames.get(info.parentId ?? "") ?? this._mainFrame;
       }
     }
-    _applyFact(fact) {
+    _applyFact(fact, at, approved = null) {
       if (fact.tab !== undefined)
         this._tab = fact.tab;
-      if (fact.url !== undefined)
+      if (at === null) {
+        if (fact.url !== undefined && !this.#urlKnown) {
+          this._url = fact.url;
+          this.#urlKnown = true;
+        }
+        return;
+      }
+      if (at.seq < this.#observedSeq)
+        return;
+      this.#observedSeq = at.seq;
+      if (fact.url !== undefined) {
         this._url = fact.url;
+        this.#urlKnown = true;
+      }
       if (fact.title !== undefined)
         this._title = fact.title;
-      if (fact.closed)
-        this._didClose();
+      if (fact.closed === true) {
+        this.#approvedClose = approved === null ? null : { seq: approved, observed: at.seq };
+        if (approved === null)
+          this.#close();
+        return;
+      }
+      if (fact.closed !== false)
+        return;
+      this.#approvedClose = null;
+      if (this._closed && at.events < this.#closeEvent)
+        return;
+      this.#liveHead = at.events;
+      this._closed = false;
     }
-    _didClose() {
+    _closeEvent(seq, at = null) {
+      if (this.#approvedClose?.seq === seq) {
+        this.#closeEvent = Math.max(this.#closeEvent, seq);
+        this.#approvedClose = null;
+        this.#close();
+        return;
+      }
+      if (at !== null && at.seq < this.#observedSeq)
+        return;
+      if (this.#approvedClose !== null) {
+        this.#closeEvent = Math.max(this.#closeEvent, seq);
+        return;
+      }
+      if (seq <= this.#closeEvent)
+        return;
+      this.#closeEvent = seq;
+      if (seq <= this.#liveHead)
+        return;
+      this.#close();
+    }
+    _settleClose(at) {
+      if (at === null || this.#approvedClose?.observed !== at.seq)
+        return;
+      this.#closeEvent = Math.max(this.#closeEvent, this.#approvedClose.seq);
+      this.#approvedClose = null;
+      this.#close();
+    }
+    #close() {
       if (this._closed)
         return;
       this._closed = true;
@@ -7738,12 +7874,12 @@ ${value.stack}`;
         const pattern = typeof url === "string" ? { glob: url } : url instanceof RegExp ? { regexSource: url.source, regexFlags: url.flags } : undefined;
         if (!pattern)
           throw clientError(api, "url: expected a string, a RegExp or a function");
-        const result = await invoke("page.waitForURL", frame._call(api, timeout), {
+        const { value: result, observed } = await invokeObserved("page.waitForURL", frame._call(api, timeout), {
           ...args,
           url: pattern,
           waitUntil
         });
-        await this._navigated(api, frame, result);
+        await this._navigated(api, frame, result, observed);
         return;
       }
       const started = Date.now();
@@ -7761,7 +7897,7 @@ ${value.stack}`;
           await frame._waitForLoadState(api, waitUntil, { timeout: remaining });
           return;
         }
-        const result = await invoke("page.waitForURL", frame._call(api, remaining), {
+        const { value: result, observed } = await invokeObserved("page.waitForURL", frame._call(api, remaining), {
           ...args,
           url: {
             regexSource: `^(?!${escapeRegExp(current)}$)`,
@@ -7769,34 +7905,31 @@ ${value.stack}`;
           },
           waitUntil: "commit"
         });
-        await this._navigated(api, frame, result);
+        await this._navigated(api, frame, result, observed);
       }
     }
     async#history(api, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
-      const result = await invoke(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil });
-      return await this._navigated(api, this._mainFrame, result);
+      const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil });
+      return await this._navigated(api, this._mainFrame, result, observed);
     }
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/context.ts
   function pageFact(value) {
     if (value instanceof Page)
-      return value._id === null ? null : value._tab === null ? { id: value._id } : { id: value._id, tab: value._tab };
+      return value._tab === null ? null : { tab: value._tab };
     if (typeof value !== "object" || value === null)
       return null;
-    const id = Reflect.get(value, "id");
     const tab = Reflect.get(value, "tab");
-    if (typeof id !== "number")
-      return null;
-    return typeof tab === "number" ? { id, tab } : { id };
+    return typeof tab === "number" ? { tab } : null;
   }
 
   class BrowserContext extends EventEmitter {
     _timeoutSettings = new TimeoutSettings;
     _events;
     _browser = null;
-    #byId = new Map;
+    #byTab = new Map;
     #unopened = null;
     #started = false;
     constructor() {
@@ -7805,7 +7938,7 @@ ${value.stack}`;
       markHandle(this);
     }
     pages() {
-      return [...this.#byId.values()].filter((page) => !page.isClosed());
+      return [...this.#byTab.values()].filter((page) => !page.isClosed());
     }
     browser() {
       return this._browser;
@@ -7842,26 +7975,28 @@ ${value.stack}`;
       if (isReported(event, "context"))
         this._events.listen(null, event, listening);
     }
-    _pageFor(fact) {
-      let page = this.#byId.get(fact.id);
+    _pageFor(fact, at = null, approved = null) {
+      let page = this.#byTab.get(fact.tab);
       if (!page) {
-        page = new Page(this, fact.id, fact.url);
+        page = new Page(this, fact.tab, fact.url);
         page._working = this.#started;
-        this.#byId.set(fact.id, page);
+        this.#byTab.set(fact.tab, page);
       }
-      page._applyFact(fact);
+      page._applyFact(fact, at, approved);
       return page;
     }
     _pageFromResult(value, url) {
       const fact = pageFact(value);
       if (!fact)
         return null;
-      return this._pageFor(url === undefined ? fact : { ...fact, url });
+      if (url !== undefined)
+        fact.url = url;
+      return this._pageFor(fact);
     }
     _runPage(init) {
       for (const fact of init.pages)
-        this._pageFor(fact);
-      const page = init.page ? this._pageFor(init.page) : new Page(this, null);
+        this._pageFor(fact, init.observed);
+      const page = init.page ? this._pageFor(init.page, init.observed) : new Page(this, null);
       if (!init.page)
         this.#unopened = page;
       page._working = true;
@@ -7874,16 +8009,18 @@ ${value.stack}`;
         return;
       })));
     }
-    _applyReply({ pages, defaultPage }) {
+    _applyReply({ pages, defaultPage, observed }) {
       const page = this.#unopened;
       if (defaultPage && page) {
         this.#unopened = null;
-        page._id = defaultPage.id;
         page._tab = defaultPage.tab;
-        this.#byId.set(defaultPage.id, page);
+        this.#byTab.set(defaultPage.tab, page);
       }
+      const approved = new Map;
+      for (const close of observed?.closes ?? [])
+        approved.set(close.tab, Math.max(approved.get(close.tab) ?? 0, close.seq));
       for (const fact of pages)
-        this._pageFor(fact);
+        this._pageFor(fact, observed, approved.get(fact.tab) ?? null);
     }
     async#openPage(api) {
       const opened = await invoke("context.newPage", { api, timeoutMs: 0 }, {});

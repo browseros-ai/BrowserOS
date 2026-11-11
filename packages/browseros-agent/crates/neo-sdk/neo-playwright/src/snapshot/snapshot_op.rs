@@ -129,8 +129,8 @@ async fn page_snapshot(
     scope: &OpScope<'_>,
     input: PageInput,
 ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
-    let page = input.page.checked(pw.browser(), scope).await?;
-    let page = OpPage::admit(pw, scope, &page).await?;
+    let page = input.page.tab();
+    let page = OpPage::admit(pw, scope, page).await?;
     let snapshotter = Snapshotter {
         pw,
         scope,
@@ -339,7 +339,7 @@ impl Snapshotter<'_> {
              crates/neo-sdk/neo-playwright-js"
         })?;
         if !sweep.is_empty() {
-            self.pw.hooks().values_swept(self.page.id().clone(), &sweep);
+            self.pw.hooks().values_swept(self.page.tab(), &sweep);
         }
         Ok(FrameReply {
             json,
@@ -371,7 +371,7 @@ impl Snapshotter<'_> {
         let FrameRead { mut reply, site } = read;
         let own = mem::take(&mut reply.sweep);
         reply.sweep = site
-            .values(self.pw, self.scope, self.page.id(), own)?
+            .values(self.pw, self.scope, self.page.tab(), own)?
             .into_values();
         Ok(reply)
     }
@@ -563,11 +563,11 @@ mod tests {
     #[test]
     fn tests_that_snapshot_inputs_decode_as_wire_ts_declares_them() -> Result<(), Box<dyn Error>> {
         let page: PageInput = serde_json::from_value(json!({
-            "page": { "$neo": "page", "id": 7, "tab": 1007 }, "mode": "ai", "depth": 3,
+            "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "depth": 3,
         }))?;
         assert_eq!((page.mode, page.depth), (SnapshotMode::Ai, Some(3)));
         let locator: LocatorInput = serde_json::from_value(json!({
-            "target": { "$neo": "locator", "page": { "$neo": "page", "id": 7, "tab": 1007 }, "chunks": [
+            "target": { "$neo": "locator", "page": { "$neo": "page", "tab": 1007 }, "chunks": [
                 { "parts": [{ "name": "aria-ref", "body": "f2e5", "source": "f2e5" }] },
             ], "display": "getByRef('f2e5')" },
             "strict": "strict",
@@ -575,9 +575,9 @@ mod tests {
         }))?;
         assert_eq!((locator.mode, locator.depth), (SnapshotMode::Default, None));
         for bad in [
-            json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 }, "mode": "ai", "boxes": true }),
-            json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 }, "mode": "codegen" }),
-            json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 }, "mode": "ai", "depth": 1.5 }),
+            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "boxes": true }),
+            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "codegen" }),
+            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "depth": 1.5 }),
         ] {
             assert!(
                 serde_json::from_value::<PageInput>(bad.clone()).is_err(),

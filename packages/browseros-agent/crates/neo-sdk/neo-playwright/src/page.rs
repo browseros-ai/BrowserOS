@@ -5,7 +5,7 @@
 //! Every page op admits its page once through the run's view, then sends its calls on a raw
 //! session for the admitted session id (decisions.md: admission per op, not per send). Tab
 //! lifecycle (listing, opening, closing) and captures go through core's view, so core's tab
-//! registry stays the one owner of page identity. Every tab an op acts on also gets one
+//! registry stays the one owner of native tab admission. Every tab an op acts on also gets one
 //! [`PageState`] in the instance's [`PageRegistry`]: its sealed worlds and seqs, and its typing
 //! window for the journal.
 //!

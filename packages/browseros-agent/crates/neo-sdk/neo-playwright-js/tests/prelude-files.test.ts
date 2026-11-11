@@ -155,7 +155,7 @@ it("tests that the channel validator's payload errors carry the method and send 
       call.name === 'locator.elementHandle'
         ? {
             $neo: 'element',
-            page: { $neo: 'page', id: 7, tab: 1007 },
+            page: { $neo: 'page', tab: 1007 },
             seq: 0,
             node: 9,
             display: '<input>',

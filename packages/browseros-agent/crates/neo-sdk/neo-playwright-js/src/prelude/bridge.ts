@@ -31,6 +31,7 @@ import { host, refuser } from './host'
 import type { OpName } from './ops.generated'
 import type {
   CallHeader,
+  Observation,
   OpInputs,
   OpOutputs,
   PageBrand,
@@ -46,14 +47,17 @@ export type RunInit = {
    * (`init.pages`); empty when it does not, and replies alone then name the other tabs.
    */
   pages: PageFact[]
+  observed: Observation | null
 }
 
 /** What one reply says about pages. */
 export type Reply = {
+  /** The host observation that produced these facts. */
+  observed: Observation | null
   /** Fresh facts about the pages the op touched, its target first. */
   pages: PageFact[]
   /** The tab of the run's own page, on the reply of an op the door opened it for. */
-  defaultPage: { id: number; tab: number } | null
+  defaultPage: { tab: number } | null
 }
 
 /**
@@ -74,6 +78,37 @@ export async function invoke<Op extends OpName>(
 }
 
 /**
+ * A page-state result and its ordering evidence. An optional consumer reserves delivery
+ * synchronously, before any caller awaiting this reply can run.
+ */
+export async function invokeObserved<Op extends OpName>(
+  op: Op,
+  call: CallHeader,
+  args: OpInputs[Op],
+  onResult?: (value: OpOutputs[Op], observed: Observation | null) => void,
+): Promise<{ value: OpOutputs[Op]; observed: Observation | null }> {
+  try {
+    const reply = await host().invoke(
+      op,
+      { call, ...args },
+      {
+        observed: true,
+        onResult:
+          onResult &&
+          ((value, observed) =>
+            onResult(value as OpOutputs[Op], readObservation(observed))),
+      },
+    )
+    return {
+      value: field(reply, 'value') as OpOutputs[Op],
+      observed: readObservation(field(reply, 'observed')),
+    }
+  } catch (thrown) {
+    throw shapeBridgeError(op, call.api, thrown)
+  }
+}
+
+/**
  * The reviver for `brand` in op results. `bytes` replaces the bootstrap's own reviver, whose
  * plain Uint8Array the prelude's Buffer subclasses.
  */
@@ -85,12 +120,17 @@ export function registerBrand(
 }
 
 export function onReply(listener: (reply: Reply) => void): void {
-  host().onReply((envelope) =>
+  host().onReply((envelope) => {
+    const observed = readObservation(field(envelope, 'observed'))
+    // A failed event read returns no records for the hub to deliver. Its closed facts
+    // must settle now, even if the host copied a close before the operation failed.
+    if (observed && field(envelope, 'err') !== undefined) observed.closes = []
     listener({
+      observed,
       pages: readPageFacts(field(envelope, 'pages')),
       defaultPage: readTab(field(envelope, 'defaultPage')),
-    }),
-  )
+    })
+  })
 }
 
 /**
@@ -104,6 +144,7 @@ export function provide(name: string, build: (init: RunInit) => unknown): void {
     return build({
       page: page ? { $neo: 'page', ...page } : null,
       pages: readPageFacts(field(init, 'pages')),
+      observed: readObservation(field(init, 'observed')),
     })
   })
 }
@@ -122,24 +163,54 @@ function field(value: unknown, name: string): unknown {
     : undefined
 }
 
-/** `{ id, tab }` from a page brand or a `defaultPage`, or null. */
-function readTab(value: unknown): { id: number; tab: number } | null {
-  const id = field(value, 'id')
+/** A tab-only identity from a page brand or a default-page reply. */
+function readTab(value: unknown): { tab: number } | null {
   const tab = field(value, 'tab')
-  return typeof id === 'number' && typeof tab === 'number' ? { id, tab } : null
+  return typeof tab === 'number' ? { tab } : null
 }
 
-/** Page facts from the host, dropping anything without a numeric id. */
+/** Invalid or absent stamps confer identity only, without changing cached lifecycle. */
+function readObservation(value: unknown): Observation | null {
+  const seq = field(value, 'seq')
+  const events = field(value, 'events')
+  if (
+    typeof seq !== 'number' ||
+    !Number.isFinite(seq) ||
+    typeof events !== 'number' ||
+    !Number.isFinite(events)
+  )
+    return null
+  const result: Observation = { seq, events }
+  const payloadCurrent = field(value, 'payloadCurrent')
+  if (typeof payloadCurrent === 'boolean')
+    result.payloadCurrent = payloadCurrent
+  const closes = field(value, 'closes')
+  if (Array.isArray(closes)) {
+    result.closes = []
+    for (const close of closes) {
+      const tab = field(close, 'tab')
+      const at = field(close, 'seq')
+      if (
+        typeof tab === 'number' &&
+        Number.isFinite(tab) &&
+        typeof at === 'number' &&
+        Number.isFinite(at)
+      )
+        result.closes.push({ tab, seq: at })
+    }
+  }
+  return result
+}
+
+/** Page facts from the host, dropping anything without a numeric tab. */
 function readPageFacts(pages: unknown): PageFact[] {
   if (!Array.isArray(pages)) return []
   const facts: PageFact[] = []
   for (const page of pages) {
     if (typeof page !== 'object' || page === null) continue
-    const id: unknown = Reflect.get(page, 'id')
-    if (typeof id !== 'number') continue
-    const fact: PageFact = { id }
     const tab: unknown = Reflect.get(page, 'tab')
-    if (typeof tab === 'number') fact.tab = tab
+    if (typeof tab !== 'number') continue
+    const fact: PageFact = { tab }
     const url: unknown = Reflect.get(page, 'url')
     const title: unknown = Reflect.get(page, 'title')
     const closed: unknown = Reflect.get(page, 'closed')

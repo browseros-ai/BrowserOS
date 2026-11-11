@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use browseros_cdp::CdpEvent;
 use browseros_core::sensitive_fields::{HIDDEN_ROOT_REPORT, JOURNAL_BINDING, JournalEntry};
-use browseros_core::{BrowserSession, PageId};
+use browseros_core::{BrowserSession, TabId};
 use serde::Deserialize;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time;
@@ -53,7 +53,7 @@ struct BindingCalled {
 
 /// A world whose seal reported a hidden root, to be swept beside the journal's loop.
 struct Reported {
-    page: PageId,
+    tab: TabId,
     world: SealedWorld,
 }
 
@@ -108,15 +108,15 @@ fn forward(
         return None;
     }
     let session = event.session_id.as_ref()?;
-    let page = sessions.page_of(session)?;
+    let tab = sessions.tab_of(session)?;
     if called.payload == HIDDEN_ROOT_REPORT {
         let context = ContextId(called.execution_context_id?);
-        let world = pages.get(&page)?.frames().by_context(session, context)?;
-        return world.queue_report().then_some(Reported { page, world });
+        let world = pages.get(tab)?.frames().by_context(session, context)?;
+        return world.queue_report().then_some(Reported { tab, world });
     }
     let entry = JournalEntry::parse(&called.payload)?;
-    let typed_by = pages.typed_by(&page);
-    hooks.field_entered(page, entry, typed_by);
+    let typed_by = pages.typed_by(tab);
+    hooks.field_entered(tab, entry, typed_by);
     None
 }
 
@@ -124,9 +124,9 @@ fn forward(
 /// or misses its budget tells the host nothing: the next op's sweep takes the reported host
 /// itself, so the op's own result is still masked.
 async fn sweep(reported: Reported, hooks: Arc<dyn PlaywrightHooks>) {
-    let Reported { page, world } = reported;
+    let Reported { tab, world } = reported;
     match time::timeout(FRAME_BUDGET, page::sweep_reported(&world)).await {
-        Ok(Ok(values)) if !values.is_empty() => hooks.values_swept(page, &values),
+        Ok(Ok(values)) if !values.is_empty() => hooks.values_swept(tab, &values),
         Ok(_) => {}
         // It may have given up waiting for another watch, before its own could unqueue it.
         Err(_late) => world.unqueue_report(),

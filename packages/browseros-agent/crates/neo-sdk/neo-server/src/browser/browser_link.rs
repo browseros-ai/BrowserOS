@@ -9,8 +9,8 @@ use browseros_core::pages::{PageInfo, PageManagerHooks};
 use browseros_core::sensitive_fields::SensitiveValues;
 use browseros_core::viewport::Viewports;
 use browseros_core::{
-    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, NativeCapabilities, PageId,
-    TabId, page_js,
+    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, NativeCapabilities, TabId,
+    page_js,
 };
 use tokio::sync::{SetOnce, broadcast, watch};
 use tokio::time;
@@ -163,8 +163,8 @@ impl BrowserLink {
     /// (`OpCtx::recheck_reach`), which run at a `waitForFunction`'s poll rate. `tab_watch` lists
     /// after every page target that opens or closes, so a tab counts from the listing that first
     /// has it until the first that lacks it. Never for a page core leaves out of its registry (an
-    /// extension's, or the developer tools'), and never from another socket's listing: Chromium
-    /// numbers its tabs from 1 again after a restart, so an old id may name another tab.
+    /// extension's, or the developer tools'), and never from another socket's listing: after a
+    /// browser restart an old tab id can name a new tab.
     #[must_use]
     pub(crate) fn lists_tab(&self, epoch: u64, tab: TabId) -> bool {
         self.listed
@@ -193,8 +193,8 @@ impl BrowserLink {
 
     /// Core's cached facts for a page, without a CDP call. Stale after an unbound navigation
     /// until something refreshes the page; `None` once core saw the tab close.
-    pub(crate) async fn cached_page(&self, page: &PageId) -> Option<PageInfo> {
-        self.session.get()?.pages.get_info(page.clone()).await
+    pub(crate) async fn page(&self, tab: TabId) -> Option<PageInfo> {
+        self.session.get()?.pages.get_info_by_tab(tab).await
     }
 
     /// The one session, once the first connect landed; until then this waits. The host API
@@ -251,10 +251,10 @@ impl BrowserLink {
         // Core's DOM scripts run in BrowserOS's isolated world, never where the page can see
         // them (skeleton D4). Process-wide, and set before any page is touched.
         page_js::set_isolated_world_enabled(true);
-        let on_page_detached = Arc::new(move |page: PageId| tabs.closed(&page));
+        let on_page_removed = Arc::new(move |info: &PageInfo| tabs.removing(info.tab_id));
         let hooks = BrowserSessionHooks {
             page_manager: PageManagerHooks {
-                on_page_detached: Some(on_page_detached),
+                on_page_removed: Some(on_page_removed),
                 ..PageManagerHooks::default()
             },
         };

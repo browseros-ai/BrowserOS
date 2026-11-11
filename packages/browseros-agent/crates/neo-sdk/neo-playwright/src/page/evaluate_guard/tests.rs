@@ -46,8 +46,8 @@ fn script(expression: &str) -> Script {
 }
 
 /// The page brand a script would send for page `id` on tab `tab`.
-fn page_ref(id: u64, tab: u64) -> Result<PageRef, serde_json::Error> {
-    serde_json::from_value(json!({ "$neo": "page", "id": id, "tab": tab }))
+fn page_ref(_id: u64, tab: u64) -> Result<PageRef, serde_json::Error> {
+    serde_json::from_value(json!({ "$neo": "page", "tab": tab }))
 }
 
 fn reply(value: Value) -> Result<Reply, CoreError> {
@@ -520,9 +520,7 @@ async fn tests_that_a_frame_has_one_budget_from_its_attach_to_its_sweep() -> Tes
     let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
     let listed = browser.pages.list().await?;
     let listed = listed.first().ok_or("the tab is listed")?;
-    let page: PageRef = serde_json::from_value(
-        json!({ "$neo": "page", "id": listed.page_id, "tab": listed.tab_id }),
-    )?;
+    let page: PageRef = serde_json::from_value(json!({ "$neo": "page", "tab": listed.tab_id }))?;
     let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
     let op = Op::from_name("page.waitForFunction").ok_or("page.waitForFunction is an op")?;
     let scope = OpScope::new(&env, op, timeout_ms(1_500));
@@ -882,7 +880,7 @@ async fn tests_that_a_try_longer_than_the_last_is_cut_at_the_deadline_as_late() 
         .await
         .map_err(|_expired| "the op's own timeout ended the sweep")?;
     let withheld = swept
-        .values(&run.playwright, &scope, page.id(), FieldValues::default())
+        .values(&run.playwright, &scope, page.tab(), FieldValues::default())
         .err()
         .ok_or("a frame late on both tries withholds the text")?;
     assert_eq!(
@@ -1130,7 +1128,7 @@ async fn tests_that_a_read_after_a_late_frame_is_masked_with_every_tries_values(
         let site = SiteSweep::of(&page, world).await.values(
             &run.playwright,
             &scope,
-            page.id(),
+            page.tab(),
             FieldValues::default(),
         );
         match site {

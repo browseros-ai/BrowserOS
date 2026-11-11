@@ -249,7 +249,7 @@ async fn install_over(
     let session = recorder.session(session)?;
     live.playwright
         .sessions()
-        .ensure(&session, &tab.page, kind)
+        .ensure(&session, tab.id, kind)
         .await?;
     Ok(SealedWorld::install(
         session,
@@ -338,7 +338,7 @@ async fn navigate_frame(tab: &Tab, search: &str) -> TestResult {
 
 /// The main frame's world, as an op reaches it.
 async fn main_world(live: &LiveBrowser, scope: &OpScope<'_>, tab: &Tab) -> TestResult<SealedWorld> {
-    let page = OpPage::admit(&live.playwright, scope, &tab.page).await?;
+    let page = OpPage::admit(&live.playwright, scope, tab.id).await?;
     Ok(page.world(&page.main_endpoint(), Place::Main).await?)
 }
 
@@ -353,7 +353,7 @@ async fn tests_that_a_new_page_starts_at_seq_0_and_concurrent_first_uses_share_o
         .await?;
     let env = live.env();
     let scope = OpScope::new(&env, count_op()?, CallHeader::default());
-    let page = OpPage::admit(&live.playwright, &scope, &tab.page).await?;
+    let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
     let endpoint = page.main_endpoint();
     let (first, second) = tokio::join!(
         page.world(&endpoint, Place::Main),
@@ -404,7 +404,7 @@ async fn tests_that_a_navigation_retires_the_seq_even_across_processes() -> Test
         matches!(stale, Err(ProbeFailure::Gone(_))),
         "the old handle must fail, never answer from another context: {stale:?}"
     );
-    let page = OpPage::admit(&live.playwright, &scope, &tab.page).await?;
+    let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
     page.frames().invalidate(&first);
     let second = page.world(&page.main_endpoint(), Place::Main).await?;
     assert_eq!(
@@ -529,7 +529,7 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
         "{by_key:?}"
     );
     let child_frame = same_process_frame(&scope, &world, pin).await?;
-    let first_page = OpPage::admit(&first.playwright, &scope, &tab.page).await?;
+    let first_page = OpPage::admit(&first.playwright, &scope, tab.id).await?;
     let child = first_page
         .world(
             &first_page.child_endpoint(world.session().clone(), child_frame.clone()),
@@ -551,7 +551,7 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
         "a tab open before the instance started takes a seq from the random base: {:?}",
         rekeyed.seq()
     );
-    let other_page = OpPage::admit(&second.playwright, &other_scope, &reopened.page).await?;
+    let other_page = OpPage::admit(&second.playwright, &other_scope, reopened.id).await?;
     assert!(
         matches!(other_page.frames().by_seq(world.seq()), SeqLookup::Retired),
         "the re-key reported the seq the first instance printed refs under, so it is retired"
@@ -622,7 +622,7 @@ async fn tests_that_the_journal_reports_typing_in_a_main_frame_password_field() 
         .send::<_, Value>("Input.insertText", json!({ "text": "journal-main" }))
         .await?;
     let expected = Journaled {
-        page: tab.page.clone(),
+        page: tab.id,
         kind: SensitiveKind::Password,
         value: "journal-main".to_owned(),
         by: TypedBy::NotAgent,
@@ -776,13 +776,13 @@ async fn tests_that_set_content_retires_the_seq_so_an_old_ref_fails_and_the_jour
         .invoke(
             &env,
             Op::from_name("page.setContent").ok_or("page.setContent is an op")?,
-            json!({ "page": { "$neo": "page", "id": tab.page.0, "tab": tab_id.0 },
+            json!({ "page": { "$neo": "page", "tab": tab_id.0 },
                     "html": PASSWORD_PAGE }),
         )
         .await?;
     assert_eq!(set, json!({}));
 
-    let page = OpPage::admit(&live.playwright, &scope, &tab.page).await?;
+    let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
     assert!(
         matches!(page.frames().by_seq(before.seq()), SeqLookup::Retired),
         "the written document is a new document, so its predecessor's seq retired"
@@ -812,7 +812,7 @@ async fn tests_that_set_content_retires_the_seq_so_an_old_ref_fails_and_the_jour
         .send::<_, Value>("Input.insertText", json!({ "text": "journal-after-set" }))
         .await?;
     let expected = Journaled {
-        page: tab.page.clone(),
+        page: tab.id,
         kind: SensitiveKind::Password,
         value: "journal-after-set".to_owned(),
         by: TypedBy::NotAgent,

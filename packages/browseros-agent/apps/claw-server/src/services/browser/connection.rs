@@ -178,7 +178,7 @@ impl BrowserService {
     async fn browser_session(&self, client: CdpClient) -> Arc<BrowserSession> {
         let epoch = client.epoch();
         let ownership = self.ownership.clone();
-        let on_page_detached: OnPageDetached = Arc::new(move |page_id| {
+        let on_page_detached: OnPageDetached = Arc::new(move |page_id, _tab, _target| {
             let ownership = ownership.clone();
             tokio::spawn(async move {
                 ownership.remove_page(&page_id).await;

@@ -15,12 +15,21 @@ import { createContext, runInContext } from 'node:vm'
 
 export type Call = { name: string; input: Record<string, unknown> }
 
+/** Internal host evidence accompanying a reply's page facts and payload. */
+type Observation = {
+  seq: number
+  events: number
+  payloadCurrent?: boolean
+  closes?: { tab: number; seq: number }[]
+}
+
 /** An op's answer: a value, or an envelope (`{ ok }`, `{ err }`, with `pages`, `defaultPage`). */
 type Envelope = {
   ok?: unknown
   err?: Record<string, unknown>
   pages?: unknown[]
-  defaultPage?: { id: number; tab: number }
+  defaultPage?: { tab: number }
+  observed?: Observation | null
 }
 export type Answer = (call: Call) => unknown | Promise<unknown>
 
@@ -86,7 +95,11 @@ export function loadPrelude(
      * The run's init (run_script.rs): `{ page }`, the run's page brand, and `pages`, every tab's
      * facts, once the run service sends them. Absent: no tab yet.
      */
-    seed?: { page: unknown; pages?: unknown[] }
+    seed?: {
+      page: unknown
+      pages?: unknown[]
+      observed?: Observation | null
+    }
     /** The prelude's source; the committed asset when absent (build.ts passes a fresh build). */
     prelude?: string
     /** A fixed `Date.now()` for the realm, so recorded `since` stamps are reproducible. */
@@ -101,6 +114,8 @@ export function loadPrelude(
   const calls: Call[] = []
   const startCalls: Call[] = []
   let refusals = 0
+  let observations = options.seed?.observed?.seq ?? 0
+  let newestEventSeq = options.seed?.observed?.events ?? 0
   // Each failed op's error, by op id, as bridge.rs remembers the failures it answered.
   const failures = new Map<unknown, Record<string, unknown>>()
   const answer = options.answer ?? (() => null)
@@ -137,6 +152,33 @@ export function loadPrelude(
           ? (reply as Envelope)
           : { ok: reply }
       if (envelope.err) failures.set(envelope.err.operationId, envelope.err)
+      newestEventSeq = Math.max(newestEventSeq, eventHead(name, envelope.ok))
+      if (envelope.observed === undefined) {
+        envelope.observed = {
+          seq: ++observations,
+          events: newestEventSeq,
+          payloadCurrent: true,
+        }
+        // A page payload always has a fact in a real host reply. Simple mocked values
+        // inherit that identity so their payload and fact share the same observation.
+        const target = call.input.page as { tab?: unknown } | undefined
+        if (
+          envelope.pages === undefined &&
+          typeof target?.tab === 'number' &&
+          [
+            'page.frames',
+            'page.goto',
+            'page.reload',
+            'page.goBack',
+            'page.goForward',
+            'page.waitForURL',
+            'page.waitForLoadState',
+            'page.setContent',
+          ].includes(name)
+        )
+          envelope.pages = [{ tab: target.tab }]
+      } else if (envelope.observed !== null)
+        observations = Math.max(observations, envelope.observed.seq)
       return JSON.stringify({ pages: [], ...envelope, ok: envelope.ok ?? null })
     },
     __neo_log: () => {},
@@ -159,7 +201,11 @@ export function loadPrelude(
     main: (...provided: unknown[]) => Promise<unknown>,
     init: string,
   ) => Promise<string>
-  const init = JSON.stringify(options.seed ?? { page: null })
+  const init = JSON.stringify({
+    page: null,
+    observed: { seq: 0, events: 0 },
+    ...options.seed,
+  })
   // The parameters arrive when the bootstrap calls the agent's function; see `ready`.
   let started: (provided: unknown[]) => void = () => {}
   const provided = new Promise<unknown[]>((resolve) => {
@@ -223,6 +269,26 @@ export function loadPrelude(
   }
 }
 
+/** Latest event already delivered by the fake host when it takes its cache observation. */
+function eventHead(name: string, value: unknown): number {
+  const events =
+    name === 'events.wait'
+      ? [value]
+      : name === 'events.next' && typeof value === 'object' && value !== null
+        ? Reflect.get(value, 'events')
+        : []
+  if (!Array.isArray(events)) return 0
+  let head = 0
+  for (const event of events) {
+    const seq =
+      typeof event === 'object' && event !== null
+        ? Reflect.get(event, 'seq')
+        : undefined
+    if (typeof seq === 'number') head = Math.max(head, seq)
+  }
+  return head
+}
+
 /**
  * The door's answer to a refusal brand (`__neo.refuse`, claw-sdk's dispatch/refusal_brand.rs):
  * refused under `name` before anything is sent, script-owned, its code one of the two a script
@@ -273,7 +339,7 @@ export function refusalCall(
 }
 
 /** A run that starts on page 7, tab 1007, as for a task whose tab the run service knows. */
-export const SEED = { page: { $neo: 'page', id: 7, tab: 1007 } }
+export const SEED = { page: { $neo: 'page', tab: 1007 } }
 
 /** JSON copy of a value from the run's realm, for assertions across realms. */
 export function json(value: unknown): unknown {
