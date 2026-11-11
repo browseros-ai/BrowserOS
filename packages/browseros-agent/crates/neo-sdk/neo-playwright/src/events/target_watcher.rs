@@ -21,7 +21,7 @@
 //!   [`DIALOG_GRACE`] later held for whoever listens by then, or closed by Neo; the reap tick
 //!   closes held dialogs whose runs all ended (`dialog_table.rs`).
 //! - **Frames.** `Page.frameAttached`, a removing `Page.frameDetached` and the main frame's
-//!   `Page.frameNavigated` go to the `FrameAttachLog`, on any session of the tab, so frames are
+//!   `Page.frameNavigated` go to the `FrameAttachLog`, from one session per native target, so frames are
 //!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`).
 //! - **Console and page errors** are recorded only while some run listens for them on that tab,
 //!   so a chatty page cannot push popups and dialogs out of the ring. BrowserOS in hosted mode
@@ -125,6 +125,8 @@ struct Watcher {
     frames: HashMap<String, TargetId>,
     /// Dialogs in their grace, oldest first; every grace is as long, so this is by deadline.
     graces: VecDeque<Grace>,
+    /// Opening metadata survives automatic answers; CDP close carries no dialog identity.
+    pending_dialogs: HashMap<SessionId, DialogOpened>,
     next_reap: Instant,
     /// Window lookups report their popup back on this channel, so only this task writes the
     /// log. The receiving end is a local of the task's loop.
@@ -289,6 +291,7 @@ impl Watcher {
             lifecycle_sources: LifecycleSources::default(),
             frames: HashMap::new(),
             graces: VecDeque::new(),
+            pending_dialogs: HashMap::new(),
             next_reap: Instant::now() + REAP,
             found,
         };
@@ -403,6 +406,7 @@ impl Watcher {
             self.sessions.clear();
             self.lifecycle_sources = LifecycleSources::default();
             self.frames.clear();
+            self.pending_dialogs.clear();
             self.writer.hub().dialogs().forget_sessions();
         }
         self.browser
@@ -451,7 +455,6 @@ impl Watcher {
             }
             "Target.targetDestroyed" => {
                 if let Some(Destroyed { target_id }) = parse(params) {
-                    self.frames.remove(&target_id);
                     let target = TargetId(target_id);
                     self.destroyed(&target);
                 }
@@ -463,6 +466,7 @@ impl Watcher {
             }
             "Target.detachedFromTarget" => {
                 if let Some(Detached { session_id }) = parse(params) {
+                    self.dialog_closed(&session_id);
                     self.sessions.remove(&session_id);
                     self.lifecycle_sources.detach(&session_id);
                 }
@@ -497,7 +501,7 @@ impl Watcher {
             }
             "Page.javascriptDialogClosed" => {
                 if let Some(session) = session_id {
-                    self.writer.hub().dialogs().closed_on_session(&session);
+                    self.dialog_closed(&session);
                 }
             }
             "Runtime.consoleAPICalled" => {
@@ -603,6 +607,7 @@ impl Watcher {
     }
 
     fn destroyed(&mut self, target: &TargetId) {
+        self.frames.remove(target.as_str());
         self.attach_log.forget(target);
         self.lifecycle.forget(target);
         let Some(page) = self.pages.remove(target) else {
@@ -615,7 +620,7 @@ impl Watcher {
             .map(|(session, _)| session.clone())
             .collect();
         for session in &sessions {
-            self.writer.hub().dialogs().closed_on_session(session);
+            self.dialog_closed(session);
             self.sessions.remove(session);
             self.lifecycle_sources.detach(session);
         }
@@ -824,6 +829,11 @@ impl Watcher {
 
     async fn dialog_opened(&mut self, session: SessionId, params: DialogParams) {
         let target = self.target_of(&session).await;
+        // A modal is reported on every attached session. Use the selected native-target
+        // source so even an automatically answered alert has one opening/closure pair.
+        if !self.lifecycle_sources.accepts(&session) {
+            return;
+        }
         let kind = DialogKind::parse(&params.kind);
         let hub = self.writer.hub();
         let id = hub.dialogs().allocate();
@@ -837,7 +847,7 @@ impl Watcher {
                 .unwrap_or_default();
             hub.dialogs().hold(
                 id,
-                HeldDialog::new(session, target.clone(), kind, listening),
+                HeldDialog::new(session.clone(), target.clone(), kind, listening),
             );
             self.graces.push_back(Grace {
                 ends: Instant::now() + DIALOG_GRACE,
@@ -846,13 +856,24 @@ impl Watcher {
             });
         }
         if let Some(target) = target {
-            self.writer.record(PageEvent::Dialog(DialogOpened {
+            let dialog = DialogOpened {
                 id,
                 target,
                 kind,
                 message: params.message,
                 default_value: params.default_prompt.unwrap_or_default(),
-            }));
+            };
+            self.writer.record(PageEvent::Dialog(dialog.clone()));
+            self.pending_dialogs.insert(session, dialog);
+        }
+    }
+
+    /// CDP orders opening before closing on one session. Removing its metadata makes duplicate
+    /// notifications and tab teardown idempotent, including alerts core already accepted.
+    fn dialog_closed(&mut self, session: &SessionId) {
+        self.writer.hub().dialogs().closed_on_session(session);
+        if let Some(dialog) = self.pending_dialogs.remove(session) {
+            self.writer.record(PageEvent::DialogClosed(dialog));
         }
     }
 
@@ -937,6 +958,7 @@ impl Watcher {
 /// Selects one lifecycle source for each native page or OOPIF target. An action's session and
 /// context observation's session can coexist, but both receive the same Chromium transitions.
 /// Keep the first source until it detaches, then promote a surviving session for that target.
+/// Dialog opening shares this selection so one physical modal receives one public identity.
 #[derive(Default)]
 struct LifecycleSources {
     targets: HashMap<SessionId, TargetId>,

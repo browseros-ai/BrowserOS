@@ -1,5 +1,5 @@
 // biome-ignore-all lint/suspicious/noUndeclaredEnvVars: This standalone Node harness is not a Turbo task.
-/** Lifecycle payloads, context mirrors and frames that predate the SDK's event watcher. */
+/** Lifecycle/modal payloads and context mirrors across watcher, frame and tab lifetimes. */
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import fs from 'node:fs'
@@ -192,6 +192,65 @@ test('lifecycle events preserve existing and new frame identity', {
       (error) => error.name === 'TimeoutError',
     )
     record('an event wait times out without an event')
+
+    const opening = new Promise((resolve) => page.once('dialog', resolve))
+    const closed = page.waitForEvent('dialogclosed', { timeout: 3000 })
+    const contextClosed = sdk.context.waitForEvent('dialogclosed', {
+      timeout: 3000,
+    })
+    const answer = page.evaluate(() => confirm('accept me'))
+    const dialog = await opening
+    await dialog.accept()
+    assert.equal(await answer, true)
+    assert.equal(await closed, dialog)
+    assert.equal(await contextClosed, dialog)
+    record(
+      'accepted dialog closes once with the original Dialog on page and context',
+    )
+
+    const automatic = page.waitForEvent('dialogclosed', { timeout: 3000 })
+    await page.evaluate(() => alert('automatic'))
+    assert.equal((await automatic).message(), 'automatic')
+    record('automatically handled dialogs still emit dialogclosed')
+
+    let releasePredicate
+    let enteredPredicate
+    const released = new Promise((resolve) => {
+      releasePredicate = resolve
+    })
+    const entered = new Promise((resolve) => {
+      enteredPredicate = resolve
+    })
+    const historical = sdk.context.waitForEvent('dialogclosed', {
+      timeout: 6000,
+      predicate: async (dialog) => {
+        if (dialog.message() === 'gate') {
+          enteredPredicate()
+          await released
+          return false
+        }
+        return dialog.message() === 'retired'
+      },
+    })
+    await page.evaluate(() => alert('gate'))
+    await entered
+    const retired = await sdk.context.newPage()
+    await retired.goto(`${url}retired`)
+    const openingRetired = new Promise((resolve) =>
+      retired.once('dialog', resolve),
+    )
+    const retiredAnswer = retired.evaluate(() => confirm('retired'))
+    const retiredDialog = await openingRetired
+    await retiredDialog.accept()
+    assert.equal(await retiredAnswer, true)
+    await retired.close()
+    releasePredicate()
+    assert.equal(await historical, retiredDialog)
+    assert.equal(retiredDialog.page(), retired)
+    assert(retiredDialog.page().isClosed())
+    record(
+      'context closure retains an approved Page after its tab closes while a predicate waits',
+    )
   } finally {
     try {
       await sdk?.finish()

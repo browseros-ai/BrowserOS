@@ -2,7 +2,7 @@
 //! read for each listener. Only the run's own event ops write here; the watcher only asks whether
 //! the run wants an event, to decide what to record and which dialogs to hold.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -13,6 +13,7 @@ use browseros_core::{TabId, TargetId};
 use tokio::sync::Notify;
 use tokio::time;
 
+use crate::events::event_hub::LOG_CAPACITY;
 use crate::events::{ListenerKey, PageEventKind, Subscription};
 
 /// How long an op ending with events still unread waits for a pump to start, when none is in
@@ -44,6 +45,8 @@ struct Inner {
     waiting: HashMap<Subscription, usize>,
     /// `events.next` calls in flight.
     pumps: usize,
+    /// View-approved identities remain usable by retained events after the tab disappears.
+    known_pages: VecDeque<KnownPage>,
 }
 
 /// Marks one `events.next` in flight until dropped.
@@ -58,6 +61,13 @@ impl Drop for Pumping<'_> {
         drop(inner);
         self.events.changed.notify_waiters();
     }
+}
+
+/// Historical native identity, admitted by this run rather than guessed from a dead target.
+#[derive(Debug)]
+struct KnownPage {
+    target: TargetId,
+    tab: TabId,
 }
 
 #[derive(Debug)]
@@ -155,6 +165,29 @@ impl RunEvents {
             .keys()
             .chain(inner.waiting.keys())
             .any(|subscription| matches!(subscription, Subscription::Context(_)))
+    }
+
+    /// Retain only identities approved by this run's view. The journal bounds how much
+    /// history can still be delivered, so the identity cache follows the same capacity.
+    pub(crate) fn remember_page(&self, target: &TargetId, tab: TabId) {
+        let mut inner = self.lock();
+        inner.known_pages.retain(|page| page.target != *target);
+        inner.known_pages.push_back(KnownPage {
+            target: target.clone(),
+            tab,
+        });
+        while inner.known_pages.len() > LOG_CAPACITY {
+            inner.known_pages.pop_front();
+        }
+    }
+
+    /// A retained event may name a tab that no live listing can resolve any longer.
+    pub(crate) fn known_page(&self, target: &TargetId) -> Option<TabId> {
+        self.lock()
+            .known_pages
+            .iter()
+            .find(|page| page.target == *target)
+            .map(|page| page.tab)
     }
 
     /// The listeners and their places, for one pass of the pump.

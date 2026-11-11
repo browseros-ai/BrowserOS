@@ -38,6 +38,8 @@ use crate::dispatch::{
     StopReason, Visibility,
 };
 use crate::host::TakeoverLock;
+use crate::runtime::{Script, ScriptOutcome, run_script};
+use crate::test_rig::{TestError, on_neo_runtime};
 use crate::test_support::FakeCdp;
 
 /// The built-ins' door on the fake browser, with the app's own rules in the app's order
@@ -3859,6 +3861,34 @@ async fn a_late_read_lock_withholds_the_close_and_its_binding_fact() -> Result<(
         assert_eq!(next.pages.first().map(|fact| fact.closed), Some(!rebind));
     }
     Ok(())
+}
+
+/// Use the full built-in registry: the runtime-only rig intentionally serves fake methods.
+#[test]
+fn captured_bytes_can_be_saved_from_quickjs_without_admitting_a_tab() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let harness = Harness::new().await.map_err(|error| error.to_string())?;
+        let own = tempfile::tempdir()?;
+        let target = own.path().join("nested/screenshot.png");
+        let (run, _guard) = harness.run().map_err(|error| error.to_string())?;
+        let script = Script {
+            code: format!(
+                "await __neo.invoke('page.saveScreenshot', {{ path: {}, base64: 'iVBORw0KGgo=' }}); return true;",
+                json!(target)
+            ),
+            page: None,
+            pages: Vec::new(),
+            observed: None,
+        };
+        let end = run_script(&run, &harness.dispatcher, script).await;
+        match end.outcome {
+            ScriptOutcome::Returned(value) => assert_eq!(value, json!(true)),
+            other => return Err(format!("expected saved bytes, got {other:?}").into()),
+        }
+        assert_eq!(fs::read(target)?, b"\x89PNG\r\n\x1a\n");
+        assert_eq!(harness.fake.count("Target.createTarget"), 0);
+        Ok(())
+    })
 }
 
 /// Hosted mode cannot produce these events; a valid wait fails before spending its timeout,

@@ -155,6 +155,7 @@ export type EventName =
   | 'popup'
   | 'close'
   | 'dialog'
+  | 'dialogclosed'
   | 'console'
   | 'pageerror'
   | 'download'
@@ -219,6 +220,12 @@ export type EventRecord = { seq: number; at: number } & (
       context: boolean
     }
   | { event: 'dialog'; page: PageBrand; dialog: DialogInfo }
+  | {
+      event: 'dialogclosed'
+      page: PageBrand
+      dialog: DialogInfo
+      context: boolean
+    }
   | { event: 'console'; page: PageBrand; message: ConsoleInfo }
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
   | { event: 'download'; page: PageBrand; download: DownloadInfo }
@@ -493,6 +500,8 @@ export type OpInputs = {
     strict?: Strictness
   } & ScreenshotOptions
   'page.pdf': PageArgs & PdfOptions
+  /** The client-side save step, on Neo's filesystem and without a browser target. */
+  'page.saveScreenshot': { path: string; base64: string }
   'page.setViewportSize': PageArgs & {
     viewportSize: { width: number; height: number }
   }
@@ -617,7 +626,8 @@ export type OpOutputs = {
   'page.waitForFunction': { value: SerializedValue; preview: string }
   'locator.waitForFunction': null
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
-  'page.screenshot': unknown
+  'page.screenshot': Uint8Array
+  'page.saveScreenshot': null
   'page.pdf': unknown
   'page.setViewportSize': Done
   /** The id `disposable.dispose` takes. */

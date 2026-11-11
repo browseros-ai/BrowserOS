@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use browseros_core::screenshot::Viewport;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::action::ElementRunner;
 use crate::op_scope::OpScope;
@@ -142,10 +142,18 @@ impl ScreenshotGeometry {
             clip,
             scale,
         } = options;
-        let element = if let Some(target) = target {
+        if let Some(target) = target {
             ElementRunner::new(scope, page, target, strict)
                 .scroll_for_screenshot()
                 .await?;
+        }
+        let metrics_target = target.map_or(MetricsTarget::Page { full_page }, |_| {
+            MetricsTarget::Element
+        });
+        let metrics = metrics(page, scope, metrics_target).await?;
+        // Metrics can cross a page navigation. Read the bound node afterwards, so a stale
+        // handle fails instead of combining an old element rectangle with a new document.
+        let element = if let Some(target) = target {
             let reading =
                 read::read_attached(pw, scope, target, strict, &Read::BoundingBox).await?;
             let value = read::for_screenshot(scope, &reading.path, reading.value).await?;
@@ -160,7 +168,6 @@ impl ScreenshotGeometry {
         } else {
             None
         };
-        let metrics = metrics(page, scope, full_page && target.is_none()).await?;
         let layout: LayoutMetrics = page
             .root_session()
             .send("Page.getLayoutMetrics", json!({}))
@@ -263,30 +270,188 @@ fn enclosing(rect: Rect) -> Rect {
     }
 }
 
-/// Wait for the document dimensions after preparation; a not-yet-created body is transient.
+/// Page images can use a replacement document; an element capture is bound to one node and
+/// must restart locator resolution if its document disappears during geometry measurement.
+#[derive(Clone, Copy)]
+enum MetricsTarget {
+    Page { full_page: bool },
+    Element,
+}
+
+/// Wait for page dimensions across navigation, like upstream's utility-world poller.
+/// An element's loss is returned to the screenshot loop rather than retargeting its capture.
 async fn metrics(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
-    require_body: bool,
+    target: MetricsTarget,
 ) -> Result<Metrics, PlaywrightError> {
+    let require_body = matches!(target, MetricsTarget::Page { full_page: true });
     let endpoint = page.main_endpoint();
     loop {
-        let value = world_call::with_world(page, &endpoint, &Place::Main, |world| async move {
+        let measured = world_call::with_world(page, &endpoint, &Place::Main, |world| async move {
             world
                 .call_for_screenshot(METRICS, &json!([require_body]))
                 .await
                 .map_err(ProbeFailure::from_core)
         })
-        .await
-        .map_err(|failure| resolve::failed(scope, failure))?;
-        if value.is_null() {
-            scope
-                .sleep(Duration::from_millis(16))
-                .await
-                .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?;
-            continue;
+        .await;
+        let delay = match measured {
+            Ok(value) if !value.is_null() => {
+                return serde_json::from_value(value)
+                    .map_err(|error| scope.fail(ErrorCode::Internal, &error.to_string()));
+            }
+            Ok(_) => Duration::from_millis(16),
+            Err(ProbeFailure::Gone(_)) => {
+                // A world can disappear when its tab closes as well. This context-independent
+                // read keeps a closed session or lost transport fatal, even with timeout: 0.
+                let _: Value = page
+                    .root_session()
+                    .send("Page.getLayoutMetrics", json!({}))
+                    .await
+                    .map_err(|error| scope.core_error(&error))?;
+                if matches!(target, MetricsTarget::Element) {
+                    return Err(scope.fail(
+                        ErrorCode::ElementDetached,
+                        "Element is not attached to the DOM",
+                    ));
+                }
+                scope.log("document changed while measuring screenshot, retrying".to_owned());
+                Duration::from_millis(100)
+            }
+            Err(failure) => return Err(resolve::failed(scope, failure)),
+        };
+        scope
+            .sleep(delay)
+            .await
+            .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use serde_json::{Value, json};
+
+    use super::{METRICS, MetricsTarget};
+    use crate::op_scope::OpScope;
+    use crate::page::OpPage;
+    use crate::target::CallHeader;
+    use crate::test_support::{ProbeAnswer, ScriptedRun, ScriptedTab, TabScript};
+    use crate::{ErrorCode, Op};
+
+    struct ReplacedDocuments {
+        reads: AtomicUsize,
+        error: &'static str,
+        layout_times_out: bool,
+    }
+
+    impl TabScript for ReplacedDocuments {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
         }
-        return serde_json::from_value(value)
-            .map_err(|error| scope.fail(ErrorCode::Internal, &error.to_string()));
+
+        fn outlasts_client(&self, method: &str) -> bool {
+            self.layout_times_out && method == "Page.getLayoutMetrics"
+        }
+
+        fn main_world(&self, _object: &str, function: &str) -> Option<Result<Value, &'static str>> {
+            if function != METRICS {
+                return None;
+            }
+            Some(if self.reads.fetch_add(1, Ordering::SeqCst) < 3 {
+                Err(self.error)
+            } else {
+                Ok(json!({ "result": { "type": "object", "value": {
+                    "width": 500, "height": 400, "scrollX": 0, "scrollY": 0,
+                    "deviceScaleFactor": 1, "fullWidth": 500, "fullHeight": 900,
+                } } }))
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn document_measurement_survives_repeated_navigation_but_preserves_fatal_errors()
+    -> Result<(), Box<dyn Error>> {
+        for (message, layout_times_out, expected, reads) in [
+            ("Execution context was destroyed.", false, None, 4),
+            (
+                "No target with given id found",
+                false,
+                Some(ErrorCode::TargetClosed),
+                1,
+            ),
+            ("capture denied", false, Some(ErrorCode::Internal), 1),
+            (
+                "Execution context was destroyed.",
+                true,
+                Some(ErrorCode::BrowserDisconnected),
+                2,
+            ),
+        ] {
+            let tab = ScriptedTab::new(ReplacedDocuments {
+                reads: AtomicUsize::new(0),
+                error: message,
+                layout_times_out,
+            });
+            let run = ScriptedRun::over(&tab).await?;
+            let op = Op::from_name("page.screenshot").ok_or("screenshot is registered")?;
+            let scope = OpScope::new(&run.env, op, CallHeader::default());
+            let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+            let result =
+                super::metrics(&page, &scope, MetricsTarget::Page { full_page: true }).await;
+            if let Some(code) = expected {
+                let error = result.err().ok_or("fatal measurement must fail")?;
+                assert_eq!(error.error_code(), Some(code), "{error}");
+                assert_eq!(
+                    tab.script().reads.load(Ordering::SeqCst),
+                    reads,
+                    "fatal errors stop measurement, including a failed session read after the generic context retry"
+                );
+            } else {
+                let measured = result?;
+                assert_eq!(
+                    (measured.width, measured.full_height),
+                    (500.0, 900.0),
+                    "measurement returns dimensions from the surviving document"
+                );
+                assert_eq!(
+                    tab.script().reads.load(Ordering::SeqCst),
+                    reads,
+                    "three document replacements precede the successful fourth read"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn element_measurement_does_not_continue_into_a_replacement_document()
+    -> Result<(), Box<dyn Error>> {
+        let tab = ScriptedTab::new(ReplacedDocuments {
+            reads: AtomicUsize::new(0),
+            error: "Execution context was destroyed.",
+            layout_times_out: false,
+        });
+        let run = ScriptedRun::over(&tab).await?;
+        let op = Op::from_name("page.screenshot").ok_or("screenshot is registered")?;
+        let scope = OpScope::new(&run.env, op, CallHeader::default());
+        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+        let error = super::metrics(&page, &scope, MetricsTarget::Element)
+            .await
+            .err()
+            .ok_or("an element's replaced document must fail its measurement")?;
+        assert_eq!(
+            error.error_code(),
+            Some(ErrorCode::ElementDetached),
+            "locator captures must re-resolve after document loss; handles must stay detached"
+        );
+        assert_eq!(
+            tab.script().reads.load(Ordering::SeqCst),
+            2,
+            "element measurement must not enter the page-level retry in a replacement document"
+        );
+        Ok(())
     }
 }
