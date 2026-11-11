@@ -10,15 +10,12 @@ use std::time::Duration;
 use std::{env, future};
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, ConnectOptions};
-use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, ProtocolSession,
     SessionId, TabId,
 };
 use futures_util::future::BoxFuture;
-use neo_playwright::{
-    ErrorCode, Op, OpEnv, Playwright, PlaywrightError, PlaywrightHooks, Refusal, RunState, TypedBy,
-};
+use neo_playwright::{ErrorCode, Op, OpEnv, Playwright, PlaywrightError, Refusal, RunState};
 use serde_json::{Map, Value, json};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
@@ -232,27 +229,6 @@ fn op(name: &str) -> Result<Op, PlaywrightError> {
         .ok_or_else(|| PlaywrightError::new(ErrorCode::Internal, format!("{name} is not an op")))
 }
 
-/// The host's hooks. No op calls them back; the capture hook can refuse, so capture tests prove
-/// it is bypassed.
-#[derive(Default)]
-struct LiveHooks {
-    capture: Mutex<Option<Refusal>>,
-}
-
-impl PlaywrightHooks for LiveHooks {
-    fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
-
-    fn values_swept(&self, _page: TabId, _values: &FieldValues) {}
-
-    fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
-        self.capture
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-            .map_or(Ok(()), Err)
-    }
-}
-
 /// A test-owned native tab. Core IDs are resolved only when a fixture needs raw CDP.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TestPage {
@@ -264,7 +240,6 @@ pub(crate) struct LiveRun {
     browser: Arc<BrowserSession>,
     playwright: Arc<Playwright>,
     env: LiveEnv,
-    hooks: Arc<LiveHooks>,
     tap: Arc<Tap>,
 }
 
@@ -299,11 +274,7 @@ impl LiveRun {
             Arc::clone(&tap) as Arc<dyn CdpConnection>,
             BrowserSessionHooks::default(),
         );
-        let hooks = Arc::new(LiveHooks::default());
-        let playwright = Playwright::new(
-            Arc::clone(&browser),
-            Arc::clone(&hooks) as Arc<dyn PlaywrightHooks>,
-        );
+        let playwright = Playwright::new(Arc::clone(&browser));
         let env = LiveEnv {
             view: BrowserView::unbound(Arc::clone(&browser), None),
             run_state: Arc::default(),
@@ -315,7 +286,6 @@ impl LiveRun {
             browser,
             playwright,
             env,
-            hooks,
             tap,
         })
     }
@@ -487,15 +457,6 @@ impl LiveRun {
             .send_value("Input.insertText", json!({ "text": text }))
             .await?;
         Ok(())
-    }
-
-    /// Makes the retained capture hook refuse, so capture tests prove it is bypassed.
-    pub(crate) fn refuse_captures(&self, refusal: Refusal) {
-        *self
-            .hooks
-            .capture
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(refusal);
     }
 
     /// Every recheck from now on is refused with `refusal`, as the owner taking over the tab

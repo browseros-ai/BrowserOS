@@ -47,7 +47,7 @@ pub(crate) use dispatcher::{
 pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, PageScript, Visibility};
 pub(crate) use observation::{ActedTarget, Claim, EventLog, Observation, Observer};
 pub(crate) use op_abort::OpAbort;
-pub(crate) use op_ctx::{OpCtx, PageChange, StandingRefusal};
+pub(crate) use op_ctx::{OpCtx, PageChange};
 pub(crate) use operation_error::{
     Answer, ErrorCode, LeafError, OpFailure, OperationError, TEXT_CHARS, clip,
 };

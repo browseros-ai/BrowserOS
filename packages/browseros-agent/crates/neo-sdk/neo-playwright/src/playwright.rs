@@ -19,7 +19,7 @@ use crate::page::{MediaSessions, PageRegistry, context_op, page_op};
 use crate::read::read_op;
 use crate::snapshot::snapshot_op;
 use crate::world::{Epoch, FrameAttachLog, SessionSetup};
-use crate::{OpEnv, PlaywrightError, PlaywrightHooks};
+use crate::{OpEnv, PlaywrightError};
 
 /// How long an op that ends may wait for its events to reach the run's listeners first
 /// ([`Playwright::events_before_reply`]). Both steps are usually immediate; this only bounds a
@@ -59,11 +59,9 @@ impl fmt::Debug for Playwright {
 impl Playwright {
     /// The facade over `browser`. Starts the watcher that records page events (popups,
     /// dialogs, closes) for the instance's lifetime, and one read of the open tabs, which decides
-    /// where an already-open tab's seqs start. `hooks` is retained for host implementations; no
-    /// op calls it. Needs a tokio runtime, as `BrowserSession` does.
+    /// where an already-open tab's seqs start. Needs a tokio runtime, as `BrowserSession` does.
     #[must_use]
-    pub fn new(browser: Arc<BrowserSession>, hooks: Arc<dyn PlaywrightHooks>) -> Arc<Self> {
-        drop(hooks);
+    pub fn new(browser: Arc<BrowserSession>) -> Arc<Self> {
         let (events, writer) = EventHub::new();
         let attach_log = Arc::new(FrameAttachLog::default());
         let progress = Arc::new(WatcherProgress::default());
@@ -209,28 +207,15 @@ impl Playwright {
 mod tests {
     use std::collections::BTreeSet;
     use std::error::Error;
-    use std::sync::Arc;
     use std::time::Duration;
 
-    use browseros_core::TabId;
-    use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
     use neo_trace::ErrorOwner;
     use serde_json::{Value, json};
     use tokio::time;
 
     use super::Playwright;
     use crate::test_env::{self, TestEnv};
-    use crate::{ErrorCode, Op, PlaywrightHooks, Refusal, TypedBy};
-
-    struct NoHooks;
-
-    impl PlaywrightHooks for NoHooks {
-        fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
-        fn values_swept(&self, _page: TabId, _values: &FieldValues) {}
-        fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
-            Ok(())
-        }
-    }
+    use crate::{ErrorCode, Op, Refusal};
 
     /// An op either answers `not built yet` or decodes its input before it reaches the host, so
     /// an empty call names the missing field and nothing is sent or noted. The ops whose
@@ -240,7 +225,7 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         const WHOLE_WITHOUT_ARGUMENTS: [&str; 3] =
             ["context.pages", "context.newPage", "events.next"];
-        let playwright = Playwright::new(test_env::offline_session(), Arc::new(NoHooks));
+        let playwright = Playwright::new(test_env::offline_session());
         let env = TestEnv::new();
         let ops = Op::all().filter(|op| !WHOLE_WITHOUT_ARGUMENTS.contains(&op.spec().name));
         for op in ops {
@@ -272,7 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn tests_that_a_bad_header_never_reaches_a_family() -> Result<(), Box<dyn Error>> {
-        let playwright = Playwright::new(test_env::offline_session(), Arc::new(NoHooks));
+        let playwright = Playwright::new(test_env::offline_session());
         let env = TestEnv::new();
         let op = Op::from_name("locator.click").ok_or("locator.click is an op")?;
         let error = playwright
@@ -310,7 +295,7 @@ mod tests {
             .get("ops")
             .and_then(Value::as_object)
             .ok_or("the examples are keyed by op")?;
-        let playwright = Playwright::new(test_env::offline_session(), Arc::new(NoHooks));
+        let playwright = Playwright::new(test_env::offline_session());
         let mut refused = BTreeSet::new();
         let mut messages = Vec::new();
         for (name, inputs) in ops {
