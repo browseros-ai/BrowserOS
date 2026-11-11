@@ -246,6 +246,9 @@ pub(crate) struct ArmPlan {
     /// The stability baseline: the probe arms only while the element still has this rect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) expect_rect: Option<Rect>,
+    /// Root quads own area/viewport checks; the interceptor checks actual event coordinates.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) browser_mapped: bool,
 }
 
 /// One `selectOptions` option, as upstream's client sends it: an option matches when every
