@@ -801,7 +801,9 @@ async fn tests_that_a_regexp_matches_a_password_and_attributes_stay_markup() -> 
             );
             let error = failure(run.invoke("expect.locator", no_attribute).await)?;
             assert!(
-                error.message().contains("Expected: \"hunter2\"\nReceived: \"\"\n"),
+                error
+                    .message()
+                    .contains("Expected: \"hunter2\"\nReceived: \"\"\n"),
                 "the typed value is not the value attribute, as upstream: {error}"
             );
             Ok(())
