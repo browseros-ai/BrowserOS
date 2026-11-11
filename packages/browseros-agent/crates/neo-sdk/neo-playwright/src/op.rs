@@ -118,8 +118,16 @@ mod tests {
 
     #[test]
     fn tests_that_names_are_playwright_receivers_and_methods() {
-        const RECEIVERS: [&str; 8] = [
-            "locator", "page", "keyboard", "mouse", "context", "expect", "events", "dialog",
+        const RECEIVERS: [&str; 9] = [
+            "locator",
+            "page",
+            "keyboard",
+            "mouse",
+            "context",
+            "expect",
+            "events",
+            "dialog",
+            "disposable",
         ];
         for op in Op::all() {
             let name = op.spec().name;
@@ -140,7 +148,9 @@ mod tests {
     /// `page.setContent` is gated: its HTML goes out only through the main-world gateway's
     /// document write (`evaluate_guard/document_write.rs`). `locator.setInputFiles` is
     /// gated: its gateway refuses Neo's own secret files and any path into `/dev` or `/proc`
-    /// before it sends a path (`input_files/secrets.rs`).
+    /// before it sends a path (`input_files/secrets.rs`). `page.addInitScript` and
+    /// `context.addInitScript` are gated: their source goes to the page, and a `{ path }` is read
+    /// from Neo's disk, only through `page/init_script.rs`, which requires both capabilities.
     ///
     /// The ops with an empty row send selectors, values or trusted input, or read in the sealed
     /// world. `page.goto` delegates URLs to Chromium, including `javascript:` scripts in the
@@ -219,6 +229,7 @@ mod tests {
             ("page.setContent", &[MainWorld], true),
             ("page.addScriptTag", &[MainWorld, HostFiles], true),
             ("page.addStyleTag", &[MainWorld, HostFiles], true),
+            ("page.emulateMedia", &[], true),
             ("page.close", &[], true),
             ("page.opener", &[], true),
             ("page.frames", &[], true),
@@ -231,8 +242,11 @@ mod tests {
             ("page.saveScreenshot", &[], true),
             ("page.pdf", &[Capture], true),
             ("page.setViewportSize", &[], true),
+            ("page.addInitScript", &[MainWorld, HostFiles], true),
             ("context.pages", &[], true),
             ("context.newPage", &[], true),
+            ("context.addInitScript", &[MainWorld, HostFiles], true),
+            ("disposable.dispose", &[], true),
             ("events.listen", &[], true),
             ("events.next", &[], true),
             ("events.wait", &[], true),

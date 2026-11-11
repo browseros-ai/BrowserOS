@@ -67,6 +67,8 @@ const ANSWERS: Record<string, unknown> = {
     url: 'about:blank',
   },
   'download.path': { path: '/runs/r/f.csv', failure: null },
+  'page.addInitScript': { id: 1 },
+  'context.addInitScript': { id: 2 },
 }
 
 /** A plausible result for each op, so the script runs to its end. The pump idles forever. */
@@ -101,6 +103,7 @@ const EVERY_OP = `
   await pay.goto('https://pay.example/'); await pay.waitForLoadState('domcontentloaded'); await pay.locator('#card').count()
   await page.waitForNavigation(); await pay.waitForNavigation({ url: '**/pay' });
   await page.waitForURL('**/a'); await page.waitForLoadState(); await page.title(); await page.content()
+  await page.emulateMedia({ media: 'print', colorScheme: 'dark', reducedMotion: 'reduce', forcedColors: 'active', contrast: 'more' });
   await page.addScriptTag({ content: 'window.injected = true' }); await pay.addStyleTag({ content: 'body { color: red }' });
   await page.setContent('<p>hi</p>'); await page.opener(); await page.evaluate(() => 1)
   await l.evaluate((e) => e.id); await l.evaluateAll((es) => es.length); await page.waitForFunction(() => true)
@@ -110,6 +113,10 @@ const EVERY_OP = `
   await page.screenshot(); await l.screenshot(); await page.pdf()
   await page.screenshot({ path: '/out/screenshot.png' })
   await page.setViewportSize({ width: 640, height: 480 })
+  const script = await page.addInitScript((a) => { window.a = a }, 1)
+  // Rust reads a path before any page work, so the offline decode needs a file that exists.
+  await page.addInitScript({ path: 'Cargo.toml' }); await context.addInitScript('window.b = 1')
+  await script.dispose()
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})
   const chooserListener = () => {}

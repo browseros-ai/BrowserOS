@@ -1,9 +1,8 @@
 /**
  * Runs the built page asset without a browser: a linkedom document installed as this
- * process's DOM globals, a stand-in for core's seal, and assets/injected.js evaluated the way
- * the install expression does. linkedom has no layout, so these tests cover routing, the
- * replies' shapes and the probe's own state; scripts/probe-smoke.mjs covers a real browser,
- * core's real seal and a strict CSP.
+ * process's DOM globals, and assets/injected.js evaluated the way the install expression does.
+ * linkedom has no layout, so these tests cover routing, the replies' shapes and the probe's own
+ * state; scripts/probe-smoke.mjs covers a real browser and a strict CSP.
  */
 import { readFileSync } from 'node:fs'
 import { parseHTML } from 'linkedom'
@@ -46,25 +45,11 @@ export type ProbePage = {
   close(): void
 }
 
-/** `kind` for `type=password` inputs only, like the seal for the fixtures used here. */
-const sealStandIn = () => ({
-  version: 1,
-  kind: (element: Element) =>
-    element.getAttribute('type') === 'password' ? 'password' : null,
-  valueEquals: () => false,
-  attributeEquals: () => false,
-  rawLength: () => 0,
-  watch: () => undefined,
-})
-
 /**
- * Installs `html` as the global DOM, with the seal stand-in unless `sealed` is false, and
- * evaluates the asset once. `close` restores every global it replaced.
+ * Installs `html` as the global DOM and evaluates the asset once. `close` restores every
+ * global it replaced.
  */
-export function openProbePage(
-  html: string,
-  { sealed = true }: { sealed?: boolean } = {},
-): ProbePage {
+export function openProbePage(html: string): ProbePage {
   const { window, document } = parseHTML(html)
   // linkedom computes no styles. The engine reads a missing style as "rendered and visible"
   // (domUtils computeBox), which is all these tests ask of it.
@@ -78,7 +63,6 @@ export function openProbePage(
   }
   for (const name of DOM_GLOBALS) replace(name, Reflect.get(window, name))
   replace('location', { href: 'https://fixture.test/page' })
-  replace('__clawSeal', sealed ? sealStandIn() : undefined)
   replace('__neoProbe', undefined)
   new Function(ASSET)()
   const callFunction = new Function(`return (${CALL_FUNCTION})`)()

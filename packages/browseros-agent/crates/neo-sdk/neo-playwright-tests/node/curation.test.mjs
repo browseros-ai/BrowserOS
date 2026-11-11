@@ -299,6 +299,25 @@ test('skip lookup uses the file and full describe path, retaining its reason', (
   )
 })
 
+test('product assertions retire only the polling shim skips without changing the manifest', () => {
+  const options = { productExpect: true }
+  for (const reason of [
+    'expectLoop: toMatchAriaSnapshot is not covered',
+    'expectLoop: toHaveScreenshot is not covered',
+    'needs Playwright internals: Locator._expect',
+    'upstream platform condition',
+  ]) {
+    const skip = { ...entry, action: 'skip', reason }
+    const before = JSON.stringify(skip)
+    assert.equal(skipReason([skip], file, [row.title]), reason)
+    assert.equal(
+      skipReason([skip], file, [row.title], options),
+      reason.startsWith('expectLoop:') ? undefined : reason,
+    )
+    assert.equal(JSON.stringify(skip), before)
+  }
+})
+
 test('skip refresh is idempotent, preserves deletions and patches, and only refreshes supplied cases', () => {
   const deleted = {
     ...entry,

@@ -181,7 +181,10 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
-        let playwright = PlaywrightFacade::start(Arc::clone(&browser));
+        let playwright = PlaywrightFacade::start(
+            Arc::clone(&browser),
+            matches!(&config.env.hosted_mode, HostedMode::On),
+        );
 
         // One solver for the process: its paid-task budget and page reservations are its own.
         let solver = CaptchaSolver::new(config.captcha.clone()).map(Arc::new);

@@ -4,6 +4,26 @@ import { isRefusal, loadPrelude, SEED } from './support/prelude-runtime'
 
 const IMAGE = { $neo: 'bytes', base64: 'iVBORw0KGgo=' }
 
+it('retains caller masks in capture when a screenshot is also saved to a path', async () => {
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: ({ name }) => (name === 'page.screenshot' ? IMAGE : null),
+  })
+  await runtime.run(`await page.screenshot({
+    path: 'masked.png', mask: [page.locator('#secret')], maskColor: '#123456'
+  })`)
+  expect(runtime.sent('page.screenshot')[0]?.input).toMatchObject({
+    type: 'png',
+    maskColor: '#123456',
+    mask: [{ $neo: 'locator' }],
+  })
+  expect(runtime.sent('page.saveScreenshot')[0]?.input).toEqual({
+    call: { api: 'page.screenshot', timeoutMs: 0 },
+    path: 'masked.png',
+    base64: IMAGE.base64,
+  })
+})
+
 it('saves element-handle screenshots with their pinned target, explicit type and API alias', async () => {
   const element = { $neo: 'element', page: SEED.page, seq: 1, node: 9 }
   const runtime = loadPrelude({

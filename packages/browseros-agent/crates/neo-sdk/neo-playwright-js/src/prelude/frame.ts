@@ -180,6 +180,8 @@ export class Frame extends EventEmitter {
   _url = ''
   _parentFrame: Frame | null
   _detached = false
+  /** An event's synchronous callback sees its metadata without rewinding the live cache. */
+  #eventView: { info: FrameInfo; detached: boolean } | null = null
 
   constructor(page: Page, id: string | null, parent: Frame | null) {
     super()
@@ -194,11 +196,33 @@ export class Frame extends EventEmitter {
   }
 
   name(): string {
-    return this._name
+    return this.#eventView?.info.name ?? this._name
   }
 
   url(): string {
-    return this._id === null ? this._page._url : this._url
+    return (
+      this.#eventView?.info.url ??
+      (this._id === null ? this._page._url : this._url)
+    )
+  }
+
+  /**
+   * Different readers can receive one journal record after a newer transition. Callbacks and
+   * predicate invocation still read that record's fields on the canonical Frame. The view ends
+   * before awaiting an async callback, whose continuation sees live state as in Playwright.
+   */
+  _duringEvent<T>(
+    info: FrameInfo,
+    event: 'frameattached' | 'framenavigated' | 'framedetached',
+    read: () => T,
+  ): T {
+    const previous = this.#eventView
+    this.#eventView = { info, detached: event === 'framedetached' }
+    try {
+      return read()
+    } finally {
+      this.#eventView = previous
+    }
   }
 
   parentFrame(): Frame | null {
@@ -210,7 +234,7 @@ export class Frame extends EventEmitter {
   }
 
   isDetached(): boolean {
-    return this._detached
+    return this.#eventView?.detached ?? this._detached
   }
 
   toJSON(): { name: string; url: string } {
@@ -1179,9 +1203,7 @@ export class Frame extends EventEmitter {
     selector: string | null,
     options: ScreenshotOptionsInput = {},
   ): Promise<unknown> {
-    const refused = refusedScreenshotOption(options)
-    if (refused !== undefined) throw unsupportedError(api, refused)
-    const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
+    const wire = await screenshotOptions(api, options)
     if (!wire.type && options.path)
       wire.type = screenshotType({ api, path: options.path })
     const { timeout, signal } = this._wait(api, options)
@@ -1401,19 +1423,28 @@ export function frameMatches(
 
 export type ScreenshotOptionsInput = TimeoutOption &
   SignalOption &
-  ScreenshotOptions & {
+  Omit<ScreenshotOptions, 'mask'> & {
     path?: string
     mask?: Locator[]
     maskColor?: string
   }
 
-/** Options that need capture features beyond temporary DOM preparation. */
-export function refusedScreenshotOption(
+/** Locator instances stay in the script realm; only parsed locator brands cross to Rust. */
+export async function screenshotOptions(
+  api: string,
   options: ScreenshotOptionsInput,
-): string | undefined {
-  if (options.mask !== undefined && options.mask.length > 0)
-    return 'Neo cannot mask elements in a screenshot; omit mask'
-  return undefined
+): Promise<ScreenshotOptions> {
+  const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
+  if (options.mask !== undefined) {
+    wire.mask = await Promise.all(
+      options.mask.map((locator) => {
+        if (!(locator instanceof Locator))
+          throw clientError(api, 'mask: expected a Locator')
+        return locator._frame._locatorBrand(api, locator._selector)
+      }),
+    )
+  }
+  return wire
 }
 
 const HELD_VALUE =
