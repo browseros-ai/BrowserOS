@@ -42,7 +42,7 @@ pub(crate) struct HostInputs {
     pub(crate) store: TraceStore,
     /// The trace writer: its committed events feed `/v1/events`, and a lock flushes it.
     pub(crate) sink: TraceSink,
-    /// Tab privacy, over the secret set the trace writer masks with.
+    /// Tab privacy, over the host API's secret set, which masks neither scripts nor the trace.
     pub(crate) privacy: Arc<Privacy>,
     /// The camera's end of the writer's screenshot queue (`spawn_writer` has the other).
     pub(crate) screenshots: ShotJobs,
