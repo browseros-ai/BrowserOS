@@ -2,10 +2,10 @@
 //! (before policy, so refusals are recorded too), once when it ends, and in between whenever its
 //! script reaches a tab besides its target.
 //!
-//! The start event carries the raw input; it is redacted on the writer task, never on the
+//! The start event carries the raw input; it is masked and bounded on the writer task, never on the
 //! dispatcher's path. Delivery arrives already derived by the dispatcher's `OperationGuard`.
 
-use crate::{EpochMillis, ErrorRecord, JsonPointer, OperationId, SecretSet};
+use crate::{EpochMillis, ErrorRecord, OperationId, SecretSet};
 use browseros_core::TabId;
 use serde_json::Value;
 use std::sync::Arc;
@@ -117,26 +117,6 @@ impl Delivery {
     }
 }
 
-/// Whether the field an operation typed into was a password, card or one-time-code field.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum TargetSensitivity {
-    /// An ordinary target, or none.
-    #[default]
-    Ordinary,
-    /// A sensitive field: the method's `sensitive` input paths are redacted, and the run's
-    /// stored code is withheld.
-    Sensitive,
-}
-
-/// Which input fields a record redacts.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RedactionPolicy {
-    /// Always stored as `[redacted]`.
-    pub secret: Vec<JsonPointer>,
-    /// Stored as `[redacted]` when the target turned out sensitive (e.g. `fill`'s `/value`).
-    pub sensitive: Vec<JsonPointer>,
-}
-
 /// The tab an operation acted on, as it was after the operation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PageState {
@@ -165,10 +145,8 @@ pub struct OperationStarted {
     /// The tab it targets, when it has one. It lists the run under that tab, and after a
     /// restart it is how a task finds its last tab again.
     pub tab: Option<TabId>,
-    /// The raw input. The writer redacts it; it is never stored as given.
+    /// The raw input. The writer masks and bounds it at the operation's end.
     pub args: Value,
-    /// Which input fields to redact.
-    pub policy: Arc<RedactionPolicy>,
     /// Values the process set does not mask yet that this record must not keep: what claw-sdk
     /// still holds unregistered (sdk-traces decision 32). The writer masks the name, the stored
     /// input and the operation's end record with it, together with the process set. It
@@ -195,8 +173,6 @@ pub struct OperationEnded {
     pub error: Option<ErrorRecord>,
     /// The page after it, from the browser's cached target info.
     pub page_after: Option<PageState>,
-    /// Whether the field it typed into was sensitive.
-    pub target: TargetSensitivity,
     /// Values this record must not keep beyond the process set's, as on [`OperationStarted`].
     /// The writer masks the input, notes, result, error message and page with it.
     pub also_mask: Option<Arc<SecretSet>>,

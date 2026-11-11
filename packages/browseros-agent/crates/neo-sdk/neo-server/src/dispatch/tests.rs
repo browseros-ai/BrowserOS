@@ -809,35 +809,26 @@ async fn a_neo_callers_refusal_brand_is_ordinary_input() -> Result<(), Box<dyn E
 }
 
 #[tokio::test]
-async fn the_trace_redacts_secret_fields_and_sensitive_ones_when_marked()
--> Result<(), Box<dyn Error>> {
+async fn the_trace_keeps_typed_values_and_secret_named_fields() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let page = harness.page("https://example.com/").await?;
     let (run, _guard) = harness.run()?;
 
-    let fill = |value: &str, sensitive: bool| json!({ "page": handle(&page), "value": value, "secret": "s3cret", "sensitive": sensitive });
-    let (ordinary, _) = harness
-        .submit(&run, "test.fill", fill("alice", false))
-        .await;
-    let (sensitive, _) = harness
-        .submit(&run, "test.fill", fill("hunter2", true))
-        .await;
+    let fill = |value: &str| json!({ "page": handle(&page), "value": value, "secret": "s3cret" });
+    let (ordinary, _) = harness.submit(&run, "test.fill", fill("alice")).await;
+    let (sensitive, _) = harness.submit(&run, "test.fill", fill("hunter2")).await;
 
     let row = harness.row(ordinary).await?;
     assert_eq!(
         row.args,
-        Some(
-            json!({ "page": handle(&page), "value": "alice", "secret": "[redacted]", "sensitive": false })
-        ),
-        "a secret field is always redacted; an ordinary field's value is kept"
+        Some(json!({ "page": handle(&page), "value": "alice", "secret": "s3cret" })),
+        "field names do not redact arguments"
     );
     let row = harness.row(sensitive).await?;
     assert_eq!(
         row.args,
-        Some(
-            json!({ "page": handle(&page), "value": "[redacted]", "secret": "[redacted]", "sensitive": true })
-        ),
-        "a sensitive target redacts the method's sensitive fields too"
+        Some(json!({ "page": handle(&page), "value": "hunter2", "secret": "s3cret" })),
+        "typed values are kept in arguments"
     );
     Ok(())
 }

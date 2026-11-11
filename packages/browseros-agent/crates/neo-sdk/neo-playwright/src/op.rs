@@ -86,9 +86,8 @@ impl Op {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashSet};
-    use std::error::Error;
 
-    use neo_trace::{Effect, JsonPointer};
+    use neo_trace::Effect;
 
     use super::Op;
     use crate::action::ActionOp;
@@ -133,48 +132,6 @@ mod tests {
                 "{name} must be `<receiver>.<method>` on a known receiver"
             );
         }
-    }
-
-    #[test]
-    fn tests_that_every_sensitive_argument_is_a_json_pointer() -> Result<(), Box<dyn Error>> {
-        for op in Op::all() {
-            let spec = op.spec();
-            for pointer in spec.sensitive_args {
-                JsonPointer::parse(pointer)?;
-            }
-            assert_eq!(
-                spec.redaction().sensitive.len(),
-                spec.sensitive_args.len(),
-                "{} must redact every argument it declares sensitive",
-                spec.name
-            );
-            assert!(
-                spec.redaction().secret.is_empty(),
-                "no Playwright argument is always secret"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_typed_text_is_redacted_for_a_sensitive_target() -> Result<(), Box<dyn Error>> {
-        for (name, pointer) in [
-            ("locator.fill", "/value"),
-            ("locator.pressSequentially", "/text"),
-            ("locator.press", "/key"),
-            ("keyboard.type", "/text"),
-            ("keyboard.insertText", "/text"),
-            ("keyboard.press", "/key"),
-            ("keyboard.down", "/key"),
-        ] {
-            let op = Op::from_name(name).ok_or(name)?;
-            assert_eq!(
-                op.spec().sensitive_args,
-                [pointer],
-                "{name} carries typed text"
-            );
-        }
-        Ok(())
     }
 
     /// The audit of record: every op, with exactly what it reaches beyond its page's sealed

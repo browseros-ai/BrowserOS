@@ -1,20 +1,16 @@
-//! Turns what the dispatcher saw into what a record may keep. In order: redact the declared
-//! input fields, mask every registered secret and every value of the record's own sets
-//! ([`Redactor::also_masking`]), then cut to size. Every mask comes before the cut: a cut that
-//! falls inside a value it has not masked yet keeps the value's head.
+//! Turns what the dispatcher saw into what a record may keep: mask every registered secret
+//! and every value of the record's own sets ([`Redactor::also_masking`]), then cut to size.
+//! Every mask comes before the cut: a cut inside an unmasked value keeps the value's head.
 //!
 //! Cuts are structural, so a stored value always parses: long strings end in `…[+N bytes]`, and
 //! arrays and objects that run over budget end in a `{"$more": n}` marker (`"$more": n` for an
 //! object). claw-server's audit cut stored JSON mid-text instead.
 
+use crate::SecretSet;
 use crate::secret_set::{mask_json_strings, mask_spans};
-use crate::{RedactionPolicy, SecretSet, TargetSensitivity};
 use serde_json::{Map, Value, json};
 use std::ops::Range;
 use std::sync::Arc;
-
-/// What a redacted field becomes.
-pub const REDACTED: &str = "[redacted]";
 
 /// Size limits, in bytes of JSON text, except `note_lines`, which counts lines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,7 +59,7 @@ pub enum Truncation {
     Cut,
 }
 
-/// A value after redaction, with whether it was cut.
+/// A value after masking and size bounding, with whether it was cut.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bounded<T> {
     /// The value to store.
@@ -72,7 +68,7 @@ pub struct Bounded<T> {
     pub truncation: Truncation,
 }
 
-/// Redacts, masks and bounds values for records. Cheap to clone.
+/// Masks and bounds values for records. Cheap to clone.
 #[derive(Clone)]
 pub struct Redactor {
     secrets: Arc<SecretSet>,
@@ -114,25 +110,10 @@ impl Redactor {
         }
     }
 
-    /// An operation's input: `secret` fields always redacted, `sensitive` ones when the target
-    /// was sensitive, then masked and bounded.
+    /// An operation's input: masked and bounded, independent of the target field's kind.
     #[must_use]
-    pub fn args(
-        &self,
-        args: &Value,
-        policy: &RedactionPolicy,
-        target: TargetSensitivity,
-    ) -> Bounded<Value> {
+    pub fn args(&self, args: &Value) -> Bounded<Value> {
         let mut value = args.clone();
-        let redacted = Value::String(REDACTED.to_string());
-        for pointer in &policy.secret {
-            pointer.replace_in(&mut value, &redacted);
-        }
-        if target == TargetSensitivity::Sensitive {
-            for pointer in &policy.sensitive {
-                pointer.replace_in(&mut value, &redacted);
-            }
-        }
         self.mask_json(&mut value);
         self.bound(value, self.limits.args, self.limits.string)
     }
@@ -355,10 +336,7 @@ fn clip(text: &str, limit: usize) -> (String, bool) {
 #[cfg(test)]
 mod tests {
     use super::{RedactionLimits, Redactor, Truncation};
-    use crate::{
-        JsonPointer, RedactionPolicy, SecretSet, SecretSetConfig, SecretSource, SecretValue,
-        TargetSensitivity,
-    };
+    use crate::{SecretSet, SecretSetConfig, SecretSource, SecretValue};
     use serde_json::{Value, json};
     use std::sync::Arc;
 
@@ -372,36 +350,11 @@ mod tests {
         Redactor::new(secrets, limits)
     }
 
-    fn pointers(paths: &[&str]) -> Vec<JsonPointer> {
-        paths
-            .iter()
-            .filter_map(|path| JsonPointer::parse(path).ok())
-            .collect()
-    }
-
-    fn fill_policy() -> RedactionPolicy {
-        RedactionPolicy {
-            secret: pointers(&["/token"]),
-            sensitive: pointers(&["/value"]),
-        }
-    }
-
     #[test]
-    fn secret_fields_are_always_redacted_and_sensitive_ones_only_for_sensitive_targets() {
+    fn inputs_keep_typed_values_without_field_redaction() {
         let redactor = redactor(RedactionLimits::default());
-        let args = json!({"value": "typed", "token": "t0k3n", "locator": {"$neo": "locator", "page": 3, "selector": "getByLabel('Email')"}});
-        let ordinary = redactor.args(&args, &fill_policy(), TargetSensitivity::Ordinary);
-        assert_eq!(
-            ordinary.value,
-            json!({"value": "typed", "token": "[redacted]", "locator": {"$neo": "locator", "page": 3, "selector": "getByLabel('Email')"}})
-        );
-        let sensitive = redactor.args(&args, &fill_policy(), TargetSensitivity::Sensitive);
-        assert_eq!(sensitive.value["value"], json!("[redacted]"));
-        assert_eq!(
-            sensitive.value["locator"]["selector"],
-            json!("getByLabel('Email')"),
-            "the selector stays for the skill builder"
-        );
+        let args = json!({"value": "typed", "token": "t0k3n", "selector": "input[type=password]"});
+        assert_eq!(redactor.args(&args).value, args);
     }
 
     #[test]

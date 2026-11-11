@@ -10,7 +10,7 @@ use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, OperationEnded, OperationId, OperationKind, OperationStarted, Outcome,
     PageState, Registration, RunEnded, RunId, RunStarted, RunStatus, SecretSet, SecretSetConfig,
-    SecretSource, SecretValue, TargetSensitivity, TaskId,
+    SecretSource, SecretValue, TaskId,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -362,7 +362,6 @@ async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() 
         effect: Effect::Read,
         tab: Some(TabId(3)),
         args: json!({"expected": held_value}),
-        policy: Arc::default(),
         also_mask: held.clone(),
         at: at(1),
     });
@@ -379,7 +378,6 @@ async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() 
             url: Some(format!("https://b.test/?name={held_value}")),
             title: Some(format!("Welcome {held_value}")),
         }),
-        target: TargetSensitivity::Ordinary,
         also_mask: held.clone(),
         at: at(2),
     });
@@ -472,7 +470,6 @@ async fn a_value_only_an_ends_set_knows_never_reaches_the_start_events_or_the_fi
         effect: Effect::Write,
         tab: Some(TabId(3)),
         args: json!({"value": found}),
-        policy: Arc::default(),
         also_mask: None,
         at: at(1),
     });
@@ -497,7 +494,6 @@ async fn a_value_only_an_ends_set_knows_never_reaches_the_start_events_or_the_fi
         result: None,
         error: None,
         page_after: None,
-        target: TargetSensitivity::Ordinary,
         also_mask: held.clone(),
         at: at(2),
     });

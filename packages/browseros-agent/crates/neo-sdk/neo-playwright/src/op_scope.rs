@@ -261,12 +261,6 @@ impl<'env> OpScope<'env> {
         }
     }
 
-    /// The op's target is a password, card or one-time-code field: the trace redacts its
-    /// sensitive arguments.
-    pub(crate) fn mark_sensitive_target(&self) {
-        self.env.mark_sensitive_target();
-    }
-
     /// Records one call-log line, as Playwright's server logs it (leading spaces nest it under
     /// the line before), and mirrors it to the trace unless it repeats the line before.
     pub(crate) fn log(&self, line: String) {
@@ -454,7 +448,7 @@ mod tests {
     use crate::op_spec::Capability;
     use crate::target::CallHeader;
     use crate::test_env::{self, EnvCall, TestEnv};
-    use crate::{Answer, ErrorCode, Refusal, TimedOut};
+    use crate::{Answer, ErrorCode, OpEnv, Refusal, RunState, TimedOut};
 
     fn op(name: &str) -> Result<Op, Box<dyn Error>> {
         Ok(Op::from_name(name).ok_or(format!("{name} is an op"))?)
@@ -615,16 +609,6 @@ mod tests {
             error.message(),
             "page.click: Timeout 5000ms exceeded.\nCall log:\n  - waiting for getByRole('button')\n    2 × element is not visible\n"
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn tests_that_marking_a_sensitive_target_reaches_the_host() -> Result<(), Box<dyn Error>>
-    {
-        let env = TestEnv::new();
-        let scope = OpScope::new(&env, op("locator.fill")?, CallHeader::default());
-        scope.mark_sensitive_target();
-        assert_eq!(env.calls(), [EnvCall::MarkSensitiveTarget]);
         Ok(())
     }
 
@@ -884,10 +868,6 @@ mod tests {
 
         fn mark_sent(&self) {
             self.env.mark_sent();
-        }
-
-        fn mark_sensitive_target(&self) {
-            self.env.mark_sensitive_target();
         }
 
         fn note(&self, line: String) {

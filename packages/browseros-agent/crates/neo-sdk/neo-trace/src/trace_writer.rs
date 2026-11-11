@@ -16,9 +16,8 @@
 //! cannot grow without bound in a live process.
 //!
 //! An operation's input reaches disk only with its end, and a run's host data only with the
-//! run's end. Two facts are known only then:
-//! - whether the operation's target was sensitive, which decides how its input is redacted;
-//! - the values the end's own set masks, such as one only the operation's own sweep found.
+//! run's end. The end's own set can mask values known only then, such as one only the
+//! operation's own sweep found.
 //!
 //! A start row written earlier would put such a value on disk raw, in the row, in the WAL page
 //! a later rewrite leaves behind, and in the `operation.started` event, which reads the row. So
@@ -62,9 +61,9 @@ use crate::storage::{
 use crate::trace_store::{RetentionPolicy, Swept};
 use crate::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationReached, OperationStarted,
-    Outcome, PrivacyRecord, PrivacyStore, PrivateReason, RedactionPolicy, Redactor, RunEffects,
-    RunEnded, RunId, RunStarted, RunStatus, SecretSet, Shot, ShotAnswer, ShotJob, ShotQueue,
-    TargetSensitivity, TaskId, TraceError, TraceStore, Truncation,
+    Outcome, PrivacyRecord, PrivacyStore, PrivateReason, Redactor, RunEffects, RunEnded, RunId,
+    RunStarted, RunStatus, SecretSet, Shot, ShotAnswer, ShotJob, ShotQueue, TaskId, TraceError,
+    TraceStore, Truncation,
 };
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
@@ -468,9 +467,8 @@ pub fn spawn_writer(
 struct OpenRun {
     /// Named by every event the run publishes until its end.
     task: Option<TaskId>,
-    /// The code as given, held in memory only. It reaches disk only at the run's end, and only
-    /// when no operation turned out sensitive, so a withheld literal is never written, not even
-    /// to the WAL. `None` when the run's start was never seen.
+    /// The code as given, held in memory until the run ends, when it is masked and bounded.
+    /// `None` when the run's start was never seen.
     code: Option<String>,
     /// Where the code holds a value the process set or the start's own set knew as the run
     /// began. The end masks these together with its own matches, then cuts.
@@ -480,7 +478,6 @@ struct OpenRun {
     host_data: Option<Value>,
     /// The start's own set, which the end masks the host data with too.
     also_mask: Option<Arc<SecretSet>>,
-    sensitive: bool,
     gaps: u64,
     operations: HashMap<u32, OpenOperation>,
     /// Each tab's last operation and the jobs still out, for the run-end screenshots.
@@ -508,7 +505,6 @@ impl OpenRun {
             code_spans,
             host_data,
             also_mask,
-            sensitive: false,
             gaps: 0,
             operations: HashMap::new(),
             tabs: TouchedTabs::default(),
@@ -521,7 +517,6 @@ struct OpenOperation {
     tab: Option<TabId>,
     effect: Effect,
     args: Value,
-    policy: Arc<RedactionPolicy>,
     /// The start's own set, which the end masks with too.
     also_mask: Option<Arc<SecretSet>>,
     /// Raw, like `args`: masked and bounded only when the end stores them.
@@ -803,7 +798,6 @@ impl Writer {
                 tab: event.tab,
                 effect: event.effect,
                 args: event.args,
-                policy: event.policy,
                 also_mask: event.also_mask,
                 notes: Vec::new(),
             },
@@ -822,21 +816,17 @@ impl Writer {
         tx: &TraceBatch,
         event: OperationEnded,
     ) -> Result<Option<TraceRecordEvent>, TraceError> {
-        let mut open = self.runs.get_mut(&event.id.run).and_then(|run| {
-            if event.target == TargetSensitivity::Sensitive {
-                run.sensitive = true;
-            }
-            run.operations.remove(&event.id.seq)
-        });
+        let mut open = self
+            .runs
+            .get_mut(&event.id.run)
+            .and_then(|run| run.operations.remove(&event.id.seq));
         let redactor = self.redactor.also_masking(
             event
                 .also_mask
                 .iter()
                 .chain(open.as_ref().and_then(|open| open.also_mask.as_ref())),
         );
-        let precise = open
-            .as_ref()
-            .map(|open| redactor.args(&open.args, &open.policy, event.target));
+        let precise = open.as_ref().map(|open| redactor.args(&open.args));
         let notes = open
             .as_mut()
             .map(|open| redactor.notes(mem::take(&mut open.notes)))
@@ -933,7 +923,7 @@ impl Writer {
         // The start's matches with the end's, so a value the process set has learned since, or
         // one held then that grew or shrank, is masked whole.
         let bounded = match open.as_ref() {
-            Some(run) if !run.sensitive => run
+            Some(run) => run
                 .code
                 .as_deref()
                 .map(|code| redactor.code_with(code, run.code_spans.clone())),
@@ -948,9 +938,8 @@ impl Writer {
                 .also_masking(event.also_mask.iter().chain(run.also_mask.as_ref()));
             Some(redactor.host_data(data).value)
         });
-        let code = match (open.as_ref(), bounded.as_ref()) {
-            (Some(run), _) if run.sensitive => RunCode::Withheld("sensitive_input"),
-            (_, Some(code)) => RunCode::Stored {
+        let code = match bounded.as_ref() {
+            Some(code) => RunCode::Stored {
                 text: &code.value,
                 truncated: code.truncation == Truncation::Cut,
             },
@@ -1053,8 +1042,7 @@ mod tests {
         Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind,
         OperationStarted, Outcome, PrivacyRecord, PrivacyStore, PrivateReason, RedactionLimits,
         Redactor, RetentionPolicy, RunEnded, RunId, RunStarted, RunStatus, SecretSet,
-        SecretSetConfig, Shot, ShotRead, TargetSensitivity, TraceError, TraceStore,
-        screenshot_queue,
+        SecretSetConfig, Shot, ShotRead, TraceError, TraceStore, screenshot_queue,
     };
     use browseros_core::TabId;
     use std::sync::Arc;
@@ -1130,7 +1118,6 @@ mod tests {
                 effect: Effect::Read,
                 tab: Some(TabId(3)),
                 args: serde_json::Value::Null,
-                policy: Arc::default(),
                 also_mask: None,
                 at: EpochMillis::from_millis(started),
             });
@@ -1202,7 +1189,6 @@ mod tests {
             effect: Effect::Write,
             tab: Some(TabId(3)),
             args: serde_json::Value::Null,
-            policy: Arc::default(),
             also_mask: None,
             at: EpochMillis::from_millis(2),
         });
@@ -1214,7 +1200,6 @@ mod tests {
             result: None,
             error: None,
             page_after: None,
-            target: TargetSensitivity::Ordinary,
             also_mask: None,
             at: EpochMillis::from_millis(3),
         });
@@ -1286,7 +1271,6 @@ mod tests {
                 effect: Effect::Write,
                 tab: Some(TabId(3)),
                 args: serde_json::Value::Null,
-                policy: Arc::default(),
                 also_mask: None,
                 at: EpochMillis::from_millis(2),
             });
@@ -1298,7 +1282,6 @@ mod tests {
                 result: None,
                 error: None,
                 page_after: None,
-                target: TargetSensitivity::Ordinary,
                 also_mask: None,
                 at: EpochMillis::from_millis(3),
             });
