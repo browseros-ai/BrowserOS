@@ -43,15 +43,15 @@ counts each. Tests are never dropped to raise a score: a deletion whose reason s
 a new pin is removed.
 
 **Case IDs.** Scope, curation and reports name tests by ID (`FI-005`). Upstream added IDs to its
-test titles after 1.64.1 (#43485), so 1.64.1's titles carry none, and `node/case-ids.json`
+test titles after 1.64.1 (microsoft/playwright#43485), so 1.64.1's titles carry none, and `node/case-ids.json`
 assigns them by spec file and title path:
 
 - A test whose file and title match a test in upstream's registry at `26137face` (the previous
   pin, whose IDs the earlier results use) keeps that ID.
 - A test with no match gets the next `9NN` number of its file's code, from 901. Upstream numbers
-  each code from 001 and is below 600, so these cannot collide. At this pin: NE-901 (removed
-  later upstream as NE-090 and NE-143) and FI-901 to FI-907 (`page.fill` value validation,
-  removed upstream by #43400 before IDs existed).
+  each code from 001 and is still below 600, so the two do not collide. At this pin: NE-901
+  (split later upstream into NE-090 and NE-143) and FI-901 to FI-907 (`page.fill` value
+  validation, removed upstream by microsoft/playwright#43400 before IDs existed).
 - An ID whose test is not at the pin is retired, never reused.
 
 Every run checks the map against the collected tests and stops on any test without an ID or

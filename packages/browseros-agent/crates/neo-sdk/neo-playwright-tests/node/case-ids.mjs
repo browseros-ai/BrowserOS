@@ -1,9 +1,9 @@
 /**
  * Stable case IDs for the pinned corpus. Scope, curation and reports name tests by ID
  * (`FI-005`), but the pinned Playwright release predates upstream's IDs in test titles
- * (#43485), so the spec sources stay untouched and `case-ids.json` attaches an ID to each
- * collected test by spec file and title path. Every run checks the map against the collected
- * cases, so a test can never fall back to an ID-like word in its title.
+ * (microsoft/playwright#43485), so the spec sources stay untouched and `case-ids.json`
+ * attaches an ID to each collected test by spec file and title path. Every run checks the map
+ * against the collected cases, so a test can never fall back to an ID-like word in its title.
  */
 import fs from 'node:fs'
 
