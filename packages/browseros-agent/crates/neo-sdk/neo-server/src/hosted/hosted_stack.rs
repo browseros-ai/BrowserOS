@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
-use neo_trace::{RedactionLimits, Redactor, SecretSet, SecretSetConfig, TraceSink, WriterConfig};
+use neo_trace::{RedactionLimits, Redactor, TraceSink, WriterConfig};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -39,11 +39,7 @@ impl HostedStack {
         let store = App::hosted_trace(&config.env.trace_dir())
             .await
             .map_err(HostedError::from_error)?;
-        // As the sidecar: the trace writer masks with a set nothing registers into, and the
-        // second set is the one housekeeping expires. Neither masks a run. The hosted stack
-        // serves no host API, so it needs none of the sidecar's `Privacy`.
-        let unmasked = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let redactor = Redactor::new(unmasked, RedactionLimits::default());
+        let redactor = Redactor::new(RedactionLimits::default());
         let trace = neo_trace::spawn_writer(
             &store,
             redactor,
@@ -53,7 +49,6 @@ impl HostedStack {
             },
             None,
         );
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
         let tabs = Arc::new(TabRegistry::new());
         let native =
             NativeCapabilities::from_browseros_version(config.launch.browseros_version.as_deref());
@@ -98,7 +93,6 @@ impl HostedStack {
                 Arc::clone(&tabs),
                 takeover,
             ),
-            secrets,
             trace.clone(),
             shutdown.clone(),
         ));

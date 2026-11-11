@@ -30,7 +30,7 @@ pub struct ServiceInputs {
     pub store: TraceStore,
     /// The trace writer. Its committed events feed `/v1/events` and `wait=`.
     pub sink: TraceSink,
-    /// Tab privacy and the process-wide secret set.
+    /// Durable tab-flag state shared with browser lifecycle cleanup.
     pub privacy: Arc<Privacy>,
     /// The agent's browser connection (the app's browser link). Screenshots are taken on it,
     /// never on a connection of their own (decision 21), and the takeover parts reach the
