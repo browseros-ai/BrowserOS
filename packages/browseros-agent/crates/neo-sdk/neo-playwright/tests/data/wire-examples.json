@@ -2336,6 +2336,22 @@
         "waitUntil": "load"
       }
     ],
+    "page.setViewportSize": [
+      {
+        "call": {
+          "api": "page.setViewportSize",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "viewportSize": {
+          "width": 640,
+          "height": 480
+        }
+      }
+    ],
     "page.title": [
       {
         "call": {

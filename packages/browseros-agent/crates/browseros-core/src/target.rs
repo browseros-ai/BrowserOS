@@ -401,6 +401,26 @@ impl BrowserView {
     pub fn current_viewport(&self, page: &PageId) -> Option<crate::viewport::ViewportRequest> {
         self.viewports.as_ref()?.current(page)
     }
+    /// The script's configured viewport, independent of a temporary owner fit. It stays
+    /// with the tab across runs; a tab with no Playwright override returns `None`.
+    #[must_use]
+    pub fn playwright_viewport(&self, page: &PageId) -> Option<crate::viewport::Size> {
+        self.viewports.as_ref()?.playwright_size(page)
+    }
+    /// Admits and locks a Playwright resize without sending it. The caller checks permission
+    /// after this await, then immediately applies the change. Fits keep their measured path.
+    pub async fn prepare_playwright_viewport(
+        &self,
+        page: PageId,
+        request: crate::viewport::ViewportRequest,
+    ) -> Result<crate::viewport::ViewportChange, CoreError> {
+        match &self.viewports {
+            Some(viewports) => viewports.prepare_change(self, page, request).await,
+            None => Err(CoreError::Message(
+                "setViewport is only available on a hosted BrowserOS neo server".to_owned(),
+            )),
+        }
+    }
     /// Holds the page without changing anything, for work outside a page operation that must
     /// not overlap viewport changes, such as a background screenshot: a capture
     /// rewrites the page's emulation until it finishes.
@@ -1037,6 +1057,21 @@ impl BrowserView {
             Some(access) => access.session().await,
             None => self.session.pages.get_session(page).await,
         }
+    }
+    /// Repairs an interrupted viewport before an SDK operation uses its admitted session.
+    /// This configures no new request. Call before taking a viewport lease; legacy callers
+    /// that already hold one continue using `prepare_viewport`'s existing repair path.
+    pub async fn repair_viewport(
+        &self,
+        page: &PageId,
+        session: &PageSession,
+    ) -> Result<(), CoreError> {
+        if let Some(viewports) = &self.viewports
+            && self.signals().pending_dialog(page).is_none()
+        {
+            viewports.repair_pending(self, page, session).await?;
+        }
+        Ok(())
     }
     /// A frame endpoint admitted through this page capability, including same-process children.
     pub async fn frame_session(

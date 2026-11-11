@@ -46,6 +46,7 @@ mod screenshot;
 mod screenshot_geometry;
 mod screenshot_preparation;
 mod subtree_load;
+mod viewport_size;
 mod wait_for_navigation;
 mod wait_for_url;
 pub(crate) mod world_call;

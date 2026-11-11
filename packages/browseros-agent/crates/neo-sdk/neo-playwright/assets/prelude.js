@@ -359,6 +359,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.setViewportSize": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "context.pages": {
       effect: "read",
       target: null,
@@ -690,12 +695,21 @@
       const url = Reflect.get(page, "url");
       const title = Reflect.get(page, "title");
       const closed = Reflect.get(page, "closed");
+      const viewport = Reflect.get(page, "viewportSize");
       if (typeof url === "string")
         fact.url = url;
       if (typeof title === "string")
         fact.title = title;
       if (typeof closed === "boolean")
         fact.closed = closed;
+      if (viewport === null)
+        fact.viewportSize = null;
+      else if (typeof viewport === "object" && viewport !== null) {
+        const width = Reflect.get(viewport, "width");
+        const height = Reflect.get(viewport, "height");
+        if (typeof width === "number" && typeof height === "number")
+          fact.viewportSize = { width, height };
+      }
       facts.push(fact);
     }
     return facts;
@@ -8046,6 +8060,8 @@ ${value.stack}`;
     #urlKnown;
     _title = "";
     _closed = false;
+    #viewportSize = null;
+    #viewportSet = false;
     #observedSeq = 0;
     #liveHead = 0;
     #closeEvent = 0;
@@ -8097,7 +8113,17 @@ ${value.stack}`;
       return null;
     }
     viewportSize() {
-      return null;
+      return this.#viewportSize || null;
+    }
+    async setViewportSize(viewportSize) {
+      this.#viewportSize = viewportSize;
+      this.#viewportSet = true;
+      for (const side of ["width", "height"]) {
+        if (!Number.isInteger(viewportSize?.[side]))
+          throw clientError("page.setViewportSize", `viewportSize.${side}: expected integer`);
+      }
+      const size = { width: viewportSize.width, height: viewportSize.height };
+      await invoke("page.setViewportSize", { api: "page.setViewportSize", timeoutMs: 0 }, { page: await this._brand("page.setViewportSize"), viewportSize: size });
     }
     workers() {
       return [];
@@ -8432,10 +8458,17 @@ ${value.stack}`;
         frame._parentFrame = info.parentId === main?.id ? this._mainFrame : this.#childFrames.get(info.parentId ?? "") ?? this._mainFrame;
       }
     }
+    #applyViewport(size) {
+      if (this.#viewportSet || size === undefined)
+        return;
+      if (this.#viewportSize === null || size === null || this.#viewportSize.width !== size.width || this.#viewportSize.height !== size.height)
+        this.#viewportSize = size;
+    }
     _applyFact(fact, at, approved = null) {
       if (fact.tab !== undefined)
         this._tab = fact.tab;
       if (at === null) {
+        this.#applyViewport(fact.viewportSize);
         if (fact.url !== undefined && !this.#urlKnown) {
           this._url = fact.url;
           this.#urlKnown = true;
@@ -8445,6 +8478,7 @@ ${value.stack}`;
       if (at.seq < this.#observedSeq)
         return;
       this.#observedSeq = at.seq;
+      this.#applyViewport(fact.viewportSize);
       if (fact.url !== undefined) {
         this._url = fact.url;
         this.#urlKnown = true;
@@ -9485,7 +9519,6 @@ Timeout: ${timeout}ms`);
       routeFromHAR: NETWORK,
       routeWebSocket: NETWORK,
       setExtraHTTPHeaders: "network settings are not available in Neo",
-      setViewportSize: "the hosted viewport is fixed",
       tap: NO_TOUCH,
       unroute: NETWORK,
       unrouteAll: NETWORK,

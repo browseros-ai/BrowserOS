@@ -9,7 +9,8 @@ use std::sync::{Mutex, PoisonError};
 
 use crate::browser::Seen;
 use browseros_core::pages::PageInfo;
-use browseros_core::{PageId, TabId};
+use browseros_core::viewport::Size;
+use browseros_core::{BrowserView, PageId, TabId};
 use neo_trace::{Delivery, Effect, OperationId, OperationReached, PageState, TraceSink};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -132,7 +133,8 @@ pub(crate) struct OpReply {
 }
 
 /// One page as a reply reports it. Deliberately not a page brand (no `$neo`), so the
-/// bootstrap never revives a fact into a `Page` object. A plain data bag.
+/// bootstrap never revives a fact into a `Page` object. Its viewport configuration initializes
+/// synchronous accessors in each new agent realm, independently of the owner's temporary fit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct PageFact {
     /// The browser's tab id.
@@ -143,6 +145,9 @@ pub(crate) struct PageFact {
     pub(crate) title: Option<String>,
     /// Whether the tab is gone.
     pub(crate) closed: bool,
+    /// Script configuration, carried to each fresh realm; owner fits never replace it.
+    #[serde(rename = "viewportSize", skip_serializing_if = "Option::is_none")]
+    pub(crate) viewport_size: Option<Size>,
 }
 
 /// The answer to a submitted call. It always arrives: once the call has an op id, its guard
@@ -741,7 +746,7 @@ impl Dispatcher {
             } else {
                 infos.next().flatten()
             };
-            facts.push(PageFact::new(&page, info));
+            facts.push(PageFact::in_view(&page, info, run.view()));
         }
         let mut released = self.release_facts(
             PageFacts {
@@ -871,6 +876,16 @@ pub(crate) struct PageFacts {
 }
 
 impl PageFact {
+    pub(crate) fn in_view(page: &PageRef, info: Option<PageInfo>, view: &BrowserView) -> Self {
+        let viewport_size = info
+            .as_ref()
+            .and_then(|info| view.playwright_viewport(&info.page_id));
+        Self {
+            viewport_size,
+            ..Self::new(page, info)
+        }
+    }
+
     pub(crate) fn new(page: &PageRef, info: Option<PageInfo>) -> Self {
         let PageRef { tab } = *page;
         match info {
@@ -879,12 +894,14 @@ impl PageFact {
                 url: Some(info.url),
                 title: Some(info.title),
                 closed: false,
+                viewport_size: None,
             },
             None => Self {
                 tab,
                 url: None,
                 title: None,
                 closed: true,
+                viewport_size: None,
             },
         }
     }

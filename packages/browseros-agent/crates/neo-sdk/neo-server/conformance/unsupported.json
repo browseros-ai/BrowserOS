@@ -96,7 +96,6 @@
   "page.screencast",
   "page.sessionStorage",
   "page.setExtraHTTPHeaders",
-  "page.setViewportSize",
   "page.tap",
   "page.touchscreen",
   "page.unroute",
