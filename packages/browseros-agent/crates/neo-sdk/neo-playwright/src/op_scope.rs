@@ -370,7 +370,7 @@ impl<'env> OpScope<'env> {
 
     /// The call log's lines as recorded, for a failed matcher's `matcherResult.log`.
     pub(crate) fn log_lines(&self) -> Vec<String> {
-        self.lock_log().kept_lines()
+        self.lock_log().raw_lines()
     }
 
     /// A core or CDP failure the leaf could not recover from, as one of the crate's codes.

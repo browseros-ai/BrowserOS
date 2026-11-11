@@ -586,8 +586,9 @@ impl MatcherFacts<'_> {
         if let Some(actual) = self.actual {
             facts.insert("actual".to_owned(), actual.clone());
         }
-        // Upstream attaches only a non-empty snapshot (`if (ariaSnapshot)`).
-        if let Some(snapshot) = self.aria_snapshot.filter(|snapshot| !snapshot.is_empty()) {
+        // A poll's snapshot stays as the engine wrote it, `""` included, as upstream's
+        // `received?.ariaSnapshot`; the body fallback arrives already without an empty one.
+        if let Some(snapshot) = self.aria_snapshot {
             facts.insert("ariaSnapshot".to_owned(), json!(snapshot));
         }
         facts.insert("log".to_owned(), json!(scope.log_lines()));
@@ -859,11 +860,7 @@ mod tests {
         assert_eq!(facts["ariaSnapshot"], json!("- heading \"Page\" [level=1]"));
 
         let bare = expect
-            .run(
-                &scope,
-                || async { Ok(Poll::Missing) },
-                || future::ready(Some(String::new())),
-            )
+            .run(&scope, || async { Ok(Poll::Missing) }, no_snapshot)
             .await
             .err()
             .ok_or("nothing there fails toBeVisible")?;
@@ -871,7 +868,30 @@ mod tests {
         assert_eq!(
             facts.get("ariaSnapshot"),
             None,
-            "an empty snapshot is left out"
+            "a frame without a body adds none"
+        );
+
+        let empty = expect
+            .run(
+                &scope,
+                || async {
+                    Ok(Poll::Ran {
+                        matches: false,
+                        resolved: "<div></div>".to_owned(),
+                        received: Some(json!("hidden")),
+                        aria_snapshot: Some(String::new()),
+                    })
+                },
+                no_snapshot,
+            )
+            .await
+            .err()
+            .ok_or("a hidden element fails toBeVisible")?;
+        let facts = empty.matcher_details().ok_or("the failure carries facts")?;
+        assert_eq!(
+            facts["ariaSnapshot"],
+            json!(""),
+            "a poll's empty snapshot stays"
         );
         Ok(())
     }
