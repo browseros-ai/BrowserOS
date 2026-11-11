@@ -9,6 +9,7 @@ import { appendFile, mkdir, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   ClientInfo,
+  NeoRunRecord,
   RunDetail,
   RunStatus,
   TaskIdentification,
@@ -51,6 +52,8 @@ export type LogLine =
   | { type: 'tools-list'; at: string; size: TextSize }
   | { type: 'run-start'; run: StoredRunStart }
   | { type: 'run-end'; id: string; end: StoredRunEnd }
+  /** Neo's record of the run, from its host API; a later line replaces an earlier one. */
+  | { type: 'neo-run'; id: string; record: NeoRunRecord }
 
 export class TaskLog {
   private readonly queues = new Map<string, Promise<void>>()
