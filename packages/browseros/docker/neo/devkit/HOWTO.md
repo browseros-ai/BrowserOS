@@ -248,7 +248,7 @@ The trace UI needs a few things the host API does not record. Each row says what
 
 ## When something goes wrong
 
-- **claw-sdk restarts in a loop with `setting the mode of /data/browserclaw/host.sock`.** A folder that Docker Desktop shares from macOS cannot hold a Unix socket. `compose.sdk-dev.yaml` moves the socket to `/tmp` in the container. If you start the container another way, set `CLAW_HOST_SOCKET` the same way.
+- **claw-sdk restarts in a loop with `setting the mode of <path>/host.sock`.** A folder that Docker Desktop shares from macOS cannot hold a Unix socket. The image's default socket, `/run/neo/host.sock`, is off the data folder, so this happens only when `CLAW_HOST_SOCKET` points into a shared folder. `compose.sdk-dev.yaml` keeps it in the container's `/tmp`.
 - **The viewer says `4409 display_paused` and keeps retrying.** A private tab is in front. Close the tabs that went private, or wait for the takeover to end.
 - **A run drives the wrong tab.** It had no `--task`. Pass one.
 - **A port is taken.** Set `NEO_GATEWAY_PORT` (16090), `NEO_HOST_PORT` (19300) or `NEO_MCP_PORT` (19010) before `up`.

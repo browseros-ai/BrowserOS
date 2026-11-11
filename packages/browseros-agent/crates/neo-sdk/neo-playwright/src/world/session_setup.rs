@@ -4,8 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use browseros_core::sensitive_fields::{JOURNAL_BINDING, SEALED_WORLD};
-use browseros_core::{CdpConnection, ProtocolSession, SessionId, TabId};
+use browseros_core::{CdpConnection, ProtocolSession, SessionId};
 use serde_json::{Value, json};
 use tokio::sync::OnceCell;
 
@@ -22,23 +21,9 @@ pub(crate) enum SessionKind {
     Oopif,
 }
 
-/// Per CDP session, once, before its first seal: `Runtime.enable` on an OOPIF session, then
-/// `Runtime.addBinding { name: __neoJournal, executionContextName: browseros-sdk }`.
-///
-/// Only what a sealed world needs belongs here: a frame's first sweep installs its world, so
-/// every call this setup sends spends that frame's `FRAME_BUDGET`, and under load each one can
-/// wait hundreds of milliseconds behind the renderer's other work. `Page` events are enabled by
-/// the ops that watch documents instead (`DocumentWatch::enable_page`).
-///
-/// The order is measured, not chosen. The seal reads `globalThis.__neoJournal` once, when it
-/// installs, so the binding must already be in the world by then; and Chromium puts a
-/// named binding into contexts created later only on a session with `Runtime` enabled. On an
-/// OOPIF session without `Runtime.enable`, the new world had no binding, the seal captured
-/// none, and that frame's journal stayed silent even after a later enable.
-///
-/// Process-wide, keyed by session id, because a session outlives any one page's state. It also
-/// remembers each session's page, so the journal can attribute an entry. A new connection
-/// epoch invalidates every session id, so the table starts over then.
+/// Enables `Runtime` once per OOPIF session so world installs can observe context creation.
+/// Core already enables it on page sessions. Concurrent installs share one setup attempt;
+/// a new connection epoch invalidates the session ids and starts a fresh table.
 pub(crate) struct SessionSetup {
     connection: Arc<dyn CdpConnection>,
     inner: Mutex<SetupInner>,
@@ -54,14 +39,7 @@ impl fmt::Debug for SessionSetup {
 struct SetupInner {
     /// The connection epoch the entries belong to.
     epoch: u64,
-    sessions: HashMap<SessionId, SessionEntry>,
-}
-
-struct SessionEntry {
-    tab: TabId,
-    /// Single-flight: concurrent first worlds on a session share one setup. A failed setup
-    /// leaves it empty for the next caller.
-    done: Arc<OnceCell<()>>,
+    sessions: HashMap<SessionId, Arc<OnceCell<()>>>,
 }
 
 impl SessionSetup {
@@ -77,12 +55,11 @@ impl SessionSetup {
         }
     }
 
-    /// Sets `session` up for sealed worlds, the first time only, and records that it belongs
-    /// to `tab`. Idempotent: CDP keeps both settings for the session's lifetime.
+    /// Enables context events for sealed worlds, the first time only. CDP keeps this setting
+    /// for the session's lifetime; a failed or cancelled attempt leaves the cell empty to retry.
     pub(crate) async fn ensure(
         &self,
         session: &ProtocolSession,
-        tab: TabId,
         kind: SessionKind,
     ) -> Result<(), ProbeFailure> {
         let Some(id) = session.session_id() else {
@@ -92,14 +69,7 @@ impl SessionSetup {
         };
         let done = {
             let mut inner = self.lock();
-            let entry = inner
-                .sessions
-                .entry(id.clone())
-                .or_insert_with(|| SessionEntry {
-                    tab,
-                    done: Arc::default(),
-                });
-            Arc::clone(&entry.done)
+            Arc::clone(inner.sessions.entry(id.clone()).or_default())
         };
         done.get_or_try_init(|| async {
             if kind == SessionKind::Oopif {
@@ -108,13 +78,6 @@ impl SessionSetup {
                     .await
                     .map_err(ProbeFailure::from_core)?;
             }
-            session
-                .send::<_, Value>(
-                    "Runtime.addBinding",
-                    json!({ "name": JOURNAL_BINDING, "executionContextName": SEALED_WORLD }),
-                )
-                .await
-                .map_err(ProbeFailure::from_core)?;
             Ok(())
         })
         .await?;
@@ -125,11 +88,6 @@ impl SessionSetup {
     /// before it creates its world (`SealedWorld::install`).
     pub(crate) fn watch_contexts(&self) -> ContextWatch {
         ContextWatch::new(self.connection.events())
-    }
-
-    /// The tab `session` was set up for, for the journal.
-    pub(crate) fn tab_of(&self, session: &SessionId) -> Option<TabId> {
-        self.lock().sessions.get(session).map(|entry| entry.tab)
     }
 
     /// The table, emptied first if the connection moved to a new epoch since it was filled.

@@ -30,7 +30,6 @@ mod solve_captcha;
 mod tab_janitor;
 #[cfg(test)]
 mod tests;
-mod typed_values;
 
 pub(crate) use builtin_set::{BuiltinDeps, builtin_set, door_rules};
 pub(crate) use captcha_claims::CaptchaClaims;
@@ -38,4 +37,3 @@ pub(crate) use playwright_facade::PlaywrightFacade;
 pub(crate) use playwright_ops::PLAYWRIGHT_PRELUDE;
 pub(crate) use privacy_hooks::PrivacyHooks;
 pub(crate) use tab_janitor::TabJanitor;
-pub(crate) use typed_values::TypedValues;

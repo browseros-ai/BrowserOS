@@ -1,7 +1,7 @@
 //! A live browser for integration tests: one CDP connection with a `Playwright` over it, as
 //! claw-sdk builds them, ops run through `Playwright::invoke` with a plain `OpEnv`, and hooks
-//! that record what the journal reports. Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT`
-//! (default 9005).
+//! that record values reported by operation sweeps. Needs BrowserOS with CDP on
+//! `BROWSEROS_CDP_PORT` (default 9005).
 
 use std::env;
 use std::error::Error;
@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_cdp::{CdpClient, ConnectOptions};
-use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
+use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, TabId, TargetId,
 };
@@ -36,15 +36,6 @@ impl TestPage {
     }
 }
 
-/// One value the journal reported.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Journaled {
-    pub(crate) page: TabId,
-    pub(crate) kind: SensitiveKind,
-    pub(crate) value: String,
-    pub(crate) by: TypedBy,
-}
-
 /// One value an op swept from a page and reported to the host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Swept {
@@ -52,21 +43,13 @@ pub(crate) struct Swept {
     pub(crate) value: String,
 }
 
-/// Hooks that remember what the journal reported and which values ops swept.
+/// Hooks that remember which values operations swept.
 #[derive(Default)]
 pub(crate) struct RecordingHooks {
-    journaled: Mutex<Vec<Journaled>>,
     swept: Mutex<Vec<Swept>>,
 }
 
 impl RecordingHooks {
-    pub(crate) fn journaled(&self) -> Vec<Journaled> {
-        self.journaled
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
     /// Every value `values_swept` reported, with its page.
     pub(crate) fn swept(&self) -> Vec<Swept> {
         self.swept
@@ -74,31 +57,10 @@ impl RecordingHooks {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
-
-    /// Waits up to 2 s for `expected` to be reported.
-    pub(crate) async fn wait_for(&self, expected: &Journaled) -> bool {
-        for _ in 0..40 {
-            if self.journaled().contains(expected) {
-                return true;
-            }
-            time::sleep(Duration::from_millis(50)).await;
-        }
-        false
-    }
 }
 
 impl PlaywrightHooks for RecordingHooks {
-    fn field_entered(&self, page: TabId, entry: JournalEntry, by: TypedBy) {
-        self.journaled
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(Journaled {
-                page,
-                kind: entry.kind,
-                value: entry.value.to_string(),
-                by,
-            });
-    }
+    fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
 
     fn values_swept(&self, page: TabId, values: &FieldValues) {
         let mut swept = self.swept.lock().unwrap_or_else(PoisonError::into_inner);

@@ -10,7 +10,7 @@
 
 use serde_json::Value;
 
-use super::{ErrorCode, OperationError, RunMask, TEXT_CHARS};
+use super::{ErrorCode, OperationError, TEXT_CHARS, operation_error};
 
 /// The codes a refusal may name: a method Neo does not serve, and an input it does not take, such
 /// as one option of a method it does serve.
@@ -46,14 +46,13 @@ impl<'a> RefusalBrand<'a> {
     }
 
     /// The door's answer, always the script's own failure. A refusal keeps its code, and its
-    /// reason is masked with `mask`, then cut to [`TEXT_CHARS`]: in that order, since a cut through
-    /// a known value would leave a prefix that no later mask recognizes. A malformed brand is
-    /// `invalid_input`, naming the method as `shown`, the name as the door shows it.
+    /// reason cut to [`TEXT_CHARS`]. A malformed brand is `invalid_input`, naming the method as
+    /// `shown`, the name as the door shows it.
     #[must_use]
-    pub(super) fn refusal(self, shown: &str, mask: &RunMask<'_>) -> OperationError {
+    pub(super) fn refusal(self, shown: &str) -> OperationError {
         match self {
             Self::Refused { code, reason } => {
-                OperationError::script(code, mask.shown(reason.to_owned(), TEXT_CHARS))
+                OperationError::script(code, operation_error::clip(reason.to_owned(), TEXT_CHARS))
             }
             Self::Malformed => OperationError::script(
                 ErrorCode::INVALID_INPUT,

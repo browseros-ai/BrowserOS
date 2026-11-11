@@ -5,11 +5,11 @@
 //!    RequestLedger::admit ─ Join (wait) │ Replay │ Duplicate │ Unavailable ─▶ that reply
 //!     └ Fresh(ticket) ─▶ tokio::spawn(execute), the panic boundary
 //!        view ─ page default (TabRegistry, then the trace's task_last_tab) ─ RunCtx::start
-//!        every open tab, masked (the init's `pages`) ─ run_script
+//!        every open tab (the init's `pages`) ─ run_script
 //!          ‖ deadline, shutdown, orphaned (no waiter for the grace) ─▶ RunCtx::stop
 //!        teardown: stop(ScriptReturned), drain ops, abort stragglers
-//!        RunReply::build, masked with the secret set and the values held since the run began
-//!        RunGuard::finish (run_ended, masked with those same values, the reply as replay)
+//!        RunReply::build
+//!        RunGuard::finish (run_ended, the reply as replay)
 //!          ─ ticket.finish (waiters, ledger)
 //!    Waiter::reply ◀── the one reply, shared by every caller of the run
 //! ```

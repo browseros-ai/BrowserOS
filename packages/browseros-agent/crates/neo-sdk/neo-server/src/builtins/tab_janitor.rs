@@ -139,15 +139,12 @@ impl TabJanitor {
         } else {
             RunStatus::Ok
         };
-        guard.finish(
-            RunEnd {
-                status,
-                error: None,
-                result: Some(json!({ "closed": closed, "kept": kept })),
-                replay: None,
-            },
-            run.held_values().set(),
-        );
+        guard.finish(RunEnd {
+            status,
+            error: None,
+            result: Some(json!({ "closed": closed, "kept": kept })),
+            replay: None,
+        });
         Some(run.id())
     }
 }

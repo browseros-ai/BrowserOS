@@ -279,6 +279,160 @@ class ServerPolicyTest(unittest.TestCase):
                 self.assertNotIn("started", result.stdout)
 
 
+class HostSocketTest(unittest.TestCase):
+    def prepare(
+        self, kind: str, host_gid: str = "", caller_socket: str | None = None
+    ) -> tuple[subprocess.CompletedProcess, Path, list[list[str]], str | None]:
+        """prepare_host_socket's result, its directory, the chown calls it made, and the
+        CLAW_HOST_SOCKET a child process (the browser, then claw-sdk) inherits."""
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        socket_dir, chowns, seen = directory / "run-neo", directory / "chowns", directory / "seen"
+        caller = (
+            f"export CLAW_HOST_SOCKET={shlex.quote(caller_socket)}\n" if caller_socket else ""
+        )
+        result = run_bash(
+            server_is(kind)
+            # Outside the container there is no neo user; 1000 is the image's default gid.
+            + "id() { [ \"$*\" = '-g neo' ] && echo 1000; }\n"
+            + f"chown() {{ local IFS=$'\\t'; echo \"$*\" >> '{chowns}'; }}\n"
+            + f"NEO_HOST_GID={shlex.quote(host_gid)} HOST_SOCKET_DIR='{socket_dir}'\n"
+            + caller
+            + shell_function("prepare_host_socket")
+            + "prepare_host_socket\n"
+            + f"sh -c 'printf %s \"${{CLAW_HOST_SOCKET-}}\"' > '{seen}'\n",
+            check=False,
+        )
+        lines = chowns.read_text().splitlines() if chowns.exists() else []
+        calls = [line.split("\t") for line in lines]
+        inherited = seen.read_text() if seen.exists() else None
+        return result, socket_dir, calls, inherited
+
+    def test_claw_sdk_gets_a_setgid_directory_owned_by_the_host_group(self):
+        result, socket_dir, chowns, inherited = self.prepare("claw-sdk", host_gid="2005")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(chowns, [["neo:2005", str(socket_dir)]])
+        # setgid: the socket claw-sdk binds inside takes the directory's group.
+        self.assertEqual(socket_dir.stat().st_mode & 0o7777, 0o2750)
+        self.assertEqual(inherited, f"{socket_dir}/host.sock")
+
+    def test_without_a_host_group_the_socket_stays_with_neos_group(self):
+        _, socket_dir, chowns, _ = self.prepare("claw-sdk")
+
+        self.assertEqual(chowns, [["neo:1000", str(socket_dir)]])
+
+    def test_a_callers_socket_path_wins(self):
+        _, socket_dir, _, inherited = self.prepare(
+            "claw-sdk", caller_socket="/tmp/dev host.sock"
+        )
+
+        self.assertTrue(socket_dir.is_dir())
+        self.assertEqual(inherited, "/tmp/dev host.sock")
+
+    def test_a_group_that_is_not_a_number_stops_the_container(self):
+        for gid in ["neo-host", "-1", "2005 "]:
+            with self.subTest(gid=gid):
+                result, socket_dir, chowns, _ = self.prepare("claw-sdk", host_gid=gid)
+
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("NEO_HOST_GID must be numeric", result.stderr)
+                self.assertFalse(socket_dir.exists())
+                self.assertEqual(chowns, [])
+
+    def test_claw_server_gets_no_socket_directory_and_no_socket_path(self):
+        result, socket_dir, chowns, inherited = self.prepare("claw-server", host_gid="2005")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(socket_dir.exists())
+        self.assertEqual(chowns, [])
+        self.assertEqual(inherited, "")
+
+
+@unittest.skipUnless(shutil.which("jq"), "needs jq, as the image has")
+class McpListenersTest(unittest.TestCase):
+    """The Local State prepare_data leaves for the browser's two MCP proxies."""
+
+    def local_state(
+        self, neo_mcp_remote: str | None, saved: dict | None = None
+    ) -> tuple[subprocess.CompletedProcess, dict | None]:
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        profile = directory / "data/profile"
+        if saved is not None:
+            profile.mkdir(parents=True)
+            (profile / "Local State").write_text(json.dumps(saved))
+        default = re.search(r'^: "\$\{NEO_MCP_REMOTE:=true\}"$', SCRIPT, re.MULTILINE)
+        parse = re.search(
+            r"^MCP_REMOTE=false\n.*?^readonly MCP_REMOTE\n", SCRIPT, re.MULTILINE | re.DOTALL
+        )
+        assert default and parse, "entrypoint.sh no longer reads NEO_MCP_REMOTE here"
+        given = (
+            "" if neo_mcp_remote is None else f"NEO_MCP_REMOTE={shlex.quote(neo_mcp_remote)}\n"
+        )
+        result = run_bash(
+            "chown() { :; }\n"
+            "log() { printf '[neo] %s\\n' \"$*\"; }\n"
+            'die() { log "$*" >&2; exit 1; }\n'
+            + shell_function("is_true")
+            + given
+            + default.group(0) + "\n"
+            + parse.group(0)
+            + f"NEO_DATA_DIR='{directory}/data' PROFILE='{profile}' NEO_HOME='{directory}'\n"
+            + f"DOWNLOADS='{directory}/data/downloads' OUTPUTS='{directory}/data/out'\n"
+            + f"CLAW_DATA='{directory}/data/browserclaw' XDG_DIR='{directory}/xdg'\n"
+            + "MCP_TLS_PORT=9011\n"
+            + shell_function("merge_json")
+            + shell_function("prepare_data")
+            + "prepare_data\n",
+            check=False,
+        )
+        state = profile / "Local State"
+        return result, json.loads(state.read_text()) if state.exists() else None
+
+    def test_unset_keeps_remote_peers_allowed_as_today(self):
+        result, state = self.local_state(None)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            state,
+            {"browseros": {"server": {"allow_remote_in_mcp": True, "proxy_https_port": 9011}}},
+        )
+
+    def test_false_keeps_both_mcp_ports_to_loopback_peers(self):
+        for value in ["false", "OFF", "0"]:
+            with self.subTest(value=value):
+                _, state = self.local_state(value)
+
+                assert state is not None
+                self.assertIs(state["browseros"]["server"]["allow_remote_in_mcp"], False)
+
+    def test_a_value_that_is_not_a_boolean_stops_the_container(self):
+        result, state = self.local_state("loopback")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("expected true or false, got 'loopback'", result.stderr)
+        self.assertIsNone(state)
+
+    def test_every_start_pins_the_https_port_and_keeps_the_profiles_other_state(self):
+        server = {"proxy_https_port": 9012, "proxy_port": 9010, "allow_remote_in_mcp": True}
+        saved = {"browseros": {"server": server}, "browser": {"enabled_labs_experiments": ["x"]}}
+
+        _, state = self.local_state("false", saved)
+
+        self.assertEqual(
+            state,
+            {
+                "browseros": {
+                    "server": {
+                        "proxy_https_port": 9011,
+                        "proxy_port": 9010,
+                        "allow_remote_in_mcp": False,
+                    }
+                },
+                "browser": {"enabled_labs_experiments": ["x"]},
+            },
+        )
+
+
 class StartDisplayTest(unittest.TestCase):
     def start(self, kind: str) -> tuple[list[list[str]], list[str], bool]:
         """The processes start_display spawns, the ones the supervisor watches, and
