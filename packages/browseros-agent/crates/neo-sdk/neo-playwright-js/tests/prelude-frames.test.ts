@@ -206,3 +206,133 @@ it('tests that a frame missing from the tree a wait reads is detached', async ()
     names: ['', 'cross'],
   })
 })
+
+it.each([false, true])(
+  'tests that a native removal is fenced even when its reply closes the page (%s)',
+  async (closed) => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) => {
+        if (call.name === 'page.frames') return TREE
+        return {
+          err: {
+            owner: 'neo',
+            code: 'target_closed',
+            delivery: 'not_sent',
+            message: 'frame.waitForURL: Navigating frame was detached!',
+          },
+          pages: [{ tab: 1007, closed }],
+          observed: { seq: 2, events: 10, payloadCurrent: true },
+        }
+      },
+    })
+    expect(
+      json(
+        await runtime.run(`
+        const same = page.frame('same')
+        try { await same.waitForURL('**/never') } catch {}
+        // An older pull may still deliver the frame's previous navigation.
+        page._eventFrame(9, 'framenavigated', {
+          id: 'same', parentId: 'main', name: 'same', url: 'https://a.example/old',
+        })
+        return { detached: same.isDetached(), names: page.frames().map(f => f.name()) }
+      `),
+      ),
+    ).toEqual({ detached: true, names: ['', 'cross'] })
+  },
+)
+
+it('tests that a URL wait timeout does not detach its live frame', async () => {
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) =>
+      call.name === 'page.frames'
+        ? TREE
+        : {
+            err: {
+              owner: 'website',
+              code: 'wait_timeout',
+              delivery: 'not_sent',
+              message: 'frame.waitForURL: Timeout 10ms exceeded.',
+            },
+          },
+  })
+  expect(
+    json(
+      await runtime.run(`
+        const same = page.frame('same')
+        try { await same.waitForURL('**/never', { timeout: 10 }) } catch {}
+        return { detached: same.isDetached(), same: page.frame('same') === same }
+      `),
+    ),
+  ).toEqual({ detached: false, same: true })
+})
+
+for (const predicate of [false, true]) {
+  for (const removed of [false, true]) {
+    it(`tests that an ambiguous frame wait error confirms the tree (predicate=${predicate}, removed=${removed})`, async () => {
+      let reads = 0
+      const runtime = loadPrelude({
+        seed: SEED,
+        answer: (call) => {
+          if (call.name === 'page.frames') {
+            if (reads++ === 0) return TREE
+            return {
+              ok: removed
+                ? { frames: TREE.frames.filter((f) => f.id !== 'same') }
+                : TREE,
+              pages: [{ tab: 1007, closed: false }],
+              observed: { seq: 3, events: 10, payloadCurrent: true },
+            }
+          }
+          return {
+            err: {
+              owner: 'neo',
+              code: 'target_closed',
+              delivery: 'not_sent',
+              message: 'frame.waitForURL: Frame was detached',
+            },
+            pages: [{ tab: 1007, closed: false }],
+            observed: { seq: 2, events: 9, payloadCurrent: true },
+          }
+        },
+      })
+      expect(
+        json(
+          await runtime.run(`
+        const same = page.frame('same')
+        try { await same.waitForURL(${predicate ? '() => true' : "'**/never'"}) } catch {}
+        return { detached: same.isDetached(), names: page.frames().map(f => f.name()) }
+      `),
+        ),
+      ).toEqual({
+        detached: removed,
+        names: removed ? ['', 'cross'] : ['', 'same', 'cross'],
+      })
+      expect(reads).toBe(2)
+      expect(
+        runtime.calls.find((call) => call.name === 'page.frames')?.input.call,
+      ).toEqual({ api: 'frame.waitForURL', timeoutMs: 1000 })
+    })
+  }
+}
+
+it('tests that a user URL predicate cannot report native frame removal', async () => {
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => (call.name === 'page.frames' ? TREE : null),
+  })
+  expect(
+    json(
+      await runtime.run(`
+    const same = page.frame('same')
+    try {
+      await same.waitForURL(() => {
+        throw Object.assign(new Error('frame.waitForURL: Navigating frame was detached!'), { code: 'target_closed' })
+      })
+    } catch {}
+    return same.isDetached()
+  `),
+    ),
+  ).toBe(false)
+})
