@@ -221,6 +221,46 @@ async fn restore_puts_back_the_agents_own_viewport_the_window_and_the_screen() -
 }
 
 #[tokio::test]
+async fn a_busy_viewport_times_out_without_stranding_the_surface_or_claiming_a_fit() -> TestResult {
+    let h = harness(&[3, 4]).await?;
+    let view =
+        BrowserView::unbound(Arc::clone(&h.session), None).with_viewports(Arc::clone(&h.viewports));
+    let pages = h.session.pages.resolve_tab_ids(&[TabId(3)]).await?;
+    let page = pages.get(&TabId(3)).ok_or("the busy tab is open")?;
+    let _busy = view
+        .prepare_playwright_viewport(
+            page.clone(),
+            ViewportRequest::playwright(Size {
+                width: 800,
+                height: 600,
+            })?,
+        )
+        .await?;
+    let failed = tokio::time::timeout(Duration::from_secs(7), h.fits.fit(TabId(3), PHONE)).await?;
+    assert!(
+        matches!(failed, Err(PartError::TimedOut(_))),
+        "a fit must not wait for an unbounded browser acknowledgement"
+    );
+    assert_eq!(
+        h.xvnc.size(),
+        HOME,
+        "a timed-out snapshot never changes the screen"
+    );
+    assert!(
+        !h.browser
+            .changes()
+            .iter()
+            .any(|change| change.starts_with("Browser.activateTab")),
+        "no outdated restore target was committed"
+    );
+    // Tab 3 remains busy while another tab successfully claims and releases the surface.
+    let other = tokio::time::timeout(Duration::from_secs(7), h.fits.fit(TabId(4), PHONE)).await??;
+    h.fits.restore(other.id).await?;
+    assert_eq!(h.xvnc.size(), HOME);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_fit_waits_for_an_inflight_resize_before_saving_what_it_will_restore() -> TestResult {
     let h = harness(&[3]).await?;
     h.agent_sets_viewport(

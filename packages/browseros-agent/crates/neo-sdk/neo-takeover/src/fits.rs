@@ -226,7 +226,8 @@ impl Fits {
     /// # Errors
     /// `UnusableViewer` under 100 px a side; `TabNotFound`; `Browser` when the tab's window
     /// cannot be read; `Screen` when Xvnc cannot be resized, which leaves the fits and the
-    /// surface as they were.
+    /// surface as they were; `TimedOut` when an in-flight viewport change does not finish
+    /// within the browser-step budget, before any fit is claimed.
     pub async fn fit(self: &Arc<Self>, tab: TabId, viewer: ScreenSize) -> Result<Fit, PartError> {
         let layout = layout_for(viewer).ok_or(PartError::UnusableViewer(viewer))?;
         // Before anything awaits. The claim's activation waits for the front turn, and without
@@ -237,7 +238,7 @@ impl Fits {
         let mut surface = self.surface.lock().await;
         let seen = Seen {
             window: self.browser.window(&page).await?,
-            viewport: self.browser.viewport(&page).await,
+            viewport: self.browser.viewport(&page).await?,
         };
         // The tab's active fit, or a new id (a `FitId` defaults to a fresh one).
         let id = self.active_fit(tab).unwrap_or_default();

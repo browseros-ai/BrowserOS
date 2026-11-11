@@ -1058,6 +1058,21 @@ impl BrowserView {
             None => self.session.pages.get_session(page).await,
         }
     }
+    /// Repairs an interrupted viewport before an SDK operation uses its admitted session.
+    /// This configures no new request. Call before taking a viewport lease; legacy callers
+    /// that already hold one continue using `prepare_viewport`'s existing repair path.
+    pub async fn repair_viewport(
+        &self,
+        page: &PageId,
+        session: &PageSession,
+    ) -> Result<(), CoreError> {
+        if let Some(viewports) = &self.viewports
+            && self.signals().pending_dialog(page).is_none()
+        {
+            viewports.repair_pending(self, page, session).await?;
+        }
+        Ok(())
+    }
     /// A frame endpoint admitted through this page capability, including same-process children.
     pub async fn frame_session(
         &self,

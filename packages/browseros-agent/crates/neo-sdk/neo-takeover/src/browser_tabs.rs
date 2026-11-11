@@ -23,7 +23,7 @@
 //! the turn would not compile.
 
 use crate::PartError;
-use crate::limits::{ACTIVATE_TIMEOUT, WINDOW_POLL, WINDOW_SETTLE};
+use crate::limits::{ACTIVATE_TIMEOUT, STEP_TIMEOUT, WINDOW_POLL, WINDOW_SETTLE};
 use crate::screen_rule::{ScreenFacts, ScreenHolder};
 use browseros_core::navigation::Navigation;
 use browseros_core::pages::PageInfo;
@@ -376,10 +376,17 @@ impl BrowserTabs {
     /// settle can end before an in-flight resize acknowledges or rolls back, so wait for its
     /// viewport lock before saving the request. Otherwise a fit could restore an older size
     /// even though that resize succeeded before the fit's own override landed.
-    pub(crate) async fn viewport(&self, page: &PageInfo) -> Option<ViewportRequest> {
+    pub(crate) async fn viewport(
+        &self,
+        page: &PageInfo,
+    ) -> Result<Option<ViewportRequest>, PartError> {
         let view = self.view();
-        let _held = view.hold_viewport(page.page_id.clone()).await;
-        view.current_viewport(&page.page_id)
+        // This runs under the shared surface lock. Keep the same bound as the plan's
+        // browser steps so a stalled tab cannot stall every other fit or restore.
+        let _held = tokio::time::timeout(STEP_TIMEOUT, view.hold_viewport(page.page_id.clone()))
+            .await
+            .map_err(|_| PartError::TimedOut("waiting for the tab's viewport"))?;
+        Ok(view.current_viewport(&page.page_id))
     }
 
     /// Sets the tab's viewport; `None` puts it in the default mode. Core waits for every

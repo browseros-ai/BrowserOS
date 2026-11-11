@@ -22,6 +22,7 @@ pub struct ViewportChange {
     fixed: Fixed,
     commands: Vec<(&'static str, Value)>,
     restore: Vec<(&'static str, Value)>,
+    previous_default: bool,
     held: Option<OwnedRwLockWriteGuard<()>>,
     /// Armed only after the caller authorizes a send, and disarmed after publication.
     restore_generation: Option<u64>,
@@ -43,10 +44,16 @@ impl Viewports {
         view.page(page.clone()).await?;
         let held = self.lock_page(view, &page).await;
         let admitted = view.page_session(page.clone()).await?;
+        self.repair_pending_locked(view, &page, &admitted).await?;
         let previous = self.tab(&page);
+        let previous_default = previous.is_none();
         let restore = match previous {
             Some(previous) => {
-                let version = self.chrome_version(view).await?;
+                let version = if matches!(previous.fixed, Fixed::Playwright { .. }) {
+                    String::new()
+                } else {
+                    self.chrome_version(view).await?
+                };
                 let mut commands = previous.fixed.commands(&version);
                 commands.extend(previous.fixed.pin());
                 commands
@@ -65,6 +72,7 @@ impl Viewports {
             fixed,
             commands: fixed.commands(""),
             restore,
+            previous_default,
             held: Some(held),
             restore_generation: None,
         })
@@ -77,6 +85,13 @@ impl ViewportChange {
     /// No renderer script is needed to acknowledge a Playwright viewport change.
     pub async fn apply(mut self) -> Result<(), CoreError> {
         self.restore_generation = Some(self.viewports.invalidate(&self.page));
+        if self.previous_default {
+            self.viewports
+                .pending_defaults
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(self.page.clone());
+        }
         for (method, params) in std::mem::take(&mut self.commands) {
             self.view
                 .send_at_capture(method, params, Some(&self.session))
@@ -114,7 +129,10 @@ impl Drop for ViewportChange {
                 Ok::<(), CoreError>(())
             };
             match tokio::time::timeout(Duration::from_secs(5), restore).await {
-                Ok(Ok(())) => viewports.applied(&page, &session, generation),
+                Ok(Ok(())) => {
+                    viewports.reset_complete(&page);
+                    viewports.applied(&page, &session, generation);
+                }
                 Ok(Err(error)) => tracing::debug!(%error, "viewport rollback remains pending"),
                 Err(_) => tracing::debug!(
                     "viewport rollback timed out; the previous mode remains pending"

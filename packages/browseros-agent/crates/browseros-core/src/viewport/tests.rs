@@ -428,6 +428,58 @@ struct Fixture {
 }
 
 #[tokio::test]
+async fn an_initial_failed_resize_keeps_a_default_reset_pending_until_an_sdk_admission_repairs_it()
+-> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    let request = ViewportRequest::playwright(Size {
+        width: 800,
+        height: 600,
+    })?;
+    let change = fixture
+        .view
+        .prepare_playwright_viewport(page.clone(), request)
+        .await?;
+    fixture.native.lock().fail = Some("Emulation.setTouchEmulationEnabled");
+    fixture.native.lock().fail_clear = true;
+    assert!(change.apply().await.is_err());
+    // Wait for the bounded cleanup to finish. Its reset also fails, leaving real rejected
+    // metrics on a tab which correctly has no published Playwright configuration.
+    drop(fixture.view.hold_viewport(page.clone()).await);
+    assert!(fixture.viewports.default_pending(&page));
+    assert_eq!(fixture.view.current_viewport(&page), None);
+    assert_eq!(fixture.view.playwright_viewport(&page), None);
+    assert!(
+        fixture
+            .native
+            .lock()
+            .emulation
+            .values()
+            .any(|state| state.metrics.is_some())
+    );
+    fixture.native.lock().fail = None;
+    let session = fixture.view.page_session(page.clone()).await?;
+    assert!(
+        fixture.view.repair_viewport(&page, &session).await.is_err(),
+        "a failed retry must not claim the default reset completed"
+    );
+    assert!(fixture.viewports.default_pending(&page));
+    fixture.native.lock().fail_clear = false;
+    fixture.view.repair_viewport(&page, &session).await?;
+    assert!(!fixture.viewports.default_pending(&page));
+    assert!(
+        fixture
+            .native
+            .lock()
+            .emulation
+            .values()
+            .all(|state| state.metrics.is_none()),
+        "the next SDK page admission clears the rejected browser override"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn playwright_changes_need_no_renderer_probe_and_publish_only_after_success() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     let page = fixture.page(1).await?;
@@ -444,9 +496,22 @@ async fn playwright_changes_need_no_renderer_probe_and_publish_only_after_succes
         .await?;
     assert_eq!(fixture.view.current_viewport(&page), Some(request));
     assert_eq!(fixture.view.playwright_viewport(&page), request.size());
+    fixture.viewports.invalidate(&page);
+    let session = fixture.view.page_session(page.clone()).await?;
+    fixture.view.repair_viewport(&page, &session).await?;
+    fixture
+        .view
+        .prepare_playwright_viewport(page, request)
+        .await?
+        .apply()
+        .await?;
     assert!(
         fixture.native.calls("Runtime.evaluate").is_empty(),
         "a CDP resize must not depend on a live document or isolated world"
+    );
+    assert!(
+        fixture.native.calls("Browser.getVersion").is_empty(),
+        "desktop Playwright metrics and their rollback need no browser identity probe"
     );
     Ok(())
 }
