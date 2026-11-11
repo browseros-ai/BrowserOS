@@ -468,7 +468,7 @@ mod tests {
     use crate::op_spec::Capability;
     use crate::target::CallHeader;
     use crate::test_env::{self, EnvCall, TestEnv};
-    use crate::{Answer, ErrorCode, Refusal, TimedOut};
+    use crate::{Answer, ErrorCode, OpEnv, Refusal, RunState, TimedOut};
 
     fn op(name: &str) -> Result<Op, Box<dyn Error>> {
         Ok(Op::from_name(name).ok_or(format!("{name} is an op"))?)
