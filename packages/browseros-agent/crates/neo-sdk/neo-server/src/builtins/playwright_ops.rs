@@ -69,13 +69,15 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `pressSequentially`, `check`, `uncheck`, `setChecked`, `selectOption`, `selectText`, \
     `focus`, `blur`, `dragTo`, `drop`, `dispatchEvent`, `scrollIntoViewIfNeeded`; no `tap`), \
     `page.keyboard` (`press`, `type`, `insertText`, `down`, `up`), `page.mouse` (`move`, \
-    `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `waitForURL`, \
-    `waitForLoadState`), scripts in the page's main world (`page.evaluate`, \
+    `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `goBack`, \
+    `goForward`, `waitForURL`, `waitForLoadState`, `waitForNavigation`), scripts in the page's \
+    main world (`page.evaluate`, \
     `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, \
     `locator.waitForFunction`, `elementHandle.evaluate`, \
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
-    `page.emulateMedia` (per page across runs and navigations), \
+    `page.emulateMedia` (per page across runs and navigations), `page.setViewportSize` (the \
+    tab keeps the size in later runs, until it closes), \
     `page.addScriptTag` and `page.addStyleTag` (also on frames), returning element handles, \
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, init scripts \
     (`page.addInitScript`, `context.addInitScript`) that every new document runs in its main \
@@ -104,7 +106,8 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     file Neo's process can read, as Playwright does \
     (a relative path resolves against Neo's working directory): the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
-    call. A directory upload needs its tab in front. An init script or a binding stays \
+    call. A directory upload needs its tab in front, and the tabs Neo opens for an agent stay \
+    in the background (`bringToFront` is refused). An init script or a binding stays \
     registered until the run ends, then its tab no longer has it; a context's reaches each tab \
     before the run's first write to it, so a popup's first document and cross-site iframes run \
     without it. A page's call of a binding reaches the script through the event pump, so a \

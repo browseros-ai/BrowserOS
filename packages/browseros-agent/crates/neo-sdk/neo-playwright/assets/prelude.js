@@ -10644,7 +10644,7 @@ Timeout: ${timeout}ms`);
     },
     Download: {
       cancel: "Neo keeps the run's downloads; it cannot cancel one",
-      createReadStream: "read a finished download with download.saveAs(path)",
+      createReadStream: "Neo gives a script the saved file, not its bytes: await download.path() and upload it with setInputFiles; the host reads the bytes from the run",
       delete: "Neo keeps the run's downloads; it cannot delete one"
     },
     ConsoleMessage: {
