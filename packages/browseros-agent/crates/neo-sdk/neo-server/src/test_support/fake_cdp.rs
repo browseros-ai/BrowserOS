@@ -149,6 +149,34 @@ impl FakeCdp {
         TabId(tab)
     }
 
+    /// A tab opened by another page, announced with CDP's openerId.
+    pub fn open_popup(&self, opener: TabId, url: &str) -> TabId {
+        let mut state = self.lock();
+        let tab = state.add_tab(url, "Popup");
+        let events = state.created_events(tab);
+        let opener = state
+            .tabs
+            .iter()
+            .find(|entry| entry.tab == opener.0)
+            .map(|entry| entry.target.clone());
+        let events = events
+            .into_iter()
+            .map(|mut event| {
+                if let Some(info) = event
+                    .params
+                    .get_mut("targetInfo")
+                    .and_then(Value::as_object_mut)
+                {
+                    info.insert("openerId".to_owned(), json!(opener));
+                }
+                event
+            })
+            .collect();
+        drop(state);
+        self.emit(events);
+        TabId(tab)
+    }
+
     /// Closes a tab the way the owner would. `false` when the fake has no such tab.
     pub fn close_tab(&self, tab: TabId) -> bool {
         let mut state = self.lock();

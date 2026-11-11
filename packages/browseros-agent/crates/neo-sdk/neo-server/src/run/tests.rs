@@ -21,7 +21,7 @@ use super::{
     ReplyError, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest, RunService, RunTimeout,
 };
 use crate::config::Defaults;
-use crate::dispatch::{ErrorCode, OperationError, TEXT_CHARS};
+use crate::dispatch::{ErrorCode, OperationError, TEXT_CHARS, TaskKind};
 use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
 
 /// Long enough that only the tests about orphans ever see it run out.
@@ -866,6 +866,162 @@ fn a_local_observation_failure_after_a_completed_write_is_not_retryable() -> Res
             "the realm cannot forge trusted operation provenance"
         );
         assert_eq!(error.delivery, None);
+        Ok(())
+    })
+}
+
+#[test]
+fn unhosted_runs_have_fresh_defaults_and_replay_their_task_notes() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let code = "return (await __neo.invoke('test.touch', { page })).tab;";
+        let previous = service.run(request(code, meta(None, None)?)?).await;
+        assert_eq!(previous.status, ReplyStatus::Ok);
+        let one = request(code, meta(Some("auto-one"), None)?)?;
+        let two = request(code, meta(Some("auto-two"), None)?)?;
+        let (first, second) = tokio::join!(service.run(one), service.run(two));
+        assert_eq!(first.status, ReplyStatus::Ok, "{first:?}");
+        assert_eq!(second.status, ReplyStatus::Ok, "{second:?}");
+        assert_ne!(
+            first.value, second.value,
+            "unhosted runs never share their default tab"
+        );
+        assert_ne!(
+            first.value, previous.value,
+            "a no-task run never inherits the previous tab"
+        );
+        assert_ne!(
+            second.value, previous.value,
+            "both concurrent runs start fresh"
+        );
+        assert_eq!(first.tasks.len(), 1);
+        assert_eq!(second.tasks.len(), 1);
+        assert_ne!(first.tasks[0].id, second.tasks[0].id);
+        assert_eq!(first.tasks[0].kind, TaskKind::BuiltinPage);
+        assert_eq!(json!(first.tasks[0].tabs[0].tab), first.value);
+        assert_eq!(first.tasks[0].tabs[0].url, "about:blank");
+        assert!(
+            rig.fake
+                .close_tab(browseros_core::TabId(first.tasks[0].tabs[0].tab))
+        );
+        rig.sink.flush().await?;
+        let replay = rig
+            .restarted_service(GRACE)?
+            .run(request(code, meta(Some("auto-one"), None)?)?)
+            .await;
+        assert_eq!(
+            *replay, *first,
+            "a stored replay keeps the original tabs and URLs"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn failed_scripts_keep_created_and_fetched_tasks_in_first_touch_order() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = "const first = await __neo.invoke('neo.createTask', { name: ' first ' });\nconst second = await __neo.invoke('neo.createTask', { name: 'second' });\nawait __neo.invoke('neo.task', { id: first.id });\nthrow new Error('later failure');";
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(code, meta(None, None)?)?)
+            .await;
+        assert_eq!(reply.status, ReplyStatus::Error);
+        assert_eq!(reply.tasks.len(), 2);
+        assert_eq!(reply.tasks[0].name.as_deref(), Some("first"));
+        assert_eq!(reply.tasks[1].name.as_deref(), Some("second"));
+        assert_eq!(reply.tasks[0].kind, TaskKind::Created);
+        assert!(reply.tasks.iter().all(|task| task.tabs.is_empty()));
+        let fetched = rig.run_service(GRACE).run(request(
+            &format!("await __neo.invoke('neo.task', {{ id: '{}' }}); throw new Error('failed again');", reply.tasks[0].id),
+            meta(None, None)?,
+        )?).await;
+        assert_eq!(fetched.tasks[0].kind, TaskKind::Fetched);
+        assert_eq!(fetched.tasks[0].id, reply.tasks[0].id);
+        Ok(())
+    })
+}
+
+#[test]
+fn host_defaults_keep_their_last_tab_and_only_report_explicit_fetches() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let first = service
+            .run(request(
+                "return (await __neo.invoke('test.touch', { page })).tab;",
+                meta(None, Some("host-task"))?,
+            )?)
+            .await;
+        assert_eq!(first.status, ReplyStatus::Ok, "{first:?}");
+        assert!(
+            first.tasks.is_empty(),
+            "host-only task ids stay out of recovery notes"
+        );
+        let tab = browseros_core::TabId(first.value.as_i64().ok_or("tab id")?);
+        assert_eq!(rig.tabs.owner(tab), Some(TaskId::parse("host-task")?));
+        let again = service
+            .run(request(
+                "return page.toJSON().tab;",
+                meta(None, Some("host-task"))?,
+            )?)
+            .await;
+        assert_eq!(again.value, first.value);
+        let fetched = service
+            .run(request(
+                "return await __neo.invoke('neo.task', { id: 'host-task' });",
+                meta(None, None)?,
+            )?)
+            .await;
+        assert_eq!(fetched.tasks[0].kind, TaskKind::Fetched);
+        assert_eq!(
+            fetched.value["pages"],
+            json!([{ "$neo": "page", "tab": tab }])
+        );
+        let other = rig.owner_tab("https://other.example/").await?;
+        let touched = service.run(request(
+            &format!("return await __neo.invoke('test.touch', {{ page: {{ '$neo': 'page', tab: {} }} }});", other.tab.0),
+            meta(None, Some("host-task"))?,
+        )?).await;
+        assert_eq!(touched.status, ReplyStatus::Ok);
+        let last = service
+            .run(request(
+                "return page.toJSON().tab;",
+                meta(None, Some("host-task"))?,
+            )?)
+            .await;
+        assert_eq!(
+            last.value,
+            json!(other.tab),
+            "the existing host rule follows the last explicit touch"
+        );
+        assert_eq!(
+            rig.tabs.owner(other.tab),
+            None,
+            "touching never takes a user's tab"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn task_notes_read_urls_at_reply_time() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let code = "await context.newPage(); await __neo.invoke('test.gate', {}); await __neo.invoke('test.gate', {});";
+        let request = request(code, meta(None, None)?)?;
+        let pending = tokio::spawn(async move { service.run(request).await });
+        within(Duration::from_secs(5), rig.gate.wait()).await?;
+        let tab = *rig.fake.tabs().first().ok_or("opened tab")?;
+        assert!(
+            rig.fake
+                .navigate_tab(tab, "https://changed.example/", "Changed")
+        );
+        within(Duration::from_secs(5), rig.gate.wait()).await?;
+        let reply = within(Duration::from_secs(5), pending).await??;
+        assert_eq!(reply.tasks[0].tabs[0].url, "https://changed.example/");
         Ok(())
     })
 }

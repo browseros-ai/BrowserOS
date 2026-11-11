@@ -3293,3 +3293,426 @@ async fn worker_bookkeeping_can_unsubscribe_after_its_page_closed() -> Result<()
     assert!(refused.error.message().contains("retiredTab"));
     Ok(())
 }
+
+#[tokio::test]
+async fn parallel_unhosted_runs_get_distinct_default_tabs_and_tasks() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let owner = harness.owner_tab("https://owner.example/").await?;
+    let (first, _first_guard) = harness.run()?;
+    let (second, _second_guard) = harness.run()?;
+    let lazy = json!({ "page": { "$neo": "page", "tab": null } });
+    let (one, two) = tokio::join!(
+        harness.submit(&first, "page.opener", lazy.clone()),
+        harness.submit(&second, "page.opener", lazy.clone()),
+    );
+    let one_page = one.default_page.clone().ok_or("first default")?;
+    let two_page = two.default_page.clone().ok_or("second default")?;
+    value(one)?;
+    value(two)?;
+    assert_ne!(
+        one_page, two_page,
+        "parallel runs cannot inherit each other's tab"
+    );
+    assert_ne!(one_page, owner);
+    assert_ne!(two_page, owner);
+    let first_task = harness.tabs.owner(one_page.tab).ok_or("first auto task")?;
+    let second_task = harness.tabs.owner(two_page.tab).ok_or("second auto task")?;
+    assert_ne!(first_task, second_task);
+    assert_eq!(
+        harness
+            .submit(&first, "page.opener", lazy)
+            .await
+            .default_page,
+        Some(one_page)
+    );
+    assert_eq!(
+        harness.fake.count("Browser.createTab"),
+        2,
+        "one lazy tab per run"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tasks_list_oldest_first_and_close_only_their_own_tabs() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owner = harness.owner_tab("https://owner.example/").await?;
+    let (run, _guard) = harness.run()?;
+    let one = value(
+        harness
+            .submit(&run, "neo.createTask", json!({ "name": " HN top 5 " }))
+            .await,
+    )?;
+    let two = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    assert!(
+        one["id"]
+            .as_str()
+            .ok_or("task id")?
+            .starts_with("hn-top-5-")
+    );
+    assert_eq!(one["pages"], json!([]));
+    let first = page_of(&value(
+        harness
+            .submit(&run, "task.newPage", json!({ "task": one["id"] }))
+            .await,
+    )?)?;
+    let other = page_of(&value(
+        harness
+            .submit(&run, "task.newPage", json!({ "task": two["id"] }))
+            .await,
+    )?)?;
+    let second = page_of(&value(
+        harness
+            .submit(&run, "task.newPage", json!({ "task": one["id"] }))
+            .await,
+    )?)?;
+    let (later, _later_guard) = harness.run()?;
+    let fetched = harness
+        .submit(&later, "neo.task", json!({ "id": one["id"] }))
+        .await;
+    assert_eq!(fetched.pages.len(), 2);
+    assert!(
+        fetched
+            .pages
+            .iter()
+            .all(|fact| fact.task_id.as_deref() == one["id"].as_str())
+    );
+    assert_eq!(value(fetched)?["pages"], json!([first, second]));
+    let closed = value(
+        harness
+            .submit(&later, "task.close", json!({ "task": one["id"] }))
+            .await,
+    )?;
+    assert_eq!(closed["closed"], json!([first.tab, second.tab]));
+    assert!(!harness.is_open(first.tab).await?);
+    assert!(!harness.is_open(second.tab).await?);
+    assert!(
+        harness.is_open(other.tab).await?,
+        "the other task stays open"
+    );
+    assert!(harness.is_open(owner.tab).await?, "a user's tab stays open");
+    assert_eq!(
+        harness.tabs.owner(first.tab),
+        None,
+        "ownership ends with the tab"
+    );
+    let absent = failure(
+        harness
+            .submit(&later, "neo.task", json!({ "id": one["id"] }))
+            .await,
+    )?;
+    assert_eq!(absent.error.code(), ErrorCode::TASK_NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_partial_task_close_keeps_refused_tabs_and_closes_the_rest() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let task = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    let held = page_of(&value(
+        harness
+            .submit(&run, "task.newPage", json!({ "task": task["id"] }))
+            .await,
+    )?)?;
+    let free = page_of(&value(
+        harness
+            .submit(&run, "task.newPage", json!({ "task": task["id"] }))
+            .await,
+    )?)?;
+    let _lock = harness.lock(held.tab, Reads::Allow).await?;
+    let refused = failure(
+        harness
+            .submit(&run, "task.close", json!({ "task": task["id"] }))
+            .await,
+    )?;
+    assert_eq!(refused.error.code(), ErrorCode::OWNER_HAS_CONTROL);
+    assert!(harness.is_open(held.tab).await?);
+    assert!(
+        !harness.is_open(free.tab).await?,
+        "one refusal does not abandon the remaining closes"
+    );
+    let fetched = value(
+        harness
+            .submit(&run, "neo.task", json!({ "id": task["id"] }))
+            .await,
+    )?;
+    assert_eq!(fetched["pages"], json!([held]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_fetch_requires_explicit_new_pages_and_never_opens_a_lazy_default()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (creator, _creator_guard) = harness.run()?;
+    let task = value(harness.submit(&creator, "neo.createTask", json!({})).await)?;
+    let (fetcher, _fetcher_guard) = harness.run()?;
+    value(
+        harness
+            .submit(&fetcher, "neo.task", json!({ "id": task["id"] }))
+            .await,
+    )?;
+    for run in [&creator, &fetcher] {
+        for (name, input) in [
+            (
+                "page.opener",
+                json!({ "page": { "$neo": "page", "tab": null } }),
+            ),
+            ("context.newPage", json!({})),
+        ] {
+            let refused = failure(harness.submit(run, name, input).await)?;
+            assert_eq!(refused.error.owner(), ErrorOwner::Script);
+            assert_eq!(refused.error.code(), ErrorCode::TASK_PAGE_REQUIRED);
+            assert!(
+                refused
+                    .error
+                    .message()
+                    .contains(task["id"].as_str().ok_or("id")?)
+            );
+            assert_eq!(refused.delivery, Delivery::NotSent);
+        }
+    }
+    assert!(
+        harness.fake.tabs().is_empty(),
+        "both slips fail before any tab opens"
+    );
+    let explicit = harness
+        .submit(&creator, "task.newPage", json!({ "task": task["id"] }))
+        .await;
+    assert_eq!(explicit.pages.len(), 1);
+    assert_eq!(explicit.pages[0].task_id.as_deref(), task["id"].as_str());
+    value(explicit)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_already_open_default_survives_a_fetch_and_shares_its_ambient_task()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let opened = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let lazy = json!({ "page": { "$neo": "page", "tab": null } });
+    let default = harness.submit(&run, "page.opener", lazy.clone()).await;
+    let default_page = default.default_page.clone().ok_or("default")?;
+    value(default)?;
+    assert_ne!(opened, default_page);
+    assert_eq!(
+        harness.tabs.owner(opened.tab),
+        harness.tabs.owner(default_page.tab)
+    );
+    value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    let after = harness.submit(&run, "page.opener", lazy).await;
+    assert_eq!(after.default_page, Some(default_page));
+    value(after)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn neo_tabs_reaches_user_tabs_with_null_task_facts() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owner = harness.owner_tab("https://owner.example/").await?;
+    let (run, _guard) = harness.run()?;
+    let tabs = harness.submit(&run, "neo.tabs", json!({})).await;
+    assert_eq!(tabs.pages.len(), 1);
+    assert_eq!(serde_json::to_value(&tabs.pages[0])?["taskId"], Value::Null);
+    assert_eq!(value(tabs)?["pages"], json!([owner]));
+    assert_eq!(harness.tabs.owner(owner.tab), None);
+    value(
+        harness
+            .submit(&run, "page.opener", json!({ "page": owner }))
+            .await,
+    )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_tasks_fail_before_any_browser_write() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    for (name, input) in [
+        ("neo.task", json!({ "id": "missing" })),
+        ("task.newPage", json!({ "task": "missing" })),
+        ("task.close", json!({ "task": "missing" })),
+    ] {
+        let refused = failure(harness.submit(&run, name, input).await)?;
+        assert_eq!(refused.error.owner(), ErrorOwner::Script);
+        assert_eq!(refused.error.code(), ErrorCode::TASK_NOT_FOUND);
+        assert_eq!(refused.delivery, Delivery::NotSent);
+        assert!(refused.error.message().contains("neo.tabs()"));
+    }
+    assert!(harness.fake.tabs().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn popups_inherit_their_openers_task_without_a_script_listener() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let task = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    let opener = page_of(&value(
+        harness
+            .submit(&run, "task.newPage", json!({ "task": task["id"] }))
+            .await,
+    )?)?;
+    let user = harness.owner_tab("https://owner.example/").await?;
+    let popup = harness
+        .fake
+        .open_popup(opener.tab, "https://popup.example/");
+    let user_popup = harness
+        .fake
+        .open_popup(user.tab, "https://user-popup.example/");
+    within(async {
+        while harness.tabs.owner(popup).is_none() {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let fetched = harness
+        .submit(&run, "neo.task", json!({ "id": task["id"] }))
+        .await;
+    assert_eq!(
+        value(fetched)?["pages"],
+        json!([opener, PageRef { tab: popup }])
+    );
+    assert_eq!(
+        harness.tabs.owner(user_popup),
+        None,
+        "a user's popup has no task"
+    );
+    value(
+        harness
+            .submit(&run, "task.close", json!({ "task": task["id"] }))
+            .await,
+    )?;
+    assert!(
+        !harness.is_open(popup).await?,
+        "task.close includes the inherited popup"
+    );
+    assert!(harness.is_open(user_popup).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_task_close_waits_for_its_inflight_open() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let task = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    harness.fake.hold_next("Browser.createTab");
+    let opening = harness.dispatcher.submit(
+        &run,
+        Call::script(
+            "task.newPage".to_owned(),
+            json!({ "task": task["id"] }),
+            None,
+        ),
+    );
+    within(async {
+        while harness.fake.count("Browser.createTab") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let closing = harness.dispatcher.submit(
+        &run,
+        Call::script("task.close".to_owned(), json!({ "task": task["id"] }), None),
+    );
+    harness.fake.release_held();
+    let page = page_of(&value(within(opening.wait()).await?)?)?;
+    let closed = value(within(closing.wait()).await?)?;
+    assert_eq!(closed["closed"], json!([page.tab]));
+    assert!(!harness.is_open(page.tab).await?);
+    let absent = failure(
+        harness
+            .submit(&run, "neo.task", json!({ "id": task["id"] }))
+            .await,
+    )?;
+    assert_eq!(absent.error.code(), ErrorCode::TASK_NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn task_inputs_reject_typos_and_invalid_names() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    for input in [
+        json!({ "name": null }),
+        json!({ "name": "x".repeat(201) }),
+        json!({ "typo": true }),
+    ] {
+        let refused = failure(harness.submit(&run, "neo.createTask", input).await)?;
+        assert_eq!(refused.error.code(), ErrorCode::INVALID_INPUT);
+    }
+    let empty = value(
+        harness
+            .submit(&run, "neo.createTask", json!({ "name": "  " }))
+            .await,
+    )?;
+    assert!(empty["id"].as_str().ok_or("id")?.starts_with("t-"));
+    let unicode = value(
+        harness
+            .submit(&run, "neo.createTask", json!({ "name": "é".repeat(200) }))
+            .await,
+    )?;
+    assert!(
+        unicode["id"].as_str().ok_or("id")?.starts_with("t-"),
+        "the limit counts characters and the slug stays ASCII"
+    );
+    Ok(())
+}
+
+struct TaskPopupEvent;
+
+impl Method for TaskPopupEvent {
+    type Input = Value;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("events.next", Effect::Read)
+    }
+    fn target(_input: &Value) -> Option<&PageTarget> {
+        None
+    }
+    fn call(
+        &self,
+        op: &OpCtx<Self>,
+        input: Value,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        future::ready(EventRelease::Batch.release(op, input))
+    }
+}
+
+#[tokio::test]
+async fn a_popup_event_assigns_ownership_before_its_first_fact() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let task = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    let opener = page_of(&value(
+        harness
+            .submit(&run, "task.newPage", json!({ "task": task["id"] }))
+            .await,
+    )?)?;
+    // No openerId on the fake target: only the delivered popup event can assign this tab.
+    let popup = harness.owner_tab("https://event-popup.example/").await?;
+    assert_eq!(harness.tabs.owner(popup.tab), None);
+    let door = harness.dispatcher_with(Vec::new(), |registry| registry.define(TaskPopupEvent))?;
+    let reply = door.submit(&run, Call::script("events.next".to_owned(), json!({
+        "events": [{ "seq": 1, "event": "popup", "page": opener,
+            "popup": { "page": popup, "url": "https://event-popup.example/" } }], "lost": 0,
+    }), None)).wait().await;
+    assert_eq!(
+        reply
+            .pages
+            .iter()
+            .find(|fact| fact.tab == popup.tab)
+            .and_then(|fact| fact.task_id.as_deref()),
+        task["id"].as_str()
+    );
+    value(reply)?;
+    Ok(())
+}
