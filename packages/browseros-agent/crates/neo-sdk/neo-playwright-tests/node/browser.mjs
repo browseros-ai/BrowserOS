@@ -62,6 +62,9 @@ export function isAlive(pid) {
 function groupOwned(pid, profile) {
   const processes = execFileSync('ps', ['-axo', 'pgid=,command='], {
     encoding: 'utf8',
+    // Concurrent agents can have very large command lines. Ownership must still be checked
+    // before cleanup; Node's 1 MiB default can otherwise strand the private browser group.
+    maxBuffer: 16 * 1024 * 1024,
   })
   return processes.split('\n').some((line) => {
     const match = line.trim().match(/^(\d+)\s+(.*)$/)

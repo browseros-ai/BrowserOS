@@ -170,10 +170,9 @@ test('navigation effects preserve deadlines, facts, responses and close semantic
     const waiter = page.waitForEvent('download').catch((error) => error)
     await Promise.all([page.close(), page.close()])
     await page.close()
-    assert.match(
-      (await waiter).message,
-      /Target page, context or browser has been closed/,
-    )
+    const closed = await waiter
+    assert.equal(closed.code, 'target_closed')
+    assert.doesNotMatch(closed.message, /CDP error/)
     assert((await childWait) instanceof Error)
     assert.equal(page.isClosed(), true)
     record('close is idempotent and rejects other event waiters')
