@@ -21,6 +21,8 @@ import { handleMcp, type McpProxyDeps } from './proxy/mcp-proxy'
 
 /** The longest `stop` waits for open connections to close. */
 const STOP_WAIT_MS = 2_000
+/** The longest an export waits for Neo's records of runs that just ended. */
+const EXPORT_JOIN_WAIT_MS = 3_000
 
 /** Seams tests replace: the clock, Neo's host API, and where exports go. */
 export interface ViewerSeams {
@@ -76,9 +78,11 @@ export async function startViewer(
   // Export: every run since the last Clear, as the store holds them at the click (one snapshot,
   // so a run or Clear during the export changes none of its files).
   const exportRuns = async () => {
+    // Neo's records of runs that just ended are still being read; wait a little for them.
     const [viewerInfo, commit] = await Promise.all([
       currentInfo(),
       viewerCommit(),
+      joiner.settled(EXPORT_JOIN_WAIT_MS),
     ])
     const { runs, log, toolsList, rawLog } = store.snapshot()
     const written = await writeExport(

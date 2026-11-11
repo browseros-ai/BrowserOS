@@ -224,3 +224,23 @@ test('stopping waits for a read in flight, so its record is attached before the 
   await joiner.stop()
   expect(fake.attached.map(([id]) => id)).toEqual(['r1'])
 })
+
+test('settling waits for a read in flight and keeps joining (an export right after a run)', async () => {
+  const fake = fakeStore()
+  const joiner = joinNeoRuns(fake.store, async () => {
+    await Bun.sleep(50)
+    return toNeoRunRecord(RUN)
+  })
+  fake.emit({ id: 'r1', status: 'ok', neoRunId: '01a1' })
+  await joiner.settled(1_000)
+  expect(fake.attached.map(([id]) => id)).toEqual(['r1'])
+  // Still joining after it settled.
+  fake.emit({ id: 'r2', status: 'ok', neoRunId: '01a2' })
+  await joiner.settled(1_000)
+  expect(fake.attached.map(([id]) => id)).toEqual(['r1', 'r2'])
+  // A read slower than the wait does not hold the caller past it.
+  const slow = joinNeoRuns(fakeStore().store, () => new Promise(() => {}))
+  const started = Date.now()
+  await slow.settled(30)
+  expect(Date.now() - started).toBeLessThan(500)
+})
