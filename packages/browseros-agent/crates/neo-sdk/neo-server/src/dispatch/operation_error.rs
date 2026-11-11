@@ -84,6 +84,13 @@ impl OperationError {
         self
     }
 
+    /// The same failure without a matcher's facts, for a copy kept after the script has them.
+    #[must_use]
+    pub(crate) fn without_matcher(mut self) -> Self {
+        self.matcher = None;
+        self
+    }
+
     /// A failed matcher's facts, for the script's error; `None` for every other failure.
     #[must_use]
     pub(crate) fn matcher(&self) -> Option<&Value> {

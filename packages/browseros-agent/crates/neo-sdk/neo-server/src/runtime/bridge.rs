@@ -165,7 +165,11 @@ impl Bridge {
             if failures.len() == FAILURES_REMEMBERED {
                 failures.pop_front();
             }
-            failures.push_back(failure.clone());
+            // The run's own error needs only the failure's fields; a matcher's snapshot and log
+            // go to the script in the reply below and are not kept for the rest of the run.
+            let mut remembered = failure.clone();
+            remembered.error = remembered.error.without_matcher();
+            failures.push_back(remembered);
         }
         envelope(&reply)
     }
