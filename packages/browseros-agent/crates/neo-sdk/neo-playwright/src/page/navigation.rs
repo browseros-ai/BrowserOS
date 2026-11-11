@@ -185,15 +185,7 @@ pub(crate) async fn navigate(
         page,
         id: frame.clone(),
     };
-    let drive = async {
-        let response = drive(scope, &session, &target, &mut watch, navigation, wait_until).await?;
-        // Restoration supplies readiness for the cached document and its entire subtree;
-        // fresh watches would wait for lifecycle events Chromium will not emit again.
-        if wait_until == LoadState::NetworkIdle && !watch.restored_from_cache() {
-            subtree_load::network_idle(pw, scope, page, &frame).await?;
-        }
-        Ok::<_, PlaywrightError>(response)
-    };
+    let drive = drive(scope, &session, &target, &mut watch, navigation, wait_until);
     let response = match scope.within(drive).await {
         Ok(response) => response?,
         Err(_expired) => {
@@ -207,6 +199,18 @@ pub(crate) async fn navigate(
             return Err(scope.timed_out(code));
         }
     };
+    // A restored main document can create new child documents in pageshow. Discover the
+    // current subtree and explicitly replay its lifecycle after the restore; a new child's
+    // genuine load wait remains website-owned. Both phases share the scope's one deadline.
+    if wait_until == LoadState::NetworkIdle {
+        match scope
+            .within(subtree_load::network_idle(pw, scope, page, &frame))
+            .await
+        {
+            Ok(result) => result?,
+            Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
+        }
+    }
     let result = NavigationResult {
         response,
         url: watch.url().map(str::to_owned),

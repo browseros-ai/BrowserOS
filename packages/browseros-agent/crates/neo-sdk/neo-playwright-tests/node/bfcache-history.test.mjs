@@ -1,12 +1,13 @@
 // biome-ignore-all lint/suspicious/noUndeclaredEnvVars: This standalone Node harness is not a Turbo task.
 /** Desktop history restores must complete without new lifecycle events or disabling BFCache. */
 import assert from 'node:assert/strict'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { Cdp } from '../js/browser.mjs'
 import { browserVersion, launchBrowser } from './browser.mjs'
 import { openClaw } from './claw-loader.mjs'
 
@@ -15,56 +16,50 @@ async function observe(port, url) {
   const version = await (
     await fetch(`http://127.0.0.1:${port}/json/version`)
   ).json()
-  const socket = new WebSocket(version.webSocketDebuggerUrl)
-  await once(socket, 'open', { signal: AbortSignal.timeout(5000) })
-  let sequence = 0
-  const pending = new Map()
-  const events = []
-  socket.addEventListener('message', ({ data }) => {
-    const reply = JSON.parse(data)
-    if (!reply.id) {
-      if (reply.method === 'Page.frameNavigated') events.push(reply.params)
-      return
-    }
-    const request = pending.get(reply.id)
-    if (!request) return
-    pending.delete(reply.id)
-    clearTimeout(request.timer)
-    if (reply.error) request.reject(new Error(reply.error.message))
-    else request.resolve(reply.result)
+  const cdp = await Cdp.connect(version.webSocketDebuggerUrl, {
+    timeoutMs: 5000,
   })
-  const close = () => {
-    for (const request of pending.values()) {
-      clearTimeout(request.timer)
-      request.reject(new Error('CDP observer closed'))
-    }
-    pending.clear()
-    socket.close()
-  }
-  const send = (method, params = {}, sessionId) =>
-    new Promise((resolve, reject) => {
-      const id = ++sequence
-      const timer = setTimeout(() => {
-        pending.delete(id)
-        reject(new Error(`CDP observer timed out: ${method}`))
-      }, 5000)
-      pending.set(id, { resolve, reject, timer })
-      socket.send(JSON.stringify({ id, method, params, sessionId }))
-    })
   try {
-    const { targetInfos } = await send('Target.getTargets')
+    const { targetInfos } = await cdp.send('Target.getTargets')
     const target = targetInfos.find((target) => target.url === url)
     assert(target)
-    const { sessionId } = await send('Target.attachToTarget', {
+    const { sessionId } = await cdp.send('Target.attachToTarget', {
       targetId: target.targetId,
       flatten: true,
     })
-    await send('Page.enable', {}, sessionId)
+    await cdp.send('Page.enable', {}, sessionId)
     return {
-      events,
-      close,
+      close: () => cdp.close(),
+      // Subscribe synchronously before the SDK sends its command. The independent socket
+      // may deliver after the SDK has already resolved, so the proof has its own deadline.
+      restored(url) {
+        return new Promise((resolve, reject) => {
+          let offDisconnect = () => {}
+          const unsubscribe = cdp.subscribe((event) => {
+            if (
+              event.sessionId === sessionId &&
+              event.method === 'Page.frameNavigated' &&
+              event.params.type === 'BackForwardCacheRestore' &&
+              event.params.frame.url === url
+            )
+              finish(undefined, event.params)
+          })
+          const finish = (error, event) => {
+            clearTimeout(timer)
+            unsubscribe()
+            offDisconnect()
+            if (error) reject(error)
+            else resolve(event)
+          }
+          const timer = setTimeout(
+            () => finish(new Error('No BFCache restore observed')),
+            5000,
+          )
+          offDisconnect = cdp.onDisconnect((error) => finish(error))
+        })
+      },
       async marker() {
-        const { result } = await send(
+        const { result } = await cdp.send(
           'Runtime.evaluate',
           {
             expression: 'globalThis.cacheMarker',
@@ -76,7 +71,7 @@ async function observe(port, url) {
       },
     }
   } catch (error) {
-    close()
+    await cdp.close()
     throw error
   }
 }
@@ -91,8 +86,24 @@ test('desktop BFCache back and forward reach every load state', {
       'bfcache-history-',
     ),
   )
+  const requests = new EventEmitter()
+  let slowResponse
   const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'text/html')
+    if (req.url === '/slow.js') {
+      slowResponse = res
+      requests.emit('slow')
+      return
+    }
+    if (req.url === '/loading-child')
+      return res.end('<script src="/slow.js"></script>')
+    if (req.url === '/restore-child')
+      return res.end(`<script>addEventListener('pageshow', event => {
+      if (event.persisted) {
+        const child = document.createElement('iframe'); child.src = '/loading-child';
+        document.body.appendChild(child);
+      }
+    })</script>`)
     res.end(
       `<title>${req.url}</title><script>globalThis.cacheMarker = crypto.randomUUID()</script>`,
     )
@@ -132,20 +143,11 @@ test('desktop BFCache back and forward reach every load state', {
         ['goBack', 'a'],
         ['goForward', 'b'],
       ]) {
-        const after = observer.events.length
         const started = Date.now()
-        const response = await page[method]({ waitUntil, timeout: 3000 })
-        const restored = observer.events
-          .slice(after)
-          .find(
-            (event) =>
-              event.type === 'BackForwardCacheRestore' &&
-              event.frame.url === `${url}/${entry}`,
-          )
-        assert(
-          restored,
-          `${method}(${waitUntil}) must actually restore from BFCache`,
-        )
+        const [restored, response] = await Promise.all([
+          observer.restored(`${url}/${entry}`),
+          page[method]({ waitUntil, timeout: 3000 }),
+        ])
         assert.equal(page.url(), `${url}/${entry}`)
         assert.equal(await observer.marker(), markers[entry])
         if (response) {
@@ -165,8 +167,37 @@ test('desktop BFCache back and forward reach every load state', {
       }
     }
     assert.equal(passed.length, 8)
+    // A restored parent's states cannot make a new pageshow child ready. Its stalled
+    // resource is a real website wait, unlike Neo missing the parent's restore event.
+    await page.goto(`${url}/restore-child`)
+    await page.goto(`${url}/b`)
+    const requested = once(requests, 'slow', {
+      signal: AbortSignal.timeout(5000),
+    })
+    const childRestore = observer.restored(`${url}/restore-child`)
+    const [error] = await Promise.all([
+      page
+        .goBack({ waitUntil: 'networkidle', timeout: 1000 })
+        .catch((error) => error),
+      childRestore,
+      requested,
+    ])
+    assert.equal(error.code, 'wait_timeout')
+    assert.equal(error.owner, 'website')
+    slowResponse.end('')
+    fs.writeFileSync(
+      path.join(output, 'proof.json'),
+      JSON.stringify(
+        {
+          passed,
+          newChildWait: { owner: error.owner, code: error.code },
+        },
+        null,
+        2,
+      ),
+    )
   } finally {
-    observer?.close()
+    await observer?.close()
     try {
       await sdk?.finish()
     } finally {
