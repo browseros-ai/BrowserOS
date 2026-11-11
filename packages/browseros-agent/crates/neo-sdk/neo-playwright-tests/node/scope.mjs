@@ -69,7 +69,7 @@ export function scopeForRun(run) {
 /** Use Playwright outcomes, including flaky/expected failures; skips stay in the denominator. */
 export function scoreResults(results, manifest = loadScope()) {
   validateScope(manifest)
-  const cases = flattenResults(results)
+  const cases = flattenResults(results, [], { allowRepeated: true })
   const all = { passed: 0, total: cases.length }
   const inScope = { passed: 0, total: 0 }
   const byReason = Object.fromEntries(

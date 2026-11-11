@@ -358,8 +358,11 @@ export function main(args = process.argv.slice(2)) {
     if (!values[key]) throw new Error(`Missing required --${key}`)
   const inputs = [
     values.bridge,
+    fileURLToPath(new URL('../scope.json', import.meta.url)),
     ...[values.neo, values.reference].flatMap((dir) =>
-      ['results.json', 'run.json'].map((file) => path.join(dir, file)),
+      ['results.json', 'run.json', 'scope.json'].map((file) =>
+        path.join(dir, file),
+      ),
     ),
   ].map((file) => path.resolve(file))
   const outputs = [values.out, values.json]

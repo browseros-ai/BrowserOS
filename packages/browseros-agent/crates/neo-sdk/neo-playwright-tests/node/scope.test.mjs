@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { flattenResults } from './report/classify.mjs'
 import {
   loadScope,
   recordScope,
@@ -90,6 +91,36 @@ test('file selectors count each selected case once and empty selections have no 
     passed: 0,
     total: 0,
   })
+})
+
+test('repeat-each instances count independently while offline joins still require unique cases', () => {
+  const report = results([
+    ['EX-001', 'expected'],
+    ['EX-002', 'unexpected'],
+  ])
+  report.suites[0].specs[0].tests.push({
+    status: 'unexpected',
+    results: [{ status: 'failed' }],
+  })
+  report.suites[0].specs[1].tests.push({
+    status: 'flaky',
+    results: [{ status: 'passed' }],
+  })
+  const scores = scoreResults(
+    report,
+    policy([
+      {
+        file: 'tests/page/example.spec.ts',
+        ids: ['EX-001'],
+        reason: 'network',
+      },
+    ]),
+  )
+  assert.deepEqual(scores.all, { passed: 2, total: 4 })
+  assert.deepEqual(scores.inScope, { passed: 1, total: 2 })
+  assert.deepEqual(scores.byReason.network, { passed: 1, total: 2 })
+  assert.equal(scores.passingExcluded.length, 1)
+  assert.throws(() => flattenResults(report), /Duplicate case identity/)
 })
 
 test('policy rejects unknown reasons, malformed IDs and overlapping selectors', () => {

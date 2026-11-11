@@ -218,6 +218,21 @@ test('CLI writes markdown and parseable one-verdict-per-case JSONL; invalid inpu
   assert.equal(self.status, 0, self.stderr)
   assert.equal(JSON.parse(self.stdout).counts.pass, 5)
   assert.match(fs.readFileSync(output, 'utf8'), /^# Vanilla in Node/)
+  // Scope is now a report input; neither output flag may destroy its provenance.
+  for (const dir of ['neo', 'reference']) {
+    const scopeFile = path.join(root, dir, 'scope.json')
+    fs.writeFileSync(scopeFile, 'preserved scope input')
+    for (const flag of ['--out', '--json']) {
+      const collision = [...args]
+      collision[collision.indexOf(flag) + 1] = scopeFile
+      const rejected = spawnSync(process.execPath, collision, {
+        encoding: 'utf8',
+      })
+      assert.equal(rejected.status, 1)
+      assert.match(rejected.stderr, /must not overwrite an input/)
+      assert.equal(fs.readFileSync(scopeFile, 'utf8'), 'preserved scope input')
+    }
+  }
   fs.rmSync(path.join(root, 'neo', 'run.json'))
   fs.rmSync(output)
   const failure = spawnSync(process.execPath, args, { encoding: 'utf8' })
