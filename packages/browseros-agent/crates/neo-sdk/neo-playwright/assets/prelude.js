@@ -8673,6 +8673,7 @@ ${value.stack}`;
     workerPages = new Set;
     pumping = false;
     batch = null;
+    newestSeen = null;
     dialogs = new Map;
     downloads = new Map;
     choosers = new Map;
@@ -8745,6 +8746,7 @@ ${value.stack}`;
       this.listening--;
     }
     async wait(api, page, event, optionsOrPredicate, since, settings) {
+      const seen = this.newestSeen;
       const kind = page === null ? "context" : "page";
       checkReported(api, event, kind);
       if (!isReported(event, kind))
@@ -8757,6 +8759,7 @@ ${value.stack}`;
       const publication = event === "framenavigated" && !options.predicate ? {
         page,
         since,
+        after: seen,
         done: new Promise((resolve) => {
           finish = resolve;
         })
@@ -8767,7 +8770,7 @@ ${value.stack}`;
         return await untilAborted(signal, () => abortedError(api, signal), async () => {
           if (lease)
             await deadline.race(lease.ready);
-          return this.waitFor(api, page, event, options, since, deadline, signal);
+          return this.waitFor(api, page, event, options, { since, after: seen }, deadline, signal);
         });
       } finally {
         if (lease)
@@ -8778,7 +8781,7 @@ ${value.stack}`;
       }
     }
     async publishNavigation(page, cut, api, deadline, signal) {
-      const waits = [...this.navigationWaits].filter((wait) => (wait.page === null || wait.page === page) && wait.since <= cut.at).map((wait) => wait.done);
+      const waits = [...this.navigationWaits].filter((wait) => (wait.page === null || wait.page === page) && wait.since <= cut.at && (wait.after === null || wait.after < cut.seq)).map((wait) => wait.done);
       let finish;
       let fail;
       const delivered = new Promise((resolve, reject) => {
@@ -8809,15 +8812,16 @@ ${value.stack}`;
         }
       }
     }
-    async waitFor(api, page, event, options, since, deadline, signal) {
+    async waitFor(api, page, event, options, from, deadline, signal) {
+      const { since } = from;
       const target = page === null ? null : await page._openedBrand(api);
-      let after = null;
+      let after = from.after;
       for (;; ) {
         const left = deadline.left();
         let record;
         let observed = null;
         try {
-          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }, undefined, signal));
+          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }, (received) => this.saw(received.seq), signal));
         } catch (error) {
           throw deadline.named(error);
         }
@@ -8905,7 +8909,13 @@ ${value.stack}`;
         this.pumping = false;
       }
     }
+    saw(seq) {
+      if (this.newestSeen === null || seq > this.newestSeen)
+        this.newestSeen = seq;
+    }
     deliverBatch(events, lost, observed) {
+      for (const event of events)
+        this.saw(event.seq);
       this.stageBatch(events);
       try {
         for (const event of events)
