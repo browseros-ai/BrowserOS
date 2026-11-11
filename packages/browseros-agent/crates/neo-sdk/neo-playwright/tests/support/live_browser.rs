@@ -8,13 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_cdp::{CdpClient, ConnectOptions};
-use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, TabId, TargetId,
 };
-use neo_playwright::{
-    Op, OpEnv, Playwright, PlaywrightError, PlaywrightHooks, Refusal, RunState, TypedBy,
-};
+use neo_playwright::{Op, OpEnv, Playwright, PlaywrightError, Refusal, RunState};
 use serde_json::{Value, json};
 use tokio::time;
 
@@ -31,19 +28,6 @@ impl TestPage {
     /// `{"$neo":"page","tab":1234}`, the brand every target carries for this tab.
     pub(crate) fn brand(&self) -> Value {
         json!({ "$neo": "page", "tab": self.tab.0 })
-    }
-}
-
-/// A host that allows every capture; no op calls its other hooks back.
-struct PlainHooks;
-
-impl PlaywrightHooks for PlainHooks {
-    fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
-
-    fn values_swept(&self, _page: TabId, _values: &FieldValues) {}
-
-    fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
-        Ok(())
     }
 }
 
@@ -86,7 +70,7 @@ impl LiveBrowser {
         let client: Arc<dyn CdpConnection> =
             Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
         let browser = BrowserSession::new(client, BrowserSessionHooks::default());
-        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(PlainHooks));
+        let playwright = Playwright::new(Arc::clone(&browser));
         let live = Self {
             browser,
             playwright,

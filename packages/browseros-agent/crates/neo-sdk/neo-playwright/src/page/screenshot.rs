@@ -352,8 +352,7 @@ mod tests {
     use crate::op_scope::OpScope;
     use crate::target::CallHeader;
     use crate::test_env::{self, TestEnv};
-    use crate::test_support::{self, RecordingHooks};
-    use crate::{Op, Playwright};
+    use crate::{Op, Playwright, test_support};
 
     /// The capture path only serves ops that declare `Capture`; undeclared calls fail before
     /// the page is admitted or prepared.
@@ -362,7 +361,7 @@ mod tests {
         let connection = TestConnection::new([]);
         let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
         connection.always("Page.captureScreenshot", json!({ "data": "cG5n" }))?;
-        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
+        let playwright = Playwright::new(Arc::clone(&browser));
         let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
         let input = || {
             serde_json::from_value::<ScreenshotInput>(
@@ -407,7 +406,7 @@ mod tests {
     #[tokio::test]
     async fn tests_that_an_undeclared_op_is_refused_before_its_page_is_looked_up()
     -> Result<(), Box<dyn Error>> {
-        let playwright = Playwright::new(test_env::offline_session(), Arc::new(RecordingHooks));
+        let playwright = Playwright::new(test_env::offline_session());
         let env = TestEnv::new();
         let evaluate = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
         let undeclared = OpScope::new(&env, evaluate, CallHeader::default());

@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::sync::Arc;
 
 use neo_trace::ErrorOwner;
 use serde_json::json;
@@ -8,7 +7,6 @@ use super::{SetContentInput, set_content};
 use crate::op_scope::OpScope;
 use crate::target::CallHeader;
 use crate::test_env::{self, EnvCall, TestEnv};
-use crate::test_support::RecordingHooks;
 use crate::{ErrorCode, Op, Playwright};
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -26,7 +24,7 @@ fn input(frame: Option<&str>) -> Result<SetContentInput, serde_json::Error> {
 /// Paused: core waits out its own attach timeout before it gives up on the page.
 #[tokio::test(start_paused = true)]
 async fn tests_that_only_an_op_declaring_main_world_writes_a_document() -> TestResult {
-    let playwright = Playwright::new(test_env::offline_session(), Arc::new(RecordingHooks));
+    let playwright = Playwright::new(test_env::offline_session());
     let env = TestEnv::new();
     let screenshot = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
     let set_content_op = Op::from_name("page.setContent").ok_or("page.setContent is an op")?;
