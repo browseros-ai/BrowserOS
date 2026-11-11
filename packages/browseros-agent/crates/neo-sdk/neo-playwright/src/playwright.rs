@@ -17,7 +17,7 @@ use crate::op_spec::Capability;
 use crate::page::{PageRegistry, context_op, page_op};
 use crate::read::read_op;
 use crate::snapshot::snapshot_op;
-use crate::world::{Epoch, Journal, SessionSetup};
+use crate::world::{Epoch, SessionSetup};
 use crate::{OpEnv, PlaywrightError, PlaywrightHooks};
 
 /// One per browser connection; runs every Playwright operation. The host builds it once at
@@ -35,12 +35,10 @@ pub struct Playwright {
     _watcher: TargetWatcher,
     /// This instance's identity to the worlds it boots.
     epoch: Epoch,
-    /// Per-session setup, shared with the journal task.
+    /// Per-session setup for isolated world installs.
     sessions: Arc<SessionSetup>,
-    /// Every tab the instance acted on, shared with the journal task.
+    /// Every tab the instance acted on.
     pages: Arc<PageRegistry>,
-    /// Held for its `Drop`, which stops the journal task with the instance.
-    _journal: Journal,
 }
 
 // A hand-written `Debug`: the hooks are a trait object and the session is not worth printing.
@@ -51,22 +49,16 @@ impl fmt::Debug for Playwright {
 }
 
 impl Playwright {
-    /// The facade over `browser`, reporting privacy events to `hooks`. Starts three background
-    /// tasks: the watcher that records page events (popups, dialogs, closes), the journal, both
-    /// for the instance's lifetime, and one read of the open tabs, which decides where an
-    /// already-open tab's seqs start. Needs a tokio runtime, as `BrowserSession` does.
+    /// The facade over `browser`, reporting privacy events to `hooks`. Starts the watcher that
+    /// records page events (popups, dialogs, closes) for the instance's lifetime, and one read
+    /// of the open tabs, which decides where an already-open tab's seqs start.
+    /// Needs a tokio runtime, as `BrowserSession` does.
     #[must_use]
     pub fn new(browser: Arc<BrowserSession>, hooks: Arc<dyn PlaywrightHooks>) -> Arc<Self> {
         let (events, writer) = EventHub::new();
         let watcher = TargetWatcher::spawn(Arc::clone(&browser), writer);
         let sessions = Arc::new(SessionSetup::new(browser.connection()));
         let pages = Arc::new(PageRegistry::new());
-        let journal = Journal::spawn(
-            &browser,
-            Arc::clone(&sessions),
-            Arc::clone(&pages),
-            Arc::clone(&hooks),
-        );
         let (registry, reader) = (Arc::clone(&pages), Arc::clone(&browser));
         drop(tokio::spawn(async move {
             registry.note_open_tabs(&reader).await;
@@ -79,7 +71,6 @@ impl Playwright {
             epoch: Epoch::random(),
             sessions,
             pages,
-            _journal: journal,
         })
     }
 

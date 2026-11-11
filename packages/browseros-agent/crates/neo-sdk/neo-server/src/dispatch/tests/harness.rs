@@ -2,14 +2,14 @@
 
 use std::error::Error;
 use std::future::{self, Future};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
 use neo_trace::{
     Effect, OperationId, OperationRow, RedactionLimits, Redactor, RunId, SecretSet,
-    SecretSetConfig, SecretValue, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    SecretSetConfig, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -19,93 +19,13 @@ use tokio::time::{self, Instant};
 use super::test_methods::{Shared, test_methods};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::dispatch::{
-    Call, Caller, Dispatcher, ErrorCode, Held, HeldValues, HeldWatch, Observer, OpReply,
-    OperationError, Policy, PolicyCheck, RegistryBuilder, RunCtx, RunGuard, RunStart,
+    Call, Caller, Dispatcher, ErrorCode, Observer, OpReply, OperationError, Policy, PolicyCheck,
+    RegistryBuilder, RunCtx, RunGuard, RunStart,
 };
 use crate::test_support::FakeCdp;
 
 /// How many overlapping calls `test.gate` waits for before any of them returns.
 pub(super) const GATE_PARTIES: usize = 50;
-
-/// What builtins' `TypedValues` holds for every run, as a test sets it: nothing, until a test
-/// holds a value, as a field typed a moment ago is held, or loses them, as a run does past the
-/// cap, now or at a given ask.
-#[derive(Default)]
-pub(super) struct HeldFake {
-    values: Mutex<Vec<String>>,
-    lost: AtomicBool,
-    /// How many times runs asked what they hold.
-    asks: AtomicUsize,
-    /// The ask that loses what is held ([`HeldFake::lose_at_ask`]); none when 0.
-    lost_at: AtomicUsize,
-}
-
-/// One run's watch on the fake.
-struct HeldFakeWatch(Arc<HeldFake>);
-
-impl HeldFake {
-    /// Every run holds `value` from now on.
-    pub(super) fn hold(&self, value: &str) {
-        self.values
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(value.to_owned());
-    }
-
-    /// Every run has lost the values held so far from now on: they mask nothing any more, as a
-    /// value forgotten past the cap does.
-    pub(super) fn lose(&self) {
-        self.values
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
-        self.lost.store(true, Ordering::SeqCst);
-    }
-
-    /// Every run loses the values held so far as runs ask what they hold for the `ask`-th time
-    /// from now, so a test can put the loss between any two asks of one op.
-    pub(super) fn lose_at_ask(&self, ask: usize) {
-        self.lost_at
-            .store(self.asks.load(Ordering::SeqCst) + ask, Ordering::SeqCst);
-    }
-
-    /// How many times runs asked what they hold so far.
-    pub(super) fn asks(&self) -> usize {
-        self.asks.load(Ordering::SeqCst)
-    }
-}
-
-impl HeldValues for HeldFake {
-    fn watch(self: Arc<Self>, _run: RunId) -> Box<dyn HeldWatch> {
-        Box::new(HeldFakeWatch(self))
-    }
-}
-
-impl HeldWatch for HeldFakeWatch {
-    fn held(&self) -> Held {
-        let ask = self.0.asks.fetch_add(1, Ordering::SeqCst) + 1;
-        if ask == self.0.lost_at.load(Ordering::SeqCst) {
-            self.0.lose();
-        }
-        let values = self
-            .0
-            .values
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let set = (!values.is_empty()).then(|| {
-            Arc::new(SecretSet::with_values(
-                SecretSetConfig::default(),
-                values.into_iter().map(SecretValue::new),
-            ))
-        });
-        if self.0.lost.load(Ordering::SeqCst) {
-            Held::Lost(set)
-        } else {
-            Held::Kept(set)
-        }
-    }
-}
 
 /// Everything a dispatcher test touches. A plain data bag.
 pub(super) struct Harness {
@@ -114,9 +34,6 @@ pub(super) struct Harness {
     pub(super) tabs: Arc<TabRegistry>,
     pub(super) store: TraceStore,
     pub(super) sink: TraceSink,
-    pub(super) secrets: Arc<SecretSet>,
-    /// What every run holds beyond `secrets`.
-    pub(super) held: Arc<HeldFake>,
     pub(super) lock: Arc<TabLock>,
     pub(super) seen: Arc<SeenChecks>,
     /// Notified when `test.hang` has sent and is waiting forever.
@@ -167,8 +84,9 @@ impl Harness {
         .await?;
         let dir = tempfile::tempdir()?;
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
+        // neo-trace's redactor still takes a secret set; the harness registers nothing in it.
         let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
+        let redactor = Redactor::new(secrets, RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, WriterConfig::default(), None);
         let lock = Arc::new(TabLock::default());
         let seen = Arc::new(SeenChecks::default());
@@ -185,13 +103,10 @@ impl Harness {
             Arc::clone(&lock) as Arc<dyn Policy>,
             Arc::clone(&seen) as Arc<dyn Policy>,
         ];
-        let held = Arc::new(HeldFake::default());
         let dispatcher = Arc::new(Dispatcher::new(
             registry.build(),
             policies,
-            Arc::clone(&secrets),
             sink.clone(),
-            Arc::clone(&held) as Arc<dyn HeldValues>,
             Arc::clone(&link),
             Arc::clone(&tabs),
             Observer::unrecorded(),
@@ -202,8 +117,6 @@ impl Harness {
             tabs,
             store,
             sink,
-            secrets,
-            held,
             lock,
             seen,
             hung,

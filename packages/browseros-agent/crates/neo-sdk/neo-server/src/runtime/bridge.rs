@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use neo_trace::{OperationId, SecretSet};
+use neo_trace::OperationId;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::time::{self, Duration, Instant};
@@ -27,8 +27,6 @@ const FAILURES_REMEMBERED: usize = 1024;
 pub(crate) struct Bridge {
     run: Arc<RunCtx>,
     dispatcher: Arc<Dispatcher>,
-    /// The process's known secrets: console lines are masked as they are kept.
-    secrets: Arc<SecretSet>,
     logs: Mutex<RunLogs>,
     /// The run's latest failed ops. An escaped `NeoError` names its op, and the run's error is
     /// the failure recorded here, never fields the script could have edited.
@@ -37,7 +35,7 @@ pub(crate) struct Bridge {
 
 /// The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
 /// […]}`, plus `defaultPage` once the call opened the run's own page. Protocol translation
-/// only: the door decided and masked every value in it.
+/// only: the door decided every value in it.
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Envelope<'a> {
@@ -86,7 +84,6 @@ impl Bridge {
     #[must_use]
     pub(crate) fn new(run: Arc<RunCtx>, dispatcher: Arc<Dispatcher>) -> Self {
         Self {
-            secrets: Arc::clone(dispatcher.secrets()),
             run,
             dispatcher,
             logs: Mutex::default(),
@@ -118,7 +115,7 @@ impl Bridge {
 
     /// `__neo_log(level, text)`: one console line, kept within the run's limits.
     pub(crate) fn log(&self, level: &str, text: String) {
-        lock(&self.logs).push(LogLevel::parse(level), text, &self.secrets);
+        lock(&self.logs).push(LogLevel::parse(level), text);
     }
 
     /// `__neo_sleep(ms)`: the clock behind `setTimeout`. Capped by the run's deadline and cut

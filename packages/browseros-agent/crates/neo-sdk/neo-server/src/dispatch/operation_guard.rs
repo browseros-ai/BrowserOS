@@ -6,28 +6,20 @@ use std::thread;
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, PageState, RedactionPolicy, SecretSet, TargetSensitivity, TraceSink,
+    Outcome, PageState, RedactionPolicy, TargetSensitivity, TraceSink,
 };
 use serde_json::Value;
 use tokio::sync::oneshot;
 
 use super::op_ctx::OpState;
 use super::{
-    Answer, CallSite, Caller, ErrorCode, Held, LeafError, Lifetime, MethodSpec, Observation,
-    OpFailure, OpLine, OpReply, OperationError, PageFact, PageScript, RunCtx, RunMask, StopReason,
-    WITHHELD,
+    Answer, CallSite, ErrorCode, LeafError, Lifetime, MethodSpec, Observation, OpFailure, OpLine,
+    OpReply, OperationError, PageFact, RunCtx, StopReason,
 };
 use crate::browser::PageRef;
 
 /// Ends one op exactly once: the trace's `op_ended`, the run's ledger, and the caller's reply.
-///
-/// Each of the op's records carries the run's held values as of sending it
-/// ([`RunCtx::held_values`]): its start the values held as it is sent, its end the values held as
-/// it settles, which include what its own read just swept. Once the run lost one of them
-/// ([`Held::Lost`]), a record sent from then on keeps Neo's own facts only: its input, a name the
-/// script made up, its result, its error and its page's URL and title are withheld, and its error
-/// says why. What a record withholds is decided with the very values it carries, so a run that
-/// turns lost between two asks never leaves a record holding what its own values cannot mask.
+/// The record and the reply carry the same outcome, as the method produced it.
 ///
 /// [`OperationGuard::finish`] is the normal path and consumes the guard. `Drop` is the
 /// backstop for an op whose future went away without an answer: its task was aborted at
@@ -48,18 +40,17 @@ struct Open {
     unsent: Option<Unsent>,
     spec: MethodSpec,
     site: Option<CallSite>,
-    caller: Caller,
     run: Arc<RunCtx>,
     trace: TraceSink,
-    secrets: Arc<SecretSet>,
     reply: oneshot::Sender<OpReply>,
 }
 
 /// What opening an op records. A plain data bag.
 pub(super) struct OpStart {
     pub(super) state: Arc<OpState>,
-    /// The name as the caller wrote it, and whether the caller may call it.
-    pub(super) name: OpName,
+    /// The name as the caller wrote it, so an unknown name is on the record as typed. The trace
+    /// writer clips it.
+    pub(super) name: String,
     pub(super) spec: MethodSpec,
     pub(super) redaction: Arc<RedactionPolicy>,
     /// The raw input. The trace writer redacts it.
@@ -67,28 +58,15 @@ pub(super) struct OpStart {
     /// The tab the call named, before the door checks it.
     pub(super) tab: StartTab,
     pub(super) site: Option<CallSite>,
-    pub(super) caller: Caller,
     pub(super) reply: oneshot::Sender<OpReply>,
 }
 
-/// An op's name as the caller wrote it, so an unknown name is on the record as typed. The trace
-/// writer masks it with the record's sets and clips it.
-pub(super) enum OpName {
-    /// A method the caller may call: a name the registry holds.
-    Callable(String),
-    /// A name the caller may not call, a missing method's or a hidden one's: the script's own
-    /// string, which may hold a value its run holds. Once the run lost one, nothing masks that
-    /// value, so a start record sent from then on keeps [`WITHHELD`] in its place.
-    Uncallable(String),
-}
-
-/// An op's start record as the door opened it. What it keeps of the name and the input, and the
-/// set it is masked with, are decided as it is sent, from one ask of what its run holds then
-/// ([`Unsent::sent`]): a lazy page delays the send, and a run can turn lost in between.
+/// An op's start record as the door opened it, before its tab is known: a lazy page delays the
+/// send ([`Unsent::sent`]).
 struct Unsent {
     id: OperationId,
     parent: Option<OperationId>,
-    name: OpName,
+    name: String,
     effect: Effect,
     /// The raw input. The trace writer redacts it.
     args: Value,
@@ -213,12 +191,7 @@ impl OperationGuard {
     /// Opens the op: records `op_started` before any rule runs, so refusals are on the record
     /// too (skeleton D7 rule 3). A channel send; it never waits on disk. An op on the run's lazy
     /// page holds its start until [`OperationGuard::started_on`], still before the rules.
-    pub(super) fn start(
-        trace: &TraceSink,
-        secrets: &Arc<SecretSet>,
-        run: &Arc<RunCtx>,
-        start: OpStart,
-    ) -> Self {
+    pub(super) fn start(trace: &TraceSink, run: &Arc<RunCtx>, start: OpStart) -> Self {
         let OpStart {
             state,
             name,
@@ -227,7 +200,6 @@ impl OperationGuard {
             args,
             tab,
             site,
-            caller,
             reply,
         } = start;
         let opened = Unsent {
@@ -241,7 +213,7 @@ impl OperationGuard {
         };
         let unsent = match tab {
             StartTab::Named(tab) => {
-                trace.op_started(opened.sent(tab, &run.held_values()));
+                trace.op_started(opened.sent(tab));
                 None
             }
             StartTab::Lazy => Some(opened),
@@ -256,10 +228,8 @@ impl OperationGuard {
                 unsent,
                 spec,
                 site,
-                caller,
                 run: Arc::clone(run),
                 trace: trace.clone(),
-                secrets: Arc::clone(secrets),
                 reply,
             }),
         }
@@ -272,8 +242,7 @@ impl OperationGuard {
             && let Some(unsent) = open.unsent.take()
         {
             open.tab = tab;
-            open.trace
-                .op_started(unsent.sent(tab, &open.run.held_values()));
+            open.trace.op_started(unsent.sent(tab));
         }
     }
 
@@ -308,7 +277,7 @@ impl Drop for OperationGuard {
 fn settle(
     open: Open,
     ending: Ending,
-    mut pages: Vec<PageFact>,
+    pages: Vec<PageFact>,
     default_page: Option<PageRef>,
     observed: Option<Observation>,
 ) {
@@ -318,51 +287,27 @@ fn settle(
         unsent,
         spec,
         site,
-        caller,
         run,
         trace,
-        secrets,
         reply,
     } = open;
-    let held = run.held_values();
     // An op that ended before the door resolved its page (a gate, a stop, a page that would not
     // open) still has every op id on the record: its start goes first, with no tab.
     if let Some(unsent) = unsent {
-        trace.op_started(unsent.sent(None, &held));
+        trace.op_started(unsent.sent(None));
     }
     let id = state.id();
     let sent_at = state.sent_at();
-    let mut settlement = Settlement::decide(sent_at.is_some(), &spec, ending);
-    let mask = RunMask::of(&secrets, &held);
-    // A main-world script's answer leaves twice, in this op's record and into the realm, and the
-    // trace writer and `RunMask::outcome` mask only its strings. The crate masks its numbers too,
-    // but only with what this op swept, so `Number(otp.value)` of a field that is gone, or of one
-    // of the process's secrets, would leave whole. So such a number gives way to its masked text
-    // here, once, for both (decision 35z). A stopgap until the crate masks its answers with these
-    // sets (ask A9): until then a typed array or a Date's time value that holds such a value
-    // leaves as it is. Every other op's numbers are Neo's own facts, a page brand's tab among
-    // them, and stay numbers.
-    if spec.page_script == PageScript::MainWorld
-        && let Settled::Value(value) = &mut settlement.result
-    {
-        mask.mask_numbers(value);
-    }
-    for mut note in state.take_notes() {
-        secrets.mask_str(&mut note);
+    let settlement = Settlement::decide(sent_at.is_some(), &spec, ending);
+    for note in state.take_notes() {
         tracing::debug!(operation = %id, method = spec.name, %note, "op note");
     }
-    let withheld = held.withheld();
-    let (result, error) = match (&settlement.result, &withheld) {
-        (Settled::Value(value), None) => (Some(value.clone()), None),
-        (Settled::Failed(error), None) => {
-            (None, Some(error.record(settlement.retryable, Some(id))))
-        }
-        (Settled::Value(_) | Settled::Failed(_), Some(withheld)) => {
-            (None, Some(withheld.record(settlement.retryable, Some(id))))
-        }
-        (Settled::Retired(_), _) => (None, None),
+    let (result, error) = match &settlement.result {
+        Settled::Value(value) => (Some(value.clone()), None),
+        Settled::Failed(error) => (None, Some(error.record(settlement.retryable, Some(id)))),
+        Settled::Retired(_) => (None, None),
     };
-    let page_after = recorded_page_state(&pages, tab, withheld.is_some());
+    let page_after = recorded_page_state(&pages, tab);
     trace.op_ended(OperationEnded {
         id,
         outcome: settlement.outcome,
@@ -376,7 +321,7 @@ fn settle(
         } else {
             TargetSensitivity::Ordinary
         },
-        also_mask: held.set(),
+        also_mask: None,
         at: EpochMillis::now(),
     });
     let line = OpLine {
@@ -396,21 +341,6 @@ fn settle(
         Settled::Failed(error) => Err(error),
         Settled::Retired(reason) => Err(reason.error()),
     };
-    // A child's result stays inside Neo, and its parent's reply is masked on the way out. A
-    // script's reply enters its realm, which never receives a value its run holds (decision 35b):
-    // a value typed or swept a moment ago is no secret of the process's set yet, and the script's
-    // own `goto` could carry it out. So the value, the error and the page facts are masked with
-    // the set this op's end record carries as well, events and their dialogs included; once the
-    // run lost one of those values, they are withheld instead. The record keeps the real outcome.
-    let outcome = match caller {
-        Caller::Script => {
-            for page in &mut pages {
-                page.mask(&mask);
-            }
-            mask.outcome(outcome)
-        }
-        Caller::Neo => outcome,
-    };
     // A departed caller is normal during teardown.
     let _ = reply.send(OpReply {
         outcome: outcome.map_err(|error| OpFailure {
@@ -426,30 +356,17 @@ fn settle(
 }
 
 /// A missing target fact must not turn a related page into the operation's trace target.
-fn recorded_page_state(
-    pages: &[PageFact],
-    tab: Option<TabId>,
-    withheld: bool,
-) -> Option<PageState> {
+fn recorded_page_state(pages: &[PageFact], tab: Option<TabId>) -> Option<PageState> {
     let page = match tab {
         Some(tab) => pages.iter().find(|page| page.tab == tab),
         None => pages.first(),
     }?;
-    let mut state = page.page_state();
-    if withheld {
-        state.url = None;
-        state.title = None;
-    }
-    Some(state)
+    Some(page.page_state())
 }
 
 impl Unsent {
-    /// The record as it is sent now, on `tab`, with `held`, what its run holds now: that set as
-    /// its `also_mask`, and, once the run lost a held value, its input withheld, and its name
-    /// too when the name is the script's own, since nothing in that set masks the value lost.
-    /// Deciding with another ask than the one the record carries could leave the name raw beside
-    /// an `also_mask` that cannot mask it.
-    fn sent(self, tab: Option<TabId>, held: &Held) -> OperationStarted {
+    /// The record as it is sent now, on `tab`.
+    fn sent(self, tab: Option<TabId>) -> OperationStarted {
         let Self {
             id,
             parent,
@@ -459,13 +376,6 @@ impl Unsent {
             policy,
             at,
         } = self;
-        let (name, args) = match (name, held.withheld()) {
-            (OpName::Callable(name) | OpName::Uncallable(name), None) => (name, args),
-            (OpName::Callable(name), Some(_)) => (name, Value::String(WITHHELD.to_owned())),
-            (OpName::Uncallable(_), Some(_)) => {
-                (WITHHELD.to_owned(), Value::String(WITHHELD.to_owned()))
-            }
-        };
         OperationStarted {
             id,
             parent,
@@ -475,7 +385,7 @@ impl Unsent {
             tab,
             args,
             policy,
-            also_mask: held.set(),
+            also_mask: None,
             at,
         }
     }
