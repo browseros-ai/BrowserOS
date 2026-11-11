@@ -66,13 +66,23 @@ const ANSWERS: Record<string, unknown> = {
     url: 'about:blank',
   },
   'download.path': { path: '/runs/r/f.csv', failure: null },
+  'page.addLocatorHandler': { uid: 1 },
 }
 
-/** A plausible result for each op, so the script runs to its end. The pump idles forever. */
+/** The locator-handler pull triggers the one handler once per recording, so its resolve is
+ * recorded too. */
+let handlerTriggered = false
+
+/** A plausible result for each op, so the script runs to its end. The pulls idle forever. */
 function everyOpAnswer(call: Call): unknown {
   if (call.name === 'events.wait')
     return call.input.event === 'dialog' ? DIALOG : DOWNLOAD
   if (call.name === 'events.next') return new Promise(() => {})
+  if (call.name === 'page.locatorHandlerTriggered') {
+    if (handlerTriggered) return new Promise(() => {})
+    handlerTriggered = true
+    return { uid: 1 }
+  }
   return ANSWERS[call.name] ?? null
 }
 
@@ -108,6 +118,8 @@ const EVERY_OP = `
   await page.$eval('b', (e) => e.id); await page.$$eval('b', (es) => es.length); await page.evaluate((e, h) => h.id, handle)
   await page.screenshot(); await l.screenshot(); await page.pdf()
   await page.setViewportSize({ width: 640, height: 480 })
+  await page.addLocatorHandler(page.getByText('Accept cookies'), async () => {}, { noWaitAfter: true, times: 2 })
+  await page.removeLocatorHandler(page.getByText('Accept cookies'))
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})
   const chooserListener = () => {}
@@ -120,6 +132,7 @@ const EVERY_OP = `
 
 /** Runs `EVERY_OP` and returns every op the prelude sent, in order. */
 export async function recordEveryOp(prelude?: string): Promise<Call[]> {
+  handlerTriggered = false
   const runtime = loadPrelude({
     seed: SEED,
     answer: everyOpAnswer,

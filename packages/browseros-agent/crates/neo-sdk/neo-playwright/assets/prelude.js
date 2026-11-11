@@ -423,6 +423,26 @@
       effect: "write",
       target: null,
       lifetime: "operation"
+    },
+    "page.addLocatorHandler": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "page.removeLocatorHandler": {
+      effect: "read",
+      target: null,
+      lifetime: "operation"
+    },
+    "page.locatorHandlerTriggered": {
+      effect: "read",
+      target: null,
+      lifetime: "background"
+    },
+    "page.resolveLocatorHandler": {
+      effect: "read",
+      target: null,
+      lifetime: "operation"
     }
   };
 
@@ -6592,395 +6612,6 @@ ${value.stack}`;
     };
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/prelude/locator.ts
-  function testIdAttributeName() {
-    return "data-testid";
-  }
-
-  class Locator {
-    _frame;
-    _selector;
-    constructor(frame, selector) {
-      this._frame = frame;
-      this._selector = selector;
-      markHandle(this);
-    }
-    page() {
-      return this._frame.page();
-    }
-    toString() {
-      return asLocatorDescription("javascript", this._selector);
-    }
-    description() {
-      return locatorCustomDescription(this._selector) ?? null;
-    }
-    locator(selectorOrLocator, options) {
-      const api = "locator.locator";
-      if (typeof selectorOrLocator === "string")
-        return new Locator(this._frame, withLocatorOptions(api, this._frame, `${this._selector} >> ${selectorOrLocator}`, options));
-      if (selectorOrLocator._frame !== this._frame)
-        throw plainError(api, "Locators must belong to the same frame.");
-      return new Locator(this._frame, withLocatorOptions(api, this._frame, `${this._selector} >> internal:chain=${JSON.stringify(selectorOrLocator._selector)}`, options));
-    }
-    within(locator) {
-      return locator.locator(this);
-    }
-    getByTestId(testId) {
-      return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
-    }
-    getByAltText(text, options) {
-      return this.locator(getByAltTextSelector(text, options));
-    }
-    getByLabel(text, options) {
-      return this.locator(getByLabelSelector(text, options));
-    }
-    getByPlaceholder(text, options) {
-      return this.locator(getByPlaceholderSelector(text, options));
-    }
-    getByText(text, options) {
-      return this.locator(getByTextSelector(text, options));
-    }
-    getByTitle(text, options) {
-      return this.locator(getByTitleSelector(text, options));
-    }
-    getByRole(role, options = {}) {
-      return this.locator(getByRoleSelector(role, options));
-    }
-    frameLocator(selector) {
-      return new FrameLocator(this._frame, `${this._selector} >> ${selector}`);
-    }
-    contentFrame() {
-      return new FrameLocator(this._frame, this._selector);
-    }
-    filter(options) {
-      return new Locator(this._frame, withLocatorOptions("locator.filter", this._frame, this._selector, options));
-    }
-    visible() {
-      return new Locator(this._frame, withLocatorOptions("locator.visible", this._frame, this._selector, {
-        visible: true
-      }));
-    }
-    describe(description) {
-      return new Locator(this._frame, `${this._selector} >> internal:describe=${JSON.stringify(description)}`);
-    }
-    first() {
-      return new Locator(this._frame, `${this._selector} >> nth=0`);
-    }
-    last() {
-      return new Locator(this._frame, `${this._selector} >> nth=-1`);
-    }
-    nth(index) {
-      return new Locator(this._frame, `${this._selector} >> nth=${index}`);
-    }
-    and(locator) {
-      if (locator._frame !== this._frame)
-        throw plainError("locator.and", "Locators must belong to the same frame.");
-      return new Locator(this._frame, `${this._selector} >> internal:and=${JSON.stringify(locator._selector)}`);
-    }
-    or(locator) {
-      if (locator._frame !== this._frame)
-        throw plainError("locator.or", "Locators must belong to the same frame.");
-      return new Locator(this._frame, `${this._selector} >> internal:or=${JSON.stringify(locator._selector)}`);
-    }
-    click(options = {}) {
-      return this._frame._click("locator.click", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    dblclick(options = {}) {
-      return this._frame._dblclick("locator.dblclick", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    hover(options = {}) {
-      return this._frame._hover("locator.hover", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    check(options = {}) {
-      return this._frame._check("locator.check", this._selector, true, {
-        ...options,
-        strict: true
-      });
-    }
-    uncheck(options = {}) {
-      return this._frame._check("locator.uncheck", this._selector, false, {
-        ...options,
-        strict: true
-      });
-    }
-    setChecked(checked, options = {}) {
-      return this._frame._check("locator.setChecked", this._selector, checked, {
-        ...options,
-        strict: true
-      });
-    }
-    dragTo(target, options = {}) {
-      return this._frame._dragAndDrop("locator.dragTo", this._selector, target._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    fill(value, options = {}) {
-      return this._frame._fill("locator.fill", this._selector, value, {
-        ...options,
-        strict: true
-      });
-    }
-    clear(options = {}) {
-      return this._frame._fill("locator.clear", this._selector, "", {
-        ...options,
-        strict: true
-      });
-    }
-    press(key, options = {}) {
-      return this._frame._press("locator.press", this._selector, key, {
-        ...options,
-        strict: true
-      });
-    }
-    pressSequentially(text, options = {}) {
-      return this._frame._type("locator.pressSequentially", this._selector, text, {
-        ...options,
-        strict: true
-      });
-    }
-    type(text, options = {}) {
-      return this._frame._type("locator.type", this._selector, text, {
-        ...options,
-        strict: true
-      });
-    }
-    selectOption(values, options = {}) {
-      return this._frame._selectOption("locator.selectOption", this._selector, values, {
-        ...options,
-        strict: true
-      });
-    }
-    selectText(options = {}) {
-      return this._frame._selectText("locator.selectText", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    focus(options = {}) {
-      return this._frame._focus("locator.focus", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    blur(options = {}) {
-      return this._frame._blur("locator.blur", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    setInputFiles(files, options = {}) {
-      return this._frame._setInputFiles("locator.setInputFiles", this._selector, files, {
-        ...options,
-        strict: true
-      });
-    }
-    dispatchEvent(type, eventInit = {}, options = {}) {
-      return this._frame._dispatchEvent("locator.dispatchEvent", this._selector, type, eventInit, {
-        ...options,
-        strict: true
-      });
-    }
-    scrollIntoViewIfNeeded(options = {}) {
-      return this._frame._scrollIntoViewIfNeeded("locator.scrollIntoViewIfNeeded", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    textContent(options = {}) {
-      return this._frame._read("locator.textContent", "locator.textContent", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    innerText(options = {}) {
-      return this._frame._read("locator.innerText", "locator.innerText", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    innerHTML(options = {}) {
-      return this._frame._read("locator.innerHTML", "locator.innerHTML", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    inputValue(options = {}) {
-      return this._frame._read("locator.inputValue", "locator.inputValue", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    getAttribute(name, options = {}) {
-      return this._frame._getAttribute("locator.getAttribute", this._selector, name, {
-        ...options,
-        strict: true
-      });
-    }
-    isChecked(options = {}) {
-      return this._frame._read("locator.isChecked", "locator.isChecked", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    isDisabled(options = {}) {
-      return this._frame._read("locator.isDisabled", "locator.isDisabled", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    isEditable(options = {}) {
-      return this._frame._read("locator.isEditable", "locator.isEditable", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    isEnabled(options = {}) {
-      return this._frame._read("locator.isEnabled", "locator.isEnabled", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    isHidden(_options) {
-      return this._frame._isVisible("locator.isHidden", "locator.isHidden", this._selector, {
-        strict: true
-      });
-    }
-    isVisible(_options) {
-      return this._frame._isVisible("locator.isVisible", "locator.isVisible", this._selector, {
-        strict: true
-      });
-    }
-    count() {
-      return this._frame._everyMatch("locator.count", "locator.count", this._selector);
-    }
-    async normalize() {
-      const resolved = await this._frame._normalize("locator.normalize", this._selector);
-      return new Locator(this._frame, resolved);
-    }
-    async all() {
-      const count = await this._frame._everyMatch("locator.count", "locator.all", this._selector);
-      return Array.from({ length: count }, (_, index) => this.nth(index));
-    }
-    allTextContents() {
-      return this._frame._everyMatch("locator.allTextContents", "locator.allTextContents", this._selector);
-    }
-    allInnerTexts() {
-      return this._frame._everyMatch("locator.allInnerTexts", "locator.allInnerTexts", this._selector);
-    }
-    boundingBox(options = {}) {
-      return this._frame._boundingBox("locator.boundingBox", this._selector, options);
-    }
-    async waitFor(options = {}) {
-      await this._frame._waitForSelector("locator.waitFor", this._selector, { ...options, strict: true }, true);
-    }
-    async elementHandle(options = {}) {
-      const handle = await this._frame._elementHandle("locator.elementHandle", this._selector, true, false, options);
-      if (!handle)
-        throw internalError("locator.elementHandle", `Could not resolve ${this} to DOM Element`);
-      return handle;
-    }
-    elementHandles() {
-      return this._frame._elementHandles("locator.elementHandles", this._selector);
-    }
-    async evaluate(pageFunction, arg, options) {
-      const api = "locator.evaluate";
-      const script = pageCall(api, "locator", pageFunction, arg, options);
-      return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
-    }
-    async waitForFunction(pageFunction, arg, options) {
-      const api = "locator.waitForFunction";
-      const script = pageCall(api, "query", pageFunction, arg);
-      await this._frame._selectorOp("locator.waitForFunction", api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
-    }
-    async evaluateAll(pageFunction, arg) {
-      const api = "locator.evaluateAll";
-      return await this._frame._evaluateAll(api, this._selector, pageCall(api, "query", pageFunction, arg));
-    }
-    ariaSnapshot(options) {
-      return this._frame._ariaSnapshot("locator.ariaSnapshot", this._selector, options);
-    }
-    ariaSnapshotJSON(options) {
-      return this._frame._ariaSnapshotJSON("locator.ariaSnapshotJSON", this._selector, options);
-    }
-    screenshot(options) {
-      return this._frame._screenshot("locator.screenshot", this._selector, options);
-    }
-  }
-
-  class FrameLocator {
-    _frame;
-    _frameSelector;
-    constructor(frame, selector) {
-      this._frame = frame;
-      this._frameSelector = selector;
-      markHandle(this);
-    }
-    #childSelector(selector) {
-      if (this._frameSelector === kAnyFrameSelector)
-        return `${this._frameSelector} >> ${selector}`;
-      return `${this._frameSelector} >> internal:control=enter-frame >> ${selector}`;
-    }
-    locator(selectorOrLocator, options) {
-      const api = "frameLocator.locator";
-      if (typeof selectorOrLocator === "string")
-        return new Locator(this._frame, withLocatorOptions(api, this._frame, this.#childSelector(selectorOrLocator), options));
-      if (selectorOrLocator._frame !== this._frame)
-        throw plainError(api, "Locators must belong to the same frame.");
-      return new Locator(this._frame, withLocatorOptions(api, this._frame, this.#childSelector(selectorOrLocator._selector), options));
-    }
-    getByTestId(testId) {
-      return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
-    }
-    getByAltText(text, options) {
-      return this.locator(getByAltTextSelector(text, options));
-    }
-    getByLabel(text, options) {
-      return this.locator(getByLabelSelector(text, options));
-    }
-    getByPlaceholder(text, options) {
-      return this.locator(getByPlaceholderSelector(text, options));
-    }
-    getByText(text, options) {
-      return this.locator(getByTextSelector(text, options));
-    }
-    getByTitle(text, options) {
-      return this.locator(getByTitleSelector(text, options));
-    }
-    getByRole(role, options = {}) {
-      return this.locator(getByRoleSelector(role, options));
-    }
-    owner() {
-      return new Locator(this._frame, this._frameSelector);
-    }
-    frameLocator(selector) {
-      return new FrameLocator(this._frame, this.#childSelector(selector));
-    }
-    #nthSelector(api, nth) {
-      if (this._frameSelector === kAnyFrameSelector)
-        throw plainError(api, "Selecting the nth frame is not allowed on frameLocator().");
-      return `${this._frameSelector} >> nth=${nth}`;
-    }
-    first() {
-      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.first", "0"));
-    }
-    last() {
-      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.last", "-1"));
-    }
-    nth(index) {
-      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.nth", String(index)));
-    }
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot.ts
   function comment(partial) {
     return `# partial: ${partial.frame} not read (${partial.reason})`;
@@ -7574,163 +7205,6 @@ ${value.stack}`;
     }
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
-  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
-  var REFUSALS = {
-    unsupported: unsupportedError,
-    client: clientError,
-    plain: plainError
-  };
-
-  class FailedCheck extends Error {
-    kind;
-    constructor(kind, message) {
-      super(message);
-      this.kind = kind;
-    }
-  }
-  function assertMaxArguments(api, count, max) {
-    if (count > max)
-      throw plainError(api, TOO_MANY_ARGUMENTS);
-  }
-  function assertEvaluateOptions(options) {
-    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS);
-  }
-  function refuseExposedFunctions(api, options) {
-    if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
-      throw unsupportedError(api, "pages cannot call back into the script in Neo; return what the page computed instead");
-  }
-  var fallThrough = (value) => ({ fallThrough: value });
-  var FORMS = {
-    frame: { options: true, afterWait: false },
-    locator: { options: true, afterWait: true },
-    handle: { options: true, afterWait: false },
-    query: { options: false, afterWait: false }
-  };
-  function pageCall(api, form, pageFunction, arg, options) {
-    const { options: checksOptions, afterWait } = FORMS[form];
-    if (checksOptions)
-      refuseExposedFunctions(api, options);
-    try {
-      if (checksOptions)
-        assertEvaluateOptions(options);
-      return script(api, pageFunction, arg);
-    } catch (error) {
-      if (afterWait) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          refused: message.startsWith(`${api}: `) ? message.slice(api.length + 2) : message
-        };
-      }
-      if (error instanceof FailedCheck)
-        throw REFUSALS[error.kind](api, error.message);
-      throw error;
-    }
-  }
-  function script(api, pageFunction, arg) {
-    const isFunction = typeof pageFunction === "function";
-    const { serialized, clientHandles } = serializeArgument(api, arg);
-    let expression;
-    try {
-      expression = normalizeEvaluationExpression(String(pageFunction), isFunction);
-    } catch (error) {
-      return { refused: error instanceof Error ? error.message : String(error) };
-    }
-    const onServer = parseSerializedValue(serialized, clientHandles);
-    const handles = [];
-    const text = JSON.stringify(serializeAsCallArgument(onServer, (value) => {
-      if (!(value instanceof ElementHandle))
-        return fallThrough(value);
-      handles.push(value._brand);
-      return { h: handles.length - 1 };
-    }));
-    return {
-      run: {
-        expression,
-        isFunction,
-        arg: text,
-        ...handles.length > 0 ? { handles } : {}
-      }
-    };
-  }
-  function serializeArgument(api, arg) {
-    let serialized;
-    const clientHandles = [];
-    const copies = new Map;
-    try {
-      serialized = serializeValue(arg, (value) => {
-        if (value instanceof ElementHandle) {
-          clientHandles.push(value);
-          return { h: clientHandles.length - 1 };
-        }
-        if (value instanceof WaitHandle) {
-          if (!copies.has(value))
-            copies.set(value, value._value(api));
-          return fallThrough(copies.get(value));
-        }
-        if (!isHandle(value))
-          return fallThrough(value);
-        throw new FailedCheck("unsupported", "Neo passes element handles as evaluate arguments, not pages, frames, locators or JSHandles; pass the value itself, or an element handle");
-      });
-    } catch (error) {
-      if (error instanceof FailedCheck)
-        throw error;
-      throw new FailedCheck("plain", error instanceof Error ? error.message : String(error));
-    }
-    validateValue(serialized, "arg.value");
-    clientHandles.forEach((handle, index) => {
-      if (handle._disposed)
-        throw new FailedCheck("client", `arg.handles[${index}]: no object with guid ${handle._guid}`);
-    });
-    return { serialized, clientHandles };
-  }
-  function validateValue(value, path) {
-    const expectString = (field, at) => {
-      if (typeof field !== "string" && !(field instanceof String))
-        throw new FailedCheck("client", `${at}: expected string, got ${typeof field}`);
-    };
-    if (value.d !== undefined)
-      expectString(value.d, `${path}.d`);
-    if (value.e !== undefined)
-      for (const key of ["m", "n", "s"])
-        expectString(value.e[key], `${path}.e.${key}`);
-    value.a?.forEach((item, index) => {
-      validateValue(item, `${path}.a[${index}]`);
-    });
-    value.o?.forEach((entry, index) => {
-      validateValue(entry.v, `${path}.o[${index}].v`);
-    });
-  }
-  function fromPageValue(api, value) {
-    try {
-      return parseEvaluationResultValue(value);
-    } catch (error) {
-      throw answerError(api, error);
-    }
-  }
-  function normalizeEvaluationExpression(expression, isFunction) {
-    expression = expression.trim();
-    if (isFunction) {
-      try {
-        new Function(`(${expression})`);
-      } catch {
-        if (expression.startsWith("async "))
-          expression = `async function ${expression.substring("async ".length)}`;
-        else
-          expression = `function ${expression}`;
-        try {
-          new Function(`(${expression})`);
-        } catch {
-          throw new Error("Passed function is not well-serializable!");
-        }
-      }
-    }
-    if (/^(async)?\s*function(\s|\()/.test(expression))
-      expression = `(${expression})`;
-    return expression;
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/prelude/element-handle.ts
   function elementBrand(value) {
     if (value instanceof ElementHandle)
@@ -7970,6 +7444,606 @@ ${value.stack}`;
         strict: "strict",
         ...wire
       });
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
+  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  var REFUSALS = {
+    unsupported: unsupportedError,
+    client: clientError,
+    plain: plainError
+  };
+
+  class FailedCheck extends Error {
+    kind;
+    constructor(kind, message) {
+      super(message);
+      this.kind = kind;
+    }
+  }
+  function assertMaxArguments(api, count, max) {
+    if (count > max)
+      throw plainError(api, TOO_MANY_ARGUMENTS);
+  }
+  function assertEvaluateOptions(options) {
+    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS);
+  }
+  function refuseExposedFunctions(api, options) {
+    if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
+      throw unsupportedError(api, "pages cannot call back into the script in Neo; return what the page computed instead");
+  }
+  var fallThrough = (value) => ({ fallThrough: value });
+  var FORMS = {
+    frame: { options: true, afterWait: false },
+    locator: { options: true, afterWait: true },
+    handle: { options: true, afterWait: false },
+    query: { options: false, afterWait: false }
+  };
+  function pageCall(api, form, pageFunction, arg, options) {
+    const { options: checksOptions, afterWait } = FORMS[form];
+    if (checksOptions)
+      refuseExposedFunctions(api, options);
+    try {
+      if (checksOptions)
+        assertEvaluateOptions(options);
+      return script(api, pageFunction, arg);
+    } catch (error) {
+      if (afterWait) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          refused: message.startsWith(`${api}: `) ? message.slice(api.length + 2) : message
+        };
+      }
+      if (error instanceof FailedCheck)
+        throw REFUSALS[error.kind](api, error.message);
+      throw error;
+    }
+  }
+  function script(api, pageFunction, arg) {
+    const isFunction = typeof pageFunction === "function";
+    const { serialized, clientHandles } = serializeArgument(api, arg);
+    let expression;
+    try {
+      expression = normalizeEvaluationExpression(String(pageFunction), isFunction);
+    } catch (error) {
+      return { refused: error instanceof Error ? error.message : String(error) };
+    }
+    const onServer = parseSerializedValue(serialized, clientHandles);
+    const handles = [];
+    const text = JSON.stringify(serializeAsCallArgument(onServer, (value) => {
+      if (!(value instanceof ElementHandle))
+        return fallThrough(value);
+      handles.push(value._brand);
+      return { h: handles.length - 1 };
+    }));
+    return {
+      run: {
+        expression,
+        isFunction,
+        arg: text,
+        ...handles.length > 0 ? { handles } : {}
+      }
+    };
+  }
+  function serializeArgument(api, arg) {
+    let serialized;
+    const clientHandles = [];
+    const copies = new Map;
+    try {
+      serialized = serializeValue(arg, (value) => {
+        if (value instanceof ElementHandle) {
+          clientHandles.push(value);
+          return { h: clientHandles.length - 1 };
+        }
+        if (value instanceof WaitHandle) {
+          if (!copies.has(value))
+            copies.set(value, value._value(api));
+          return fallThrough(copies.get(value));
+        }
+        if (!isHandle(value))
+          return fallThrough(value);
+        throw new FailedCheck("unsupported", "Neo passes element handles as evaluate arguments, not pages, frames, locators or JSHandles; pass the value itself, or an element handle");
+      });
+    } catch (error) {
+      if (error instanceof FailedCheck)
+        throw error;
+      throw new FailedCheck("plain", error instanceof Error ? error.message : String(error));
+    }
+    validateValue(serialized, "arg.value");
+    clientHandles.forEach((handle, index) => {
+      if (handle._disposed)
+        throw new FailedCheck("client", `arg.handles[${index}]: no object with guid ${handle._guid}`);
+    });
+    return { serialized, clientHandles };
+  }
+  function validateValue(value, path) {
+    const expectString = (field, at) => {
+      if (typeof field !== "string" && !(field instanceof String))
+        throw new FailedCheck("client", `${at}: expected string, got ${typeof field}`);
+    };
+    if (value.d !== undefined)
+      expectString(value.d, `${path}.d`);
+    if (value.e !== undefined)
+      for (const key of ["m", "n", "s"])
+        expectString(value.e[key], `${path}.e.${key}`);
+    value.a?.forEach((item, index) => {
+      validateValue(item, `${path}.a[${index}]`);
+    });
+    value.o?.forEach((entry, index) => {
+      validateValue(entry.v, `${path}.o[${index}].v`);
+    });
+  }
+  function fromPageValue(api, value) {
+    try {
+      return parseEvaluationResultValue(value);
+    } catch (error) {
+      throw answerError(api, error);
+    }
+  }
+  function normalizeEvaluationExpression(expression, isFunction) {
+    expression = expression.trim();
+    if (isFunction) {
+      try {
+        new Function(`(${expression})`);
+      } catch {
+        if (expression.startsWith("async "))
+          expression = `async function ${expression.substring("async ".length)}`;
+        else
+          expression = `function ${expression}`;
+        try {
+          new Function(`(${expression})`);
+        } catch {
+          throw new Error("Passed function is not well-serializable!");
+        }
+      }
+    }
+    if (/^(async)?\s*function(\s|\()/.test(expression))
+      expression = `(${expression})`;
+    return expression;
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/locator.ts
+  function testIdAttributeName() {
+    return "data-testid";
+  }
+
+  class Locator {
+    _frame;
+    _selector;
+    constructor(frame, selector) {
+      this._frame = frame;
+      this._selector = selector;
+      markHandle(this);
+    }
+    page() {
+      return this._frame.page();
+    }
+    toString() {
+      return asLocatorDescription("javascript", this._selector);
+    }
+    description() {
+      return locatorCustomDescription(this._selector) ?? null;
+    }
+    locator(selectorOrLocator, options) {
+      const api = "locator.locator";
+      if (typeof selectorOrLocator === "string")
+        return new Locator(this._frame, withLocatorOptions(api, this._frame, `${this._selector} >> ${selectorOrLocator}`, options));
+      if (selectorOrLocator._frame !== this._frame)
+        throw plainError(api, "Locators must belong to the same frame.");
+      return new Locator(this._frame, withLocatorOptions(api, this._frame, `${this._selector} >> internal:chain=${JSON.stringify(selectorOrLocator._selector)}`, options));
+    }
+    within(locator) {
+      return locator.locator(this);
+    }
+    getByTestId(testId) {
+      return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
+    }
+    getByAltText(text, options) {
+      return this.locator(getByAltTextSelector(text, options));
+    }
+    getByLabel(text, options) {
+      return this.locator(getByLabelSelector(text, options));
+    }
+    getByPlaceholder(text, options) {
+      return this.locator(getByPlaceholderSelector(text, options));
+    }
+    getByText(text, options) {
+      return this.locator(getByTextSelector(text, options));
+    }
+    getByTitle(text, options) {
+      return this.locator(getByTitleSelector(text, options));
+    }
+    getByRole(role, options = {}) {
+      return this.locator(getByRoleSelector(role, options));
+    }
+    frameLocator(selector) {
+      return new FrameLocator(this._frame, `${this._selector} >> ${selector}`);
+    }
+    contentFrame() {
+      return new FrameLocator(this._frame, this._selector);
+    }
+    filter(options) {
+      return new Locator(this._frame, withLocatorOptions("locator.filter", this._frame, this._selector, options));
+    }
+    visible() {
+      return new Locator(this._frame, withLocatorOptions("locator.visible", this._frame, this._selector, {
+        visible: true
+      }));
+    }
+    describe(description) {
+      return new Locator(this._frame, `${this._selector} >> internal:describe=${JSON.stringify(description)}`);
+    }
+    first() {
+      return new Locator(this._frame, `${this._selector} >> nth=0`);
+    }
+    last() {
+      return new Locator(this._frame, `${this._selector} >> nth=-1`);
+    }
+    nth(index) {
+      return new Locator(this._frame, `${this._selector} >> nth=${index}`);
+    }
+    and(locator) {
+      if (locator._frame !== this._frame)
+        throw plainError("locator.and", "Locators must belong to the same frame.");
+      return new Locator(this._frame, `${this._selector} >> internal:and=${JSON.stringify(locator._selector)}`);
+    }
+    or(locator) {
+      if (locator._frame !== this._frame)
+        throw plainError("locator.or", "Locators must belong to the same frame.");
+      return new Locator(this._frame, `${this._selector} >> internal:or=${JSON.stringify(locator._selector)}`);
+    }
+    click(options = {}) {
+      return this._frame._click("locator.click", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    dblclick(options = {}) {
+      return this._frame._dblclick("locator.dblclick", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    hover(options = {}) {
+      return this._frame._hover("locator.hover", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    check(options = {}) {
+      return this._frame._check("locator.check", this._selector, true, {
+        ...options,
+        strict: true
+      });
+    }
+    uncheck(options = {}) {
+      return this._frame._check("locator.uncheck", this._selector, false, {
+        ...options,
+        strict: true
+      });
+    }
+    setChecked(checked, options = {}) {
+      return this._frame._check("locator.setChecked", this._selector, checked, {
+        ...options,
+        strict: true
+      });
+    }
+    dragTo(target, options = {}) {
+      return this._frame._dragAndDrop("locator.dragTo", this._selector, target._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    fill(value, options = {}) {
+      return this._frame._fill("locator.fill", this._selector, value, {
+        ...options,
+        strict: true
+      });
+    }
+    clear(options = {}) {
+      return this._frame._fill("locator.clear", this._selector, "", {
+        ...options,
+        strict: true
+      });
+    }
+    press(key, options = {}) {
+      return this._frame._press("locator.press", this._selector, key, {
+        ...options,
+        strict: true
+      });
+    }
+    pressSequentially(text, options = {}) {
+      return this._frame._type("locator.pressSequentially", this._selector, text, {
+        ...options,
+        strict: true
+      });
+    }
+    type(text, options = {}) {
+      return this._frame._type("locator.type", this._selector, text, {
+        ...options,
+        strict: true
+      });
+    }
+    selectOption(values, options = {}) {
+      return this._frame._selectOption("locator.selectOption", this._selector, values, {
+        ...options,
+        strict: true
+      });
+    }
+    selectText(options = {}) {
+      return this._frame._selectText("locator.selectText", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    focus(options = {}) {
+      return this._frame._focus("locator.focus", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    blur(options = {}) {
+      return this._frame._blur("locator.blur", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    setInputFiles(files, options = {}) {
+      return this._frame._setInputFiles("locator.setInputFiles", this._selector, files, {
+        ...options,
+        strict: true
+      });
+    }
+    dispatchEvent(type, eventInit = {}, options = {}) {
+      return this._frame._dispatchEvent("locator.dispatchEvent", this._selector, type, eventInit, {
+        ...options,
+        strict: true
+      });
+    }
+    scrollIntoViewIfNeeded(options = {}) {
+      return this._frame._scrollIntoViewIfNeeded("locator.scrollIntoViewIfNeeded", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    textContent(options = {}) {
+      return this._frame._read("locator.textContent", "locator.textContent", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    innerText(options = {}) {
+      return this._frame._read("locator.innerText", "locator.innerText", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    innerHTML(options = {}) {
+      return this._frame._read("locator.innerHTML", "locator.innerHTML", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    inputValue(options = {}) {
+      return this._frame._read("locator.inputValue", "locator.inputValue", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    getAttribute(name, options = {}) {
+      return this._frame._getAttribute("locator.getAttribute", this._selector, name, {
+        ...options,
+        strict: true
+      });
+    }
+    isChecked(options = {}) {
+      return this._frame._read("locator.isChecked", "locator.isChecked", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    isDisabled(options = {}) {
+      return this._frame._read("locator.isDisabled", "locator.isDisabled", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    isEditable(options = {}) {
+      return this._frame._read("locator.isEditable", "locator.isEditable", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    isEnabled(options = {}) {
+      return this._frame._read("locator.isEnabled", "locator.isEnabled", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    isHidden(_options) {
+      return this._frame._isVisible("locator.isHidden", "locator.isHidden", this._selector, {
+        strict: true
+      });
+    }
+    isVisible(_options) {
+      return this._frame._isVisible("locator.isVisible", "locator.isVisible", this._selector, {
+        strict: true
+      });
+    }
+    count() {
+      return this._frame._everyMatch("locator.count", "locator.count", this._selector);
+    }
+    async normalize() {
+      const resolved = await this._frame._normalize("locator.normalize", this._selector);
+      return new Locator(this._frame, resolved);
+    }
+    async all() {
+      const count = await this._frame._everyMatch("locator.count", "locator.all", this._selector);
+      return Array.from({ length: count }, (_, index) => this.nth(index));
+    }
+    allTextContents() {
+      return this._frame._everyMatch("locator.allTextContents", "locator.allTextContents", this._selector);
+    }
+    allInnerTexts() {
+      return this._frame._everyMatch("locator.allInnerTexts", "locator.allInnerTexts", this._selector);
+    }
+    boundingBox(options = {}) {
+      return this._frame._boundingBox("locator.boundingBox", this._selector, options);
+    }
+    async waitFor(options = {}) {
+      await this._frame._waitForSelector("locator.waitFor", this._selector, { ...options, strict: true }, true);
+    }
+    async elementHandle(options = {}) {
+      const handle = await this._frame._elementHandle("locator.elementHandle", this._selector, true, false, options);
+      if (!handle)
+        throw internalError("locator.elementHandle", `Could not resolve ${this} to DOM Element`);
+      return handle;
+    }
+    elementHandles() {
+      return this._frame._elementHandles("locator.elementHandles", this._selector);
+    }
+    async evaluate(pageFunction, arg, options) {
+      const api = "locator.evaluate";
+      const script = pageCall(api, "locator", pageFunction, arg, options);
+      return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
+    }
+    async waitForFunction(pageFunction, arg, options) {
+      const api = "locator.waitForFunction";
+      const script = pageCall(api, "query", pageFunction, arg);
+      await this._frame._selectorOp("locator.waitForFunction", api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
+    }
+    async evaluateAll(pageFunction, arg) {
+      const api = "locator.evaluateAll";
+      return await this._frame._evaluateAll(api, this._selector, pageCall(api, "query", pageFunction, arg));
+    }
+    ariaSnapshot(options) {
+      return this._frame._ariaSnapshot("locator.ariaSnapshot", this._selector, options);
+    }
+    ariaSnapshotJSON(options) {
+      return this._frame._ariaSnapshotJSON("locator.ariaSnapshotJSON", this._selector, options);
+    }
+    screenshot(options) {
+      return this._frame._screenshot("locator.screenshot", this._selector, options);
+    }
+  }
+
+  class FrameLocator {
+    _frame;
+    _frameSelector;
+    constructor(frame, selector) {
+      this._frame = frame;
+      this._frameSelector = selector;
+      markHandle(this);
+    }
+    #childSelector(selector) {
+      if (this._frameSelector === kAnyFrameSelector)
+        return `${this._frameSelector} >> ${selector}`;
+      return `${this._frameSelector} >> internal:control=enter-frame >> ${selector}`;
+    }
+    locator(selectorOrLocator, options) {
+      const api = "frameLocator.locator";
+      if (typeof selectorOrLocator === "string")
+        return new Locator(this._frame, withLocatorOptions(api, this._frame, this.#childSelector(selectorOrLocator), options));
+      if (selectorOrLocator._frame !== this._frame)
+        throw plainError(api, "Locators must belong to the same frame.");
+      return new Locator(this._frame, withLocatorOptions(api, this._frame, this.#childSelector(selectorOrLocator._selector), options));
+    }
+    getByTestId(testId) {
+      return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
+    }
+    getByAltText(text, options) {
+      return this.locator(getByAltTextSelector(text, options));
+    }
+    getByLabel(text, options) {
+      return this.locator(getByLabelSelector(text, options));
+    }
+    getByPlaceholder(text, options) {
+      return this.locator(getByPlaceholderSelector(text, options));
+    }
+    getByText(text, options) {
+      return this.locator(getByTextSelector(text, options));
+    }
+    getByTitle(text, options) {
+      return this.locator(getByTitleSelector(text, options));
+    }
+    getByRole(role, options = {}) {
+      return this.locator(getByRoleSelector(role, options));
+    }
+    owner() {
+      return new Locator(this._frame, this._frameSelector);
+    }
+    frameLocator(selector) {
+      return new FrameLocator(this._frame, this.#childSelector(selector));
+    }
+    #nthSelector(api, nth) {
+      if (this._frameSelector === kAnyFrameSelector)
+        throw plainError(api, "Selecting the nth frame is not allowed on frameLocator().");
+      return `${this._frameSelector} >> nth=${nth}`;
+    }
+    first() {
+      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.first", "0"));
+    }
+    last() {
+      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.last", "-1"));
+    }
+    nth(index) {
+      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.nth", String(index)));
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/locator-handlers.ts
+  class LocatorHandlers {
+    #byUid = new Map;
+    #pulling = false;
+    async add(api, page, locator, handler, options = {}) {
+      if (!(locator instanceof Locator) || locator._frame !== page._mainFrame)
+        throw plainError(api, "Locator must belong to the main frame of this page");
+      if (options.times === 0)
+        return;
+      const target = await locator._frame._locatorBrand(api, locator._selector);
+      const { uid } = await invoke("page.addLocatorHandler", { api, timeoutMs: 0 }, options.noWaitAfter ? { target, noWaitAfter: true } : { target });
+      this.#byUid.set(uid, { page, locator, handler, times: options.times });
+      if (!this.#pulling) {
+        this.#pulling = true;
+        this.pull();
+      }
+    }
+    async remove(api, page, locator) {
+      for (const [uid, registration] of this.#byUid) {
+        if (registration.page !== page || !(locator instanceof Locator) || registration.locator._frame !== locator._frame || registration.locator._selector !== locator._selector)
+          continue;
+        this.#byUid.delete(uid);
+        await invoke("page.removeLocatorHandler", { api, timeoutMs: 0 }, { uid }).catch(() => {});
+      }
+    }
+    async pull() {
+      try {
+        while (this.#byUid.size > 0) {
+          const { uid } = await invoke("page.locatorHandlerTriggered", { api: "page.locatorHandlerTriggered", timeoutMs: 0 }, {});
+          if (uid !== null)
+            this.#run(uid);
+        }
+      } catch {} finally {
+        this.#pulling = false;
+      }
+    }
+    async#run(uid) {
+      let remove = false;
+      try {
+        const registration = this.#byUid.get(uid);
+        if (registration && registration.times !== 0) {
+          if (registration.times !== undefined)
+            registration.times--;
+          await registration.handler(registration.locator);
+        }
+        remove = registration?.times === 0;
+      } finally {
+        if (remove)
+          this.#byUid.delete(uid);
+        await invoke("page.resolveLocatorHandler", { api: "page.resolveLocatorHandler", timeoutMs: 0 }, remove ? { uid, remove: true } : { uid }).catch(() => {});
+      }
     }
   }
 
@@ -8332,6 +8406,12 @@ ${value.stack}`;
     }
     waitForSelector(selector, options) {
       return this._mainFrame._waitForSelector("page.waitForSelector", selector, options, false);
+    }
+    addLocatorHandler(locator, handler, options) {
+      return this._context._locatorHandlers.add("page.addLocatorHandler", this, locator, handler, options);
+    }
+    removeLocatorHandler(locator) {
+      return this._context._locatorHandlers.remove("page.removeLocatorHandler", this, locator);
     }
     goto(url, options) {
       return this._mainFrame._goto("page.goto", url, options);
@@ -8739,6 +8819,7 @@ ${value.stack}`;
   class BrowserContext extends EventEmitter {
     _timeoutSettings = new TimeoutSettings;
     _events;
+    _locatorHandlers = new LocatorHandlers;
     _browser = null;
     #byTab = new Map;
     #unopened = null;
@@ -9580,7 +9661,6 @@ Timeout: ${timeout}ms`);
     },
     Page: {
       addInitScript: "init scripts are not available in Neo; run page.evaluate() after page.goto()",
-      addLocatorHandler: "locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting",
       bringToFront: "Neo keeps agent tabs in the background; act on the page directly",
       cancelPickLocator: NO_INSPECTOR,
       clearConsoleMessages: 'Neo keeps no console history; listen with page.on("console")',
@@ -9594,7 +9674,6 @@ Timeout: ${timeout}ms`);
       pageErrors: 'Neo keeps no error history; listen with page.on("pageerror") before the page fails',
       pause: NO_INSPECTOR,
       pickLocator: NO_INSPECTOR,
-      removeLocatorHandler: "locator handlers are not available in Neo",
       requestGC: "garbage collection is not available in Neo",
       requests: "Neo does not record network requests",
       route: NETWORK,

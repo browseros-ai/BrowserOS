@@ -49,6 +49,7 @@ import {
 } from './frame'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
+import type { LocatorHandlerOptions } from './locator-handlers'
 import { markHandle, pick } from './options'
 import { Response } from './response'
 import type { LocatorOptions } from './selectors'
@@ -578,6 +579,30 @@ export class Page extends EventEmitter {
       selector,
       options,
       false,
+    )
+  }
+
+  // ---- locator handlers (locator-handlers.ts) -------------------------------------------
+
+  addLocatorHandler(
+    locator: Locator,
+    handler: (locator: Locator) => unknown,
+    options?: LocatorHandlerOptions,
+  ): Promise<void> {
+    return this._context._locatorHandlers.add(
+      'page.addLocatorHandler',
+      this,
+      locator,
+      handler,
+      options,
+    )
+  }
+
+  removeLocatorHandler(locator: Locator): Promise<void> {
+    return this._context._locatorHandlers.remove(
+      'page.removeLocatorHandler',
+      this,
+      locator,
     )
   }
 

@@ -35,6 +35,7 @@ use crate::input::{
     self, BurstFailure, ClickOptions, InputDevices, InputStep, Modifiers, MouseButton, PageInput,
     Point as PagePoint, UnknownKey,
 };
+use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{
@@ -92,6 +93,14 @@ pub(crate) struct PointerAction {
     pub(crate) modifiers: Option<Vec<&'static str>>,
     /// `false` is 1.64.1's `scroll: 'none'`.
     pub(crate) scroll: bool,
+}
+
+impl PointerAction {
+    /// Upstream runs the locator handlers before each attempt unless `force` is set, and never
+    /// for `dragTo`'s drop half, so a handler cannot move the mouse while the button is held.
+    fn prechecks(&self) -> Prechecks {
+        Prechecks::unless(self.force || self.kind == PointerKind::DragTarget)
+    }
 }
 
 /// `dragTo`'s two pointer actions, in upstream's order.
@@ -245,7 +254,7 @@ impl<'a> PointerRunner<'a> {
         self.subject.log_waiting();
         let backoff = Backoff::outer(self.scope.timeout());
         for attempt in 0.. {
-            let Some(located) = self.next_location(backoff, attempt, action.force).await? else {
+            let Some(located) = self.next_location(backoff, attempt, action).await? else {
                 continue;
             };
             match self
@@ -270,7 +279,7 @@ impl<'a> PointerRunner<'a> {
         self.subject.log_waiting();
         let backoff = Backoff::outer(self.scope.timeout());
         for attempt in 0.. {
-            let Some(located) = self.next_location(backoff, attempt, action.force).await? else {
+            let Some(located) = self.next_location(backoff, attempt, action).await? else {
                 continue;
             };
             let Some(pin) = self.pin(&located).await? else {
@@ -311,24 +320,26 @@ impl<'a> PointerRunner<'a> {
         Err(self.timed_out())
     }
 
-    /// The outer loop's wait before attempt `attempt`, then one resolution. `None` while the
-    /// locator matches nothing yet, or its element sits in a hidden frame.
+    /// The outer loop's wait before attempt `attempt`, the locator handlers, then one
+    /// resolution. `None` while the locator matches nothing yet, or its element sits in a
+    /// hidden frame.
     async fn next_location(
         &mut self,
         backoff: Backoff,
         attempt: usize,
-        force: bool,
+        action: &PointerAction,
     ) -> Result<Option<Resolved>, PlaywrightError> {
         if self.scope.sleep(backoff.wait(attempt)).await.is_err() {
             return Err(self.timed_out());
         }
-        let Ok(located) = self.scope.within(self.subject.locate(attempt)).await else {
+        let locating = self.subject.locate(attempt, action.prechecks());
+        let Ok(located) = self.scope.within(locating).await else {
             return Err(self.timed_out());
         };
         let Some(located) = located? else {
             return Ok(None);
         };
-        if !force && !located.frame_visible() {
+        if !action.force && !located.frame_visible() {
             self.matched = true;
             self.scope
                 .log("  element is inside a hidden frame, retrying".to_owned());
@@ -417,6 +428,14 @@ impl<'a> PointerRunner<'a> {
             }
             if self.scope.sleep(wait).await.is_err() {
                 return Err(self.timed_out());
+            }
+            // A retry runs the locator handlers, as upstream's `_retryAction` does before each
+            // attempt; the outer pass ran the first attempt's just before it.
+            if retry > 0 && action.prechecks() == Prechecks::Run {
+                match self.scope.within(self.subject.run_handlers()).await {
+                    Ok(checked) => checked?,
+                    Err(_expired) => return Err(self.timed_out()),
+                }
             }
 
             // ① Resolve or reuse the pin, check the states, scroll, measure.

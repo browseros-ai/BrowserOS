@@ -17,7 +17,7 @@ use crate::page::{PageRegistry, context_op, page_op};
 use crate::read::read_op;
 use crate::snapshot::snapshot_op;
 use crate::world::{Epoch, FrameAttachLog, SessionSetup};
-use crate::{OpEnv, PlaywrightError, PlaywrightHooks};
+use crate::{OpEnv, PlaywrightError, PlaywrightHooks, locator_handler};
 
 /// One per browser connection; runs every Playwright operation. The host builds it once at
 /// startup (claw-sdk: next to its browser link) and calls [`Playwright::invoke`] from each
@@ -142,6 +142,7 @@ impl Playwright {
             OpKind::Page(op) => page_op::invoke(self, &scope, op, args).await,
             OpKind::Context(op) => context_op::invoke(self, &scope, op, args).await,
             OpKind::Event(op) => event_op::invoke(self, &scope, op, args).await,
+            OpKind::LocatorHandler(op) => locator_handler::invoke(&scope, op, args).await,
         };
         scope.settle(answered)
     }
@@ -179,8 +180,12 @@ mod tests {
     #[tokio::test]
     async fn tests_that_an_empty_call_fails_before_it_reaches_the_host()
     -> Result<(), Box<dyn Error>> {
-        const WHOLE_WITHOUT_ARGUMENTS: [&str; 3] =
-            ["context.pages", "context.newPage", "events.next"];
+        const WHOLE_WITHOUT_ARGUMENTS: [&str; 4] = [
+            "context.pages",
+            "context.newPage",
+            "events.next",
+            "page.locatorHandlerTriggered",
+        ];
         let playwright = Playwright::new(test_env::offline_session(), Arc::new(NoHooks));
         let env = TestEnv::new();
         let ops = Op::all().filter(|op| !WHOLE_WITHOUT_ARGUMENTS.contains(&op.spec().name));

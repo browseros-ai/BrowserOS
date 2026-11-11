@@ -463,6 +463,16 @@ export type OpInputs = {
   'page.setViewportSize': PageArgs & {
     viewportSize: { width: number; height: number }
   }
+  /** A handler's locator, on the main frame of its page; `uid` names the registration. */
+  'page.addLocatorHandler': { target: LocatorBrand; noWaitAfter?: true }
+  'page.removeLocatorHandler': { uid: number }
+  /**
+   * The background pull for locator handlers: answers the uid of the next handler an action
+   * paused for, or null once the run has none left (locator-handlers.ts).
+   */
+  'page.locatorHandlerTriggered': Record<string, never>
+  /** The script ran the handler; `remove` once its `times` ran out. The paused action goes on. */
+  'page.resolveLocatorHandler': { uid: number; remove?: true }
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
   /**
@@ -582,6 +592,10 @@ export type OpOutputs = {
   'page.screenshot': unknown
   'page.pdf': unknown
   'page.setViewportSize': Done
+  'page.addLocatorHandler': { uid: number }
+  'page.removeLocatorHandler': Done
+  'page.locatorHandlerTriggered': { uid: number | null }
+  'page.resolveLocatorHandler': Done
   'context.pages': { pages: PageEntry[] }
   'context.newPage': PageEntry
   'events.listen': Done

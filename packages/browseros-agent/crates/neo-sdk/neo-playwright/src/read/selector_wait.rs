@@ -1,11 +1,13 @@
 //! Upstream's `waitForSelector` (server/frames.ts at v1.64.1), which `locator.waitFor`,
-//! `page.waitForSelector` and `locator.elementHandle` wait on.
+//! `page.waitForSelector` and `locator.elementHandle` wait on, and which the locator-handler
+//! checkpoint waits on for a handler's locator to be hidden.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
 
 use crate::backoff::Backoff;
+use crate::locator_handler::{self, Prechecks};
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, Read};
@@ -99,6 +101,27 @@ pub(crate) async fn wait_for_selector(
     }
 }
 
+/// The locator-handler checkpoint's wait once a handler ran: upstream's
+/// `waitForSelector(progress, { selector }, false, { state: 'hidden' })`. The first match,
+/// with no `waiting for` line and no checkpoint of its own, but each poll's `locator resolved
+/// to visible <preview>` line. Unbounded, as the checkpoint is: its action's timeout ends it.
+pub(crate) async fn wait_hidden(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    target: &LocatorTarget,
+) -> Result<(), PlaywrightError> {
+    let polls = Polls {
+        strict: Strictness::FirstMatch,
+        state: SelectorState::Hidden,
+        returning: Returning::Nothing,
+        prechecks: Prechecks::Skip,
+    };
+    polls
+        .run(scope, page, target, &AtomicBool::new(false))
+        .await
+        .map(drop)
+}
+
 /// [`wait_for_selector`]'s polls, which its deadline drops wherever they are. `matched` is set
 /// once a poll found an element.
 async fn poll_selector(
@@ -111,71 +134,110 @@ async fn poll_selector(
     matched: &AtomicBool,
 ) -> Result<Value, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
-    let resolver = Resolver::new(&page, scope, target, strict);
     scope.log(format!("waiting for {}{}", target.display, state.suffix()));
-    let backoff = Backoff::outer(scope.timeout());
-    for attempt in 0.. {
-        if scope.sleep(backoff.wait(attempt)).await.is_err() {
-            return Err(scope.timed_out(state.timed_out(matched.load(Ordering::Relaxed))));
-        }
-        let request = |last, frame_visible| ProbeRequest::Read {
-            target: ProbeTarget::Chunk(last),
-            strictness: strict,
-            frame_visible,
-            read: Read::Located,
-        };
-        // Its preview reaches the call log and the handle.
-        let landed = match resolver.attempt_at(request).await {
-            Ok(landed) => landed,
-            Err(error)
-                if state.met_without_element()
-                    && error.error_code() == Some(ErrorCode::ElementDetached) =>
-            {
-                return Ok(Value::Null);
+    let polls = Polls {
+        strict,
+        state,
+        returning,
+        prechecks: Prechecks::Run,
+    };
+    polls.run(scope, &page, target, matched).await
+}
+
+/// What one selector wait polls for.
+struct Polls {
+    strict: Strictness,
+    state: SelectorState,
+    returning: Returning,
+    /// Upstream's `performActionPreChecksAndLog`: the script's own waits run the checkpoint
+    /// before every poll; the checkpoint's wait does not.
+    prechecks: Prechecks,
+}
+
+impl Polls {
+    async fn run(
+        &self,
+        scope: &OpScope<'_>,
+        page: &OpPage<'_>,
+        target: &LocatorTarget,
+        matched: &AtomicBool,
+    ) -> Result<Value, PlaywrightError> {
+        let Self {
+            strict,
+            state,
+            returning,
+            prechecks,
+        } = *self;
+        let resolver = Resolver::new(page, scope, target, strict);
+        let backoff = Backoff::outer(scope.timeout());
+        for attempt in 0.. {
+            if scope.sleep(backoff.wait(attempt)).await.is_err() {
+                return Err(scope.timed_out(state.timed_out(matched.load(Ordering::Relaxed))));
             }
-            Err(error) => return Err(error),
-        };
-        let Some(Landed { reply, world, .. }) = landed else {
-            if state.met_without_element() {
-                return Ok(Value::Null);
+            if prechecks == Prechecks::Run {
+                Box::pin(locator_handler::checkpoint(scope, page)).await?;
             }
-            continue;
-        };
-        let located: Located = match reply {
-            ProbeReply::Read { value, .. } => element_read::read_value(scope, value.into_value())?,
-            ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {
+            let request = |last, frame_visible| ProbeRequest::Read {
+                target: ProbeTarget::Chunk(last),
+                strictness: strict,
+                frame_visible,
+                read: Read::Located,
+            };
+            // Its preview reaches the call log and the handle.
+            let landed = match resolver.attempt_at(request).await {
+                Ok(landed) => landed,
+                Err(error)
+                    if state.met_without_element()
+                        && error.error_code() == Some(ErrorCode::ElementDetached) =>
+                {
+                    return Ok(Value::Null);
+                }
+                Err(error) => return Err(error),
+            };
+            let Some(Landed { reply, world, .. }) = landed else {
                 if state.met_without_element() {
                     return Ok(Value::Null);
                 }
                 continue;
+            };
+            let located: Located = match reply {
+                ProbeReply::Read { value, .. } => {
+                    element_read::read_value(scope, value.into_value())?
+                }
+                ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {
+                    if state.met_without_element() {
+                        return Ok(Value::Null);
+                    }
+                    continue;
+                }
+                // A ref that can never match again: gone is what these two wait for.
+                ProbeReply::None { stale_ref: Some(_) } if state.met_without_element() => {
+                    return Ok(Value::Null);
+                }
+                other => return Err(resolver.refused(other)),
+            };
+            scope.log(located.log_line());
+            matched.store(true, Ordering::Relaxed);
+            if !state.met_by(&located) {
+                continue;
             }
-            // A ref that can never match again: gone is what these two wait for.
-            ProbeReply::None { stale_ref: Some(_) } if state.met_without_element() => {
+            let hands_out = matches!(state, SelectorState::Attached | SelectorState::Visible);
+            if returning == Returning::Nothing || !hands_out {
                 return Ok(Value::Null);
             }
-            other => return Err(resolver.refused(other)),
-        };
-        scope.log(located.log_line());
-        matched.store(true, Ordering::Relaxed);
-        if !state.met_by(&located) {
-            continue;
+            // Upstream polls again when the element went before its handle was made.
+            if let Some(brand) = element_handle::element_brand(
+                scope,
+                &target.page,
+                &world,
+                located.pin,
+                &located.preview,
+            )
+            .await?
+            {
+                return Ok(brand);
+            }
         }
-        let hands_out = matches!(state, SelectorState::Attached | SelectorState::Visible);
-        if returning == Returning::Nothing || !hands_out {
-            return Ok(Value::Null);
-        }
-        // Upstream polls again when the element went before its handle was made.
-        if let Some(brand) = element_handle::element_brand(
-            scope,
-            &target.page,
-            &world,
-            located.pin,
-            &located.preview,
-        )
-        .await?
-        {
-            return Ok(brand);
-        }
+        Err(scope.timed_out(state.timed_out(matched.load(Ordering::Relaxed))))
     }
-    Err(scope.timed_out(state.timed_out(matched.load(Ordering::Relaxed))))
 }

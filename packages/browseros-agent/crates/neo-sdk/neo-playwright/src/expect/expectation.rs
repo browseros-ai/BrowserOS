@@ -338,12 +338,17 @@ impl Expectation {
     /// Polls until the matcher's result differs from `.not`. `poll` runs one probe call and
     /// maps its reply with [`Expectation::poll_of`]; it fails only for what ends the op at
     /// once (a strict violation, an error the engine threw, a stale ref, a gone page).
-    pub(crate) async fn run<F, Fut>(
+    /// `checkpoint` is the page's locator-handler checkpoint, which upstream's `expect` runs
+    /// under the timeout before the one-shot and before every later poll.
+    pub(crate) async fn run<C, CFut, F, Fut>(
         &self,
         scope: &OpScope<'_>,
+        mut checkpoint: C,
         mut poll: F,
     ) -> Result<Value, PlaywrightError>
     where
+        C: FnMut() -> CFut,
+        CFut: Future<Output = Result<(), PlaywrightError>>,
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<Poll, PlaywrightError>>,
     {
@@ -356,6 +361,10 @@ impl Expectation {
         ));
         if let Receiver::Locator(display) = receiver {
             scope.log(format!("waiting for {display}"));
+        }
+        match scope.within(checkpoint()).await {
+            Ok(checked) => checked?,
+            Err(_expired) => return Err(self.timed_out(scope, None)),
         }
         // Upstream's one-shot finishes even past the timeout, so `toBeVisible({ timeout: 1 })`
         // passes on a visible element, and upstream drops its call-log lines. It gets at least
@@ -379,7 +388,11 @@ impl Expectation {
             if scope.sleep(backoff.wait(attempt)).await.is_err() {
                 break;
             }
-            let Ok(polled) = scope.within(poll()).await else {
+            let checked_poll = async {
+                checkpoint().await?;
+                poll().await
+            };
+            let Ok(polled) = scope.within(checked_poll).await else {
                 break;
             };
             let polled = polled?;
@@ -545,6 +558,11 @@ mod tests {
     use crate::test_env::TestEnv;
     use crate::{ErrorCode, PlaywrightError};
 
+    /// A page without locator handlers: the checkpoint passes at once.
+    async fn no_handlers() -> Result<(), PlaywrightError> {
+        Ok(())
+    }
+
     fn locator_scope(env: &TestEnv) -> Result<OpScope<'_>, Box<dyn Error>> {
         let op = Op::from_name("expect.locator").ok_or("expect.locator is an op")?;
         Ok(OpScope::new(
@@ -683,7 +701,7 @@ mod tests {
         let scope = scope_with_timeout(&env, 1)?;
         let expect = visible(&scope)?;
         let passed = expect
-            .run(&scope, || async {
+            .run(&scope, no_handlers, || async {
                 time::sleep(Duration::from_millis(50)).await;
                 Ok(Poll::Ran {
                     matches: true,
@@ -705,7 +723,11 @@ mod tests {
         let expect = visible(&scope)?;
         let started = Instant::now();
         let error = expect
-            .run(&scope, future::pending::<Result<Poll, PlaywrightError>>)
+            .run(
+                &scope,
+                no_handlers,
+                future::pending::<Result<Poll, PlaywrightError>>,
+            )
             .await
             .err()
             .ok_or("a poll that never answers cannot pass")?;

@@ -13,6 +13,7 @@ import type { Browser } from './browser'
 import { EventEmitter } from './emitter'
 import { internalError } from './errors'
 import { checkReported, EventHub, isReported } from './events'
+import { LocatorHandlers } from './locator-handlers'
 import { markHandle } from './options'
 import { Page } from './page'
 import { TimeoutSettings } from './timeouts'
@@ -30,6 +31,8 @@ function pageFact(value: unknown): PageFact | null {
 export class BrowserContext extends EventEmitter {
   readonly _timeoutSettings = new TimeoutSettings()
   readonly _events: EventHub
+  /** The run's locator handlers, on every page: one pull serves them all. */
+  readonly _locatorHandlers = new LocatorHandlers()
   _browser: Browser | null = null
   readonly #byTab = new Map<number, Page>()
   /** The run's `page` while it has no tab; the reply that names its tab clears it. */

@@ -13,7 +13,7 @@ use crate::probe::{ExpectParams, ProbeFailure, ProbeRequest, ProbeTarget};
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{PageRef, Target};
 use crate::world::Place;
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, locator_handler};
 
 listed_enum! {
     /// Retrying matchers. Non-retrying value matchers (`toBe`, `toEqual`, ...) run in the
@@ -116,7 +116,9 @@ async fn locator(
             None => Ok(expect.nothing_found()),
         }
     };
-    expect.run(scope, poll).await
+    expect
+        .run(scope, || locator_handler::checkpoint(scope, &page), poll)
+        .await
 }
 
 /// A page matcher, on the main frame's document (upstream's `:root`).
@@ -142,7 +144,11 @@ async fn page(
     let page = OpPage::admit_handle(pw, scope, &page).await?;
     let request = expect.request(ProbeTarget::Document, true);
     expect
-        .run(scope, || main_frame(&page, scope, &expect, &request))
+        .run(
+            scope,
+            || locator_handler::checkpoint(scope, &page),
+            || main_frame(&page, scope, &expect, &request),
+        )
         .await
 }
 

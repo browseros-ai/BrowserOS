@@ -2,6 +2,7 @@
 
 use crate::DownloadFacts;
 use crate::events::{RunDownloads, RunEvents};
+use crate::locator_handler::LocatorHandlers;
 use crate::object_group::ObjectGroup;
 use crate::page::FrameRoutes;
 
@@ -20,6 +21,8 @@ pub struct RunState {
     /// Returned tags and chooser inputs retained until the script and all its handles end.
     pub(crate) objects: ObjectGroup,
     pub(crate) downloads: RunDownloads,
+    /// `page.addLocatorHandler` registrations; dropping them wakes any action still paused.
+    pub(crate) locator_handlers: LocatorHandlers,
 }
 
 impl RunState {

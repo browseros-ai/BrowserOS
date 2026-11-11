@@ -91,8 +91,6 @@ export const UNSUPPORTED = {
   Page: {
     addInitScript:
       'init scripts are not available in Neo; run page.evaluate() after page.goto()',
-    addLocatorHandler:
-      'locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting',
     bringToFront:
       'Neo keeps agent tabs in the background; act on the page directly',
     cancelPickLocator: NO_INSPECTOR,
@@ -113,7 +111,6 @@ export const UNSUPPORTED = {
       'Neo keeps no error history; listen with page.on("pageerror") before the page fails',
     pause: NO_INSPECTOR,
     pickLocator: NO_INSPECTOR,
-    removeLocatorHandler: 'locator handlers are not available in Neo',
     requestGC: 'garbage collection is not available in Neo',
     requests: 'Neo does not record network requests',
     route: NETWORK,
