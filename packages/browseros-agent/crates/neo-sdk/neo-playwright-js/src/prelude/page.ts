@@ -127,6 +127,7 @@ const PDF_KEYS = [
 export class Page extends EventEmitter {
   /** The browser's tab id, which the page's brand carries; null until a fact or result names it. */
   _tab: number | null
+  #taskId: string | null = null
   readonly _context: BrowserContext
   readonly _timeoutSettings: TimeoutSettings
   readonly _mainFrame: Frame
@@ -195,6 +196,16 @@ export class Page extends EventEmitter {
   }
 
   // ---- synchronous state ----------------------------------------------------------------
+
+  /** Neo addition: the browser tab id; null until the built-in page opens its tab. */
+  get tabId(): number | null {
+    return this._tab
+  }
+
+  /** Neo addition: the task that owns this tab, or null for a task-less tab. */
+  get taskId(): string | null {
+    return this.#taskId
+  }
 
   context(): BrowserContext {
     return this._context
@@ -1411,6 +1422,7 @@ export class Page extends EventEmitter {
     approved: number | null = null,
   ): void {
     if (fact.tab !== undefined) this._tab = fact.tab
+    if (fact.taskId !== undefined) this.#taskId = fact.taskId
     if (at === null) {
       this.#applyViewport(fact.viewportSize)
       if (fact.url !== undefined && !this.#urlKnown) {

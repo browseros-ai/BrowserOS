@@ -86,6 +86,7 @@ export type WorkerInfo = { id: string; url: string }
 export type PageFact = {
   workers?: WorkerInfo[]
   tab: number
+  taskId?: string | null
   url?: string
   title?: string
   closed?: boolean

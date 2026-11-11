@@ -28,7 +28,11 @@ function pageFact(value: unknown): PageFact | null {
     return value._tab === null ? null : { tab: value._tab }
   if (typeof value !== 'object' || value === null) return null
   const tab: unknown = Reflect.get(value, 'tab')
-  return typeof tab === 'number' ? { tab } : null
+  if (typeof tab !== 'number') return null
+  const fact: PageFact = { tab }
+  const taskId: unknown = Reflect.get(value, 'taskId')
+  if (taskId === null || typeof taskId === 'string') fact.taskId = taskId
+  return fact
 }
 
 export class BrowserContext extends EventEmitter {

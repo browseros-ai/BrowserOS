@@ -903,12 +903,15 @@
       if (typeof tab !== "number")
         continue;
       const fact = { tab };
+      const taskId = Reflect.get(page, "taskId");
       const url = Reflect.get(page, "url");
       const title = Reflect.get(page, "title");
       const closed = Reflect.get(page, "closed");
       const viewport = Reflect.get(page, "viewportSize");
       if (typeof url === "string")
         fact.url = url;
+      if (taskId === null || typeof taskId === "string")
+        fact.taskId = taskId;
       if (typeof title === "string")
         fact.title = title;
       if (typeof closed === "boolean")
@@ -9769,6 +9772,7 @@ ${value.stack}`;
 
   class Page extends EventEmitter {
     _tab;
+    #taskId = null;
     _context;
     _timeoutSettings;
     _mainFrame;
@@ -9808,6 +9812,12 @@ ${value.stack}`;
       this.localStorage = new WebStorage(this, "local");
       this.sessionStorage = new WebStorage(this, "session");
       markHandle(this);
+    }
+    get tabId() {
+      return this._tab;
+    }
+    get taskId() {
+      return this.#taskId;
     }
     context() {
       return this._context;
@@ -10408,6 +10418,8 @@ ${value.stack}`;
     _applyFact(fact, at, approved = null) {
       if (fact.tab !== undefined)
         this._tab = fact.tab;
+      if (fact.taskId !== undefined)
+        this.#taskId = fact.taskId;
       if (at === null) {
         this.#applyViewport(fact.viewportSize);
         if (fact.url !== undefined && !this.#urlKnown) {
@@ -10611,7 +10623,13 @@ ${value.stack}`;
     if (typeof value !== "object" || value === null)
       return null;
     const tab = Reflect.get(value, "tab");
-    return typeof tab === "number" ? { tab } : null;
+    if (typeof tab !== "number")
+      return null;
+    const fact = { tab };
+    const taskId = Reflect.get(value, "taskId");
+    if (taskId === null || typeof taskId === "string")
+      fact.taskId = taskId;
+    return fact;
   }
 
   class BrowserContext extends EventEmitter {

@@ -315,11 +315,13 @@ function readPageFacts(pages: unknown): PageFact[] {
     const tab: unknown = Reflect.get(page, 'tab')
     if (typeof tab !== 'number') continue
     const fact: PageFact = { tab }
+    const taskId: unknown = Reflect.get(page, 'taskId')
     const url: unknown = Reflect.get(page, 'url')
     const title: unknown = Reflect.get(page, 'title')
     const closed: unknown = Reflect.get(page, 'closed')
     const viewport: unknown = Reflect.get(page, 'viewportSize')
     if (typeof url === 'string') fact.url = url
+    if (taskId === null || typeof taskId === 'string') fact.taskId = taskId
     if (typeof title === 'string') fact.title = title
     if (typeof closed === 'boolean') fact.closed = closed
     if (viewport === null) fact.viewportSize = null
