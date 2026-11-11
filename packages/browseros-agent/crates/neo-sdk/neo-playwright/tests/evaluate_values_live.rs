@@ -287,7 +287,7 @@ async fn tests_that_a_value_shaped_like_a_handle_stays_a_plain_object() -> TestR
                typeof value.goto]",
         )
         .await?;
-        assert_eq!(got, json!([true, ["$neo", "id", "tab"], "undefined"]));
+        assert_eq!(got, json!([true, ["$neo", "tab"], "undefined"]));
         Ok(())
     })
     .await
