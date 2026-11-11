@@ -605,31 +605,6 @@
     threw:
       message: 'page.setContent: waitUntil "networkidle" cannot be observed after setContent in Neo; use "load"'
       name: Error
-- case: goto-javascript
-  path: /returned/outcomes/0/threw/message
-  kind: decided
-  reason: "M2, cherry-picked ec5ad8675: Chromium runs a javascript: URL that Page.navigate is
-    given in the current document's main world, and only then reports the navigation aborted
-    (upstream's net::ERR_ABORTED, after the script set the title). That script would run outside
-    Neo's privacy sweep and read any same-site frame, so Neo refuses the URL, however it is
-    spelled, as neo / unsupported before the page is admitted or anything is sent. Run the
-    script with page.evaluate, which the sweep brackets."
-  p: "page.goto: net::ERR_ABORTED at javascript:void(document.title = 'ran')"
-  n: "page.goto: Neo does not open javascript: URLs, whose script runs in the page's main world outside Neo's privacy sweep; run the script with page.evaluate"
-- case: goto-javascript
-  path: /returned/outcomes/1/threw/message
-  kind: decided
-  reason: "M2, cherry-picked ec5ad8675: the same refusal for a URL spelled with a leading space
-    and another case, which Chromium reads as javascript: too."
-  p: "page.goto: net::ERR_ABORTED at javascript:void(document.title = 'ran')"
-  n: "page.goto: Neo does not open javascript: URLs, whose script runs in the page's main world outside Neo's privacy sweep; run the script with page.evaluate"
-- case: goto-javascript
-  path: /returned/title
-  kind: decided
-  reason: "M2: what the refusal above leaves of the page. Upstream's goto ran the URL's script
-    in the document, which set the title; Neo sent nothing, so the document is untouched."
-  p: ran
-  n: Child
 - case: popup-evaluate
   path: /returned/openerReadsPopup/returned/2
   kind: decided

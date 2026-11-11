@@ -9,9 +9,9 @@
 //!  context.pages() first: the run's init lists every tab
 //!  a form: fill a field and click a button through locators, then expect the page's answer
 //!    (a matcher that holds passes, one that does not throws)
-//!  a local file (Neo's host token, /etc/hosts): the door refuses each goto to one, and the
-//!    page's own navigations to one (location, meta refresh, a link, an iframe, a popup, an
-//!    allowed load's redirect) read nothing local
+//!  a local file: goto loads it; a JavaScript URL executes before reporting `ERR_ABORTED`.
+//!    Chromium still refuses web pages' own navigations to local files (location, meta refresh,
+//!    a link, an iframe, a popup, a web load's redirect)
 //!  a read between two keystrokes in a password field: the read masks the field, the host reads
 //!    none of it back from the trace outside its page facts, and once the tab closes a later run
 //!    masks the field's final value and none of its prefixes
@@ -92,10 +92,9 @@ for (let i = 0; i < 100 && heard.length === 0; i++) {
 return { heard: heard.slice(0, 1), title: await page.title() };
 "#;
 
-/// Every way a script could get a local file in front of a read. `LOCAL` (the files), `SERVER`
-/// (a web server on loopback) and `VIEW_SOURCE` are defined ahead of it. Each of the page's own
-/// navigations runs once to each file and once to a URL Neo allows, which the page reaches, so
-/// a route that read nothing local was refused rather than never tried.
+/// Direct file navigations and the browser's web-to-file boundary. `LOCAL` (the files),
+/// `SERVER` (a web server on loopback) and `VIEW_SOURCE` are defined ahead of it. Each page
+/// navigation also tries a web URL, proving the browser exercised that route.
 const LOCAL_READS: &str = r#"
 const tried = { gotos: {}, local: {}, allowed: {} };
 const attempt = async (url) => {
@@ -124,6 +123,9 @@ const everything = async () => {
 for (const url of [...LOCAL, 'chrome://version', VIEW_SOURCE, 'about:version']) {
   tried.gotos[url] = await attempt(url);
 }
+tried.javascript = await page.goto("javascript:void(document.title = 'ran')")
+  .then(() => ({ returned: true }), (error) => ({ code: error.code, message: String(error.message).split('\n')[0] }));
+tried.javascriptTitle = await page.title();
 // A loopback frame in a data: page is refused as a private network request, so the frame's
 // allowed URL is a data: one. A popup has none: with no user gesture, the popup blocker refuses
 // window.open whatever its URL, so that route pins the outcome alone.
@@ -251,8 +253,8 @@ async fn a_script_fills_and_clicks_a_form_and_expects_the_answer() -> TestResult
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_script_reads_no_local_file_through_any_navigation() -> TestResult {
-    on_browseros(|rig| Box::pin(no_local_reads(rig))).await
+async fn a_script_loads_local_files_but_web_pages_cannot_navigate_to_them() -> TestResult {
+    on_browseros(|rig| Box::pin(local_navigations(rig))).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -650,9 +652,29 @@ async fn scope_inside_has(rig: &Rig) -> TestResult {
     Ok(())
 }
 
-async fn no_local_reads(rig: &Rig) -> TestResult {
-    // Stands in for Neo's host token and CAPTCHA key files: a file the browser's user can read,
-    // whose contents appear nowhere else.
+/// The navigation error describes Chromium's abort, while the title proves script execution.
+fn assert_javascript_navigation(tried: &Value) {
+    assert_eq!(
+        tried.pointer("/javascript/code"),
+        Some(&json!("navigation_failed")),
+        "{tried}"
+    );
+    assert_eq!(
+        tried.pointer("/javascript/message"),
+        Some(&json!(
+            "page.goto: net::ERR_ABORTED at javascript:void(document.title = 'ran')"
+        )),
+        "{tried}"
+    );
+    assert_eq!(
+        tried.get("javascriptTitle"),
+        Some(&json!("ran")),
+        "the script executed before the error"
+    );
+}
+
+async fn local_navigations(rig: &Rig) -> TestResult {
+    // A synthetic local file proves goto reads from disk rather than a web fixture.
     let dir = tempfile::tempdir()?;
     let secret = dir.path().join("host-token");
     let marker = format!("neo-local-secret-{}", RunId::new());
@@ -676,17 +698,28 @@ async fn no_local_reads(rig: &Rig) -> TestResult {
         .ok_or("the script returns what it tried")?;
 
     let refused = json!({ "owner": "script", "code": "invalid_input", "delivery": "not_sent" });
-    for url in local
-        .iter()
-        .map(String::as_str)
-        .chain(["chrome://version", view_source.as_str()])
-    {
+    for url in ["chrome://version", view_source.as_str()] {
         assert_eq!(
             tried.get("gotos").and_then(|gotos| gotos.get(url)),
             Some(&refused),
-            "the door refuses a goto to {url}: {tried}"
+            "other unsupported schemes retain their refusal: {tried}"
         );
     }
+    for (url, expected) in local.iter().zip(["localhost", marker.as_str()]) {
+        let loaded = tried
+            .get("gotos")
+            .and_then(|gotos| gotos.get(url))
+            .ok_or("each local navigation has a result")?;
+        assert_eq!(loaded.get("url"), Some(&json!(url)), "{loaded}");
+        assert!(
+            loaded
+                .get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|content| content.contains(expected)),
+            "goto loaded the local file: {loaded}"
+        );
+    }
+    assert_javascript_navigation(tried);
     assert_eq!(
         tried.pointer("/gotos/about:version/url"),
         Some(&json!("about:version")),

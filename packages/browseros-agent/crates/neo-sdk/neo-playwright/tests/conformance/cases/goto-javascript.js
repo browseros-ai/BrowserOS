@@ -1,12 +1,18 @@
-// page.goto with a javascript: URL, however it is spelled: upstream sends it and Chromium runs
-// the script in the current document's main world; Neo refuses it before anything is sent,
-// because that script would run outside Neo's privacy sweep (decided).
+// Chromium executes a JavaScript URL in the current document before reporting ERR_ABORTED.
+// Both page.goto and the main frame form must preserve the script's effect and the error.
 await page.goto(fixtures.url('child.html'))
 const outcomes = []
-for (const url of [
-  "javascript:void(document.title = 'ran')",
-  " JavaScript:void(document.title = 'ran')",
-]) {
-  outcomes.push(await harness.settle(page.goto(url)))
+for (const target of [page, page.mainFrame()]) {
+  for (const url of [
+    "javascript:void(document.title = 'ran')",
+    " JavaScript:void(document.title = 'ran')",
+    "java\tscript:void(document.title = 'ran')",
+  ]) {
+    await harness.pageEval(page, "document.title = 'before'")
+    outcomes.push({
+      outcome: await harness.settle(target.goto(url)),
+      title: await harness.pageEval(page, 'document.title'),
+    })
+  }
 }
-return { outcomes, title: await harness.pageEval(page, 'document.title') }
+return outcomes

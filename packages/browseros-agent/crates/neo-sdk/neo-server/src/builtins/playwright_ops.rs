@@ -87,21 +87,17 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `jsonValue()` reads; `setContent` refuses `waitUntil: 'networkidle'`, which Neo cannot \
     observe after a write, with nothing sent; and a result nested more than about 50 objects \
     deep can fail `Maximum call stack size exceeded`, where Playwright allows 98. `goto` and \
-    `reload` open only `http`, `https`, `data` and `about` URLs. `setInputFiles` uploads any \
+    `reload` open `http`, `https`, `data`, `about`, `file` and `javascript` URLs; Chromium \
+    executes a `javascript:` URL before reporting `net::ERR_ABORTED`. `setInputFiles` uploads any \
     file Neo's process can read, as Playwright does \
     (a relative path resolves against Neo's working directory), except Neo's own secret files, \
     which fail `neo_secret_upload_refused` with nothing sent: the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
     call. A directory upload needs its tab in front.";
 
-/// The schemes a navigation may load (decision 27): the web, and documents the script makes
-/// itself. Every other scheme shows the agent what it must not see, or runs script where no sweep
-/// masks a field: `file:` reads Neo's host token and CAPTCHA key files, `chrome:` and `devtools:`
-/// the browser's own pages, `view-source:` a page's source, and `javascript:` runs in the tab's
-/// main world (decision 26). An allowlist, so a scheme nobody listed is refused too. `about:`
-/// is safe while Chromium loads every `about:` URL as an empty page and never as the `chrome:`
-/// page of the same name (`about:version`), which `tests/playwright_browseros.rs` pins.
-const NAVIGABLE_SCHEMES: [&str; 4] = ["http", "https", "data", "about"];
+/// Schemes admitted by the server for goto and reload. Local files and JavaScript URLs are
+/// passed to Chromium as Playwright does; other browser-specific schemes remain unsupported.
+const NAVIGABLE_SCHEMES: [&str; 6] = ["http", "https", "data", "about", "file", "javascript"];
 
 /// Registers every neo-playwright op as a script method, as [`OpMarks`] decides from its
 /// declarations: a held op as its refusal alone, every other one as a [`PlaywrightOp`]. Called
@@ -272,14 +268,8 @@ impl OpInput {
         self.json.get("runBeforeUnload") == Some(&Value::Bool(true))
     }
 
-    /// The door's refusal of a navigation to a URL Neo does not open ([`NAVIGABLE_SCHEMES`]),
-    /// decided before anything is sent. Only `page.goto` names a URL (`frame.goto` sends that op
-    /// too); a reload goes where the tab is ([`refused_reload`]), and a history step where the
-    /// tab once went. A `javascript:` URL is one reason: Chromium runs it in the current
-    /// document's main world through `Page.navigate` and only then reports the navigation
-    /// aborted, a `page.evaluate` with no guard around it. What the door cannot see, the page's
-    /// own navigations and an allowed load's redirects, Chromium refuses to a local file itself
-    /// (`tests/playwright_browseros.rs` pins each).
+    /// Rejects unsupported URL schemes before sending a navigation. `frame.goto` uses the
+    /// same op; reload checks the current URL instead, and history follows a previous entry.
     fn refused_navigation(&self) -> Option<OperationError> {
         let url = self.json.get("url")?.as_str()?;
         let which = match url_scheme(url) {
@@ -313,11 +303,8 @@ impl OpInput {
     }
 }
 
-/// The door's refusal of `page.reload` on a page whose URL Neo does not open, decided before
-/// anything is sent, as a goto's is ([`OpInput::refused_navigation`]). The agent did not choose
-/// that URL: the owner may have opened a local file in the tab, which a reload would load again
-/// for the agent's next read. Core's cached URL can trail a navigation the page made on its own,
-/// so the page is refreshed once first (one `Browser.getTabInfo`).
+/// Checks the tab's current scheme before reload. Core's cached URL can trail a navigation
+/// the page made on its own, so refresh once through `Browser.getTabInfo` first.
 async fn refused_reload<M>(
     op: &OpCtx<M>,
     _page: &PageRef,
@@ -819,11 +806,11 @@ mod tests {
             ("HTTP://bank.example/", true),
             ("data:text/html,<script>document.title = 'x'</script>", true),
             ("about:blank", true),
-            ("file:///etc/hosts", false),
-            ("JavaScript:void(0)", false),
+            ("file:///etc/hosts", true),
+            ("JavaScript:void(0)", true),
             // The browser drops what surrounds a URL, and tabs and newlines inside it.
-            (" \u{1}fi\tl\ne:///etc/hosts", false),
-            (" \u{1}java\tscr\nipt:void(0)", false),
+            (" \u{1}fi\tl\ne:///etc/hosts", true),
+            (" \u{1}java\tscr\nipt:void(0)", true),
             ("view-source:https://bank.example/", false),
             // No scheme the URL Standard reads, so none to allow.
             ("/etc/hosts", false),

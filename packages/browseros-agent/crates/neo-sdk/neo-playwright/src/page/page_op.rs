@@ -147,8 +147,7 @@ pub(crate) async fn invoke(
 ) -> Result<Value, PlaywrightError> {
     match op {
         PageOp::Goto => {
-            let (page, navigation, wait_until) =
-                args.decode::<GotoInput>(scope)?.into_parts(scope)?;
+            let (page, navigation, wait_until) = args.decode::<GotoInput>(scope)?.into_parts();
             let page = page.tab();
             navigation::navigate(pw, scope, page, navigation, wait_until).await
         }
