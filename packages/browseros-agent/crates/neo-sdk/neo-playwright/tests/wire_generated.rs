@@ -43,6 +43,72 @@ const HEADER: &str = "\
 /// Upstream's generated protocol types at the pin, vendored byte for byte (`third_party`).
 const CHANNELS: &str = "../../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels";
 
+/// A TypeScript name a Rust type prints as an import instead of a derived shape
+/// (`#[ts(type = "import('…').Name")]`). Allowed only where an example file both sides decode
+/// keeps the Rust type and the imported declaration in step, or where the value is opaque to
+/// Rust by design: nothing else compares the two.
+struct Imported {
+    /// The module as the generated file imports it, relative to `generated/types/`.
+    module: &'static str,
+    name: &'static str,
+    /// The example file (from this crate's manifest directory) that holds the two together.
+    checked_by: &'static str,
+}
+
+/// Every imported name the generated types print, each with its check. A family that imports
+/// another probe or vendored type adds its row here, naming the file that checks it.
+const IMPORTED: &[Imported] = &[
+    Imported {
+        module: "../../../probe/protocol",
+        name: "SnapshotMode",
+        checked_by: "tests/data/probe-protocol.json",
+    },
+    Imported {
+        module: "../../vendored",
+        name: "AriaSnapshotJSON",
+        checked_by: "tests/data/snapshot-output.json",
+    },
+    // The prelude's own parse of a selector; Rust keeps each chunk's JSON and reads only the
+    // ref jumps, and the recorded prelude inputs decode in Rust.
+    Imported {
+        module: "../../vendored",
+        name: "ParsedSelector",
+        checked_by: "tests/data/wire-examples.json",
+    },
+];
+
+/// One imported TypeScript name, as a generated file prints it.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Import {
+    module: String,
+    name: String,
+}
+
+/// Every `import('<module>').<Name>` in `text`, in order.
+fn imports(text: &str) -> Vec<Import> {
+    let mut found = Vec::new();
+    for piece in text.split("import(").skip(1) {
+        let Some((module, after)) = piece
+            .strip_prefix(['\'', '"'])
+            .and_then(|quoted| quoted.split_once(['\'', '"']))
+        else {
+            continue;
+        };
+        let Some(after) = after.strip_prefix(").") else {
+            continue;
+        };
+        let name: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
+            .collect();
+        found.push(Import {
+            module: module.to_owned(),
+            name,
+        });
+    }
+    found
+}
+
 /// One named type of the whole layout, with the families whose ops reach it: one family's own
 /// type is exported from its file, one reached by two or more from `common.ts`.
 struct Reached<'w> {
@@ -622,6 +688,75 @@ fn tests_that_the_generated_prelude_files_match_the_rust_wire() -> Result<(), Bo
         changed.join("\n  ")
     );
     Ok(())
+}
+
+/// The override list is exact: every imported name the generated types print is listed with
+/// an example file that exists, and every listed name is still printed.
+#[test]
+fn tests_that_every_imported_type_is_held_by_an_example_file() -> Result<(), Box<dyn Error>> {
+    let files = render(&families()).map_err(|refusals| refusals.join("\n"))?;
+    let mut used = BTreeSet::new();
+    let mut unlisted = Vec::new();
+    for (path, text) in &files {
+        for import in imports(text) {
+            if IMPORTED
+                .iter()
+                .any(|entry| entry.module == import.module && entry.name == import.name)
+            {
+                used.insert(import);
+            } else {
+                unlisted.push(format!(
+                    "{}: import('{}').{}",
+                    path.display(),
+                    import.module,
+                    import.name
+                ));
+            }
+        }
+    }
+    assert!(
+        unlisted.is_empty(),
+        "a Rust type prints as an imported name no example file checks; derive its shape, or \
+         add it to IMPORTED with the file both sides decode:\n  {}",
+        unlisted.join("\n  ")
+    );
+    for entry in IMPORTED {
+        assert!(
+            used.contains(&Import {
+                module: entry.module.to_owned(),
+                name: entry.name.to_owned(),
+            }),
+            "IMPORTED lists import('{}').{}, which no generated type prints any more",
+            entry.module,
+            entry.name
+        );
+        assert!(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(entry.checked_by)
+                .is_file(),
+            "{} is held by {}, which does not exist",
+            entry.name,
+            entry.checked_by
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn tests_that_imports_are_read_from_either_quote() {
+    assert_eq!(
+        imports("a: import('../x').Y[], b: import(\"z\").W_2 | null, c: import(x)"),
+        [
+            Import {
+                module: "../x".to_owned(),
+                name: "Y".to_owned()
+            },
+            Import {
+                module: "z".to_owned(),
+                name: "W_2".to_owned()
+            }
+        ]
+    );
 }
 
 #[test]
