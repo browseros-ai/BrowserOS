@@ -13,6 +13,10 @@
 /// Rendered lines kept in an error: the first one and the latest `MAX_LINES - 1`.
 const MAX_LINES: usize = 12;
 
+/// Raw lines a failed matcher's `matcherResult.log` keeps, the first one and the latest
+/// `MAX_RAW_LINES - 1`: a 5 s wait logs a few dozen.
+const MAX_RAW_LINES: usize = 1000;
+
 /// The longest repeated block the compression looks for. Upstream's retry blocks are 2 to 5
 /// lines; the bound keeps compression linear in the log's length on the minutes-long waits a
 /// `timeout: 0` op can run, where upstream's unbounded search grows with its cube.
@@ -31,6 +35,26 @@ impl CallLog {
         let changed = self.lines.last().is_none_or(|last| last != line);
         self.lines.push(line.to_owned());
         changed
+    }
+
+    /// The recorded lines as they were logged, uncompressed: Playwright's `matcherResult.log`,
+    /// which upstream fills from the server's raw log and never bounds. Neo keeps the first line
+    /// and the latest `MAX_RAW_LINES - 1`, which holds every line of an ordinary failing wait
+    /// while a minutes-long `timeout: 0` one cannot grow the script's error without bound.
+    pub(crate) fn raw_lines(&self) -> Vec<String> {
+        if self.lines.len() <= MAX_RAW_LINES {
+            return self.lines.clone();
+        }
+        self.lines
+            .iter()
+            .take(1)
+            .chain(
+                self.lines
+                    .iter()
+                    .skip(self.lines.len() - (MAX_RAW_LINES - 1)),
+            )
+            .cloned()
+            .collect()
     }
 
     /// What follows an error's first line, as upstream's client appends it:

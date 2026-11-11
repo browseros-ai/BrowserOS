@@ -187,6 +187,32 @@ export function expectChecks(injected: InjectedScript): ExpectChecks {
   }
 }
 
+/**
+ * The aria snapshot a failing poll of `element` reports (upstream's private
+ * `InjectedScript._ariaSnapshotForExpect` at v1.64.1): the element's subtree for `toHaveText`
+ * and `toContainText`, its own line for the other property matchers, the body when the element
+ * or its frame is hidden or the matcher is a page matcher, and none for count or the arrays.
+ */
+export function expectFailureSnapshot(
+  injected: InjectedScript,
+  element: Element,
+  params: FrameExpectParams,
+  frameVisible: boolean,
+): string | undefined {
+  const snapshot: unknown = Reflect.get(injected, '_ariaSnapshotForExpect')
+  if (typeof snapshot !== 'function')
+    throw new ProbeError(
+      'internal',
+      'the vendored InjectedScript has no _ariaSnapshotForExpect',
+    )
+  const text: unknown = Reflect.apply(snapshot, injected, [
+    element,
+    params,
+    frameVisible,
+  ])
+  return typeof text === 'string' ? text : undefined
+}
+
 /** The `src` of an `<iframe>` or `<frame>`; undefined for any other element. */
 export function frameSource(element: Element): string | undefined {
   if (element.nodeName !== 'IFRAME' && element.nodeName !== 'FRAME')

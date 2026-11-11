@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fmt;
 
 use neo_trace::{Delivery, ErrorOwner, ErrorRecord, OperationId};
+use serde_json::Value;
 
 /// How many characters of a script-chosen text the door keeps in an error it builds: a thrown
 /// error's name and its message, and a prelude refusal's reason (FR/RC C4). One constant, so they
@@ -31,6 +32,10 @@ pub(crate) struct OperationError {
     code: ErrorCode,
     message: String,
     timed_out: bool,
+    /// A failed `expect` matcher's facts from neo-playwright, which the script's error carries
+    /// as `matcherResult` for the expect prelude to complete. The door never reads them, and the
+    /// trace does not store them.
+    matcher: Option<Box<Value>>,
 }
 
 impl OperationError {
@@ -60,6 +65,7 @@ impl OperationError {
             code,
             message: message.to_string(),
             timed_out: false,
+            matcher: None,
         }
     }
 
@@ -69,6 +75,26 @@ impl OperationError {
     pub(crate) fn timed_out(mut self) -> Self {
         self.timed_out = true;
         self
+    }
+
+    /// The same failure, carrying a failed matcher's facts for the script's error.
+    #[must_use]
+    pub(crate) fn with_matcher(mut self, facts: Value) -> Self {
+        self.matcher = Some(Box::new(facts));
+        self
+    }
+
+    /// The same failure without a matcher's facts, for a copy kept after the script has them.
+    #[must_use]
+    pub(crate) fn without_matcher(mut self) -> Self {
+        self.matcher = None;
+        self
+    }
+
+    /// A failed matcher's facts, for the script's error; `None` for every other failure.
+    #[must_use]
+    pub(crate) fn matcher(&self) -> Option<&Value> {
+        self.matcher.as_deref()
     }
 
     /// Who must change to fix it.

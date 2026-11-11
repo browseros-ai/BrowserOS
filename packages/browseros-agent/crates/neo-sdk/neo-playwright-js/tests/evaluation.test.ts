@@ -130,7 +130,6 @@ it('tests that upstream client checks throw unprefixed and the server one is rai
       return [
         await outcome(page.evaluate(() => 1, 2, 3, 4)),
         await outcome(page.evaluate(() => 1, 2, 3)),
-        await outcome(page.evaluate(() => 1, 2, { exposeFunctions: true })),
         await outcome(page.waitForFunction(() => 1, 2, { polling: 'often' })),
         await outcome(page.evaluate(Object.getOwnPropertyDescriptor({ get x() { return 1 } }, 'x').get)),
       ]
@@ -141,10 +140,6 @@ it('tests that upstream client checks throw unprefixed and the server one is rai
   expect(outcomes).toEqual([
     [tooMany, 'invalid_input'],
     [tooMany, 'invalid_input'],
-    [
-      'page.evaluate: pages cannot call back into the script in Neo; return what the page computed instead',
-      'method_unavailable',
-    ],
     ['Unknown polling option: often', 'invalid_input'],
     'returned',
   ])

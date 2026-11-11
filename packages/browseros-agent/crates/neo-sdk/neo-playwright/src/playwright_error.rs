@@ -26,6 +26,7 @@ use std::fmt;
 use browseros_cdp::CdpError;
 use browseros_core::CoreError;
 use neo_trace::ErrorOwner;
+use serde_json::Value;
 
 use crate::Refusal;
 use crate::listed_enum::listed_enum;
@@ -216,6 +217,10 @@ pub struct PlaywrightError {
     message: String,
     /// The op sent input and cannot tell what it did: the answer is ambiguous.
     outcome_lost: bool,
+    /// What a failed `expect` matcher saw (`{ actual?, ariaSnapshot?, log, timedOut }`), which
+    /// the expect prelude completes into Playwright's `error.matcherResult`. Hosts pass it to
+    /// the script as it is; boxed, so every other error stays small.
+    matcher: Option<Box<Value>>,
 }
 
 /// What failed: one of the crate's codes, or a host policy that refused.
@@ -239,6 +244,7 @@ impl PlaywrightError {
             failure: Failure::Code(code),
             message,
             outcome_lost: false,
+            matcher: None,
         }
     }
 
@@ -303,6 +309,20 @@ impl PlaywrightError {
         }
     }
 
+    /// A failed `expect` matcher's facts for the script's `error.matcherResult`; `None` for
+    /// every other failure. Opaque to hosts: the expect prelude reads it.
+    #[must_use]
+    pub fn matcher_details(&self) -> Option<&Value> {
+        self.matcher.as_deref()
+    }
+
+    /// The same failure, carrying a failed matcher's facts (see [`Self::matcher_details`]).
+    #[must_use]
+    pub(crate) fn with_matcher(mut self, details: Value) -> Self {
+        self.matcher = Some(Box::new(details));
+        self
+    }
+
     /// The same failure, raised after the op sent input it can no longer account for, such as
     /// a click whose verdict came back unreadable: the answer becomes ambiguous.
     #[must_use]
@@ -328,6 +348,7 @@ impl From<Refusal> for PlaywrightError {
             },
             message: refusal.message,
             outcome_lost: false,
+            matcher: None,
         }
     }
 }
