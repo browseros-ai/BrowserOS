@@ -161,11 +161,11 @@ impl ScreenshotPreparation {
                     &json!([]),
                 )
                 .await;
-            if let Err(error) = fonts {
-                if matches!(ProbeFailure::from_core(error), ProbeFailure::Gone(_)) {
-                    page.frames().invalidate(&world);
-                    return Ok(false);
-                }
+            if let Err(error) = fonts
+                && matches!(ProbeFailure::from_core(error), ProbeFailure::Gone(_))
+            {
+                page.frames().invalidate(&world);
+                return Ok(false);
             }
         }
         Ok(true)
