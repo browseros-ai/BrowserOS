@@ -1,32 +1,19 @@
-//! Carrying what a broken trace file still holds into the fresh store that replaces it.
+//! Recovering request-id history from a broken trace file into its replacement.
 //!
-//! When `trace.db` will not open (a schema this build does not know, a damaged page), claw-sdk
-//! moves it aside and starts a fresh store. Two parts of the old file outlive its records, and
-//! losing either fails open:
-//! - the private flags (`private_tabs`). Chromium keeps its tabs open across a Neo restart, and
-//!   a restart keeps every flag (D6), so a lost flag lets Neo capture a private tab's pixels;
-//! - the request-id history (the `runs` that carried a `request_id`). Admission refuses a repeat
-//!   by finding its first run (D14), so a lost run lets a retried request run twice.
-//!
-//! [`TraceStore::salvage`] copies what it can of both into the fresh store before the writer
-//! and `Privacy` start, and reports, part by part, what it could not, so the caller fails closed
-//! on exactly that:
+//! A lost request binding could let a retry run twice. Salvage copies the request runs it can
+//! recover and reports whether the history is complete, so admission can judge an unknown id.
+//! It runs before the new writer starts; the old file stays untouched for later inspection.
 //!
 //! ```text
-//!  open fails ─▶ trace.db and its -wal moved aside ─▶ a fresh store opened at trace.db
-//!    ─▶ salvage(aside): flags and request runs into the fresh store, in one transaction
-//!    ─▶ Privacy::new(store.private_tabs())
-//!    ─▶ flags not complete: the app fails closed, making every tab open at the browser's
-//!       next listing private (PrivateReason::FlagsLost) before anything captures
+//!  trace.db fails to open → move it and its WAL aside → open a fresh store
+//!    → salvage(aside) → request runs and replay data committed together
 //! ```
 //!
 //! How the old file is read:
 //! - Read-only, never repaired: it is what a human will look at, and a write to a damaged b-tree
 //!   can spread the damage. SQLite may still create an index file (`-shm`) beside it.
-//! - Each part on its own, with its own scan and its own check, so a damaged `runs` page cannot
-//!   cost the flags, nor a damaged flag page the request ids.
 //! - Through its write-ahead log when the log holds frames: a crash leaves the latest commits,
-//!   new flags among them, only there. A read-only connection cannot open a WAL file whose log is
+//!   new request runs among them, only there. A read-only connection cannot open a WAL file whose log is
 //!   gone, so without frames the file is read alone (`immutable`). A part the log view cannot
 //!   read at all is read from the file alone too, and then is not whole: the commits still in
 //!   the log are missing from it.
@@ -35,8 +22,8 @@
 //!   whose header fails, and stops at the first frame that fails, without an error, so a read
 //!   through the log ends and passes `quick_check` while the commits past the damage are
 //!   missing. A damaged log leaves every part not whole, even when the failed frame may be a
-//!   write a crash cut short, with no commit in it: a part reported not whole only costs
-//!   over-protection. A frame whose salts are not the header's was written before the log last
+//!   write a crash cut short, with no commit in it: an incomplete history cannot prove that an
+//!   unknown request never ran. A frame whose salts are not the header's was written before the log last
 //!   restarted, which is normal, and is not judged.
 //! - Table b-trees only (`NOT INDEXED`), so a damaged index cannot hide rows.
 //! - Only the columns a part needs, so an older schema reads too: a missing optional column is
@@ -47,11 +34,7 @@
 //!   indexes: a page cut short reads as zeros, which SQLite can return as rows without an error.
 
 use crate::storage::{SalvagedRun, TraceBatch};
-use crate::{
-    EpochMillis, PrivacyRecord, PrivateReason, RequestId, RunEffects, RunId, RunStatus, TaskId,
-    TraceError, TraceStore,
-};
-use browseros_core::TabId;
+use crate::{EpochMillis, RequestId, RunEffects, RunId, RunStatus, TaskId, TraceError, TraceStore};
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
 use sea_orm::sqlx::{self, Row, SqliteConnection};
 use serde_json::Value;
@@ -77,13 +60,6 @@ const LOG_VERSION: u32 = 3_007_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "a part that did not come across whole must be acted on, or Neo fails open"]
 pub struct Salvage {
-    /// The private flags, which [`Privacy::new`](crate::Privacy::new) loads through
-    /// [`TraceStore::private_tabs`]. When they are not complete, a tab the old file kept private
-    /// may read as not private, so the caller fails closed: no capture until every tab open at
-    /// the browser's next listing is private on disk
-    /// ([`PrivateReason::FlagsLost`](crate::PrivateReason::FlagsLost)). claw-sdk does this with
-    /// its flag-recovery marker.
-    pub flags: Recovery,
     /// The runs that carried a `requestId`, which admission looks up
     /// ([`TraceStore::run_by_request`]) to refuse a repeat. When they are not complete, a repeat
     /// of a lost request would run again. Whether to refuse a `requestId` it cannot vouch for,
@@ -135,54 +111,38 @@ pub enum Loss {
 }
 
 impl TraceStore {
-    /// Copies the private flags and the request-id history of `old`, a trace file that would not
-    /// open, into this store, the fresh one that replaces it. Call it before
-    /// [`spawn_writer`](crate::spawn_writer) and [`Privacy::new`](crate::Privacy::new): Privacy
-    /// loads its flags from [`TraceStore::private_tabs`] once, when it starts.
+    /// Copies the request-id history of a trace file that would not open into its replacement.
+    /// Call before [`spawn_writer`](crate::spawn_writer) starts accepting records.
     ///
-    /// `old`'s write-ahead log must be beside it as `<old>-wal`, moved with it, because a crash
-    /// leaves the latest commits only there. The module doc says how `old` is read.
+    /// Move `old`'s write-ahead log with it as `<old>-wal`: a crash may leave the newest
+    /// request bindings only there. Recovered runs keep their ids, request/task bindings,
+    /// timestamps, status, effects and stored replies. They have no operations or code; code
+    /// reads `unavailable`. A previously running run becomes interrupted with unknown effects.
     ///
-    /// A flag is committed through the writer's own statement, so it reads back exactly as a
-    /// flag the writer committed. One whose time or reason does not read still keeps its tab
-    /// private, with the salvage's time and `host` in their place. A run comes across with what
-    /// admission and a host's lookup read: its id, request and task ids, start and end, status,
-    /// effects and stored reply. It has no operations, and its code reads `unavailable`. A run
-    /// the old file shows running ended with that Neo, so it reads `interrupted` with effects
-    /// `unknown`, as [`TraceStore::open`] closes a crashed run.
-    ///
-    /// Idempotent: a flag or run this store already has is left as it is, so a salvage that a
-    /// crash cut short can run again over the same files.
+    /// Idempotent: a run already in this store is left alone, so a salvage interrupted by a
+    /// crash can run again over the same old files.
     ///
     /// # Errors
-    /// When this store could not take the rows. Nothing was copied, so treat both parts as
-    /// [`Recovery::Unreadable`].
+    /// When this store could not commit the recovered rows. Treat the history as unreadable.
     pub async fn salvage(&self, old: &Path) -> Result<Salvage, TraceError> {
-        let now = EpochMillis::now();
         let log = read_log(old).await;
         let first = if log == Log::Empty {
             View::FileOnly
         } else {
             View::WithLog
         };
-        let mut scans = scan_view(old, first, log).await;
-        if log != Log::Empty && (scans.flags.is_nothing() || scans.requests.is_nothing()) {
+        let mut requests = scan_view(old, first, log).await;
+        if log != Log::Empty && requests.is_nothing() {
             let file = scan_view(old, View::FileOnly, log).await;
-            scans.flags = scans.flags.or(file.flags);
-            scans.requests = scans.requests.or(file.requests);
+            requests = requests.or(file);
         }
-        let flags = carry(scans.flags, |row| flag(row, now));
-        let requests = carry(scans.requests, request_run);
+        let requests = carry(requests, request_run);
         let tx = TraceBatch::begin(self.db()).await?;
-        for (tab, record) in &flags.rows {
-            tx.persist_private(*tab, *record).await?;
-        }
         for (id, run) in &requests.rows {
             tx.insert_salvaged_run(*id, run).await?;
         }
         tx.commit().await?;
         Ok(Salvage {
-            flags: flags.recovery,
             requests: requests.recovery,
         })
     }
@@ -231,13 +191,6 @@ struct Part {
     filter: &'static str,
 }
 
-const FLAGS: Part = Part {
-    table: "private_tabs",
-    required: &["tab_id"],
-    optional: &["since", "reason"],
-    filter: "",
-};
-
 const REQUESTS: Part = Part {
     table: "runs",
     required: &["id", "request_id", "started_at"],
@@ -274,12 +227,6 @@ impl Scan {
             scan @ Self::Rows { .. } => scan,
         }
     }
-}
-
-/// Both parts, as one view read them.
-struct Scans {
-    flags: Scan,
-    requests: Scan,
 }
 
 /// Judges the write-ahead log of the trace file at `old` before SQLite reads it. SQLite skips a
@@ -436,8 +383,8 @@ fn checksum(order: WordOrder, words: &[[u8; 4]], [mut s0, mut s1]: [u32; 2]) -> 
     [s0, s1]
 }
 
-/// Reads both parts of `old` through `view`. A file that does not open reads as nothing.
-async fn scan_view(old: &Path, view: View, log: Log) -> Scans {
+/// Reads the request runs of `old` through `view`. A file that does not open reads as nothing.
+async fn scan_view(old: &Path, view: View, log: Log) -> Scan {
     use sea_orm::sqlx::Connection;
 
     let options = SqliteConnectOptions::new()
@@ -449,20 +396,16 @@ async fn scan_view(old: &Path, view: View, log: Log) -> Scans {
         Ok(conn) => conn,
         Err(error) => {
             tracing::warn!(%error, ?view, old = %old.display(), "salvage cannot open the broken trace file");
-            return Scans {
-                flags: Scan::Nothing,
-                requests: Scan::Nothing,
-            };
+            return Scan::Nothing;
         }
     };
-    let flags = scan(&mut conn, &FLAGS, view, log).await;
     let requests = scan(&mut conn, &REQUESTS, view, log).await;
     // Closed rather than dropped: sqlx closes a dropped connection later, on its worker thread,
     // and the caller may move the file as soon as this returns.
     if let Err(error) = conn.close().await {
         tracing::warn!(%error, ?view, "salvage could not close the broken trace file");
     }
-    Scans { flags, requests }
+    requests
 }
 
 async fn scan(conn: &mut SqliteConnection, part: &Part, view: View, log: Log) -> Scan {
@@ -592,26 +535,6 @@ fn carry<K: Ord, V>(scan: Scan, parse: impl Fn(&SqliteRow) -> Option<(K, V)>) ->
         rows: carried,
         recovery,
     }
-}
-
-/// A flag row. Its tab id is the row's key, so it always reads; a time or reason that does not
-/// read still keeps the tab private, as [`TraceStore::private_tabs`] keeps a flag whose reason
-/// it does not know.
-fn flag(row: &SqliteRow, now: EpochMillis) -> Option<(TabId, PrivacyRecord)> {
-    let tab = TabId(row.try_get("tab_id").ok()?);
-    let since = row
-        .try_get::<Option<i64>, _>("since")
-        .ok()
-        .flatten()
-        .map_or(now, EpochMillis::from_millis);
-    let reason = row
-        .try_get::<Option<String>, _>("reason")
-        .ok()
-        .flatten()
-        .as_deref()
-        .and_then(PrivateReason::parse)
-        .unwrap_or(PrivateReason::Host);
-    Some((tab, PrivacyRecord { since, reason }))
 }
 
 /// A run row, or `None` when a field that places it does not read: its id, its request or task

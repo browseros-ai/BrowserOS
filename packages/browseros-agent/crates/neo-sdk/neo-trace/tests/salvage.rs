@@ -8,9 +8,9 @@
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, IdError, Loss, OperationEnded, OperationId, OperationKind,
-    OperationStarted, Outcome, Privacy, PrivacyRecord, PrivateReason, Recovery, RedactionLimits,
-    Redactor, RequestId, RunEffects, RunEnded, RunId, RunStarted, RunStatus, Salvage, TaskId,
-    TraceError, TraceSink, TraceStore, WriterConfig,
+    OperationStarted, Outcome, Recovery, RedactionLimits, Redactor, RequestId, RunEffects,
+    RunEnded, RunId, RunStarted, RunStatus, Salvage, TaskId, TraceError, TraceSink, TraceStore,
+    WriterConfig,
 };
 use sea_orm::sqlx;
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -21,7 +21,6 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, SeekFrom};
 use std::num::TryFromIntError;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 type TestResult<T = ()> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -58,18 +57,17 @@ fn writer(store: &TraceStore) -> TraceSink {
     )
 }
 
-/// A Neo still running over its trace: tabs 3 and 9 private, and three runs.
+/// A Neo still running over its trace, with three runs.
 struct Old {
     path: PathBuf,
     /// Keep the store open, so its latest commits stay in the write-ahead log.
     _store: TraceStore,
     sink: TraceSink,
-    privacy: Arc<Privacy>,
     /// `call-1` in task `checkout`: ended ok at 1 000 with a reply to replay.
     ended: RunId,
     /// `call-2` with no task: still running when Neo stopped.
     running: RunId,
-    /// No request id, so nothing to salvage; its operations fill pages past the flags' page.
+    /// No request id, so nothing to salvage; its operations fill pages past the schema.
     untracked: RunId,
 }
 
@@ -95,13 +93,6 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
     let path = dir.join("old/trace.db");
     let store = TraceStore::open(&path).await?;
     let sink = writer(&store);
-    let privacy = Privacy::new(Arc::new(sink.clone()), HashMap::new());
-    privacy
-        .make_private(TabId(3), PrivateReason::SecretInput, at(5))
-        .await?;
-    privacy
-        .make_private(TabId(9), PrivateReason::Takeover, at(6))
-        .await?;
     let ended = start(&sink, Some("call-1"), Some("checkout"), 0)?;
     sink.run_ended(RunEnded {
         id: ended,
@@ -142,15 +133,14 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
         path,
         _store: store,
         sink,
-        privacy,
         ended,
         running,
         untracked,
     })
 }
 
-/// Checkpoints every commit `old` made into its file, so its writer restarts the log, then makes
-/// tab 11 private and starts `call-3`: those two commits are only in the log's first frames, and
+/// Checkpoints every commit `old` made into its file, so its writer restarts the log, then
+/// starts `call-3`: that commit is only in the log's first frames, and
 /// frames left from before the restart follow them.
 async fn restart_the_log(old: &Old) -> TestResult {
     use sea_orm::sqlx::Connection;
@@ -167,9 +157,6 @@ async fn restart_the_log(old: &Old) -> TestResult {
         "no reader held the log, so the next write restarts it"
     );
     let before = fs::metadata(&log)?.len();
-    old.privacy
-        .make_private(TabId(11), PrivateReason::Host, at(7))
-        .await?;
     start(&old.sink, Some("call-3"), None, 4_000)?;
     old.sink.flush().await?;
     assert_eq!(
@@ -317,8 +304,7 @@ async fn a_trace_whose_schema_does_not_parse_fails_to_open_with_every_connection
 }
 
 #[tokio::test]
-async fn a_readable_trace_carries_its_flags_and_request_history_into_the_fresh_store() -> TestResult
-{
+async fn a_readable_trace_carries_its_request_history_into_the_fresh_store() -> TestResult {
     let dir = tempfile::tempdir()?;
     let old = old_trace(dir.path()).await?;
     let aside = dir.path().join("old/trace.db.broken");
@@ -329,30 +315,10 @@ async fn a_readable_trace_carries_its_flags_and_request_history_into_the_fresh_s
     assert_eq!(
         salvage,
         Salvage {
-            flags: Recovery::Complete { rows: 2 },
             requests: Recovery::Complete { rows: 2 },
         },
         "the run without a request id stays behind"
     );
-
-    let flags = store.private_tabs().await?;
-    assert_eq!(
-        flags.get(&TabId(3)),
-        Some(&PrivacyRecord {
-            since: at(5),
-            reason: PrivateReason::SecretInput,
-        })
-    );
-    assert_eq!(
-        flags.get(&TabId(9)).map(|record| record.reason),
-        Some(PrivateReason::Takeover)
-    );
-    let privacy = Privacy::new(Arc::new(writer(&store)), flags);
-    assert!(
-        privacy.capture(TabId(3)).is_none(),
-        "a private tab stays private across the broken file"
-    );
-    assert!(privacy.capture(TabId(4)).is_some());
 
     let first = store
         .run_by_request(&request("call-1")?, Some(&task("checkout")?))
@@ -404,12 +370,11 @@ async fn a_readable_trace_carries_its_flags_and_request_history_into_the_fresh_s
         salvage,
         "salvaging the same file again changes nothing"
     );
-    assert_eq!(store.private_tabs().await?.len(), 2);
     Ok(())
 }
 
 #[tokio::test]
-async fn a_trace_moved_without_its_write_ahead_log_loses_both_parts() -> TestResult {
+async fn a_trace_moved_without_its_write_ahead_log_loses_request_history() -> TestResult {
     use sea_orm::sqlx::Connection;
 
     let dir = tempfile::tempdir()?;
@@ -424,9 +389,6 @@ async fn a_trace_moved_without_its_write_ahead_log_loses_both_parts() -> TestRes
     let mut conn = SqliteConnection::connect_with(&options).await?;
     sqlx::raw_sql(
         "PRAGMA journal_mode = WAL; \
-         CREATE TABLE private_tabs (tab_id INTEGER PRIMARY KEY, since INTEGER NOT NULL, \
-         reason TEXT NOT NULL); \
-         INSERT INTO private_tabs VALUES (3, 5, 'secret_input'); \
          CREATE TABLE runs (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, \
          status TEXT NOT NULL, request_id TEXT);",
     )
@@ -440,18 +402,17 @@ async fn a_trace_moved_without_its_write_ahead_log_loses_both_parts() -> TestRes
     assert_eq!(
         store.salvage(&aside).await?,
         Salvage {
-            flags: Recovery::Unreadable,
             requests: Recovery::Unreadable,
         },
         "the tables are only in the log, so the log must move with the file"
     );
-    assert!(store.private_tabs().await?.is_empty());
     Ok(())
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_log_that_cannot_be_read_leaves_the_file_alone_and_both_parts_incomplete() -> TestResult {
+async fn a_log_that_cannot_be_read_leaves_the_file_alone_and_request_history_incomplete()
+-> TestResult {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir()?;
@@ -471,12 +432,10 @@ async fn a_log_that_cannot_be_read_leaves_the_file_alone_and_both_parts_incomple
     assert_eq!(
         store.salvage(&aside).await?,
         Salvage {
-            flags: read_without_the_log,
             requests: read_without_the_log,
         },
         "the file alone gives every row it holds, but the log may hold newer commits"
     );
-    assert_eq!(store.private_tabs().await?.len(), 2);
     Ok(())
 }
 
@@ -492,19 +451,17 @@ async fn a_log_restarted_over_older_frames_carries_the_commits_only_it_holds() -
     assert_eq!(
         store.salvage(&aside).await?,
         Salvage {
-            flags: Recovery::Complete { rows: 3 },
             requests: Recovery::Complete { rows: 3 },
         },
         "frames left from before the restart are not the log's own, so they cost nothing"
     );
-    assert!(store.private_tabs().await?.contains_key(&TabId(11)));
     let latest = store.run_by_request(&request("call-3")?, None).await?;
     assert!(latest.is_some(), "call-3's run came across from the log");
     Ok(())
 }
 
 #[tokio::test]
-async fn a_log_whose_header_fails_its_checksum_leaves_both_parts_incomplete() -> TestResult {
+async fn a_log_whose_header_fails_its_checksum_leaves_request_history_incomplete() -> TestResult {
     let dir = tempfile::tempdir()?;
     let old = old_trace(dir.path()).await?;
     restart_the_log(&old).await?;
@@ -520,21 +477,16 @@ async fn a_log_whose_header_fails_its_checksum_leaves_both_parts_incomplete() ->
     assert_eq!(
         store.salvage(&aside).await?,
         Salvage {
-            flags: without_the_log,
             requests: without_the_log,
         },
         "SQLite skips a log whose header fails its checksum without an error, so the file alone \
          reads as whole"
     );
-    assert!(
-        !store.private_tabs().await?.contains_key(&TabId(11)),
-        "tab 11's flag was only in the log"
-    );
     Ok(())
 }
 
 #[tokio::test]
-async fn a_log_cut_short_inside_its_last_frame_leaves_both_parts_incomplete() -> TestResult {
+async fn a_log_cut_short_inside_its_last_frame_leaves_request_history_incomplete() -> TestResult {
     let dir = tempfile::tempdir()?;
     let old = old_trace(dir.path()).await?;
     restart_the_log(&old).await?;
@@ -545,7 +497,7 @@ async fn a_log_cut_short_inside_its_last_frame_leaves_both_parts_incomplete() ->
 
     let salvage = store.salvage(&aside).await?;
     assert!(
-        !salvage.flags.is_complete() && !salvage.requests.is_complete(),
+        !salvage.requests.is_complete(),
         "SQLite skips a frame cut short without an error, and it may hold the newest commit: \
          {salvage:?}"
     );
@@ -576,14 +528,14 @@ async fn a_store_whose_log_is_damaged_is_refused_and_keeps_its_log_for_salvage()
     let store = fresh(dir.path()).await?;
     let salvage = store.salvage(&broken).await?;
     assert!(
-        !salvage.flags.is_complete() && !salvage.requests.is_complete(),
+        !salvage.requests.is_complete(),
         "salvage still sees the damage: {salvage:?}"
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn a_damaged_page_in_a_committed_frame_leaves_both_parts_incomplete() -> TestResult {
+async fn a_damaged_page_in_a_committed_frame_leaves_request_history_incomplete() -> TestResult {
     let dir = tempfile::tempdir()?;
     let old = old_trace(dir.path()).await?;
     restart_the_log(&old).await?;
@@ -599,7 +551,6 @@ async fn a_damaged_page_in_a_committed_frame_leaves_both_parts_incomplete() -> T
     assert_eq!(
         store.salvage(&aside).await?,
         Salvage {
-            flags: without_the_log,
             requests: without_the_log,
         },
         "SQLite stops reading the log at the first frame that fails its checksum, without an \
@@ -621,13 +572,13 @@ async fn a_trace_cut_short_keeps_the_pages_before_the_cut_and_reports_the_rest_l
     let aside = dir.path().join("old/trace.db.broken");
     folded_copy(&old.path, &aside).await?;
     let layout = Layout::of(&aside).await?;
-    let flags_page = layout.root("private_tabs")?;
+    let cut_page = layout.root("private_tabs")?;
     assert!(
-        layout.pages * layout.page_size > flags_page + layout.page_size,
-        "pages written after the schema sit past the flags' page, so the cut leaves fewer pages \
+        layout.pages * layout.page_size > cut_page + layout.page_size,
+        "pages written after the schema sit past the schema, so the cut leaves fewer pages \
          than the header claims"
     );
-    let cut = flags_page + layout.page_size / 2;
+    let cut = cut_page + layout.page_size / 2;
     OpenOptions::new().write(true).open(&aside)?.set_len(cut)?;
     let store = fresh(dir.path()).await?;
 
@@ -637,17 +588,13 @@ async fn a_trace_cut_short_keeps_the_pages_before_the_cut_and_reports_the_rest_l
         Recovery::Complete { rows: 2 },
         "the runs table lies before the cut"
     );
-    assert!(
-        !salvage.flags.is_complete(),
-        "the flags' page was cut in half: {salvage:?}"
-    );
     let first = store.run_by_request(&request("call-1")?, None).await?;
     assert_eq!(first.map(|run| run.id), Some(old.ended));
     Ok(())
 }
 
 #[tokio::test]
-async fn garbage_over_the_header_loses_both_parts() -> TestResult {
+async fn garbage_over_the_header_loses_request_history() -> TestResult {
     let dir = tempfile::tempdir()?;
     let old = old_trace(dir.path()).await?;
     let aside = dir.path().join("old/trace.db.broken");
@@ -659,18 +606,16 @@ async fn garbage_over_the_header_loses_both_parts() -> TestResult {
     assert_eq!(
         salvage,
         Salvage {
-            flags: Recovery::Unreadable,
             requests: Recovery::Unreadable,
         },
         "not a database at all"
     );
     assert_eq!(store.run_by_request(&request("call-1")?, None).await?, None);
-    assert!(store.private_tabs().await?.is_empty());
     Ok(())
 }
 
 #[tokio::test]
-async fn a_damaged_runs_table_loses_the_request_history_and_keeps_the_flags() -> TestResult {
+async fn a_damaged_runs_table_loses_the_request_history_() -> TestResult {
     let dir = tempfile::tempdir()?;
     let old = old_trace(dir.path()).await?;
     let aside = dir.path().join("old/trace.db.broken");
@@ -683,14 +628,10 @@ async fn a_damaged_runs_table_loses_the_request_history_and_keeps_the_flags() ->
     assert_eq!(
         salvage,
         Salvage {
-            flags: Recovery::Complete { rows: 2 },
             requests: Recovery::Unreadable,
         },
-        "one damaged table does not cost the other"
+        "the damaged runs table cannot supply request history"
     );
-    let mut tabs: Vec<TabId> = store.private_tabs().await?.into_keys().collect();
-    tabs.sort_unstable();
-    assert_eq!(tabs, vec![TabId(3), TabId(9)]);
     assert_eq!(store.run_by_request(&request("call-1")?, None).await?, None);
     Ok(())
 }
@@ -719,7 +660,6 @@ async fn a_run_whose_id_does_not_parse_is_counted_and_the_rest_come_across() -> 
             lost: Loss::Rows(1.try_into()?),
         }
     );
-    assert_eq!(salvage.flags, Recovery::Complete { rows: 2 });
     let first = store.run_by_request(&request("call-1")?, None).await?;
     assert_eq!(first.map(|run| run.id), Some(old.ended));
     Ok(())
@@ -736,11 +676,10 @@ async fn an_older_schema_without_optional_columns_still_carries_over() -> TestRe
         .filename(&aside)
         .create_if_missing(true);
     let mut conn = SqliteConnection::connect_with(&options).await?;
-    // No task_id, effects, replay or replay_until on runs, and no reason on private_tabs.
+    // No task_id, effects, replay or replay_until on runs.
     sqlx::raw_sql(
         "CREATE TABLE runs (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, ended_at INTEGER, \
-         status TEXT NOT NULL, request_id TEXT); \
-         CREATE TABLE private_tabs (tab_id INTEGER PRIMARY KEY, since INTEGER NOT NULL);",
+         status TEXT NOT NULL, request_id TEXT);",
     )
     .execute(&mut conn)
     .await?;
@@ -764,11 +703,6 @@ async fn an_older_schema_without_optional_columns_still_carries_over() -> TestRe
         .execute(&mut conn)
         .await?;
     }
-    sqlx::query("INSERT INTO private_tabs (tab_id, since) VALUES (3, ?), (9, ?)")
-        .bind(at(5).millis())
-        .bind(at(6).millis())
-        .execute(&mut conn)
-        .await?;
     conn.close().await?;
     let store = fresh(dir.path()).await?;
 
@@ -776,17 +710,8 @@ async fn an_older_schema_without_optional_columns_still_carries_over() -> TestRe
     assert_eq!(
         salvage,
         Salvage {
-            flags: Recovery::Complete { rows: 2 },
             requests: Recovery::Complete { rows: 2 },
         }
-    );
-    assert_eq!(
-        store.private_tabs().await?.get(&TabId(3)),
-        Some(&PrivacyRecord {
-            since: at(5),
-            reason: PrivateReason::Host,
-        }),
-        "a flag stored without a reason still holds"
     );
     let first = store
         .run_by_request(&request("call-1")?, None)

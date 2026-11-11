@@ -4,7 +4,7 @@
 //! delivery and the trace have a single front door (STYLE.md P2).
 //!
 //! The default-off `hosted-run` feature exports `hosted`: the same bridge, dispatcher,
-//! privacy and trace, with JavaScript owned by the caller. Each connection owns a runtime
+//! trace, with JavaScript owned by the caller. Each connection owns a runtime
 //! built by [`App::runtime`]; closing it drains runs and releases all background browser tasks.
 //! It starts no listeners and queues no trace screenshots.
 

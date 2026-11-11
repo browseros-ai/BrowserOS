@@ -77,14 +77,11 @@ pub struct ShotJob {
 /// What became of one job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shot {
-    /// The JPEG is at the job's path, admitted by its capture guard.
+    /// The JPEG is at the job's path.
     Taken {
         /// Its size, which the disk cap counts.
         bytes_len: u64,
     },
-    /// The tab was private before the capture, or went private before the pixels were kept.
-    /// Nothing was written. Read back as 410 `withheld`.
-    Withheld,
     /// No picture: too many newer jobs waited on its tab, the tab closed, or the capture failed
     /// or timed out on every attempt. Nothing was written, and the operation keeps no screenshot.
     Dropped,

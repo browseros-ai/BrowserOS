@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_takeover::Xvnc;
 
 use super::{ConfigError, Defaults};
@@ -15,15 +14,6 @@ pub(crate) struct EnvConfig {
     /// `BROWSERCLAW_DIR` (trimmed, non-empty), else `.browserclaw` under `home`. Logs, the trace
     /// store and the default host socket live under it.
     pub(crate) state_dir: PathBuf,
-    /// The user's home: `HOME` (trimmed, non-empty), else the passwd entry's, for a launch
-    /// through `env -i`, which sets no `HOME`. The Neo image keeps its CAPTCHA keys under it
-    /// (`Defaults::CAPTCHA_KEY_DIR`), and the state dir falls back to it.
-    pub(crate) home: Option<PathBuf>,
-    /// neo-captcha's key-file variables (`BROWSEROS_CAPSOLVER_API_KEY_FILE`, then
-    /// `BROWSEROS_2CAPTCHA_API_KEY_FILE`), each trimmed and blank as unset, as that crate reads
-    /// them. Its `CaptchaConfig` reads each key once and keeps no path, so these are where Neo's
-    /// secret files learn the keys' places.
-    pub(crate) captcha_key_files: Vec<PathBuf>,
     /// `CLAW_LOG`, else `Defaults::LOG_FILTER`.
     pub(crate) log_filter: String,
     /// `BROWSERCLAW_HOSTED_MODE`.
@@ -121,18 +111,10 @@ impl EnvConfig {
             host_api,
             xvnc,
             state_dir,
-            home,
-            captcha_key_files: [CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV]
-                .into_iter()
-                .filter_map(&read)
-                .map(PathBuf::from)
-                .collect(),
         })
     }
 
-    /// `$BROWSERCLAW_DIR/claw-sdk`, the trace store's directory: the one source for where
-    /// `open_trace` keeps the store and for the secret file that denies it to uploads, so the
-    /// two cannot drift apart.
+    /// `$BROWSERCLAW_DIR/claw-sdk`, where `open_trace` keeps the store.
     #[must_use]
     pub(crate) fn trace_dir(&self) -> PathBuf {
         self.state_dir.join("claw-sdk")
@@ -169,11 +151,9 @@ fn non_blank(value: Option<String>) -> Option<String> {
 mod tests {
     use std::collections::HashMap;
     use std::error::Error;
-    use std::fs;
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
 
-    use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CaptchaConfig, TWOCAPTCHA_KEY_FILE_ENV};
     use neo_takeover::{ScreenSize, Xvnc};
 
     use super::{EnvConfig, HostApiConfig, HostedMode};
@@ -194,8 +174,6 @@ mod tests {
             config,
             EnvConfig {
                 state_dir: PathBuf::from("/home/neo/.browserclaw"),
-                home: Some(PathBuf::from("/home/neo")),
-                captcha_key_files: Vec::new(),
                 log_filter: Defaults::LOG_FILTER.to_owned(),
                 hosted_mode: HostedMode::Off { value: None },
                 native_version: None,
@@ -255,51 +233,6 @@ mod tests {
         Ok(())
     }
 
-    /// Every key file neo-captcha reads is one Neo names, so no key reaches an upload
-    /// through a spelling the two read differently.
-    #[test]
-    fn reads_the_captcha_key_paths_as_browseros_captcha_trims_them() -> Result<(), Box<dyn Error>> {
-        let dir = tempfile::tempdir()?;
-        let capsolver = dir.path().join("capsolver-api-key");
-        let twocaptcha = dir.path().join("2captcha-api-key");
-        fs::write(&capsolver, "capsolver-key")?;
-        fs::write(&twocaptcha, "twocaptcha-key")?;
-        let vars = HashMap::from([
-            ("HOME".to_owned(), "/home/neo".to_owned()),
-            (
-                CAPSOLVER_KEY_FILE_ENV.to_owned(),
-                format!("  {}\n", capsolver.display()),
-            ),
-            (
-                TWOCAPTCHA_KEY_FILE_ENV.to_owned(),
-                format!("\t{} ", twocaptcha.display()),
-            ),
-        ]);
-        let lookup = |name: &str| vars.get(name).cloned();
-        let solver = CaptchaConfig::from_lookup(lookup);
-        assert!(
-            solver.capsolver.is_some() && solver.twocaptcha.is_some(),
-            "neo-captcha trims each value and reads the key at that path"
-        );
-        assert_eq!(
-            EnvConfig::from_lookup(&lookup, &|| None)?.captcha_key_files,
-            [capsolver, twocaptcha],
-            "Neo names the same two files, trimmed the same way"
-        );
-
-        let blank = env(&[
-            ("HOME", "/home/neo"),
-            (CAPSOLVER_KEY_FILE_ENV, "   "),
-            (TWOCAPTCHA_KEY_FILE_ENV, ""),
-        ])?;
-        assert_eq!(
-            blank.captcha_key_files,
-            Vec::<PathBuf>::new(),
-            "a blank value names no file, as neo-captcha reads none"
-        );
-        Ok(())
-    }
-
     /// `HOME` wins, as every Unix program reads it; an `env -i` launch, which has none, still
     /// gets the user's home from the passwd entry.
     #[test]
@@ -309,9 +242,8 @@ mod tests {
             &|name| (name == "HOME").then(|| "/tmp/rig/home".to_owned()),
             &passwd,
         )?;
-        assert_eq!(set.home.as_deref(), Some(Path::new("/tmp/rig/home")));
+        assert_eq!(set.state_dir, Path::new("/tmp/rig/home/.browserclaw"));
         let unset = EnvConfig::from_lookup(&|_| None, &passwd)?;
-        assert_eq!(unset.home.as_deref(), Some(Path::new("/home/neo")));
         assert_eq!(
             unset.state_dir,
             Path::new("/home/neo/.browserclaw"),

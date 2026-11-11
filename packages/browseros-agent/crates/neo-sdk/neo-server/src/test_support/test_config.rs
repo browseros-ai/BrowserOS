@@ -1,15 +1,12 @@
 //! A process config for tests, without a launch file or the real environment.
 
-use std::env;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::Path;
 
 use neo_captcha::config::CaptchaConfig;
 use neo_takeover::Xvnc;
 
-use crate::config::{
-    AppConfig, Defaults, EnvConfig, HostApiConfig, HostedMode, LaunchConfig, SecretFiles,
-};
+use crate::config::{AppConfig, Defaults, EnvConfig, HostApiConfig, HostedMode, LaunchConfig};
 
 /// The config Chromium would give a hosted Neo, with its state and its browser profile under
 /// `state_dir` and the agent port left to the OS (port 0; `App::local_addr` reports the one it
@@ -18,7 +15,6 @@ use crate::config::{
 /// [`CLOSED_XVNC`].
 #[must_use]
 pub fn test_config(state_dir: &Path) -> AppConfig {
-    let cwd = env::current_dir();
     let launch = LaunchConfig {
         server_port: 0,
         cdp_port: Defaults::CDP_PORT,
@@ -28,8 +24,6 @@ pub fn test_config(state_dir: &Path) -> AppConfig {
     };
     let env = EnvConfig {
         state_dir: state_dir.to_path_buf(),
-        home: None,
-        captcha_key_files: Vec::new(),
         log_filter: Defaults::LOG_FILTER.to_owned(),
         hosted_mode: HostedMode::On,
         native_version: None,
@@ -42,7 +36,6 @@ pub fn test_config(state_dir: &Path) -> AppConfig {
         xvnc: CLOSED_XVNC,
     };
     AppConfig {
-        secret_files: SecretFiles::locate(&env, &launch, &cwd),
         launch,
         env,
         captcha: CaptchaConfig::default(),

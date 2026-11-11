@@ -3,7 +3,7 @@
 //!
 //! zuzu (mirrord) is the only client. It reaches Neo over a Unix socket that the app binds;
 //! the app builds one [`Service`] from values it already holds (the trace store and sink,
-//! `Privacy`, the agent's browser session and viewports, the writer's screenshot jobs, Xvnc's
+//! the agent's browser session and viewports, the writer's screenshot jobs, Xvnc's
 //! address and home size, and Chromium's CDP port) and serves [`Service::router`] on that socket
 //! through [`host_service`]:
 //!
@@ -30,7 +30,7 @@
 //!  dispatcher lock policy (app) ─▶ Service::locks().check, synchronous
 //!  dispatcher door, page.bringToFront (app) ─▶ Service::front(): check (synchronous), and
 //!                                              bring_to_front through the front turn
-//!  browser link tab events (app) ─▶ Service::tab_opened, tab_closed, retain_tabs
+//!  browser link tab events (app) ─▶ Service::tab_closed, retain_tabs
 //!       a reconcile's fence (app) ─▶ Service::tab_fence, before its listing; the routes that
 //!                                    change a tab stamp it first (tab_stamps)
 //! ```

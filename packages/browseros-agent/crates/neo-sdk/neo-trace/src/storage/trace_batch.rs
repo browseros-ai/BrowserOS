@@ -12,13 +12,13 @@ use sea_orm::{
 };
 use serde_json::Value;
 
-use super::entities::{operations, private_tabs, run_tabs, runs};
+use super::entities::{operations, run_tabs, runs};
 use super::record_rows::{json_error, parse_id};
 use crate::screenshot_files::ShotFiles;
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, Outcome, PageState,
-    PrivacyRecord, RequestId, RetentionPolicy, RunEffects, RunId, RunStatus, Shot, ShotState,
-    Swept, TaskId, TraceError,
+    RequestId, RetentionPolicy, RunEffects, RunId, RunStatus, Shot, ShotState, Swept, TaskId,
+    TraceError,
 };
 
 /// A run's start row, containing only identity and state. Code and host data arrive with the
@@ -134,35 +134,6 @@ impl TraceBatch {
         runs::Entity::update_many()
             .col_expr(runs::Column::Complete, Expr::value(true))
             .filter(runs::Column::Complete.eq(false))
-            .exec(&self.txn)
-            .await?;
-        Ok(())
-    }
-
-    pub(crate) async fn persist_private(
-        &self,
-        tab: TabId,
-        record: PrivacyRecord,
-    ) -> Result<(), TraceError> {
-        // A private tab keeps its first record, including the original private instant.
-        private_tabs::Entity::insert(private_tabs::ActiveModel {
-            tab_id: Set(tab.0),
-            since: Set(record.since.millis()),
-            reason: Set(record.reason.as_str().to_owned()),
-        })
-        .on_conflict(
-            OnConflict::column(private_tabs::Column::TabId)
-                .do_nothing()
-                .to_owned(),
-        )
-        .exec_without_returning(&self.txn)
-        .await?;
-        Ok(())
-    }
-
-    pub(crate) async fn forget_private(&self, tab: TabId) -> Result<(), TraceError> {
-        private_tabs::Entity::delete_many()
-            .filter(private_tabs::Column::TabId.eq(tab.0))
             .exec(&self.txn)
             .await?;
         Ok(())
@@ -375,7 +346,6 @@ impl TraceBatch {
                 ShotState::Stored,
                 Some(i64::try_from(bytes_len).unwrap_or(i64::MAX)),
             ),
-            Shot::Withheld => (ShotState::Withheld, None),
             Shot::Dropped => return Ok(()),
         };
         operations::Entity::update_many()
