@@ -23,6 +23,11 @@ const testSuites = {
       argv: [bun, 'run', 'test'],
     },
     {
+      label: 'Neo conformance harness tests',
+      cwd: resolve(projectRoot, 'crates/neo-sdk/neo-server'),
+      argv: [bun, 'run', 'test:conformance'],
+    },
+    {
       label: 'diagnostics tests',
       cwd: resolve(projectRoot, 'packages/diagnostics'),
       argv: [bun, 'run', 'test'],
