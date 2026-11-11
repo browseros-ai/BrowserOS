@@ -10,13 +10,8 @@ pub mod store;
 pub mod triage;
 pub mod verify;
 
-/// Whether saved skills compile into ultrafast flows. `false` turns the whole feature off and
-/// saving works as it did before.
-pub const ULTRAFAST_ENABLED: bool = true;
-
-/// Write flows run without the one-time Allow writes approval while ultrafast is being tested.
-// TODO(DaniAkash): revert to `false` once the testing period ends, so write flows need approval again.
-pub const WRITES_ALLOWED_BY_DEFAULT: bool = true;
+/// Write flows ask once before they run on their own.
+pub const WRITES_ALLOWED_BY_DEFAULT: bool = false;
 
 /// Whether a write flow may run live without asking the user first.
 #[must_use]

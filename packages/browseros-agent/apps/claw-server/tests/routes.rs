@@ -545,7 +545,6 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         "name_session",
         "save_skill",
         "mark_skill_run",
-        "run_skill",
         "request_human_help",
         "await_human_help",
     ];
@@ -702,6 +701,53 @@ async fn tests_that_turning_human_help_off_over_http_reaches_mcp_agents() -> any
             .is_some_and(|text| text.contains("turned off")),
         "call body: {body:?}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_skill_is_refused_even_for_a_skill_with_a_verified_flow() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    app.state
+        .skills
+        .create(claw_server::services::skills::CreateSkill {
+            name: "neo-shop-add".to_string(),
+            description: "Add a product to the cart".to_string(),
+            site: None,
+            steps: vec!["Open the search".to_string(), "Add it".to_string()],
+            learned_notes: vec![],
+            origin: claw_server::services::skills::SkillOrigin::Agent,
+            source_session_id: None,
+        })
+        .await?;
+    app.state
+        .skills
+        .put_flow_row(claw_server::services::flow::new_row(
+            "neo-shop-add",
+            claw_server::services::flow::FlowStatus::Verified,
+        ))
+        .await?;
+    let session_id = initialize_mcp(&app).await?;
+
+    let call = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "run_skill", "arguments": { "name": "neo-shop-add" } }
+    });
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(call),
+        &[("mcp-session-id", &session_id)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["error"]["code"], -32601, "{body}");
+    assert!(body["result"].is_null(), "{body}");
+
+    let runs = app.state.skills.get("neo-shop-add").await?.runs;
+    assert!(runs.is_empty());
     Ok(())
 }
 
