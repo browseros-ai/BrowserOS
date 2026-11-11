@@ -83,10 +83,7 @@ pub(crate) async fn invoke(
 }
 
 /// A locator matcher: each poll re-resolves the locator, frames included, and checks it in
-/// the last chunk's world, as upstream's `callOnSelector` does. Every poll previews page text
-/// (what the locator resolved to, cut at 50 characters in the page), so each sweeps its
-/// element's site first and sends the values along (`Resolver::attempt_masked`); the same
-/// values mask the `Received` value and the preview again in Rust.
+/// the last chunk's world, as upstream's `callOnSelector` does.
 async fn locator(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -116,12 +113,8 @@ async fn locator(
     let resolver = Resolver::new(&page, scope, &target, expect.strictness());
     let poll = || async {
         let request = |last, frame_visible| expect.request(ProbeTarget::Chunk(last), frame_visible);
-        match resolver.attempt_masked(request).await? {
-            Some(Landed {
-                reply,
-                alongside: site,
-                ..
-            }) => expect.poll_of(scope, reply, || Ok(site)),
+        match resolver.attempt_at(request).await? {
+            Some(Landed { reply, .. }) => expect.poll_of(scope, reply),
             None => Ok(expect.nothing_found()),
         }
     };
@@ -155,10 +148,8 @@ async fn page(
         .await
 }
 
-/// One poll of the main frame, with its site's values swept first and sent along: the title
-/// and the URL it compares are page text, and the probe previews the document's root as it
-/// does a locator's element. A navigation that replaced the document reads as nothing there
-/// for this poll; the next one installs in the new document.
+/// One poll of the main frame, on the document's root. A navigation that replaced the document
+/// reads as nothing there for this poll; the next one installs in the new document.
 async fn main_frame(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
@@ -170,8 +161,8 @@ async fn main_frame(
         Err(ProbeFailure::Gone(_)) => return Ok(Poll::Missing),
         Err(failure) => return Err(resolve::failed(scope, failure)),
     };
-    match resolve::ask_masked(page, scope, &world, request).await? {
-        Ok(asked) => expect.poll_of(scope, asked.reply, || Ok(asked.alongside)),
+    match resolve::ask(&world, request, None).await {
+        Ok(reply) => expect.poll_of(scope, reply),
         Err(ProbeFailure::Gone(_)) => {
             page.frames().invalidate(&world);
             Ok(Poll::Missing)

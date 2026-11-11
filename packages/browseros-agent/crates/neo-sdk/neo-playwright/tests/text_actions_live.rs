@@ -2024,16 +2024,16 @@ async fn tests_that_an_edit_through_a_label_treats_the_field_it_changes_as_sensi
         "every fill reached the field its label names"
     );
 
-    // The seal's sweep holds a multiple select's first selected value only, so the second
-    // stays hidden only when the select itself is known to be sensitive.
+    // A one-time-code select answers its selected values as upstream's does, and its target
+    // is still marked sensitive for the trace.
     let select = "return await page.locator('#codes-label')\
                   .selectOption([{ label: 'First' }, { label: 'Second' }])";
     run.clear_calls();
     let selected = script_on(&run, &page, select).await?;
     assert_eq!(
         selected,
-        json!(["[private]", "[private]"]),
-        "a one-time-code select answers every selected value masked"
+        json!(["code-118204", "code-907316"]),
+        "a one-time-code select answers every selected value"
     );
     assert_marked_and_hidden(&run, select, "code-");
     run.close_page(&page).await;

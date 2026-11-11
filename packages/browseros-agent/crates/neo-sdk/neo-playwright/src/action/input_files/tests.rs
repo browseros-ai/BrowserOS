@@ -261,7 +261,7 @@ async fn tests_that_the_clients_refusals_are_unprefixed_and_in_its_order() -> Te
 /// attach timeout before it gives up on the page.
 #[tokio::test(start_paused = true)]
 async fn tests_that_only_an_op_declaring_host_files_reaches_the_page() -> TestResult {
-    let playwright = Playwright::new(offline_session(), Arc::new(RecordingHooks::default()));
+    let playwright = Playwright::new(offline_session(), Arc::new(RecordingHooks));
     let env = TestEnv::new();
     let input = || {
         serde_json::from_value::<SetInputFilesInput>(json!({
@@ -318,7 +318,7 @@ fn upload_of(files: &Value) -> Result<SetInputFilesInput, serde_json::Error> {
 /// page asked for.
 #[tokio::test]
 async fn tests_that_a_missing_path_is_refused_before_any_page_work() -> TestResult {
-    let playwright = Playwright::new(offline_session(), Arc::new(RecordingHooks::default()));
+    let playwright = Playwright::new(offline_session(), Arc::new(RecordingHooks));
     let env = TestEnv::new();
     let upload = Op::from_name("locator.setInputFiles").ok_or("setInputFiles is an op")?;
     let scope = OpScope::new(&env, upload, CallHeader::default());

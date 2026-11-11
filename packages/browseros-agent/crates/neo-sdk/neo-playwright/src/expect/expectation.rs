@@ -20,8 +20,7 @@ use crate::expect::matcher_message::{
     self, MatcherMessage, Receiver, Reported, Shape, TextExpected,
 };
 use crate::op_scope::OpScope;
-use crate::page::site_sweep::SiteValues;
-use crate::probe::{ErrorClass, ExpectParams, ProbeReply, ProbeRequest, ProbeTarget};
+use crate::probe::{ErrorClass, ExpectParams, PageText, ProbeReply, ProbeRequest, ProbeTarget};
 use crate::target::Strictness;
 use crate::{ErrorCode, PlaywrightError, resolve};
 
@@ -237,10 +236,9 @@ pub(crate) enum Poll {
     Ran {
         /// The matcher's own result, before `.not`.
         matches: bool,
-        /// What the locator resolved to, for the call log, masked with the element's site.
+        /// What the locator resolved to, for the call log.
         resolved: String,
-        /// The compared value, masked by the seal and with the element's site; `None` is
-        /// `undefined`.
+        /// The compared value, masked by the seal; `None` is `undefined`.
         received: Option<Value>,
     },
     /// No element matched (or a frame on the way is not there yet).
@@ -394,17 +392,11 @@ impl Expectation {
         Err(self.timed_out(scope, last.as_ref()))
     }
 
-    /// One probe reply as a poll, or the failure it ends the op with. What the locator
-    /// resolved to, the value compared and a strict violation's previews are page text, masked
-    /// once with the values of the element's site, which `site` gives from the sweep taken with
-    /// the poll, as a read's (`SiteSweep::values`). It is asked only for a reply that holds
-    /// such text, and its failure (a frame of the site that missed its budget) fails the
-    /// matcher closed.
+    /// One probe reply as a poll, or the failure it ends the op with.
     pub(crate) fn poll_of(
         &self,
         scope: &OpScope<'_>,
         reply: ProbeReply,
-        site: impl FnOnce() -> Result<SiteValues, PlaywrightError>,
     ) -> Result<Poll, PlaywrightError> {
         match reply {
             ProbeReply::Expect {
@@ -416,18 +408,16 @@ impl Expectation {
                 if sensitive.is_some() {
                     self.mark_sensitive(scope);
                 }
-                let values = site()?;
                 Ok(Poll::Ran {
                     matches,
-                    resolved: values.mask_line(resolved),
-                    received: received.map(|received| values.mask(received)),
+                    resolved: resolved.into_line(),
+                    received: received.map(PageText::into_value),
                 })
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(self.nothing_found()),
             // Upstream throws these from the page, so they end the matcher at once and print
             // as its `Error:` line.
             ProbeReply::Strict { message } => {
-                let message = site()?.mask_text(message);
                 Err(self.thrown(scope, ErrorCode::StrictModeViolation, &message))
             }
             ProbeReply::Error {
@@ -552,14 +542,12 @@ mod tests {
     use std::future;
     use std::time::Duration;
 
-    use browseros_core::sensitive_fields::FieldValues;
     use serde_json::{Map, Value, json};
     use tokio::time::{self, Instant};
 
     use super::{Expectation, Expression, MatcherArgs, ONE_SHOT_FLOOR, Poll, Subject};
     use crate::op::Op;
     use crate::op_scope::OpScope;
-    use crate::page::site_sweep::SiteValues;
     use crate::probe::{ExpectParams, ProbeReply};
     use crate::target::{CallHeader, Strictness};
     use crate::test_env::{EnvCall, TestEnv};
@@ -575,15 +563,6 @@ mod tests {
                 timeout_ms: Some(5000),
             },
         ))
-    }
-
-    /// A site whose sweep found no sensitive field.
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "the shape of the values a poll's site sweep gives"
-    )]
-    fn unswept() -> Result<SiteValues, PlaywrightError> {
-        Ok(SiteValues::found(FieldValues::default()))
     }
 
     /// `matcher` on `locator('#pw')`, with the prelude's `params`.
@@ -809,7 +788,7 @@ mod tests {
             "kind": "expect", "matches": false, "resolved": "<input type=\"password\" id=\"pw\"/>",
             "received": "••••", "sensitive": "password",
         }))?;
-        let poll = value.poll_of(&scope, reply, unswept)?;
+        let poll = value.poll_of(&scope, reply)?;
         assert_eq!(env.calls(), [EnvCall::MarkSensitiveTarget]);
         let error = value.timed_out(&scope, Some(&poll));
         assert_eq!(error.error_code(), Some(ErrorCode::AssertionFailed));
@@ -827,7 +806,6 @@ mod tests {
                 serde_json::from_value(
                     json!({ "kind": "error", "class": "unsupported", "message": "no RegExp here" }),
                 )?,
-                unswept,
             )
             .err()
             .ok_or("the probe's refusal ends the op")?;
@@ -840,63 +818,6 @@ mod tests {
             env.calls(),
             [EnvCall::MarkSensitiveTarget],
             "the target is marked once"
-        );
-        Ok(())
-    }
-
-    /// A value copied from a frame of the element's site reaches the call log, the message and
-    /// a strict violation's previews masked, though the poll's own frame holds no such field.
-    #[tokio::test]
-    async fn tests_that_a_poll_masks_its_page_text_with_the_values_of_its_site()
-    -> Result<(), Box<dyn Error>> {
-        let env = TestEnv::new();
-        let scope = locator_scope(&env)?;
-        let text = expectation(
-            &scope,
-            "toHaveText",
-            json!({ "expression": "to.have.text", "expectedText": [{ "string": "Signed out" }], "isNot": false }),
-        )?;
-        let site = || {
-            Ok(SiteValues::found(FieldValues::from_sweep(&json!([
-                "copied-secret-71"
-            ]))))
-        };
-        let reply: ProbeReply = serde_json::from_value(json!({
-            "kind": "expect", "matches": false,
-            "resolved": "<h1 data-who=\"copied-secret-71\">Signed in with copied-secret-71</h1>",
-            "received": "Signed in with copied-secret-71", "sensitive": null,
-        }))?;
-        let poll = text.poll_of(&scope, reply, site)?;
-        let Poll::Ran {
-            resolved, received, ..
-        } = &poll
-        else {
-            return Err("an expect reply is a poll that ran".into());
-        };
-        assert_eq!(
-            resolved,
-            "<h1 data-who=\"[private]\">Signed in with [private]</h1>"
-        );
-        assert_eq!(received, &Some(json!("Signed in with [private]")));
-        let message = text.timed_out(&scope, Some(&poll)).to_string();
-        assert!(
-            message.contains("Received: \"Signed in with [private]\"")
-                && !message.contains("copied-secret-71"),
-            "{message}"
-        );
-
-        let strict: ProbeReply = serde_json::from_value(json!({
-            "kind": "strict",
-            "message": "strict mode violation: locator('.who') resolved to 2 elements:\n    1) <p>copied-secret-71</p>",
-        }))?;
-        let violation = text
-            .poll_of(&scope, strict, site)
-            .err()
-            .ok_or("a strict violation ends the matcher")?;
-        assert!(
-            violation.message().contains("1) <p>[private]</p>")
-                && !violation.message().contains("copied-secret-71"),
-            "{violation}"
         );
         Ok(())
     }

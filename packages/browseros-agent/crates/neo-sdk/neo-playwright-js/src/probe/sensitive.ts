@@ -2,9 +2,9 @@
  * The probe's side of sdk-privacy's seal. Core's seal.js runs in this world before the engine
  * and replaces every getter a field value can be read through, so the engine reads `••••` for
  * password, card and one-time-code fields. Its `__clawSeal` object keeps the native getters
- * for jobs that never hand a value to the agent; the `sweep` and `focused` requests use it.
+ * for jobs that never hand a value to the agent; the `focused` request uses it.
  */
-import type { Focused, SensitiveKind, Sweep } from './protocol'
+import type { Focused, SensitiveKind } from './protocol'
 import { frameSource, type World } from './world'
 
 /** `__clawSeal`, as crates/browseros-core/src/sensitive_fields/seal.js defines it. */
@@ -14,7 +14,6 @@ export type ClawSeal = {
   valueEquals(element: Element, expected: string): boolean
   attributeEquals(element: Element, name: string, expected: string): boolean
   rawLength(element: Element): number
-  sensitiveValues(): string[]
   watch(root: Node): void
 }
 
@@ -23,7 +22,6 @@ const SEAL_METHODS = [
   'valueEquals',
   'attributeEquals',
   'rawLength',
-  'sensitiveValues',
   'watch',
 ] as const
 
@@ -56,11 +54,6 @@ export function editedKind(
   return world.seal.kind(
     world.injected.retarget(element, 'follow-label') ?? element,
   )
-}
-
-/** Raw values of this document's sensitive fields. Rust masks them out of page echoes. */
-export function sweep(world: World): Sweep {
-  return { kind: 'sweep', values: world.seal.sensitiveValues() }
 }
 
 /** Open shadow roots nest; this bounds the walk on a pathological page. */

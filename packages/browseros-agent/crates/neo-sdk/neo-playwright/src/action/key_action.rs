@@ -147,7 +147,7 @@ impl<'a> KeyRunner<'a> {
             Called::Reply(ProbeReply::Element { pin, sensitive, .. }) => (pin, sensitive.is_some()),
             Called::Reply(ProbeReply::None { stale_ref: None }) => return Ok(false),
             Called::Reply(ProbeReply::Detached) => return self.subject.detached().map(|()| false),
-            Called::Reply(other) => return Err(self.subject.refused(located, other).await),
+            Called::Reply(other) => return Err(self.subject.refused(other)),
             Called::Gone => return self.subject.lost(located).map(|()| false),
         };
         self.matched = true;
@@ -217,7 +217,7 @@ impl<'a> KeyRunner<'a> {
         {
             Called::Reply(ProbeReply::Value { .. }) => Ok(true),
             Called::Reply(ProbeReply::Detached) => self.subject.detached().map(|()| false),
-            Called::Reply(other) => Err(self.subject.refused(located, other).await),
+            Called::Reply(other) => Err(self.subject.refused(other)),
             Called::Gone => self.subject.lost(located).map(|()| false),
         }
     }
@@ -230,7 +230,7 @@ impl<'a> KeyRunner<'a> {
         let Ok(asked) = self.scope.within(self.subject.call(located, request)).await else {
             return Err(self.timed_out());
         };
-        match asked? {
+        match asked {
             Ok(reply) => Ok(Called::Reply(reply)),
             Err(ProbeFailure::Gone(_)) => Ok(Called::Gone),
             Err(failure) => Err(resolve::failed(self.scope, failure)),

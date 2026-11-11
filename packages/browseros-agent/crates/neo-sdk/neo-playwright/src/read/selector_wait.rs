@@ -124,8 +124,8 @@ async fn poll_selector(
             frame_visible,
             read: Read::Located,
         };
-        // Its preview reaches the call log and the handle: the site's values go with it.
-        let landed = match resolver.attempt_masked(request).await {
+        // Its preview reaches the call log and the handle.
+        let landed = match resolver.attempt_at(request).await {
             Ok(landed) => landed,
             Err(error)
                 if state.met_without_element()
@@ -135,27 +135,16 @@ async fn poll_selector(
             }
             Err(error) => return Err(error),
         };
-        let Some(Landed {
-            reply,
-            world,
-            alongside: site,
-            ..
-        }) = landed
-        else {
+        let Some(Landed { reply, world, .. }) = landed else {
             if state.met_without_element() {
                 return Ok(Value::Null);
             }
             continue;
         };
         let located: Located = match reply {
-            ProbeReply::Read {
-                value,
-                sensitive,
-                sweep,
-            } => {
+            ProbeReply::Read { value, sensitive } => {
                 element_read::mark_sensitive(scope, sensitive);
-                let value = site.with_own(pw, page.tab(), sweep).mask(value);
-                element_read::read_value(scope, value)?
+                element_read::read_value(scope, value.into_value())?
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {
                 if state.met_without_element() {
@@ -167,7 +156,7 @@ async fn poll_selector(
             ProbeReply::None { stale_ref: Some(_) } if state.met_without_element() => {
                 return Ok(Value::Null);
             }
-            other => return Err(site.refused(scope, other)),
+            other => return Err(resolver.refused(other)),
         };
         scope.log(located.log_line());
         matched.store(true, Ordering::Relaxed);

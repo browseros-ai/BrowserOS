@@ -93,7 +93,7 @@ impl PageOp {
             Self::Evaluate => OpSpec::write(
                 "page.evaluate",
                 PAGE,
-                "run a function in the main world, behind the sensitive-value sweep",
+                "run a function in the main world, as Playwright's page.evaluate does",
             )
             .using(&[Capability::MainWorld])
             .policed(),
@@ -174,8 +174,7 @@ pub(crate) async fn invoke(
         PageOp::Content => {
             document_op::read(pw, scope, args.decode(scope)?, DocumentPart::Content).await
         }
-        // Boxed for the same reason: each holds its frame's world install inside its timeout,
-        // and setContent's guard its sweeps too.
+        // Boxed for the same reason: each holds its frame's world install inside its timeout.
         PageOp::SetContent => {
             Box::pin(document_op::set_content(pw, scope, args.decode(scope)?)).await
         }

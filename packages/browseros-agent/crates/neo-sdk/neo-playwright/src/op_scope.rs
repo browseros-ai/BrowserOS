@@ -65,9 +65,7 @@ pub(crate) struct OpScope<'env> {
 }
 
 /// A page admitted for one op through the run's view: the profile and window scope check ran
-/// once, and the op's calls go to this session. The sweeps hold one, found without admission,
-/// for each tab opener links connect to the op's page (`OpPage::linked_tab`), and never act
-/// on it.
+/// once, and the op's calls go to this session.
 #[derive(Debug)]
 pub(crate) struct AdmittedPage {
     pub(crate) tab: TabId,
@@ -215,7 +213,6 @@ impl<'env> OpScope<'env> {
             Some(admitted) if admitted.tab == tab => {
                 // Navigation and frame-tree reads admit directly, without OpPage. Report at
                 // this common boundary so every payload names its actual source binding.
-                // Opener-linked sweep pages bypass admission and never replace this source.
                 self.env.report_target(tab, &admitted.session.target_id);
                 Ok(admitted)
             }

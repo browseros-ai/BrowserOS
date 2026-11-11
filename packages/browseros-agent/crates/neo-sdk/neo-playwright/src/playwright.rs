@@ -26,8 +26,6 @@ pub struct Playwright {
     /// The unbound session behind every run's view: frame sessions, raw protocol sessions and
     /// CDP events. Each op still admits its page through its own run's view first.
     browser: Arc<BrowserSession>,
-    /// The host's privacy callbacks.
-    hooks: Arc<dyn PlaywrightHooks>,
     /// Page events since this facade started; the watcher below is its only writer.
     events: Arc<EventHub>,
     /// Records CDP's page events into `events`. Dropping the facade stops it.
@@ -40,7 +38,7 @@ pub struct Playwright {
     pages: Arc<PageRegistry>,
 }
 
-// A hand-written `Debug`: the hooks are a trait object and the session is not worth printing.
+// A hand-written `Debug`: the session is not worth printing.
 impl fmt::Debug for Playwright {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Playwright").finish_non_exhaustive()
@@ -48,12 +46,13 @@ impl fmt::Debug for Playwright {
 }
 
 impl Playwright {
-    /// The facade over `browser`, reporting privacy events to `hooks`. Starts the watcher that
-    /// records page events (popups, dialogs, closes) for the instance's lifetime, and one read
-    /// of the open tabs, which decides where an already-open tab's seqs start.
-    /// Needs a tokio runtime, as `BrowserSession` does.
+    /// The facade over `browser`. Starts the watcher that records page events (popups,
+    /// dialogs, closes) for the instance's lifetime, and one read of the open tabs, which decides
+    /// where an already-open tab's seqs start. `hooks` is retained for host implementations; no
+    /// op calls it. Needs a tokio runtime, as `BrowserSession` does.
     #[must_use]
     pub fn new(browser: Arc<BrowserSession>, hooks: Arc<dyn PlaywrightHooks>) -> Arc<Self> {
+        drop(hooks);
         let (events, writer) = EventHub::new();
         let watcher = TargetWatcher::spawn(Arc::clone(&browser), writer);
         let sessions = Arc::new(SessionSetup::new(browser.connection()));
@@ -64,7 +63,6 @@ impl Playwright {
         }));
         Arc::new(Self {
             browser,
-            hooks,
             events,
             _watcher: watcher,
             epoch: Epoch::random(),
@@ -94,11 +92,6 @@ impl Playwright {
     /// frame sessions, core's frame registry and events.
     pub(crate) fn browser(&self) -> &BrowserSession {
         &self.browser
-    }
-
-    /// The host's privacy callbacks.
-    pub(crate) fn hooks(&self) -> &dyn PlaywrightHooks {
-        self.hooks.as_ref()
     }
 
     /// This instance's epoch.

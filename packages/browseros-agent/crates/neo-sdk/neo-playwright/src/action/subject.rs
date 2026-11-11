@@ -15,7 +15,6 @@
 use crate::PlaywrightError;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::page::site_sweep::{self, ReadMask};
 use crate::probe::{ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget};
 use crate::resolve::{self, HandleSite, Resolved, Resolver};
 use crate::target::{ElementTarget, LocatorTarget, Strictness, Target};
@@ -111,23 +110,18 @@ impl<'a> Subject<'a> {
         }
     }
 
-    /// `request` in `located`'s world, from its root node when there is one, and once more with
-    /// the site's values when its reply would hold page text the engine cut (`Resolved::call`).
+    /// `request` in `located`'s world, from its root node when there is one (`Resolved::call`).
     pub(crate) async fn call(
         &self,
         located: &Resolved,
         request: &ProbeRequest,
-    ) -> Result<Result<ProbeReply, ProbeFailure>, PlaywrightError> {
-        located.call(self.page, self.scope, request).await
+    ) -> Result<ProbeReply, ProbeFailure> {
+        located.call(request).await
     }
 
-    /// A reply in `located`'s world that ends the action. A strict violation previews each
-    /// match's markup, which is page text, so its message is masked with the element's site
-    /// first (`site_sweep::refused`); any other reply is `resolve::refused`'s.
-    pub(crate) async fn refused(&self, located: &Resolved, reply: ProbeReply) -> PlaywrightError {
-        let world = located.world().clone();
-        let pw = self.page.playwright();
-        site_sweep::refused(pw, self.scope, self.page, world, reply, ReadMask::Textless).await
+    /// A reply that ends the action (`resolve::refused`).
+    pub(crate) fn refused(&self, reply: ProbeReply) -> PlaywrightError {
+        resolve::refused(self.scope, reply)
     }
 
     /// The world `located` names went away under a call. It is forgotten; a locator resolves

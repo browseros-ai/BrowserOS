@@ -16,12 +16,10 @@
 use futures_util::future;
 
 use crate::op_scope::OpScope;
-use crate::page::OpPage;
 use crate::probe::{
     Hit, PageText, ParsedSelector, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
 };
 use crate::resolve::{self, FramePath, Hop, HopIframe};
-use crate::world::SealedWorld;
 use crate::{ErrorCode, PlaywrightError};
 
 /// Where the element's point lands in the page.
@@ -30,13 +28,8 @@ pub(crate) enum Projection {
     /// The point in the main viewport's CSS pixels.
     At(Point),
     /// An element of a parent frame receives events at the point instead of the iframe:
-    /// upstream's description of it (`<div id="overlay"></div>`), page text of the parent's
-    /// `world`, whose site masks it.
-    /// The world is boxed: it is large, and the other variants carry little.
-    Covered {
-        by: PageText,
-        world: Box<SealedWorld>,
-    },
+    /// upstream's description of it (`<div id="overlay"></div>`), page text of the parent.
+    Covered { by: PageText },
     /// A CSS transform on a parent's iframe makes the offset more than a translation.
     Transformed,
     /// An iframe on the way is gone: resolve the locator again.
@@ -45,11 +38,8 @@ pub(crate) enum Projection {
 
 /// Places `point`, in the pixels of the frame `path` leads to, in the main viewport; with
 /// `hit_test`, also checks every parent's iframe receives events there, topmost first, as
-/// upstream does. A parent world, or its iframe, that went away is [`Projection::Gone`]. A hit
-/// test that misses describes what is in the way, which the probe cuts under the parent's
-/// site's mask (`resolve::ask`).
+/// upstream does. A parent world, or its iframe, that went away is [`Projection::Gone`].
 pub(crate) async fn project(
-    page: &OpPage<'_>,
     scope: &OpScope<'_>,
     path: &FramePath,
     point: Point,
@@ -57,7 +47,7 @@ pub(crate) async fn project(
 ) -> Result<Projection, PlaywrightError> {
     let broken = |why: &str| scope.fail(ErrorCode::Internal, why);
     let hops = path.hops();
-    let boxes = future::join_all(hops.iter().map(|hop| frame_box(page, scope, hop, None))).await;
+    let boxes = future::join_all(hops.iter().map(|hop| frame_box(scope, hop, None))).await;
     let mut origins = Vec::with_capacity(hops.len());
     for placed in boxes {
         match placed? {
@@ -86,16 +76,13 @@ pub(crate) async fn project(
     let hits = future::join_all(
         hops.iter()
             .zip(&at_level)
-            .map(|(hop, at)| frame_box(page, scope, hop, Some(*at))),
+            .map(|(hop, at)| frame_box(scope, hop, Some(*at))),
     )
     .await;
-    for (hop, hit) in hops.iter().zip(hits) {
+    for hit in hits {
         match hit? {
             Placed::Hit(Hit::Done(_)) => {}
-            Placed::Hit(Hit::Missed { by }) => {
-                let world = Box::new(hop.parent.clone());
-                return Ok(Projection::Covered { by, world });
-            }
+            Placed::Hit(Hit::Missed { by }) => return Ok(Projection::Covered { by }),
             Placed::Gone => return Ok(Projection::Gone),
             Placed::Origin(_) | Placed::NoOrigin => {
                 return Err(broken("frameBox answered a hit test without its hit"));
@@ -114,7 +101,6 @@ enum Placed {
 }
 
 async fn frame_box(
-    page: &OpPage<'_>,
     scope: &OpScope<'_>,
     hop: &Hop,
     point: Option<Point>,
@@ -128,8 +114,7 @@ async fn frame_box(
         }
     };
     let request = ProbeRequest::FrameBox { iframe, point };
-    let reply = resolve::ask(page, scope, &hop.parent, &request, None).await?;
-    Ok(match reply {
+    Ok(match resolve::ask(&hop.parent, &request, None).await {
         Ok(ProbeReply::FrameBox { hit: Some(hit), .. }) if point.is_some() => Placed::Hit(hit),
         Ok(ProbeReply::FrameBox {
             origin: Some(origin),

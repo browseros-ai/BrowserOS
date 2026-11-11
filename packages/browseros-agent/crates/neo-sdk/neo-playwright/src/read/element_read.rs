@@ -5,14 +5,12 @@
 //! is read once, because it is there or it is gone for good.
 
 use browseros_core::sensitive_fields::SensitiveKind;
-use futures_util::future;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::backoff::Backoff;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::page::site_sweep::{self, ReadMask};
 use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read};
 use crate::resolve::{self, FramePath, HandleSite, Landed, Resolver};
 use crate::target::{ElementTarget, LocatorTarget, Strictness, Target};
@@ -50,7 +48,7 @@ pub(crate) struct Reading {
 
 /// Reads `target`'s element with `read`, once it is there. When the seal says the element read
 /// is a password, card or one-time-code field, the op's target is marked sensitive for the
-/// trace; its value already came back masked. A handle whose node is gone fails
+/// trace; its value already came back through the seal. A handle whose node is gone fails
 /// `element_detached`.
 pub(crate) async fn read_attached(
     pw: &Playwright,
@@ -110,28 +108,19 @@ async fn poll_locator(
             frame_visible,
             read: read.clone(),
         };
-        let masked = |world| ReadMask::of(&page, world, read.holds_page_text());
-        let Some(Landed {
-            reply,
-            path,
-            world,
-            alongside: mask,
-        }) = resolver.attempt_alongside(request, masked).await?
-        else {
+        let Some(Landed { reply, path, .. }) = resolver.attempt_at(request).await? else {
             continue;
         };
         match reply {
-            ProbeReply::Read {
-                value,
-                sensitive,
-                sweep,
-            } => {
+            ProbeReply::Read { value, sensitive } => {
                 mark_sensitive(scope, sensitive);
-                let value = mask.value(pw, scope, page.tab(), sweep, value)?;
-                return Ok(Reading { value, path });
+                return Ok(Reading {
+                    value: value.into_value(),
+                    path,
+                });
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {}
-            other => return Err(site_sweep::refused(pw, scope, &page, world, other, mask).await),
+            other => return Err(resolve::refused(scope, other)),
         }
     }
     Err(scope.timed_out(ErrorCode::NoMatch))
@@ -156,21 +145,11 @@ async fn read_handle(
         frame_visible: true,
         read: read.clone(),
     };
-    let world = site.world().clone();
-    let (reply, mask) = future::join(
-        site.call(&request),
-        ReadMask::of(&page, world, read.holds_page_text()),
-    )
-    .await;
-    match reply? {
-        ProbeReply::Read {
-            value,
-            sensitive,
-            sweep,
-        } => {
+    match site.call(&request).await? {
+        ProbeReply::Read { value, sensitive } => {
             mark_sensitive(scope, sensitive);
             Ok(Some(Reading {
-                value: mask.value(pw, scope, page.tab(), sweep, value)?,
+                value: value.into_value(),
                 path: site.path().clone(),
             }))
         }
@@ -214,19 +193,16 @@ pub(crate) async fn read_visibility(
             read: read.clone(),
         })
         .await?;
-    let Some(Landed { reply, world, .. }) = landed else {
+    let Some(Landed { reply, .. }) = landed else {
         return Ok(without_element);
     };
     match reply {
         ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(without_element),
-        // A state read carries no sweep (protocol.ts `ReadValue`).
-        ProbeReply::Read {
-            value, sensitive, ..
-        } => {
+        ProbeReply::Read { value, sensitive } => {
             mark_sensitive(scope, sensitive);
-            Ok(value.textless())
+            Ok(value.into_value())
         }
-        other => Err(site_sweep::refused(pw, scope, &page, world, other, ReadMask::Textless).await),
+        other => Err(resolve::refused(scope, other)),
     }
 }
 

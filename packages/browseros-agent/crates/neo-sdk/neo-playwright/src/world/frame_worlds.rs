@@ -40,9 +40,9 @@ pub(crate) enum Place {
     Main,
     /// A child frame, and how this hop reached it from its parent.
     Child(ParentLink),
-    /// A child frame found in its session's frame tree rather than through a hop (the
-    /// evaluate guard's sweep of the same-process frames). There is no iframe key to record,
-    /// so no parent link is; a later hop into the frame records one.
+    /// A child frame found in its session's frame tree rather than through a hop (a `frame.*`
+    /// form's frame, or an element's). There is no iframe key to record, so no parent link is;
+    /// a later hop into the frame records one.
     Descendant,
 }
 

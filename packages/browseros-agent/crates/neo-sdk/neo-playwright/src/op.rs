@@ -181,8 +181,8 @@ mod tests {
     /// world, and whether its gateway polices all of it before its first effect (`gated`). A
     /// host holds and polices ops by these declarations, so a new op without a row, or a
     /// declaration changed without its row, fails here until the audit is redone on purpose.
-    /// `page.setContent` is gated: its HTML goes out only through the evaluate guard's document
-    /// write, between sweeps (`evaluate_guard/document_write.rs`). `locator.setInputFiles` is
+    /// `page.setContent` is gated: its HTML goes out only through the main-world gateway's
+    /// document write (`evaluate_guard/document_write.rs`). `locator.setInputFiles` is
     /// gated: its gateway refuses Neo's own secret files and any path into `/dev` or `/proc`
     /// before it sends a path (`input_files/secrets.rs`).
     ///

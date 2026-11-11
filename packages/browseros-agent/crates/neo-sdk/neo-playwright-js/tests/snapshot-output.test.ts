@@ -27,8 +27,8 @@ const output = data('snapshot-output.json') as {
 /**
  * Upstream's text with Neo's documented changes made as text edits, apart from the Rust code
  * that makes them on the tree: a generic named by its own text prints that text, a generic's
- * name over other content goes, the code swept in the top frame is masked where its child
- * prints it, and a partial frame's iframe keeps its line but loses its content.
+ * name over other content goes, and a partial frame's iframe keeps its line but loses its
+ * content.
  */
 function withNeoRules(upstream: string): string {
   const lines: string[] = []
@@ -53,8 +53,7 @@ function withNeoRules(upstream: string): string {
         .replace(
           /^(\s*)- generic "[^"]*" (\[ref=[^\]]+\]):$/,
           '$1- generic $2:',
-        )
-        .replaceAll('482913', '[private]'),
+        ),
     )
   }
   return lines.join('\n')
