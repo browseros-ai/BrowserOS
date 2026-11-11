@@ -1,3 +1,9 @@
 <!doctype html><html><head><meta charset="utf-8"><title>Hang</title><script src="frame.js"></script></head>
 <body><h1>Hang (D, level 1)</h1><button>Hang button</button>
-<script>addEventListener("load", () => setTimeout(() => { for (;;) {} }, 1500)); // an unresponsive cross-site frame (its own process), after it has loaded</script></body></html>
+<script>
+addEventListener('message', ({data, source}) => {
+  if (data === 'neo-fixture-spin' && source === parent) for (;;) {}
+});
+// Cross-process messages leave when this task ends; the parent's later command starts the spin.
+addEventListener('load', () => setTimeout(() => parent.postMessage('neo-fixture-hang-ready', '*'), 3000));
+</script></body></html>
