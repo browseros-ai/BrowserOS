@@ -93,6 +93,14 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
+    hint: 'Neo keeps no console history; hosted BrowserOS emits no console events',
+    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
+  },
+  {
+    hint: 'Neo keeps no error history; hosted BrowserOS emits no pageerror events',
+    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
+  },
+  {
     hint: 'Neo keeps no console history; listen with page.on("console") before the page logs',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
@@ -315,6 +323,10 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/events.ts'],
   },
   {
+    hint: 'the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS',
+    sources: ['neo-playwright-js/src/prelude/events.ts'],
+  },
+  {
     hint: 'Neo does not report closed dialogs',
     sources: ['neo-playwright-js/src/prelude/events.ts'],
   },
@@ -460,20 +472,6 @@ const rustHints = [
     sources: ['neo-playwright/src/page/evaluate_guard.rs'],
     expression:
       "Neo lost its connection to a frame of the script's site and could not reach it again for its privacy sweep, .+; try again",
-  },
-  {
-    wording:
-      "<api>: a frame of the page's site did not answer Neo's privacy sweep within {}ms, so page text that may hold its values is withheld; try again once the frame responds",
-    sources: ['neo-playwright/src/page/site_sweep.rs'],
-    expression:
-      "a frame of the page's site did not answer Neo's privacy sweep within .+ms, so page text that may hold its values is withheld; try again once the frame responds",
-  },
-  {
-    wording:
-      "<api>: Neo lost its connection to a frame of the page's site and could not reach it again for its privacy sweep, so page text that may hold its values is withheld; try again",
-    sources: ['neo-playwright/src/page/site_sweep.rs'],
-    expression:
-      "Neo lost its connection to a frame of the page's site and could not reach it again for its privacy sweep, so page text that may hold its values is withheld; try again",
   },
   {
     wording:

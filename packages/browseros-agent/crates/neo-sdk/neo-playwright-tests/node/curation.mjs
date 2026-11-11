@@ -356,13 +356,22 @@ export function curationArgs(args, output) {
   return filtered
 }
 
-export function skipReason(entries, file, titles) {
-  return entries.find(
+export function skipReason(
+  entries,
+  file,
+  titles,
+  { productExpect = false } = {},
+) {
+  const reason = entries.find(
     (entry) =>
       entry.action === 'skip' &&
       entry.file === file &&
       entry.title === titles.join(' › '),
   )?.reason
+  // The manifest records limitations of the old polling shim. A run that uses Neo's
+  // expect must exercise those assertions, including the product's own refusals. Keep
+  // the manifest and its diagnostic patches intact, and retain unrelated internals skips.
+  return productExpect && uncoveredCheck.test(reason) ? undefined : reason
 }
 
 /** The skip the owner's order 2 adds for a case, or `null`: needs-internals, or an uncovered expectLoop check. */
