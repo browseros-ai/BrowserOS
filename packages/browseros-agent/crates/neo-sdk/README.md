@@ -5,6 +5,8 @@ package: each child owns its manifest, and the agent workspace lists the eight R
 explicitly. Keep tool configuration inside the packages that need it so it cannot change
 the lint or formatting rules of sibling crates.
 
+Give agents [agent.d.ts](agent.d.ts) with the MCP URL for the task API, script globals, and a four-run example.
+
 ```text
 host / MCP run
       |
