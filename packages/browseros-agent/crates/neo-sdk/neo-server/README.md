@@ -6,6 +6,8 @@ The binary is `browseros-claw-sdk`. Code style and review rules are in [STYLE.md
 
 ## How it runs
 
+To run it beside the browser in a container, use the Neo SDK image in [docker/](docker/README.md).
+
 Chromium starts the binary with its launch JSON and reads the exit code.
 
 | Invocation or event | Result |

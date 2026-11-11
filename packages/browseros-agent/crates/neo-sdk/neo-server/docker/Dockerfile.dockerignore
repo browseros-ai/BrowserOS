@@ -1,0 +1,12 @@
+# The context is packages/browseros-agent. Send only what Cargo needs to load the workspace and
+# build the server: every member's manifest and sources (Cargo refuses a member it cannot read),
+# the lockfile, and this folder. node_modules alone is about 2 GB.
+*
+!Cargo.toml
+!Cargo.lock
+!crates
+!apps/claw-server
+**/node_modules
+# Only Cargo's output at the root: `**/target` would also drop source modules such as
+# browseros-core/src/target/.
+target

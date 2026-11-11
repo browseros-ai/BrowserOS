@@ -234,6 +234,12 @@ prepare_host_socket() {
 start_display() {
   # X servers expect a root-owned, sticky socket directory.
   mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+  # An Xvnc killed with the rest of the container's processes (zuzu's OOM path
+  # kills them all at once and restarts this script) leaves its socket and lock
+  # behind, and the wait below would then pass before the new one listens, so
+  # vncconfig and openbox lose the display. Nothing else starts an X server
+  # here, so any :1 left at this point is stale.
+  rm -f /tmp/.X11-unix/X1 /tmp/.X1-lock
   local xvnc_argv=(Xvnc :1 -geometry "$NEO_SCREEN" -depth 24 -SecurityTypes None
     -localhost -rfbport 5900 -AlwaysShared -nolisten tcp)
   # Viewers can still paste into Neo; only copying out stops.

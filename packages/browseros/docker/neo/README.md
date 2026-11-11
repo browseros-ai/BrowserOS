@@ -470,7 +470,9 @@ claw-sdk` runs claw-sdk instead, with a dev-only kit to watch the browser, send 
 each run's trace; [`devkit/HOWTO.md`](devkit/HOWTO.md) walks through it.
 
 An image can also run claw-sdk in place of claw-server. Those images are built and
-smoke-tested only for now, and none is published. A claw-sdk image serves no noVNC viewer on
+smoke-tested only for now, and none is published. Hosts that run claw-sdk, such as zuzu, use the
+Neo SDK image instead: [`crates/neo-sdk/neo-server/docker`](../../../browseros-agent/crates/neo-sdk/neo-server/docker/README.md)
+builds it from one commit with a pinned browser and this folder's supervisor. A claw-sdk image serves no noVNC viewer on
 6080, never sends the clipboard to VNC viewers, and skips the human-help setting, which
 claw-sdk does not have. The image knows which server it runs from a version marker compiled
 into the server binary: `docker run --rm --entrypoint neo-server-info <image> kind`.

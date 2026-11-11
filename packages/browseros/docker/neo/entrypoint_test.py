@@ -7,9 +7,11 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import NamedTuple
 
 HERE = Path(__file__).parent
 SCRIPT = (HERE / "entrypoint.sh").read_text()
@@ -433,40 +435,71 @@ class McpListenersTest(unittest.TestCase):
         )
 
 
+class Display(NamedTuple):
+    spawned: list[list[str]]
+    supervised: list[str]
+    viewer: bool
+    # Whether the display socket already existed when Xvnc was started.
+    stale_at_xvnc: bool
+    lock_left: bool
+
+
 class StartDisplayTest(unittest.TestCase):
-    def start(self, kind: str) -> tuple[list[list[str]], list[str], bool]:
-        """The processes start_display spawns, the ones the supervisor watches, and
-        whether it marked a viewer for the healthcheck."""
+    def start(self, kind: str, stale: bool = False) -> Display:
+        """What start_display spawns and leaves. The stand-in Xvnc creates the display socket
+        start_display waits for; `stale` leaves a killed Xvnc's socket and lock first."""
         directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
         calls, supervised = directory / "calls", directory / "supervised"
-        mark, x11 = directory / "neo-viewer", directory / "x11"
+        mark, x11, lock = directory / "neo-viewer", directory / "x11", directory / "X1-lock"
+        seen = directory / "stale-at-xvnc"
         x11.mkdir()
-        # The display socket Xvnc creates, which start_display waits for.
-        with socket.socket(socket.AF_UNIX) as display:
-            display.bind(str(x11 / "X1"))
+        if stale:
+            with socket.socket(socket.AF_UNIX) as display:
+                display.bind(str(x11 / "X1"))
+            lock.write_text("       42\n")
+        bind = f"import socket; socket.socket(socket.AF_UNIX).bind('{x11 / 'X1'}')"
         run_bash(
             server_is(kind)
-            + f"spawn_as_neo() {{ local IFS=$'\\t'; echo \"$*\" >> '{calls}'; : & }}\n"
+            + "spawn_as_neo() {\n"
+            + f"  local IFS=$'\\t'; echo \"$*\" >> '{calls}'\n"
+            + f"  if [ \"$1\" = Xvnc ]; then [ ! -e '{x11 / 'X1'}' ] || touch '{seen}';"
+            + f" {shlex.quote(sys.executable)} -c \"{bind}\"; fi\n"
+            + "  : &\n}\n"
             + f"NEO_SCREEN=1600x1000 VIEWER_MARK='{mark}'\n"
-            + shell_function("start_display").replace("/tmp/.X11-unix", str(x11))
+            + shell_function("start_display")
+            .replace("/tmp/.X11-unix", str(x11))
+            .replace("/tmp/.X1-lock", str(lock))
             + f"start_display\nwait\nprintf '%s\\n' \"${{supervised[@]}}\" > '{supervised}'\n"
         )
-        spawned = [line.split("\t") for line in calls.read_text().splitlines()]
-        return spawned, supervised.read_text().split(), mark.exists()
+        return Display(
+            [line.split("\t") for line in calls.read_text().splitlines()],
+            supervised.read_text().split(),
+            mark.exists(),
+            seen.exists(),
+            lock.exists(),
+        )
 
     def test_claw_server_keeps_todays_display(self):
-        spawned, supervised, viewer = self.start("claw-server")
+        display = self.start("claw-server")
 
-        self.assertEqual(spawned, [TODAY_XVNC, VNCCONFIG, OPENBOX, TODAY_WEBSOCKIFY])
-        self.assertEqual(supervised, ["xvnc", "openbox", "websockify"])
-        self.assertTrue(viewer)
+        self.assertEqual(display.spawned, [TODAY_XVNC, VNCCONFIG, OPENBOX, TODAY_WEBSOCKIFY])
+        self.assertEqual(display.supervised, ["xvnc", "openbox", "websockify"])
+        self.assertTrue(display.viewer)
 
     def test_claw_sdk_keeps_the_clipboard_from_viewers_and_serves_no_novnc(self):
-        spawned, supervised, viewer = self.start("claw-sdk")
+        display = self.start("claw-sdk")
 
-        self.assertEqual(spawned, [TODAY_XVNC + CLIPBOARD_OFF, VNCCONFIG, OPENBOX])
-        self.assertEqual(supervised, ["xvnc", "openbox"])
-        self.assertFalse(viewer)
+        self.assertEqual(display.spawned, [TODAY_XVNC + CLIPBOARD_OFF, VNCCONFIG, OPENBOX])
+        self.assertEqual(display.supervised, ["xvnc", "openbox"])
+        self.assertFalse(display.viewer)
+
+    def test_a_killed_xvncs_socket_and_lock_are_gone_before_xvnc_starts(self):
+        # Left in place, the socket would let start_display go on before the new Xvnc listens.
+        display = self.start("claw-sdk", stale=True)
+
+        self.assertFalse(display.stale_at_xvnc)
+        self.assertFalse(display.lock_left)
+        self.assertEqual(display.spawned[0], TODAY_XVNC + CLIPBOARD_OFF)
 
 
 class ConfigureNeoTest(unittest.TestCase):
