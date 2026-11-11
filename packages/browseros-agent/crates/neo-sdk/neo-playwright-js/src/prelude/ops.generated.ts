@@ -313,6 +313,11 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.emulateMedia': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'page.close': {
     effect: 'write',
     target: 'page',
@@ -368,12 +373,27 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.addInitScript': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'context.pages': {
     effect: 'read',
     target: null,
     lifetime: 'operation',
   },
   'context.newPage': {
+    effect: 'write',
+    target: null,
+    lifetime: 'operation',
+  },
+  'context.addInitScript': {
+    effect: 'write',
+    target: null,
+    lifetime: 'operation',
+  },
+  'disposable.dispose': {
     effect: 'write',
     target: null,
     lifetime: 'operation',

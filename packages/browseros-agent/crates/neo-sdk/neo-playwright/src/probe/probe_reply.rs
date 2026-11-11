@@ -11,7 +11,6 @@
 
 use std::fmt;
 
-use browseros_core::sensitive_fields::SensitiveKind;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -23,7 +22,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 16;
+pub(crate) const PROBE_PROTOCOL: u32 = 18;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -55,13 +54,10 @@ pub(crate) enum ProbeReply {
     Strict {
         message: String,
     },
-    /// One element, pinned. `sensitive` is the seal's `kind` of the field an edit of the
-    /// element changes: the element, or the control its label names. An op marks its target
-    /// sensitive on it before it logs or sends a value.
+    /// One element, pinned, with upstream's preview of it.
     Element {
         pin: Pin,
         preview: String,
-        sensitive: Option<SensitiveKind>,
     },
     /// An `<iframe>` or `<frame>`, pinned. `key` names it in this world's ref map, for the
     /// child frame's parent link. It carries no preview, which a hop never needs.
@@ -81,14 +77,13 @@ pub(crate) enum ProbeReply {
     State {
         missing: ElementState,
     },
-    /// Measured, not armed: frame-local CSS pixels. `sensitive` is as [`Self::Element`]'s.
+    /// Measured, not armed: frame-local CSS pixels.
     Measured {
         pin: Pin,
         rect: Rect,
         point: Point,
         in_view: bool,
         transformed: bool,
-        sensitive: Option<SensitiveKind>,
     },
     /// Upstream's description of what intercepts pointer events: the page's own markup.
     Covered {
@@ -112,16 +107,14 @@ pub(crate) enum ProbeReply {
         origin: Option<Point>,
         hit: Option<Hit>,
     },
-    /// An edit's result, masked by the seal at sensitive fields' own getters only: the
-    /// probe's own words for most edits, and the options' values for `selectOptions`.
+    /// An edit's result: the probe's own words for most edits, and the options' values for
+    /// `selectOptions`.
     Value {
         value: PageText,
     },
-    /// One element's read, masked by the seal at sensitive fields' own getters only.
-    /// `sensitive` is the seal's `kind` of the element the value came from.
+    /// One element's read.
     Read {
         value: PageText,
-        sensitive: Option<SensitiveKind>,
     },
     /// A `readAll`: how many matched, and one value per match where the read has values.
     Values {
@@ -139,27 +132,18 @@ pub(crate) enum ProbeReply {
     },
     /// One `expect` poll: the matcher's own result before `.not`, upstream's call-log text for
     /// what the locator resolved to, the value it compared (`None` is JavaScript's
-    /// `undefined`, which leaves the field out; `null` stays a value), and the seal's kind of
-    /// a field compared through `__clawSeal.valueEquals` or `attributeEquals`.
+    /// `undefined`, which leaves the field out; `null` stays a value).
     Expect {
         matches: bool,
         resolved: PageText,
         #[serde(default, deserialize_with = "present")]
         received: Option<PageText>,
-        sensitive: Option<SensitiveKind>,
-    },
-    /// The focused element: a sensitive field, an iframe the keys go into, or an element that
-    /// may host a closed shadow root, which the sealed world cannot see into.
-    Focused {
-        sensitive: bool,
-        iframe: Option<Pin>,
-        host: Option<Pin>,
     },
     UrlMatch {
         matches: bool,
         url: String,
     },
-    /// A `document` read: text the seal masked where it serializes a field.
+    /// A `document` read: the title, or the doctype and the root's markup.
     DocumentText {
         text: String,
     },
@@ -199,7 +183,6 @@ impl ProbeReply {
             Self::Selector { .. } => "selector",
             Self::Snapshot { .. } => "snapshot",
             Self::Expect { .. } => "expect",
-            Self::Focused { .. } => "focused",
             Self::UrlMatch { .. } => "urlMatch",
             Self::DocumentText { .. } => "documentText",
             Self::Replaced => "replaced",
@@ -270,8 +253,7 @@ pub(crate) struct SnapshotIframe {
     pub(crate) src: String,
 }
 
-/// A value as the probe sent it: the page's own text, which the seal masks only at a sensitive
-/// field's own getters. It prints as `[page text]`, so no log line carries a value the page
+/// A value as the probe sent it: the page's own text. It prints as `[page text]`, so no log line carries a value the page
 /// shows (STYLE P4); [`PageText::into_value`] hands it to the op's output, and [`PageText::pin`]
 /// takes only the probe's pin and drops the text unread.
 #[derive(Deserialize)]
@@ -417,7 +399,7 @@ mod tests {
     fn tests_that_a_reply_this_build_cannot_read_is_refused() {
         for bad in [
             json!({ "kind": "described", "protocol": 1, "seq": 0 }),
-            json!({ "kind": "element", "pin": 3, "preview": "<b>", "sensitive": "pin_code" }),
+            json!({ "kind": "element", "pin": 3, "preview": "<b>", "sensitive": null }),
             json!({ "kind": "none", "staleRef": "e5", "extra": true }),
             json!({ "kind": "teleported" }),
         ] {
@@ -450,7 +432,7 @@ mod tests {
     #[test]
     fn tests_that_an_expect_poll_keeps_null_apart_from_undefined() -> Result<(), Box<dyn Error>> {
         let poll = |received: Option<Value>| {
-            let mut reply = json!({ "kind": "expect", "matches": false, "resolved": "<input/>", "sensitive": null });
+            let mut reply = json!({ "kind": "expect", "matches": false, "resolved": "<input/>" });
             if let (Some(received), Some(fields)) = (received, reply.as_object_mut()) {
                 fields.insert("received".to_owned(), received);
             }
@@ -474,7 +456,7 @@ mod tests {
     #[test]
     fn tests_that_page_text_never_prints() -> Result<(), Box<dyn Error>> {
         let read: ProbeReply = serde_json::from_value(json!({
-            "kind": "read", "value": "Signed in with hunter2", "sensitive": null,
+            "kind": "read", "value": "Signed in with hunter2",
         }))?;
         assert!(
             !format!("{read:?}").contains("hunter2"),

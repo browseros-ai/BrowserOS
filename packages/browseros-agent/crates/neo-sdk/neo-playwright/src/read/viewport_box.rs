@@ -159,7 +159,6 @@ async fn frame_origin(scope: &OpScope<'_>, hop: &Hop) -> Result<OriginState, Pla
         )),
         Err(ProbeFailure::Cdp(error)) => Err(scope.core_error(&error)),
         Err(ProbeFailure::Broken(why)) => Err(scope.fail(ErrorCode::Internal, &why)),
-        Err(failure @ ProbeFailure::Late) => Err(resolve::failed(scope, failure)),
     }
 }
 
@@ -192,7 +191,7 @@ mod tests {
             let reply = if detached {
                 json!({ "kind": "detached" })
             } else {
-                json!({ "kind": "read", "value": null, "sensitive": null })
+                json!({ "kind": "read", "value": null })
             };
             connection.always(
                 "Runtime.callFunctionOn",

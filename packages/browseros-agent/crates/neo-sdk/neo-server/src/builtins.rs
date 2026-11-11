@@ -9,6 +9,7 @@
 //!  TabJanitor::sweep ─▶ a Neo-origin run ─▶ Dispatcher::submit(page.close) per idle agent tab
 //!  keep_downloads ─▶ at a run's end, the finished files its download events handed it, copied
 //!                    beside the trace for the host (the run service calls it before it answers)
+//!  remove_init_scripts ─▶ at a run's end, its init scripts off every tab, before it answers
 //! ```
 //!
 //! Every built-in is a private `dispatch::Method` type, reachable only by the name it registers,
@@ -37,5 +38,5 @@ pub(crate) use builtin_set::{BuiltinDeps, builtin_set, door_rules};
 pub(crate) use captcha_claims::CaptchaClaims;
 pub(crate) use keep_downloads::keep_downloads;
 pub(crate) use playwright_facade::PlaywrightFacade;
-pub(crate) use playwright_ops::PLAYWRIGHT_PRELUDE;
+pub(crate) use playwright_ops::{PLAYWRIGHT_PRELUDE, remove_init_scripts};
 pub(crate) use tab_janitor::TabJanitor;

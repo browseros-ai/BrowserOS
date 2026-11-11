@@ -319,6 +319,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.emulateMedia": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "page.close": {
       effect: "write",
       target: "page",
@@ -374,12 +379,27 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.addInitScript": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "context.pages": {
       effect: "read",
       target: null,
       lifetime: "operation"
     },
     "context.newPage": {
+      effect: "write",
+      target: null,
+      lifetime: "operation"
+    },
+    "context.addInitScript": {
+      effect: "write",
+      target: null,
+      lifetime: "operation"
+    },
+    "disposable.dispose": {
       effect: "write",
       target: null,
       lifetime: "operation"
@@ -924,7 +944,8 @@
     "animations",
     "caret",
     "style",
-    "scale"
+    "scale",
+    "maskColor"
   ];
   var handles = new WeakSet;
   function markHandle(object) {
@@ -1999,9 +2020,20 @@
     "console",
     "pageerror",
     "download",
-    "filechooser"
+    "filechooser",
+    "load",
+    "domcontentloaded",
+    "frameattached",
+    "framenavigated",
+    "framedetached"
   ]);
-  var CONTEXT_EVENTS = new Set(["page"]);
+  var CONTEXT_EVENTS = new Set([
+    "page",
+    "pageload",
+    "frameattached",
+    "framenavigated",
+    "framedetached"
+  ]);
   var UNREPORTED = {
     request: "Neo does not report network events; wait for what the page shows instead",
     response: "Neo does not report network events; wait for what the page shows instead",
@@ -2011,15 +2043,9 @@
     worker: "Neo does not report workers",
     serviceworker: "Neo does not report service workers",
     backgroundpage: "Neo does not report extension background pages",
-    frameattached: "Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits",
-    framedetached: "Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits",
-    framenavigated: "Neo does not report frame events; use page.waitForURL()",
-    load: "Neo does not report load events; use page.waitForLoadState()",
-    domcontentloaded: 'Neo does not report load events; use page.waitForLoadState("domcontentloaded")',
     crash: "Neo does not report crashes; a crashed page fails its next call",
-    pageload: "Neo does not report load events; use page.waitForLoadState()",
     pageclose: 'listen for close on the page itself: page.on("close")',
-    weberror: 'listen for pageerror on the page itself: page.on("pageerror")',
+    weberror: "the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS",
     dialogclosed: "Neo does not report closed dialogs"
   };
   function checkReported(api, event, reported) {
@@ -2048,13 +2074,23 @@
     nextChooserLease = 0;
     chooserListeners = new Map;
     chooserChanges = new Map;
+    contextChanges = new Map;
+    contextSince = new Map;
     constructor(owner) {
       this.owner = owner;
     }
     listen(page, event, on) {
       const since = Date.now();
       this.listening += on ? 1 : -1;
-      if (event === "filechooser" && page) {
+      if (page === null) {
+        if (on)
+          this.contextSince.set(event, since);
+        else
+          this.contextSince.delete(event);
+        const previous = this.contextChanges.get(event) ?? Promise.resolve();
+        const changed = previous.then(() => this.sendListen(null, event, on, since));
+        this.contextChanges.set(event, changed);
+      } else if (event === "filechooser") {
         const lease = on ? this.intercept(page) : this.chooserListeners.get(page);
         if (on && lease)
           this.chooserListeners.set(page, lease);
@@ -2111,11 +2147,12 @@
         } finally {
           this.settleCloses(observed);
         }
-        if (!options.predicate)
+        const predicate = options.predicate;
+        if (!predicate)
           return value;
         let accepted;
         try {
-          accepted = await deadline.race(Reflect.apply(options.predicate, undefined, [value]));
+          accepted = await deadline.race(this.duringEvent(record, () => Reflect.apply(predicate, undefined, [value])));
         } catch (error) {
           throw prefixed(api, error);
         }
@@ -2210,6 +2247,9 @@
         this.page({ $neo: "page", tab: close.tab })._settleClose(observed);
     }
     deliver(record, observed) {
+      const context = record.event === "page" || record.event === "pageload" || "context" in record && record.context;
+      if (context && typeof record.at === "number" && record.at < (this.contextSince.get(record.event) ?? Infinity))
+        return;
       switch (record.event) {
         case "popup":
           this.page(record.page).emit("popup", this.page(record.popup.page, record.popup.url));
@@ -2217,6 +2257,28 @@
         case "page":
           this.owner.emit("page", this.page(record.page, record.url));
           return;
+        case "load":
+        case "domcontentloaded": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          this.duringEvent(record, () => page.emit(record.event, page));
+          return;
+        }
+        case "pageload": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          this.duringEvent(record, () => this.owner.emit("pageload", page));
+          return;
+        }
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached": {
+          const page = this.page(record.page);
+          const frame = page._eventFrame(record.seq, record.event, record.frame);
+          const emitter = record.context ? this.owner : page;
+          frame._duringEvent(record.frame, record.event, () => emitter.emit(record.event, frame));
+          return;
+        }
         case "close":
           this.page(record.page)._closeEvent(record.seq, observed);
           return;
@@ -2247,12 +2309,39 @@
         }
       }
     }
+    duringEvent(record, read) {
+      switch (record.event) {
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached": {
+          const frame = this.page(record.page)._eventFrame(record.seq, record.event, record.frame);
+          return frame._duringEvent(record.frame, record.event, read);
+        }
+        case "load":
+        case "domcontentloaded":
+        case "pageload":
+          return this.page(record.page).mainFrame()._duringEvent(record.frame, "framenavigated", read);
+        default:
+          return read();
+      }
+    }
     value(record, observed) {
       switch (record.event) {
         case "popup":
           return this.page(record.popup.page, record.popup.url);
         case "page":
           return this.page(record.page, record.url);
+        case "load":
+        case "domcontentloaded":
+        case "pageload": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          return page;
+        }
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached":
+          return this.page(record.page)._eventFrame(record.seq, record.event, record.frame);
         case "close": {
           const page = this.page(record.page);
           page._closeEvent(record.seq, observed);
@@ -2295,6 +2384,56 @@
       return chooser;
     }
   }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/init-script.ts
+  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  function checkInitOptions(api, script, options) {
+    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+      throw plainError(api, TOO_MANY_ARGUMENTS);
+    if (!options || !Reflect.get(options, "exposeFunctions"))
+      return;
+    if (typeof script !== "function")
+      throw plainError(api, "Passing functions requires the init script to be a function");
+    throw unsupportedError(api, "pages cannot call back into the script in Neo; pass values the page can use instead");
+  }
+  function initSource(api, script, arg) {
+    if (typeof script === "function") {
+      const argText = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
+      return { source: `(${String(script)})(${argText})` };
+    }
+    if (arg !== undefined)
+      throw plainError(api, "Cannot evaluate a string with arguments");
+    if (typeof script === "string")
+      return { source: script };
+    if (typeof script === "object" && script !== null) {
+      const content = Reflect.get(script, "content");
+      if (content !== undefined)
+        return { source: String(content) };
+      const path = Reflect.get(script, "path");
+      if (path !== undefined)
+        return { path: String(path) };
+    }
+    throw plainError(api, "Either path or content property must be present");
+  }
+
+  class Disposable {
+    #id;
+    constructor(id) {
+      this.#id = id;
+    }
+    async dispose() {
+      await invoke("disposable.dispose", { api: "disposable.dispose", timeoutMs: 0 }, { id: this.#id });
+    }
+  }
+  var asyncDispose = Reflect.get(Symbol, "asyncDispose");
+  if (typeof asyncDispose === "symbol")
+    Object.defineProperty(Disposable.prototype, asyncDispose, {
+      configurable: true,
+      writable: true,
+      value() {
+        return this.dispose();
+      }
+    });
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers.ts
   var kFunctionBindingPrefix = "__pw_fn_";
@@ -6683,6 +6822,7 @@ ${value.stack}`;
     _url = "";
     _parentFrame;
     _detached = false;
+    #eventView = null;
     constructor(page, id, parent) {
       super();
       this._page = page;
@@ -6694,10 +6834,19 @@ ${value.stack}`;
       return this._page;
     }
     name() {
-      return this._name;
+      return this.#eventView?.info.name ?? this._name;
     }
     url() {
-      return this._id === null ? this._page._url : this._url;
+      return this.#eventView?.info.url ?? (this._id === null ? this._page._url : this._url);
+    }
+    _duringEvent(info, event, read) {
+      const previous = this.#eventView;
+      this.#eventView = { info, detached: event === "framedetached" };
+      try {
+        return read();
+      } finally {
+        this.#eventView = previous;
+      }
     }
     parentFrame() {
       return this._parentFrame;
@@ -6706,7 +6855,7 @@ ${value.stack}`;
       return this._page.frames().filter((frame) => frame._parentFrame === this);
     }
     isDetached() {
-      return this._detached;
+      return this.#eventView?.detached ?? this._detached;
     }
     toJSON() {
       return { name: this.name(), url: this.url() };
@@ -7053,10 +7202,7 @@ ${value.stack}`;
     async _screenshot(api, selector, options = {}) {
       if (options.path !== undefined)
         throw unsupportedError(api, "Neo returns the image instead of writing a file; omit path");
-      const refused = refusedScreenshotOption(options);
-      if (refused !== undefined)
-        throw unsupportedError(api, refused);
-      const wire = pick(options, SCREENSHOT_KEYS);
+      const wire = await screenshotOptions(api, options);
       const { timeout, signal } = this._wait(api, options);
       const page = await this._page._brand(api);
       if (selector === null)
@@ -7163,10 +7309,16 @@ ${value.stack}`;
     }
     return Boolean(url(frame.url()));
   }
-  function refusedScreenshotOption(options) {
-    if (options.mask !== undefined && options.mask.length > 0)
-      return "Neo cannot mask elements in a screenshot; omit mask";
-    return;
+  async function screenshotOptions(api, options) {
+    const wire = pick(options, SCREENSHOT_KEYS);
+    if (options.mask !== undefined) {
+      wire.mask = await Promise.all(options.mask.map((locator) => {
+        if (!(locator instanceof Locator))
+          throw clientError(api, "mask: expected a Locator");
+        return locator._frame._locatorBrand(api, locator._selector);
+      }));
+    }
+    return wire;
   }
   var HELD_VALUE = "Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()";
 
@@ -7434,10 +7586,7 @@ ${value.stack}`;
       const api = "elementHandle.screenshot";
       if (options.path !== undefined)
         throw unsupportedError(api, "Neo returns the image instead of writing a file; omit path");
-      const refused = refusedScreenshotOption(options);
-      if (refused !== undefined)
-        throw unsupportedError(api, refused);
-      const wire = pick(options, SCREENSHOT_KEYS);
+      const wire = await screenshotOptions(api, options);
       return await invoke("page.screenshot", { api, timeoutMs: timeoutMs(api, this.#timeout(options)) }, {
         page: await this._page._brand(api),
         target: this._brand,
@@ -7448,7 +7597,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
-  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  var TOO_MANY_ARGUMENTS2 = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
   var REFUSALS = {
     unsupported: unsupportedError,
     client: clientError,
@@ -7464,11 +7613,11 @@ ${value.stack}`;
   }
   function assertMaxArguments(api, count, max) {
     if (count > max)
-      throw plainError(api, TOO_MANY_ARGUMENTS);
+      throw plainError(api, TOO_MANY_ARGUMENTS2);
   }
   function assertEvaluateOptions(options) {
     if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS);
+      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS2);
   }
   function refuseExposedFunctions(api, options) {
     if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
@@ -8221,6 +8370,9 @@ ${value.stack}`;
     _working = false;
     _navigationsInFlight = 0;
     #childFrames = new Map;
+    #knownFrames = new Map;
+    #frameEvents = new Map;
+    #frameSequences = new Map;
     constructor(context, tab, url) {
       super();
       this._context = context;
@@ -8250,7 +8402,7 @@ ${value.stack}`;
       return this.frames().find((frame) => frameMatches(frame, selector)) ?? null;
     }
     url() {
-      return this._url;
+      return this._mainFrame.url();
     }
     isClosed() {
       return this._closed;
@@ -8442,6 +8594,29 @@ ${value.stack}`;
     content() {
       return this._mainFrame._content("page.content");
     }
+    async emulateMedia(options = {}) {
+      const api = "page.emulateMedia";
+      const allowed = {
+        media: ["screen", "print", "no-override"],
+        colorScheme: ["dark", "light", "no-preference", "no-override"],
+        reducedMotion: ["reduce", "no-preference", "no-override"],
+        forcedColors: ["active", "none", "no-override"],
+        contrast: ["no-preference", "more", "no-override"]
+      };
+      const input = {};
+      for (const key of Object.keys(allowed)) {
+        const value = options[key] === null ? "no-override" : options[key];
+        if (value === undefined)
+          continue;
+        if (typeof value !== "string" || !allowed[key].includes(value))
+          throw clientError(api, `${key}: expected one of (${allowed[key].join("|")})`);
+        input[key] = value;
+      }
+      await invoke("page.emulateMedia", this._mainFrame._call(api, 0), {
+        page: await this._brand(api),
+        ...input
+      });
+    }
     addScriptTag(options = {}) {
       return this._mainFrame._addTag("page.addScriptTag", "page.addScriptTag", options);
     }
@@ -8454,6 +8629,13 @@ ${value.stack}`;
     async evaluate(pageFunction, arg, options) {
       assertMaxArguments("page.evaluate", arguments.length, 3);
       return await this._mainFrame._evaluate("page.evaluate", pageFunction, arg, options);
+    }
+    async addInitScript(script, arg, options) {
+      const api = "page.addInitScript";
+      checkInitOptions(api, script, options);
+      const source = initSource(api, script, arg);
+      const { id } = await invoke("page.addInitScript", { api, timeoutMs: 0 }, { page: await this._brand(api), script: source });
+      return new Disposable(id);
     }
     waitForFunction(pageFunction, arg, options) {
       return this._mainFrame._waitForFunction("page.waitForFunction", pageFunction, arg, options);
@@ -8556,7 +8738,7 @@ ${value.stack}`;
     }
     _evaluated(frames, at) {
       if (this.#payloadCurrent(at) && Array.isArray(frames))
-        this._applyFrames(frames);
+        this._applyFrames(frames, at);
     }
     async _navigated(api, frame, result, at) {
       if (this.#payloadCurrent(at)) {
@@ -8568,7 +8750,7 @@ ${value.stack}`;
             frame._url = result.url;
         }
         if (Array.isArray(result?.frames))
-          this._applyFrames(result.frames);
+          this._applyFrames(result.frames, at);
         else
           await this._refreshFrames(api);
       } else if (!this._closed) {
@@ -8591,35 +8773,101 @@ ${value.stack}`;
     async _refreshFrames(api) {
       const { value: tree, observed } = await invokeObserved("page.frames", { api, timeoutMs: 0 }, { page: await this._brand(api) });
       if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
-        this._applyFrames(tree.frames);
+        this._applyFrames(tree.frames, observed);
     }
-    _applyFrames(infos) {
+    _applyFrames(infos, at = null) {
+      const current = (id) => !at || (this.#frameSequences.get(id) ?? 0) <= at.events;
+      const remember = (id) => {
+        if (at)
+          this.#frameSequences.set(id, Math.max(at.events, this.#frameSequences.get(id) ?? 0));
+      };
       const main = infos.find((info) => info.parentId === null);
-      if (main) {
+      if (main && current(null)) {
+        remember(null);
         this._url = main.url;
         this.#urlKnown = true;
         this._mainFrame._name = main.name;
       }
       const present = new Map;
       for (const info of infos) {
-        if (info.parentId === null)
+        if (info.parentId === null || !current(info.id))
           continue;
         present.set(info.id, info);
-        let frame = this.#childFrames.get(info.id);
+        remember(info.id);
+        let frame = this.#knownFrames.get(info.id);
         if (!frame) {
           frame = new Frame(this, info.id, this._mainFrame);
-          this.#childFrames.set(info.id, frame);
+          this.#knownFrames.set(info.id, frame);
         }
+        frame._detached = false;
+        this.#childFrames.set(info.id, frame);
         frame._update(info);
       }
       for (const [id, frame] of this.#childFrames) {
+        if (!current(id))
+          continue;
         const info = present.get(id);
         if (!info) {
+          remember(id);
           frame._detached = true;
           this.#childFrames.delete(id);
           continue;
         }
         frame._parentFrame = info.parentId === main?.id ? this._mainFrame : this.#childFrames.get(info.parentId ?? "") ?? this._mainFrame;
+      }
+      this.#pruneFrames();
+    }
+    _eventFrame(seq, event, info) {
+      const delivered = this.#frameEvents.get(seq);
+      if (delivered)
+        return delivered;
+      const id = info.parentId === null ? null : info.id;
+      const current = id === null ? this._mainFrame : this.#knownFrames.get(id);
+      if (current && seq <= (this.#frameSequences.get(id) ?? 0)) {
+        return this.#rememberFrameEvent(seq, current);
+      }
+      this.#frameSequences.set(id, seq);
+      let frame;
+      if (info.parentId === null) {
+        frame = this._mainFrame;
+        this._url = info.url;
+        this.#urlKnown = true;
+      } else {
+        frame = this.#knownFrames.get(info.id) ?? new Frame(this, info.id, this._mainFrame);
+        this.#knownFrames.set(info.id, frame);
+        frame._parentFrame = this.#knownFrames.get(info.parentId) ?? this._mainFrame;
+        if (event === "framedetached") {
+          frame._detached = true;
+          this.#childFrames.delete(info.id);
+        } else {
+          frame._detached = false;
+          this.#childFrames.set(info.id, frame);
+        }
+      }
+      if (event !== "frameattached" || frame.url() === "")
+        frame._update(info);
+      this.#pruneFrames();
+      return this.#rememberFrameEvent(seq, frame);
+    }
+    #rememberFrameEvent(seq, frame) {
+      this.#frameEvents.set(seq, frame);
+      if (this.#frameEvents.size > 1024) {
+        const oldest = this.#frameEvents.keys().next().value;
+        if (oldest !== undefined)
+          this.#frameEvents.delete(oldest);
+      }
+      return frame;
+    }
+    #pruneFrames() {
+      let retained = this.#knownFrames.size - this.#childFrames.size;
+      for (const [id, frame] of this.#knownFrames) {
+        if (retained <= 1024)
+          break;
+        if (frame._detached) {
+          this.#knownFrames.delete(id);
+          this.#frameSequences.delete(id);
+          retained--;
+        }
       }
     }
     #applyViewport(size) {
@@ -8849,6 +9097,13 @@ ${value.stack}`;
     }
     serviceWorkers() {
       return [];
+    }
+    async addInitScript(script, arg, options) {
+      const api = "browserContext.addInitScript";
+      checkInitOptions(api, script, options);
+      const source = initSource(api, script, arg);
+      const { id } = await invoke("context.addInitScript", { api, timeoutMs: 0 }, { script: source });
+      return new Disposable(id);
     }
     async newPage() {
       return await this.#openPage("browserContext.newPage");
@@ -9621,7 +9876,6 @@ Timeout: ${timeout}ms`);
     },
     BrowserContext: {
       addCookies: PROFILE,
-      addInitScript: "init scripts are not available in Neo; run page.evaluate() after page.goto()",
       clearCookies: PROFILE,
       clearPermissions: "permissions are the owner's profile settings",
       close: OWNED,
@@ -9660,18 +9914,16 @@ Timeout: ${timeout}ms`);
       tracing: { hint: TRACE, kind: "property" }
     },
     Page: {
-      addInitScript: "init scripts are not available in Neo; run page.evaluate() after page.goto()",
       bringToFront: "Neo keeps agent tabs in the background; act on the page directly",
       cancelPickLocator: NO_INSPECTOR,
-      clearConsoleMessages: 'Neo keeps no console history; listen with page.on("console")',
-      clearPageErrors: 'Neo keeps no error history; listen with page.on("pageerror")',
-      consoleMessages: 'Neo keeps no console history; listen with page.on("console") before the page logs',
-      emulateMedia: "media emulation is not available in Neo",
+      clearConsoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
+      clearPageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
+      consoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
       evaluateHandle: NO_HANDLES,
       exposeBinding: "pages cannot call back into the script; read state with page.evaluate()",
       exposeFunction: "pages cannot call back into the script; read state with page.evaluate()",
       hideHighlight: NO_INSPECTOR,
-      pageErrors: 'Neo keeps no error history; listen with page.on("pageerror") before the page fails',
+      pageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
       pause: NO_INSPECTOR,
       pickLocator: NO_INSPECTOR,
       requestGC: "garbage collection is not available in Neo",

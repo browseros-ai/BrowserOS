@@ -47,6 +47,7 @@ import {
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
+import { checkInitOptions, Disposable, initSource } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
 import type { LocatorHandlerOptions } from './locator-handlers'
@@ -77,6 +78,15 @@ import type {
   PageFact,
   PageHandle,
 } from './wire'
+
+/** Page-scoped preferences; omitted values are retained and null clears just that override. */
+export type MediaOptions = {
+  media?: 'screen' | 'print' | null
+  colorScheme?: 'dark' | 'light' | 'no-preference' | null
+  reducedMotion?: 'reduce' | 'no-preference' | null
+  forcedColors?: 'active' | 'none' | null
+  contrast?: 'no-preference' | 'more' | null
+}
 
 export type CloseOptions = { runBeforeUnload?: boolean; reason?: string }
 
@@ -138,6 +148,12 @@ export class Page extends EventEmitter {
    */
   _navigationsInFlight = 0
   readonly #childFrames = new Map<string, Frame>()
+  /** Snapshots may observe removal before the event reader delivers its retained record. */
+  readonly #knownFrames = new Map<string, Frame>()
+  /** Waiters and page/context listeners share the same event's Frame and apply it once. */
+  readonly #frameEvents = new Map<number, Frame>()
+  /** Per-frame journal watermarks prevent a late pull from undoing a newer event or snapshot. */
+  readonly #frameSequences = new Map<string | null, number>()
 
   constructor(context: BrowserContext, tab: number | null, url?: string) {
     super()
@@ -178,7 +194,7 @@ export class Page extends EventEmitter {
   }
 
   url(): string {
-    return this._url
+    return this._mainFrame.url()
   }
 
   isClosed(): boolean {
@@ -664,6 +680,32 @@ export class Page extends EventEmitter {
     return this._mainFrame._content('page.content')
   }
 
+  async emulateMedia(options: MediaOptions = {}): Promise<void> {
+    const api = 'page.emulateMedia'
+    const allowed = {
+      media: ['screen', 'print', 'no-override'],
+      colorScheme: ['dark', 'light', 'no-preference', 'no-override'],
+      reducedMotion: ['reduce', 'no-preference', 'no-override'],
+      forcedColors: ['active', 'none', 'no-override'],
+      contrast: ['no-preference', 'more', 'no-override'],
+    }
+    const input: Partial<Record<keyof MediaOptions, string>> = {}
+    for (const key of Object.keys(allowed) as (keyof MediaOptions)[]) {
+      const value = options[key] === null ? 'no-override' : options[key]
+      if (value === undefined) continue
+      if (typeof value !== 'string' || !allowed[key].includes(value))
+        throw clientError(
+          api,
+          `${key}: expected one of (${allowed[key].join('|')})`,
+        )
+      input[key] = value
+    }
+    await invoke('page.emulateMedia', this._mainFrame._call(api, 0), {
+      page: await this._brand(api),
+      ...input,
+    })
+  }
+
   addScriptTag(options: ScriptTagOptions = {}): Promise<ElementHandle> {
     return this._mainFrame._addTag(
       'page.addScriptTag',
@@ -697,6 +739,27 @@ export class Page extends EventEmitter {
       arg,
       options,
     )
+  }
+
+  /**
+   * upstream's `page.addInitScript`: the script runs in the main world of every document this
+   * page loads from now on, before the page's own scripts, until the run ends or the returned
+   * disposable is disposed. The document already loaded does not run it.
+   */
+  async addInitScript(
+    script: unknown,
+    arg?: unknown,
+    options?: unknown,
+  ): Promise<Disposable> {
+    const api = 'page.addInitScript'
+    checkInitOptions(api, script, options)
+    const source = initSource(api, script, arg)
+    const { id } = await invoke(
+      'page.addInitScript',
+      { api, timeoutMs: 0 },
+      { page: await this._brand(api), script: source },
+    )
+    return new Disposable(id)
   }
 
   waitForFunction(
@@ -890,7 +953,7 @@ export class Page extends EventEmitter {
   /** A script's supplemental facts must belong to this Page's current admitted binding. */
   _evaluated(frames: FrameInfo[] | undefined, at: Observation | null): void {
     if (this.#payloadCurrent(at) && Array.isArray(frames))
-      this._applyFrames(frames)
+      this._applyFrames(frames, at)
   }
 
   async _navigated(
@@ -906,7 +969,7 @@ export class Page extends EventEmitter {
           this.#urlKnown = true
         } else frame._url = result.url
       }
-      if (Array.isArray(result?.frames)) this._applyFrames(result.frames)
+      if (Array.isArray(result?.frames)) this._applyFrames(result.frames, at)
       else await this._refreshFrames(api)
     } else if (!this._closed) {
       // Keep the original operation's return value even if a fresh read of the replacement
@@ -949,7 +1012,7 @@ export class Page extends EventEmitter {
     // A reply without a tree leaves the caches as they were rather than failing the
     // navigation that already succeeded. The main frame's entry refreshes `url()`.
     if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
-      this._applyFrames(tree.frames)
+      this._applyFrames(tree.frames, observed)
   }
 
   /**
@@ -957,27 +1020,42 @@ export class Page extends EventEmitter {
    * marking frames that left the tree detached. Parents are linked after every frame exists,
    * so the order Rust lists them in does not matter.
    */
-  _applyFrames(infos: FrameInfo[]): void {
+  _applyFrames(infos: FrameInfo[], at: Observation | null = null): void {
+    const current = (id: string | null) =>
+      !at || (this.#frameSequences.get(id) ?? 0) <= at.events
+    const remember = (id: string | null) => {
+      if (at)
+        this.#frameSequences.set(
+          id,
+          Math.max(at.events, this.#frameSequences.get(id) ?? 0),
+        )
+    }
     const main = infos.find((info) => info.parentId === null)
-    if (main) {
+    if (main && current(null)) {
+      remember(null)
       this._url = main.url
       this.#urlKnown = true
       this._mainFrame._name = main.name
     }
     const present = new Map<string, FrameInfo>()
     for (const info of infos) {
-      if (info.parentId === null) continue
+      if (info.parentId === null || !current(info.id)) continue
       present.set(info.id, info)
-      let frame = this.#childFrames.get(info.id)
+      remember(info.id)
+      let frame = this.#knownFrames.get(info.id)
       if (!frame) {
         frame = new Frame(this, info.id, this._mainFrame)
-        this.#childFrames.set(info.id, frame)
+        this.#knownFrames.set(info.id, frame)
       }
+      frame._detached = false
+      this.#childFrames.set(info.id, frame)
       frame._update(info)
     }
     for (const [id, frame] of this.#childFrames) {
+      if (!current(id)) continue
       const info = present.get(id)
       if (!info) {
+        remember(id)
         frame._detached = true
         this.#childFrames.delete(id)
         continue
@@ -986,6 +1064,71 @@ export class Page extends EventEmitter {
         info.parentId === main?.id
           ? this._mainFrame
           : (this.#childFrames.get(info.parentId ?? '') ?? this._mainFrame)
+    }
+    this.#pruneFrames()
+  }
+
+  /** Apply event-time identity before callbacks; a removed frame stays usable as metadata. */
+  _eventFrame(
+    seq: number,
+    event: 'frameattached' | 'framenavigated' | 'framedetached',
+    info: FrameInfo,
+  ): Frame {
+    const delivered = this.#frameEvents.get(seq)
+    if (delivered) return delivered
+    const id = info.parentId === null ? null : info.id
+    const current = id === null ? this._mainFrame : this.#knownFrames.get(id)
+    if (current && seq <= (this.#frameSequences.get(id) ?? 0)) {
+      return this.#rememberFrameEvent(seq, current)
+    }
+    this.#frameSequences.set(id, seq)
+    let frame: Frame
+    if (info.parentId === null) {
+      frame = this._mainFrame
+      this._url = info.url
+      this.#urlKnown = true
+    } else {
+      frame =
+        this.#knownFrames.get(info.id) ??
+        new Frame(this, info.id, this._mainFrame)
+      this.#knownFrames.set(info.id, frame)
+      frame._parentFrame =
+        this.#knownFrames.get(info.parentId) ?? this._mainFrame
+      if (event === 'framedetached') {
+        frame._detached = true
+        this.#childFrames.delete(info.id)
+      } else {
+        frame._detached = false
+        this.#childFrames.set(info.id, frame)
+      }
+    }
+    // An attach can arrive after a snapshot already read the initial document. Preserve
+    // that document's URL; later navigation records still update the same Frame object.
+    if (event !== 'frameattached' || frame.url() === '') frame._update(info)
+    this.#pruneFrames()
+    return this.#rememberFrameEvent(seq, frame)
+  }
+
+  /** Multiple readers share one event identity; the cache follows the journal's bound. */
+  #rememberFrameEvent(seq: number, frame: Frame): Frame {
+    this.#frameEvents.set(seq, frame)
+    if (this.#frameEvents.size > 1024) {
+      const oldest = this.#frameEvents.keys().next().value
+      if (oldest !== undefined) this.#frameEvents.delete(oldest)
+    }
+    return frame
+  }
+
+  /** Retain at most a journal's worth of removed frames for delayed event delivery. */
+  #pruneFrames(): void {
+    let retained = this.#knownFrames.size - this.#childFrames.size
+    for (const [id, frame] of this.#knownFrames) {
+      if (retained <= 1024) break
+      if (frame._detached) {
+        this.#knownFrames.delete(id)
+        this.#frameSequences.delete(id)
+        retained--
+      }
     }
   }
 

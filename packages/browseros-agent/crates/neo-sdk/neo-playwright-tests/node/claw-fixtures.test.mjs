@@ -112,9 +112,17 @@ test('the first context factory works, the second is really refused', async ({ c
 test('explicit requested default is really refused', async ({ contextFactory }) => {
   await expect(contextFactory({ viewport: { width: 1280, height: 720 } })).rejects.toThrow('Neo has one browser profile');
 });
-test('expectLoop uses real v1 constructors', async ({ page }) => {
+test('product expect uses real v1 constructors', async ({ page }) => {
   await page.goto('data:text/html,<h1>hello</h1>');
   await expect(page.locator('h1')).toHaveText('hello');
+  await expect.configure({ timeout: 1000 })(page.locator('h1')).toHaveAccessibleName('hello');
+  await expect.extend({})(page.locator('h1')).not.toHaveText('different');
+});
+test('product assertion errors pass through the import seam', async ({ page }) => {
+  await page.setContent('<div>actual</div>');
+  const error = await expect(page.locator('div')).toHaveText('wanted', { timeout: 20 }).catch(e => e);
+  expect(error.message).toContain('expect(locator).toHaveText(expected) failed');
+  expect(error.message).not.toContain('expectLoop:');
 });
 for (const [name, options] of [ ['viewport', { viewport: { width: 1280, height: 720 } }], ['offline', { offline: false }], ['contextOptions', { contextOptions: { acceptDownloads: true } }] ]) test.describe(name, () => {
   test.use(options);
@@ -171,9 +179,18 @@ for (const [name, options] of [ ['viewport', { viewport: { width: 1280, height: 
   const rows = classifyRuns(results, { suites: [] }, [], { engine: 'claw' })
   assert.equal(rows.filter((row) => row.verdict === 'neo-lacks').length, 3)
   assert.equal(
-    rows.find((row) => row.title.includes('expectLoop uses')).verdict,
-    'pass via expectLoop',
+    rows.find((row) => row.title.includes('product expect uses')).verdict,
+    'pass',
   )
+  const productRows = flattenResults(results).filter((row) =>
+    row.title.startsWith('product '),
+  )
+  assert.equal(productRows.length, 2)
+  for (const row of productRows) {
+    assert.ok(row.test.annotations.some((a) => a.type === 'neoExpect'))
+    assert.ok(row.test.annotations.every((a) => a.type !== 'expectLoop'))
+    assert.equal(row.test.results.at(-1).status, 'passed')
+  }
   for (const row of flattenResults(results).filter(
     (row) => row.title.includes('explicit ') || row.title.includes('second is'),
   ))

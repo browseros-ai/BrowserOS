@@ -4,15 +4,12 @@
  * crates/neo-sdk/neo-playwright/assets/injected.js: one module graph, so the probe shares the
  * engine's single copy of module state, and one global, `__neoProbe`.
  *
- * Rust installs it once per frame document, in the sealed `browseros-sdk` world:
+ * Rust installs it once per frame document, in the isolated `browseros-engine` world:
  *
- *   (() => { <core's seal_source()>;
- *            if (!globalThis.__neoProbe) { <injected.js> }
+ *   (() => { if (!globalThis.__neoProbe) { <injected.js> }
  *            return globalThis.__neoProbe.boot({ frameSeq, epoch }) })()
  *
- * The seal comes first in the same script, so a seal that throws leaves no engine behind,
- * and `boot` refuses a world without one. After that every request is one CALL_FUNCTION
- * (protocol.ts). Each request family has its own handler file; this one owns the lifecycle
+ * After that every request is one CALL_FUNCTION (protocol.ts). Each request family has its own handler file; this one owns the lifecycle
  * (boot and re-key), the dispatch table and the error replies.
  */
 import { isInvalidSelectorError } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
@@ -37,7 +34,7 @@ import {
 } from './protocol'
 import { read, readAll } from './read'
 import { generatedSelector, pinned, resolve } from './resolve'
-import { focused, sealIn } from './sensitive'
+import { screenshotMask, screenshotMaskCleanup } from './screenshot'
 import { snapshot } from './snapshot'
 import { matchUrl } from './url'
 import {
@@ -63,6 +60,8 @@ type Handlers = { [O in Routed]: Handler<O> }
 /** One entry per request kind: adding a kind is a line here plus its handler file. */
 const HANDLERS: Handlers = {
   describe: described,
+  screenshotMask,
+  screenshotMaskCleanup,
   resolve,
   act,
   verdict,
@@ -75,7 +74,6 @@ const HANDLERS: Handlers = {
   selector: generatedSelector,
   snapshot,
   expect,
-  focused,
   matchUrl,
   document: documentText,
   setContent: replaceDocument,
@@ -122,12 +120,6 @@ function createProbe(): NeoProbe {
     boot(options) {
       const { frameSeq, epoch } = parseBootOptions(options)
       if (world?.epoch === epoch) return described(world)
-      const seal = sealIn(globalThis)
-      if (!seal)
-        throw new ProbeError(
-          'internal',
-          'refusing to boot: this world has no seal (__clawSeal)',
-        )
       // Another epoch is another claw-sdk process, or this one after a restart. Nothing it
       // was handed may resolve under the new seq: pins, refs and the engine's ref expandos
       // are dropped, and a fresh engine takes the new seq.
@@ -138,7 +130,7 @@ function createProbe(): NeoProbe {
       injected.onGlobalListenersRemoved.add(listenForMoves)
       refs.install(engineTable(injected), injected.utils)
       const retired = world?.seq
-      world = { epoch, seq: frameSeq, injected, seal, pins, refs }
+      world = { epoch, seq: frameSeq, injected, pins, refs }
       return retired === undefined
         ? described(world)
         : { ...described(world), retired }

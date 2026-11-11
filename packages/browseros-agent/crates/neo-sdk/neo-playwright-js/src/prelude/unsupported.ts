@@ -47,8 +47,6 @@ export const UNSUPPORTED = {
   },
   BrowserContext: {
     addCookies: PROFILE,
-    addInitScript:
-      'init scripts are not available in Neo; run page.evaluate() after page.goto()',
     clearCookies: PROFILE,
     clearPermissions: "permissions are the owner's profile settings",
     close: OWNED,
@@ -89,18 +87,15 @@ export const UNSUPPORTED = {
     tracing: { hint: TRACE, kind: 'property' },
   },
   Page: {
-    addInitScript:
-      'init scripts are not available in Neo; run page.evaluate() after page.goto()',
     bringToFront:
       'Neo keeps agent tabs in the background; act on the page directly',
     cancelPickLocator: NO_INSPECTOR,
     clearConsoleMessages:
-      'Neo keeps no console history; listen with page.on("console")',
+      'Neo keeps no console history; hosted BrowserOS emits no console events',
     clearPageErrors:
-      'Neo keeps no error history; listen with page.on("pageerror")',
+      'Neo keeps no error history; hosted BrowserOS emits no pageerror events',
     consoleMessages:
-      'Neo keeps no console history; listen with page.on("console") before the page logs',
-    emulateMedia: 'media emulation is not available in Neo',
+      'Neo keeps no console history; hosted BrowserOS emits no console events',
     evaluateHandle: NO_HANDLES,
     exposeBinding:
       'pages cannot call back into the script; read state with page.evaluate()',
@@ -108,7 +103,7 @@ export const UNSUPPORTED = {
       'pages cannot call back into the script; read state with page.evaluate()',
     hideHighlight: NO_INSPECTOR,
     pageErrors:
-      'Neo keeps no error history; listen with page.on("pageerror") before the page fails',
+      'Neo keeps no error history; hosted BrowserOS emits no pageerror events',
     pause: NO_INSPECTOR,
     pickLocator: NO_INSPECTOR,
     requestGC: 'garbage collection is not available in Neo',

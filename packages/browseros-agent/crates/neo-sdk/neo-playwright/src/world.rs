@@ -1,5 +1,5 @@
-//! Sealed worlds: one `browseros-sdk` isolated world per frame document, each holding core's
-//! seal, Playwright's `InjectedScript` and Neo's probe.
+//! Sealed worlds: one `browseros-engine` isolated world per frame document, each holding
+//! Playwright's `InjectedScript` and Neo's probe, apart from the page's main world.
 //!
 //! ```text
 //!  first use of (session, frame) in a page ── FrameWorlds::world        single-flight cell
@@ -9,26 +9,19 @@
 //!          │                                 executionContextCreated, watched from before the
 //!          │                                 create), or by number for a world that existed
 //!          │                                 if the session reported nothing about the number
-//!          ├─ install_function(seal, engine, boot { frameSeq, epoch })
-//!          │    → described { seq, retired? }   a re-key's old seq is never handed out again
-//!          └─ watch_hidden_roots              a pierced DOM scan; the seal watches each closed
-//!                                             shadow root, which it cannot find by itself
+//!          └─ install_function(engine, boot { frameSeq, epoch })
+//!               → described { seq, retired? }   a re-key's old seq is never handed out again
 //!  every later call ── probe::call(world)    Runtime.callFunctionOn on that handle
-//!  every sweep ── watch_hidden_roots again, then the seal's sweep (hidden_roots)
 //!  a call fails Gone ── FrameWorlds::invalidate: the cell goes and the seq retires
 //! ```
 //!
 //! Invariants, and what enforces each:
-//! - **No unsealed engine world.** The seal and the engine run in one call, seal first; a
-//!   throwing seal stops it before the engine exists, and `boot` refuses a world without one.
+//! - **The engine never runs in a page world.** The page's own scripts share the main world
+//!   with it, so the engine lives only in its isolated world.
 //! - **The handle is the sealed world's, never a page world's.** A numeric context id can name
 //!   a page's world in another renderer, so the install takes the handle by the new world's
 //!   `uniqueId`, or by number only across a window in which the session reported nothing about
 //!   that number (`SealedWorld::install`). Every later call goes by the handle.
-//! - **No closed root the seal cannot see.** The seal finds fields and hears input only from
-//!   the document down through open roots, so the install scans the document for closed roots
-//!   and has the seal watch each (`hidden_roots`). A scan that fails fails the install, so a
-//!   read whose frame held a root Neo could not watch is refused.
 //! - **One engine per world.** The install's guard on `__neoProbe` makes it idempotent, and the
 //!   single-flight cell makes concurrent first uses share one install.
 //! - **A seq names one document forever.** Every new document gets a new seq and none is
@@ -47,7 +40,6 @@ mod engine_source;
 mod frame_attach_log;
 mod frame_seq;
 mod frame_worlds;
-mod hidden_roots;
 mod sealed_world;
 mod session_setup;
 
