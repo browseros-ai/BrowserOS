@@ -105,7 +105,6 @@ impl TestRig {
         .await?;
         let dir = tempfile::tempdir()?;
         let store = open_store(dir.path().join("trace.db")).await?;
-        // neo-trace's redactor still takes a secret set; the rig registers nothing in it.
         let redactor = Redactor::new(RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, writer, None);
         let gate = Arc::new(Barrier::new(2));

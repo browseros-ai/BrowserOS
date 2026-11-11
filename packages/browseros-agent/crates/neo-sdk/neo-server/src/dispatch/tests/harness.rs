@@ -84,7 +84,6 @@ impl Harness {
         .await?;
         let dir = tempfile::tempdir()?;
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-        // neo-trace's redactor still takes a secret set; the harness registers nothing in it.
         let redactor = Redactor::new(RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, WriterConfig::default(), None);
         let lock = Arc::new(TabLock::default());

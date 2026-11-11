@@ -91,7 +91,7 @@ pub(crate) struct RunEnd {
     pub(crate) error: Option<ErrorRecord>,
     /// The script's return value.
     pub(crate) result: Option<Value>,
-    /// The masked reply, kept by the trace to answer a repeated `requestId`.
+    /// The exact reply, kept by the trace to answer a repeated `requestId`.
     pub(crate) replay: Option<Value>,
 }
 
