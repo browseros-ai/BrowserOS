@@ -86,22 +86,20 @@ pub(crate) struct TabListing {
 /// listings, still reports its close; a burst costs one listing, and so does a reconnect.
 ///
 /// Each listing also fires core's detach hook for the tabs it lacks, which drops them from
-/// `TabRegistry`: core notices a closed tab only on its own close or its next listing. And each
-/// replaces `listed`, the tabs core knew then, which the door reads without awaiting.
+/// `TabRegistry`: core notices a closed tab only on its own close or its next listing.
 ///
 /// Runs for the process's life: the session's event channel outlives every reconnect.
 pub(crate) async fn tab_watch(
     session: Arc<BrowserSession>,
     events: broadcast::Sender<TabEvent>,
     watched: watch::Sender<Option<Watched>>,
-    listed: watch::Sender<Option<TabListing>>,
 ) {
     let connection = session.connection();
     // Subscribed before discovery is asked for, so no target event can slip in between.
     let mut cdp_events = session.cdp_events();
     let mut checks = time::interval(EPOCH_CHECK);
     checks.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut watch = Watch::new(events, watched, listed);
+    let mut watch = Watch::new(events, watched);
     loop {
         tokio::select! {
             _ = checks.tick() => {
@@ -183,8 +181,6 @@ async fn watched_pages(session: &BrowserSession, epoch: u64) -> Option<Vec<PageI
 struct Watch {
     events: broadcast::Sender<TabEvent>,
     watched: watch::Sender<Option<Watched>>,
-    /// Where each listing goes, whole, for `BrowserLink::lists_tab`.
-    listed: watch::Sender<Option<TabListing>>,
     /// The current start; `None` until target discovery is first on.
     current: Option<Watched>,
     /// The followed socket's page targets, by target id, with their tab.
@@ -225,15 +221,10 @@ struct TargetDestroyed {
 }
 
 impl Watch {
-    fn new(
-        events: broadcast::Sender<TabEvent>,
-        watched: watch::Sender<Option<Watched>>,
-        listed: watch::Sender<Option<TabListing>>,
-    ) -> Self {
+    fn new(events: broadcast::Sender<TabEvent>, watched: watch::Sender<Option<Watched>>) -> Self {
         Self {
             events,
             watched,
-            listed,
             current: None,
             targets: HashMap::new(),
             closing: BTreeSet::new(),
@@ -340,11 +331,6 @@ impl Watch {
                 .insert(page.target_id.as_str().to_owned(), page.tab_id);
         }
         let open: BTreeSet<TabId> = pages.iter().map(|page| page.tab_id).collect();
-        // Before the events: a tab is known to the door by the time its open is reported.
-        self.listed.send_replace(Some(TabListing {
-            watched: current,
-            open: open.iter().copied().collect(),
-        }));
         for tab in mem::take(&mut self.closing) {
             if !open.contains(&tab) {
                 self.send(TabEvent::Closed {

@@ -2,10 +2,9 @@
 
 use std::sync::Arc;
 
-use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
-use browseros_core::{TabId, TargetId};
+use browseros_core::TargetId;
 
-use neo_playwright::{Playwright, PlaywrightHooks, Refusal, TypedBy};
+use neo_playwright::Playwright;
 use tokio::sync::OnceCell;
 
 use crate::browser::BrowserLink;
@@ -53,9 +52,7 @@ impl PlaywrightFacade {
     /// the browser.
     pub(crate) async fn get(&self) -> &Arc<Playwright> {
         self.playwright
-            .get_or_init(|| async {
-                Playwright::new(self.link.linked().await, Arc::new(NoopHooks))
-            })
+            .get_or_init(|| async { Playwright::new(self.link.linked().await) })
             .await
     }
 }
@@ -75,19 +72,5 @@ impl EventLog for PlaywrightFacade {
         self.playwright
             .get()
             .and_then(|pw| pw.navigated_target(target))
-    }
-}
-
-/// Consumes the engine's field notifications without retaining values or tab state. The
-/// facade owns this stateless sink because the current engine contract requires callbacks.
-struct NoopHooks;
-
-impl PlaywrightHooks for NoopHooks {
-    fn field_entered(&self, _tab: TabId, _entry: JournalEntry, _by: TypedBy) {}
-
-    fn values_swept(&self, _tab: TabId, _values: &FieldValues) {}
-
-    fn capture_allowed(&self, _tab: TabId) -> Result<(), Refusal> {
-        Ok(())
     }
 }

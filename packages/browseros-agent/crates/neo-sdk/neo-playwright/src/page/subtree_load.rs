@@ -108,8 +108,7 @@ mod tests {
     use crate::op_scope::OpScope;
     use crate::target::CallHeader;
     use crate::test_env::TestEnv;
-    use crate::test_support::{self, RecordingHooks};
-    use crate::{ErrorCode, Playwright};
+    use crate::{ErrorCode, Playwright, test_support};
 
     #[tokio::test]
     async fn child_disappearance_during_lookup_retries_but_a_missing_root_fails()
@@ -123,7 +122,7 @@ mod tests {
                 "frame": { "id": "target-7", "loaderId": "L", "url": "https://a.test/" }
             }}),
         )?;
-        let pw = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
+        let pw = Playwright::new(Arc::clone(&browser));
         let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
         let scope = OpScope::new(
             &env,
