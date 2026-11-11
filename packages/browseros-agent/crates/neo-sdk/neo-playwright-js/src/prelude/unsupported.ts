@@ -157,7 +157,6 @@ export const UNSUPPORTED = {
     webmcp: { hint: 'WebMCP is not available in Neo', kind: 'property' },
   },
   Locator: {
-    drop: 'dropping data is not available in Neo; use locator.dragTo()',
     evaluateHandle: NO_HANDLES,
     hideHighlight: NO_INSPECTOR,
     highlight: NO_INSPECTOR,

@@ -44,6 +44,11 @@
       target: "target",
       lifetime: "operation"
     },
+    "locator.drop": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
     "locator.fill": {
       effect: "write",
       target: "target",
@@ -4097,6 +4102,17 @@ ${value.stack}`;
       }))
     };
   }
+  function dropFiles(api, files) {
+    const input = inputFiles(api, files);
+    if ("payloads" in input)
+      return input;
+    return {
+      paths: input.paths.map((path) => ({
+        path,
+        mimeType: src_default.getType(path) || "application/octet-stream"
+      }))
+    };
+  }
   function payloadBytes(api, items) {
     let total = 0;
     for (const item of items) {
@@ -4133,6 +4149,7 @@ ${value.stack}`;
   }
   var CLIENT_MESSAGES = [
     /^Multiple directories are not supported$/,
+    /^Dropping a directory is not supported/,
     /^File paths must be all files or a single directory$/,
     /^(?:E[A-Z0-9]+|UNKNOWN): [^,\n]+, stat '/
   ];
@@ -7353,6 +7370,9 @@ ${value.stack}`;
         strict: true
       });
     }
+    drop(payload, options = {}) {
+      return this._frame._drop(this._selector, payload, options);
+    }
     setInputFiles(files, options = {}) {
       return this._frame._setInputFiles("locator.setInputFiles", this._selector, files, {
         ...options,
@@ -7940,6 +7960,18 @@ ${value.stack}`;
     }
     async _selectText(api, selector, options = {}) {
       await this._selectorOp("locator.selectText", api, selector, options.strict, this._wait(api, options), pick(options, ["force"]));
+    }
+    async _drop(selector, payload, options) {
+      const api = "locator.drop";
+      const files = payload.files === undefined ? undefined : dropFiles(api, payload.files);
+      await withClientErrors(api, () => this._selectorOp("locator.drop", api, selector, true, this._wait(api, options), {
+        files,
+        data: Object.entries(payload.data ?? {}).map(([mimeType, value]) => ({
+          mimeType,
+          value
+        })),
+        position: options.position
+      }));
     }
     async _setInputFiles(api, selector, files, options = {}) {
       const input = inputFiles(api, files);
@@ -10361,7 +10393,6 @@ Timeout: ${timeout}ms`);
       webmcp: { hint: "WebMCP is not available in Neo", kind: "property" }
     },
     Locator: {
-      drop: "dropping data is not available in Neo; use locator.dragTo()",
       evaluateHandle: NO_HANDLES,
       hideHighlight: NO_INSPECTOR,
       highlight: NO_INSPECTOR,

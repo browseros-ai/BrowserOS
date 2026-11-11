@@ -174,6 +174,7 @@ mod tests {
             ("locator.check", &[], true),
             ("locator.uncheck", &[], true),
             ("locator.dragTo", &[], true),
+            ("locator.drop", &[HostFiles], true),
             ("locator.fill", &[], true),
             ("locator.press", &[], true),
             ("locator.pressSequentially", &[], true),

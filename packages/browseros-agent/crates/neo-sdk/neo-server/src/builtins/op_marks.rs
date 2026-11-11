@@ -303,6 +303,7 @@ mod tests {
             placement: Served,
         };
         let expected = vec![
+            served("locator.drop", &[HostFiles]),
             served("locator.setInputFiles", &[HostFiles]),
             served("page.setContent", &[MainWorld]),
             served("page.addScriptTag", &[MainWorld, HostFiles]),
@@ -547,6 +548,12 @@ mod tests {
             op: "page.setContent",
             file: "main_world_browseros.rs",
             test: "set_content_behaves_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "locator.drop",
+            file: "drop_browseros.rs",
+            test: "external_drop_preserves_files_and_mime_data",
             proves: Proves::Served,
         },
         BrowserosCase {

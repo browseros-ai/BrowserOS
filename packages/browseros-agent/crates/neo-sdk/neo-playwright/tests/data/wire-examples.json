@@ -725,6 +725,41 @@
         "options": {}
       }
     ],
+    "locator.drop": [
+      {
+        "call": {
+          "api": "locator.drop",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "data": [
+          {
+            "mimeType": "text/plain",
+            "value": "external"
+          }
+        ]
+      }
+    ],
     "locator.elementHandle": [
       {
         "call": {

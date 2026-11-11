@@ -10,6 +10,7 @@
 //!  ops                                what to do     runner           sent by
 //!  click dblclick hover check uncheck PointerAction  PointerRunner    PageInput (mouse)
 //!  dragTo                             DragPhases     PointerRunner    PageInput (mouse)
+//!  drop                               DropData       PointerRunner    page edit (DataTransfer)
 //!  press pressSequentially            Keys           KeyRunner        PageInput (keys)
 //!  fill selectOption selectText       FormEdit       FormRunner       page edit (+ PageInput)
 //!  focus blur dispatchEvent           Edit           ElementRunner    page edit
