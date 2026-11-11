@@ -13,9 +13,7 @@ import {
   internalsSkipPrefix as skipPrefix,
 } from './report/classify.mjs'
 
-const manifestPath = fileURLToPath(
-  new URL('./curation.json', import.meta.url),
-)
+const manifestPath = fileURLToPath(new URL('./curation.json', import.meta.url))
 export const patchReason =
   'error diagnostics: remove wording and call logs; retain behavior and error classes'
 export const entryKey = (entry) =>
