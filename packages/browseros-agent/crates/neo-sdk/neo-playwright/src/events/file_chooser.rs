@@ -40,7 +40,7 @@ impl FileChooser {
             Err(error) if error.error_code() == Some(ErrorCode::TargetClosed) => return Ok(None),
             Err(error) => return Err(error),
         };
-        let op_page = OpPage::observed(pw, scope, &admitted).await;
+        let op_page = OpPage::observed(pw, &admitted).await;
         let world = match world_call::listed_frame_world(&op_page, scope, Some(&opened.frame)).await
         {
             Ok(Some(world)) if world.session().session_id() == Some(&opened.session) => world,

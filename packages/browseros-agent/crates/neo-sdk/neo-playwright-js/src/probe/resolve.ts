@@ -20,7 +20,6 @@ import type {
   Strictness,
   StrictViolation,
 } from './protocol'
-import { editedKind } from './sensitive'
 import { engineTable, frameSource, ProbeError, type World } from './world'
 
 /** What resolving a target found: its one element, or why there is none to act on. */
@@ -151,7 +150,6 @@ export function resolve(
       kind: 'element',
       pin: world.pins.add(element),
       preview: world.injected.previewNode(element),
-      sensitive: editedKind(world, element),
     }
   const src = frameSource(element)
   if (src === undefined)

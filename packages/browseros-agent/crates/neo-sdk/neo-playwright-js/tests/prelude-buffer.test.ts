@@ -35,6 +35,46 @@ const sameAsNode = (cases: string[]) =>
     Object.fromEntries(cases.map((code) => [code, node(code)])),
   )
 
+it('reads PNG and WebP integer fields with Node bounds, including sliced buffers', () => {
+  for (const method of [
+    'readUInt8',
+    'readUInt16BE',
+    'readUInt16LE',
+    'readUInt32BE',
+    'readUInt32LE',
+    'readInt32BE',
+  ]) {
+    const offsets = [
+      '',
+      'undefined',
+      '0',
+      '-0',
+      '1',
+      '2',
+      '3',
+      '4',
+      '-1',
+      '0.5',
+      'NaN',
+      'Infinity',
+      '-Infinity',
+      '"0"',
+      'null',
+      '{}',
+    ]
+    sameAsNode(
+      [
+        'Buffer.from([0xff, 0xfe, 0x80, 0x01, 0x7f])',
+        'Buffer.from([9, 0xff, 0xfe, 0x80, 0x01, 8]).subarray(1, 5)',
+        'Buffer.alloc(0)',
+        'Buffer.alloc(2)',
+      ].flatMap((buffer) =>
+        offsets.map((offset) => `${buffer}.${method}(${offset})`),
+      ),
+    )
+  }
+})
+
 const STRINGS: [string, string][] = [
   ['hello', 'utf8'],
   ['héllo €𝄞', 'utf8'],

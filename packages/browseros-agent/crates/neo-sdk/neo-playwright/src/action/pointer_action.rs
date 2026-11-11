@@ -26,6 +26,7 @@ use serde::Deserialize;
 
 use crate::action::actionability::{PointerKind, Requirements, requirements, state_name};
 use crate::action::arm_guard::ArmGuard;
+use crate::action::attempt_log::AttemptLog;
 use crate::action::frame_projection::{self, Projection};
 use crate::action::requested_navigations::RequestedNavigations;
 use crate::action::subject::Subject;
@@ -402,16 +403,16 @@ impl<'a> PointerRunner<'a> {
         let req = requirements(action.kind);
         let trial = if action.trial { " (trial run)" } else { "" };
         let inner = Backoff::inner();
+        // The attempt's lines wait until the element is seen (`attempt_log.rs`).
+        let mut attempt = AttemptLog::new(self.scope, pin.is_some());
         for retry in 0.. {
             let wait = inner.wait(retry);
             if retry == 0 {
-                self.scope
-                    .log(format!("attempting {} action{trial}", req.name));
+                attempt.log(format!("attempting {} action{trial}", req.name));
             } else {
-                self.scope
-                    .log(format!("retrying {} action{trial}", req.name));
+                attempt.log(format!("retrying {} action{trial}", req.name));
                 if !wait.is_zero() {
-                    self.scope.log(format!("  waiting {}ms", wait.as_millis()));
+                    attempt.log(format!("  waiting {}ms", wait.as_millis()));
                 }
             }
             if self.scope.sleep(wait).await.is_err() {
@@ -420,8 +421,7 @@ impl<'a> PointerRunner<'a> {
 
             // ① Resolve or reuse the pin, check the states, scroll, measure.
             if !action.force {
-                self.scope
-                    .log(format!("  waiting for element to be {}", req.waits_for()));
+                attempt.log(format!("  waiting for element to be {}", req.waits_for()));
             }
             let scroll = if action.scroll {
                 SCROLL_ROTATION
@@ -433,7 +433,19 @@ impl<'a> PointerRunner<'a> {
             };
             let target = pin.map_or_else(|| self.subject.first_target(), ProbeTarget::Pin);
             let measure = self.act_request(located, action, &req, target, scroll, None);
-            let measured = match self.call(located, &measure).await? {
+            let called = self.call(located, &measure).await?;
+            match &called {
+                Called::Reply(ProbeReply::Measured { .. } | ProbeReply::State { .. }) => {
+                    attempt.found();
+                }
+                // The locator matches nothing yet: back to the outer loop with nothing logged, as
+                // upstream's `continuePolling`. Once the element was seen, this is a detach.
+                Called::Reply(ProbeReply::None { stale_ref: None }) if !attempt.is_found() => {
+                    return Ok(Inner::Reresolve);
+                }
+                _ => {}
+            }
+            let measured = match called {
                 Called::Reply(ProbeReply::Measured {
                     pin: pinned,
                     rect,

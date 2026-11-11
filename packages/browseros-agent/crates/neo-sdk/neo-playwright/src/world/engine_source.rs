@@ -1,8 +1,6 @@
-//! The page asset, and the one function that installs it with core's seal.
+//! The page asset, and the one function that installs it in a frame's isolated world.
 
 use std::sync::OnceLock;
-
-use browseros_core::sensitive_fields::seal_source;
 
 use crate::probe::PROBE_PROTOCOL;
 
@@ -10,9 +8,8 @@ use crate::probe::PROBE_PROTOCOL;
 /// sources by `crates/neo-sdk/neo-playwright-js/scripts/build.ts`.
 ///
 /// Evaluating it in a world defines one global, `__neoProbe`. Its `boot({ frameSeq, epoch })`
-/// builds the engine for that document, and refuses to unless core's seal ran first in the
-/// same world. The inspector overlay and the `window.playwright` helper are compiled out as
-/// empty stand-ins.
+/// builds the engine for that document. The inspector overlay and the `window.playwright`
+/// helper are compiled out as empty stand-ins.
 const ENGINE_JS: &str = include_str!("../../assets/injected.js");
 
 /// The function an install calls on a world's global with `{ frameSeq, epoch }`. It returns
@@ -20,7 +17,6 @@ const ENGINE_JS: &str = include_str!("../../assets/injected.js");
 /// seq a re-key replaced.
 ///
 /// ```text
-///  seal_source()                       idempotent per document; before any engine code
 ///  held = globalThis.__neoProbe
 ///  held, this protocol   → held.boot(options)   same epoch: no-op; another epoch: re-key
 ///  held, other protocol  → held.boot(options)   re-keyed first, so it forgets its refs and
@@ -29,9 +25,7 @@ const ENGINE_JS: &str = include_str!("../../assets/injected.js");
 ///  none (or replaced)    → <injected.js>; __neoProbe.boot(options), plus the kept `retired`
 /// ```
 ///
-/// The seal runs first in the same call, so a seal that throws leaves no engine behind, and
-/// `boot` refuses a world without one: an unsealed engine world cannot exist. The guard on
-/// `__neoProbe` keeps one engine per world, because a second copy carries its own module
+/// The guard on `__neoProbe` keeps one engine per world, because a second copy carries its own module
 /// state and would mint colliding refs. Every protocol version keeps `boot` and the
 /// `protocol` and `retired` fields of its reply, since a newer build re-keys an older probe
 /// through them and must still learn the seq the older one numbered the document with.
@@ -39,21 +33,18 @@ pub(crate) fn install_function() -> &'static str {
     static SOURCE: OnceLock<String> = OnceLock::new();
     SOURCE.get_or_init(|| {
         format!(
-            "function (options) {{\n{seal};\nconst held = globalThis.__neoProbe;\nlet retired;\n\
+            "function (options) {{\nconst held = globalThis.__neoProbe;\nlet retired;\n\
              if (held) {{\n  const described = held.boot(options);\n  if (described.protocol \
              === {PROBE_PROTOCOL}) return described;\n  retired = described.retired;\n  delete \
              globalThis.__neoProbe;\n}}\n{ENGINE_JS}\nconst booted = \
              globalThis.__neoProbe.boot(options);\nreturn retired === undefined ? booted : {{ \
-             ...booted, retired }};\n}}",
-            seal = seal_source(),
+             ...booted, retired }};\n}}"
         )
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use browseros_core::sensitive_fields::seal_source;
-
     use super::{ENGINE_JS, install_function};
 
     const UPSTREAM: &str = "crates/neo-sdk/neo-playwright/third_party/playwright";
@@ -88,13 +79,15 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_the_install_seals_before_the_engine_exists() {
+    fn tests_that_the_install_boots_whichever_probe_is_in_charge() {
         let install = install_function();
-        let seal = install.find(seal_source()).unwrap_or(usize::MAX);
-        let engine = install.find(ENGINE_JS).unwrap_or(0);
         assert!(
-            seal < engine,
-            "the seal runs before any engine code, so a throwing seal leaves no engine"
+            install.starts_with("function (options) {\nconst held = globalThis.__neoProbe;"),
+            "the install reads a probe the world already holds before any engine code"
+        );
+        assert!(
+            install.contains(ENGINE_JS),
+            "the install carries the engine"
         );
         assert!(
             install.trim_end().ends_with(

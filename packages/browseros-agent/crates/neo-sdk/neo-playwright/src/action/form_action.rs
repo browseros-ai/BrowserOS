@@ -4,7 +4,7 @@
 //! ```text
 //!  outer loop (locator: re-resolve │ handle: once)      fill and selectOption wait for the
 //!    inner loop (the pinned element, Backoff::inner)     frames on the way to be visible
-//!      ① act { chunk | pin, states }   ─ measured { pin, sensitive } │ state: retry │ detached
+//!      ① act { chunk | pin, states }   ─ measured { pin } │ state: retry │ detached
 //!         (force: resolve { want: element }, no states)
 //!      the tab's input lock ──────────────────────────────────────────────────────────────
 //!      send_effect()                   ─ Sent, right before the edit
@@ -13,10 +13,7 @@
 //!         selectOptions → options not found or not enabled: retry
 //! ```
 //!
-//! A warm fill is 3 CDP messages (①, ②, the insertText). The probe reports with ① whether the
-//! field the edit changes is a password, card or one-time-code field: the element, or the
-//! control its label names, as upstream's edits follow a label (the forced path too). The call
-//! log names a fill's value only for a field that is not sensitive.
+//! A warm fill is 3 CDP messages (①, ②, the insertText).
 
 use std::time::Duration;
 
@@ -25,6 +22,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::action::actionability::state_name;
+use crate::action::attempt_log::AttemptLog;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::input::{self, Keyboard};
@@ -38,9 +36,6 @@ use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
 use crate::world::Pin;
 use crate::{ErrorCode, PlaywrightError};
-
-/// The mask the call log shows for a sensitive field's typed value, the seal's own.
-pub(crate) const MASKED: &str = "••••";
 
 /// One form edit and what it carries.
 pub(crate) enum FormEdit<'v> {
@@ -116,14 +111,13 @@ enum SelectRetry {
 
 /// Where ① left the attempt.
 enum Ready {
-    At {
-        pin: Pin,
-        sensitive: bool,
-    },
+    At(Pin),
     /// The first state that does not hold yet.
     Missing(ElementState),
     /// The element or its world went away: the next outer pass.
     Gone,
+    /// The locator matches nothing yet: the next outer pass, with nothing logged.
+    Unmatched,
 }
 
 /// Where ② left the attempt.
@@ -210,29 +204,36 @@ impl<'a> FormRunner<'a> {
         let inner = Backoff::inner();
         let mut pin = None;
         let mut announced = false;
+        // The attempt's lines wait until the element is seen (`attempt_log.rs`).
+        let mut attempt = AttemptLog::new(self.scope, false);
         for retry in 0.. {
             let wait = inner.wait(retry);
             if retry == 0 {
-                self.scope.log(format!("attempting {} action", row.name));
+                attempt.log(format!("attempting {} action", row.name));
             } else {
-                self.scope.log(format!("retrying {} action", row.name));
+                attempt.log(format!("retrying {} action", row.name));
                 if !wait.is_zero() {
-                    self.scope.log(format!("  waiting {}ms", wait.as_millis()));
+                    attempt.log(format!("  waiting {}ms", wait.as_millis()));
                 }
             }
             if self.scope.sleep(wait).await.is_err() {
                 return Err(self.timed_out());
             }
             if !self.force {
-                self.scope
-                    .log(format!("  waiting for element to be {}", row.waits_for));
+                attempt.log(format!("  waiting for element to be {}", row.waits_for));
             }
-            let pinned = match self.ready(located, pin, row).await? {
-                Ready::At { pin, sensitive } => {
+            let ready = self.ready(located, pin, row, attempt.is_found()).await?;
+            match &ready {
+                Ready::At(_) | Ready::Missing(_) => attempt.found(),
+                Ready::Unmatched => return Ok(None),
+                Ready::Gone => {}
+            }
+            let pinned = match ready {
+                Ready::At(pin) => {
                     self.matched = true;
                     if !announced {
                         announced = true;
-                        self.announce(edit, sensitive);
+                        self.announce(edit);
                     }
                     pin
                 }
@@ -242,7 +243,7 @@ impl<'a> FormRunner<'a> {
                         .log(format!("  element is not {}", state_name(state)));
                     continue;
                 }
-                Ready::Gone => return Ok(None),
+                Ready::Gone | Ready::Unmatched => return Ok(None),
             };
             pin = Some(pinned);
             match self.apply(located, pinned, edit).await? {
@@ -254,12 +255,13 @@ impl<'a> FormRunner<'a> {
         Err(self.timed_out())
     }
 
-    /// ①: the element pinned once its states hold, and whether it is a sensitive field.
+    /// ①: the element pinned once its states hold.
     async fn ready(
         &self,
         located: &Resolved,
         pin: Option<Pin>,
         row: &Row,
+        found: bool,
     ) -> Result<Ready, PlaywrightError> {
         let target = pin.map_or_else(|| self.subject.first_target(), ProbeTarget::Pin);
         let request = if self.force {
@@ -281,14 +283,11 @@ impl<'a> FormRunner<'a> {
             }
         };
         Ok(match self.call(located, &request).await? {
-            Called::Reply(
-                ProbeReply::Measured { pin, sensitive, .. }
-                | ProbeReply::Element { pin, sensitive, .. },
-            ) => Ready::At {
-                pin,
-                sensitive: sensitive.is_some(),
-            },
+            Called::Reply(ProbeReply::Measured { pin, .. } | ProbeReply::Element { pin, .. }) => {
+                Ready::At(pin)
+            }
             Called::Reply(ProbeReply::State { missing }) => Ready::Missing(missing),
+            Called::Reply(ProbeReply::None { stale_ref: None }) if !found => Ready::Unmatched,
             Called::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
                 self.subject.detached()?;
                 Ready::Gone
@@ -408,11 +407,10 @@ impl<'a> FormRunner<'a> {
         }
     }
 
-    /// Upstream's `fill("value")` line, with the value masked in a sensitive field.
-    fn announce(&self, edit: &FormEdit<'_>, sensitive: bool) {
+    /// Upstream's `fill("value")` line.
+    fn announce(&self, edit: &FormEdit<'_>) {
         if let FormEdit::Fill(value) = edit {
-            let shown = if sensitive { MASKED } else { value.0.as_str() };
-            self.scope.log(format!("  fill(\"{shown}\")"));
+            self.scope.log(format!("  fill(\"{}\")", value.0));
         }
     }
 

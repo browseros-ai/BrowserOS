@@ -49,20 +49,14 @@
   const BASE64 =
     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
+  // QuickJS-ng's own `Uint8Array.prototype.toBase64` (TC39's), taken before the agent's code
+  // runs. A JS encoder that kept one string per three bytes held about 50 bytes of heap per three
+  // bytes encoded, so returning a multi-megabyte screenshot ran the realm's 64 MiB heap out
+  // before the reply's size was ever checked.
+  const encodeBase64 = Uint8Array.prototype.toBase64
+
   function toBase64(bytes) {
-    const parts = []
-    for (let index = 0; index < bytes.length; index += 3) {
-      const second = bytes[index + 1]
-      const third = bytes[index + 2]
-      const n = (bytes[index] << 16) | ((second ?? 0) << 8) | (third ?? 0)
-      parts.push(
-        BASE64[(n >> 18) & 63] +
-          BASE64[(n >> 12) & 63] +
-          (second === undefined ? '=' : BASE64[(n >> 6) & 63]) +
-          (third === undefined ? '=' : BASE64[n & 63]),
-      )
-    }
-    return parts.join('')
+    return encodeBase64.call(bytes)
   }
 
   function fromBase64(text) {

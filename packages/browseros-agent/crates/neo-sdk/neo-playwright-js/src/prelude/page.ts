@@ -47,6 +47,7 @@ import {
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
+import { checkInitOptions, Disposable, initSource } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
 import { markHandle, pick } from './options'
@@ -76,6 +77,15 @@ import type {
   PageFact,
   PageHandle,
 } from './wire'
+
+/** Page-scoped preferences; omitted values are retained and null clears just that override. */
+export type MediaOptions = {
+  media?: 'screen' | 'print' | null
+  colorScheme?: 'dark' | 'light' | 'no-preference' | null
+  reducedMotion?: 'reduce' | 'no-preference' | null
+  forcedColors?: 'active' | 'none' | null
+  contrast?: 'no-preference' | 'more' | null
+}
 
 export type CloseOptions = { runBeforeUnload?: boolean; reason?: string }
 
@@ -645,6 +655,32 @@ export class Page extends EventEmitter {
     return this._mainFrame._content('page.content')
   }
 
+  async emulateMedia(options: MediaOptions = {}): Promise<void> {
+    const api = 'page.emulateMedia'
+    const allowed = {
+      media: ['screen', 'print', 'no-override'],
+      colorScheme: ['dark', 'light', 'no-preference', 'no-override'],
+      reducedMotion: ['reduce', 'no-preference', 'no-override'],
+      forcedColors: ['active', 'none', 'no-override'],
+      contrast: ['no-preference', 'more', 'no-override'],
+    }
+    const input: Partial<Record<keyof MediaOptions, string>> = {}
+    for (const key of Object.keys(allowed) as (keyof MediaOptions)[]) {
+      const value = options[key] === null ? 'no-override' : options[key]
+      if (value === undefined) continue
+      if (typeof value !== 'string' || !allowed[key].includes(value))
+        throw clientError(
+          api,
+          `${key}: expected one of (${allowed[key].join('|')})`,
+        )
+      input[key] = value
+    }
+    await invoke('page.emulateMedia', this._mainFrame._call(api, 0), {
+      page: await this._brand(api),
+      ...input,
+    })
+  }
+
   addScriptTag(options: ScriptTagOptions = {}): Promise<ElementHandle> {
     return this._mainFrame._addTag(
       'page.addScriptTag',
@@ -678,6 +714,27 @@ export class Page extends EventEmitter {
       arg,
       options,
     )
+  }
+
+  /**
+   * upstream's `page.addInitScript`: the script runs in the main world of every document this
+   * page loads from now on, before the page's own scripts, until the run ends or the returned
+   * disposable is disposed. The document already loaded does not run it.
+   */
+  async addInitScript(
+    script: unknown,
+    arg?: unknown,
+    options?: unknown,
+  ): Promise<Disposable> {
+    const api = 'page.addInitScript'
+    checkInitOptions(api, script, options)
+    const source = initSource(api, script, arg)
+    const { id } = await invoke(
+      'page.addInitScript',
+      { api, timeoutMs: 0 },
+      { page: await this._brand(api), script: source },
+    )
+    return new Disposable(id)
   }
 
   waitForFunction(

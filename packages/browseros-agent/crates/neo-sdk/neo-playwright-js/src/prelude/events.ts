@@ -85,7 +85,8 @@ const UNREPORTED: Readonly<Record<string, string>> = {
   backgroundpage: 'Neo does not report extension background pages',
   crash: 'Neo does not report crashes; a crashed page fails its next call',
   pageclose: 'listen for close on the page itself: page.on("close")',
-  weberror: 'listen for pageerror on the page itself: page.on("pageerror")',
+  weberror:
+    'the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS',
 }
 
 /**

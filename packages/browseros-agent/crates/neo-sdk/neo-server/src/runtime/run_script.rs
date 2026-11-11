@@ -20,6 +20,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time;
 
+use super::fit_result::{self, ResultBlob};
 use super::install_web_globals::install_web_globals;
 use super::{Bridge, RunLogs};
 use crate::browser::PageRef;
@@ -80,12 +81,17 @@ pub(crate) struct ScriptEnd {
     pub(crate) outcome: ScriptOutcome,
     /// Its console output, within the run's limits.
     pub(crate) logs: RunLogs,
+    /// The bytes a returned value was too large to carry, which its blob markers name. The run
+    /// service writes them beside the trace before it answers; empty unless the value was over
+    /// `Defaults::MAX_RESULT_BYTES`.
+    pub(crate) blobs: Vec<ResultBlob>,
 }
 
 /// How a script ended.
 #[derive(Debug)]
 pub(crate) enum ScriptOutcome {
-    /// It returned this value, JSON-safe and within `Defaults::MAX_RESULT_BYTES`.
+    /// It returned this value, JSON-safe and within `Defaults::MAX_RESULT_BYTES` once its
+    /// largest bytes became blob markers ([`ScriptEnd::blobs`]).
     Returned(Value),
     /// A `NeoError` from one of its ops escaped: the run fails with that op's failure, exactly
     /// as the door decided it.
@@ -161,8 +167,9 @@ pub(crate) fn run_script<'a>(
     Box::pin(async move {
         let bridge = Arc::new(Bridge::new(Arc::clone(run), Arc::clone(dispatcher)));
         let cause = Arc::new(HaltCause::default());
+        let mut blobs = Vec::new();
         let outcome = match evaluate(run, &bridge, &cause, script).await {
-            Evaluated::Settled(json) => settle(&json, &bridge),
+            Evaluated::Settled(json) => settle(&json, &bridge, &mut blobs),
             Evaluated::Uncompiled(message) => {
                 ScriptOutcome::Failed(OperationError::script(ErrorCode::SYNTAX_ERROR, message))
             }
@@ -176,6 +183,7 @@ pub(crate) fn run_script<'a>(
         ScriptEnd {
             outcome,
             logs: bridge.take_logs(),
+            blobs,
         }
     })
 }
@@ -396,21 +404,30 @@ fn interrupt_handler(
     })
 }
 
-fn settle(json: &str, bridge: &Bridge) -> ScriptOutcome {
-    // Before parsing, so a huge value is refused without building its tree. A thrown error's
-    // text is not held to it: it parses into three strings, clipped below.
-    if json.starts_with(SETTLED_OK) && json.len() > Defaults::MAX_RESULT_BYTES + SETTLED_OVERHEAD {
-        return ScriptOutcome::Failed(OperationError::script(
-            ErrorCode::RESULT_TOO_LARGE,
-            format_args!(
-                "the script returned {} bytes of JSON; a run returns at most {} KiB, so return less \
-                 (a summary, or the fields you need)",
-                json.len(),
-                Defaults::MAX_RESULT_BYTES / 1024
-            ),
-        ));
-    }
+/// The script's settled JSON as its outcome. A returned value over the limit keeps its largest
+/// bytes in `blobs` and returns markers for them; a thrown error's text is not held to the limit,
+/// since it parses into three strings, clipped below. The realm's heap bounds `json`.
+fn settle(json: &str, bridge: &Bridge, blobs: &mut Vec<ResultBlob>) -> ScriptOutcome {
+    let over =
+        json.starts_with(SETTLED_OK) && json.len() > Defaults::MAX_RESULT_BYTES + SETTLED_OVERHEAD;
     match serde_json::from_str::<Settled>(json) {
+        Ok(Settled::Ok(mut value)) if over => {
+            match fit_result::fit_result(&mut value, Defaults::MAX_RESULT_BYTES) {
+                Ok(kept) => {
+                    *blobs = kept;
+                    ScriptOutcome::Returned(value)
+                }
+                Err(size) => ScriptOutcome::Failed(OperationError::script(
+                    ErrorCode::RESULT_TOO_LARGE,
+                    format_args!(
+                        "the script returned {size} bytes of JSON; a run returns at most {} KiB, so return \
+                     less (a summary, or the fields you need). Bytes (a Buffer) over the limit come \
+                     back as blobs the host reads, so return large text as Buffer.from(text)",
+                        Defaults::MAX_RESULT_BYTES / 1024
+                    ),
+                )),
+            }
+        }
         Ok(Settled::Ok(value)) => ScriptOutcome::Returned(value),
         Ok(Settled::Thrown(Thrown::Operation { operation_id })) => {
             match bridge.failure(operation_id) {

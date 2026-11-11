@@ -18,7 +18,7 @@ pub enum TraceError {
     /// A stored screenshot's file could not be read.
     #[error("screenshot file: {0}")]
     Screenshot(#[source] std::io::Error),
-    /// A file a run kept beside the trace (its downloads) could not be read.
+    /// A file a run kept beside the trace (a download or a reply blob) could not be read.
     #[error("run output file: {0}")]
     Output(#[source] std::io::Error),
     /// A stored row did not read back as a record (a newer schema, or a damaged file).

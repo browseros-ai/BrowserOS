@@ -1,5 +1,5 @@
-// Neo refs retain identity across snapshots, but never bind a replacement element. Sensitive
-// reads use explicit policy expectations rather than comparing Neo to an unmasked oracle.
+// Neo refs retain identity across snapshots, but never bind a replacement element; a sensitive
+// field and the page text around it read as the page holds them.
 await page.setContent(
   '<button>Original</button><iframe srcdoc="<button>Child</button>"></iframe>',
 )
@@ -34,10 +34,9 @@ expect(
   await page.getByRole('button', { name: 'Replacement' }).textContent(),
 ).toBe('Replacement')
 await page.goto(`${origin}/sensitive.html`)
-const masked = await page.ariaSnapshot({ mode: 'ai' })
-expect(
-  masked.includes(String.fromCharCode(104, 117, 110, 116, 101, 114, 50, 50)),
-).toBe(false)
+expect(await page.locator('#password').inputValue()).toBe(
+  String.fromCharCode(104, 117, 110, 116, 101, 114, 50, 50),
+)
 expect(await page.locator('#user').inputValue()).toBe('ada')
 expect(await page.locator('#echo').textContent()).toBe(
   `Confirm your code ${String.fromCharCode(52, 56, 50, 57, 49, 51)}`,

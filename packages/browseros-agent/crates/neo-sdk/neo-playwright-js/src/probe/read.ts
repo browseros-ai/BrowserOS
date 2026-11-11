@@ -1,7 +1,7 @@
 /**
  * Reads: `read` resolves one element and reads it in the same call, `readAll` reads every
- * match. Both run in the sealed world, so a value comes back through the seal: a password,
- * card or one-time-code field reads `••••`. Neither waits; Rust's retry loop does.
+ * match. Both run in the engine's isolated world, which reads the page's DOM as the page has
+ * it. Neither waits; Rust's retry loop does.
  *
  * Each read is upstream's callback from server/frames.ts at v1.64.1 (`textContent`,
  * `innerText`, `inputValue` and the rest), with the same checks and the same thrown
@@ -22,9 +22,7 @@ import type {
 import { queryAll, resolveTarget } from './resolve'
 import { frameSource, ProbeError, type World } from './world'
 
-/** A read's value, and the element it was read from (a label's control for `inputValue`). */
-type Reading = { value: unknown; from: Element }
-type Reader = (world: World, element: Element) => Reading
+type Reader = (world: World, element: Element) => unknown
 
 const XHTML = 'http://www.w3.org/1999/xhtml'
 
@@ -33,53 +31,35 @@ function readerFor(request: ReadRequest, root: Node | undefined): Reader {
   const { read, frameVisible } = request
   switch (read.kind) {
     case 'textContent':
-      return (_world, element) => ({
-        value: element.textContent,
-        from: element,
-      })
+      return (_world, element) => element.textContent
     case 'innerText':
       return (world, element) => {
         if (element.namespaceURI !== XHTML)
           throw world.injected.createStacklessError(
             'Node is not an HTMLElement',
           )
-        return { value: (element as HTMLElement).innerText, from: element }
+        return (element as HTMLElement).innerText
       }
     case 'innerHtml':
-      return (_world, element) => ({ value: element.innerHTML, from: element })
+      return (_world, element) => element.innerHTML
     case 'attribute':
-      return (_world, element) => ({
-        value: element.getAttribute(read.name),
-        from: element,
-      })
+      return (_world, element) => element.getAttribute(read.name)
     case 'inputValue':
       return inputValue
     case 'state':
       // Upstream's `elementState`: `visible` and `hidden` read the element itself and its
       // frames' visibility, the others follow a label to its control and throw on an element
       // the state does not apply to ("Not a checkbox or radio button").
-      return (world, element) => ({
-        value: world.injected.elementState(element, read.state, frameVisible)
-          .matches,
-        from: element,
-      })
+      return (world, element) =>
+        world.injected.elementState(element, read.state, frameVisible).matches
     case 'boundingBox':
-      return (_world, element) => ({ value: borderBox(element), from: element })
+      return (_world, element) => borderBox(element)
     case 'frameOrigin':
-      return (_world, element) => ({
-        value: frameOrigin(element),
-        from: element,
-      })
+      return (_world, element) => frameOrigin(element)
     case 'located':
-      return (world, element) => ({
-        value: located(world, request, element, root),
-        from: element,
-      })
+      return (world, element) => located(world, request, element, root)
     case 'checkable':
-      return (world, element) => ({
-        value: checkable(world, element),
-        from: element,
-      })
+      return (world, element) => checkable(world, element)
     case 'fileInput':
       return (world, element) => fileInput(world, element, read)
   }
@@ -96,7 +76,7 @@ function fileInput(
   world: World,
   element: Element,
   read: { multiple: boolean; directory: boolean },
-): Reading {
+): FileInput {
   const { injected } = world
   const control = injected.retarget(element, 'follow-label')
   if (control?.tagName !== 'INPUT')
@@ -115,12 +95,11 @@ function fileInput(
       '[webkitdirectory] input requires passing a path to a directory',
     )
   const pin = world.pins.add(input)
-  const value: FileInput = {
+  return {
     pin,
     target: element === input ? pin : world.pins.add(element),
     takesPaths: input.type === 'file',
   }
-  return { value, from: input }
 }
 
 /**
@@ -133,7 +112,7 @@ function checkable(world: World, element: Element): Checkable {
 }
 
 /** Upstream's `inputValue`: the control a label names, and only a form control. */
-function inputValue(world: World, element: Element): Reading {
+function inputValue(world: World, element: Element): string {
   const control = world.injected.retarget(element, 'follow-label')
   if (
     !control ||
@@ -144,7 +123,7 @@ function inputValue(world: World, element: Element): Reading {
     throw world.injected.createStacklessError(
       'Node is not an <input>, <textarea> or <select> element',
     )
-  return { value: (control as HTMLInputElement).value, from: control }
+  return (control as HTMLInputElement).value
 }
 
 /**
@@ -282,13 +261,12 @@ export function read(
       ? { kind: 'one' as const, element: root }
       : resolveTarget(world, request.target, request.strictness, root)
   if (found.kind !== 'one') return found
-  const { value, from } = reader(world, found.element)
-  return { kind: 'read', value, sensitive: world.seal.kind(from) }
+  return { kind: 'read', value: reader(world, found.element) }
 }
 
 /**
  * Every match now. The text reads are upstream's client `$$eval`s (run in the main world
- * there, through the seal here): `textContent || ''` and `innerText`, one per match in
+ * there, in the isolated world here): `textContent || ''` and `innerText`, one per match in
  * document order; an element without `innerText` (SVG) reads as ''.
  */
 export function readAll(

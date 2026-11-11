@@ -319,6 +319,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.emulateMedia": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "page.close": {
       effect: "write",
       target: "page",
@@ -374,12 +379,27 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.addInitScript": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "context.pages": {
       effect: "read",
       target: null,
       lifetime: "operation"
     },
     "context.newPage": {
+      effect: "write",
+      target: null,
+      lifetime: "operation"
+    },
+    "context.addInitScript": {
+      effect: "write",
+      target: null,
+      lifetime: "operation"
+    },
+    "disposable.dispose": {
       effect: "write",
       target: null,
       lifetime: "operation"
@@ -904,7 +924,8 @@
     "animations",
     "caret",
     "style",
-    "scale"
+    "scale",
+    "maskColor"
   ];
   var handles = new WeakSet;
   function markHandle(object) {
@@ -1629,6 +1650,41 @@
         return false;
       return this.every((byte, index) => byte === other[index]);
     }
+    readUInt8(offset = 0) {
+      return this.#readUnsigned(offset, 1, "be");
+    }
+    readUInt16BE(offset = 0) {
+      return this.#readUnsigned(offset, 2, "be");
+    }
+    readUInt16LE(offset = 0) {
+      return this.#readUnsigned(offset, 2, "le");
+    }
+    readUInt32BE(offset = 0) {
+      return this.#readUnsigned(offset, 4, "be");
+    }
+    readUInt32LE(offset = 0) {
+      return this.#readUnsigned(offset, 4, "le");
+    }
+    readInt32BE(offset = 0) {
+      return this.readUInt32BE(offset) | 0;
+    }
+    #readUnsigned(offset, width, order) {
+      if (typeof offset !== "number")
+        throw nodeError(TypeError, "ERR_INVALID_ARG_TYPE", `The "offset" argument must be of type number. ${received(offset)}`);
+      if (Math.floor(offset) !== offset)
+        throw outOfRange("offset", "an integer", offset);
+      const last = this.length - width;
+      if (last < 0)
+        throw nodeError(RangeError, "ERR_BUFFER_OUT_OF_BOUNDS", "Attempt to access memory outside buffer bounds");
+      if (offset < 0 || offset > last)
+        throw outOfRange("offset", `>= 0 and <= ${last}`, offset);
+      let value = 0;
+      for (let index = 0;index < width; index++) {
+        const at = order === "be" ? offset + index : offset + width - index - 1;
+        value = value * 256 + (this[at] ?? 0);
+      }
+      return value;
+    }
     slice(start, end) {
       return this.subarray(start, end);
     }
@@ -1971,7 +2027,7 @@
     backgroundpage: "Neo does not report extension background pages",
     crash: "Neo does not report crashes; a crashed page fails its next call",
     pageclose: 'listen for close on the page itself: page.on("close")',
-    weberror: 'listen for pageerror on the page itself: page.on("pageerror")'
+    weberror: "the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS"
   };
   function checkReported(api, event, reported) {
     if (typeof event !== "string")
@@ -2316,6 +2372,56 @@
       return chooser;
     }
   }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/init-script.ts
+  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  function checkInitOptions(api, script, options) {
+    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+      throw plainError(api, TOO_MANY_ARGUMENTS);
+    if (!options || !Reflect.get(options, "exposeFunctions"))
+      return;
+    if (typeof script !== "function")
+      throw plainError(api, "Passing functions requires the init script to be a function");
+    throw unsupportedError(api, "pages cannot call back into the script in Neo; pass values the page can use instead");
+  }
+  function initSource(api, script, arg) {
+    if (typeof script === "function") {
+      const argText = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
+      return { source: `(${String(script)})(${argText})` };
+    }
+    if (arg !== undefined)
+      throw plainError(api, "Cannot evaluate a string with arguments");
+    if (typeof script === "string")
+      return { source: script };
+    if (typeof script === "object" && script !== null) {
+      const content = Reflect.get(script, "content");
+      if (content !== undefined)
+        return { source: String(content) };
+      const path = Reflect.get(script, "path");
+      if (path !== undefined)
+        return { path: String(path) };
+    }
+    throw plainError(api, "Either path or content property must be present");
+  }
+
+  class Disposable {
+    #id;
+    constructor(id) {
+      this.#id = id;
+    }
+    async dispose() {
+      await invoke("disposable.dispose", { api: "disposable.dispose", timeoutMs: 0 }, { id: this.#id });
+    }
+  }
+  var asyncDispose = Reflect.get(Symbol, "asyncDispose");
+  if (typeof asyncDispose === "symbol")
+    Object.defineProperty(Disposable.prototype, asyncDispose, {
+      configurable: true,
+      writable: true,
+      value() {
+        return this.dispose();
+      }
+    });
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers.ts
   var kFunctionBindingPrefix = "__pw_fn_";
@@ -7473,10 +7579,7 @@ ${value.stack}`;
     async _screenshot(api, selector, options = {}) {
       if (options.path !== undefined)
         throw unsupportedError(api, "Neo returns the image instead of writing a file; omit path");
-      const refused = refusedScreenshotOption(options);
-      if (refused !== undefined)
-        throw unsupportedError(api, refused);
-      const wire = pick(options, SCREENSHOT_KEYS);
+      const wire = await screenshotOptions(api, options);
       const { timeout, signal } = this._wait(api, options);
       const page = await this._page._brand(api);
       if (selector === null)
@@ -7583,10 +7686,16 @@ ${value.stack}`;
     }
     return Boolean(url(frame.url()));
   }
-  function refusedScreenshotOption(options) {
-    if (options.mask !== undefined && options.mask.length > 0)
-      return "Neo cannot mask elements in a screenshot; omit mask";
-    return;
+  async function screenshotOptions(api, options) {
+    const wire = pick(options, SCREENSHOT_KEYS);
+    if (options.mask !== undefined) {
+      wire.mask = await Promise.all(options.mask.map((locator) => {
+        if (!(locator instanceof Locator))
+          throw clientError(api, "mask: expected a Locator");
+        return locator._frame._locatorBrand(api, locator._selector);
+      }));
+    }
+    return wire;
   }
   var HELD_VALUE = "Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()";
 
@@ -7626,7 +7735,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
-  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  var TOO_MANY_ARGUMENTS2 = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
   var REFUSALS = {
     unsupported: unsupportedError,
     client: clientError,
@@ -7642,11 +7751,11 @@ ${value.stack}`;
   }
   function assertMaxArguments(api, count, max) {
     if (count > max)
-      throw plainError(api, TOO_MANY_ARGUMENTS);
+      throw plainError(api, TOO_MANY_ARGUMENTS2);
   }
   function assertEvaluateOptions(options) {
     if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS);
+      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS2);
   }
   function refuseExposedFunctions(api, options) {
     if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
@@ -8011,10 +8120,7 @@ ${value.stack}`;
       const api = "elementHandle.screenshot";
       if (options.path !== undefined)
         throw unsupportedError(api, "Neo returns the image instead of writing a file; omit path");
-      const refused = refusedScreenshotOption(options);
-      if (refused !== undefined)
-        throw unsupportedError(api, refused);
-      const wire = pick(options, SCREENSHOT_KEYS);
+      const wire = await screenshotOptions(api, options);
       return await invoke("page.screenshot", { api, timeoutMs: timeoutMs(api, this.#timeout(options)) }, {
         page: await this._page._brand(api),
         target: this._brand,
@@ -8416,6 +8522,29 @@ ${value.stack}`;
     content() {
       return this._mainFrame._content("page.content");
     }
+    async emulateMedia(options = {}) {
+      const api = "page.emulateMedia";
+      const allowed = {
+        media: ["screen", "print", "no-override"],
+        colorScheme: ["dark", "light", "no-preference", "no-override"],
+        reducedMotion: ["reduce", "no-preference", "no-override"],
+        forcedColors: ["active", "none", "no-override"],
+        contrast: ["no-preference", "more", "no-override"]
+      };
+      const input = {};
+      for (const key of Object.keys(allowed)) {
+        const value = options[key] === null ? "no-override" : options[key];
+        if (value === undefined)
+          continue;
+        if (typeof value !== "string" || !allowed[key].includes(value))
+          throw clientError(api, `${key}: expected one of (${allowed[key].join("|")})`);
+        input[key] = value;
+      }
+      await invoke("page.emulateMedia", this._mainFrame._call(api, 0), {
+        page: await this._brand(api),
+        ...input
+      });
+    }
     addScriptTag(options = {}) {
       return this._mainFrame._addTag("page.addScriptTag", "page.addScriptTag", options);
     }
@@ -8428,6 +8557,13 @@ ${value.stack}`;
     async evaluate(pageFunction, arg, options) {
       assertMaxArguments("page.evaluate", arguments.length, 3);
       return await this._mainFrame._evaluate("page.evaluate", pageFunction, arg, options);
+    }
+    async addInitScript(script, arg, options) {
+      const api = "page.addInitScript";
+      checkInitOptions(api, script, options);
+      const source = initSource(api, script, arg);
+      const { id } = await invoke("page.addInitScript", { api, timeoutMs: 0 }, { page: await this._brand(api), script: source });
+      return new Disposable(id);
     }
     waitForFunction(pageFunction, arg, options) {
       return this._mainFrame._waitForFunction("page.waitForFunction", pageFunction, arg, options);
@@ -8888,6 +9024,13 @@ ${value.stack}`;
     }
     serviceWorkers() {
       return [];
+    }
+    async addInitScript(script, arg, options) {
+      const api = "browserContext.addInitScript";
+      checkInitOptions(api, script, options);
+      const source = initSource(api, script, arg);
+      const { id } = await invoke("context.addInitScript", { api, timeoutMs: 0 }, { script: source });
+      return new Disposable(id);
     }
     async newPage() {
       return await this.#openPage("browserContext.newPage");
@@ -9660,7 +9803,6 @@ Timeout: ${timeout}ms`);
     },
     BrowserContext: {
       addCookies: PROFILE,
-      addInitScript: "init scripts are not available in Neo; run page.evaluate() after page.goto()",
       clearCookies: PROFILE,
       clearPermissions: "permissions are the owner's profile settings",
       close: OWNED,
@@ -9699,19 +9841,17 @@ Timeout: ${timeout}ms`);
       tracing: { hint: TRACE, kind: "property" }
     },
     Page: {
-      addInitScript: "init scripts are not available in Neo; run page.evaluate() after page.goto()",
       addLocatorHandler: "locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting",
       bringToFront: "Neo keeps agent tabs in the background; act on the page directly",
       cancelPickLocator: NO_INSPECTOR,
-      clearConsoleMessages: 'Neo keeps no console history; listen with page.on("console")',
-      clearPageErrors: 'Neo keeps no error history; listen with page.on("pageerror")',
-      consoleMessages: 'Neo keeps no console history; listen with page.on("console") before the page logs',
-      emulateMedia: "media emulation is not available in Neo",
+      clearConsoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
+      clearPageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
+      consoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
       evaluateHandle: NO_HANDLES,
       exposeBinding: "pages cannot call back into the script; read state with page.evaluate()",
       exposeFunction: "pages cannot call back into the script; read state with page.evaluate()",
       hideHighlight: NO_INSPECTOR,
-      pageErrors: 'Neo keeps no error history; listen with page.on("pageerror") before the page fails',
+      pageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
       pause: NO_INSPECTOR,
       pickLocator: NO_INSPECTOR,
       removeLocatorHandler: "locator handlers are not available in Neo",

@@ -13,15 +13,18 @@ use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_output::to_output;
 use crate::op_scope::OpScope;
-use crate::op_spec::{OpSpec, OpTarget};
-use crate::page::PageHandle;
+use crate::op_spec::{Capability, OpSpec, OpTarget};
+use crate::page::{PageHandle, init_script};
 use crate::{Playwright, PlaywrightError};
 
 listed_enum! {
-    /// The one browser context a run sees: its tabs, and opening a new one.
+    /// The one browser context a run sees: its tabs, opening a new one, and the init scripts it
+    /// gives every tab the run writes to, with the disposable each registration returns.
     pub(crate) enum ContextOp {
         Pages,
         NewPage,
+        AddInitScript,
+        Dispose,
     }
 }
 
@@ -37,11 +40,24 @@ impl ContextOp {
             Self::NewPage => {
                 OpSpec::write("context.newPage", OpTarget::None, "open a background tab")
             }
+            Self::AddInitScript => OpSpec::write(
+                "context.addInitScript",
+                OpTarget::None,
+                "run a script in the main world of every new document of each tab the run \
+                 writes to, until the run ends",
+            )
+            .using(&[Capability::MainWorld, Capability::HostFiles])
+            .policed(),
+            Self::Dispose => OpSpec::write(
+                "disposable.dispose",
+                OpTarget::None,
+                "remove what an addInitScript registered",
+            ),
         }
     }
 }
 
-/// Neither op takes arguments beyond the call header.
+/// `context.pages` and `context.newPage` take no arguments beyond the call header.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NoArgs {}
@@ -67,51 +83,65 @@ pub(crate) async fn invoke(
     op: ContextOp,
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
-    let NoArgs {} = args.decode(scope)?;
-    let core = |error| scope.core_error(&error);
     match op {
         ContextOp::Pages => {
-            let listing = scope.view().list_pages().await.map_err(core)?;
-            let pages = listing
-                .pages
-                .into_iter()
-                .map(|page| PageEntry {
-                    page: PageHandle::new(page.tab_id),
-                    url: page.url,
-                })
-                .collect();
-            to_output(scope, &Pages { pages })
+            let NoArgs {} = args.decode(scope)?;
+            pages(scope).await
         }
         ContextOp::NewPage => {
-            // The list of tabs open at the instance's start must be read before this tab
-            // exists, or a newPage right after `Playwright::new` lands in that list and its
-            // refs print from the random base (`f250e3`) instead of bare (`e3`). Measured by
-            // conformance Runner N, whose first op in a new instance is this one.
-            pw.pages().note_open_tabs(pw.browser()).await;
-            let _sent = scope.send_effect()?;
-            // Core opens it in the background and keeps focus emulation on, as for every tab it
-            // opens for the agent.
-            let opened = scope
-                .view()
-                .new_page(
-                    "about:blank",
-                    NewPageOptions {
-                        background: Some(true),
-                        ..NewPageOptions::default()
-                    },
-                )
-                .await
-                .map_err(core)?;
-            ready(pw, scope, &opened).await;
-            to_output(
-                scope,
-                &PageEntry {
-                    page: PageHandle::new(opened.tab_id),
-                    url: opened.url,
-                },
-            )
+            let NoArgs {} = args.decode(scope)?;
+            new_page(pw, scope).await
         }
+        ContextOp::AddInitScript => init_script::add_to_context(scope, args.decode(scope)?).await,
+        ContextOp::Dispose => init_script::dispose(scope, args.decode(scope)?).await,
     }
+}
+
+async fn pages(scope: &OpScope<'_>) -> Result<Value, PlaywrightError> {
+    let listing = scope
+        .view()
+        .list_pages()
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    let pages = listing
+        .pages
+        .into_iter()
+        .map(|page| PageEntry {
+            page: PageHandle::new(page.tab_id),
+            url: page.url,
+        })
+        .collect();
+    to_output(scope, &Pages { pages })
+}
+
+async fn new_page(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightError> {
+    // The list of tabs open at the instance's start must be read before this tab
+    // exists, or a newPage right after `Playwright::new` lands in that list and its
+    // refs print from the random base (`f250e3`) instead of bare (`e3`). Measured by
+    // conformance Runner N, whose first op in a new instance is this one.
+    pw.pages().note_open_tabs(pw.browser()).await;
+    let _sent = scope.send_effect()?;
+    // Core opens it in the background and keeps focus emulation on, as for every tab it
+    // opens for the agent.
+    let opened = scope
+        .view()
+        .new_page(
+            "about:blank",
+            NewPageOptions {
+                background: Some(true),
+                ..NewPageOptions::default()
+            },
+        )
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    ready(pw, scope, &opened).await;
+    to_output(
+        scope,
+        &PageEntry {
+            page: PageHandle::new(opened.tab_id),
+            url: opened.url,
+        },
+    )
 }
 
 /// Readies the tab `newPage` just opened, as upstream's `newPage` does before it returns:

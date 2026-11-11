@@ -11,12 +11,7 @@
  *   focus, blur, dispatchEvent
  *   setFiles       upstream's injected.setInputFiles, for setInputFiles payloads (files.ts)
  *
- * The seal masks a sensitive textarea's value, so upstream's `selectionEnd = value.length`
- * would select only the mask's four characters, and a fill would then type over part of the
- * field. Both selections are redone here with the seal's raw length (design D14). Inputs need
- * no help: `select()` reads no value.
- *
- * `dispatchEvent` runs here, in the sealed world, where upstream runs it in the main world.
+ * `dispatchEvent` runs here, in the isolated world, where upstream runs it in the main world.
  * The event reaches the page's listeners the same way (it is not trusted either way), and its
  * init is JSON, so no page object crosses into this world.
  */
@@ -32,9 +27,7 @@ function apply(world: World, edit: Edit, element: Element): Edited {
   switch (edit.kind) {
     case 'fill': {
       const filled = injected.fill(element, edit.value)
-      if (filled === 'error:notconnected') return filled
-      if (filled === 'needsinput') selectSensitiveText(world, element)
-      return valueReply(filled)
+      return filled === 'error:notconnected' ? filled : valueReply(filled)
     }
     case 'selectOptions': {
       const selected = injected.selectOptions(element, edit.options)
@@ -42,7 +35,6 @@ function apply(world: World, edit: Edit, element: Element): Edited {
     }
     case 'selectText': {
       const selected = injected.selectText(element)
-      if (selected === 'done') selectSensitiveText(world, element)
       return selected === 'done' ? valueReply(null) : selected
     }
     case 'focus':
@@ -63,20 +55,6 @@ function valueReply(value: unknown): Value {
 
 function doneOf(result: 'error:notconnected' | 'done'): Edited {
   return result === 'done' ? valueReply(null) : result
-}
-
-/**
- * The whole text of a sensitive textarea, which upstream's selectText (also inside fill)
- * selected only as far as the seal's mask reaches. It follows a label to its control, as
- * upstream's retarget does.
- */
-function selectSensitiveText(world: World, element: Element): void {
-  const control = world.injected.retarget(element, 'follow-label')
-  if (control?.nodeName.toLowerCase() !== 'textarea') return
-  if (world.seal.kind(control) === null) return
-  const textarea = control as HTMLTextAreaElement
-  textarea.selectionStart = 0
-  textarea.selectionEnd = world.seal.rawLength(textarea)
 }
 
 export function edit(world: World, request: EditRequest): ReplyTo<'edit'> {

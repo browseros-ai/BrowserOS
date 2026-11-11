@@ -1,5 +1,6 @@
 // biome-ignore-all lint/suspicious/noUndeclaredEnvVars: This standalone Node harness is not a Turbo task.
 /** Loads v1's exact production sources in Node's main realm, with a private bootstrap holder. */
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
@@ -77,6 +78,13 @@ export async function openClaw(cdpPort, options = {}, { onUncaught } = {}) {
         { filename },
       )(holder, holder.__neo)
     }
+    // Node libraries (including Playwright's image comparators) require Node Buffer identity.
+    // Adapt bytes at this host boundary through the bootstrap's public hooks, leaving the
+    // production bundles and their QuickJS Buffer implementation unchanged.
+    holder.__neo.brands.register('bytes', (json) =>
+      Buffer.from(String(json.base64 ?? ''), 'base64'),
+    )
+    holder.__neo.provide('Buffer', () => Buffer)
     const names = holder.__neo.parameters().split(/,\s*/)
     let ready
     let entered = false

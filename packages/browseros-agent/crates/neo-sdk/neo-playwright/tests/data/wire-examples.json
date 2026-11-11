@@ -1,6 +1,17 @@
 {
   "about": "Every op input the prelude sends, recorded by crates/neo-sdk/neo-playwright-js/scripts/wire-examples.ts. Do not edit: run bun run build in crates/neo-sdk/neo-playwright-js.",
   "ops": {
+    "context.addInitScript": [
+      {
+        "call": {
+          "api": "browserContext.addInitScript",
+          "timeoutMs": 0
+        },
+        "script": {
+          "source": "window.b = 1"
+        }
+      }
+    ],
     "context.newPage": [
       {
         "call": {
@@ -33,6 +44,15 @@
           "tab": 1007
         },
         "dialog": 4
+      }
+    ],
+    "disposable.dispose": [
+      {
+        "call": {
+          "api": "disposable.dispose",
+          "timeoutMs": 0
+        },
+        "id": 1
       }
     ],
     "download.path": [
@@ -1992,6 +2012,34 @@
         "deltaY": 9
       }
     ],
+    "page.addInitScript": [
+      {
+        "call": {
+          "api": "page.addInitScript",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "script": {
+          "source": "((a) => { window.a = a })(1)"
+        }
+      },
+      {
+        "call": {
+          "api": "page.addInitScript",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "script": {
+          "path": "Cargo.toml"
+        }
+      }
+    ],
     "page.addScriptTag": [
       {
         "call": {
@@ -2066,6 +2114,23 @@
           "$neo": "page",
           "tab": 1007
         }
+      }
+    ],
+    "page.emulateMedia": [
+      {
+        "call": {
+          "api": "page.emulateMedia",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "media": "print",
+        "colorScheme": "dark",
+        "reducedMotion": "reduce",
+        "forcedColors": "active",
+        "contrast": "more"
       }
     ],
     "page.evaluate": [
