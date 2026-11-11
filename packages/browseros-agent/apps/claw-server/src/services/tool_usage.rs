@@ -1,7 +1,7 @@
 //! Daily tool call totals for this install, reported once each UTC day is over.
 
 use crate::{
-    analytics::{AnalyticsService, events::TOOL_CALLS_DAILY},
+    analytics::{AnalyticsService, Delivery, events::TOOL_CALLS_DAILY},
     db::{
         run_error_budget::utc_day,
         tool_calls_daily::{ToolCallCount, ToolCallsDailyRepository},
@@ -32,8 +32,9 @@ pub async fn record_tool_call(
     }
 }
 
-/// Sends one event per finished UTC day, then forgets that day. When events cannot leave this
-/// process (opted out, no project key, hosted), the held counts are dropped instead.
+/// Sends one event per finished UTC day and forgets a day once PostHog has it. A failed send keeps
+/// the day for the next attempt. When events cannot leave this process (opted out, no project
+/// key, hosted), the held counts are dropped instead.
 pub async fn flush_finished_days(
     repo: &ToolCallsDailyRepository,
     analytics: &AnalyticsService,
@@ -45,20 +46,30 @@ pub async fn flush_finished_days(
     }
     let mut sent = 0;
     for day in repo.days_before(&utc_day(now_ms)).await? {
+        let Some(midnight_ms) = utc_midnight_ms(&day) else {
+            repo.delete_day(&day).await?;
+            continue;
+        };
         let counts = repo.counts(&day).await?;
-        // The event is dated noon of its day, so it lands on that date in any project timezone
-        // within twelve hours of UTC.
-        if let Some(midnight_ms) = utc_midnight_ms(&day)
-            && analytics.capture_once(
+        // Dated noon of its day, so the event lands on that date in any project timezone within
+        // twelve hours of UTC.
+        match analytics
+            .send_once(
                 TOOL_CALLS_DAILY,
                 daily_properties(&day, &counts),
                 midnight_ms + NOON_MS,
                 &day,
             )
+            .await
         {
-            sent += 1;
+            Delivery::Sent => {
+                sent += 1;
+                repo.delete_day(&day).await?;
+            }
+            Delivery::Dropped => repo.delete_day(&day).await?,
+            // Most likely offline; the remaining days would fail the same way.
+            Delivery::Failed => break,
         }
-        repo.delete_day(&day).await?;
     }
     Ok(sent)
 }
@@ -103,7 +114,13 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use axum::{Router, body::Bytes, http::StatusCode, routing::any};
-    use std::time::Duration;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicU16, Ordering},
+        },
+        time::Duration,
+    };
     use tempfile::{TempDir, tempdir};
     use tokio::{
         net::TcpListener,
@@ -117,6 +134,7 @@ mod tests {
         repo: ToolCallsDailyRepository,
         analytics: AnalyticsService,
         received: UnboundedReceiver<Value>,
+        status: Arc<AtomicU16>,
         _dir: TempDir,
     }
 
@@ -126,13 +144,17 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let host = format!("http://{}", listener.local_addr()?);
         let (sender, received) = unbounded_channel();
+        let status = Arc::new(AtomicU16::new(200));
+        let reply = status.clone();
         let app = Router::new().fallback(any(move |body: Bytes| {
             let sender = sender.clone();
+            let reply = reply.clone();
             async move {
                 if let Ok(value) = serde_json::from_slice::<Value>(&body) {
                     let _ = sender.send(value);
                 }
-                StatusCode::OK
+                StatusCode::from_u16(reply.load(Ordering::SeqCst))
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
             }
         }));
         tokio::spawn(async move {
@@ -146,6 +168,7 @@ mod tests {
             repo: ToolCallsDailyRepository::new(db),
             analytics,
             received,
+            status,
             _dir: dir,
         })
     }
@@ -198,7 +221,7 @@ mod tests {
         assert_eq!(sent, 1, "only the finished day is sent");
 
         let body = harness.next_event().await?;
-        assert_eq!(body["event"], "tool_calls_daily");
+        assert_eq!(body["event"], TOOL_CALLS_DAILY.name());
         assert_eq!(body["timestamp"], "2026-11-10T12:00:00");
         let properties = &body["properties"];
         assert_eq!(properties["day"], "2026-11-10");
@@ -241,6 +264,31 @@ mod tests {
 
         assert_eq!(first["uuid"], second["uuid"]);
         assert_eq!(first["timestamp"], second["timestamp"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_day_posthog_did_not_accept_is_kept_and_sent_later() -> anyhow::Result<()> {
+        let mut harness = harness(true).await?;
+        let tomorrow = NOV_10_NOON + DAY_MS;
+        harness.call("tabs", "Codex", false, NOV_10_NOON).await;
+
+        harness.status.store(400, Ordering::SeqCst);
+        assert_eq!(
+            flush_finished_days(&harness.repo, &harness.analytics, tomorrow).await?,
+            0
+        );
+        let rejected = harness.next_event().await?;
+        assert_eq!(harness.repo.counts("2026-11-10").await?.len(), 1);
+
+        harness.status.store(200, Ordering::SeqCst);
+        assert_eq!(
+            flush_finished_days(&harness.repo, &harness.analytics, tomorrow).await?,
+            1
+        );
+        let accepted = harness.next_event().await?;
+        assert_eq!(rejected["uuid"], accepted["uuid"]);
+        assert!(harness.repo.counts("2026-11-10").await?.is_empty());
         Ok(())
     }
 

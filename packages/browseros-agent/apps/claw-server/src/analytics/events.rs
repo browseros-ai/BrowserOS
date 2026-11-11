@@ -164,7 +164,7 @@ impl PropertyDefinition {
                 is_calendar_day(raw).then(|| Value::String(raw.to_string()))
             }
             PropertyKind::ToolCounts => normalize_counts(value, |tool| {
-                if known_tool_names().contains(tool) {
+                if known_tool_names().contains(tool) || SERVER_TOOL_NAMES.contains(&tool) {
                     tool.to_string()
                 } else {
                     OTHER_TOOL.to_string()
@@ -225,6 +225,17 @@ fn normalize_token(value: &Value, accepted: &[&str]) -> Option<Value> {
         .contains(&raw)
         .then(|| Value::String(raw.to_string()))
 }
+
+/// Tools the server registers next to the shared browser catalog. Daily counts keep their names;
+/// anything else is reported as `other`.
+const SERVER_TOOL_NAMES: [&str; 6] = [
+    "save_skill",
+    "mark_skill_run",
+    "run_skill",
+    "request_human_help",
+    "await_human_help",
+    "solve_captcha",
+];
 
 fn known_tool_names() -> &'static HashSet<&'static str> {
     static KNOWN_TOOL_NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
@@ -935,7 +946,12 @@ mod tests {
             "total_calls": 9,
             "error_calls": 1,
             "distinct_tools": 3,
-            "by_tool": { "navigate": 4, "https://example.com/private": 2, "custom_tool": 3 },
+            "by_tool": {
+                "navigate": 4,
+                "save_skill": 1,
+                "https://example.com/private": 2,
+                "custom_tool": 3
+            },
             "by_client": { "Claude Code": 6, "claude-code": 1, "Codex": 2 },
             "url": "https://example.com"
         }));
@@ -946,7 +962,7 @@ mod tests {
                 "total_calls": 9,
                 "error_calls": 1,
                 "distinct_tools": 3,
-                "by_tool": { "navigate": 4, "other": 5 },
+                "by_tool": { "navigate": 4, "other": 5, "save_skill": 1 },
                 "by_client": { "claude-code": 7, "codex": 2 }
             }))
         );

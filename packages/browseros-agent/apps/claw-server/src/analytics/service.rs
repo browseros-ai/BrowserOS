@@ -86,6 +86,17 @@ fn non_empty_value(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
+/// What became of an event sent with [`AnalyticsService::send_once`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// PostHog accepted it.
+    Sent,
+    /// It can never be sent: no consent or project key, or its properties were rejected.
+    Dropped,
+    /// The request failed and may succeed later.
+    Failed,
+}
+
 #[derive(Clone)]
 struct ActiveClient {
     client: Arc<Client>,
@@ -230,31 +241,39 @@ impl AnalyticsService {
         self.active_client().is_some()
     }
 
-    /// Captures an event that describes a finished period, stamped at `timestamp_ms` and given
-    /// an id derived from the install and `dedupe_key`. Sending the same key again yields the
-    /// same id, which PostHog collapses, so a retried send cannot count twice.
-    pub fn capture_once(
+    /// Sends an event that describes a finished period and waits for PostHog to accept it. The
+    /// event is stamped at `timestamp_ms` and given an id derived from the install and
+    /// `dedupe_key`, so sending the same key again yields the same id and PostHog keeps one copy.
+    pub async fn send_once(
         &self,
         definition: EventDefinition,
         properties: Value,
         timestamp_ms: i64,
         dedupe_key: &str,
-    ) -> bool {
+    ) -> Delivery {
         let Some(active) = self.active_client() else {
-            return false;
+            return Delivery::Dropped;
         };
         let Some(mut event) = build_event(&active, definition, properties) else {
-            return false;
+            return Delivery::Dropped;
         };
         let Some(timestamp) = chrono::DateTime::from_timestamp_millis(timestamp_ms) else {
-            return false;
+            return Delivery::Dropped;
         };
         if event.set_timestamp(timestamp).is_err() {
-            return false;
+            return Delivery::Dropped;
         }
         event.set_uuid(dedupe_uuid(&active.distinct_id, definition, dedupe_key));
-        active.client.capture(event);
-        true
+        match active.client.capture_immediate(event).await {
+            Ok(summary) if summary.submitted() == 1 && summary.not_persisted() == 0 => {
+                Delivery::Sent
+            }
+            Ok(_) => Delivery::Dropped,
+            Err(error) => {
+                tracing::debug!(%error, event = definition.name(), "analytics send failed");
+                Delivery::Failed
+            }
+        }
     }
 
     pub async fn shutdown(&self) {

@@ -832,6 +832,7 @@ async fn tests_that_explicit_grouping_never_sends_the_cleanup_tip() -> anyhow::R
 #[tokio::test]
 async fn mcp_tool_calls_are_counted_for_the_day() -> anyhow::Result<()> {
     let app = test_app().await?;
+    let started_ms = epoch_ms()?;
     for arguments in [
         json!({ "name": "first" }),
         json!({ "name": "second" }),
@@ -846,21 +847,30 @@ async fn mcp_tool_calls_are_counted_for_the_day() -> anyhow::Result<()> {
         .await?;
     }
 
-    let now_ms = i64::try_from(
+    // The calls may straddle UTC midnight, so add up every day the test spanned.
+    let mut days = vec![
+        claw_server::db::run_error_budget::utc_day(started_ms),
+        claw_server::db::run_error_budget::utc_day(epoch_ms()?),
+    ];
+    days.dedup();
+    let (mut calls, mut error_calls) = (0, 0);
+    for day in days {
+        for count in app.state.tool_calls_daily.counts(&day).await? {
+            assert_eq!(count.tool_name, "name_session");
+            calls += count.calls;
+            error_calls += count.error_calls;
+        }
+    }
+    assert_eq!((calls, error_calls), (3, 1));
+    Ok(())
+}
+
+fn epoch_ms() -> anyhow::Result<i64> {
+    Ok(i64::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_millis(),
-    )?;
-    let counts = app
-        .state
-        .tool_calls_daily
-        .counts(&claw_server::db::run_error_budget::utc_day(now_ms))
-        .await?;
-    assert_eq!(counts.len(), 1, "{counts:?}");
-    assert_eq!(counts[0].tool_name, "name_session");
-    assert_eq!(counts[0].calls, 3);
-    assert_eq!(counts[0].error_calls, 1);
-    Ok(())
+    )?)
 }
 
 #[tokio::test]
