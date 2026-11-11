@@ -145,6 +145,20 @@ describe('Copy on a run row', () => {
     expect(await written[0]).toContain('finished later')
   })
 
+  it('copies an open row from the run as it is now, even while the row still shows an older detail', async () => {
+    await table(new Set([second.id]))
+    const { clipboard, written } = fakeClipboard()
+    Object.assign(navigator, { clipboard })
+    delete (globalThis as Record<string, unknown>).ClipboardItem
+    // The server's run moves on; the open row's cached detail has not been refetched yet.
+    details.set(second.id, {
+      ...second,
+      reply: { ...second.reply, text: 'finished since' },
+    })
+    await dom.interact(() => fire(copyButton(2), 'click'))
+    expect(await written[0]).toContain('finished since')
+  })
+
   it('a second copy keeps "Copied" for another 1.5 s', async () => {
     await table()
     const { clipboard } = fakeClipboard()

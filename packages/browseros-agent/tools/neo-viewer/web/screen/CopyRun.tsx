@@ -3,9 +3,11 @@
  * to paste into any agent and ask about it. The block comes from `shared/run-markdown.ts`, the
  * renderer the export's `runs/NNN.md` uses, so the two never drift; Copy shows the whole reply.
  *
- * A closed row has no detail loaded, so Copy fetches it. The clipboard is handed a promise of the
- * text (`ClipboardItem`) at the click, so the write keeps the click's user activation however long
- * the fetch takes; a browser without `ClipboardItem` gets `writeText` once the text is ready.
+ * Copy fetches the run at the click, open row or closed: a row's detail is a cache that can lag
+ * the run (closed, it stops refreshing; reopened, it shows the old value until its refetch lands),
+ * and a copy must hold the reply as it is now. The clipboard is handed a promise of the text
+ * (`ClipboardItem`) at the click, so the write keeps the click's user activation however long the
+ * fetch takes; a browser without `ClipboardItem` gets `writeText` once the text is ready.
  *
  * The button is a sibling of the row's button, laid over the row's end (`RunRow`'s copy slot),
  * not inside it: a button cannot hold a button, and a click on Copy never opens or closes the row.
@@ -17,7 +19,7 @@ import { apiRoutes } from '../../shared/api'
 import { runMarkdown } from '../../shared/run-markdown'
 
 /** The run's Markdown as Copy writes it: the shared renderer, with no limit on the reply. */
-export function runCopyText(detail: RunDetail): string {
+function runCopyText(detail: RunDetail): string {
   return runMarkdown(detail, { replyChars: null })
 }
 
@@ -28,17 +30,9 @@ async function fetchDetail(runId: string): Promise<RunDetail> {
   return ((await response.json()) as RunResponse).run
 }
 
-/**
- * Writes the run's Markdown to the clipboard: from `detail` when the row is open (it is kept
- * current while open), else from the run fetched now.
- */
-export async function copyRun(
-  run: RunSummary,
-  detail: RunDetail | null,
-): Promise<void> {
-  const text = (detail ? Promise.resolve(detail) : fetchDetail(run.id)).then(
-    runCopyText,
-  )
+/** Writes the run's Markdown to the clipboard, from the run as the server holds it now. */
+async function copyRun(run: RunSummary): Promise<void> {
+  const text = fetchDetail(run.id).then(runCopyText)
   if (typeof ClipboardItem === 'undefined') {
     await navigator.clipboard.writeText(await text)
     return
@@ -59,11 +53,9 @@ type CopyState = 'idle' | 'copied' | 'failed'
 
 export function CopyRunButton({
   run,
-  detail,
   open,
 }: {
   run: RunSummary
-  detail: RunDetail | null
   /** An open row always shows Copy; a closed one on hover and keyboard focus. */
   open: boolean
 }) {
@@ -105,7 +97,7 @@ export function CopyRunButton({
         aria-label={label}
         title={label}
         onClick={() => {
-          copyRun(run, detail).then(
+          copyRun(run).then(
             () => finish('copied'),
             () => finish('failed'),
           )
