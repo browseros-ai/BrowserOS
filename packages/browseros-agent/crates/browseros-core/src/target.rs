@@ -1195,18 +1195,35 @@ impl BrowserView {
         params: Value,
         background: ScreenshotBackground,
     ) -> Result<String, CoreError> {
+        let capture = self.begin_screenshot(page, background).await?;
+        let data = capture.capture(params).await;
+        capture.finish().await;
+        data
+    }
+
+    /// Begin one admitted capture sequence. The returned lease shares audit/desktop capture
+    /// serialization and can capture multiple PNG tiles without releasing temporary state.
+    pub async fn begin_screenshot(
+        &self,
+        page: PageId,
+        background: ScreenshotBackground,
+    ) -> Result<crate::screenshot::ScreenshotCapture, CoreError> {
         if self.epoch_guard()?.is_none() {
             let session = self.session.pages.get_session(page).await?;
-            return crate::screenshot::capture_cdp(&session.session, params, background).await;
+            return crate::screenshot::ScreenshotCapture::acquire(
+                session.session,
+                None,
+                background,
+            )
+            .await;
         }
         let access = self
             .page_access(page)
             .await?
             .ok_or_else(|| cdp_policy::unsupported("Page.captureScreenshot"))?;
         let session = access.session().await?;
-        let data = crate::screenshot::capture_cdp(&session.session, params, background).await?;
-        access.fresh().await?;
-        Ok(data)
+        crate::screenshot::ScreenshotCapture::acquire(session.session, Some(access), background)
+            .await
     }
 
     /// [`Self::screenshot`] with the caller's last word on the capture: `before_capture` runs

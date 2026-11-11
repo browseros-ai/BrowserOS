@@ -18,6 +18,7 @@ mod live_run;
 use std::error::Error;
 use std::sync::Arc;
 
+use browseros_core::ProtocolSession;
 use js_runner::OpHost;
 use live_run::{LiveRun, TestResult, brand};
 use serde_json::{Value, json};
@@ -128,6 +129,100 @@ async fn encodings_preserve_alpha_and_restore_the_default_background() -> TestRe
                 "webpTransparent": [0,0,0,0], "afterTimeout": [255,255,255,255] },
             "cancelled": true, "defaultWebp": true, "lossyWebp": false,
         })
+    );
+    Ok(())
+}
+
+/// Tall background tabs must retain their density, transparency and host foreground state.
+#[tokio::test]
+#[ignore = "needs an owned BrowserOS on BROWSEROS_CDP_PORT"]
+async fn tall_pngs_preserve_rows_without_activating_or_resizing_the_tab() -> TestResult {
+    let run = Arc::new(LiveRun::connect().await?);
+    let page = run.new_page().await?;
+    let session = run
+        .browser()
+        .pages
+        .get_session(run.core_page(&page).await?)
+        .await?
+        .session;
+    let root = ProtocolSession::root(run.browser().connection());
+    let active: Value = root.send("Browser.getActiveTab", json!({})).await?;
+    let measured = async {
+        let mut results = Vec::new();
+        for (width, density) in [(512, 1.5), (1280, 2.0)] {
+            session.send::<_, Value>("Emulation.setDeviceMetricsOverride", json!({
+                "width": width, "height": 600, "deviceScaleFactor": density, "mobile": false,
+            })).await?;
+            let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+            let value = js_runner::run_script(&host, &json!({ "page": brand(&page) }), r#"
+                await page.setContent('<style>html,body{margin:0;background:transparent}</style><div style="height:10000px;background:red"></div><div style="width:2px;height:12000px;background:blue"></div>');
+                const viewport = await page.evaluate(() => [innerWidth,innerHeight,devicePixelRatio,scrollX,scrollY]);
+                async function sample(scale, ys) {
+                    const bytes = await page.screenshot({ fullPage: true, omitBackground: true, scale, timeout: 20000 });
+                    const url = 'data:image/png;base64,' + Buffer.from(bytes).toString('base64');
+                    return await page.evaluate(async ({url, ys}) => {
+                        const image = new Image();
+                        await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url; });
+                        const canvas = document.createElement('canvas');
+                        canvas.width = image.width; canvas.height = 1;
+                        const context = canvas.getContext('2d');
+                        const pixels = ys.map(y => {
+                            context.clearRect(0,0,canvas.width,1);
+                            context.drawImage(image,0,y,image.width,1,0,0,image.width,1);
+                            return [Array.from(context.getImageData(0,0,1,1).data), Array.from(context.getImageData(10,0,1,1).data)];
+                        });
+                        return { size: [image.width,image.height], pixels };
+                    }, {url,ys});
+                }
+                const device = await sample('device', [3123,3124,10415,10416,14999,15000,19999,20000,22000*viewport[2]-1]);
+                const css = await sample('css', [9999,10000,15624,15625,21999]);
+                return { device,css,viewport,after: await page.evaluate(() => [innerWidth,innerHeight,devicePixelRatio,scrollX,scrollY]) };
+            "#).await?;
+            results.push(value);
+        }
+        Ok::<_, Box<dyn Error>>(results)
+    }.await;
+    let after_active: Value = root.send("Browser.getActiveTab", json!({})).await?;
+    let _reset = session
+        .send::<_, Value>("Emulation.clearDeviceMetricsOverride", json!({}))
+        .await;
+    run.close_page(&page).await;
+    let red = json!([[255, 0, 0, 255], [255, 0, 0, 255]]);
+    let blue = json!([[0, 0, 255, 255], [0, 0, 0, 0]]);
+    let expected = [(512, 1.5, 768, 33000), (1280, 2.0, 2560, 44000)].map(
+        |(width, density, device_width, device_height)| {
+            let pixels: Vec<_> = [
+                3123.0,
+                3124.0,
+                10415.0,
+                10416.0,
+                14999.0,
+                15000.0,
+                19999.0,
+                20000.0,
+                22000.0 * density - 1.0,
+            ]
+            .into_iter()
+            .map(|y| {
+                if y < 10000.0 * density {
+                    red.clone()
+                } else {
+                    blue.clone()
+                }
+            })
+            .collect();
+            let density_value = if density < 2.0 { json!(1.5) } else { json!(2) };
+            json!({
+                "device": { "size": [device_width,device_height], "pixels": pixels },
+                "css": { "size": [width,22000], "pixels": [red,blue,blue,blue,blue] },
+                "viewport": [width,600,density_value,0,0], "after": [width,600,density_value,0,0],
+            })
+        },
+    );
+    assert_eq!(measured?, expected);
+    assert_eq!(
+        active, after_active,
+        "captures must not activate their native tab"
     );
     Ok(())
 }

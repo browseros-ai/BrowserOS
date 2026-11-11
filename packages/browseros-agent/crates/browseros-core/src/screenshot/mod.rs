@@ -1,5 +1,6 @@
 mod background;
 
+use crate::target::page_access::PageAccess;
 use crate::{
     CoreError, FrameId, PageJs, ProtocolSession, observer::Observer, pointer, snapshot::RefEntry,
 };
@@ -141,27 +142,64 @@ struct Frame {
 
 /// A caller-normalized CDP screenshot, serialized with all other captures on this session.
 /// The SDK owns image geometry; core owns the capture queue and agent pointer lifecycle.
+#[cfg(test)]
 pub(crate) async fn capture_cdp(
     session: &ProtocolSession,
     params: Value,
     background: ScreenshotBackground,
 ) -> Result<String, CoreError> {
-    if background == ScreenshotBackground::Default {
-        return run_exclusive_screenshot_capture(session, || async {
-            let Ok(data) =
-                capture_without_pointer(session, params, || Ok::<(), Infallible>(())).await?;
-            Ok(data)
+    let capture = ScreenshotCapture::acquire(session.clone(), None, background).await?;
+    let data = capture.capture(params).await;
+    capture.finish().await;
+    data
+}
+
+/// An admitted, exclusive screenshot sequence. A tiled image retains this lease across all
+/// protocol captures, so audit images cannot interleave with its temporary rendering state.
+/// Dropping it retains the queue through any asynchronous background restoration.
+#[must_use = "finish the capture sequence after restoring caller-owned rendering state"]
+pub struct ScreenshotCapture {
+    session: ProtocolSession,
+    access: Option<Arc<PageAccess>>,
+    state: background::CaptureState,
+}
+
+impl ScreenshotCapture {
+    pub(crate) async fn acquire(
+        session: ProtocolSession,
+        access: Option<Arc<PageAccess>>,
+        background: ScreenshotBackground,
+    ) -> Result<Self, CoreError> {
+        let state = background::CaptureState::acquire(
+            &session,
+            screenshot_mutex(&session),
+            background == ScreenshotBackground::Transparent,
+        )
+        .await?;
+        Ok(Self {
+            session,
+            access,
+            state,
         })
-        .await;
     }
-    // Audit and SDK captures use this same queue. The override exists only while its guard
-    // owns the queue, including cancellation cleanup after a lost protocol acknowledgement.
-    let background =
-        background::TransparentBackground::acquire(session, screenshot_mutex(session)).await?;
-    let captured = capture_without_pointer(session, params, || Ok::<(), Infallible>(())).await;
-    background.restore().await;
-    let Ok(data) = captured?;
-    Ok(data)
+
+    /// Capture normalized CDP parameters, rechecking the admitted target for every tile.
+    pub async fn capture(&self, params: Value) -> Result<String, CoreError> {
+        if let Some(access) = &self.access {
+            access.fresh().await?;
+        }
+        let Ok(data) =
+            capture_without_pointer(&self.session, params, || Ok::<(), Infallible>(())).await?;
+        if let Some(access) = &self.access {
+            access.fresh().await?;
+        }
+        Ok(data)
+    }
+
+    /// Restore core-owned rendering state before releasing the shared capture queue.
+    pub async fn finish(self) {
+        self.state.restore().await;
+    }
 }
 
 pub async fn capture_screenshot_with_annotations(

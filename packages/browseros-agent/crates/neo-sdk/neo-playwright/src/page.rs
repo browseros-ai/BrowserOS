@@ -42,6 +42,7 @@ mod page_value;
 mod pdf;
 mod screenshot;
 mod screenshot_geometry;
+mod screenshot_png;
 mod screenshot_preparation;
 mod wait_for_navigation;
 mod wait_for_url;

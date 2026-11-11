@@ -86,6 +86,8 @@ impl Default for GeometryOptions<'_> {
 pub(super) struct ScreenshotGeometry {
     pub(super) clip: Viewport,
     pub(super) beyond_viewport: bool,
+    /// Encoded pixels per CSS document pixel, including device density and clip scaling.
+    pub(super) raster_scale: f64,
 }
 
 /// CSS document bounds before image-density scaling is applied.
@@ -223,6 +225,7 @@ impl ScreenshotGeometry {
                 scale: image_scale,
             },
             beyond_viewport: !document.fits_viewport,
+            raster_scale: image_scale * metrics.device_scale_factor,
         })
     }
 }
