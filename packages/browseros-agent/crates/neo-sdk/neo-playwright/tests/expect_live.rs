@@ -123,7 +123,7 @@ fn notes(run: &LiveRun) -> Vec<String> {
         .into_iter()
         .filter_map(|call| match call {
             EnvCall::Note(line) => Some(line),
-            EnvCall::Recheck | EnvCall::MarkSent | EnvCall::MarkSensitiveTarget => None,
+            EnvCall::Recheck | EnvCall::MarkSent => None,
         })
         .collect()
 }
@@ -705,11 +705,7 @@ async fn tests_that_a_typed_password_is_compared_through_the_seal() -> TestResul
                 5000,
             );
             assert_eq!(run.invoke("expect.locator", right).await?, Value::Null);
-            assert_eq!(
-                effects(&run),
-                [EnvCall::MarkSensitiveTarget],
-                "the trace redacts the expected password"
-            );
+            assert!(effects(&run).is_empty(), "expectations have no effects");
             let label = locator(&page, &[css("label[for=pw]")], "locator('label')");
             let through_label = on_locator(
                 &label,

@@ -195,7 +195,6 @@ impl OpMarks {
             } else {
                 PageScript::Sealed
             },
-            sensitive_args: spec.sensitive_args,
             ..MethodSpec::new(spec.name, spec.effect)
         };
         Self { spec: method, hold }
