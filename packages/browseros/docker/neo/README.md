@@ -406,7 +406,9 @@ signed in to your accounts.
 - **Port 9010** exposes Neo's whole local API, not only `/mcp`: sessions, recordings and settings.
 - **Port 9011 serves the same API as 9010 over HTTPS** (a self-signed certificate), and it
   cannot be turned off. It is not published, but any process that can reach the container can
-  reach it, so a host that firewalls 9010 must firewall 9011 the same way.
+  reach it, so a host that firewalls 9010 must firewall 9011 the same way. If another process
+  holds 9011 when Neo starts, the browser takes the next free port instead, so a host that must
+  keep a local user off Neo should allow that user a list of ports rather than block a few.
 - **`NEO_MCP_REMOTE=false`** makes both MCP ports refuse every peer but loopback. Docker's port
   forwarding arrives from outside the container, so a published 9010 then stops answering.
 - **Keep the `127.0.0.1:` in `-p`.** Without it, Docker publishes the port on every network
