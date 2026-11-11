@@ -21,14 +21,18 @@ use crate::dispatch::EventLog;
 /// that comes first builds it itself, through the same cell, so there is still exactly one.
 pub(crate) struct PlaywrightFacade {
     link: Arc<BrowserLink>,
+    /// Frozen startup mode, passed through each op's environment. Only hosted BrowserOS
+    /// suppresses console/page-error events; ordinary desktop connections keep their waits.
+    hosted: bool,
     playwright: OnceCell<Arc<Playwright>>,
 }
 
 impl PlaywrightFacade {
     /// The facade over `link`'s session, built in the background on its first connect.
-    pub(crate) fn start(link: Arc<BrowserLink>) -> Arc<Self> {
+    pub(crate) fn start(link: Arc<BrowserLink>, hosted: bool) -> Arc<Self> {
         let facade = Arc::new(Self {
             link,
+            hosted,
             playwright: OnceCell::new(),
         });
         // Waits for a first connect that may never come; nothing waits on this task.
@@ -37,6 +41,11 @@ impl PlaywrightFacade {
             early.get().await;
         });
         facade
+    }
+
+    /// The browser's configured startup mode.
+    pub(crate) fn hosted_mode(&self) -> bool {
+        self.hosted
     }
 
     /// The facade, built here if the background start has not finished. An op runs only
