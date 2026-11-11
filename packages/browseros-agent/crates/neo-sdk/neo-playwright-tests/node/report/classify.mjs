@@ -130,8 +130,14 @@ function errorsOf(test, location) {
 
 /** Neo: Only explicit infrastructure signals; ordinary test timeouts/closed-page errors are outcomes. */
 // `Neo hosted runs keep at most`: the Node door's own handle caps (hosted-run only), not product behavior.
-function isHarnessError(line) {
+function isHarnessError(line, stack = '') {
   if (isLoopError(line)) return false
+  if (
+    /[\\/]neo-playwright-tests[\\/](?:js[\\/]browser|node[\\/](?:claw-harness|browser-defaults))\.mjs:\d/.test(
+      stack,
+    )
+  )
+    return true
   return /(?:worker process|test worker).*exited unexpectedly|Browser (?:did not (?:start|publish|own)|exited at startup)|Owned browser process group survived cleanup|Cannot revalidate browser group|(?:^|: )harness-error:|ERR_DLOPEN_FAILED|Cannot find module .*(?:neo_node|claw_node)|dlopen\([^\n]*claw_node|(?:browser|Browser) (?:process )?(?:crashed|disconnected unexpectedly)|browserType\.launch: (?:Executable doesn't exist|Failed to launch|Target .*closed|spawn )|connect ECONNREFUSED|EADDRINUSE|Timeout.*(?:setting up|tearing down).*"__(?:neo|claw)"|Neo hosted runs keep at most/i.test(
     line,
   )
@@ -411,10 +417,14 @@ export function classifyCase(neo, reference, { engine = 'neo' } = {}) {
     skipReasons,
   }
   if (neoOutcome === 'pass' || neoOutcome === 'skip') return nonFailure(row)
-  const infrastructure = errors.find((error) => isHarnessError(error.firstLine))
+  const infrastructure = errors.find((error) =>
+    isHarnessError(error.firstLine, `${error.stack}\n${error.message}`),
+  )
   const referenceInfrastructure =
     referenceOutcome === 'fail' &&
-    referenceErrors.find((error) => isHarnessError(error.firstLine))
+    referenceErrors.find((error) =>
+      isHarnessError(error.firstLine, `${error.stack}\n${error.message}`),
+    )
   if (
     neoOutcome === 'harness-error' ||
     infrastructure ||

@@ -117,3 +117,20 @@ test('tests that claw setup and add-on failures belong to the harness', () => {
   ])
     assert.equal(classify(message).verdict, 'harness-error', message)
 })
+
+test('tests that private CDP failures are harness errors even without a message prefix', () => {
+  const message = 'Error: Target.detachFromTarget: No session with given id'
+  const detail =
+    message +
+    '\n    at Cdp.#receive (/runner/neo-playwright-tests/js/browser.mjs:160:25)'
+  for (const extra of [{ stack: detail }, { message: detail }])
+    assert.equal(classify(message, 'claw', extra).verdict, 'harness-error')
+  assert.equal(
+    classify(message, 'claw', {
+      stack:
+        message +
+        '\n    at Page.close (/runner/neo-playwright/assets/prelude.js:12:1)',
+    }).verdict,
+    'neo-differs',
+  )
+})
