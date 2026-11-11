@@ -24,6 +24,7 @@ struct LostCapture {
     document: AtomicUsize,
     prepared: AtomicUsize,
     fonts: AtomicUsize,
+    stalled_tree: bool,
 }
 
 impl TabScript for LostCapture {
@@ -39,7 +40,15 @@ impl TabScript for LostCapture {
         if first {
             self.started.notify_one();
         }
-        first
+        first && !self.stalled_tree
+    }
+
+    fn delay(&self, method: &str) -> Duration {
+        if self.stalled_tree && method == "Page.getFrameTree" {
+            Duration::from_secs(60)
+        } else {
+            Duration::ZERO
+        }
     }
 
     fn cdp_reply(&self, method: &str, _params: &Value) -> Option<Value> {
@@ -76,6 +85,26 @@ impl TabScript for LostCapture {
             None
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stalled_tree_read_does_not_block_an_otherwise_ready_capture()
+-> Result<(), Box<dyn Error>> {
+    let tab = ScriptedTab::new(LostCapture {
+        stalled_tree: true,
+        ..LostCapture::default()
+    });
+    let run = ScriptedRun::over(&tab).await?;
+    let op = Op::from_name("page.screenshot").ok_or("screenshot is registered")?;
+    let result = time::timeout(
+        Duration::from_secs(4),
+        run.playwright
+            .invoke(&run.env, op, json!({ "page": run.page })),
+    )
+    .await
+    .map_err(|_elapsed| "baseline tree read blocked capture behind stalled renderer metadata")??;
+    assert_eq!(result["base64"], "AQID");
+    Ok(())
 }
 
 #[tokio::test(start_paused = true)]
