@@ -1049,7 +1049,8 @@ mod tests {
     /// An answer whose batch rolls back is stored by the next batch and counted once: its run
     /// neither waits for it forever nor completes while its other job is still out.
     #[tokio::test]
-    async fn an_answer_in_a_rolled_back_batch_is_stored_by_the_next_one() {
+    async fn an_answer_in_a_rolled_back_batch_is_stored_by_the_next_one()
+    -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
         let store = TraceStore::open(&dir.path().join("trace.db"))
             .await
@@ -1106,6 +1107,12 @@ mod tests {
         let (Some(first_job), Some(second_job)) = (jobs.try_recv(), jobs.try_recv()) else {
             panic!("a job per write expected");
         };
+        let jpeg = b"\xff\xd8 retry \xff\xd9";
+        for job in [&first_job, &second_job] {
+            let parent = job.path.parent().ok_or("screenshot path without parent")?;
+            tokio::fs::create_dir_all(parent).await?;
+            tokio::fs::write(&job.path, jpeg).await?;
+        }
         let complete = || {
             let store = store.clone();
             async move {
@@ -1124,7 +1131,9 @@ mod tests {
                 .await
                 .is_ok()
         );
-        first_job.answer.send(Shot::Dropped);
+        first_job.answer.send(Shot::Taken {
+            bytes_len: jpeg.len() as u64,
+        });
         sink.op_started(OperationStarted {
             id: OperationId::new(RunId::new(), 1),
             parent: None,
@@ -1146,12 +1155,14 @@ mod tests {
         let _ = sink.flush().await;
         assert_eq!(
             store.screenshot(first).await.ok(),
-            Some(ShotRead::None),
+            Some(ShotRead::Jpeg(jpeg.to_vec())),
             "the next batch stored the answer"
         );
         assert_eq!(complete().await, Some(false), "the second job is still out");
 
-        second_job.answer.send(Shot::Dropped);
+        second_job.answer.send(Shot::Taken {
+            bytes_len: jpeg.len() as u64,
+        });
         let announced = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 match events.recv().await {
@@ -1164,7 +1175,11 @@ mod tests {
         .await;
         assert_eq!(announced.ok(), Some(true));
         assert_eq!(complete().await, Some(true));
-        assert_eq!(store.screenshot(second).await.ok(), Some(ShotRead::None));
+        assert_eq!(
+            store.screenshot(second).await.ok(),
+            Some(ShotRead::Jpeg(jpeg.to_vec()))
+        );
+        Ok(())
     }
 
     #[tokio::test]
