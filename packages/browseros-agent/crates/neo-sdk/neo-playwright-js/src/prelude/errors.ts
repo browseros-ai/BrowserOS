@@ -27,7 +27,7 @@
  * client prefixes every API error. expect's errors are the exception: Playwright prints those
  * as `expect(locator).toHaveText(expected) failed`, named `Error`, never `TimeoutError`.
  */
-import { type RefusalCode, refuser } from './host'
+import { localTimeout, type RefusalCode, refuser } from './host'
 import type { OpName } from './ops.generated'
 import type { SignalLike } from './signal'
 
@@ -264,7 +264,8 @@ export function internalError(api: string, message: string): Error {
  * passed between them: the same `website / wait_timeout` Rust reports when one op times out.
  */
 export function waitTimeoutError(api: string, message: string): Error {
-  return withFields(new TimeoutError(`${api}: ${message}`), {
+  const text = `${api}: ${message}`
+  return withFields(localTimeout(text) ?? new TimeoutError(text), {
     code: 'wait_timeout',
     owner: 'website',
     delivery: 'not_sent',

@@ -2,8 +2,7 @@
  * The `snapshot` request: one frame's half of upstream's server algorithm
  * (server/page.ts `ariaSnapshotJSONForFrame` at v1.64.1). It runs Playwright's own
  * `ariaSnapshotJSON` over this frame's document or one element, and returns the iframes it
- * rendered for Rust to hop into, with this document's sweep. Rust stitches the frames and masks
- * every page string with the union of every frame's sweep; nothing here reads a child frame.
+ * rendered for Rust to hop into. Rust stitches the frames; nothing here reads a child frame.
  *
  * In ai mode the engine mints refs under this world's prefix (`f<seq>e<n>`, bare `e<n>` at
  * seq 0, because `createEngine` passed the seq), and every ref goes into Neo's per-document ref
@@ -60,6 +59,5 @@ export function snapshot(
     kind: 'snapshot',
     json,
     iframes,
-    sweep: world.seal.sensitiveValues(),
   }
 }

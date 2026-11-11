@@ -45,7 +45,7 @@ use crate::surface::{Seen, Surface};
 use crate::surface_steps::{self, PlanFor};
 use crate::{BrowserTabs, FitId, PartError, ScreenHolder, ScreenSize, Xvnc};
 use browseros_core::{TabId, TargetId};
-use neo_trace::{EpochMillis, SecretSet};
+use neo_trace::EpochMillis;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::watch;
@@ -111,7 +111,7 @@ pub struct Keyboard {
 /// The fitted tab's place, for the owner page's browser bar.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BrowserBar {
-    /// The tab's URL, with every known secret masked.
+    /// The tab's current URL, as reported by browser navigation history.
     pub url: String,
     /// Whether there is history to go back to.
     pub back: bool,
@@ -191,7 +191,6 @@ impl Entry {
 pub struct Fits {
     browser: BrowserTabs,
     screen: Screen,
-    secrets: Arc<SecretSet>,
     table: Mutex<HashMap<FitId, Entry>>,
     surface: tokio::sync::Mutex<Surface>,
     /// Held through each round of owner view reads, and by each release until its fit reads as
@@ -204,13 +203,12 @@ pub struct Fits {
 }
 
 impl Fits {
-    /// No fits. `secrets` masks the browser bar's URL.
+    /// Builds viewport fits over the browser and its shared screen.
     #[must_use]
-    pub fn new(browser: BrowserTabs, xvnc: Xvnc, secrets: Arc<SecretSet>) -> Arc<Self> {
+    pub fn new(browser: BrowserTabs, xvnc: Xvnc) -> Arc<Self> {
         Arc::new(Self {
             browser,
             screen: Screen::new(xvnc),
-            secrets,
             table: Mutex::default(),
             surface: tokio::sync::Mutex::default(),
             owner_views: tokio::sync::Mutex::default(),
@@ -341,9 +339,6 @@ impl Fits {
             Ok(Ok(true)) => BarOutcome::Completed,
             Ok(Ok(false)) => BarOutcome::Failed,
             Ok(Err(error)) => {
-                // A failed load's error names the address, which can carry a known secret.
-                let mut error = error.to_string();
-                self.secrets.mask_str(&mut error);
                 tracing::debug!(%error, fit = %id, "the owner's browser bar did not move the tab");
                 BarOutcome::Failed
             }
@@ -582,14 +577,7 @@ impl Fits {
             })
             .collect::<Vec<_>>();
         for (id, tab, screen, mode, known) in active {
-            let read = owner_view::read(
-                &self.browser,
-                &self.secrets,
-                tab,
-                mode,
-                screen,
-                known.as_deref(),
-            );
+            let read = owner_view::read(&self.browser, tab, mode, screen, known.as_deref());
             match tokio::time::timeout(OWNER_VIEW_BUDGET, read).await {
                 Ok(Ok(view)) => self.store(id, screen, mode, view),
                 Ok(Err(error)) => tracing::debug!(%error, fit = %id, "an owner view read failed"),

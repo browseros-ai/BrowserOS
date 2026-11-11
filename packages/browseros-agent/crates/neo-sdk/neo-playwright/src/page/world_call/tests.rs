@@ -19,8 +19,7 @@ const TIMEOUT: Duration = Duration::from_millis(2_000);
 /// Upstream's timeout covers a whole `setContent`, `waitForFunction` or `waitForURL` call, the
 /// frame's world included, so a renderer that never answers its world's install holds none of
 /// them past it. Each one ends at its timeout, with upstream's message and nothing rechecked
-/// or sent; the main-world ops end before the gateway's first sweep, the only part with a
-/// budget of its own. The frame forms name a child frame, which is entered from the main
+/// or sent. The frame forms name a child frame, which is entered from the main
 /// frame's world, the one that never installs here.
 /// Paused: the ops' clocks run on tokio's.
 #[tokio::test(start_paused = true)]
@@ -31,7 +30,7 @@ async fn tests_that_an_op_ends_at_its_timeout_while_its_frames_world_never_insta
     // The session's setup for its worlds answers, and the world itself never installs.
     connection.always("Runtime.addBinding", json!({}))?;
     connection.always("Page.createIsolatedWorld", testing::cdp_pending())?;
-    let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
+    let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
     let brand = json!({ "$neo": "page", "tab": 7 });
     let script = json!({ "run": { "expression": "() => true", "isFunction": true,
                                   "arg": r#"{"v":"undefined"}"# } });

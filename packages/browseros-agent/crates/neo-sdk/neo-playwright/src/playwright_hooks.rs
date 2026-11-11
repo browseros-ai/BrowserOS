@@ -16,10 +16,7 @@ pub trait PlaywrightHooks: Send + Sync {
     /// what to keep, so the privacy policy lives in one place.
     fn field_entered(&self, page: TabId, entry: JournalEntry, by: TypedBy);
 
-    /// A main-world script ran on `page`, a snapshot read one of its frames, or `title()` or
-    /// `content()` read its document, while these sensitive values were on it. The crate has
-    /// already masked the result with them; the host registers them as secrets. A snapshot
-    /// reports each frame's values as it reads it.
+    /// Retained for host implementations; no op sweeps sensitive values, so nothing calls it.
     fn values_swept(&self, page: TabId, values: &FieldValues);
 
     /// Retained for host implementations; screenshots and PDFs do not call this hook.

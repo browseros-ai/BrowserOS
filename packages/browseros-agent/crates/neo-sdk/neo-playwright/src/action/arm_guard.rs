@@ -7,11 +7,9 @@ use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
 use crate::input::TabInput;
-use crate::op_scope::OpScope;
-use crate::page::OpPage;
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
+use crate::resolve;
 use crate::world::SealedWorld;
-use crate::{PlaywrightError, resolve};
 
 /// An interceptor armed in one world. Playwright's interceptor blocks every later pointer
 /// event in its frame once it saw a miss (and every one in a trial), so one left armed would
@@ -59,30 +57,19 @@ impl ArmGuard {
         }
     }
 
-    /// Stops the interceptor and reads what it saw. Once the probe answered (with a verdict or
-    /// an error), or the world is gone, there is nothing left to disarm; any other failure
-    /// leaves it to `Drop`.
-    ///
-    /// The interceptor described what was in the way during the trusted event, outside any
-    /// probe call, where no mask is in force; the probe masks that text whole (page-mask.ts)
-    /// and describes the element again while answering. That second description is cut under
-    /// the call's mask, so the verdict is asked as any action request is (`resolve::ask`): a
-    /// miss answers `needsMask` first, and the probe keeps the verdict for its token, so asking
-    /// again answers the same one.
-    pub(crate) async fn verdict(
-        &mut self,
-        page: &OpPage<'_>,
-        scope: &OpScope<'_>,
-    ) -> Result<Result<ProbeReply, ProbeFailure>, PlaywrightError> {
+    /// Stops the interceptor and reads what it saw: the interceptor's own description of what
+    /// was in the way, from the trusted event. Once the probe answered (with a verdict or an
+    /// error), or the world is gone, there is nothing left to disarm; any other failure leaves
+    /// it to `Drop`.
+    pub(crate) async fn verdict(&mut self) -> Result<ProbeReply, ProbeFailure> {
         let Some(world) = self.world.clone() else {
-            return Ok(Err(ProbeFailure::Broken(
+            return Err(ProbeFailure::Broken(
                 "the interceptor's verdict was already read".to_owned(),
-            )));
+            ));
         };
         let request = ProbeRequest::Verdict { token: self.token };
-        let reply = resolve::ask(page, scope, &world, &request, None).await;
-        // A sweep that failed after the first answer still found the interceptor stopped.
-        if matches!(reply, Ok(Ok(_) | Err(ProbeFailure::Gone(_))) | Err(_)) {
+        let reply = resolve::ask(&world, &request, None).await;
+        if matches!(reply, Ok(_) | Err(ProbeFailure::Gone(_))) {
             self.world = None;
         }
         reply

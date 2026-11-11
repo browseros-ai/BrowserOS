@@ -1,11 +1,10 @@
 //! A live browser for integration tests: one CDP connection with a `Playwright` over it, as
-//! claw-sdk builds them, ops run through `Playwright::invoke` with a plain `OpEnv`, and hooks
-//! that record values reported by operation sweeps. Needs BrowserOS with CDP on
-//! `BROWSEROS_CDP_PORT` (default 9005).
+//! claw-sdk builds them, and ops run through `Playwright::invoke` with a plain `OpEnv`. Needs
+//! BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005).
 
 use std::env;
 use std::error::Error;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_cdp::{CdpClient, ConnectOptions};
@@ -35,39 +34,13 @@ impl TestPage {
     }
 }
 
-/// One value an op swept from a page and reported to the host.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Swept {
-    pub(crate) page: TabId,
-    pub(crate) value: String,
-}
+/// A host that allows every capture; no op calls its other hooks back.
+struct PlainHooks;
 
-/// Hooks that remember which values operations swept.
-#[derive(Default)]
-pub(crate) struct RecordingHooks {
-    swept: Mutex<Vec<Swept>>,
-}
-
-impl RecordingHooks {
-    /// Every value `values_swept` reported, with its page.
-    pub(crate) fn swept(&self) -> Vec<Swept> {
-        self.swept
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-}
-
-impl PlaywrightHooks for RecordingHooks {
+impl PlaywrightHooks for PlainHooks {
     fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
 
-    fn values_swept(&self, page: TabId, values: &FieldValues) {
-        let mut swept = self.swept.lock().unwrap_or_else(PoisonError::into_inner);
-        swept.extend(values.registrable().map(|value| Swept {
-            page,
-            value: value.to_owned(),
-        }));
-    }
+    fn values_swept(&self, _page: TabId, _values: &FieldValues) {}
 
     fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
         Ok(())
@@ -102,7 +75,6 @@ impl OpEnv for LiveEnv {
 pub(crate) struct LiveBrowser {
     pub(crate) browser: Arc<BrowserSession>,
     pub(crate) playwright: Arc<Playwright>,
-    pub(crate) hooks: Arc<RecordingHooks>,
 }
 
 impl LiveBrowser {
@@ -114,15 +86,10 @@ impl LiveBrowser {
         let client: Arc<dyn CdpConnection> =
             Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
         let browser = BrowserSession::new(client, BrowserSessionHooks::default());
-        let hooks = Arc::new(RecordingHooks::default());
-        let playwright = Playwright::new(
-            Arc::clone(&browser),
-            Arc::clone(&hooks) as Arc<dyn PlaywrightHooks>,
-        );
+        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(PlainHooks));
         let live = Self {
             browser,
             playwright,
-            hooks,
         };
         // `Playwright::new` reads the open tabs in the background, and that read decides
         // where a tab's seqs start. An op on a tab that is already open waits for it, so a

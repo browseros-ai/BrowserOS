@@ -129,8 +129,8 @@ pub(crate) enum ProbeRequest {
     },
     /// One read of every match, without waiting.
     ReadAll { target: ProbeTarget, read: ReadAll },
-    /// `ariaSnapshotJSON` of `root`, this frame's rendered iframe refs and the sweep. `root:
-    /// document` is upstream's frame root, `body,frameset`.
+    /// `ariaSnapshotJSON` of `root` and this frame's rendered iframe refs. `root: document` is
+    /// upstream's frame root, `body,frameset`.
     Snapshot {
         root: ProbeTarget,
         mode: SnapshotMode,
@@ -146,8 +146,6 @@ pub(crate) enum ProbeRequest {
         frame_visible: bool,
         params: ExpectParams,
     },
-    /// `__clawSeal.sensitiveValues()`, for the evaluate guard.
-    Sweep,
     /// The focused element: a sensitive field? An iframe (pinned, to hop into)?
     Focused,
     /// The vendored `urlMatches(pattern, url)`: the page is JavaScript's regex engine.
@@ -371,27 +369,6 @@ pub(crate) enum Read {
     },
 }
 
-impl Read {
-    /// Whether the value can hold page text, so the read is masked with its site's values. A
-    /// state, a checkable, a file input's pin, a box and a frame's origin cannot (protocol.ts
-    /// `TEXTLESS`, whose reads send no sweep).
-    pub(crate) fn holds_page_text(&self) -> bool {
-        match self {
-            Self::TextContent
-            | Self::InnerText
-            | Self::InnerHtml
-            | Self::InputValue
-            | Self::Attribute { .. }
-            | Self::Located => true,
-            Self::BoundingBox
-            | Self::State { .. }
-            | Self::Checkable
-            | Self::FileInput { .. }
-            | Self::FrameOrigin => false,
-        }
-    }
-}
-
 /// What a `readAll` reads from every match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -400,17 +377,6 @@ pub(crate) enum ReadAll {
     TextContents,
     InnerTexts,
     Pins,
-}
-
-impl ReadAll {
-    /// Whether the values can hold page text: every read but the count (a pin's preview is
-    /// the element's markup).
-    pub(crate) fn holds_page_text(self) -> bool {
-        match self {
-            Self::TextContents | Self::InnerTexts | Self::Pins => true,
-            Self::Count => false,
-        }
-    }
 }
 
 /// `ariaSnapshot`'s mode.
@@ -507,7 +473,6 @@ mod tests {
             "readAll",
             "snapshot",
             "expect",
-            "sweep",
             "focused",
             "matchUrl",
             "pinned",

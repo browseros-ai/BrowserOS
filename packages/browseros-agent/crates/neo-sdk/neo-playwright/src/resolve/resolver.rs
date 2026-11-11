@@ -1,18 +1,13 @@
 //! From a locator to the world its last chunk runs in, through every frame on the way.
 
-use std::future::Future;
-
 use browseros_core::FrameId;
-use browseros_core::sensitive_fields::FieldValues;
-use futures_util::future;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
-use crate::page::site_sweep::{SiteSweep, SiteValues};
 use crate::page::{FRAME_BUDGET, OpPage};
 use crate::probe::{
-    self, ErrorClass, Hit, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
+    self, ErrorClass, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
     QueryState, Read, Want,
 };
 use crate::resolve::frame_start::{FrameStart, Started};
@@ -36,27 +31,13 @@ pub(crate) struct Resolver<'a> {
 
 /// A reply, and where the request that got it ran: what an op needs when it goes on working
 /// in that world (making a handle of a pinned element) or above it (placing a box in the main
-/// viewport). `alongside` is what [`Resolver::attempt_alongside`] ran in that world at the same
-/// time as the request, such as a read's site sweep, or the values the request of
-/// [`Resolver::attempt_masked`] was masked with; none for [`Resolver::attempt_at`].
+/// viewport).
 #[derive(Debug)]
-pub(crate) struct Landed<T = ()> {
+pub(crate) struct Landed {
     pub(crate) reply: ProbeReply,
     pub(crate) world: SealedWorld,
     pub(crate) path: FramePath,
-    pub(crate) alongside: T,
 }
-
-/// A request's reply, and what ran with the request in its world: a read's site sweep, or the
-/// values the request was masked with. It becomes a [`Landed`]'s `alongside`.
-pub(crate) struct Asked<T> {
-    pub(crate) reply: ProbeReply,
-    pub(crate) alongside: T,
-}
-
-/// What [`Resolver::attempt`]'s `send` got in the world a pass resolved, or why the world gave
-/// none (`Gone` is the liveness rule's).
-type Answered<T> = Result<Asked<T>, ProbeFailure>;
 
 /// The frames one pass went through so far: their parents, top down, and whether every
 /// `<iframe>` on the way is visible (upstream's `frameVisible`).
@@ -110,17 +91,9 @@ impl Resolved {
 
     /// Sends `request` in [`Resolved::world`], with the root node the target is queried from
     /// when there is one (an element handle's node, or the root of a locator rooted at a
-    /// handle). A pinned target ignores the root. A reply that would hold page text the engine
-    /// cut (a strict violation, a covered element's description) answers `needsMask`, and the
-    /// request goes once more with the site's values ([`ask`]), so every action request is
-    /// masked in the page without a sweep before the ones that hold no text.
-    pub(crate) async fn call(
-        &self,
-        page: &OpPage<'_>,
-        scope: &OpScope<'_>,
-        request: &ProbeRequest,
-    ) -> Result<Result<ProbeReply, ProbeFailure>, PlaywrightError> {
-        ask(page, scope, &self.world, request, self.root.as_deref()).await
+    /// handle). A pinned target ignores the root.
+    pub(crate) async fn call(&self, request: &ProbeRequest) -> Result<ProbeReply, ProbeFailure> {
+        ask(&self.world, request, self.root.as_deref()).await
     }
 
     /// The world the last chunk runs in.
@@ -227,72 +200,6 @@ impl<'a> Resolver<'a> {
         &self,
         request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
     ) -> Result<Option<Landed>, PlaywrightError> {
-        self.attempt_alongside(request, |_world| future::ready(()))
-            .await
-    }
-
-    /// [`Resolver::attempt_at`], with `alongside` run on the world the request lands in, at the
-    /// same time as the request, so a read's sweep of its frame's site (`page::SiteSweep`)
-    /// overlaps the read instead of following it. Only the output of the pass whose request was
-    /// answered is kept. A request that answers `needsMask` (its reply previews page text, a
-    /// strict violation say) is asked once more with its site's values ([`remask`]).
-    pub(crate) async fn attempt_alongside<T, Fut>(
-        &self,
-        request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
-        alongside: impl Fn(SealedWorld) -> Fut,
-    ) -> Result<Option<Landed<T>>, PlaywrightError>
-    where
-        Fut: Future<Output = T>,
-    {
-        self.attempt(request, |world, request, root| {
-            let beside = alongside(world.clone());
-            async move {
-                let asked = self.ask(&world, &request, root.as_deref());
-                let (reply, alongside) = future::join(asked, beside).await;
-                Ok(reply?.map(|reply| Asked { reply, alongside }))
-            }
-        })
-        .await
-    }
-
-    /// [`Resolver::attempt_at`] for a request whose reply always previews page text (`located`,
-    /// `pins`): the landed world's site is swept first and the request carries its values, so
-    /// the probe masks the previews before it cuts them and never answers `needsMask`; a field
-    /// that changed meanwhile is caught by a sweep after the reply ([`masked_call`]). A frame of
-    /// the site that missed a sweep fails the op closed; the landed world's own frame gone under
-    /// either sweep is the request coming back gone. The values come back as `alongside`, for
-    /// the op's own mask of the reply.
-    pub(crate) async fn attempt_masked(
-        &self,
-        request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
-    ) -> Result<Option<Landed<SiteValues>>, PlaywrightError> {
-        self.attempt(request, |world, request, root| async move {
-            let site = match site_values(self.page, self.scope, &world).await? {
-                Ok(site) => site,
-                Err(gone) => return Ok(Err(gone)),
-            };
-            let root = root.as_deref();
-            let Masked { reply, site } =
-                masked_call(self.page, self.scope, &world, &request, root, site).await?;
-            Ok(reply.map(|reply| Asked {
-                reply,
-                alongside: site,
-            }))
-        })
-        .await
-    }
-
-    /// The passes of one attempt, under the liveness rule. `send` runs the request in the world
-    /// a pass resolved (with the handle's node as its root, when the pass starts from one), and
-    /// what ran with it comes back beside the reply.
-    async fn attempt<T, Fut>(
-        &self,
-        request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
-        send: impl Fn(SealedWorld, ProbeRequest, Option<String>) -> Fut,
-    ) -> Result<Option<Landed<T>>, PlaywrightError>
-    where
-        Fut: Future<Output = Result<Answered<T>, PlaywrightError>>,
-    {
         for _ in 0..2 {
             let resolved = match self.resolve().await? {
                 Step::Ready(resolved) => resolved,
@@ -306,14 +213,12 @@ impl<'a> Resolver<'a> {
             };
             let last = ParsedSelector::of(self.target.chunks.last());
             let request = request(last, resolved.frame_visible);
-            let answered = send(resolved.world.clone(), request, resolved.root.clone()).await?;
-            match answered {
-                Ok(Asked { reply, alongside }) => {
+            match ask(&resolved.world, &request, resolved.root.as_deref()).await {
+                Ok(reply) => {
                     return Ok(Some(Landed {
                         reply,
                         world: resolved.world,
                         path: resolved.path,
-                        alongside,
                     }));
                 }
                 Err(ProbeFailure::Gone(_)) => {
@@ -361,16 +266,6 @@ impl<'a> Resolver<'a> {
     /// error thrown in the page, or a reply the request does not take.
     pub(crate) fn refused(&self, reply: ProbeReply) -> PlaywrightError {
         refused(self.scope, reply)
-    }
-
-    /// [`ask`] on this resolver's page.
-    async fn ask(
-        &self,
-        world: &SealedWorld,
-        request: &ProbeRequest,
-        root: Option<&str>,
-    ) -> Result<Result<ProbeReply, ProbeFailure>, PlaywrightError> {
-        ask(self.page, self.scope, world, request, root).await
     }
 
     /// One pass: the start world, then one hop per chunk but the last. A chunk that leads
@@ -568,24 +463,12 @@ async fn hop_from(
         strictness,
         want: Want::Frame,
     };
-    // A hop that previews page text, a strict violation's or a non-iframe's, is asked again with
-    // the parent's site's values, which mask that text here too.
-    let (reply, masked) = match call_from(parent, &request, root).await {
-        Ok(ProbeReply::NeedsMask) => (
-            Box::pin(remask(page, scope, parent, &request, root)).await?,
-            true,
-        ),
-        reply => (reply, false),
-    };
-    let (pin, key, visible) = match reply {
+    let (pin, key, visible) = match ask(parent, &request, root).await {
         Ok(ProbeReply::Frame {
             pin, key, visible, ..
         }) => (pin, key, visible),
         Ok(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
             return Ok(Hopped::Missing);
-        }
-        Ok(ProbeReply::NotFrame { .. } | ProbeReply::Strict { .. }) if !masked => {
-            return Err(unmasked(scope));
         }
         // Upstream throws this from the page, so it is never retried.
         Ok(ProbeReply::NotFrame { preview }) => {
@@ -619,8 +502,8 @@ pub(crate) async fn hop_pinned(
         strictness: Strictness::Strict,
         want: Want::Frame,
     };
-    // A pin names one element, so only a not-an-iframe preview can ask for the mask
-    // (`needsMask`); the preview is never shown here, so it is not asked for again.
+    // A pin names one element; one that is no iframe any more is missing here, its preview
+    // unread.
     let (pin, key, visible) = match probe::call(parent, &request).await {
         Ok(ProbeReply::Frame {
             pin, key, visible, ..
@@ -628,8 +511,7 @@ pub(crate) async fn hop_pinned(
         Ok(
             ProbeReply::None { stale_ref: None }
             | ProbeReply::Detached
-            | ProbeReply::NotFrame { .. }
-            | ProbeReply::NeedsMask,
+            | ProbeReply::NotFrame { .. },
         ) => return Ok(Hopped::Missing),
         Ok(other) => return Err(refused(scope, other)),
         Err(ProbeFailure::Gone(_)) => return Ok(Hopped::ParentGone),
@@ -738,219 +620,9 @@ pub(super) async fn enter_iframe(
     }
 }
 
-/// `request` in `world` (from `root` when there is one), and once more with the site's values
-/// ([`remask`]) when it answers `needsMask`: the probe met page text the engine cuts, a strict
-/// violation's or a covered element's say, with no mask to put on it first. Every request of a
-/// locator op, an action or a matcher whose reply can hold such text goes through here,
-/// [`Resolver::attempt_masked`] or [`remask`], never a bare probe call that would refuse the
-/// reply.
-pub(crate) async fn ask(
-    page: &OpPage<'_>,
-    scope: &OpScope<'_>,
-    world: &SealedWorld,
-    request: &ProbeRequest,
-    root: Option<&str>,
-) -> Result<Result<ProbeReply, ProbeFailure>, PlaywrightError> {
-    let asked = call_from(world, request, root).await;
-    if !matches!(asked, Ok(ProbeReply::NeedsMask)) {
-        return Ok(asked);
-    }
-    Box::pin(remask(page, scope, world, request, root)).await
-}
-
-/// `request` in `world` with its site's values, swept first, for a request whose reply always
-/// previews page text (an `expect` poll's `resolved`), so it never answers `needsMask`. The
-/// values come back as the reply's `alongside`, for the op's own mask of it; `world`'s frame
-/// gone under a sweep is the request coming back gone.
-pub(crate) async fn ask_masked(
-    page: &OpPage<'_>,
-    scope: &OpScope<'_>,
-    world: &SealedWorld,
-    request: &ProbeRequest,
-) -> Result<Result<Asked<SiteValues>, ProbeFailure>, PlaywrightError> {
-    let site = match site_values(page, scope, world).await? {
-        Ok(site) => site,
-        Err(gone) => return Ok(Err(gone)),
-    };
-    let Masked { reply, site } = masked_call(page, scope, world, request, None, site).await?;
-    Ok(reply.map(|reply| Asked {
-        reply,
-        alongside: site,
-    }))
-}
-
-/// Sends `request` in `world` again, with the values of every sensitive field of the world's
-/// site, swept now: the probe masks page text with them before Playwright's engine cuts it for
-/// a preview or a hint, and the page text of a reply that ends the op (a strict violation, a
-/// not-an-iframe preview) is masked with them in Rust too ([`masked_call`] checks them against
-/// a sweep after the reply). A frame of the site that missed a sweep fails the op closed,
-/// because the reply's text may hold that frame's value. Callers box it: it is a rare second
-/// call, and every locator op's future would otherwise hold its state.
-pub(super) async fn remask(
-    page: &OpPage<'_>,
-    scope: &OpScope<'_>,
-    world: &SealedWorld,
-    request: &ProbeRequest,
-    root: Option<&str>,
-) -> Result<Result<ProbeReply, ProbeFailure>, PlaywrightError> {
-    let site = match site_values(page, scope, world).await? {
-        Ok(site) => site,
-        Err(gone) => return Ok(Err(gone)),
-    };
-    let Masked { reply, site } = masked_call(page, scope, world, request, root, site).await?;
-    Ok(reply.map(|reply| site.mask_reply(reply)))
-}
-
-/// A reply to a request that carried its site's values, and the values its page text was
-/// masked with in the page, which the op masks the reply with again.
-struct Masked {
-    reply: Result<ProbeReply, ProbeFailure>,
-    site: SiteValues,
-}
-
-/// `request` in `world`, carrying `site`: the values of every sensitive field of the world's
-/// site as a sweep before the call found them.
-///
-/// The probe adds its own frame's values as they are during the call, so that frame can never
-/// be newer than the mask. Another frame of the site can: typed into after its sweep, and copied
-/// into this frame's text by the page's script, its new value would be cut short and match no
-/// mask afterwards. So a reply that holds text the probe cut is followed by a sweep of the
-/// site. A value the call lacked sends the request once more with every value found; a value
-/// the second call lacked too withholds the reply, rather than chase a field still changing.
-///
-/// ```text
-///  sweep ─ call(site) ─ sweep: nothing new ─ the reply, masked with both sweeps
-///                             └ a new value ─ call(all) ─ sweep: nothing new ─ the reply
-///                                                               └ new again ─ withheld
-/// ```
-async fn masked_call(
-    page: &OpPage<'_>,
-    scope: &OpScope<'_>,
-    world: &SealedWorld,
-    request: &ProbeRequest,
-    root: Option<&str>,
-    site: SiteValues,
-) -> Result<Masked, PlaywrightError> {
-    let site = match checked_call(page, scope, world, request, root, site).await? {
-        Checked::Fits(masked) => return Ok(masked),
-        Checked::Changed(site) => site,
-    };
-    match checked_call(page, scope, world, request, root, site).await? {
-        Checked::Fits(masked) => Ok(masked),
-        Checked::Changed(_) => Err(scope.fail(
-            ErrorCode::Unsupported,
-            "a sensitive field of the frame's site changed while Neo read the page, and again \
-             when it read once more, so the result is withheld; try again once the field stops \
-             changing",
-        )),
-    }
-}
-
-/// How one masked call compares with the sweep of its site that followed it.
-enum Checked {
-    /// The sweep found no value the call lacked: the reply, with every value either sweep found.
-    Fits(Masked),
-    /// A field of the site changed after the sweep the call carried: every value found so far.
-    Changed(SiteValues),
-}
-
-/// One masked call, and the sweep of the site after it when the reply holds text the probe cut.
-async fn checked_call(
-    page: &OpPage<'_>,
-    scope: &OpScope<'_>,
-    world: &SealedWorld,
-    request: &ProbeRequest,
-    root: Option<&str>,
-    site: SiteValues,
-) -> Result<Checked, PlaywrightError> {
-    let reply = probe::call_masked(world, request, root, site.probe_mask()).await;
-    if !holds_cut_text(&reply) {
-        return Ok(Checked::Fits(Masked { reply, site }));
-    }
-    // A reply's sweep is its frame's values as the probe added them to the mask (protocol.ts's
-    // `Mask`), so a change in the probe's own frame never sends the request again.
-    let own = match &reply {
-        Ok(ProbeReply::Read { sweep, .. } | ProbeReply::Values { sweep, .. }) => Some(sweep),
-        Ok(_) | Err(_) => None,
-    };
-    // The host hears them now: the sweep below can drop this reply or send the request again,
-    // and either exit would lose a value only this call saw, which the next document may echo.
-    if let Some(own) = own.filter(|own| !own.is_empty()) {
-        page.playwright().hooks().values_swept(page.tab(), own);
-    }
-    let after = match site_values(page, scope, world).await? {
-        Ok(after) => after,
-        // The reply's frame went away before the sweep could check the site, so the reply is
-        // dropped for the request coming back gone, and none of its page text leaves.
-        Err(gone) => {
-            return Ok(Checked::Fits(Masked {
-                reply: Err(gone),
-                site,
-            }));
-        }
-    };
-    let changed = site.lacks_any_of(own, &after);
-    let site = site.union(after);
-    Ok(if changed {
-        Checked::Changed(site)
-    } else {
-        Checked::Fits(Masked { reply, site })
-    })
-}
-
-/// Whether `reply` can hold page text the probe cut for a preview or a hint: anything but a
-/// miss, an iframe (whose reply carries no preview), an action's states, measurements and
-/// arming, a hit test that hit, or a failure. A kind added later counts as holding some until
-/// it is listed here.
-fn holds_cut_text(reply: &Result<ProbeReply, ProbeFailure>) -> bool {
-    !matches!(
-        reply,
-        Ok(ProbeReply::None { .. }
-            | ProbeReply::Detached
-            | ProbeReply::Frame { .. }
-            | ProbeReply::State { .. }
-            | ProbeReply::Measured { .. }
-            | ProbeReply::Armed { .. }
-            | ProbeReply::Moves { .. }
-            | ProbeReply::Focused { .. }
-            | ProbeReply::Verdict { hit: Hit::Done(_) }
-            | ProbeReply::FrameBox {
-                hit: None | Some(Hit::Done(_)),
-                ..
-            })
-            | Err(_)
-    )
-}
-
-/// The values of every sensitive field of `world`'s site, swept now and told to the host, for a
-/// request sent in `world` after the sweep: `Gone` when `world`'s own frame went away under it
-/// (`SiteSweep::values_or_gone`).
-async fn site_values(
-    page: &OpPage<'_>,
-    scope: &OpScope<'_>,
-    world: &SealedWorld,
-) -> Result<Result<SiteValues, ProbeFailure>, PlaywrightError> {
-    SiteSweep::of(page, world.clone()).await.values_or_gone(
-        page.playwright(),
-        scope,
-        page.tab(),
-        FieldValues::default(),
-    )
-}
-
-/// A hop's strict violation or not-an-iframe preview from a call that carried no mask. The
-/// probe answers `needsMask` instead of sending such text unmasked, so this is a probe bug,
-/// and the op fails closed rather than let the text out.
-pub(super) fn unmasked(scope: &OpScope<'_>) -> PlaywrightError {
-    scope.fail(
-        ErrorCode::Internal,
-        "the probe previewed page text without the mask of its frame's site",
-    )
-}
-
 /// `request` in `world`: from the document, or from `root` (an element handle's node there),
 /// which the probe reads as the call's root element.
-async fn call_from(
+pub(crate) async fn ask(
     world: &SealedWorld,
     request: &ProbeRequest,
     root: Option<&str>,
@@ -982,7 +654,7 @@ async fn iframes_visible(scope: &OpScope<'_>, path: &FramePath) -> Result<bool, 
             },
         };
         let visible = match probe::call(&hop.parent, &request).await {
-            Ok(ProbeReply::Read { value, .. }) => value.textless() == Value::Bool(true),
+            Ok(ProbeReply::Read { value, .. }) => value.into_value() == Value::Bool(true),
             Ok(ProbeReply::None { .. } | ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => {
                 false
             }
@@ -1090,133 +762,20 @@ fn selector_text(chunk: &Chunk) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use browseros_core::sensitive_fields::FieldValues;
     use serde_json::{Value, json};
     use tokio::time;
 
-    use super::{Masked, Resolved, Resolver, Step, masked_call, selector_text, site_values};
+    use super::{Resolved, Resolver, Step, selector_text};
     use crate::op_scope::OpScope;
     use crate::page::OpPage;
-    use crate::page::site_sweep::SiteValues;
-    use crate::probe::{ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read};
+    use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, Read};
     use crate::resolve::{HopIframe, Landed};
     use crate::target::{CallHeader, Chunk, LocatorTarget, Strictness, Target};
-    use crate::test_support::fixture_server::{FixtureServer, Page, nest_pages};
-    use crate::test_support::{
-        LiveBrowser, ProbeAnswer, ScriptedRun, ScriptedTab, Tab, TabScript, TestResult, count_op,
-    };
-    use crate::world::{FrameSeq, Place, SeqLookup};
-
-    /// What the read's frame does once it answered the first read.
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum AfterRead {
-        /// It leaves for another document: the sweep after the reply finds it gone, and the
-        /// reply is dropped.
-        Leaves,
-        /// Another frame of its site holds a new value from then on: the sweep after the reply
-        /// finds it, and the read is sent once more.
-        Changes,
-    }
-
-    /// One frame of `https://a.test/` whose first read sees [`TYPED_LATE`] and whose later
-    /// reads do not.
-    struct ReadOnce {
-        after: AfterRead,
-        reads: AtomicUsize,
-    }
-
-    /// A value in the read's own frame after the sweep before the call, which only the first
-    /// call's own sweep saw.
-    const TYPED_LATE: &str = "typed-after-the-sweep";
-
-    impl ReadOnce {
-        fn new(after: AfterRead) -> Self {
-            Self {
-                after,
-                reads: AtomicUsize::new(0),
-            }
-        }
-
-        fn read_once(&self) -> bool {
-            self.reads.load(Ordering::SeqCst) > 0
-        }
-    }
-
-    impl TabScript for ReadOnce {
-        fn probe(&self, _frame: &str, request: &Value) -> ProbeAnswer {
-            if self.after == AfterRead::Leaves && self.read_once() {
-                return ProbeAnswer::error("Cannot find context with specified id");
-            }
-            if request["op"] == "read" {
-                let own: &[&str] = if self.reads.fetch_add(1, Ordering::SeqCst) == 0 {
-                    &[TYPED_LATE]
-                } else {
-                    &[]
-                };
-                return ProbeAnswer::reply(json!({ "kind": "read", "value": "Signed in",
-                    "sensitive": null, "sweep": own }));
-            }
-            if self.read_once() {
-                return ProbeAnswer::reply(
-                    json!({ "kind": "sweep", "values": ["typed-in-another-frame"] }),
-                );
-            }
-            ProbeAnswer::empty_sweep()
-        }
-
-        fn left(&self) -> bool {
-            self.after == AfterRead::Leaves && self.read_once()
-        }
-    }
-
-    /// A reply carries its own frame's values as the probe found them during the call. The
-    /// sweep after it can drop the reply (its frame went away) or send the read once more
-    /// (another frame changed), and either way the host still learns those values: the next
-    /// document or the next reply may echo one (a form that posts the field and prints it
-    /// back), and the host masks every exit with what it was told.
-    #[tokio::test(start_paused = true)]
-    async fn tests_that_a_dropped_or_repeated_reply_still_tells_the_host_its_own_sweep()
-    -> TestResult {
-        for after in [AfterRead::Leaves, AfterRead::Changes] {
-            let tab = ScriptedTab::new(ReadOnce::new(after));
-            let run = ScriptedRun::over(&tab).await?;
-            let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
-            let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
-            let world = page
-                .world(&page.main_endpoint(), Place::Main)
-                .await
-                .map_err(|failure| failure.to_string())?;
-            let request = located("h1")?;
-            let site = SiteValues::found(FieldValues::default());
-            let Masked { reply, .. } =
-                masked_call(&page, &scope, &world, &request, None, site).await?;
-            match after {
-                AfterRead::Leaves => assert!(
-                    matches!(reply, Err(ProbeFailure::Gone(_))),
-                    "the reply whose frame left before the sweep after it is dropped"
-                ),
-                AfterRead::Changes => assert!(
-                    matches!(reply, Ok(ProbeReply::Read { .. })),
-                    "the read sent once more answers"
-                ),
-            }
-            assert!(
-                run.hooks.swept().iter().any(|value| value == TYPED_LATE),
-                "the first reply's own sweep reached the host when its frame {}: {:?}",
-                if after == AfterRead::Leaves {
-                    "left"
-                } else {
-                    "changed"
-                },
-                run.hooks.swept()
-            );
-        }
-        Ok(())
-    }
+    use crate::test_support::fixture_server::{FixtureServer, nest_pages};
+    use crate::test_support::{LiveBrowser, Tab, TestResult, count_op};
+    use crate::world::{FrameSeq, SeqLookup};
 
     #[test]
     fn tests_that_a_chunk_prints_as_upstreams_stringify_selector() -> TestResult {
@@ -1358,7 +917,7 @@ mod tests {
                 ..
             }) = resolver.attempt_at(read).await?
             {
-                text = value.masked(&FieldValues::default());
+                text = value.into_value();
                 if text == "B3 button" {
                     break;
                 }
@@ -1386,113 +945,6 @@ mod tests {
             page.frames().by_seq(FrameSeq(after.seq().0 + 1)),
             SeqLookup::Unknown
         ));
-        live.close(&tab).await;
-        Ok(())
-    }
-
-    /// The top page of `tests/data/site_copy/top.html` and its same-origin field frame.
-    fn site_copy_pages() -> HashMap<String, Page> {
-        [
-            (
-                "/site_copy/top.html",
-                include_str!("../../tests/data/site_copy/top.html"),
-            ),
-            (
-                "/site_copy/field.html",
-                include_str!("../../tests/data/site_copy/field.html"),
-            ),
-        ]
-        .into_iter()
-        .map(|(path, body)| (path.to_owned(), Page::html(body)))
-        .collect()
-    }
-
-    /// `page.$(selector, { strict: true })`'s request in the main frame.
-    fn located(selector: &str) -> TestResult<ProbeRequest> {
-        let parsed = json!({ "parts": [{
-            "name": "css",
-            "body": [{ "simples": [{ "selector": { "css": selector, "functions": [] }, "combinator": "" }] }],
-            "source": selector,
-        }] });
-        Ok(ProbeRequest::Read {
-            target: ProbeTarget::Chunk(serde_json::from_value(parsed)?),
-            strictness: Strictness::Strict,
-            frame_visible: true,
-            read: Read::Located,
-        })
-    }
-
-    /// The longest start of `secret`, three characters or more, that `shown` holds.
-    fn leaked_start<'a>(shown: &str, secret: &'a str) -> Option<&'a str> {
-        (3..=secret.len())
-            .rev()
-            .filter_map(|end| secret.get(..end))
-            .find(|start| shown.contains(start))
-    }
-
-    #[tokio::test]
-    #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-    async fn tests_that_a_field_of_the_site_typed_into_after_the_sweep_is_masked_before_the_cut()
-    -> TestResult {
-        const FRESH: &str = "fresh-secret-123456";
-        let live = LiveBrowser::connect().await?;
-        let server = FixtureServer::start(site_copy_pages()).await?;
-        let tab = live
-            .open(&server.url("127.0.0.1", "/site_copy/top.html?inproc"))
-            .await?;
-        let ready = "(() => { try { return !!field(); } catch (_) { return false; } })()";
-        for _ in 0..200 {
-            if tab.main_world(ready).await? == json!(true) {
-                break;
-            }
-            time::sleep(Duration::from_millis(50)).await;
-        }
-        tab.main_world("field().value = 'stale-secret-0000'; copyField()")
-            .await?;
-        let env = live.env();
-        let scope = OpScope::new(&env, count_op()?, CallHeader::default());
-        let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
-        let world = page.world(&page.main_endpoint(), Place::Main).await?;
-        // The site as each op's sweep finds it before its call. The page's own frame holds no
-        // field, so its probe has nothing of its own to add when the user types on in the
-        // same-origin child, and the page copies the new value into the top document.
-        let live_world = |_gone| "the page's own frame is still there";
-        let for_preview = site_values(&page, &scope, &world)
-            .await?
-            .map_err(live_world)?;
-        let for_strict = site_values(&page, &scope, &world)
-            .await?
-            .map_err(live_world)?;
-        tab.main_world(&format!("field().value = {FRESH:?}; copyField()"))
-            .await?;
-
-        let request = located("#long")?;
-        let Masked { reply, site } =
-            masked_call(&page, &scope, &world, &request, None, for_preview).await?;
-        let Ok(ProbeReply::Read { value, sweep, .. }) = reply else {
-            return Err(format!("a located read reads: {reply:?}").into());
-        };
-        let shown = site
-            .with_own(&live.playwright, page.tab(), sweep)
-            .mask(value)
-            .to_string();
-        assert!(
-            shown.contains("opened under is [privat"),
-            "{shown}: the preview is cut inside the masked value"
-        );
-        assert_eq!(leaked_start(&shown, FRESH), None, "{shown}");
-
-        let request = located(".who")?;
-        let Masked { reply, site } =
-            masked_call(&page, &scope, &world, &request, None, for_strict).await?;
-        let Ok(ProbeReply::Strict { message }) = reply.map(|reply| site.mask_reply(reply)) else {
-            return Err("two elements are .who".into());
-        };
-        assert!(
-            message.contains("Signed in with [private]"),
-            "{message}: the heading's preview holds the masked value"
-        );
-        assert_eq!(leaked_start(&message, FRESH), None, "{message}");
         live.close(&tab).await;
         Ok(())
     }

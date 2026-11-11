@@ -2,7 +2,7 @@
 //! way a main-world script's result leaves an op.
 //!
 //! ```text
-//!  page    assets/main-world.js: serializeAsCallArgument(value) ─▶ JSON.stringify ─▶ one string
+//!  page    assets/main-world.js: serializeAsCallArgument(value) ─▶ writeJson ─▶ one string
 //!  here    depth_of ─▶ strict parse ─▶ PageValue ─▶ into_json, the format again
 //!  agent   the prelude's vendored parseEvaluationResultValue ─▶ the script's value
 //! ```

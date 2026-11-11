@@ -23,9 +23,7 @@
 //! returned or the host dropped its future.
 
 use std::future::Future;
-use std::mem;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -35,11 +33,11 @@ use browseros_core::{
 };
 use futures_util::future::{self, Either};
 use neo_trace::Effect;
-use serde_json::{Value, json};
-use tokio::runtime::Handle;
+use serde_json::Value;
 use tokio::time::{self, Instant};
 
 use crate::call_log::CallLog;
+use crate::object_group::ObjectGroup;
 use crate::op::Op;
 use crate::op_spec::Capability;
 use crate::target::CallHeader;
@@ -67,62 +65,13 @@ pub(crate) struct OpScope<'env> {
 }
 
 /// A page admitted for one op through the run's view: the profile and window scope check ran
-/// once, and the op's calls go to this session. The sweeps hold one, found without admission,
-/// for each tab opener links connect to the op's page (`OpPage::linked_tab`), and never act
-/// on it.
+/// once, and the op's calls go to this session.
 #[derive(Debug)]
 pub(crate) struct AdmittedPage {
     pub(crate) tab: TabId,
     /// Core cache identity: private to this admission and never serialized.
     pub(crate) core_page: PageId,
     pub(crate) session: PageSession,
-}
-
-/// Names the op's objects so they go together: one group per op, released on every session
-/// that holds one of them when the scope drops.
-struct ObjectGroup {
-    /// `neo-playwright-op-<n>`, unique in the process.
-    name: String,
-    /// The sessions that hold an object in the group. A std mutex, never held across an await.
-    sessions: Mutex<Vec<ProtocolSession>>,
-}
-
-/// Numbers the ops' object groups.
-static NEXT_GROUP: AtomicU64 = AtomicU64::new(1);
-
-impl ObjectGroup {
-    fn new() -> Self {
-        Self {
-            name: format!(
-                "neo-playwright-op-{}",
-                NEXT_GROUP.fetch_add(1, Ordering::Relaxed)
-            ),
-            sessions: Mutex::default(),
-        }
-    }
-}
-
-/// Releases the group with the op, cancelled or not. The release is spawned, so it runs after
-/// a dropped future too; it is idempotent, and a session that is gone has nothing left to free.
-impl Drop for ObjectGroup {
-    fn drop(&mut self) {
-        let sessions =
-            mem::take(&mut *self.sessions.lock().unwrap_or_else(PoisonError::into_inner));
-        if sessions.is_empty() {
-            return;
-        }
-        let Ok(runtime) = Handle::try_current() else {
-            return;
-        };
-        let name = mem::take(&mut self.name);
-        drop(runtime.spawn(async move {
-            for session in sessions {
-                let _released = session
-                    .send::<_, Value>("Runtime.releaseObjectGroup", json!({ "objectGroup": name }))
-                    .await;
-            }
-        }));
-    }
 }
 
 /// The op's own wait ended: its Playwright timeout passed, or the script aborted it through
@@ -152,15 +101,13 @@ impl<'env> OpScope<'env> {
     /// The object group for remote objects this op asks `session` for. Naming it registers
     /// the session, so the group is released there when the op ends.
     pub(crate) fn object_group(&self, session: &ProtocolSession) -> &str {
-        let mut sessions = self
-            .objects
-            .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if !sessions.iter().any(|known| known.same_session(session)) {
-            sessions.push(session.clone());
-        }
-        &self.objects.name
+        self.objects.on(session)
+    }
+
+    /// Releases the op's remote objects now, keeping its group for later ones
+    /// ([`ObjectGroup::release_now`]). Only for a leaf whose tries share no remote object.
+    pub(crate) async fn release_objects(&self) {
+        self.objects.release_now().await;
     }
 
     /// The op's Playwright timeout; `None` waits until the host drops the op.
@@ -193,37 +140,50 @@ impl<'env> OpScope<'env> {
         tab: TabId,
     ) -> Result<&AdmittedPage, PlaywrightError> {
         if self.page.get().is_none() {
-            let mut info = browser.pages.get_info_by_tab(tab).await;
-            if info.is_none() {
-                self.view()
-                    .resolve_tab_ids(&[tab])
-                    .await
-                    .map_err(|error| self.core_error(&error))?;
-                info = browser.pages.get_info_by_tab(tab).await;
-            }
-            let info =
-                info.ok_or_else(|| self.fail(ErrorCode::TargetClosed, "the tab was closed"))?;
-            let session = self
-                .view()
-                .page_session(info.page_id.clone())
-                .await
-                .map_err(|error| self.core_error(&error))?;
-            let _ = self.page.set(AdmittedPage {
-                tab,
-                core_page: info.page_id,
-                session,
-            });
+            let admitted = self
+                .observe_page(browser, tab)
+                .await?
+                .ok_or_else(|| self.fail(ErrorCode::TargetClosed, "the tab was closed"))?;
+            let _ = self.page.set(admitted);
         }
         match self.page.get() {
             Some(admitted) if admitted.tab == tab => {
                 // Navigation and frame-tree reads admit directly, without OpPage. Report at
                 // this common boundary so every payload names its actual source binding.
-                // Opener-linked sweep pages bypass admission and never replace this source.
                 self.env.report_target(tab, &admitted.session.target_id);
                 Ok(admitted)
             }
             _ => Err(self.fail(ErrorCode::Internal, "one operation acts on one tab")),
         }
+    }
+
+    /// View admission for one record in a batch read. Unlike `admit`, this does not select
+    /// the operation's action target or report a single payload source to the host: an event
+    /// pump can observe several tabs. Writes still need the separate single-tab admission.
+    pub(crate) async fn observe_page(
+        &self,
+        browser: &BrowserSession,
+        tab: TabId,
+    ) -> Result<Option<AdmittedPage>, PlaywrightError> {
+        let mut info = browser.pages.get_info_by_tab(tab).await;
+        if info.is_none() {
+            self.view()
+                .resolve_tab_ids(&[tab])
+                .await
+                .map_err(|error| self.core_error(&error))?;
+            info = browser.pages.get_info_by_tab(tab).await;
+        }
+        let Some(info) = info else { return Ok(None) };
+        let session = self
+            .view()
+            .page_session(info.page_id.clone())
+            .await
+            .map_err(|error| self.core_error(&error))?;
+        Ok(Some(AdmittedPage {
+            tab,
+            core_page: info.page_id,
+            session,
+        }))
     }
 
     /// The gateway check: refuses, as `neo / internal` with nothing sent, an op whose spec does
@@ -734,6 +694,21 @@ mod tests {
             Box::pin(async { Ok(json!({})) })
         }
 
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            if expected_epoch != self.connection_epoch() {
+                return Box::pin(async {
+                    Err(CdpError::Transport("fixture epoch changed".into()))
+                });
+            }
+            self.send(method, params, session)
+        }
+
         fn send_raw_json<'a>(
             &'a self,
             _method: &'a str,
@@ -801,6 +776,43 @@ mod tests {
             [Some(SessionId::from("A")), Some(SessionId::from("B"))],
             "released once on each session that holds one of the op's objects"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_releasing_the_objects_frees_the_group_now_and_keeps_it()
+    -> Result<(), Box<dyn Error>> {
+        let recording = Arc::new(Recording::default());
+        let connection: Arc<dyn CdpConnection> = Arc::clone(&recording) as Arc<dyn CdpConnection>;
+        let session = ProtocolSession::for_session(connection, SessionId::from("A"));
+        let env = TestEnv::new();
+        let scope = OpScope::new(&env, op("locator.waitForFunction")?, CallHeader::default());
+        let group = scope.object_group(&session).to_owned();
+        let releases = || {
+            recording
+                .sent
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .filter(|(method, params, session)| {
+                    method == "Runtime.releaseObjectGroup"
+                        && params["objectGroup"] == group.as_str()
+                        && *session == Some(SessionId::from("A"))
+                })
+                .count()
+        };
+        scope.release_objects().await;
+        assert_eq!(releases(), 1, "released at once, before the op ends");
+        assert_eq!(
+            scope.object_group(&session),
+            group,
+            "the next try's objects join the same group"
+        );
+        drop(scope);
+        for _ in 0..10 {
+            task::yield_now().await;
+        }
+        assert_eq!(releases(), 2, "and the op's end releases them too");
         Ok(())
     }
 

@@ -26,10 +26,9 @@
 //!   `uniqueId`, or by number only across a window in which the session reported nothing about
 //!   that number (`SealedWorld::install`). Every later call goes by the handle.
 //! - **No closed root the seal cannot see.** The seal finds fields and hears input only from
-//!   the document down through open roots, so the install, and every sweep before it reads,
-//!   scans the document for closed roots and has the seal watch each (`hidden_roots`). A
-//!   scan that fails fails the install or the sweep, so a read whose frame held a root Neo
-//!   could not watch is refused.
+//!   the document down through open roots, so the install scans the document for closed roots
+//!   and has the seal watch each (`hidden_roots`). A scan that fails fails the install, so a
+//!   read whose frame held a root Neo could not watch is refused.
 //! - **One engine per world.** The install's guard on `__neoProbe` makes it idempotent, and the
 //!   single-flight cell makes concurrent first uses share one install.
 //! - **A seq names one document forever.** Every new document gets a new seq and none is
@@ -45,12 +44,14 @@
 //!   re-installs and retries once, a ref jump fails `element_detached`.
 
 mod engine_source;
+mod frame_attach_log;
 mod frame_seq;
 mod frame_worlds;
 mod hidden_roots;
 mod sealed_world;
 mod session_setup;
 
+pub(crate) use frame_attach_log::{FrameAttachLog, FrameEvent};
 pub(crate) use frame_seq::{BackendNodeId, ContextId, Epoch, FrameSeq, Pin};
 pub(crate) use frame_worlds::{
     Endpoint, FrameWorlds, Installer, LinkedParent, ParentLink, Place, SeqLookup,

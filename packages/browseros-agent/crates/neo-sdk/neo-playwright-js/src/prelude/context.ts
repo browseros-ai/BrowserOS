@@ -151,11 +151,14 @@ export class BrowserContext extends EventEmitter {
   /**
    * One `page.frames` read per open working page that has a tab, in parallel, each failure
    * swallowed, as `waitForTimeout` ends (FR-1). A page with no tab yet is skipped, so a wait
-   * never opens the run's lazy tab, and a refused read leaves that page's tree as it was.
+   * never opens the run's lazy tab, and a refused read leaves that page's tree as it was. So is
+   * a page with a navigation op in flight, which Chromium would not answer until that
+   * navigation ends (`Page._navigationsInFlight`).
    */
   async _refreshWorkingFrames(api: string): Promise<void> {
     const working = this.pages().filter(
-      (page) => page._working && page._tab !== null,
+      (page) =>
+        page._working && page._tab !== null && page._navigationsInFlight === 0,
     )
     await Promise.all(
       working.map((page) => page._refreshFrames(api).catch(() => undefined)),

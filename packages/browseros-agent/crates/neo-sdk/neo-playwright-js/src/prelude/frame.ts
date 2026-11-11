@@ -1182,20 +1182,22 @@ export class Frame extends EventEmitter {
       throw clientError(api, `url: expected string, got ${typeof url}`)
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
-    const args = await this._frameArgs(api)
-    const { value: result, observed } = await invokeObserved(
-      'page.goto',
-      this._call(api, this._navigationTimeout(options)),
-      {
-        ...args,
-        url,
-        waitUntil,
-        ...pick(options, ['referer']),
-      },
-      undefined,
-      signal,
-    )
-    return await this._page._navigated(api, this, result, observed)
+    return await this._page._navigating(async () => {
+      const args = await this._frameArgs(api)
+      const { value: result, observed } = await invokeObserved(
+        'page.goto',
+        this._call(api, this._navigationTimeout(options)),
+        {
+          ...args,
+          url,
+          waitUntil,
+          ...pick(options, ['referer']),
+        },
+        undefined,
+        signal,
+      )
+      return await this._page._navigated(api, this, result, observed)
+    })
   }
 
   async _waitForLoadState(
@@ -1319,7 +1321,6 @@ export type ScreenshotOptionsInput = TimeoutOption &
     mask?: Locator[]
     maskColor?: string
     omitBackground?: boolean
-    scale?: 'css' | 'device'
   }
 
 /** Options that need capture features beyond temporary DOM preparation. */
@@ -1330,8 +1331,6 @@ export function refusedScreenshotOption(
     return 'Neo cannot mask elements in a screenshot; omit mask'
   if (options.omitBackground)
     return 'Neo cannot capture a transparent background; omit omitBackground'
-  if (options.scale === 'css')
-    return 'Neo captures at the device scale; omit scale or pass "device"'
   return undefined
 }
 

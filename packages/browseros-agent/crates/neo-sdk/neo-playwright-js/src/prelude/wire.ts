@@ -157,6 +157,7 @@ export type EventName =
   | 'console'
   | 'pageerror'
   | 'download'
+  | 'filechooser'
   | 'page'
 
 export type DialogInfo = {
@@ -179,6 +180,9 @@ export type DownloadInfo = {
   suggestedFilename: string
 }
 
+/** The exact native input, rather than a selector that could resolve to a replacement. */
+export type FileChooserInfo = { element: ElementBrand; isMultiple: boolean }
+
 /**
  * One event as Rust delivers it to one listener or wait. `event` is Playwright's name and
  * `page` the page it fires on; the context's `page` event names the new tab there. `seq` is the
@@ -200,6 +204,7 @@ export type EventRecord = { seq: number; at: number } & (
   | { event: 'console'; page: PageBrand; message: ConsoleInfo }
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
   | { event: 'download'; page: PageBrand; download: DownloadInfo }
+  | { event: 'filechooser'; page: PageBrand; chooser: FileChooserInfo }
 )
 
 /**
@@ -272,6 +277,7 @@ export type PageScript =
 
 /** The screenshot options Neo captures with; the prelude refuses the others before sending. */
 export type ScreenshotOptions = {
+  scale?: 'css' | 'device'
   animations?: 'disabled' | 'allow'
   caret?: 'hide' | 'initial'
   style?: string
@@ -311,6 +317,7 @@ export type ExpectArgs = {
 
 /** Each op's input after `call`. */
 export type OpInputs = {
+  'events.interceptFileChooser': PageArgs & { lease: number; on: boolean }
   'locator.click': TargetArgs & { options: PointerOptions }
   'locator.dblclick': TargetArgs & { options: PointerOptions }
   'locator.hover': TargetArgs & { options: PointerOptions }
@@ -425,6 +432,7 @@ export type OpInputs = {
   'locator.evaluateAll': EveryMatchArgs & { script: PageScript }
   /** `polling` in milliseconds; absent is `'raf'`. */
   'page.waitForFunction': FrameArgs & { script: PageScript; polling?: number }
+  'locator.waitForFunction': TargetArgs & { script: PageScript }
   /** With `target`, a screenshot of one element (`locator.screenshot`). */
   'page.screenshot': PageArgs & {
     target?: Target
@@ -474,6 +482,7 @@ export type OpInputs = {
  * (`__neo.brands.register`); the revivers and the classes read the raw brands.
  */
 export type OpOutputs = {
+  'events.interceptFileChooser': Done
   'locator.click': null
   'locator.dblclick': null
   'locator.hover': null
@@ -541,6 +550,7 @@ export type OpOutputs = {
   'locator.evaluateAll': SerializedValue
   /** The predicate's truthy value, masked, and upstream's preview of it (`toString()`). */
   'page.waitForFunction': { value: SerializedValue; preview: string }
+  'locator.waitForFunction': null
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
   'page.screenshot': unknown
   'page.pdf': unknown

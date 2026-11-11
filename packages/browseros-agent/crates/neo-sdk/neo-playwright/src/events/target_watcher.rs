@@ -17,6 +17,9 @@
 //!   Any other dialog is held for the runs listening for dialogs on its tab, then
 //!   [`DIALOG_GRACE`] later held for whoever listens by then, or closed by Neo; the reap tick
 //!   closes held dialogs whose runs all ended (`dialog_table.rs`).
+//! - **Frames.** `Page.frameAttached`, a removing `Page.frameDetached` and the main frame's
+//!   `Page.frameNavigated` go to the `FrameAttachLog`, on any session of the tab, so frames are
+//!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`).
 //! - **Console and page errors** are recorded only while some run listens for them on that tab,
 //!   so a chatty page cannot push popups and dialogs out of the ring. BrowserOS in hosted mode
 //!   sends neither (measured: no `Runtime.consoleAPICalled` and no `Runtime.exceptionThrown`
@@ -41,9 +44,10 @@ use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
 use crate::events::page_event::{
     ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened, DownloadStarted,
-    ExceptionParams, OpenedPage, PageError, PageEvent, WindowKind,
+    ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent, WindowKind,
 };
 use crate::events::{PageEventKind, navigation_event};
+use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
 /// click that opened it (build-design graft 7).
@@ -73,11 +77,16 @@ impl Drop for TargetWatcher {
 }
 
 impl TargetWatcher {
-    /// Starts watching `browser`, recording through `writer`. Outside a tokio runtime there is
-    /// nothing to run it on, so no events are recorded.
-    pub(crate) fn spawn(browser: Arc<BrowserSession>, writer: EventWriter) -> Self {
+    /// Starts watching `browser`, recording page events through `writer` and frame lifecycles
+    /// into `attach_log`. Outside a tokio runtime there is nothing to run it on, so nothing is
+    /// recorded.
+    pub(crate) fn spawn(
+        browser: Arc<BrowserSession>,
+        writer: EventWriter,
+        attach_log: Arc<FrameAttachLog>,
+    ) -> Self {
         let task = Handle::try_current().ok().map(|runtime| {
-            let (watcher, found) = Watcher::new(browser, writer);
+            let (watcher, found) = Watcher::new(browser, writer, attach_log);
             runtime.spawn(watcher.run(found))
         });
         Self { task }
@@ -90,6 +99,7 @@ struct Watcher {
     /// An unbound view, for core's session-to-page registry.
     view: BrowserView,
     writer: EventWriter,
+    attach_log: Arc<FrameAttachLog>,
     /// The connection epoch discovery ran for; `None` until it succeeds, and after a lag.
     epoch: Option<u64>,
     /// The tabs the watcher knows.
@@ -187,6 +197,44 @@ struct DialogParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct FrameAttached {
+    frame_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FrameDetached {
+    frame_id: String,
+    /// `remove` or `swap` (the frame moved to another process and lives on).
+    #[serde(default)]
+    reason: String,
+}
+
+#[derive(Deserialize)]
+struct FrameNavigated {
+    frame: NavigatedFrame,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NavigatedFrame {
+    id: String,
+    #[serde(default)]
+    url: String,
+    /// The `#...` part, which CDP reports apart from `url`.
+    #[serde(default)]
+    url_fragment: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileChooserParams {
+    frame_id: FrameId,
+    backend_node_id: Option<BackendNodeId>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DownloadParams {
     frame_id: String,
     guid: String,
@@ -200,12 +248,14 @@ impl Watcher {
     fn new(
         browser: Arc<BrowserSession>,
         writer: EventWriter,
+        attach_log: Arc<FrameAttachLog>,
     ) -> (Self, UnboundedReceiver<OpenedPage>) {
         let (found, found_rx) = mpsc::unbounded_channel();
         let watcher = Self {
             view: BrowserView::unbound(Arc::clone(&browser), None),
             browser,
             writer,
+            attach_log,
             epoch: None,
             pages: HashMap::new(),
             closed_early: HashSet::new(),
@@ -228,8 +278,12 @@ impl Watcher {
             tokio::select! {
                 received = events.recv() => match received {
                     Ok(event) => self.handle(event).await,
-                    // Events were dropped: rediscover, which records what closed meanwhile.
-                    Err(RecvError::Lagged(_)) => self.epoch = None,
+                    // Events were dropped: rediscover, which records what closed meanwhile, and
+                    // tell the frame log that commits may be missing.
+                    Err(RecvError::Lagged(_)) => {
+                        self.epoch = None;
+                        self.attach_log.lost_events();
+                    }
                     Err(RecvError::Closed) => return,
                 },
                 Some(opened) = found.recv() => self.found(opened),
@@ -339,6 +393,9 @@ impl Watcher {
         } = event;
         match method.as_str() {
             "Page.frameNavigated" | "Page.navigatedWithinDocument" | "Page.frameDetached" => {
+                if let Some(session) = &session_id {
+                    self.frame_lifecycle(&method, session, &params).await;
+                }
                 if let Some(navigation) = navigation_event::parse(&method, params) {
                     self.writer.record(navigation);
                 }
@@ -356,7 +413,9 @@ impl Watcher {
             "Target.targetDestroyed" => {
                 if let Some(Destroyed { target_id }) = parse(params) {
                     self.frames.remove(&target_id);
-                    self.destroyed(&TargetId(target_id));
+                    let target = TargetId(target_id);
+                    self.attach_log.forget(&target);
+                    self.destroyed(&target);
                 }
             }
             "Target.attachedToTarget" => {
@@ -369,9 +428,32 @@ impl Watcher {
                     self.sessions.remove(&session_id);
                 }
             }
+            "Page.frameAttached" => {
+                if let Some(session) = &session_id {
+                    self.frame_lifecycle(&method, session, &params).await;
+                }
+            }
             "Page.javascriptDialogOpening" => {
                 if let (Some(session), Some(dialog)) = (session_id, parse(params)) {
                     self.dialog_opened(session, dialog).await;
+                }
+            }
+            "Page.fileChooserOpened" => {
+                // Core owns interception on agent tabs and their remote descendants. Keep
+                // every chooser in the bounded log: a wait may be admitted after its click,
+                // but its synchronous `since` stamp still predates this event.
+                if let Some(session) = session_id
+                    && let Some(target) = self.target_of(&session).await
+                    && let Some(params) = parse::<FileChooserParams>(params)
+                    && let Some(node) = params.backend_node_id
+                {
+                    self.writer
+                        .record(PageEvent::FileChooser(FileChooserOpened {
+                            target,
+                            session,
+                            frame: params.frame_id,
+                            node,
+                        }));
                 }
             }
             "Page.javascriptDialogClosed" => {
@@ -539,6 +621,47 @@ impl Watcher {
         self.sessions
             .insert(session.clone(), info.target_id.clone());
         Some(info.target_id)
+    }
+
+    /// The frame log's part of a frame event: an attached or removed child frame, or the main
+    /// frame's commit. Same-document navigations and process swaps change no number.
+    async fn frame_lifecycle(&mut self, method: &str, session: &SessionId, params: &Value) {
+        match method {
+            "Page.frameAttached" => {
+                if let Some(FrameAttached { frame_id }) = parse(params.clone()) {
+                    self.frame_event(session, FrameEvent::Attached(FrameId(frame_id)))
+                        .await;
+                }
+            }
+            "Page.frameDetached" => {
+                if let Some(detached) = parse::<FrameDetached>(params.clone())
+                    && detached.reason != "swap"
+                {
+                    let removed = FrameEvent::Removed(FrameId(detached.frame_id));
+                    self.frame_event(session, removed).await;
+                }
+            }
+            "Page.frameNavigated" => {
+                if let Some(FrameNavigated { frame }) = parse(params.clone())
+                    && let Some(tab) = self.target_of(session).await
+                    // A tab's main frame id is its target id; a child's commit keeps its number.
+                    && frame.id == tab.0
+                {
+                    // Upstream's frame URL: `framePayload.url + (framePayload.urlFragment || '')`.
+                    let url = format!("{}{}", frame.url, frame.url_fragment.unwrap_or_default());
+                    self.attach_log
+                        .record(&tab, FrameEvent::MainCommitted { url });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Logs `event` for the tab `session` belongs to.
+    async fn frame_event(&mut self, session: &SessionId, event: FrameEvent) {
+        if let Some(tab) = self.target_of(session).await {
+            self.attach_log.record(&tab, event);
+        }
     }
 
     /// The tab of `session`, if some run listens for `event` on it.

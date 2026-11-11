@@ -139,6 +139,9 @@ pub(crate) struct Installed {
     /// `Playwright` (a restart's re-key) it names a document that old refs may still print, so
     /// the page must never hand it out again (`FrameWorlds`).
     pub(crate) retired: Option<FrameSeq>,
+    /// The document's URL when the world booted (`location.href`): the page a main frame's
+    /// next commit leaves, when no commit of it was seen yet (`FrameWorlds`).
+    pub(crate) url: String,
 }
 
 /// The `Runtime` events one install reads about the world it creates. It must be subscribed
@@ -349,13 +352,13 @@ impl SealedWorld {
             )
             .await
             .map_err(ProbeFailure::from_core)?;
-        let (seq, retired) = match probe::reply_of(called) {
+        let (seq, retired, url) = match probe::reply_of(called) {
             Ok(ProbeReply::Described {
                 protocol,
                 seq,
                 retired,
-                ..
-            }) if protocol == PROBE_PROTOCOL => (seq, retired),
+                url,
+            }) if protocol == PROBE_PROTOCOL => (seq, retired, url),
             Ok(ProbeReply::Described { protocol, .. }) => {
                 return Err(ProbeFailure::Broken(format!(
                     "engine asset is stale: the world runs probe protocol {protocol}, this build \
@@ -380,7 +383,11 @@ impl SealedWorld {
             Ok(watched) => watched?,
             Err(_late) => return Err(ProbeFailure::Late),
         };
-        Ok(Installed { world, retired })
+        Ok(Installed {
+            world,
+            retired,
+            url,
+        })
     }
 
     /// The booted world, once its seal watches every hidden root its document holds now.
@@ -599,17 +606,22 @@ impl SealedWorld {
         &self.global
     }
 
-    /// Runs rendering-only screenshot preparation in this held isolated world, returning no
-    /// page data. Keeping the CDP script gateway here prevents capture code from accidentally
-    /// evaluating in the page's main world or a recycled numeric execution context.
-    pub(crate) async fn render_for_screenshot(
+    /// Runs an internal screenshot rendering or geometry script in this held isolated world.
+    /// Screenshot code may read layout numbers here; agent-provided functions never enter this
+    /// gateway. The held global prevents a recycled numeric context from changing the world.
+    pub(crate) async fn call_for_screenshot(
         &self,
         script: &str,
         arguments: &Value,
-    ) -> Result<(), CoreError> {
+    ) -> Result<Value, CoreError> {
+        #[derive(Deserialize)]
+        struct ResultValue {
+            value: Option<Value>,
+        }
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Reply {
+            result: Option<ResultValue>,
             exception_details: Option<Value>,
         }
         let arguments: Vec<Value> = arguments
@@ -618,25 +630,17 @@ impl SealedWorld {
             .flatten()
             .map(|value| json!({ "value": value }))
             .collect();
-        let reply: Reply = self
-            .session
-            .send(
-                "Runtime.callFunctionOn",
-                json!({
-                    "objectId": self.global(),
-                    "functionDeclaration": script,
-                    "arguments": arguments,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                }),
-            )
-            .await?;
+        let reply: Reply = self.session.send("Runtime.callFunctionOn", json!({
+            "objectId": self.global(), "functionDeclaration": script, "arguments": arguments,
+            "returnByValue": true, "awaitPromise": true,
+        })).await?;
         if reply.exception_details.is_some() {
-            return Err(CoreError::PageScript(
-                "screenshot rendering failed".to_owned(),
-            ));
+            return Err(CoreError::PageScript("screenshot script failed".to_owned()));
         }
-        Ok(())
+        Ok(reply
+            .result
+            .and_then(|result| result.value)
+            .unwrap_or(Value::Null))
     }
 
     /// The context id `DOM.resolveNode` needs; see the field.

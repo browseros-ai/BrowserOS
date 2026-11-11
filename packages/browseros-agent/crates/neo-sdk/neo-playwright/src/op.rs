@@ -114,7 +114,7 @@ mod tests {
             None,
             "an unsupported method is no op"
         );
-        assert_eq!(names.len(), 76, "the v1 op list has 76 ops");
+        assert_eq!(names.len(), 78, "the v1 op list has 78 ops");
     }
 
     #[test]
@@ -138,8 +138,8 @@ mod tests {
     /// world, and whether its gateway polices all of it before its first effect (`gated`). A
     /// host holds and polices ops by these declarations, so a new op without a row, or a
     /// declaration changed without its row, fails here until the audit is redone on purpose.
-    /// `page.setContent` is gated: its HTML goes out only through the evaluate guard's document
-    /// write, between sweeps (`evaluate_guard/document_write.rs`). `locator.setInputFiles` is
+    /// `page.setContent` is gated: its HTML goes out only through the main-world gateway's
+    /// document write (`evaluate_guard/document_write.rs`). `locator.setInputFiles` is
     /// gated: its gateway refuses Neo's own secret files and any path into `/dev` or `/proc`
     /// before it sends a path (`input_files/secrets.rs`).
     ///
@@ -156,7 +156,7 @@ mod tests {
     )]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
         use Capability::{Capture, HostFiles, MainWorld};
-        const AUDITED: [(&str, &[Capability], bool); 76] = [
+        const AUDITED: [(&str, &[Capability], bool); 78] = [
             ("locator.click", &[], true),
             ("locator.dblclick", &[], true),
             ("locator.hover", &[], true),
@@ -222,6 +222,7 @@ mod tests {
             ("locator.evaluate", &[MainWorld], true),
             ("locator.evaluateAll", &[MainWorld], true),
             ("page.waitForFunction", &[MainWorld], true),
+            ("locator.waitForFunction", &[MainWorld], true),
             ("page.screenshot", &[Capture], true),
             ("page.pdf", &[Capture], true),
             ("context.pages", &[], true),
@@ -229,15 +230,15 @@ mod tests {
             ("events.listen", &[], true),
             ("events.next", &[], true),
             ("events.wait", &[], true),
+            ("events.interceptFileChooser", &[], true),
             ("dialog.accept", &[], true),
             ("dialog.dismiss", &[], true),
             ("download.path", &[], true),
             ("download.saveAs", &[], true),
         ];
-        let mut audited: BTreeMap<&str, (&[Capability], bool)> = AUDITED
-            .into_iter()
-            .map(|(name, capabilities, gated)| (name, (capabilities, gated)))
-            .collect();
+        let mut audited = BTreeMap::from(
+            AUDITED.map(|(name, capabilities, gated)| (name, (capabilities, gated))),
+        );
         let mut differ = Vec::new();
         for spec in Op::all().map(Op::spec) {
             let row = audited.remove(spec.name);

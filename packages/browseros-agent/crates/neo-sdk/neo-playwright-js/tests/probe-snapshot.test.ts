@@ -1,5 +1,5 @@
 // The probe's `snapshot` request on the built asset: how a locator root that is not one live
-// element is answered, and the sweep every frame-level snapshot carries. linkedom has no
+// element is answered, and what a frame-level snapshot carries. linkedom has no
 // layout, so ai-mode refs and the rendered iframes are covered by the crate's
 // tests/snapshot_live.rs on a real browser.
 import { afterEach, expect, it } from 'bun:test'
@@ -41,9 +41,9 @@ it('tests that a locator root matching no element, several, or a stale ref is an
   )
 })
 
-it('tests that a frame-level snapshot carries the sweep and no iframes outside ai mode', () => {
+it('tests that a frame-level snapshot carries no iframes outside ai mode', () => {
   const probe = booted()
   expect(
     probe.call({ op: 'snapshot', root: 'document', mode: 'default' }),
-  ).toMatchObject({ kind: 'snapshot', iframes: [], sweep: ['hunter2'] })
+  ).toMatchObject({ kind: 'snapshot', iframes: [] })
 })

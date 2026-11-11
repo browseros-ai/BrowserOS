@@ -15,15 +15,11 @@
 //!
 //! A warm fill is 3 CDP messages (①, ②, the insertText). The probe reports with ① whether the
 //! field the edit changes is a password, card or one-time-code field: the element, or the
-//! control its label names, as upstream's edits follow a label (the forced path too).
-//! The call log names a fill's value only for a field that is not sensitive.
-//! `selectOption`'s values are the options' own, page text, so they are masked with the
-//! element's site before the op returns them; a sensitive select's selected values are its
-//! value, and are masked whatever its sweep holds.
+//! control its label names, as upstream's edits follow a label (the forced path too). The call
+//! log names a fill's value only for a field that is not sensitive.
 
 use std::time::Duration;
 
-use browseros_core::sensitive_fields::FieldValues;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -33,7 +29,7 @@ use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::input::{self, Keyboard};
 use crate::op_scope::{OpScope, Sent};
-use crate::page::{OpPage, site_sweep};
+use crate::page::OpPage;
 use crate::probe::{
     Edit, ElementState, FillValue, PageText, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
     Retarget, ScrollPlan, SelectOption, Want,
@@ -231,14 +227,14 @@ impl<'a> FormRunner<'a> {
                 self.scope
                     .log(format!("  waiting for element to be {}", row.waits_for));
             }
-            let (pinned, sensitive) = match self.ready(located, pin, row).await? {
+            let pinned = match self.ready(located, pin, row).await? {
                 Ready::At { pin, sensitive } => {
                     self.matched = true;
                     if !announced {
                         announced = true;
                         self.announce(edit, sensitive);
                     }
-                    (pin, sensitive)
+                    pin
                 }
                 Ready::Missing(state) => {
                     self.matched = true;
@@ -249,7 +245,7 @@ impl<'a> FormRunner<'a> {
                 Ready::Gone => return Ok(None),
             };
             pin = Some(pinned);
-            match self.apply(located, pinned, edit, sensitive).await? {
+            match self.apply(located, pinned, edit).await? {
                 Applied::Done(value) => return Ok(Some(value)),
                 Applied::Retry(line) => self.scope.log(line.to_owned()),
                 Applied::Gone => return Ok(None),
@@ -297,7 +293,7 @@ impl<'a> FormRunner<'a> {
                 self.subject.detached()?;
                 Ready::Gone
             }
-            Called::Reply(other) => return Err(self.subject.refused(located, other).await),
+            Called::Reply(other) => return Err(self.subject.refused(other)),
             Called::Gone => {
                 self.subject.lost(located)?;
                 Ready::Gone
@@ -305,13 +301,12 @@ impl<'a> FormRunner<'a> {
         })
     }
 
-    /// ②: the edit itself, after `send_effect`. `sensitive` is ①'s word on the element.
+    /// ②: the edit itself, after `send_effect`.
     async fn apply(
         &self,
         located: &Resolved,
         pin: Pin,
         edit: &FormEdit<'_>,
-        sensitive: bool,
     ) -> Result<Applied, PlaywrightError> {
         match edit {
             FormEdit::Fill(value) => self.fill(located, pin, value).await,
@@ -329,8 +324,7 @@ impl<'a> FormRunner<'a> {
                 let Some(selected) = edited else {
                     return Ok(Applied::Gone);
                 };
-                let selected = self.masked(located, selected, sensitive).await?;
-                Ok(match decode(self.scope, selected)? {
+                Ok(match decode(self.scope, selected.into_value())? {
                     Selected::Values(values) => {
                         self.scope.log("  selected specified option(s)".to_owned());
                         Applied::Done(Value::from(values))
@@ -374,7 +368,7 @@ impl<'a> FormRunner<'a> {
         let Some(filled) = self.edit(&sent, located, pin, edit).await? else {
             return Ok(Applied::Gone);
         };
-        if decode::<Filled>(self.scope, filled.textless())? == Filled::NeedsInput {
+        if decode::<Filled>(self.scope, filled.into_value())? == Filled::NeedsInput {
             let mut planned = input.plan();
             let steps = if value.0.is_empty() {
                 planned
@@ -409,31 +403,9 @@ impl<'a> FormRunner<'a> {
             Called::Reply(ProbeReply::Detached) => self.subject.detached().map(|()| None),
             // Upstream's own refusals, thrown before the edit changed anything ("Element is
             // not a <select> element").
-            Called::Reply(other) => Err(self.subject.refused(located, other).await),
+            Called::Reply(other) => Err(self.subject.refused(other)),
             Called::Gone => self.subject.lost(located).map(|()| None),
         }
-    }
-
-    /// A `selectOptions` answer as the op may return it: masked with the element's site,
-    /// swept after the edit so the sweep holds the values it set, and with a sensitive select's
-    /// own selected values besides, which a multiple select's sweep holds only the first of.
-    /// The edit is out, so a sweep that fails leaves the answer ambiguous.
-    async fn masked(
-        &self,
-        located: &Resolved,
-        selected: PageText,
-        sensitive: bool,
-    ) -> Result<Value, PlaywrightError> {
-        let own = if sensitive {
-            selected.field_values()
-        } else {
-            FieldValues::default()
-        };
-        let swept = site_sweep::swept_now(self.page, self.scope, located.world().clone(), own);
-        let Ok(values) = self.scope.within(swept).await else {
-            return Err(self.timed_out().after_input());
-        };
-        Ok(values.map_err(PlaywrightError::after_input)?.mask(selected))
     }
 
     /// Upstream's `fill("value")` line, with the value masked in a sensitive field.
@@ -452,7 +424,7 @@ impl<'a> FormRunner<'a> {
         let Ok(asked) = self.scope.within(self.subject.call(located, request)).await else {
             return Err(self.timed_out());
         };
-        match asked? {
+        match asked {
             Ok(reply) => Ok(Called::Reply(reply)),
             Err(ProbeFailure::Gone(_)) => Ok(Called::Gone),
             Err(failure) => Err(resolve::failed(self.scope, failure)),

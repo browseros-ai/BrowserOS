@@ -19,8 +19,8 @@ use crate::{ErrorCode, PlaywrightError};
 /// A handle names its node by document (`seq`) and CDP backend node id, never by a pin, so
 /// the probe's pin eviction cannot detach it. Once its document is gone the seq is retired and
 /// the handle is detached for good; while the document lives, a node that left it is detached
-/// too. That is Neo's rule for every op on a handle, where upstream still reads a detached
-/// node's text through `:scope`.
+/// too. File selection can still use a held, detached input, as native file choosers do;
+/// other actions require attachment in the probe.
 pub(crate) struct HandleSite<'a> {
     page: &'a OpPage<'a>,
     scope: &'a OpScope<'a>,

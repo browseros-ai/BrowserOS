@@ -16,30 +16,20 @@ import type { AriaSnapshotJSON } from '../../../neo-playwright/third_party/playw
 import type { ParsedSelector } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 
 /**
- * Bumped on any shape change, and on any change to what Rust relies on the probe doing (such
- * as `Mask`). `boot` reports it, and an install whose number differs from Rust's
- * PROBE_PROTOCOL fails as `neo / internal` (the engine asset is stale).
+ * Bumped on any shape change, and on any change to what Rust relies on the probe doing. `boot`
+ * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
+ * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 13
+export const PROTOCOL = 14
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
- * object, with the request, an element handle's node as the call's root (or null), and the
- * call's mask (or nothing), so the probe treats a root that is not a Node as "no root". A
- * world whose probe is gone (or never booted) answers `uninstalled`, which Rust treats like a
- * stale context: install again, once.
+ * object, with the request and an element handle's node as the call's root (or null), so the
+ * probe treats a root that is not a Node as "no root". A world whose probe is gone (or never
+ * booted) answers `uninstalled`, which Rust treats like a stale context: install again, once.
  */
 export const CALL_FUNCTION =
-  'function (request, root, mask) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, mask) : { kind: "uninstalled" }; }'
-
-/**
- * The raw values of every sensitive field of the call's frame's site (Rust's site sweep), each
- * at least four characters long. The probe masks page text with them, and with its own frame's
- * values as they are during the call, before Playwright's engine cuts or quotes it for a preview
- * or a locator hint (page-mask.ts). Rust relies on the second part: a reply's `sweep` is part
- * of the mask its text was cut under. Never for the agent.
- */
-export type Mask = string[]
+  'function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: "uninstalled" }; }'
 
 /** An element this world resolved earlier in the same op; see `Pins` in world.ts. */
 export type Pin = number
@@ -265,7 +255,6 @@ export type ExpectRequest = {
   frameVisible: boolean
   params: ExpectParams
 }
-export type SweepRequest = { op: 'sweep' }
 export type FocusedRequest = { op: 'focused' }
 /**
  * Vendored `urlMatches(pattern, url)`. Rust names the URL, the one a navigation reported, so
@@ -311,7 +300,6 @@ export type ProbeRequest =
   | ReadAllRequest
   | SnapshotRequest
   | ExpectRequest
-  | SweepRequest
   | FocusedRequest
   | MatchUrlRequest
   | PinnedRequest
@@ -358,7 +346,7 @@ export type ResolvedElement = {
 }
 /**
  * `key` names the iframe in this world's ref map, for the child frame's parent link. A hop
- * needs no preview of the iframe, so building one does not cost every hop a mask.
+ * needs no preview of the iframe, so it builds none.
  */
 export type ResolvedFrame = {
   kind: 'frame'
@@ -393,30 +381,23 @@ export type FrameBox = {
 export type Value = { kind: 'value'; value: unknown }
 /**
  * One element's read, through the seal. `sensitive` is the seal's `kind` of the element the
- * value came from. `sweep` holds the
- * raw values of this document's sensitive fields when the value can carry page text (every
- * read but `state`, `boundingBox` and `frameOrigin`, which send none): the seal guards a field,
- * not an ancestor's text, and Rust masks the value with them. Never for the agent.
+ * value came from.
  */
 export type ReadValue = {
   kind: 'read'
   value: unknown
   sensitive: SensitiveKind | null
-  sweep: string[]
 }
-/** Every match's read; `sweep` as in `ReadValue`, none for `count`. */
+/** Every match's read. */
 export type Values = {
   kind: 'values'
   count: number
   values: unknown[]
-  sweep: string[]
 }
-/** `sweep` holds raw sensitive values for Rust's mask, never for the agent. */
 export type Snapshot = {
   kind: 'snapshot'
   json: AriaSnapshotJSON
   iframes: SnapshotIframe[]
-  sweep: string[]
 }
 /**
  * What one poll saw. `matches` is the matcher's own result, before `.not`. `resolved` is
@@ -433,8 +414,6 @@ export type ExpectPoll = {
   received?: unknown
   sensitive: SensitiveKind | null
 }
-/** Raw values of this document's sensitive fields, for Rust's mask; never for the agent. */
-export type Sweep = { kind: 'sweep'; values: string[] }
 /**
  * The focused element: a sensitive field? An iframe (pinned, so Rust can hop into it)? Or an
  * element that may host a closed shadow root this world cannot see into (pinned as `host`,
@@ -447,23 +426,13 @@ export type Focused = {
   host: Pin | null
 }
 export type UrlMatch = { kind: 'urlMatch'; matches: boolean; url: string }
-/**
- * Page text, which the seal already masked where it serializes a field. `sweep` holds the raw
- * values of this document's sensitive fields for Rust's mask of echoes, never for the agent.
- */
+/** Page text, which the seal already masked where it serializes a field. */
 export type DocumentText = {
   kind: 'documentText'
   text: string
-  sweep: string[]
 }
 /** The document's content was replaced; the world stays booted under the same seq. */
 export type Replaced = { kind: 'replaced' }
-/**
- * The reply would have held page text the engine cuts or quotes (a preview, a strict
- * violation's hints), and the call came without a mask: Rust sweeps the frame's site and
- * sends the request again with one. Any request may answer it.
- */
-export type NeedsMask = { kind: 'needsMask' }
 export type ErrorReply = { kind: 'error'; message: string; class: ErrorClass }
 export type Uninstalled = { kind: 'uninstalled' }
 
@@ -487,12 +456,10 @@ export type ProbeReply =
   | Values
   | Snapshot
   | ExpectPoll
-  | Sweep
   | Focused
   | UrlMatch
   | DocumentText
   | Replaced
-  | NeedsMask
   | ErrorReply
   | Uninstalled
 export type ReplyKind = ProbeReply['kind']
@@ -501,8 +468,8 @@ export type ReplyKind = ProbeReply['kind']
 export type ValueOp = Exclude<Op, 'pinned'>
 
 /**
- * The replies each request may produce besides `error`, `uninstalled` and `needsMask`, which
- * any request may produce. Handlers are typed against it (ReplyTo), and probe-protocol.json
+ * The replies each request may produce besides `error` and `uninstalled`, which any request
+ * may produce. Handlers are typed against it (ReplyTo), and probe-protocol.json
  * carries it so Rust can decode each request's reply as exactly its own.
  */
 export const REPLY_KINDS = {
@@ -518,7 +485,6 @@ export const REPLY_KINDS = {
   readAll: ['values'],
   snapshot: ['snapshot', 'none', 'strict', 'detached'],
   expect: ['expect', 'none', 'strict', 'detached'],
-  sweep: ['sweep'],
   focused: ['focused'],
   matchUrl: ['urlMatch'],
   document: ['documentText'],
@@ -532,7 +498,6 @@ export type ReplyTo<O extends ValueOp> =
   | Extract<ProbeReply, { kind: (typeof REPLY_KINDS)[O][number] }>
   | ErrorReply
   | Uninstalled
-  | NeedsMask
 
 /** What `boot` takes: this document's frame seq, and the `Playwright` instance's epoch. */
 export type BootOptions = { frameSeq: number; epoch: string }
@@ -547,8 +512,8 @@ export type NeoProbe = {
    */
   boot(options: BootOptions): Described
   /**
-   * One request, with the call's root and mask; see CALL_FUNCTION. Answers `uninstalled` until
-   * `boot` has run.
+   * One request, with the call's root; see CALL_FUNCTION. Answers `uninstalled` until `boot`
+   * has run.
    */
-  call(request: unknown, root?: unknown, mask?: unknown): unknown
+  call(request: unknown, root?: unknown): unknown
 }
