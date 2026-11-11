@@ -6,7 +6,7 @@
 //!    `target.page` ─ the door resolves it to one tab and runs its rules on that tab
 //!      ─ PlaywrightOp::call: the resolved page written back into the input
 //!          ─ Playwright::invoke(OpCtxEnv, op, json), raced with the run's stop
-//!              ├─ recheck, recheck_reach, mark_sent, note ─▶ OpCtx
+//!              ├─ recheck, mark_sent, note ─▶ OpCtx
 //!              └─ PlaywrightError ─ leaf_error ─▶ LeafError: owner, code, timeout, answer
 //!          ─ opened, navigated and closed pages reported to the door
 //!          ─ an event pull's events: each one's tabs through the rules (event_release.rs)
@@ -99,8 +99,7 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `javascript:` URL before reporting `net::ERR_ABORTED`. `reload` opens only `http`, `https`, \
     `data` and `about` URLs. `setInputFiles` uploads any \
     file Neo's process can read, as Playwright does \
-    (a relative path resolves against Neo's working directory), except Neo's own secret files, \
-    which fail `neo_secret_upload_refused` with nothing sent: the caller sandboxes the \
+    (a relative path resolves against Neo's working directory): the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
     call. A directory upload needs its tab in front. An init script stays registered until the \
     run ends, then its tab no longer runs it; a context's init script reaches each tab before \
@@ -661,8 +660,6 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::NavigationObservationTimeout => ErrorCode::NAVIGATION_OBSERVATION_TIMEOUT,
         PlaywrightCode::InvalidInput => ErrorCode::INVALID_INPUT,
         PlaywrightCode::Unsupported => ErrorCode::UNSUPPORTED,
-        PlaywrightCode::SensitiveCopyRefused => ErrorCode::SENSITIVE_COPY_REFUSED,
-        PlaywrightCode::SecretUploadRefused => ErrorCode::SECRET_UPLOAD_REFUSED,
         PlaywrightCode::TargetClosed => ErrorCode::TARGET_CLOSED,
         PlaywrightCode::BrowserDisconnected => ErrorCode::BROWSER_DISCONNECTED,
         PlaywrightCode::Aborted => ErrorCode::ABORTED,
@@ -990,14 +987,13 @@ mod tests {
     #[test]
     fn a_refusal_the_crate_hands_back_keeps_its_owner_and_code() {
         let cases = [
-            // The crate's own, when a tab the page's script can act on has no tab id to name to
-            // the door (`op_env::unchecked_reach`).
+            // The crate's own, for a Playwright feature Neo does not support here.
             (
                 ErrorOwner::Neo,
                 "unsupported",
-                "Neo refused this call: the page is linked to 1 other tab(s) through window.opener",
+                "Neo refused this call: the popup opened as a window",
             ),
-            // The door's rules, through `OpEnv::recheck` and `OpEnv::recheck_reach`.
+            // The door's rules, through `OpEnv::recheck`.
             (
                 ErrorOwner::Host,
                 "owner_has_control",
