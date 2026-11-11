@@ -10366,6 +10366,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       receiver: "Locator",
       expectation: arg,
       expected: (isNot) => `Expected: ${isNot ? "not " : ""}${word}`,
+      value: word,
       params: { expression, ...extra },
       options
     };
@@ -10389,6 +10390,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       receiver,
       expectation: "expected",
       expected: (isNot) => `Expected${suffix}: ${isNot ? "not " : ""}${stringify(expected)}`,
+      value: expected,
       params,
       options
     };
@@ -10401,6 +10403,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       receiver: "Locator",
       expectation: "expected",
       expected: (isNot) => `Expected: ${isNot ? "not " : ""}${stringify(expected)}`,
+      value: expected,
       params,
       options
     };
@@ -10527,10 +10530,8 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
     const isLocator = actual instanceof Locator;
     if (matcher.receiver === "Page" ? !isPage : !isLocator)
       throw argumentError(name, `${name} can be only used with ${matcher.receiver} object, was called with ${receiverText(actual)}`);
-    const call = {
-      api,
-      timeoutMs: timeoutMs(api, matcher.options?.timeout ?? state.config.timeout)
-    };
+    const timeout = matcher.options?.timeout ?? state.config.timeout;
+    const call = { api, timeoutMs: timeoutMs(api, timeout) };
     const shape = {
       matcher: name,
       expectation: matcher.expectation,
@@ -10549,12 +10550,32 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
           ...shape
         });
     } catch (error) {
+      if (error instanceof Error)
+        completeMatcherResult(error, name, state, matcher, timeout);
       if (state.message && error instanceof Error)
         error.message = `${state.message}
 
 ${error.message}`;
       throw error;
     }
+  }
+  function isMatcherFacts(value) {
+    return typeof value === "object" && value !== null && Array.isArray(Reflect.get(value, "log")) && typeof Reflect.get(value, "timedOut") === "boolean";
+  }
+  function completeMatcherResult(error, name, state, matcher, timeout) {
+    const facts = Reflect.get(error, "matcherResult");
+    if (!isMatcherFacts(facts))
+      return;
+    Reflect.set(error, "matcherResult", {
+      message: error.message,
+      pass: state.isNot,
+      actual: facts.actual,
+      name,
+      expected: matcher.value,
+      log: facts.log,
+      timeout: facts.timedOut ? timeout : undefined,
+      ariaSnapshot: facts.ariaSnapshot
+    });
   }
   async function urlPredicate(page, predicate, state, options) {
     const timeout = options?.timeout ?? state.config.timeout;
