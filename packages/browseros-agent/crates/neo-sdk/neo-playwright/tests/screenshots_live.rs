@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use browseros_core::ProtocolSession;
 use js_runner::OpHost;
-use live_run::{LiveRun, TestResult, brand};
+use live_run::{Intercept, LiveRun, TestResult, brand};
 use serde_json::{Value, json};
 
 #[tokio::test]
@@ -224,5 +224,80 @@ async fn tall_pngs_preserve_rows_without_activating_or_resizing_the_tab() -> Tes
         active, after_active,
         "captures must not activate their native tab"
     );
+    Ok(())
+}
+
+/// The real selector engine supplies every mask match, including shadow DOM and subframes.
+/// Timeout cleanup must finish before another screenshot can observe the temporary overlays.
+#[tokio::test]
+#[ignore = "needs an owned BrowserOS on BROWSEROS_CDP_PORT"]
+async fn caller_masks_cover_matches_and_restore_on_success_and_cancellation() -> TestResult {
+    let run = Arc::new(LiveRun::connect().await?);
+    let page = run.new_page().await?;
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let measured = js_runner::run_script(&host, &json!({ "page": brand(&page) }), r#"
+        await page.setContent(`<style>body{margin:0}.secret{position:absolute;width:40px;height:30px}</style>
+          <div id=main class=secret style="left:20px;top:20px;background:red"></div>
+          <div id=hidden class=secret style="left:70px;top:20px;visibility:hidden"></div>
+          <div id=shadow style="position:absolute;left:120px;top:20px"></div>
+          <iframe id=frame style="position:absolute;left:20px;top:100px;width:100px;height:80px;border:0" srcdoc='<style>body{margin:0}</style><div class=secret style="margin:10px;width:40px;height:30px;background:green"></div>'></iframe>`);
+        await page.evaluate(() => {
+            document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML = '<div class=secret style="width:40px;height:30px;background:blue"></div>';
+        });
+        await page.frameLocator('#frame').locator('.secret').waitFor();
+        async function pixels(bytes, points) {
+            return await page.evaluate(async ({url,points}) => {
+                const image = new Image();
+                await new Promise((resolve,reject) => { image.onload=resolve;image.onerror=reject;image.src=url; });
+                const canvas = document.createElement('canvas'); canvas.width=canvas.height=1;
+                const context=canvas.getContext('2d');
+                return points.map(([x,y]) => {
+                    context.clearRect(0,0,1,1); context.drawImage(image,x,y,1,1,0,0,1,1);
+                    return Array.from(context.getImageData(0,0,1,1).data);
+                });
+            }, {url:'data:image/png;base64,'+Buffer.from(bytes).toString('base64'),points});
+        }
+        const mask=[page.locator('.secret'),page.frameLocator('#frame').locator('.secret'),page.locator('.missing')];
+        const points=[[25,25],[75,25],[125,25],[35,115]];
+        const masked=await pixels(await page.screenshot({mask,maskColor:'#00ff00',scale:'css'}),points);
+        const normal=await pixels(await page.screenshot({scale:'css'}),points);
+        const alpha=await pixels(await page.screenshot({mask:[page.locator('#main')],maskColor:'rgba(0,255,0,0.5)',scale:'css'}),[[25,25]]);
+        const locator=await pixels(await page.locator('#main').screenshot({mask:[page.locator('#main')],scale:'css'}),[[5,5]]);
+        const element=await page.$('#main');
+        const handle=await pixels(await element.screenshot({mask:[page.locator('#main')],maskColor:'blue',scale:'css'}),[[5,5]]);
+        let failed=false;
+        try { await page.screenshot({mask:[page.locator('#main'),page.locator('unknown-engine=oops')]}); }
+        catch { failed=true; }
+        const overlays=await page.evaluate(() => [document.querySelectorAll('x-pw-glass').length,document.querySelector('iframe').contentDocument.querySelectorAll('x-pw-glass').length]);
+        return {masked,normal,alpha,locator,handle,overlays,failed};
+    "#).await;
+    let cancelled = if measured.is_ok() {
+        run.intercept("Page.captureScreenshot", Intercept::Hang);
+        js_runner::run_script(
+            &host,
+            &json!({ "page": brand(&page) }),
+            r"
+            let cancelled=false;
+            try { await page.screenshot({mask:[page.locator('#main')],timeout:100}); }
+            catch { cancelled=true; }
+            await page.waitForFunction(() => document.querySelectorAll('x-pw-glass').length === 0);
+            await page.screenshot();
+            return cancelled;
+        ",
+        )
+        .await
+    } else {
+        Ok(Value::Null)
+    };
+    run.close_page(&page).await;
+    assert_eq!(
+        measured?,
+        json!({
+            "masked": [[0,255,0,255],[0,255,0,255],[0,255,0,255],[0,255,0,255]],
+            "normal": [[255,0,0,255],[255,255,255,255],[0,0,255,255],[0,128,0,255]],
+            "alpha": [[127,128,0,255]], "locator": [[255,0,255,255]], "handle": [[0,0,255,255]], "overlays": [0,0], "failed": true,
+        })
+    );
+    assert_eq!(cancelled?, json!(true));
     Ok(())
 }

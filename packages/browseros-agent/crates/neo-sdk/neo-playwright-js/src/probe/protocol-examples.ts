@@ -28,6 +28,8 @@ const GO_BUTTON = chunk('internal:role=button[name="Go"i]')
 
 export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   describe: [{ op: 'describe' }],
+  screenshotMask: [{ op: 'screenshotMask', target: GO_BUTTON, color: '#F0F' }],
+  screenshotMaskCleanup: [{ op: 'screenshotMaskCleanup' }],
   resolve: [
     { op: 'resolve', target: GO_BUTTON, strictness: 'strict', want: 'element' },
     {

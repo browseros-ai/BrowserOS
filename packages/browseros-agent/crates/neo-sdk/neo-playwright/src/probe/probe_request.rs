@@ -129,6 +129,10 @@ pub(crate) enum ProbeRequest {
     },
     /// One read of every match, without waiting.
     ReadAll { target: ProbeTarget, read: ReadAll },
+    /// Paint every explicit screenshot-mask match in this world, without waiting.
+    ScreenshotMask { target: ProbeTarget, color: String },
+    /// Remove this world's caller-selected screenshot overlays. Idempotent.
+    ScreenshotMaskCleanup,
     /// `ariaSnapshotJSON` of `root` and this frame's rendered iframe refs. `root: document` is
     /// upstream's frame root, `body,frameset`.
     Snapshot {
@@ -471,6 +475,8 @@ mod tests {
             "edit",
             "read",
             "readAll",
+            "screenshotMask",
+            "screenshotMaskCleanup",
             "snapshot",
             "expect",
             "focused",

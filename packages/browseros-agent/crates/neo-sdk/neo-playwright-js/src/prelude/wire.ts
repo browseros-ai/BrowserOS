@@ -286,6 +286,9 @@ export type ScreenshotOptions = {
   quality?: number
   fullPage?: boolean
   clip?: Rect
+  /** Only the locators the caller explicitly asks to cover. */
+  mask?: LocatorBrand[]
+  maskColor?: string
 }
 
 /** `page.pdf`'s options with upstream's names, sizes and margins already in CSS units. */

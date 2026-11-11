@@ -37,6 +37,7 @@ import {
 } from './protocol'
 import { read, readAll } from './read'
 import { pinned, resolve } from './resolve'
+import { screenshotMask, screenshotMaskCleanup } from './screenshot'
 import { focused, sealIn } from './sensitive'
 import { snapshot } from './snapshot'
 import { matchUrl } from './url'
@@ -63,6 +64,8 @@ type Handlers = { [O in Routed]: Handler<O> }
 /** One entry per request kind: adding a kind is a line here plus its handler file. */
 const HANDLERS: Handlers = {
   describe: described,
+  screenshotMask,
+  screenshotMaskCleanup,
   resolve,
   act,
   verdict,

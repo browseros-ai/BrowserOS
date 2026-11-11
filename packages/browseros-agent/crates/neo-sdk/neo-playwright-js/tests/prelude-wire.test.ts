@@ -632,26 +632,30 @@ describe('errors', () => {
     ).toHaveLength(1)
   })
 
-  it('tests that screenshot options Neo cannot honor are refused, and the rest are sent flat', async () => {
+  it('tests that screenshot masks cross as locator brands and encoding options are sent flat', async () => {
     const runtime = loadPrelude({ seed: SEED })
-    const refused = json(
-      await runtime.run(`
-        const refused = []
-        for (const options of [{ mask: [page.locator('#a')] }])
-          try { await page.screenshot(options) } catch (e) { refused.push(e.code) }
-        await page.locator('#a').screenshot({ type: 'webp', quality: 50, omitBackground: true, caret: 'initial', animations: 'disabled', style: 'p {}', scale: 'css' })
-        return refused
-      `),
-    )
-    expect(refused).toEqual(Array(1).fill('method_unavailable'))
-    expect(runtime.calls.filter(isRefusal).map((call) => call.name)).toEqual(
-      Array(1).fill('page.screenshot'),
-    )
+    await runtime.run(`
+      await page.screenshot({ mask: [page.locator('#hidden')], maskColor: '#00ff00' })
+      await page.locator('#a').screenshot({ type: 'webp', quality: 50, omitBackground: true, caret: 'initial', animations: 'disabled', style: 'p {}', scale: 'css', mask: [page.locator('#b')] })
+    `)
+    expect(runtime.calls.filter(isRefusal)).toEqual([])
     expect(
       runtime.calls
         .filter((call) => !isRefusal(call))
         .map((call) => call.input),
     ).toEqual([
+      {
+        call: { api: 'page.screenshot', timeoutMs: 5000 },
+        page: { $neo: 'page', tab: 1007 },
+        maskColor: '#00ff00',
+        mask: [
+          expect.objectContaining({
+            $neo: 'locator',
+            display: "locator('#hidden')",
+            chunks: expect.any(Array),
+          }),
+        ],
+      },
       {
         call: { api: 'locator.screenshot', timeoutMs: 5000 },
         page: { $neo: 'page', tab: 1007 },
@@ -664,6 +668,13 @@ describe('errors', () => {
         animations: 'disabled',
         style: 'p {}',
         scale: 'css',
+        mask: [
+          expect.objectContaining({
+            $neo: 'locator',
+            display: "locator('#b')",
+            chunks: expect.any(Array),
+          }),
+        ],
       },
     ])
   })

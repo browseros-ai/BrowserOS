@@ -4649,9 +4649,53 @@
 
   // crates/neo-sdk/neo-playwright-js/src/stubs/highlight.ts
   class Highlight {
-    constructor(_injected) {}
-    install() {}
-    uninstall() {}
+    #pane;
+    #shadow;
+    #entries = [];
+    #injected;
+    constructor(injected) {
+      this.#injected = injected;
+      this.#pane = injected.document.createElement("x-pw-glass");
+      this.#pane.setAttribute("popover", "manual");
+      this.#pane.style.cssText = "inset:0;width:100%;height:100%;max-width:none;max-height:none;padding:0;margin:0;border:none;overflow:visible;pointer-events:none;display:flex;background-color:transparent";
+      this.#shadow = this.#pane.attachShadow({ mode: "closed" });
+    }
+    install() {
+      const root = this.#injected.document.documentElement;
+      if (!root)
+        return;
+      if (!root.contains(this.#pane) || this.#pane.nextElementSibling)
+        root.appendChild(this.#pane);
+      this.#pane.hidePopover();
+      this.#pane.showPopover();
+    }
+    uninstall() {
+      this.#pane.remove();
+      this.#entries.length = 0;
+    }
+    addMaskedElements(elements, color) {
+      for (const element of elements)
+        this.#entries.push({ element, color });
+      this.#shadow.replaceChildren();
+      const highlights = this.#entries.map(() => {
+        const highlight = this.#injected.document.createElement("x-pw-highlight");
+        highlight.style.cssText = "position:absolute;top:0;left:0;width:0;height:0";
+        this.#shadow.appendChild(highlight);
+        return highlight;
+      });
+      const boxes = this.#entries.map(({ element }) => element.getBoundingClientRect());
+      for (const [index, highlight] of highlights.entries()) {
+        const box = boxes[index], entry = this.#entries[index];
+        if (!box || !entry)
+          continue;
+        highlight.style.backgroundColor = entry.color;
+        highlight.style.left = `${box.x}px`;
+        highlight.style.top = `${box.y}px`;
+        highlight.style.width = `${box.width}px`;
+        highlight.style.height = `${box.height}px`;
+        highlight.style.display = "block";
+      }
+    }
   }
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/layoutSelectorUtils.ts
@@ -8557,7 +8601,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 14;
+  var PROTOCOL = 15;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -8747,6 +8791,16 @@ ${value.stack}`;
           values: elements.map((element) => element.innerText ?? "")
         };
     }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/screenshot.ts
+  function screenshotMask(world, request, root) {
+    world.injected.addMaskedElements(queryAll(world, request.target, root), request.color);
+    return { kind: "value", value: null };
+  }
+  function screenshotMaskCleanup(world) {
+    world.injected.hideHighlight();
+    return { kind: "value", value: null };
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/snapshot.ts
@@ -8953,6 +9007,8 @@ ${value.stack}`;
   // crates/neo-sdk/neo-playwright-js/src/probe/index.ts
   var HANDLERS = {
     describe: described2,
+    screenshotMask,
+    screenshotMaskCleanup,
     resolve,
     act,
     verdict,
