@@ -243,14 +243,20 @@ pub(crate) struct ArmPlan {
     pub(crate) expect_rect: Option<Rect>,
 }
 
-/// One `selectOptions` option, as upstream's client sends it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// One `selectOptions` option, as upstream's client sends it: an option matches when every
+/// attribute named here does (injected `selectOptions`), so `{ value, label }` picks the option
+/// with both, and one that names none matches any option, as upstream's does.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum SelectOption {
-    ValueOrLabel(String),
-    Value(String),
-    Label(String),
-    Index(u32),
+pub(crate) struct SelectOption {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) value_or_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) index: Option<u32>,
 }
 
 /// An edit of a pinned element.
@@ -422,9 +428,30 @@ mod tests {
 
     use serde_json::{Number, Value, json};
 
-    use super::{Edit, FillValue, ParsedSelector, ProbeRequest};
+    use super::{Edit, FillValue, ParsedSelector, ProbeRequest, SelectOption};
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
+
+    /// An option names any of its attributes, all of which must match (SO-008), and one the
+    /// probe does not know is refused.
+    #[test]
+    fn tests_that_a_select_option_keeps_every_attribute_it_names() -> Result<(), Box<dyn Error>> {
+        let both: SelectOption = serde_json::from_value(json!({ "value": "g", "label": "Green" }))?;
+        assert_eq!(
+            both,
+            SelectOption {
+                value: Some("g".to_owned()),
+                label: Some("Green".to_owned()),
+                ..SelectOption::default()
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&both)?,
+            json!({ "value": "g", "label": "Green" })
+        );
+        assert!(serde_json::from_value::<SelectOption>(json!({ "text": "Green" })).is_err());
+        Ok(())
+    }
 
     /// Integral numbers decode into `f64` fields and come back as `5.0`, which `Value` keeps
     /// apart from `5`; JavaScript has one number type, so compare as it would.
