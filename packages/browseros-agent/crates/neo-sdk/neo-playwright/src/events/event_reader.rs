@@ -10,7 +10,9 @@ use serde::Serialize;
 use crate::events::event_hub::EventRecord;
 use crate::events::file_chooser::FileChooser;
 use crate::events::frame_lifecycle::{EventFrame, FrameLifecycle};
-use crate::events::page_event::{DialogId, Location, OpenedPage, PageEvent, WindowKind};
+use crate::events::page_event::{
+    DialogId, DialogOpened, Location, OpenedPage, PageEvent, WindowKind,
+};
 use crate::events::{PageEventKind, Subscription};
 use crate::op_scope::OpScope;
 use crate::page::PageHandle;
@@ -37,15 +39,17 @@ pub(crate) struct Delivered {
 }
 
 impl Delivered {
-    /// Page listeners precede the context mirror of the same frame transition, irrespective
-    /// of the listener map's iteration order (Playwright's client emits in this order).
+    /// Same-record mirrors follow Playwright's emitter ownership: frames reach the page
+    /// before the context, while dialog closure reaches the context before the page.
     pub(crate) fn order(&self) -> (u64, bool) {
-        let context = matches!(
-            &self.payload,
-            Payload::FrameAttached { context: true, .. }
-                | Payload::FrameNavigated { context: true, .. }
-                | Payload::FrameDetached { context: true, .. }
-        );
+        let context = match &self.payload {
+            Payload::FrameAttached { context, .. }
+            | Payload::FrameNavigated { context, .. }
+            | Payload::FrameDetached { context, .. } => *context,
+            // Playwright's BrowserContext owns dialog dispatch and emits its close first.
+            Payload::DialogClosed { context, .. } => !context,
+            _ => false,
+        };
         (self.seq, context)
     }
 }
@@ -91,6 +95,12 @@ enum Payload {
     },
     #[serde(rename = "dialog")]
     Dialog { page: PageHandle, dialog: Dialog },
+    #[serde(rename = "dialogclosed")]
+    DialogClosed {
+        page: PageHandle,
+        dialog: Dialog,
+        context: bool,
+    },
     #[serde(rename = "console")]
     Console {
         page: PageHandle,
@@ -220,12 +230,16 @@ impl Tabs {
                     .collect(),
             );
         }
-        Ok(self.listed.as_ref().and_then(|listed| {
+        let known = self.listed.as_ref().and_then(|listed| {
             listed
                 .iter()
                 .find(|(listed, _)| listed == target)
                 .map(|(_, page)| page.clone())
-        }))
+        });
+        if let Some(page) = &known {
+            scope.run_state().events.remember_page(target, page.tab());
+        }
+        Ok(known)
     }
 }
 
@@ -242,10 +256,23 @@ pub(crate) async fn deliver(
     let listener = match subscription {
         Subscription::Page { tab, .. } => Some(PageHandle::new(*tab)),
         Subscription::ContextPage => None,
+        Subscription::Context(PageEventKind::DialogClosed) => {
+            let PageEvent::DialogClosed(dialog) = &record.event else {
+                return Ok(None);
+            };
+            // A dialog's closing can be delivered after its page closed. Never require a
+            // live tab to recover an identity this run already approved while it existed.
+            if let Some(tab) = scope.run_state().events.known_page(&dialog.target) {
+                Some(PageHandle::new(tab))
+            } else {
+                tabs.new_tab(scope, &dialog.target).await?
+            }
+        }
         Subscription::Context(_) => {
             let target = match &record.event {
                 PageEvent::FrameLifecycle(frame) => &frame.target,
                 PageEvent::Load { target, .. } => target,
+                PageEvent::DialogClosed(dialog) => &dialog.target,
                 _ => return Ok(None),
             };
             tabs.new_tab(scope, target).await?
@@ -285,6 +312,11 @@ fn lifecycle_payload(
     context: bool,
 ) -> Option<Payload> {
     let payload = match (event, listener) {
+        (PageEvent::DialogClosed(dialog), Some(page)) => Payload::DialogClosed {
+            page,
+            dialog: dialog_info(dialog),
+            context,
+        },
         (PageEvent::FrameLifecycle(FrameLifecycle { kind, frame, .. }), Some(page)) => {
             let frame = frame.clone();
             match kind {
@@ -386,12 +418,7 @@ async fn ordinary_payload(
         }
         (PageEvent::Dialog(dialog), Some(page)) => Payload::Dialog {
             page,
-            dialog: Dialog {
-                id: dialog.id,
-                kind: dialog.kind.as_str(),
-                message: dialog.message.clone(),
-                default_value: dialog.default_value.clone(),
-            },
+            dialog: dialog_info(dialog),
         },
         (PageEvent::Console(message), Some(page)) => Payload::Console {
             page,
@@ -432,6 +459,7 @@ async fn ordinary_payload(
             | PageEvent::FrameDetached(_)
             | PageEvent::FrameSwapped(_)
             | PageEvent::FrameLifecycle(_)
+            | PageEvent::DialogClosed(_)
             | PageEvent::Load { .. },
             _,
         )
@@ -446,6 +474,16 @@ async fn ordinary_payload(
         ) => return Ok(None),
     };
     Ok(Some(payload))
+}
+
+/// Opening and closing share one protocol representation and one client Dialog identity.
+fn dialog_info(dialog: &DialogOpened) -> Dialog {
+    Dialog {
+        id: dialog.id,
+        kind: dialog.kind.as_str(),
+        message: dialog.message.clone(),
+        default_value: dialog.default_value.clone(),
+    }
 }
 
 /// A console/dialog/etc. can follow renderer-initiated navigation. Delivery synchronizes
