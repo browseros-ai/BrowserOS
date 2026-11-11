@@ -380,10 +380,15 @@ export type OpInputs = {
   /** `noWait` is `page.$`: the first match now, or null, instead of waiting for one. */
   'locator.elementHandle': TargetArgs & { noWait?: true }
   'locator.elementHandles': EveryMatchArgs
-  'page.ariaSnapshot': PageArgs & { mode: 'ai' | 'default'; depth?: number }
+  'page.ariaSnapshot': PageArgs & {
+    mode: 'ai' | 'default'
+    depth?: number
+    boxes?: boolean
+  }
   'locator.ariaSnapshot': TargetArgs & {
     mode: 'ai' | 'default'
     depth?: number
+    boxes?: boolean
   }
   'expect.locator': { target: Target } & ExpectArgs
   'expect.page': PageArgs & ExpectArgs

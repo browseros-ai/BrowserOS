@@ -88,7 +88,7 @@ const EVERY_OP = `
   await l.count(); await l.normalize(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor()
   const handle = await l.elementHandle(); await handle.click(); await l.elementHandles()
   await handle.$('b'); await handle.$$('b')
-  await page.ariaSnapshot(); await l.ariaSnapshot()
+  await page.ariaSnapshot(); await l.ariaSnapshot(); await page.ariaSnapshotJSON({ boxes: true })
   await expect(l).toBeVisible(); await expect(page).toHaveTitle('x')
   await page.keyboard.down('a'); await page.keyboard.up('a'); await page.keyboard.press('a')
   await page.keyboard.type('ab'); await page.keyboard.insertText('ab')
