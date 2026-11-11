@@ -168,9 +168,13 @@ impl ErrorCode {
         match error {
             CoreError::Cdp(cdp) => match cdp {
                 CdpError::SessionGone => Self::TargetClosed,
-                // BrowserOS's tab-domain reply for a close racing another close. Other
-                // protocol failures remain Internal; their text is not proof a tab closed.
-                CdpError::Protocol { message, .. } if message == "No tab with given id" => {
+                // Tab/target lookup can race a close before the detached event reaches the
+                // journal. These exact missing-identity replies are closure evidence; other
+                // protocol failures remain Internal.
+                CdpError::Protocol { message, .. }
+                    if message == "No tab with given id"
+                        || message == "No target with given id found" =>
+                {
                     Self::TargetClosed
                 }
                 CdpError::ConnectionLost
@@ -522,6 +526,21 @@ mod tests {
             Answer::Definite,
             "nothing was sent before a refusal"
         );
+    }
+
+    #[test]
+    fn missing_tab_and_target_replies_mean_closed_but_other_protocol_errors_do_not() {
+        for (message, expected) in [
+            ("No tab with given id", ErrorCode::TargetClosed),
+            ("No target with given id found", ErrorCode::TargetClosed),
+            ("Cannot find context with specified id", ErrorCode::Internal),
+        ] {
+            let error = CoreError::Cdp(CdpError::Protocol {
+                code: -32000,
+                message: message.to_owned(),
+            });
+            assert_eq!(ErrorCode::from_core(&error), expected, "{message}");
+        }
     }
 
     #[test]
