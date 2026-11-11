@@ -4,8 +4,9 @@
  * fresh QuickJS realm after its bootstrap, so the prelude's state lives exactly as long as one
  * run. What it uses, one function each:
  *
- * - `__neo.invoke(name, input)`: resolves with an op's `ok` value, its brands revived; rejects
- *   with the bootstrap's NeoError, a TimeoutError when the op timed out.
+ * - `__neo.invoke(name, input, options)`: resolves with an op's `ok` value, its brands revived;
+ *   rejects with the bootstrap's NeoError, a TimeoutError when the op timed out. `options.signal`
+ *   makes the op abortable (signal.ts).
  * - `__neo.brands.register(brand, fromJson)`: the reviver for one brand in results.
  * - `__neo.onReply(listener)`: every reply envelope, before its value is revived. Its `pages`
  *   facts keep `page.url()`, `isClosed()` and `context.pages()` current between ops, and its
@@ -26,9 +27,10 @@
  * the bundle names no host identifier, which tests/prelude-globals.test.ts checks, and
  * claw-sdk's runtime/tests.rs pins that a run's realm gains only `__neo` and its natives.
  */
-import { shapeBridgeError, unsupportedError } from './errors'
+import { shapeBridgeError, unsupportedError, withAbortCause } from './errors'
 import { host, refuser } from './host'
 import type { OpName } from './ops.generated'
+import type { SignalLike } from './signal'
 import type {
   CallHeader,
   Observation,
@@ -63,29 +65,37 @@ export type Reply = {
 /**
  * Runs one op. Inputs are plain JSON built by the classes (never class instances, which the
  * bootstrap's codec refuses), and the result is trusted as `OpOutputs` declares: Rust decoded
- * the input and owns the result's shape. Every failure is shaped once, here.
+ * the input and owns the result's shape. Every failure is shaped once, here. A `signal` aborts
+ * the op (signal.ts). The method checked it when the script called it; one that fired since is
+ * the call in flight, which the bootstrap aborts as soon as it is sent.
  */
 export async function invoke<Op extends OpName>(
   op: Op,
   call: CallHeader,
   args: OpInputs[Op],
+  signal?: SignalLike,
 ): Promise<OpOutputs[Op]> {
   try {
-    return (await host().invoke(op, { call, ...args })) as OpOutputs[Op]
+    return (await host().invoke(
+      op,
+      { call, ...args },
+      signal === undefined ? undefined : { signal },
+    )) as OpOutputs[Op]
   } catch (thrown) {
-    throw shapeBridgeError(op, call.api, thrown)
+    throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal)
   }
 }
 
 /**
  * A page-state result and its ordering evidence. An optional consumer reserves delivery
- * synchronously, before any caller awaiting this reply can run.
+ * synchronously, before any caller awaiting this reply can run. `signal` as for [`invoke`].
  */
 export async function invokeObserved<Op extends OpName>(
   op: Op,
   call: CallHeader,
   args: OpInputs[Op],
   onResult?: (value: OpOutputs[Op], observed: Observation | null) => void,
+  signal?: SignalLike,
 ): Promise<{ value: OpOutputs[Op]; observed: Observation | null }> {
   try {
     const reply = await host().invoke(
@@ -93,6 +103,7 @@ export async function invokeObserved<Op extends OpName>(
       { call, ...args },
       {
         observed: true,
+        signal,
         onResult:
           onResult &&
           ((value, observed) =>
@@ -104,7 +115,7 @@ export async function invokeObserved<Op extends OpName>(
       observed: readObservation(field(reply, 'observed')),
     }
   } catch (thrown) {
-    throw shapeBridgeError(op, call.api, thrown)
+    throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal)
   }
 }
 

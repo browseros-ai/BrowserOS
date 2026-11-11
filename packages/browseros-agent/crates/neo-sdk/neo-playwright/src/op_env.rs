@@ -8,10 +8,18 @@
 //! handler with both and drops the op's future (skeleton D7, steps 4 and 5), and everything
 //! an op leaves behind in the page is cleaned up by `Drop` guards, which run on that drop too.
 //! A second way to stop would be a second cleanup path to get right.
+//!
+//! An abort is not a stop. Playwright's `signal` option fails one op as its own timeout does,
+//! with the op's call log and an `operation was aborted: <reason>` line (upstream's
+//! `Progress.abort`), so it reaches the op through [`OpEnv::aborted`], which `OpScope`'s waits
+//! race exactly as they race the op's deadline: the op returns its error through the timeout
+//! path it already has, and nothing is dropped from outside.
 
+use std::future;
 use std::sync::Arc;
 
 use browseros_core::{BrowserView, TabId, TargetId};
+use futures_util::future::BoxFuture;
 use neo_trace::ErrorOwner;
 use serde_json::Value;
 
@@ -71,6 +79,19 @@ pub trait OpEnv: Send + Sync {
     /// The target this operation admitted for its own page. The host compares this with
     /// the later cache observation before allowing a result payload to refresh page state.
     fn report_target(&self, _tab: TabId, _target: &TargetId) {}
+
+    /// The reason the script gave when it aborted this op through Playwright's `signal` option,
+    /// as upstream prints it (an `Error` reason's message, else the reason as a string), once it
+    /// has. `None` while the op runs unaborted, and always for a host that offers no abort.
+    fn abort_reason(&self) -> Option<String> {
+        None
+    }
+
+    /// Resolves once the script aborts this op, when [`OpEnv::abort_reason`] reads `Some`.
+    /// Cheap to call again: each wait of the op races a fresh one. The default never resolves.
+    fn aborted(&self) -> BoxFuture<'_, ()> {
+        Box::pin(future::pending())
+    }
 }
 
 /// A host policy refused the op (`owner_has_control`, `page_private`, ...). It reaches the

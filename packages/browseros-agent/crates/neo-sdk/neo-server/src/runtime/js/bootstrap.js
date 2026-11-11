@@ -4,10 +4,10 @@
 //
 // The bridge's three natives take and return strings only. This file turns them into the agent
 // API's plumbing: NeoError and TimeoutError, the input codec, reply envelopes, call sites,
-// handle brands, a prelude's refusals as door calls, console, timers, and the run itself. After
-// it and the preludes run, the realm's globals are QuickJS's own plus __neo_invoke, __neo_log,
-// __neo_sleep and __neo (pinned by runtime/tests.rs): the agent's API reaches its code as the
-// parameters of its function, never as globals.
+// handle brands, a prelude's refusals as door calls, aborts of calls in flight, console, timers,
+// and the run itself. After it and the preludes run, the realm's globals are QuickJS's own plus
+// __neo_invoke, __neo_log, __neo_sleep and __neo (pinned by runtime/tests.rs): the agent's API
+// reaches its code as the parameters of its function, never as globals.
 
 ;(() => {
   const nativeInvoke = globalThis.__neo_invoke // (name, inputJson, site) => Promise<string>, never rejects
@@ -311,13 +311,57 @@
     return match === null ? '' : `run:${Number(match[1]) - 1}:${match[2]}`
   }
 
+  // An abortable call (`options.signal`, an AbortSignal) is keyed by the realm, which learns its
+  // op id only from the reply: the bridge registers the key when the call is submitted, and
+  // `$neo.abort` names the op by it (runtime/bridge.rs). The op fails as its own timeout would,
+  // with code `aborted`, and the Playwright prelude names that error `AbortError`.
+  let nextAbortKey = 1
+
+  function abortOp(key, signal) {
+    const reason = textOf(() => {
+      const given = signal.reason
+      return given instanceof Error ? given.message : String(given)
+    })
+    // Not awaited: the bridge answers an abort at once, and the native never rejects.
+    nativeInvoke('$neo.abort', JSON.stringify({ key, reason }), '')
+  }
+
+  // Calls `abort` when `signal` fires, or at once if it already has; returns the detach.
+  function whenAborted(signal, abort) {
+    if (signal.aborted) {
+      abort()
+      return () => {}
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    return () => signal.removeEventListener('abort', abort)
+  }
+
   const replyListeners = []
   async function invoke(name, input, options) {
     // Before the first await, while the agent's frame is still on the stack.
     const site = callSite()
-    const envelope = JSON.parse(
-      await nativeInvoke(String(name), encode(input), site),
+    const signal = options?.signal
+    const key = signal === undefined ? undefined : String(nextAbortKey++)
+    const encoded = encode(input)
+    // Submitted now, so the bridge knows the key before the signal can fire.
+    const answer = nativeInvoke(
+      String(name),
+      key === undefined
+        ? encoded
+        : `{"$neo":"abortable","key":"${key}","input":${encoded}}`,
+      site,
     )
+    const detach =
+      key === undefined
+        ? undefined
+        : whenAborted(signal, () => abortOp(key, signal))
+    let text
+    try {
+      text = await answer
+    } finally {
+      detach?.()
+    }
+    const envelope = JSON.parse(text)
     for (const listener of replyListeners) listener(envelope)
     if (envelope.err !== undefined) {
       const error = envelope.err.timeout

@@ -102,6 +102,7 @@ impl TabJanitor {
                     input: json!({ "page": page }),
                     caller: Caller::Neo,
                     site: None,
+                    abort: None,
                 };
                 self.dispatcher.submit(&run, call)
             })

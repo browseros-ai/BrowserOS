@@ -21,9 +21,9 @@ use super::page_target::TargetHandle;
 use super::refusal_brand::RefusalBrand;
 use super::registry::DecodedCall;
 use super::{
-    ActedTarget, Answer, Claim, ErrorCode, LeafError, MethodSpec, Observation, Observer, OpFailure,
-    OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry, RunCtx, Visibility,
-    operation_error,
+    ActedTarget, Answer, Claim, ErrorCode, LeafError, MethodSpec, Observation, Observer, OpAbort,
+    OpFailure, OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry, RunCtx,
+    Visibility, operation_error,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 
@@ -88,6 +88,9 @@ pub(crate) struct Call {
     pub(crate) caller: Caller,
     /// Where in the script the call was made.
     pub(crate) site: Option<CallSite>,
+    /// The script's switch for aborting this op (Playwright's `signal`), when it can. A child
+    /// op takes its parent's, so an abort reaches whichever of them is waiting.
+    pub(crate) abort: Option<OpAbort>,
 }
 
 /// Where in the script a call was made (`run:LINE:COL`), for the run's reply lines. A plain
@@ -178,6 +181,16 @@ impl Call {
             input,
             caller: Caller::Script,
             site,
+            abort: None,
+        }
+    }
+
+    /// The same call, which the script can abort through `abort`.
+    #[must_use]
+    pub(crate) fn abortable(self, abort: OpAbort) -> Self {
+        Self {
+            abort: Some(abort),
+            ..self
         }
     }
 }
@@ -294,6 +307,7 @@ impl Dispatcher {
             input,
             caller: Caller::Neo,
             site: None,
+            abort: None,
         };
         let (pending, admitted) = self.admit(run, call, parent.map(Arc::clone));
         if let Some(admitted) = admitted {
@@ -364,8 +378,10 @@ impl Dispatcher {
             input,
             caller,
             site,
+            abort,
         } = call;
-        let state = OpState::new(run.next_operation(), parent);
+        let abort = abort.or_else(|| parent.as_ref().and_then(|parent| parent.abort().cloned()));
+        let state = OpState::new(run.next_operation(), parent, abort);
         let (reply, receiver) = oneshot::channel();
         let pending = PendingReply {
             operation: state.id(),
