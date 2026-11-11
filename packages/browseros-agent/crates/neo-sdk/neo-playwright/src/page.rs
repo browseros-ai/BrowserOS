@@ -48,6 +48,7 @@ mod page_registry;
 mod page_state;
 mod page_value;
 mod pdf;
+mod save_screenshot;
 mod screenshot;
 mod screenshot_geometry;
 mod screenshot_masks;

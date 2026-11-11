@@ -356,6 +356,9 @@ export function curationArgs(args, output) {
   return filtered
 }
 
+/** Product assertions supersede only skips caused by the old polling shim's matcher table. */
+const uncoveredCheck = /^expectLoop: \w+ is not covered$/
+
 export function skipReason(
   entries,
   file,

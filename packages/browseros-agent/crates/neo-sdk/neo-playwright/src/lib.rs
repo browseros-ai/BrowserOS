@@ -11,9 +11,10 @@
 //! Licensing: Playwright is Apache-2.0. `THIRD_PARTY_NOTICES.md` carries its `LICENSE` and
 //! `NOTICE` and must ship next to any binary that embeds this crate.
 //!
-//! The host sees one facade and one op table. Each Playwright call the prelude makes is one
-//! [`Op`] (`locator.click`, `page.ariaSnapshot`, ...); the host registers every op from
-//! [`Op::all`] and hands each call to [`Playwright::invoke`] with an [`OpEnv`] for that call.
+//! The host sees one facade and one op table. Each browser or filesystem step is an [`Op`]
+//! (`locator.click`, `page.ariaSnapshot`, ...); a client method may compose steps, such as
+//! screenshot capture followed by a file save. The host registers every op from [`Op::all`]
+//! and hands each step to [`Playwright::invoke`] with an [`OpEnv`] for that call.
 //! Each op's [`OpSpec`] declares the [`Capability`]s it reaches beyond its page's sealed world
 //! (the page's main world, its pixels, Neo's screen, Neo's disk), and the host holds and polices
 //! ops by those declarations, never by op name. Each capability's gateway in the crate refuses
@@ -23,7 +24,7 @@
 //!  agent JS ─ prelude ─ __neo.invoke(op, json) ─ host dispatcher (policy, trace, delivery)
 //!                                                        │ OpEnv: recheck, mark_sent, note
 //!  Playwright::invoke(env, op, json) ◀───────────────────┘
-//!    └─ OpScope (call header) ─ family leaf (its own typed input) ─ sealed world per frame
+//!    └─ OpScope (call header) ─ family leaf (typed input) ─ browser worlds or filesystem
 //! ```
 //!
 //! Ownership: state that outlives one op belongs to [`Playwright`] (per browser connection) or
@@ -36,6 +37,7 @@ mod call_log;
 mod download_facts;
 mod events;
 mod expect;
+mod file_save;
 mod input;
 mod listed_enum;
 mod locator_handler;

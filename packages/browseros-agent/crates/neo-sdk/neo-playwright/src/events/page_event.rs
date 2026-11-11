@@ -37,6 +37,8 @@ pub(crate) enum PageEvent {
     Closed(TargetId),
     /// A JavaScript dialog opened.
     Dialog(DialogOpened),
+    /// The same dialog closed, by a script, the browser, or automatic handling.
+    DialogClosed(DialogOpened),
     /// A console message, recorded only while some run listens for it on that page.
     Console(ConsoleMessage),
     /// An uncaught exception, recorded only while some run listens for it on that page.
@@ -62,7 +64,8 @@ impl PageEvent {
             ) => page == target && *load == kind,
             (PageEventKind::Popup, Self::Opened(opened)) => opened.opener.as_ref() == Some(target),
             (PageEventKind::Close, Self::Closed(closed)) => closed == target,
-            (PageEventKind::Dialog, Self::Dialog(dialog)) => dialog.target == *target,
+            (PageEventKind::Dialog, Self::Dialog(dialog))
+            | (PageEventKind::DialogClosed, Self::DialogClosed(dialog)) => dialog.target == *target,
             (PageEventKind::Console, Self::Console(message)) => message.target == *target,
             (PageEventKind::PageError, Self::PageError(error)) => error.target == *target,
             (PageEventKind::Download, Self::Download(download)) => {

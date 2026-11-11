@@ -392,8 +392,10 @@ async fn tests_that_a_navigation_retires_the_seq_even_across_processes() -> Test
         page.frames().by_seq(FrameSeq(1)),
         SeqLookup::Live { .. }
     ));
+    // Child frames reserve seqs when they attach, even before their worlds install. The
+    // fixture's iframe can already own seq 2; use an unallocated seq for the unknown case.
     assert!(matches!(
-        page.frames().by_seq(FrameSeq(2)),
+        page.frames().by_seq(FrameSeq(u32::MAX)),
         SeqLookup::Unknown
     ));
 

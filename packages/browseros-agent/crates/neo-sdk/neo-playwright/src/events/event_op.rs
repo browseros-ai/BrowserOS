@@ -26,7 +26,7 @@ use crate::op_output::to_output;
 use crate::op_scope::{Expired, OpScope, Sent};
 use crate::op_spec::{OpSpec, OpTarget, PAGE};
 use crate::target::PageRef;
-use crate::{DownloadState, ErrorCode, Playwright, PlaywrightError};
+use crate::{DownloadState, ErrorCode, Playwright, PlaywrightError, file_save};
 
 listed_enum! {
     /// Listening, the pump, one-shot waits, held dialogs and finished downloads.
@@ -265,6 +265,10 @@ async fn observe_context(scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
     let setup = async {
         let listing = scope.view().list_pages().await?;
         for page in listing.pages {
+            scope
+                .run_state()
+                .events
+                .remember_page(&page.target_id, page.tab_id);
             // A tab can close between listing and attachment. The watcher retries live tabs.
             if let Err(error) = scope.view().page_session(page.page_id).await {
                 scope.log(format!(
@@ -534,19 +538,8 @@ async fn save_as(
     })?;
     let sent = scope.send_effect()?;
     copy_to(&sent, &source, &target).await.map_err(|error| {
-        // A destination the script chose that cannot hold a file is the script's to fix; any
-        // other failure (a full disk, the browser's file gone) is Neo's.
-        let code = match error.kind() {
-            io::ErrorKind::PermissionDenied
-            | io::ErrorKind::NotADirectory
-            | io::ErrorKind::IsADirectory
-            | io::ErrorKind::ReadOnlyFilesystem
-            | io::ErrorKind::InvalidFilename
-            | io::ErrorKind::InvalidInput => ErrorCode::InvalidInput,
-            _ => ErrorCode::Internal,
-        };
         scope.fail(
-            code,
+            file_save::error_code(error.kind()),
             &format!(
                 "cannot save the download to \"{}\": {error}",
                 target.display()
