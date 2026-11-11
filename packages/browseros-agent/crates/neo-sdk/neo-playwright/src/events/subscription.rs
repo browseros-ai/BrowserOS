@@ -10,6 +10,9 @@ listed_enum! {
     /// (`page.waitForEvent(name)`).
     pub(crate) enum PageEventKind {
         Popup,
+        Worker,
+        WorkerClosed,
+        WorkerState,
         Close,
         Dialog,
         DialogClosed,
@@ -33,6 +36,9 @@ impl PageEventKind {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Popup => "popup",
+            Self::Worker => "worker",
+            Self::WorkerClosed => "workerclosed",
+            Self::WorkerState => "workerstate",
             Self::Close => "close",
             Self::Dialog => "dialog",
             Self::DialogClosed => "dialogclosed",
@@ -75,7 +81,7 @@ impl PageEventKind {
             "request" | "requestfailed" | "requestfinished" | "response" | "websocket" => Some(
                 format!("page.on('{name}') is not available in Neo: network events are not in v1"),
             ),
-            "crash" | "worker" => Some(format!("page.on('{name}') is not available in Neo")),
+            "crash" => Some(format!("page.on('{name}') is not available in Neo")),
             _ => None,
         };
         Err(hint.map_or(Unknown::NotAnEvent, Unknown::Unsupported))

@@ -47,6 +47,7 @@ import type {
 
 /** Events a page reports, from Rust's log. */
 const PAGE_EVENTS: ReadonlySet<string> = new Set([
+  'worker',
   'popup',
   'close',
   'dialog',
@@ -82,7 +83,6 @@ const UNREPORTED: Readonly<Record<string, string>> = {
   requestfinished:
     'Neo does not report network events; wait for what the page shows instead',
   websocket: 'Neo does not report WebSockets',
-  worker: 'Neo does not report workers',
   serviceworker: 'Neo does not report service workers',
   backgroundpage: 'Neo does not report extension background pages',
   crash: 'Neo does not report crashes; a crashed page fails its next call',
@@ -138,12 +138,14 @@ type ChooserLease = { ready: Promise<void>; release(): Promise<void> }
 export type EventOwner = EventEmitter & {
   _timeoutSettings: TimeoutSettings
   _pageFromResult(value: unknown, url?: string): Page | null
+  _settleWorkerFacts(at: Observation | null): void
 }
 
 export class EventHub {
   private readonly owner: EventOwner
   /** Listened (emitter, event) pairs; the pump runs while there is one. */
   private listening = 0
+  private readonly workerPages = new Set<Page>()
   private pumping = false
   /** A decoded pump batch owns its close positions until its earlier records run. */
   private batch: {
@@ -167,6 +169,14 @@ export class EventHub {
 
   constructor(owner: EventOwner) {
     this.owner = owner
+  }
+
+  /** Bookkeeping interest is independent of user worker listeners, so a delayed worker
+   * creation updates synchronous workers() even after the script's last foreground call. */
+  observeWorkers(page: Page): void {
+    if (this.workerPages.has(page)) return
+    this.workerPages.add(page)
+    this.listen(page, 'workerstate', true)
   }
 
   /**
@@ -452,6 +462,7 @@ export class EventHub {
 
   /** Finish this reply's approvals if a record was absent or a callback interrupted the batch. */
   private settleCloses(observed: Observation | null): void {
+    this.owner._settleWorkerFacts(observed)
     for (const close of observed?.closes ?? [])
       this.page({ $neo: 'page', tab: close.tab })._settleClose(observed)
   }
@@ -474,6 +485,20 @@ export class EventHub {
     )
       return
     switch (record.event) {
+      case 'workerstate': {
+        const worker = this.page(record.page)._worker(record.worker)
+        if (record.closed) worker._didClose()
+        return
+      }
+      case 'worker':
+        this.page(record.page).emit(
+          'worker',
+          this.page(record.page)._worker(record.worker),
+        )
+        return
+      case 'workerclosed':
+        this.page(record.page)._worker(record.worker)._didClose()
+        return
       case 'popup':
         this.page(record.page).emit(
           'popup',
@@ -577,6 +602,15 @@ export class EventHub {
   /** The value `waitForEvent` resolves with for one event. */
   private value(record: EventRecord, observed: Observation | null): unknown {
     switch (record.event) {
+      case 'workerstate':
+        return undefined
+      case 'worker':
+        return this.page(record.page)._worker(record.worker)
+      case 'workerclosed': {
+        const worker = this.page(record.page)._worker(record.worker)
+        worker._didClose()
+        return worker
+      }
       case 'popup':
         return this.page(record.popup.page, record.popup.url)
       case 'page':

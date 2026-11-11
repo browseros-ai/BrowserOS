@@ -69,7 +69,7 @@ pub(crate) use document_write::DocumentWrite;
 /// travels with every call, so nothing of Neo stays in the page. `eval` works in it even under a
 /// page CSP that forbids it, because Chromium allows code generation inside a call from the
 /// inspector (measured on BrowserOS with `script-src 'self'`).
-const MAIN_WORLD_JS: &str = include_str!("../../assets/main-world.js");
+pub(crate) const MAIN_WORLD_JS: &str = include_str!("../../assets/main-world.js");
 
 /// A poller's next poll: the predicate called again, judged in the page.
 const POLL: &str = "function () { return this(); }";
@@ -542,6 +542,18 @@ fn parsed(scope: &OpScope<'_>, serialized: Serialized) -> Result<PageValue, Play
         Unreadable::TooDeep => scope.fail(ErrorCode::PageError, TOO_DEEP),
         Unreadable::Shape => scope.fail(ErrorCode::PageError, OUTSIDE_FORMAT),
     })
+}
+
+/// The same result boundary for worker scripts: enforce the depth and tagged-value
+/// contract before the host records the value or the prelude revives it.
+pub(crate) fn evaluation_result(
+    scope: &OpScope<'_>,
+    text: Option<String>,
+) -> Result<Value, PlaywrightError> {
+    returned(
+        scope,
+        parsed(scope, text.map_or(Serialized::Undefined, Serialized::Text))?,
+    )
 }
 
 /// A result upstream's server cannot send back: one holding a `{fn}`, which it reads as a

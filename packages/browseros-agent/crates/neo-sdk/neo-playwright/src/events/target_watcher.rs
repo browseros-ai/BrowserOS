@@ -47,6 +47,7 @@ use tokio::runtime::Handle;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, MissedTickBehavior};
 
@@ -81,6 +82,7 @@ const TICK: Duration = Duration::from_millis(250);
 #[derive(Debug)]
 pub(crate) struct TargetWatcher {
     task: Option<JoinHandle<()>>,
+    requests: UnboundedSender<WatcherRequest>,
 }
 
 impl Drop for TargetWatcher {
@@ -91,7 +93,23 @@ impl Drop for TargetWatcher {
     }
 }
 
+#[derive(Debug)]
+struct WatcherRequest {
+    closed: Option<TargetId>,
+    done: oneshot::Sender<()>,
+}
+
 impl TargetWatcher {
+    /// Foreground replies must see every CDP fact received before their command replied.
+    /// A confirmed explicit close also retires workers before Chromium finishes tearing
+    /// down a renderer with unresolved promises (Playwright issue 43204).
+    pub(crate) async fn synchronize(&self, closed: Option<TargetId>) {
+        let (done, wait) = oneshot::channel();
+        if self.requests.send(WatcherRequest { closed, done }).is_ok() {
+            let _ = time::timeout(Duration::from_secs(2), wait).await;
+        }
+    }
+
     /// Starts watching `browser`, recording page events through `writer` and frame lifecycles
     /// into `attach_log`. Outside a tokio runtime there is nothing to run it on, so nothing is
     /// recorded.
@@ -100,11 +118,12 @@ impl TargetWatcher {
         writer: EventWriter,
         attach_log: Arc<FrameAttachLog>,
     ) -> Self {
+        let (requests, pending) = mpsc::unbounded_channel();
         let task = Handle::try_current().ok().map(|runtime| {
             let (watcher, found) = Watcher::new(browser, writer, attach_log);
-            runtime.spawn(watcher.run(found))
+            runtime.spawn(watcher.run(found, pending))
         });
-        Self { task }
+        Self { task, requests }
     }
 }
 
@@ -118,12 +137,18 @@ struct Watcher {
     lifecycle: FrameLifecycleTracker,
     /// The connection epoch discovery ran for; `None` until it succeeds, and after a lag.
     epoch: Option<u64>,
+    /// Retained across lag-driven rediscovery, so reconnect still invalidates endpoints.
+    connection_epoch: Option<u64>,
     /// The tabs the watcher knows.
     pages: HashMap<TargetId, KnownPage>,
     /// Popups whose window lookup was in flight when they closed.
     closed_early: HashSet<TargetId>,
     /// Which tab each page or OOPIF session belongs to.
     sessions: HashMap<SessionId, TargetId>,
+    /// Only the chosen auto-attach endpoint publishes a worker's console and close.
+    worker_sessions: HashMap<SessionId, String>,
+    /// Older Chromium has no workerScriptLoaded event and uses context creation instead.
+    worker_script_events: Option<bool>,
     /// Core may attach concurrently. One source per native target prevents each CDP session
     /// from publishing the same lifecycle transition; OOPIFs have their own native target.
     lifecycle_sources: LifecycleSources,
@@ -172,6 +197,8 @@ struct TargetInfo {
     target_id: String,
     #[serde(rename = "type")]
     kind: String,
+    #[serde(default)]
+    parent_frame_id: Option<String>,
     #[serde(default)]
     url: String,
     #[serde(default)]
@@ -321,9 +348,12 @@ impl Watcher {
             attach_log,
             lifecycle: FrameLifecycleTracker::default(),
             epoch: None,
+            connection_epoch: None,
             pages: HashMap::new(),
             closed_early: HashSet::new(),
             sessions: HashMap::new(),
+            worker_sessions: HashMap::new(),
+            worker_script_events: None,
             lifecycle_sources: LifecycleSources::default(),
             frames: HashMap::new(),
             contexts: HashMap::new(),
@@ -335,7 +365,11 @@ impl Watcher {
         (watcher, found_rx)
     }
 
-    async fn run(mut self, mut found: UnboundedReceiver<OpenedPage>) {
+    async fn run(
+        mut self,
+        mut found: UnboundedReceiver<OpenedPage>,
+        mut requests: UnboundedReceiver<WatcherRequest>,
+    ) {
         // Subscribed before discovery, so no target is created unseen in between.
         let mut events = self.browser.cdp_events();
         let mut bindings = self.browser.cdp_events_targeted("Runtime.bindingCalled");
@@ -359,6 +393,16 @@ impl Watcher {
                     self.drain(&mut events).await;
                     self.binding_called(call).await;
                 }
+                Some(request) = requests.recv() => {
+                    // Initial synchronous page facts need attachments even for tabs the
+                    // run has never acted on; otherwise their pre-existing workers vanish.
+                    if self.epoch.is_none() { self.tick().await; }
+                    self.drain(&mut events).await;
+                    if let Some(target) = request.closed {
+                        for worker in self.writer.hub().workers.list(&target) { self.close_worker(&worker.id); }
+                    }
+                    let _ = request.done.send(());
+                }
                 Some(opened) = found.recv() => self.found(opened),
                 _ = tick.tick() => self.tick().await,
                 () = time::sleep_until(grace_ends.unwrap_or_else(Instant::now)), if grace_ends.is_some() => {
@@ -375,7 +419,15 @@ impl Watcher {
             return;
         };
         match method {
+            "Inspector.workerScriptLoaded" => self.writer.hub().workers.script_loaded(&session),
             "Runtime.executionContextCreated" => {
+                if let Some(id) = params
+                    .get("context")
+                    .and_then(|context| context.get("id"))
+                    .and_then(Value::as_i64)
+                {
+                    self.writer.hub().workers.context(&session, id);
+                }
                 if let Some(ContextCreated { context }) = parse(params)
                     && context.aux_data.is_default
                     && let Some(frame) = context.aux_data.frame_id
@@ -400,6 +452,9 @@ impl Watcher {
 
     /// A session went: its tab and its contexts are forgotten.
     fn session_detached(&mut self, session: &SessionId) {
+        if let Some(id) = self.worker_sessions.remove(session) {
+            self.close_worker(&id);
+        }
         self.contexts.retain(|(known, _), _| known != session);
         self.sessions.remove(session);
     }
@@ -455,9 +510,10 @@ impl Watcher {
     async fn tick(&mut self) {
         let epoch = self.browser.connection().connection_epoch();
         if self.epoch != Some(epoch) && self.browser.is_connected() {
-            let changed = self.epoch.is_some_and(|known| known != epoch);
+            let changed = self.connection_epoch.is_some_and(|known| known != epoch);
             if self.discover(changed).await.is_ok() {
                 self.epoch = Some(epoch);
+                self.connection_epoch = Some(epoch);
             }
         }
         self.observe_context().await;
@@ -498,6 +554,25 @@ impl Watcher {
                 .cdp("Target.getTargets", json!({}), None)
                 .await?,
         )?;
+        if self.connection_epoch.is_some() && !changed {
+            self.recover_workers(&targets.target_infos).await;
+        }
+        // Reconcile worker lifetimes after broadcast lag, just as discovery reconciles tabs.
+        let live_workers: HashSet<&str> = targets
+            .target_infos
+            .iter()
+            .filter(|info| info.kind == "worker")
+            .map(|info| info.target_id.as_str())
+            .collect();
+        let gone_workers: Vec<String> = self
+            .worker_sessions
+            .values()
+            .filter(|id| !live_workers.contains(id.as_str()))
+            .cloned()
+            .collect();
+        for id in gone_workers {
+            self.close_worker(&id);
+        }
         let live: HashSet<TargetId> = targets
             .target_infos
             .into_iter()
@@ -521,6 +596,11 @@ impl Watcher {
         }
         if changed {
             self.lifecycle = FrameLifecycleTracker::default();
+            for id in self.worker_sessions.values().cloned().collect::<Vec<_>>() {
+                self.close_worker(&id);
+            }
+            self.worker_sessions.clear();
+            self.worker_script_events = None;
             self.sessions.clear();
             self.lifecycle_sources = LifecycleSources::default();
             self.frames.clear();
@@ -628,8 +708,7 @@ impl Watcher {
                     && let Some(target) = self.wanted(&session, PageEventKind::Console).await
                     && let Some(params) = parse::<ConsoleParams>(params)
                 {
-                    let message = ConsoleMessage::from_params(target, params);
-                    self.writer.record(PageEvent::Console(message));
+                    self.console(&session, target, params);
                 }
             }
             "Runtime.exceptionThrown" => {
@@ -726,6 +805,10 @@ impl Watcher {
     }
 
     fn destroyed(&mut self, target: &TargetId) {
+        self.close_worker(target.as_str());
+        for worker in self.writer.hub().workers.list(target) {
+            self.close_worker(&worker.id);
+        }
         self.frames.remove(target.as_str());
         self.attach_log.forget(target);
         self.lifecycle.forget(target);
@@ -755,12 +838,188 @@ impl Watcher {
         }
     }
 
+    fn console(&mut self, session: &SessionId, target: TargetId, params: ConsoleParams) {
+        if !self.worker_sessions.contains_key(session) && !self.lifecycle_sources.accepts(session) {
+            return;
+        }
+        let mut message = ConsoleMessage::from_params(target, params);
+        message.worker = self
+            .worker_sessions
+            .get(session)
+            .and_then(|id| self.writer.hub().workers.get(&message.target, id))
+            .map(|worker| worker.info.clone());
+        self.writer.record(PageEvent::Console(message));
+    }
+
+    fn close_worker(&mut self, id: &str) {
+        if let Some(worker) = self.writer.hub().workers.remove(id) {
+            if let Some(session) = worker.session.session_id() {
+                self.worker_sessions.remove(session);
+                self.sessions.remove(session);
+            }
+            self.writer.record(PageEvent::Worker {
+                target: worker.page.clone(),
+                worker: worker.info.clone(),
+                closed: true,
+            });
+        }
+    }
+
+    async fn worker_script_events(&mut self) -> bool {
+        #[derive(Deserialize)]
+        struct Version {
+            product: String,
+        }
+        if let Some(supported) = self.worker_script_events {
+            return supported;
+        }
+        let version = self
+            .browser
+            .cdp("Browser.getVersion", json!({}), None)
+            .await;
+        let supported = version
+            .ok()
+            .and_then(parse::<Version>)
+            .and_then(|version| {
+                version
+                    .product
+                    .split_once('/')
+                    .and_then(|(_, version)| version.split('.').next())
+                    .and_then(|major| major.parse::<u32>().ok())
+            })
+            .is_some_and(|major| major >= 143);
+        self.worker_script_events = Some(supported);
+        supported
+    }
+
+    /// Reattach after event loss with a fresh Runtime agent. This replays both context and
+    /// script-loaded notifications; retaining the old worker ID preserves client identity.
+    async fn recover_workers(&mut self, targets: &[TargetInfo]) {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct AttachedWorker {
+            session_id: SessionId,
+        }
+        for target in targets.iter().filter(|info| info.kind == "worker") {
+            let known = self
+                .sessions
+                .values()
+                .find_map(|page| self.writer.hub().workers.get(page, &target.target_id));
+            if known.as_ref().is_some_and(|worker| {
+                matches!(
+                    *worker.context.borrow(),
+                    super::worker_table::WorkerContext::Ready(_)
+                )
+            }) {
+                continue;
+            }
+            let owner = known
+                .as_ref()
+                .map(|worker| worker.page.clone())
+                .or_else(|| {
+                    let frame = target.parent_frame_id.as_deref()?;
+                    self.pages
+                        .keys()
+                        .find(|page| page.as_str() == frame)
+                        .cloned()
+                        .or_else(|| self.frames.get(frame).cloned())
+                        .or_else(|| {
+                            self.contexts.iter().find_map(|((session, _), known)| {
+                                (known.as_str() == frame)
+                                    .then(|| self.sessions.get(session).cloned())
+                                    .flatten()
+                            })
+                        })
+                });
+            let Some(owner) = owner else {
+                continue;
+            };
+            let reply = self
+                .browser
+                .cdp(
+                    "Target.attachToTarget",
+                    json!({"targetId": target.target_id, "flatten": true}),
+                    None,
+                )
+                .await;
+            let Some(attached) = reply.ok().and_then(parse::<AttachedWorker>) else {
+                continue;
+            };
+            if let Some(old) = self.writer.hub().workers.remove(&target.target_id)
+                && let Some(session) = old.session.session_id()
+            {
+                self.worker_sessions.remove(session);
+                self.sessions.remove(session);
+            }
+            let info = super::worker_table::WorkerInfo {
+                id: target.target_id.clone(),
+                url: target.url.clone(),
+            };
+            self.start_worker(owner, info, attached.session_id, known.is_none())
+                .await;
+        }
+    }
+
+    async fn start_worker(
+        &mut self,
+        tab: TargetId,
+        info: super::worker_table::WorkerInfo,
+        session_id: SessionId,
+        announce: bool,
+    ) {
+        let session = self
+            .browser
+            .protocol_session(session_id.clone())
+            .at_connection_epoch();
+        self.sessions.insert(session_id.clone(), tab.clone());
+        let wait_for_script = self.worker_script_events().await;
+        if !self.writer.hub().workers.insert(
+            tab.clone(),
+            info.clone(),
+            session.clone(),
+            wait_for_script,
+        ) {
+            return;
+        }
+        self.worker_sessions.insert(session_id, info.id.clone());
+        if announce {
+            self.writer.record(PageEvent::Worker {
+                target: tab,
+                worker: info,
+                closed: false,
+            });
+        }
+        // Runtime.enable replays startup contexts and console messages. Arm recursive
+        // attachment as upstream does, so nested workers belong to the same Page.
+        let _ = session.send_value("Runtime.enable", json!({})).await;
+        let _ = session
+            .send_value(
+                "Target.setAutoAttach",
+                json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}),
+            )
+            .await;
+        let _ = session
+            .send_value("Runtime.runIfWaitingForDebugger", json!({}))
+            .await;
+    }
+
     async fn attached(&mut self, parent: Option<&SessionId>, attached: Attached) {
         let Attached {
             session_id,
             target_info,
         } = attached;
         match target_info.kind.as_str() {
+            "worker" => {
+                let Some(parent) = parent else { return };
+                let Some(tab) = self.target_of(parent).await else {
+                    return;
+                };
+                let info = super::worker_table::WorkerInfo {
+                    id: target_info.target_id,
+                    url: target_info.url,
+                };
+                self.start_worker(tab, info, session_id, true).await;
+            }
             "page" => {
                 let target = TargetId(target_info.target_id);
                 self.lifecycle_sources.attach(&session_id, &target);
@@ -800,6 +1059,13 @@ impl Watcher {
                 .filter(|tab| tab.as_str() == event.frame.as_str()),
             _ => None,
         };
+        if let Some(target) = &main_of
+            && matches!(&navigation, PageEvent::Navigation(event) if event.new_document)
+        {
+            for worker in self.writer.hub().workers.list(target) {
+                self.close_worker(&worker.id);
+            }
+        }
         let seq = self.writer.record(navigation);
         if let Some(tab) = main_of {
             self.writer.main_frame_navigated(tab, seq);
@@ -821,15 +1087,27 @@ impl Watcher {
         Some(info.target_id)
     }
 
-    /// A context subscription also covers newly discovered pages that no SDK action has
-    /// admitted yet. Core owns these sessions and their shutdown, just like action sessions.
+    /// Auto-attach every native page so `page.workers()` can enumerate existing workers in
+    /// untouched adopted tabs. Context lifecycle listeners reuse those sessions. Core owns
+    /// their shutdown, just like action sessions; nothing creates or selects a tab here.
     async fn observe_context(&self) {
-        if !self.writer.hub().wants_context_lifecycle() {
-            return;
-        }
         if let Ok(Ok(listing)) = time::timeout(Duration::from_secs(1), self.view.list_pages()).await
         {
             for page in listing.pages {
+                // Agent-created tabs are initialized by their foreground creation call.
+                // Racing that call can add an attach attempt after its client timeout.
+                if self.browser.pages.is_agent_created(&page.page_id).await {
+                    continue;
+                }
+                if self
+                    .browser
+                    .pages
+                    .get_attached_session(page.page_id.clone())
+                    .await
+                    .is_some()
+                {
+                    continue;
+                }
                 if !self
                     .sessions
                     .values()

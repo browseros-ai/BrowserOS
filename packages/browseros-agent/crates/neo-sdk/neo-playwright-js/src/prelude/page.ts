@@ -8,6 +8,7 @@
  * `{"$neo":"page","tab": null}`, claw-sdk's door opens one tab for them however many race to be
  * first, and the reply's `defaultPage` binds this object to that tab (`BrowserContext`).
  */
+
 import type { UrlPattern } from '../probe/protocol'
 import { type BindingCallback, exposeOnPage } from './bindings'
 import { invoke, invokeObserved, sleep } from './bridge'
@@ -78,7 +79,9 @@ import type {
   PageBrand,
   PageFact,
   PageHandle,
+  WorkerInfo,
 } from './wire'
+import { Worker } from './worker'
 
 /** Page-scoped preferences; omitted values are retained and null clears just that override. */
 export type MediaOptions = {
@@ -246,8 +249,37 @@ export class Page extends EventEmitter {
     )
   }
 
-  workers(): never[] {
-    return []
+  readonly #workers = new Map<string, Worker>()
+  readonly #workerBatches = new Set<number>()
+  #workerSnapshot: WorkerInfo[] | null = null
+
+  workers(): Worker[] {
+    return [...this.#workers.values()].filter((worker) => !worker._closed)
+  }
+
+  /** Facts, waits and listeners must return the same Worker, including after its close. */
+  _worker(info: WorkerInfo): Worker {
+    let worker = this.#workers.get(info.id)
+    if (!worker) {
+      worker = new Worker(this, info)
+      this.#workers.set(info.id, worker)
+    }
+    return worker
+  }
+
+  /** A batch may carry console before close. Retire from facts only after all such replies
+   * have delivered their records; newer foreground facts replace the pending snapshot. */
+  _settleWorkerFacts(at: Observation | null): void {
+    if (at) this.#workerBatches.delete(at.seq)
+    if (this.#workerBatches.size === 0 && this.#workerSnapshot)
+      this.#applyWorkers(this.#workerSnapshot)
+  }
+
+  #applyWorkers(workers: WorkerInfo[]): void {
+    const live = new Set(workers.map((worker) => worker.id))
+    for (const [id, worker] of this.#workers)
+      if (!live.has(id)) worker._didClose()
+    for (const info of workers) this._worker(info)
   }
 
   /**
@@ -1228,6 +1260,13 @@ export class Page extends EventEmitter {
     }
     if (at.seq < this.#observedSeq) return
     this.#observedSeq = at.seq
+    if (fact.workers) {
+      this._context._events.observeWorkers(this)
+      this.#workerSnapshot = fact.workers
+      for (const worker of fact.workers) this._worker(worker)
+      if (at.deferWorkers) this.#workerBatches.add(at.seq)
+      else this._settleWorkerFacts(null)
+    }
     this.#observedHead = Math.max(this.#observedHead, at.events)
     this.#applyViewport(fact.viewportSize)
     if (fact.url !== undefined) {
@@ -1281,6 +1320,8 @@ export class Page extends EventEmitter {
   #close(): void {
     if (this._closed) return
     this._closed = true
+    this.#workerSnapshot = []
+    this._settleWorkerFacts(null)
     this.emit('close', this)
   }
 
