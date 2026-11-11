@@ -113,6 +113,9 @@ struct Watcher {
     closed_early: HashSet<TargetId>,
     /// Which tab each page or OOPIF session belongs to.
     sessions: HashMap<SessionId, TargetId>,
+    /// Core may attach concurrently. One source per native target prevents each CDP session
+    /// from publishing the same lifecycle transition; OOPIFs have their own native target.
+    lifecycle_sources: LifecycleSources,
     /// Which tab each out-of-process frame belongs to (an OOPIF's frame id is its target id).
     frames: HashMap<String, TargetId>,
     /// Dialogs in their grace, oldest first; every grace is as long, so this is by deadline.
@@ -276,6 +279,7 @@ impl Watcher {
             pages: HashMap::new(),
             closed_early: HashSet::new(),
             sessions: HashMap::new(),
+            lifecycle_sources: LifecycleSources::default(),
             frames: HashMap::new(),
             graces: VecDeque::new(),
             next_reap: Instant::now() + REAP,
@@ -381,6 +385,7 @@ impl Watcher {
         if changed {
             self.lifecycle = FrameLifecycleTracker::default();
             self.sessions.clear();
+            self.lifecycle_sources = LifecycleSources::default();
             self.frames.clear();
             self.writer.hub().dialogs().forget_sessions();
         }
@@ -443,6 +448,7 @@ impl Watcher {
             "Target.detachedFromTarget" => {
                 if let Some(Detached { session_id }) = parse(params) {
                     self.sessions.remove(&session_id);
+                    self.lifecycle_sources.detach(&session_id);
                 }
             }
             "Page.loadEventFired" | "Page.domContentEventFired" => {
@@ -595,6 +601,7 @@ impl Watcher {
         for session in &sessions {
             self.writer.hub().dialogs().closed_on_session(session);
             self.sessions.remove(session);
+            self.lifecycle_sources.detach(session);
         }
         match page.state {
             PageState::Reported => {
@@ -616,16 +623,23 @@ impl Watcher {
         match target_info.kind.as_str() {
             "page" => {
                 let target = TargetId(target_info.target_id);
+                self.lifecycle_sources.attach(&session_id, &target);
                 self.sessions.insert(session_id.clone(), target.clone());
-                self.seed_lifecycle(&target, &session_id).await;
+                if self.lifecycle_sources.accepts(&session_id) {
+                    self.seed_lifecycle(&target, &session_id).await;
+                }
             }
             "iframe" => {
                 if let Some(parent) = parent
                     && let Some(tab) = self.target_of(parent).await
                 {
+                    self.lifecycle_sources
+                        .attach(&session_id, &TargetId(target_info.target_id.clone()));
                     self.frames.insert(target_info.target_id, tab.clone());
                     self.sessions.insert(session_id.clone(), tab.clone());
-                    self.seed_lifecycle(&tab, &session_id).await;
+                    if self.lifecycle_sources.accepts(&session_id) {
+                        self.seed_lifecycle(&tab, &session_id).await;
+                    }
                 }
             }
             _ => {}
@@ -662,6 +676,7 @@ impl Watcher {
         let info = self.browser.pages.get_info(page).await?;
         self.sessions
             .insert(session.clone(), info.target_id.clone());
+        self.lifecycle_sources.attach(session, &info.target_id);
         self.seed_lifecycle(&info.target_id, session).await;
         Some(info.target_id)
     }
@@ -705,6 +720,10 @@ impl Watcher {
     /// Both public callbacks and navigation waits observe the same ordered CDP transition.
     async fn frame_changed(&mut self, method: &str, session: Option<&SessionId>, params: Value) {
         if let Some(session) = session {
+            self.target_of(session).await;
+            if !self.lifecycle_sources.accepts(session) {
+                return;
+            }
             self.frame_lifecycle(method, session, &params).await;
         }
         self.navigated(method, session, params).await;
@@ -712,8 +731,10 @@ impl Watcher {
 
     /// Load notifications from an OOPIF belong to its Frame, never to the page or context.
     async fn page_load(&mut self, method: &str, session: &SessionId) {
-        if self.view.page_for_session(session).await.is_some()
-            && let Some(target) = self.target_of(session).await
+        if let Some(target) = self.target_of(session).await
+            && self.lifecycle_sources.accepts(session)
+            // The chosen root session can predate core's most recently attached session.
+            && self.lifecycle_sources.targets.get(session) == Some(&target)
         {
             let kind = if method == "Page.loadEventFired" {
                 PageEventKind::Load
@@ -894,6 +915,42 @@ impl Watcher {
             url: download.url,
             suggested_filename: download.suggested_filename,
         }));
+    }
+}
+
+/// Selects one lifecycle source for each native page or OOPIF target. An action's session and
+/// context observation's session can coexist, but both receive the same Chromium transitions.
+/// Keep the first source until it detaches, then promote a surviving session for that target.
+#[derive(Default)]
+struct LifecycleSources {
+    targets: HashMap<SessionId, TargetId>,
+    primary: HashMap<TargetId, SessionId>,
+}
+
+impl LifecycleSources {
+    fn attach(&mut self, session: &SessionId, target: &TargetId) {
+        self.targets.insert(session.clone(), target.clone());
+        self.primary
+            .entry(target.clone())
+            .or_insert_with(|| session.clone());
+    }
+
+    fn accepts(&self, session: &SessionId) -> bool {
+        self.targets
+            .get(session)
+            .and_then(|target| self.primary.get(target))
+            == Some(session)
+    }
+
+    fn detach(&mut self, session: &SessionId) {
+        if let Some(target) = self.targets.remove(session)
+            && self.primary.get(&target) == Some(session)
+        {
+            self.primary.remove(&target);
+            if let Some((next, _)) = self.targets.iter().find(|(_, known)| **known == target) {
+                self.primary.insert(target, next.clone());
+            }
+        }
     }
 }
 

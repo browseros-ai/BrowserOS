@@ -160,6 +160,33 @@ test('lifecycle events preserve existing and new frame identity', {
     assert.equal(await dom, page)
     record('page load and DOMContentLoaded and context pageload carry Page')
 
+    // Context observation and newPage readiness can attach two sessions to the same native
+    // target. Every lifecycle transition must still reach each public listener exactly once.
+    const created = await sdk.context.newPage()
+    const receipts = { navigated: 0, loaded: 0 }
+    const countNavigation = (frame) => {
+      if (frame.page() === created && frame.url() === `${url}new-tab`)
+        receipts.navigated++
+    }
+    const countLoad = (candidate) => {
+      if (candidate === created) receipts.loaded++
+    }
+    sdk.context.on('framenavigated', countNavigation)
+    sdk.context.on('pageload', countLoad)
+    const createdLoad = sdk.context.waitForEvent('pageload', {
+      timeout: 3000,
+      predicate: (candidate) => candidate === created,
+    })
+    await created.goto(`${url}new-tab`)
+    assert.equal(await createdLoad, created)
+    await created.close()
+    sdk.context.off('framenavigated', countNavigation)
+    sdk.context.off('pageload', countLoad)
+    assert.deepEqual(receipts, { navigated: 1, loaded: 1 })
+    record(
+      'new tabs publish each lifecycle transition once across concurrent CDP sessions',
+    )
+
     await assert.rejects(
       page.waitForEvent('load', { timeout: 50 }),
       (error) => error.name === 'TimeoutError',
