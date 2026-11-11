@@ -182,6 +182,7 @@ impl<'env> OpScope<'env> {
 
     /// Carries delivered-close evidence to the host before the operation returns its value.
     pub(crate) fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
+        self.run_state().frames.forget(tab);
         self.env.report_close(tab, target, seq);
     }
 

@@ -76,6 +76,8 @@ struct WatchedFrame {
     navigations: VecDeque<Navigated>,
     /// The frame's URL as last reported, for the prelude's synchronous `page.url()`.
     url: Option<String>,
+    /// Failure URL from the current snapshot, including one read after a renderer swap.
+    unreachable: Option<String>,
     /// The frame left the watched session: `Page.frameDetached` named it there, either reason
     /// (`swap`, `remove`), or the session detached. Only [`DocumentWatch::navigated`] acts on
     /// it.
@@ -161,6 +163,11 @@ impl DocumentWatch {
         self.frame.current.as_deref()
     }
 
+    /// The current endpoint, which a child navigation can replace when its renderer swaps.
+    pub(crate) fn session(&self) -> &ProtocolSession {
+        &self.session
+    }
+
     /// Waits for a subsequent navigation intent while preserving all lifecycle events read
     /// along the way. Used to cancel an optional timing read, never the navigation itself.
     pub(crate) async fn navigation_started(&mut self) -> Result<(), WatchError> {
@@ -205,6 +212,7 @@ impl DocumentWatch {
                 .entry(frame.loader_id.clone())
                 .or_default();
             self.frame.current = Some(frame.loader_id);
+            self.frame.unreachable = frame.unreachable_url;
             self.frame.url = Some(with_fragment(frame.url, frame.url_fragment.as_deref()));
         }
         Ok(())
@@ -219,6 +227,20 @@ impl DocumentWatch {
                 } else {
                     CommitOutcome::Interrupted(first.url.clone())
                 });
+            }
+            // A replacement session may have committed before Page was enabled there.
+            // Its current snapshot is sufficient only for this exact expected loader.
+            if self.frame.current.as_deref() == Some(loader)
+                && let Some(url) = &self.frame.url
+            {
+                return Ok(CommitOutcome::Committed(Commit {
+                    loader: loader.to_owned(),
+                    url: url.clone(),
+                    unreachable: self.frame.unreachable.clone(),
+                }));
+            }
+            if self.frame.left {
+                return Err(WatchError::Left);
             }
             self.next().await?;
         }
@@ -396,6 +418,7 @@ impl WatchedFrame {
 
     fn commit(&mut self, commit: Commit) {
         self.pending = false;
+        self.unreachable.clone_from(&commit.unreachable);
         self.reached
             .entry(commit.loader.clone())
             .or_default()

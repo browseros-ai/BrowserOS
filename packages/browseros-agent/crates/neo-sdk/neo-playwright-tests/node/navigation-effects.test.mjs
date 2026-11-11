@@ -40,6 +40,10 @@ test('navigation effects preserve deadlines, facts, responses and close semantic
     }
     if (req.url === '/parent')
       return res.end('<iframe src="/loading"></iframe>')
+    if (req.url === '/remove-parent')
+      return res.end(
+        '<iframe src="/loading"></iframe><script>setTimeout(() => document.querySelector("iframe").remove(), 150)</script>',
+      )
     res.end('<title>Ready</title><h1>Ready</h1>')
   })
   server.listen(0, '127.0.0.1')
@@ -85,6 +89,32 @@ test('navigation effects preserve deadlines, facts, responses and close semantic
     assert.equal(childResponse.status(), 200)
     assert.equal(childResponse.frame(), child)
     assert.equal(child.url(), `${url}/child`)
+    const cross = `${url.replace('127.0.0.1', 'localhost')}/child-cross`
+    const crossResponse = await child.goto(cross, { timeout: 3000 })
+    assert.equal(crossResponse.status(), 200)
+    assert.equal(crossResponse.frame(), child)
+    assert.equal(child.url(), cross)
+    await child.evaluate(async () => {
+      const frame = document.createElement('iframe')
+      frame.src = '/nested'
+      document.body.appendChild(frame)
+      await new Promise((resolve) => {
+        frame.onload = resolve
+      })
+    })
+    const nested = child.childFrames()[0]
+    const nestedResponse = await nested.goto(`${cross}/nested-next`, {
+      timeout: 3000,
+    })
+    assert.equal(nestedResponse.status(), 200)
+    assert.equal(nestedResponse.frame(), nested)
+    const childHung = once(requests, '/hang')
+    const childFirst = child
+      .goto(`${url.replace('127.0.0.1', 'localhost')}/hang`, { timeout: 3000 })
+      .catch((error) => error)
+    await childHung
+    assert.equal((await child.goto(cross, { timeout: 3000 })).status(), 200)
+    assert.match((await childFirst).message, /ERR_ABORTED|interrupted/)
     record('child goto watches and reads the selected document')
     const hung = once(requests, '/hang')
     const first = page
@@ -118,6 +148,15 @@ test('navigation effects preserve deadlines, facts, responses and close semantic
     await assert.rejects(
       page.goto(`${url}/parent`, { waitUntil: 'networkidle', timeout: 1000 }),
       (error) => error.name === 'TimeoutError',
+    )
+    assert.equal(
+      (
+        await page.goto(`${url}/remove-parent`, {
+          waitUntil: 'networkidle',
+          timeout: 5000,
+        })
+      ).status(),
+      200,
     )
     record('networkidle includes a child with a stalled resource')
     const waiter = page.waitForEvent('download').catch((error) => error)

@@ -201,6 +201,7 @@ async fn navigation_reply(
     navigation: NavigationResult,
     navigation_seq: u64,
 ) -> Result<NavigationReply, PlaywrightError> {
+    let since = pw.events().head();
     let frames = frame_tree::read(
         pw.browser(),
         page.core_page(),
@@ -208,6 +209,7 @@ async fn navigation_reply(
     )
     .await
     .map_err(|error| scope.core_error(&error))?;
+    frames.remember(pw, scope, page.tab(), &page.main_endpoint().session, since);
     Ok(NavigationReply {
         navigation,
         frames,

@@ -33,9 +33,8 @@ use crate::op_output::to_output;
 use crate::op_scope::OpScope;
 use crate::page::document_watch::{DocumentWatch, WatchError};
 use crate::page::evaluate_guard::{self, TreeFrame};
-use crate::page::navigation::{frame_host, watch_error};
 use crate::page::world_call::{unexpected, with_world};
-use crate::page::{LoadState, OpPage, subtree_load};
+use crate::page::{LoadState, OpPage, navigation, subtree_load};
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, UrlPattern};
 use crate::resolve::failed;
 use crate::target::PageRef;
@@ -100,7 +99,7 @@ pub(crate) async fn wait_for_url(
             return Err(scope.fail(ErrorCode::TargetClosed, "Frame was detached"));
         };
         let probed = |failure| failed(scope, failure);
-        let watched = |error| watch_error(scope, &error);
+        let watched = |error| navigation::watch_error(scope, &error);
         if !followed
             .matches_current(&page, &pattern)
             .await
@@ -196,7 +195,9 @@ impl Followed {
         let (session_id, session) = if frame_id == main.frame {
             (root_id, main.session)
         } else {
-            match frame_host(pw, scope, page.tab(), (root_id, main.session), &frame_id).await {
+            match navigation::frame_host(pw, scope, page.tab(), (root_id, main.session), &frame_id)
+                .await
+            {
                 Ok(host) => host,
                 Err(error) if error.error_code() == Some(ErrorCode::TargetClosed) => {
                     return Ok(Self::Detached);
@@ -214,7 +215,7 @@ impl Followed {
         match started.await {
             Ok(()) => Ok(Self::Watching(Box::new(Watching { frame, watch }))),
             Err(WatchError::FrameDetached) => Ok(Self::Moving),
-            Err(error) => Err(watch_error(scope, &error)),
+            Err(error) => Err(navigation::watch_error(scope, &error)),
         }
     }
 }

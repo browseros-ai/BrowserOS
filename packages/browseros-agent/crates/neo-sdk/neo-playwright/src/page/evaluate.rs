@@ -10,14 +10,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time;
 
-use crate::op_output::to_output;
 use crate::op_scope::OpScope;
 use crate::page::evaluate_guard::{
     ArgText, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Script, Subject,
 };
 use crate::page::frame_tree::{self, FrameTree};
 use crate::target::{ElementTarget, PageRef};
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, op_output};
 
 /// How often `waitForFunction` polls for `polling: 'raf'`, its default. Rust polls instead of
 /// the page's animation frames, which never fire in a background tab (measured); 100 ms is
@@ -151,7 +150,7 @@ async fn evaluated(
         .ok()
         .and_then(Result::ok)
         .flatten();
-    to_output(scope, &Evaluated { value, frames })
+    op_output::to_output(scope, &Evaluated { value, frames })
 }
 
 /// Runs `page.waitForFunction`: polls from Rust until the predicate is truthy or throws, because
