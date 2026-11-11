@@ -74,7 +74,6 @@
   "page.pickLocator",
   "page.removeLocatorHandler",
   "page.request",
-  "page.requestGC",
   "page.requests",
   "page.route",
   "page.routeFromHAR",
@@ -94,5 +93,6 @@
   "response.request",
   "response.securityDetails",
   "response.serverAddr",
-  "response.text"
+  "response.text",
+  "selectors.register"
 ]
