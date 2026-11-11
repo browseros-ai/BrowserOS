@@ -225,9 +225,7 @@ async fn reports_mask(run: Arc<LiveRun>, page: &TestPage, secret: &str) -> TestR
         .into_iter()
         .filter_map(|call| match call {
             EnvCall::Note(line) if line.contains(secret) => Some(line),
-            EnvCall::Note(_) | EnvCall::Recheck | EnvCall::RecheckReach(_) | EnvCall::MarkSent => {
-                None
-            }
+            EnvCall::Note(_) | EnvCall::Recheck | EnvCall::MarkSent => None,
         })
         .collect();
     if !leaked.is_empty() {
@@ -383,7 +381,7 @@ async fn reports_no_start(run: Arc<LiveRun>, page: &TestPage, secret: &str) -> T
         .into_iter()
         .filter_map(|call| match call {
             EnvCall::Note(line) => Some(line),
-            EnvCall::Recheck | EnvCall::RecheckReach(_) | EnvCall::MarkSent => None,
+            EnvCall::Recheck | EnvCall::MarkSent => None,
         })
         .collect();
     let leaked: Vec<&String> = notes

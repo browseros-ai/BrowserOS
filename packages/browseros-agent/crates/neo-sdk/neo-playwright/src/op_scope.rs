@@ -7,20 +7,16 @@
 //!                                            │ sleep, within  Rust's clock against the op's own timeout
 //!                                            │ require(cap)   at a capability's gateway: declared?
 //!                                            └ send_effect()  recheck, then mark_sent ──▶ Sent
-//!                                              send_effect_reaching(tabs)
-//!                                                             recheck, recheck_reach(tabs), then
-//!                                                             mark_sent ──▶ Sent
 //!                                                             └▶ input, navigation, element edits,
 //!                                                                main-world script: each takes &Sent
 //! ```
 //!
 //! Delivery is derived from one fact, whether the op was marked sent before its first write
 //! (skeleton D7.5), so that fact is not left to convention. The host's env is private to the
-//! scope, [`OpScope::send_effect_reaching`] is the only code that reaches `OpEnv::mark_sent`
-//! ([`OpScope::send_effect`] is it with no other tab), it always re-runs the host's
-//! attempt-stage policies first, and the [`Sent`] it returns is the only way to call a function
-//! that changes the page. A leaf that never calls either, which is every read, can neither mark
-//! itself sent nor reach an effect.
+//! scope, [`OpScope::send_effect`] is the only code that reaches `OpEnv::mark_sent`, it always
+//! re-runs the host's attempt-stage policies first, and the [`Sent`] it returns is the only way
+//! to call a function that changes the page. A leaf that never calls it, which is every read,
+//! can neither mark itself sent nor reach an effect.
 //!
 //! The scope also owns the op's CDP object group: every remote object the op asks for (an
 //! iframe it hops through) lives in it, and dropping the scope releases it, whether the op
@@ -52,8 +48,7 @@ pub(crate) use sent::Sent;
 /// One operation in flight. Lives for one `Playwright::invoke`; every method takes `&self`,
 /// so a leaf can log and read its deadline while it holds a [`Sent`].
 pub(crate) struct OpScope<'env> {
-    /// The host's side of this op. Private: leaves reach `mark_sent` only via `send_effect`
-    /// or `send_effect_reaching`.
+    /// The host's side of this op. Private: leaves reach `mark_sent` only via `send_effect`.
     env: &'env dyn OpEnv,
     op: Op,
     /// The method the script called (`page.click`); every message starts with it.
@@ -249,31 +244,17 @@ impl<'env> OpScope<'env> {
     /// proof every effect takes. Call it right before each attempt's effect: an action that
     /// retries its input re-checks before every attempt, because the owner can take over
     /// between a missed attempt and its retry. A refusal passes through with the policy's
-    /// owner and code, and nothing is marked. It is [`OpScope::send_effect_reaching`] for an
-    /// effect that reaches no other tab.
+    /// owner and code, and nothing is marked. A main-world send runs the rules on the op's own
+    /// tab only, as every other effect does, though its script can reach the tab's opener and
+    /// popups.
     pub(crate) fn send_effect(&self) -> Result<Sent<'_>, PlaywrightError> {
-        self.send_effect_reaching(&[])
-    }
-
-    /// [`OpScope::send_effect`] for a main-world send, which also reaches `reach`: the other
-    /// tabs of the op page's opener-linked group, from the privacy sweep before the send. The
-    /// host's rules run on the op's tab (`OpEnv::recheck`), then on those tabs
-    /// (`OpEnv::recheck_reach`), and only then is the op marked sent, all in `mod sent`'s one
-    /// constructor, with no await between them and the send. An empty `reach` asks the host
-    /// nothing more, so a page with no opener link records `[Recheck, MarkSent]` as before.
-    pub(crate) fn send_effect_reaching(
-        &self,
-        reach: &[TabId],
-    ) -> Result<Sent<'_>, PlaywrightError> {
         match self.op.spec().effect {
             // `OpSpec` promises hosts that a read never marks itself sent.
             Effect::Read => Err(self.fail(
                 ErrorCode::Internal,
                 "a read operation cannot change the page",
             )),
-            Effect::Write => {
-                Sent::after_recheck_reaching(self.env, reach).map_err(PlaywrightError::from)
-            }
+            Effect::Write => Sent::after_recheck(self.env).map_err(PlaywrightError::from),
         }
     }
 
@@ -358,38 +339,27 @@ impl<'env> OpScope<'env> {
 
 /// Kept in its own module so that nothing outside it can build a [`Sent`]: its field is private
 /// to this module, and its one constructor is visible only to `op_scope.rs`, whose only call is
-/// in `OpScope::send_effect_reaching` (a unit test below checks that). The constructor itself
-/// runs `recheck`, then `recheck_reach`, then `mark_sent`, so even a second caller could not
-/// skip any of them.
+/// in `OpScope::send_effect` (a unit test below checks that). The constructor itself runs
+/// `recheck`, then `mark_sent`, so even a second caller could not skip either.
 mod sent {
     use std::marker::PhantomData;
 
-    use browseros_core::TabId;
-
     use crate::{OpEnv, Refusal};
 
-    /// Proof that the host re-ran its attempt-stage policies, on the op's tab and on every
-    /// other tab a main-world script reaches, and marked this op sent. Every function that
-    /// dispatches input, navigates, edits an element or runs main-world script takes `&Sent`.
-    /// Zero-sized; it borrows its `OpScope`, so it cannot outlive the op.
+    /// Proof that the host re-ran its attempt-stage policies on the op's tab and marked this op
+    /// sent. Every function that dispatches input, navigates, edits an element or runs
+    /// main-world script takes `&Sent`. Zero-sized; it borrows its `OpScope`, so it cannot
+    /// outlive the op.
     #[derive(Debug)]
     pub(crate) struct Sent<'scope> {
         _scope: PhantomData<&'scope ()>,
     }
 
     impl<'scope> Sent<'scope> {
-        /// `recheck`, then `recheck_reach(reach)` when `reach` is not empty, then `mark_sent`,
-        /// in the order STYLE P6 requires: a refusal returns before anything is marked. Every
-        /// effect but a main-world send passes an empty `reach`, so its host hears exactly
-        /// `recheck`, `mark_sent`.
-        pub(super) fn after_recheck_reaching(
-            env: &'scope dyn OpEnv,
-            reach: &[TabId],
-        ) -> Result<Self, Refusal> {
+        /// `recheck`, then `mark_sent`, in the order STYLE P6 requires: a refusal returns before
+        /// anything is marked.
+        pub(super) fn after_recheck(env: &'scope dyn OpEnv) -> Result<Self, Refusal> {
             env.recheck()?;
-            if !reach.is_empty() {
-                env.recheck_reach(reach)?;
-            }
             env.mark_sent();
             Ok(Self {
                 _scope: PhantomData,
@@ -418,7 +388,7 @@ mod tests {
     use crate::op_spec::Capability;
     use crate::target::CallHeader;
     use crate::test_env::{self, EnvCall, TestEnv};
-    use crate::{Answer, ErrorCode, OpEnv, Refusal, RunState, TimedOut};
+    use crate::{Answer, ErrorCode, Refusal, TimedOut};
 
     fn op(name: &str) -> Result<Op, Box<dyn Error>> {
         Ok(Op::from_name(name).ok_or(format!("{name} is an op"))?)
@@ -532,149 +502,31 @@ mod tests {
     }
 
     /// The `Sent` module's guarantee, checked on this file's source: the constructor is called
-    /// once outside the module that defines it, and that call is in `send_effect_reaching`.
+    /// once outside the module that defines it, and that call is in `send_effect`.
     #[test]
-    fn tests_that_only_send_effect_reaching_mints_sent() {
+    fn tests_that_only_send_effect_mints_sent() {
         let source = include_str!("op_scope.rs");
         let code = source.split("#[cfg(test)]").next().unwrap_or_default();
         let outside_module = code.split("mod sent {").next().unwrap_or_default();
-        let call = concat!("Sent::", "after_recheck_reaching(");
+        let call = concat!("Sent::", "after_recheck(");
         assert_eq!(
             outside_module.matches(call).count(),
             1,
             "one call site mints Sent"
         );
-        let body = |name: &str| {
-            outside_module
-                .split(&format!("fn {name}("))
-                .nth(1)
-                .and_then(|body| body.split("\n    pub(crate) fn ").next())
-                .unwrap_or_default()
-                .to_owned()
-        };
+        let send_effect = outside_module
+            .split("fn send_effect(")
+            .nth(1)
+            .and_then(|body| body.split("\n    pub(crate) fn ").next())
+            .unwrap_or_default();
         assert!(
-            body("send_effect_reaching").contains(call),
-            "the one call site is send_effect_reaching"
+            send_effect.contains(call),
+            "the one call site is send_effect"
         );
         assert!(
-            body("send_effect").contains("self.send_effect_reaching(&[])"),
-            "send_effect goes through it with no other tab"
-        );
-        assert!(
-            code.contains("pub(super) fn after_recheck_reaching(")
-                && code.contains("_scope: PhantomData<"),
+            code.contains("pub(super) fn after_recheck(") && code.contains("_scope: PhantomData<"),
             "the constructor and the field stay private to the module"
         );
-    }
-
-    /// A main-world send's host hears its rules asked of the op's tab, then of the group's
-    /// other tabs, and only then the mark; one that reaches no other tab is asked nothing more.
-    #[tokio::test]
-    async fn tests_that_send_effect_reaching_rechecks_the_other_tabs_before_it_marks()
-    -> Result<(), Box<dyn Error>> {
-        let env = TestEnv::new();
-        let scope = OpScope::new(&env, op("page.evaluate")?, CallHeader::default());
-        let _linked = scope.send_effect_reaching(&[TabId(7), TabId(9)])?;
-        let _alone = scope.send_effect_reaching(&[])?;
-        assert_eq!(
-            env.calls(),
-            [
-                EnvCall::Recheck,
-                EnvCall::RecheckReach(vec![TabId(7), TabId(9)]),
-                EnvCall::MarkSent,
-                EnvCall::Recheck,
-                EnvCall::MarkSent,
-            ]
-        );
-        Ok(())
-    }
-
-    /// A refusal on another tab of the group passes through as the host made it, and nothing
-    /// is marked: the script never goes out.
-    #[tokio::test]
-    async fn tests_that_a_refusal_on_another_tab_marks_nothing() -> Result<(), Box<dyn Error>> {
-        let refusal = Refusal {
-            owner: ErrorOwner::Host,
-            code: "owner_has_control".to_owned(),
-            message: "The owner is using a tab this page's scripts reach.".to_owned(),
-            host_code: None,
-        };
-        let env = TestEnv::refusing_reach(refusal);
-        let scope = OpScope::new(&env, op("page.evaluate")?, CallHeader::default());
-        let error = scope
-            .send_effect_reaching(&[TabId(7)])
-            .err()
-            .ok_or("a refused reach must fail")?;
-        assert_eq!(
-            env.calls(),
-            [EnvCall::Recheck, EnvCall::RecheckReach(vec![TabId(7)])],
-            "nothing is marked sent after the refusal"
-        );
-        assert_eq!(
-            (error.owner(), error.code(), error.message()),
-            (
-                ErrorOwner::Host,
-                "owner_has_control",
-                "The owner is using a tab this page's scripts reach."
-            )
-        );
-        Ok(())
-    }
-
-    /// A host that implements only what `OpEnv` requires.
-    struct BareHost(TestEnv);
-
-    impl OpEnv for BareHost {
-        fn view(&self) -> &BrowserView {
-            self.0.view()
-        }
-
-        fn run_state(&self) -> &Arc<RunState> {
-            self.0.run_state()
-        }
-
-        fn recheck(&self) -> Result<(), Refusal> {
-            self.0.recheck()
-        }
-
-        fn mark_sent(&self) {
-            self.0.mark_sent();
-        }
-
-        fn note(&self, line: String) {
-            self.0.note(line);
-        }
-    }
-
-    /// `OpEnv::recheck_reach`'s default fails closed: a host that never implemented it refuses
-    /// every send that reaches another tab, as `neo / unsupported` with nothing marked, and
-    /// still lets through one that reaches none.
-    #[tokio::test]
-    async fn tests_that_the_default_recheck_reach_refuses_any_other_tab()
-    -> Result<(), Box<dyn Error>> {
-        let host = BareHost(TestEnv::new());
-        let scope = OpScope::new(&host, op("page.evaluate")?, CallHeader::default());
-        let error = scope
-            .send_effect_reaching(&[TabId(7)])
-            .err()
-            .ok_or("the default refuses another tab")?;
-        assert_eq!(
-            (error.owner(), error.code()),
-            (ErrorOwner::Neo, "unsupported")
-        );
-        assert!(
-            error.message().contains("window.opener")
-                && error.message().contains("nothing was sent"),
-            "the refusal says why and what became of the call: {error}"
-        );
-        assert_eq!(host.0.calls(), [EnvCall::Recheck], "nothing is marked sent");
-        let _alone = scope.send_effect_reaching(&[])?;
-        assert_eq!(
-            host.0.calls(),
-            [EnvCall::Recheck, EnvCall::Recheck, EnvCall::MarkSent],
-            "a send that reaches no other tab is not refused"
-        );
-        Ok(())
     }
 
     #[tokio::test]

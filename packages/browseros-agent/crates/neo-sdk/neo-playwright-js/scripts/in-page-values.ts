@@ -1,15 +1,14 @@
 /**
  * The value-format golden, crates/neo-sdk/neo-playwright/tests/data/in-page-values.json: for each
- * case, the text Playwright's in-page serializer writes for it as a result (`page`), what Neo's
- * mask must make of that under `swept` (`masked`, written here by hand from the masking rules),
- * and the text upstream's client and server send the page for it as an argument (`arg`, or the
- * client's `argError`).
+ * case, the text Playwright's in-page serializer writes for it as a result (`page`), what Rust's
+ * parse writes back for the prelude (`result`), and the text upstream's client and server send
+ * the page for it as an argument (`arg`, or the client's `argError`).
  *
  * `page` and `arg` come from the vendored modules themselves, run here in Bun: the serializer the
  * page runs (`serializeAsCallArgument`) and, for arguments, the client's `serializeValue`, the
- * server's `parseSerializedValue` and the serializer again. Rust's page_value tests parse, mask
- * and re-emit every `page` text against `masked`; the prelude's tests read `masked` and `arg`
- * back through the built prelude. One file, so the three runtimes cannot drift.
+ * server's `parseSerializedValue` and the serializer again. Rust's page_value tests parse and
+ * re-emit every `page` text against `result`; the prelude's tests read `result` and `arg` back
+ * through the built prelude. One file, so the three runtimes cannot drift.
  *
  * Sources build every value deterministically: an Error carries a fixed stack, because a real
  * one names this script's own path. Each source runs in this realm, whose classes the
@@ -22,19 +21,12 @@ import {
   serializeValue,
 } from '../../neo-playwright/third_party/playwright/packages/protocol/src/serializers'
 
-/**
- * The sensitive values every case is masked with, as a sweep finds them: a long one, a code, a
- * short CVC, and a short one spelled like the format's own `{v: 'NaN'}` tag, which is not page
- * text and must survive.
- */
-const SWEPT = ['hunter2-secret', '482913', '123', 'NaN']
-
 type Case = {
   name: string
   /** A JS expression: the value a page script returns, or an agent passes. */
   source: string
-  /** The masked result under SWEPT; absent when the mask leaves `page` as it is. */
-  masked?: unknown
+  /** What Rust's parse writes back; absent when it is `page` in canonical form. */
+  result?: unknown
   /** The agent's realm cannot build this value (QuickJS has no `URL`): no `arg`. */
   pageOnly?: true
   /**
@@ -75,7 +67,7 @@ const CASES: Case[] = [
   {
     name: 'ArrayBuffer',
     source: 'Uint8Array.of(1, 2).buffer',
-    masked: { o: [], id: 1 },
+    result: { o: [], id: 1 },
   },
   { name: 'nested arrays', source: '[1, [2, [3]], []]' },
   { name: 'undefined in an array', source: '[undefined, 1]' },
@@ -100,101 +92,6 @@ const CASES: Case[] = [
   },
   { name: '__proto__ key', source: 'JSON.parse(\'{"__proto__": 1, "n": 2}\')' },
   { name: 'URL', source: "new URL('https://a.example/p?q=1')", pageOnly: true },
-  {
-    name: 'a long value inside a string',
-    source: "'you typed hunter2-secret'",
-    masked: 'you typed [private]',
-  },
-  {
-    name: 'a long value as a key',
-    source: "({ 'hunter2-secret': true })",
-    masked: { o: [{ k: '[private]', v: true }], id: 1 },
-  },
-  {
-    name: 'a code as a number',
-    source: 'Number("482913")',
-    masked: '[private]',
-  },
-  {
-    name: 'a code inside a larger number',
-    source: '4829130',
-    masked: '[private]0',
-  },
-  {
-    name: 'a code as a BigInt',
-    source: 'BigInt("482913")',
-    masked: '[private]',
-  },
-  {
-    name: 'a code as a Date',
-    source: 'new Date(Number("482913"))',
-    masked: '[private]',
-  },
-  {
-    name: 'a long value in an Error',
-    source:
-      "Object.assign(new Error('bad hunter2-secret'), { stack: 'Error: bad hunter2-secret\\n    at page' })",
-    masked: {
-      e: {
-        n: 'Error',
-        m: 'bad [private]',
-        s: 'Error: bad [private]\n    at page',
-      },
-    },
-  },
-  {
-    name: 'a long value in a URL',
-    source: "new URL('https://a.example/?pw=hunter2-secret')",
-    masked: 'https://a.example/?pw=[private]',
-    pageOnly: true,
-  },
-  {
-    name: 'a long value in a RegExp',
-    source: '/hunter2-secret/g',
-    masked: '/[private]/g',
-  },
-  {
-    name: 'a long value as UTF-8 bytes',
-    source: "Uint8Array.from('hunter2-secret', (c) => c.charCodeAt(0))",
-    masked: '[private]',
-  },
-  {
-    name: 'a code as an Int32Array element',
-    source: 'Int32Array.of(1, Number("482913"))',
-    masked: '1,[private]',
-  },
-  {
-    name: 'a code as a Float64Array element',
-    source: 'Float64Array.of(Number("482913"))',
-    masked: '[private]',
-  },
-  {
-    name: 'a code as a BigInt64Array element',
-    source: 'BigInt64Array.of(BigInt("482913"))',
-    masked: '[private]',
-  },
-  {
-    name: 'a short value as a Uint16Array element',
-    source: 'Uint16Array.of(7, 123)',
-    masked: '7,[private]',
-  },
-  {
-    name: 'a short value inside a typed array element',
-    source: 'Int32Array.of(1234)',
-  },
-  {
-    name: 'a short value as a whole string',
-    source: "['123', '1234', 123, 1234]",
-    masked: { a: ['[private]', '1234', '[private]', 1234], id: 1 },
-  },
-  {
-    name: 'a short value spelled like a tag',
-    source: "[NaN, 'NaN', { NaN: 1 }]",
-    masked: {
-      a: [{ v: 'NaN' }, '[private]', { o: [{ k: '[private]', v: 1 }], id: 2 }],
-      id: 1,
-    },
-  },
 ]
 
 const fallThrough = (value: unknown) => ({ fallThrough: value })
@@ -218,7 +115,7 @@ function argText(value: unknown): { arg: string } | { argError: string } {
 }
 
 /**
- * What Rust's parse makes of a page text's structure, which a case's `masked` defaults to: its
+ * What Rust's parse makes of a page text's structure, which a case's `result` defaults to: its
  * ids renumbered from 1 in order of appearance and its refs rewritten to match, as upstream's
  * server writes them again. The serializer numbers objects that way already, except the ones
  * it writes with id 0 (an object whose `toJSON` is not used, say), which take their place in the
@@ -252,7 +149,7 @@ function canonical(page: unknown): unknown {
 /** The golden, as scripts/build.ts writes it. */
 export function inPageValuesDocument(): string {
   const values = CASES.map(
-    ({ name, source, masked, pageOnly, validatorError }) => {
+    ({ name, source, result, pageOnly, validatorError }) => {
       const value: unknown = runInThisContext(`(${source})`)
       const page = pageText(value)
       const arg = validatorError ? { argError: validatorError } : argText(value)
@@ -260,7 +157,7 @@ export function inPageValuesDocument(): string {
         name,
         source,
         page,
-        masked: masked ?? canonical(JSON.parse(page)),
+        result: result ?? canonical(JSON.parse(page)),
         ...(pageOnly ? {} : arg),
       }
     },
@@ -268,8 +165,7 @@ export function inPageValuesDocument(): string {
   return `${JSON.stringify(
     {
       about:
-        'Playwright in-page values, their masks and their argument texts, written by crates/neo-sdk/neo-playwright-js/scripts/in-page-values.ts. Do not edit: run bun run build in crates/neo-sdk/neo-playwright-js.',
-      swept: SWEPT,
+        'Playwright in-page values, what Rust writes back for each and their argument texts, written by crates/neo-sdk/neo-playwright-js/scripts/in-page-values.ts. Do not edit: run bun run build in crates/neo-sdk/neo-playwright-js.',
       values,
     },
     null,

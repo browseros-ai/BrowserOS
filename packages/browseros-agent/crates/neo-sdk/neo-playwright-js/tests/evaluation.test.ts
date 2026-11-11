@@ -1,9 +1,9 @@
 // The prelude's half of the value format, against the one golden the crate's page_value tests
 // read too (crates/neo-sdk/neo-playwright/tests/data/in-page-values.json, scripts/in-page-values.ts).
 // Through the built prelude in a realm like QuickJS's: an argument reaches the wire as upstream's
-// client and server send it, with upstream's client errors, and a masked result reads back as the
-// value upstream's server and client make of it, computed here with the vendored modules on Bun's
-// own globals.
+// client and server send it, with upstream's client errors, and the result Rust writes back reads
+// as the value upstream's server and client make of it, computed here with the vendored modules on
+// Bun's own globals.
 import { expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { parseEvaluationResultValue } from '../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
@@ -23,7 +23,7 @@ type Case = {
   name: string
   source: string
   page: string
-  masked: unknown
+  result: unknown
   arg?: string
   argError?: string
 }
@@ -69,9 +69,9 @@ function describe(value: unknown, seen = new Set<unknown>()): unknown {
 
 const fallThrough = (value: unknown) => ({ fallThrough: value })
 
-/** What upstream's client receives for a value its page serialized as `masked`. */
-function upstreamResult(masked: unknown): unknown {
-  const onServer: unknown = parseEvaluationResultValue(masked as never)
+/** What upstream's client receives for a value its page serialized as `result`. */
+function upstreamResult(result: unknown): unknown {
+  const onServer: unknown = parseEvaluationResultValue(result as never)
   return parseSerializedValue(serializeValue(onServer, fallThrough), undefined)
 }
 
@@ -102,13 +102,13 @@ it('tests that every argument reaches the wire as upstream sends it, or fails as
   }
 })
 
-it('tests that every masked result reads back as upstream reads it', async () => {
+it('tests that every result reads back as upstream reads it', async () => {
   for (const value of golden.values) {
     const runtime = loadPrelude({
       seed: SEED,
-      answer: (call) => (call.name === 'page.evaluate' ? value.masked : null),
+      answer: (call) => (call.name === 'page.evaluate' ? value.result : null),
     })
-    const upstream = upstreamResult(value.masked)
+    const upstream = upstreamResult(value.result)
     const described = json(
       await runtime.run(
         `const describe = ${describe.toString()}\nreturn describe(await page.evaluate(() => 0))`,

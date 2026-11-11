@@ -27,8 +27,8 @@ use neo_takeover::{
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, Privacy, PrivacyRecord, PrivacyStore, PrivateReason, RedactionLimits, Redactor, RunId,
-    RunStarted, SecretSet, SecretSetConfig, TaskId, TraceError, TraceSink,
-    TraceStore, WriterConfig, spawn_writer,
+    RunStarted, SecretSet, SecretSetConfig, TaskId, TraceError, TraceSink, TraceStore,
+    WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;

@@ -30,18 +30,8 @@ pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum EnvCall {
     Recheck,
-    /// `OpEnv::recheck_reach`, with the other tabs of the op page's opener-linked group.
-    RecheckReach(Vec<TabId>),
     MarkSent,
     Note(String),
-}
-
-/// One thing the crate told its host, in the order the host heard it: a call of the run's side,
-/// or the values the evaluate guard reported (`PlaywrightHooks::values_swept`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Heard {
-    Call(EnvCall),
-    Swept(Vec<String>),
 }
 
 /// What the [`Tap`] does to the first command the crate sends with the method a test named.
@@ -195,19 +185,13 @@ struct LiveEnv {
     view: BrowserView,
     run_state: Arc<RunState>,
     calls: Mutex<Vec<EnvCall>>,
-    /// Shared with the hooks, so the order of a report and a mark can be read.
-    heard: Arc<Mutex<Vec<Heard>>>,
     policy: Policy,
     /// What `recheck` refuses with, as a takeover would, until a test allows it again.
     refusal: Mutex<Option<Refusal>>,
-    /// What `recheck_reach` refuses with, as a takeover of another tab of the page's group
-    /// would, until a test allows it again.
-    reach_refusal: Mutex<Option<Refusal>>,
 }
 
 impl LiveEnv {
     fn record(&self, call: EnvCall) {
-        lock(&self.heard).push(Heard::Call(call.clone()));
         self.calls
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -233,12 +217,6 @@ impl OpEnv for LiveEnv {
         lock(&self.refusal).clone().map_or(Ok(()), Err)
     }
 
-    /// Allows the group's other tabs, unless a test refuses them.
-    fn recheck_reach(&self, tabs: &[TabId]) -> Result<(), Refusal> {
-        self.record(EnvCall::RecheckReach(tabs.to_vec()));
-        lock(&self.reach_refusal).clone().map_or(Ok(()), Err)
-    }
-
     fn mark_sent(&self) {
         self.record(EnvCall::MarkSent);
     }
@@ -248,55 +226,24 @@ impl OpEnv for LiveEnv {
     }
 }
 
-/// A host that implements only what `OpEnv` requires, through the live env, and keeps every
-/// default the trait gives: what a host gets that never implemented the rest, such as
-/// `recheck_reach`'s refusal.
-struct DefaultHost<'env>(&'env LiveEnv);
-
-impl OpEnv for DefaultHost<'_> {
-    fn view(&self) -> &BrowserView {
-        self.0.view()
-    }
-
-    fn run_state(&self) -> &Arc<RunState> {
-        self.0.run_state()
-    }
-
-    fn recheck(&self) -> Result<(), Refusal> {
-        self.0.recheck()
-    }
-
-    fn mark_sent(&self) {
-        self.0.mark_sent();
-    }
-
-    fn note(&self, line: String) {
-        self.0.note(line);
-    }
-}
-
 /// The op `name` names.
 fn op(name: &str) -> Result<Op, PlaywrightError> {
     Op::from_name(name)
         .ok_or_else(|| PlaywrightError::new(ErrorCode::Internal, format!("{name} is not an op")))
 }
 
-/// The host's privacy layer: every value the evaluate guard swept is kept, as the host would
-/// register it. The unused capture hook can refuse to detect callers.
+/// The host's privacy layer: every value a read's sweep found is kept, as the host would register
+/// it. The unused capture hook can refuse to detect callers.
 #[derive(Default)]
 struct LiveHooks {
     capture: Mutex<Option<Refusal>>,
     swept: Mutex<Vec<String>>,
-    heard: Arc<Mutex<Vec<Heard>>>,
 }
 
 impl PlaywrightHooks for LiveHooks {
     fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
 
     fn values_swept(&self, _page: TabId, values: &FieldValues) {
-        lock(&self.heard).push(Heard::Swept(
-            values.registrable().map(str::to_owned).collect(),
-        ));
         self.swept
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -358,11 +305,7 @@ impl LiveRun {
             Arc::clone(&tap) as Arc<dyn CdpConnection>,
             BrowserSessionHooks::default(),
         );
-        let heard = Arc::<Mutex<Vec<Heard>>>::default();
-        let hooks = Arc::new(LiveHooks {
-            heard: Arc::clone(&heard),
-            ..LiveHooks::default()
-        });
+        let hooks = Arc::new(LiveHooks::default());
         let playwright = Playwright::new(
             Arc::clone(&browser),
             Arc::clone(&hooks) as Arc<dyn PlaywrightHooks>,
@@ -371,10 +314,8 @@ impl LiveRun {
             view: BrowserView::unbound(Arc::clone(&browser), None),
             run_state: Arc::default(),
             calls: Mutex::default(),
-            heard,
             policy,
             refusal: Mutex::default(),
-            reach_refusal: Mutex::default(),
         };
         Ok(Self {
             browser,
@@ -449,17 +390,6 @@ impl LiveRun {
     /// Runs op `name` with `input`, as claw-sdk's handler does.
     pub(crate) async fn invoke(&self, name: &str, input: Value) -> Result<Value, PlaywrightError> {
         self.playwright.invoke(&self.env, op(name)?, input).await
-    }
-
-    /// Runs op `name` with `input` for a host that keeps every `OpEnv` default ([`DefaultHost`]).
-    pub(crate) async fn invoke_on_default_host(
-        &self,
-        name: &str,
-        input: Value,
-    ) -> Result<Value, PlaywrightError> {
-        self.playwright
-            .invoke(&DefaultHost(&self.env), op(name)?, input)
-            .await
     }
 
     /// Ends this run and starts the next on the same `Playwright`, as claw-sdk does between
@@ -548,7 +478,7 @@ impl LiveRun {
         Ok(())
     }
 
-    /// The values the evaluate guard reported so far, long enough to register.
+    /// The values the sweeps reported so far, long enough to register.
     pub(crate) fn swept(&self) -> Vec<String> {
         self.hooks
             .swept
@@ -574,12 +504,6 @@ impl LiveRun {
             .refusal
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = refusal;
-    }
-
-    /// Every `recheck_reach` from now on is refused with `refusal`, as the owner taking over
-    /// another tab of the page's group would; `None` allows them again.
-    pub(crate) fn refuse_reach(&self, refusal: Option<Refusal>) {
-        *lock(&self.env.reach_refusal) = refusal;
     }
 
     /// A background tab on `url`, opened the way the owner or another session opens one, so
@@ -689,18 +613,11 @@ impl LiveRun {
 
     /// Forgets the calls recorded so far.
     pub(crate) fn clear_calls(&self) {
-        lock(&self.env.heard).clear();
         self.env
             .calls
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
-    }
-
-    /// The calls and the guard's reports since the last [`LiveRun::clear_calls`], in the order
-    /// the host heard them.
-    pub(crate) fn heard(&self) -> Vec<Heard> {
-        lock(&self.env.heard).clone()
     }
 
     /// Resolves the fixture's tab only at a raw core call; test handles retain no core ID.

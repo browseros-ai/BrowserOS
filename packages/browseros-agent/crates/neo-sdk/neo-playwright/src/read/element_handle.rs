@@ -97,24 +97,6 @@ pub(crate) async fn backend_node(
     world: &SealedWorld,
     pin: Pin,
 ) -> Result<Option<BackendNodeId>, PlaywrightError> {
-    Ok(pinned_node(scope, world, pin)
-        .await?
-        .map(|node| node.backend))
-}
-
-/// An element a query pinned, found again: its object in the sealed world, in the op's object
-/// group, and its CDP backend node id.
-pub(crate) struct PinnedNode {
-    pub(crate) sealed: String,
-    pub(crate) backend: BackendNodeId,
-}
-
-/// The element `pin` names in `world`; `None` when the element or the world went first.
-async fn pinned_node(
-    scope: &OpScope<'_>,
-    world: &SealedWorld,
-    pin: Pin,
-) -> Result<Option<PinnedNode>, PlaywrightError> {
     let sealed = match probe::pinned_object(scope, world, pin).await {
         Ok(Some(object)) => object,
         Ok(None) | Err(ProbeFailure::Gone(_)) => return Ok(None),
@@ -125,10 +107,7 @@ async fn pinned_node(
         .send::<_, Described>("DOM.describeNode", json!({ "objectId": sealed }))
         .await;
     match described {
-        Ok(described) => Ok(Some(PinnedNode {
-            sealed,
-            backend: described.node.backend_node_id,
-        })),
+        Ok(described) => Ok(Some(described.node.backend_node_id)),
         Err(error) => match ProbeFailure::from_core(error) {
             ProbeFailure::Gone(_) => Ok(None),
             failure => Err(resolve::failed(scope, failure)),
@@ -145,7 +124,7 @@ pub(crate) async fn every_match(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
     target: &LocatorTarget,
-) -> Result<Option<(SealedWorld, Vec<PinnedNode>)>, PlaywrightError> {
+) -> Result<Option<(SealedWorld, Vec<BackendNodeId>)>, PlaywrightError> {
     let resolver = Resolver::new(page, scope, target, Strictness::FirstMatch);
     let landed = resolver
         .attempt_at(|last, _| ProbeRequest::ReadAll {
@@ -167,7 +146,7 @@ pub(crate) async fn every_match(
                 "a pins read sent a match without its pin",
             )
         })?;
-        let Some(node) = pinned_node(scope, &world, pin).await? else {
+        let Some(node) = backend_node(scope, &world, pin).await? else {
             return Err(scope.fail(
                 ErrorCode::TargetClosed,
                 &format!(
