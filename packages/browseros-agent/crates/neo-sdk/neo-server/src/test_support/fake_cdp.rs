@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::{future, mem};
 
-use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
+use browseros_cdp::{CdpError, CdpEvent, ObservedEvents, TargetedEvents};
 use browseros_core::{CdpConnection, SessionId, TabId};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -633,7 +633,7 @@ impl CdpConnection for FakeCdp {
         self.targeted.subscribe(method)
     }
 
-    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+    fn observe_events(&self, methods: &[&str]) -> Option<ObservedEvents> {
         Some(self.targeted.observe(methods))
     }
 

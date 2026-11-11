@@ -1,5 +1,6 @@
 use crate::{
-    CdpError, CdpEvent, EventStream, SessionId, TargetedEvents, discovery::discover_websocket_url,
+    CdpError, CdpEvent, EventStream, ObservedEvents, SessionId, TargetedEvents,
+    discovery::discover_websocket_url,
 };
 use futures_util::{
     SinkExt, StreamExt,
@@ -335,10 +336,10 @@ impl CdpClient {
         self.inner.targeted.subscribe(method)
     }
 
-    /// An ordered, lossless copy of selected low-volume events. Unlike targeted subscriptions,
-    /// observation leaves existing broadcast and targeted delivery unchanged.
+    /// An ordered copy of selected events, with [`ObservedEvents`]' lifecycle and log policy.
+    /// Unlike targeted subscriptions, it leaves existing delivery unchanged.
     #[must_use]
-    pub fn observe_events(&self, methods: &[&str]) -> mpsc::UnboundedReceiver<CdpEvent> {
+    pub fn observe_events(&self, methods: &[&str]) -> ObservedEvents {
         self.inner.targeted.observe(methods)
     }
 

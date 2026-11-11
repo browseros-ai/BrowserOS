@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
+use browseros_cdp::{CdpError, CdpEvent, ObservedEvents, TargetedEvents};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, ProtocolSession, SessionId,
     TabId, TargetId,
@@ -225,7 +225,7 @@ impl CdpConnection for Recording {
             .map_or_else(|| broadcast::channel(1).1, broadcast::Sender::subscribe)
     }
 
-    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+    fn observe_events(&self, methods: &[&str]) -> Option<ObservedEvents> {
         self.events.as_ref().map(|_| self.targeted.observe(methods))
     }
 

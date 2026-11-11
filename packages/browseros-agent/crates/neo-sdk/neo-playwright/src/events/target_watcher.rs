@@ -33,7 +33,7 @@ use std::future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_cdp::CdpEvent;
+use browseros_cdp::{CdpEvent, ObservedEvents};
 use browseros_core::{BrowserSession, BrowserView, CoreError, FrameId, SessionId, TargetId};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -55,8 +55,9 @@ use crate::events::{PageEventKind, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// Keep this watcher's lifecycle events in wire order: attachment establishes the session for
-/// frames, dialogs and choosers, and closure ends their lifetime. Chatty console/error messages
-/// remain on the broadcast; adding a lifecycle handler below also needs an entry here.
+/// frames, dialogs and choosers, and closure ends their lifetime. Logs also need attachment
+/// order (especially OOPIFs); the transport bounds their backlog separately. New handlers below
+/// also need an entry here so the native watcher reads one ordered feed.
 const LIFECYCLE_EVENTS: &[&str] = &[
     "Target.targetCreated",
     "Target.targetInfoChanged",
@@ -72,6 +73,8 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "Page.fileChooserOpened",
     "Browser.downloadWillBegin",
     "Browser.downloadProgress",
+    "Runtime.consoleAPICalled",
+    "Runtime.exceptionThrown",
 ];
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
@@ -116,7 +119,7 @@ impl TargetWatcher {
             // Discovery can await replies while another tab floods that ring; losing or
             // reordering these events could strand a dialog or close the wrong generation.
             let dialogs = browser.connection().observe_events(LIFECYCLE_EVENTS);
-            let events = browser.cdp_events();
+            let events = dialogs.is_none().then(|| browser.cdp_events());
             browser.page_signals.delegate_dialog_handling();
             let (watcher, found) = Watcher::new(browser, writer, attach_log);
             runtime.spawn(watcher.run(found, events, dialogs))
@@ -313,10 +316,9 @@ impl Watcher {
     async fn run(
         mut self,
         mut found: UnboundedReceiver<OpenedPage>,
-        mut events: broadcast::Receiver<CdpEvent>,
-        mut dialogs: Option<UnboundedReceiver<CdpEvent>>,
+        mut events: Option<broadcast::Receiver<CdpEvent>>,
+        mut dialogs: Option<ObservedEvents>,
     ) {
-        let observed_dialogs = dialogs.is_some();
         let mut tick = time::interval(TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
@@ -331,12 +333,13 @@ impl Watcher {
                     Some(event) => self.handle(event).await,
                     None => return,
                 },
-                received = events.recv() => match received {
-                    Ok(event) => {
-                        if !observed_dialogs || !LIFECYCLE_EVENTS.contains(&event.method.as_str()) {
-                            self.handle(event).await;
-                        }
-                    },
+                received = async {
+                    match events.as_mut() {
+                        Some(events) => events.recv().await,
+                        None => future::pending().await,
+                    }
+                } => match received {
+                    Ok(event) => self.handle(event).await,
                     // Events were dropped: rediscover, which records what closed meanwhile, and
                     // tell the frame log that commits may be missing.
                     Err(RecvError::Lagged(_)) => {
@@ -935,10 +938,10 @@ mod tests {
     use tokio::sync::broadcast::error::TryRecvError;
     use tokio::time;
 
-    use super::TargetWatcher;
+    use super::{LIFECYCLE_EVENTS, TargetWatcher, Watcher};
     use crate::RunState;
     use crate::events::page_event::DialogId;
-    use crate::events::{EventHub, PageEventKind, Subscription};
+    use crate::events::{EventHub, PageEvent, PageEventKind, Subscription};
     use crate::test_env::Recording;
     use crate::world::FrameAttachLog;
 
@@ -950,6 +953,71 @@ mod tests {
     #[tokio::test]
     async fn dialog_order_and_answers_survive_broadcast_overflow() {
         verify_unanswered_alert(64).await;
+    }
+
+    #[tokio::test]
+    async fn iframe_logs_follow_attachment_in_the_ordered_feed() {
+        let connection = Recording::streaming();
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (hub, writer) = EventHub::new();
+        let run = Arc::new(RunState::default());
+        for event in [PageEventKind::Console, PageEventKind::PageError] {
+            run.events.listen(
+                Subscription::Page {
+                    tab: TabId(7),
+                    target: TargetId("T".to_owned()),
+                    event,
+                },
+                0,
+                0,
+            );
+        }
+        hub.bind(&run);
+        let (mut watcher, _found) =
+            Watcher::new(browser, writer, Arc::new(FrameAttachLog::default()));
+        let Some(mut events) = connection.observe_events(LIFECYCLE_EVENTS) else {
+            panic!("streaming transport supports observation")
+        };
+        for (method, params, session) in [
+            (
+                "Target.attachedToTarget",
+                json!({"sessionId":"S", "targetInfo":{"targetId":"T", "type":"page"}}),
+                None,
+            ),
+            (
+                "Target.attachedToTarget",
+                json!({"sessionId":"IF", "targetInfo":{"targetId":"F", "type":"iframe"}}),
+                Some("S"),
+            ),
+            (
+                "Runtime.consoleAPICalled",
+                json!({"type":"log", "args":[{"type":"string", "value":"iframe log"}]}),
+                Some("IF"),
+            ),
+            (
+                "Runtime.exceptionThrown",
+                json!({"exceptionDetails":{"text":"Uncaught", "exception":{"description":"Error: iframe"}}}),
+                Some("IF"),
+            ),
+        ] {
+            connection.emit(CdpEvent {
+                method: method.to_owned(),
+                params,
+                session_id: session.map(SessionId::from),
+            });
+        }
+        // Exercise the native feed itself: OOPIF sessions are established by attachment,
+        // not core's page-session fallback. Both messages must follow that attachment.
+        while let Ok(event) = events.try_recv() {
+            watcher.handle(event).await;
+        }
+        let records = hub.read_after(0).records;
+        assert!(matches!(records.as_slice(), [console, error]
+            if matches!(&console.event, PageEvent::Console(message) if message.target.as_str() == "T")
+                && matches!(&error.event, PageEvent::PageError(message) if message.target.as_str() == "T")));
     }
 
     #[tokio::test]

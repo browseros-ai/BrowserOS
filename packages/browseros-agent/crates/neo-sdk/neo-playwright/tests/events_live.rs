@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use browseros_cdp::{CdpClient, CdpError, CdpEvent};
+use browseros_cdp::{CdpClient, CdpError, CdpEvent, ObservedEvents};
 use browseros_core::{CdpConnection, SessionId};
 use futures_util::future::BoxFuture;
 use live_run::{LiveRun, TestPage, TestResult, brand, test_page};
@@ -465,7 +465,7 @@ impl CdpConnection for HoldsOneAnswer {
         CdpConnection::events_targeted(&self.client, method)
     }
 
-    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+    fn observe_events(&self, methods: &[&str]) -> Option<ObservedEvents> {
         CdpConnection::observe_events(&self.client, methods)
     }
 

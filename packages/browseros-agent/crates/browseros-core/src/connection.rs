@@ -1,5 +1,5 @@
 use crate::{CoreError, SessionId, TargetError};
-use browseros_cdp::{CdpClient, CdpError, CdpEvent};
+use browseros_cdp::{CdpClient, CdpError, CdpEvent, ObservedEvents};
 use futures_util::future::BoxFuture;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -62,10 +62,10 @@ pub trait CdpConnection: Send + Sync {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent>;
 
-    /// Optional ordered, lossless observation of selected event methods, leaving existing
-    /// delivery intact. The native client supports this; legacy/custom transports can retain
+    /// Optional ordered observation of selected event methods, leaving existing
+    /// delivery intact; see `ObservedEvents` for lifecycle guarantees and log bounds. Legacy/custom transports can retain
     /// broadcast-only behavior. Wrappers must forward it to preserve native guarantees.
-    fn observe_events(&self, _methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+    fn observe_events(&self, _methods: &[&str]) -> Option<ObservedEvents> {
         None
     }
 
@@ -133,7 +133,7 @@ impl CdpConnection for CdpClient {
         CdpClient::events(self)
     }
 
-    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+    fn observe_events(&self, methods: &[&str]) -> Option<ObservedEvents> {
         Some(CdpClient::observe_events(self, methods))
     }
 

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use std::{env, future};
 
-use browseros_cdp::{CdpClient, CdpError, CdpEvent, ConnectOptions};
+use browseros_cdp::{CdpClient, CdpError, CdpEvent, ConnectOptions, ObservedEvents};
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, ProtocolSession,
@@ -171,7 +171,7 @@ impl CdpConnection for Tap {
         self.browser.events_targeted(method)
     }
 
-    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+    fn observe_events(&self, methods: &[&str]) -> Option<ObservedEvents> {
         self.browser.observe_events(methods)
     }
 

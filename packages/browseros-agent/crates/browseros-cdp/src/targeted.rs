@@ -23,9 +23,37 @@
 use crate::CdpEvent;
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+
+const LOG_BACKLOG: usize = 4096;
+
+/// One ordered feed of selected events. Lifecycle events are lossless so a stalled reader
+/// cannot strand a dialog or lose attachment order. At most 4096 console/error messages wait
+/// unread; further chatty messages are dropped until reading frees space. Other delivery is
+/// unaffected, including the ordinary broadcast's own bound.
+#[derive(Debug)]
+pub struct ObservedEvents {
+    receiver: mpsc::UnboundedReceiver<ObservedEvent>,
+}
+
+impl ObservedEvents {
+    pub async fn recv(&mut self) -> Option<CdpEvent> {
+        self.receiver.recv().await.map(|queued| queued.event)
+    }
+
+    pub fn try_recv(&mut self) -> Result<CdpEvent, mpsc::error::TryRecvError> {
+        self.receiver.try_recv().map(|queued| queued.event)
+    }
+}
+
+/// Holds a chatty event's budget slot only while it waits in the queue, not during handling.
+#[derive(Debug)]
+struct ObservedEvent {
+    event: CdpEvent,
+    _log_slot: Option<OwnedSemaphorePermit>,
+}
 
 /// Each method's subscribers, oldest first.
 type Subscribers = HashMap<String, Vec<mpsc::UnboundedSender<CdpEvent>>>;
@@ -34,7 +62,38 @@ type Subscribers = HashMap<String, Vec<mpsc::UnboundedSender<CdpEvent>>>;
 #[derive(Debug)]
 struct Observer {
     methods: HashSet<String>,
-    sender: mpsc::UnboundedSender<CdpEvent>,
+    sender: mpsc::UnboundedSender<ObservedEvent>,
+    log_slots: Arc<Semaphore>,
+}
+
+impl Observer {
+    /// False removes a closed registration. A full log budget drops only that message;
+    /// lifecycle events still enter the same queue in wire order.
+    fn offer(&self, event: &CdpEvent) -> bool {
+        if self.sender.is_closed() {
+            return false;
+        }
+        if !self.methods.contains(&event.method) {
+            return true;
+        }
+        let log_slot = if matches!(
+            event.method.as_str(),
+            "Runtime.consoleAPICalled" | "Runtime.exceptionThrown"
+        ) {
+            let Ok(slot) = Arc::clone(&self.log_slots).try_acquire_owned() else {
+                return true;
+            };
+            Some(slot)
+        } else {
+            None
+        };
+        self.sender
+            .send(ObservedEvent {
+                event: event.clone(),
+                _log_slot: log_slot,
+            })
+            .is_ok()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -65,11 +124,10 @@ impl TargetedEvents {
         rx
     }
 
-    /// Copies selected methods into one ordered, unbounded queue without taking them away
-    /// from existing broadcast or targeted consumers. Used for low-volume lifecycle events
-    /// whose loss could strand a page, such as dialog opening and closing.
+    /// Copies selected methods into one ordered feed without taking them from existing
+    /// consumers. Lifecycle events are lossless; chatty traffic has [`ObservedEvents`]' bound.
     #[must_use]
-    pub fn observe(&self, methods: &[&str]) -> mpsc::UnboundedReceiver<CdpEvent> {
+    pub fn observe(&self, methods: &[&str]) -> ObservedEvents {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut subscribers = self.subscribers();
         subscribers
@@ -78,19 +136,18 @@ impl TargetedEvents {
         subscribers.observers.push(Observer {
             methods: methods.iter().map(|method| (*method).to_owned()).collect(),
             sender,
+            log_slots: Arc::new(Semaphore::new(LOG_BACKLOG)),
         });
-        receiver
+        ObservedEvents { receiver }
     }
 
     /// Copies `event` to passive observers, then hands it to every targeted subscriber of its
     /// method. Gives it back when no targeted subscriber took it, for the caller to broadcast.
     pub fn deliver(&self, event: CdpEvent) -> Option<CdpEvent> {
         let mut subscribers = self.subscribers();
-        subscribers.observers.retain(|observer| {
-            !observer.sender.is_closed()
-                && (!observer.methods.contains(&event.method)
-                    || observer.sender.send(event.clone()).is_ok())
-        });
+        subscribers
+            .observers
+            .retain(|observer| observer.offer(&event));
         let Some(senders) = subscribers.targeted.get_mut(&event.method) else {
             return Some(event);
         };
@@ -124,7 +181,7 @@ impl TargetedEvents {
 
 #[cfg(test)]
 mod tests {
-    use super::TargetedEvents;
+    use super::{LOG_BACKLOG, TargetedEvents};
     use crate::CdpEvent;
     use serde_json::json;
 
@@ -163,5 +220,26 @@ mod tests {
             Some("closed".to_owned())
         );
         assert!(observer.try_recv().is_err());
+    }
+
+    #[test]
+    fn console_backlog_is_bounded_without_dropping_lifecycle_events() {
+        let events = TargetedEvents::default();
+        let mut observer = events.observe(&["Runtime.consoleAPICalled", "opening"]);
+        for _ in 0..LOG_BACKLOG + 1 {
+            let _ = events.deliver(event("Runtime.consoleAPICalled"));
+        }
+        let _ = events.deliver(event("opening"));
+        let mut messages = Vec::new();
+        while let Ok(event) = observer.try_recv() {
+            messages.push(event.method);
+        }
+        assert_eq!(messages.len(), LOG_BACKLOG + 1);
+        assert_eq!(messages.last().map(String::as_str), Some("opening"));
+        let _ = events.deliver(event("Runtime.consoleAPICalled"));
+        assert_eq!(
+            observer.try_recv().ok().map(|event| event.method),
+            Some("Runtime.consoleAPICalled".to_owned())
+        );
     }
 }

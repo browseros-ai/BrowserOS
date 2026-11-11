@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, ObservedEvents};
 use browseros_core::sensitive_fields::{SEALED_WORLD, SensitiveKind};
 use browseros_core::{CdpConnection, FrameId, ProtocolSession, SessionId};
 use futures_util::future::BoxFuture;
@@ -202,7 +202,7 @@ impl CdpConnection for Recorder {
         self.inner.events_targeted(method)
     }
 
-    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+    fn observe_events(&self, methods: &[&str]) -> Option<ObservedEvents> {
         self.inner.observe_events(methods)
     }
 

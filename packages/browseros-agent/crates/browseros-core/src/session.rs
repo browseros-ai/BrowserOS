@@ -13,7 +13,7 @@ use crate::{
     sensitive_fields::{SensitiveValues, SensitiveValuesSetting},
     windows::WindowManager,
 };
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, ObservedEvents};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::{
@@ -480,7 +480,7 @@ impl CdpConnection for EvictingConnection {
         self.inner.events()
     }
 
-    fn observe_events(&self, methods: &[&str]) -> Option<mpsc::UnboundedReceiver<CdpEvent>> {
+    fn observe_events(&self, methods: &[&str]) -> Option<ObservedEvents> {
         self.inner.observe_events(methods)
     }
 

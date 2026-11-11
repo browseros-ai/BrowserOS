@@ -10,7 +10,7 @@ pub use discovery::discover_websocket_url;
 pub use error::CdpError;
 pub use events::{CdpEvent, EventStream};
 pub use generated::*;
-pub use targeted::TargetedEvents;
+pub use targeted::{ObservedEvents, TargetedEvents};
 
 use serde::{Deserialize, Serialize};
 use std::{fmt, hash::Hash};
