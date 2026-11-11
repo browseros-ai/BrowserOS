@@ -532,6 +532,7 @@ dependencies = [
  "browseros-core",
  "browseros-mcp",
  "bytes",
+ "chrono",
  "clap",
  "claw-api",
  "ed25519-dalek",

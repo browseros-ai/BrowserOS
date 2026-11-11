@@ -1,8 +1,8 @@
 /**
  * Ultrafast skills: saving a session compiles it into a verified flow, run_skill runs it or
  * hands back with an owned page and the write guard, and a one-step patch repairs a site
- * change. Every case drives the test shop, switches ultrafast on through the settings API, and
- * switches it off again so later cases see the default tool list.
+ * change. Compiled flows are off by default, so every case runs on a server of its own that a
+ * debug build starts with them on; the shared server keeps the default tool list.
  */
 
 import {
@@ -10,8 +10,9 @@ import {
   type UltrafastShop,
 } from '../fixtures/ultrafast-shop'
 import type { CaseContext, ContractCase } from './cases'
-import { expectOk } from './helpers'
-import { type McpSession, textOf } from './mcp-client'
+import { expectOk, waitUntil } from './helpers'
+import { McpSession, textOf } from './mcp-client'
+import { startRustServer } from './rust-server'
 import {
   SHOP_EXAMPLES,
   SHOP_PROSE,
@@ -91,42 +92,75 @@ async function savedShopSkill(
   }
 }
 
+async function withUltrafastServer(
+  ctx: CaseContext,
+  body: (ctx: CaseContext, session: McpSession) => Promise<void>,
+): Promise<void> {
+  const server = await startRustServer(ctx.browser.cdpPort, {
+    env: { CLAW_SERVER_ULTRAFAST: '1' },
+  })
+  try {
+    const session = await McpSession.connect(
+      server.baseUrl,
+      'ultrafast-contract',
+    )
+    try {
+      await waitUntil(
+        async () =>
+          !(await session.callTool('tabs', { action: 'list' })).isError,
+        'ultrafast server to attach',
+      )
+      await body({ ...ctx, server }, session)
+    } finally {
+      await closeMyPages(session)
+      await session.close().catch(() => {})
+    }
+  } finally {
+    await server.stop()
+  }
+}
+
 async function withShop(
   ctx: CaseContext,
-  body: (shop: UltrafastShop, session: McpSession) => Promise<void>,
+  body: (
+    shop: UltrafastShop,
+    session: McpSession,
+    ctx: CaseContext,
+  ) => Promise<void>,
 ): Promise<void> {
-  const shop = await startUltrafastShop()
-  const session = await ctx.openSession('ultrafast-contract')
-  try {
-    await body(shop, session)
-  } finally {
-    await closeMyPages(session)
-    await shop.stop()
-  }
+  await withUltrafastServer(ctx, async (isolated, session) => {
+    const shop = await startUltrafastShop()
+    try {
+      await body(shop, session, isolated)
+    } finally {
+      await shop.stop()
+    }
+  })
 }
 
 export const ultrafastCases: ContractCase[] = [
   {
     name: 'ultrafast: on, run_skill is listed and save_skill takes a flow',
     async run(ctx) {
-      const session = await ctx.openSession('ultrafast-on')
-      const tools = await session.listTools()
-      if (!tools.some((tool) => tool.name === 'run_skill')) {
-        throw new Error('run_skill is not listed')
-      }
-      const save = tools.find((tool) => tool.name === 'save_skill')
-      const schema = save?.inputSchema as {
-        properties?: Record<string, unknown>
-      }
-      if (!schema?.properties?.flow) {
-        throw new Error('save_skill does not offer flow fields')
-      }
+      await withUltrafastServer(ctx, async (_isolated, session) => {
+        const tools = await session.listTools()
+        if (!tools.some((tool) => tool.name === 'run_skill')) {
+          throw new Error('run_skill is not listed')
+        }
+        const save = tools.find((tool) => tool.name === 'save_skill')
+        const schema = save?.inputSchema as {
+          properties?: Record<string, unknown>
+        }
+        if (!schema?.properties?.flow) {
+          throw new Error('save_skill does not offer flow fields')
+        }
+      })
     },
   },
   {
     name: 'ultrafast: saving a session compiles a verified flow without writing',
     async run(ctx) {
-      await withShop(ctx, async (shop, session) => {
+      await withShop(ctx, async (shop, session, ctx) => {
         await session.callTool('run', {
           code: `const p = await browser.open('${shop.url('/s?k=sensodyne')}'); await p.waitForSelector('[data-result]'); return (await p.snapshot()).text`,
         })
@@ -169,7 +203,7 @@ export const ultrafastCases: ContractCase[] = [
   {
     name: 'ultrafast: run_skill finishes, or hands back with an owned page and the write guard',
     async run(ctx) {
-      await withShop(ctx, async (shop, session) => {
+      await withShop(ctx, async (shop, session, ctx) => {
         await savedShopSkill(ctx, session, shop, 'contract-shop-run')
         shop.reset()
         const done = await structured(session, 'run_skill', {
@@ -220,7 +254,7 @@ export const ultrafastCases: ContractCase[] = [
   {
     name: 'ultrafast: a one-step patch repairs a site change',
     async run(ctx) {
-      await withShop(ctx, async (shop, session) => {
+      await withShop(ctx, async (shop, session, ctx) => {
         await savedShopSkill(ctx, session, shop, 'contract-shop-patch')
         shop.reset()
         shop.state.layout = 'v2'

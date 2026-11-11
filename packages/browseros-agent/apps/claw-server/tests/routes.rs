@@ -545,7 +545,6 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         "name_session",
         "save_skill",
         "mark_skill_run",
-        "run_skill",
         "request_human_help",
         "await_human_help",
     ];
@@ -705,6 +704,53 @@ async fn tests_that_turning_human_help_off_over_http_reaches_mcp_agents() -> any
     Ok(())
 }
 
+#[tokio::test]
+async fn run_skill_is_refused_even_for_a_skill_with_a_verified_flow() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    app.state
+        .skills
+        .create(claw_server::services::skills::CreateSkill {
+            name: "neo-shop-add".to_string(),
+            description: "Add a product to the cart".to_string(),
+            site: None,
+            steps: vec!["Open the search".to_string(), "Add it".to_string()],
+            learned_notes: vec![],
+            origin: claw_server::services::skills::SkillOrigin::Agent,
+            source_session_id: None,
+        })
+        .await?;
+    app.state
+        .skills
+        .put_flow_row(claw_server::services::flow::new_row(
+            "neo-shop-add",
+            claw_server::services::flow::FlowStatus::Verified,
+        ))
+        .await?;
+    let session_id = initialize_mcp(&app).await?;
+
+    let call = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "run_skill", "arguments": { "name": "neo-shop-add" } }
+    });
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(call),
+        &[("mcp-session-id", &session_id)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["error"]["code"], -32601, "{body}");
+    assert!(body["result"].is_null(), "{body}");
+
+    let runs = app.state.skills.get("neo-shop-add").await?.runs;
+    assert!(runs.is_empty());
+    Ok(())
+}
+
 async fn stateless_mcp_request(
     router: &Router,
     method: &str,
@@ -827,6 +873,50 @@ async fn tests_that_explicit_grouping_never_sends_the_cleanup_tip() -> anyhow::R
     let text = reply["result"]["content"].to_string();
     assert!(!text.contains("tab group"), "{reply}");
     Ok(())
+}
+
+#[tokio::test]
+async fn mcp_tool_calls_are_counted_for_the_day() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let started_ms = epoch_ms()?;
+    for arguments in [
+        json!({ "name": "first" }),
+        json!({ "name": "second" }),
+        json!({ "name": 5 }),
+    ] {
+        stateless_mcp_request(
+            &app.router,
+            "tools/call",
+            json!({ "name": "name_session", "arguments": arguments }),
+            Some("Codex"),
+        )
+        .await?;
+    }
+
+    // The calls may straddle UTC midnight, so add up every day the test spanned.
+    let mut days = vec![
+        claw_server::db::run_error_budget::utc_day(started_ms),
+        claw_server::db::run_error_budget::utc_day(epoch_ms()?),
+    ];
+    days.dedup();
+    let (mut calls, mut error_calls) = (0, 0);
+    for day in days {
+        for count in app.state.tool_calls_daily.counts(&day).await? {
+            assert_eq!(count.tool_name, "name_session");
+            calls += count.calls;
+            error_calls += count.error_calls;
+        }
+    }
+    assert_eq!((calls, error_calls), (3, 1));
+    Ok(())
+}
+
+fn epoch_ms() -> anyhow::Result<i64> {
+    Ok(i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis(),
+    )?)
 }
 
 #[tokio::test]

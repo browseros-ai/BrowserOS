@@ -4,7 +4,7 @@ use crate::{
     db::entities::{skill_flows, skill_runs},
     error::{AppError, AppResult, CanonicalError, RequestId},
     services::{
-        flow::{self, FlowStatus, ULTRAFAST_ENABLED},
+        flow::{self, FlowStatus},
         skills::{CreateSkill, SkillDetailView, SkillOrigin, SkillView, UpdateSkill},
     },
 };
@@ -45,7 +45,7 @@ pub(super) async fn list(
             .or_default()
             .push(run);
     }
-    let mut flows: HashMap<String, skill_flows::Model> = if ULTRAFAST_ENABLED {
+    let mut flows: HashMap<String, skill_flows::Model> = if state.ultrafast_enabled() {
         state
             .skills
             .flow_rows()
@@ -69,7 +69,7 @@ pub(super) async fn list(
             .map_err(|source| map_error(&request_id, source))?;
         let mut dto = skill_to_dto(view);
         dto.token_savings = Some(Box::new(token_savings));
-        if ULTRAFAST_ENABLED {
+        if state.ultrafast_enabled() {
             dto.ultrafast = Some(Box::new(ultrafast_to_dto(flow.as_ref())));
         }
         items.push(dto);
@@ -114,7 +114,7 @@ pub(super) async fn create(
         .await
         .map_err(|source| map_error(&request_id, source))?;
     let mut skill = skill_to_dto(view);
-    if ULTRAFAST_ENABLED {
+    if state.ultrafast_enabled() {
         skill.ultrafast = Some(Box::new(ultrafast_to_dto(None)));
     }
     Ok((StatusCode::CREATED, Json(skill)))
@@ -140,7 +140,7 @@ pub(super) async fn update(
         )
         .await
         .map_err(|source| map_error(&request_id, source))?;
-    let detail = if ULTRAFAST_ENABLED {
+    let detail = if state.ultrafast_enabled() {
         state
             .skills
             .reconcile_flow_after_edit(&name)
@@ -196,6 +196,12 @@ pub(super) async fn flow(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<models::SkillFlowSource>, CanonicalError> {
+    if !state.ultrafast_enabled() {
+        return Err(map_error(
+            &request_id,
+            AppError::not_found("this skill has no ultrafast flow"),
+        ));
+    }
     let path = crate::services::flow::store::flow_path(&state.skills.skill_dir(&name));
     match tokio::fs::read_to_string(&path).await {
         Ok(source) => Ok(Json(models::SkillFlowSource::new(source))),
@@ -219,6 +225,12 @@ pub(super) async fn approve_write(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Skill>, CanonicalError> {
+    if !state.ultrafast_enabled() {
+        return Err(map_error(
+            &request_id,
+            AppError::not_found("this skill has no ultrafast flow"),
+        ));
+    }
     let row = state
         .skills
         .flow_row(&name)
@@ -302,7 +314,7 @@ async fn with_ultrafast(
     request_id: &RequestId,
     mut detail: SkillDetail,
 ) -> Result<SkillDetail, CanonicalError> {
-    if ULTRAFAST_ENABLED {
+    if state.ultrafast_enabled() {
         let flow = state
             .skills
             .flow_row(&detail.skill.name)

@@ -34,6 +34,13 @@ const EFFICIENCY_ESTIMATOR_VERSION: &str = "efficiency_estimator_version";
 const SCREENSHOT_BASELINE_WIDTH: &str = "screenshot_baseline_width";
 const SCREENSHOT_BASELINE_HEIGHT: &str = "screenshot_baseline_height";
 const SCREENSHOT_TOKENS_PER_DISPATCH: &str = "screenshot_tokens_per_dispatch";
+const DAY: &str = "day";
+const TOTAL_CALLS: &str = "total_calls";
+const ERROR_CALLS: &str = "error_calls";
+const DISTINCT_TOOLS: &str = "distinct_tools";
+const BY_TOOL: &str = "by_tool";
+const BY_CLIENT: &str = "by_client";
+const OTHER_TOOL: &str = "other";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
@@ -84,6 +91,9 @@ enum PropertyKind {
     ToolName,
     UnsignedInteger,
     SignedInteger,
+    UtcDay,
+    ToolCounts,
+    ClientCounts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,8 +159,64 @@ impl PropertyDefinition {
                 .as_i64()
                 .filter(|value| value.unsigned_abs() <= MAX_SAFE_INTEGER)
                 .map(Value::from),
+            PropertyKind::UtcDay => {
+                let raw = value.as_str()?;
+                is_calendar_day(raw).then(|| Value::String(raw.to_string()))
+            }
+            PropertyKind::ToolCounts => normalize_counts(value, |tool| {
+                if known_tool_names().contains(tool) || SERVER_TOOL_NAMES.contains(&tool) {
+                    tool.to_string()
+                } else {
+                    OTHER_TOOL.to_string()
+                }
+            }),
+            PropertyKind::ClientCounts => normalize_counts(value, bucket_client_name),
         }
     }
+}
+
+/// A real `YYYY-MM-DD` date, so only the day key and never free text reaches this property.
+fn is_calendar_day(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    let digits_at = |range: std::ops::Range<usize>| bytes[range].iter().all(u8::is_ascii_digit);
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !digits_at(0..4)
+        || !digits_at(5..7)
+        || !digits_at(8..10)
+    {
+        return false;
+    }
+    let (Ok(year), Ok(month), Ok(day)) = (
+        raw[0..4].parse::<i32>(),
+        raw[5..7].parse::<u8>(),
+        raw[8..10].parse::<u8>(),
+    ) else {
+        return false;
+    };
+    time::Month::try_from(month)
+        .ok()
+        .and_then(|month| time::Date::from_calendar_date(year, month, day).ok())
+        .is_some()
+}
+
+/// Re-keys a count map through `bucket`, summing counts that land on the same key. Bucketing
+/// an already bucketed key is a no-op, so a sanitized map passes the send-time check unchanged.
+fn normalize_counts(value: &Value, bucket: impl Fn(&str) -> String) -> Option<Value> {
+    let mut counts: Map<String, Value> = Map::new();
+    for (key, count) in value.as_object()? {
+        let count = count.as_u64().filter(|count| *count <= MAX_SAFE_INTEGER)?;
+        let key = bucket(key);
+        let total = counts
+            .get(&key)
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .checked_add(count)
+            .filter(|total| *total <= MAX_SAFE_INTEGER)?;
+        counts.insert(key, Value::from(total));
+    }
+    Some(Value::Object(counts))
 }
 
 fn normalize_token(value: &Value, accepted: &[&str]) -> Option<Value> {
@@ -159,6 +225,17 @@ fn normalize_token(value: &Value, accepted: &[&str]) -> Option<Value> {
         .contains(&raw)
         .then(|| Value::String(raw.to_string()))
 }
+
+/// Tools the server registers next to the shared browser catalog. Daily counts keep their names;
+/// anything else is reported as `other`.
+const SERVER_TOOL_NAMES: [&str; 6] = [
+    "save_skill",
+    "mark_skill_run",
+    "run_skill",
+    "request_human_help",
+    "await_human_help",
+    "solve_captcha",
+];
 
 fn known_tool_names() -> &'static HashSet<&'static str> {
     static KNOWN_TOOL_NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
@@ -309,7 +386,20 @@ pub const AGENT_SESSION_EFFICIENCY_COMPUTED: EventDefinition = EventDefinition::
     ],
 );
 
-pub const ALL: [EventDefinition; 8] = [
+/// One per install and finished UTC day: how many tool calls it made, by tool and by client.
+pub const TOOL_CALLS_DAILY: EventDefinition = EventDefinition::new(
+    "tool_calls_daily",
+    &[
+        PropertyDefinition::new(DAY, PropertyKind::UtcDay),
+        PropertyDefinition::new(TOTAL_CALLS, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(ERROR_CALLS, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(DISTINCT_TOOLS, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(BY_TOOL, PropertyKind::ToolCounts),
+        PropertyDefinition::new(BY_CLIENT, PropertyKind::ClientCounts),
+    ],
+);
+
+pub const ALL: [EventDefinition; 9] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
     AGENT_SESSION_TASK_DECLARED,
@@ -318,6 +408,7 @@ pub const ALL: [EventDefinition; 8] = [
     HARNESS_DISCONNECTED,
     AGENT_SESSION_TOOL_USAGE,
     AGENT_SESSION_EFFICIENCY_COMPUTED,
+    TOOL_CALLS_DAILY,
 ];
 
 pub(crate) fn by_wire_name(name: &str) -> Option<EventDefinition> {
@@ -369,7 +460,7 @@ mod tests {
 
     #[test]
     fn catalog_pins_wire_names_and_required_properties() {
-        assert_eq!(ALL.len(), 8);
+        assert_eq!(ALL.len(), 9);
         assert_eq!(
             ALL.map(EventDefinition::name),
             [
@@ -381,6 +472,18 @@ mod tests {
                 HARNESS_DISCONNECTED.name(),
                 AGENT_SESSION_TOOL_USAGE.name(),
                 AGENT_SESSION_EFFICIENCY_COMPUTED.name(),
+                TOOL_CALLS_DAILY.name(),
+            ]
+        );
+        assert_eq!(
+            TOOL_CALLS_DAILY.property_names(),
+            vec![
+                "day",
+                "total_calls",
+                "error_calls",
+                "distinct_tools",
+                "by_tool",
+                "by_client",
             ]
         );
         assert_eq!(
@@ -833,6 +936,66 @@ mod tests {
                 "nested": { "prompt": "private" }
             })),
             Some(json!({ "harness": "Zed" }))
+        );
+    }
+
+    #[test]
+    fn daily_tool_calls_keep_only_known_tools_bucketed_clients_and_a_real_day() {
+        let sanitized = TOOL_CALLS_DAILY.sanitize(&json!({
+            "day": "2026-11-10",
+            "total_calls": 9,
+            "error_calls": 1,
+            "distinct_tools": 3,
+            "by_tool": {
+                "navigate": 4,
+                "save_skill": 1,
+                "https://example.com/private": 2,
+                "custom_tool": 3
+            },
+            "by_client": { "Claude Code": 6, "claude-code": 1, "Codex": 2 },
+            "url": "https://example.com"
+        }));
+        assert_eq!(
+            sanitized,
+            Some(json!({
+                "day": "2026-11-10",
+                "total_calls": 9,
+                "error_calls": 1,
+                "distinct_tools": 3,
+                "by_tool": { "navigate": 4, "other": 5, "save_skill": 1 },
+                "by_client": { "claude-code": 7, "codex": 2 }
+            }))
+        );
+        let Some(Value::Object(sanitized)) = sanitized else {
+            panic!("the daily event should sanitize");
+        };
+        let sanitized: HashMap<String, Value> = sanitized.into_iter().collect();
+        assert!(TOOL_CALLS_DAILY.required_values_are_normalized(&sanitized));
+
+        for day in ["2026-02-30", "2026-11-1", "yesterday", "+026-11-10"] {
+            assert_eq!(
+                TOOL_CALLS_DAILY.sanitize(&json!({
+                    "day": day,
+                    "total_calls": 1,
+                    "error_calls": 0,
+                    "distinct_tools": 1,
+                    "by_tool": { "tabs": 1 },
+                    "by_client": { "Codex": 1 }
+                })),
+                None,
+                "{day} is not a calendar day"
+            );
+        }
+        assert_eq!(
+            TOOL_CALLS_DAILY.sanitize(&json!({
+                "day": "2026-11-10",
+                "total_calls": 1,
+                "error_calls": 0,
+                "distinct_tools": 1,
+                "by_tool": { "tabs": "many" },
+                "by_client": { "Codex": 1 }
+            })),
+            None
         );
     }
 
