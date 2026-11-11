@@ -28,7 +28,10 @@ async function fetchDetail(runId: string): Promise<RunDetail> {
   return ((await response.json()) as RunResponse).run
 }
 
-/** Writes the run's Markdown to the clipboard, fetching the run first when its row is closed. */
+/**
+ * Writes the run's Markdown to the clipboard: from `detail` when the row is open (it is kept
+ * current while open), else from the run fetched now.
+ */
 export async function copyRun(
   run: RunSummary,
   detail: RunDetail | null,
@@ -64,12 +67,21 @@ export function CopyRunButton({
   /** An open row always shows Copy; a closed one on hover and keyboard focus. */
   open: boolean
 }) {
-  const [state, setState] = useState<CopyState>('idle')
+  // `done` counts finished copies, so a second copy restarts the 1.5 s even when its state matches.
+  const [{ state, done }, setResult] = useState<{
+    state: CopyState
+    done: number
+  }>({ state: 'idle', done: 0 })
   useEffect(() => {
-    if (state === 'idle') return
-    const timer = setTimeout(() => setState('idle'), COPIED_MS)
+    if (state === 'idle' || done === 0) return
+    const timer = setTimeout(
+      () => setResult((current) => ({ ...current, state: 'idle' })),
+      COPIED_MS,
+    )
     return () => clearTimeout(timer)
-  }, [state])
+  }, [state, done])
+  const finish = (next: CopyState) =>
+    setResult((current) => ({ state: next, done: current.done + 1 }))
   const label = `Copy run ${run.seq} as Markdown: its code, the methods each line called, and what the model read`
   return (
     <span
@@ -94,8 +106,8 @@ export function CopyRunButton({
         title={label}
         onClick={() => {
           copyRun(run, detail).then(
-            () => setState('copied'),
-            () => setState('failed'),
+            () => finish('copied'),
+            () => finish('failed'),
           )
         }}
         className="flex size-6 items-center justify-center rounded-md border border-control bg-white text-ink-2 hover:bg-[#F4F6FA] hover:text-ink focus-visible:opacity-100"

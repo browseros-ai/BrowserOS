@@ -36,7 +36,7 @@ export function RunTable(props: RunTableProps) {
   const { runs, sort } = props
   const scale = barScale(runs)
   return (
-    <div className="flex min-w-[720px] flex-col">
+    <div className="flex min-w-[752px] flex-col">
       <div className="sticky top-0 z-10">
         <Header sort={sort} onSort={props.onSort} />
         <Legend />
@@ -186,7 +186,8 @@ function RunEntry({
           onClick={() => onRow(run)}
           nowMs={nowMs}
         />
-        <CopyRunButton run={run} detail={detail} open={open} />
+        {/* A closed row's detail is a cache that stopped refreshing: Copy fetches the run afresh. */}
+        <CopyRunButton run={run} detail={open ? detail : null} open={open} />
       </div>
       {open && (
         <RunBlock

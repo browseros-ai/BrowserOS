@@ -34,13 +34,10 @@ describe('Copy on a run row', () => {
   const toggles: number[] = []
   const savedItem = Object.getOwnPropertyDescriptor(globalThis, 'ClipboardItem')
 
-  async function table(openIds: ReadonlySet<string> = new Set()) {
-    const details = new Map<string, RunDetail>([
-      [first.id, first],
-      [second.id, second],
-    ])
-    dom = await installDom(details)
-    await dom.render(
+  let details: Map<string, RunDetail>
+
+  function Table({ openIds }: { openIds: ReadonlySet<string> }) {
+    return (
       <RunTable
         runs={[first, second]}
         totals={runTotals([first, second])}
@@ -52,8 +49,17 @@ describe('Copy on a run row', () => {
         onRow={(run) => toggles.push(run.seq)}
         onOpenFull={() => {}}
         nowMs={Date.now()}
-      />,
+      />
     )
+  }
+
+  async function table(openIds: ReadonlySet<string> = new Set()) {
+    details = new Map<string, RunDetail>([
+      [first.id, first],
+      [second.id, second],
+    ])
+    dom = await installDom(details)
+    await dom.render(<Table openIds={openIds} />)
   }
 
   afterEach(async () => {
@@ -121,5 +127,41 @@ describe('Copy on a run row', () => {
     expect(copyButton(2).getAttribute('aria-label')).toContain(
       'Copy run 2 as Markdown',
     )
+  })
+
+  it('copies a row that was open and closed again from the run as it is now, not the cached detail', async () => {
+    await table(new Set([second.id]))
+    const { clipboard, written } = fakeClipboard()
+    Object.assign(navigator, { clipboard })
+    delete (globalThis as Record<string, unknown>).ClipboardItem
+    // The run changes after its row closed: the row's cached detail no longer matches it.
+    const later = {
+      ...second,
+      reply: { ...second.reply, text: 'finished later' },
+    }
+    details.set(second.id, later)
+    await dom.render(<Table openIds={new Set()} />)
+    await dom.interact(() => fire(copyButton(2), 'click'))
+    expect(await written[0]).toContain('finished later')
+  })
+
+  it('a second copy keeps "Copied" for another 1.5 s', async () => {
+    await table()
+    const { clipboard } = fakeClipboard()
+    Object.assign(navigator, { clipboard })
+    delete (globalThis as Record<string, unknown>).ClipboardItem
+    const status = () =>
+      dom.container.querySelector('[role="status"]')?.textContent ?? ''
+    await dom.interact(() => fire(copyButton(2), 'click'))
+    expect(status()).toBe('Copied')
+    await Bun.sleep(1_000)
+    await dom.interact(() => fire(copyButton(2), 'click'))
+    await Bun.sleep(1_000)
+    await dom.settle()
+    // 2 s after the first copy, 1 s after the second: still shown.
+    expect(status()).toBe('Copied')
+    await Bun.sleep(700)
+    await dom.settle()
+    expect(status()).toBe('')
   })
 })

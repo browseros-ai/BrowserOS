@@ -203,14 +203,14 @@ for an agent to read, and shows its path with Copy path until dismissed; the ter
   log.jsonl            the raw log
 ```
 
-**Copy** on a run row (at its right end: on hover, on keyboard focus, always on an open row) puts that
-run's Markdown on the clipboard, from the same renderer as `runs/NNN.md` but with the whole reply:
-paste it into any agent and ask about the run. A closed row's run is fetched at the click.
-
 It lives outside the state folder, so it survives the viewer stopping and Clear. An agent can start
 at one small file and open only what a question needs: README.md stays under about 300 lines however
 many runs there are. No host token or Authorization header is ever in an export. Screenshots are
 not exported.
+
+**Copy** on a run row (at its right end: on hover, on keyboard focus, always on an open row) puts that
+run's Markdown on the clipboard, from the same renderer as `runs/NNN.md` but with the whole reply:
+paste it into any agent and ask about the run. A closed row's run is fetched at the click.
 
 ## The API
 
