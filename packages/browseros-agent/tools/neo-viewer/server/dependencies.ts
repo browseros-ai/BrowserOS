@@ -68,6 +68,13 @@ export function planDependencies(input: {
   }
   return {
     kind: 'stop',
-    message: `neo-viewer: its packages (${input.missing.join(', ')}) are not installed, and this is Bun ${input.bunVersion}, whose install does not link them; the repo pins Bun ${input.pinned}. Run: cd ${input.agentDir} && npx -y bun@${input.pinned} install --frozen-lockfile`,
+    message: `neo-viewer: its packages (${input.missing.join(', ')}) are not installed, and this is Bun ${input.bunVersion}, whose install does not link them; the repo pins Bun ${input.pinned}. Run: cd ${shellQuote(input.agentDir)} && npx -y bun@${input.pinned} install --frozen-lockfile`,
   }
+}
+
+/** A path as one shell word, so the printed command can be pasted as is. */
+function shellQuote(path: string): string {
+  return /^[\w./@:+-]+$/.test(path)
+    ? path
+    : `'${path.replaceAll("'", "'\\''")}'`
 }

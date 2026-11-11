@@ -1,9 +1,32 @@
 /**
- * The viewer process serving an instance, recorded in the instance's state folder
- * (`viewer.json`), so a later start of the same instance can tell it is still running.
+ * An instance's state folder: which instance owns it (`instance`), and the viewer process serving
+ * it (`viewer.json`), so a later start can tell it is still running.
  */
 
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+
+/**
+ * Claims the state folder for `instance`, or refuses before anything in it changes when another
+ * instance owns it: a start clears the folder's history and rewrites its token, so two instances
+ * given the same `--data-dir` would clear each other's.
+ */
+export async function claimStateFolder(
+  dir: string,
+  instance: string,
+): Promise<void> {
+  const marker = join(dir, 'instance')
+  const owner = await readFile(marker, 'utf8').then(
+    (text) => text.trim(),
+    () => null,
+  )
+  if (owner !== null && owner !== instance) {
+    throw new Error(
+      `neo-viewer: ${dir} holds instance ${owner}'s state; give instance ${instance} its own --data-dir (or none)`,
+    )
+  }
+  if (owner === null) await writeFile(marker, `${instance}\n`)
+}
 
 export interface ViewerRecord {
   pid: number

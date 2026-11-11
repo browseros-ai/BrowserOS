@@ -27,7 +27,7 @@ import {
   startContainer,
   stopContainer,
 } from './neo-container'
-import { liveViewer, readViewerFile } from './running-viewer'
+import { claimStateFolder, liveViewer, readViewerFile } from './running-viewer'
 import { type RunningViewer, startViewer } from './viewer-server'
 
 const AGENT_DIR = join(import.meta.dir, '..', '..', '..')
@@ -69,6 +69,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
 try {
   await mkdir(options.dataDir, { recursive: true })
+  await claimStateFolder(options.dataDir, options.instance)
   await checkRunningViewer()
   const neo = options.upstream
     ? { mcpUrl: options.upstream, hostApi: options.hostApi }
@@ -87,7 +88,12 @@ try {
 `)
   await writeFile(
     viewerFile,
-    JSON.stringify({ pid: process.pid, port: options.port, url: viewer.url }),
+    // The port it listens on (not --port, which 0 leaves to the OS), for the same-port check.
+    JSON.stringify({
+      pid: process.pid,
+      port: Number(new URL(viewer.url).port),
+      url: viewer.url,
+    }),
   )
 } catch (error) {
   // A start cut short by Ctrl-C is already being cleaned up by `stop`.

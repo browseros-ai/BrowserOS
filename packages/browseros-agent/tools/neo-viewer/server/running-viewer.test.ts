@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { liveViewer } from './running-viewer'
+import { claimStateFolder, liveViewer } from './running-viewer'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -31,4 +31,14 @@ test("a recorded viewer counts only while its pid still runs this tool's entry",
   expect(await liveViewer(file, async () => '/usr/bin/vim notes.md')).toBeNull()
   expect(await liveViewer(file, async () => null)).toBeNull()
   expect(await liveViewer(join(tmpdir(), 'no-such-viewer.json'))).toBeNull()
+})
+
+test('a state folder belongs to one instance: another refuses it before changing anything', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'neo-viewer-state-'))
+  dirs.push(dir)
+  await claimStateFolder(dir, 'vp-a')
+  await claimStateFolder(dir, 'vp-a')
+  await expect(claimStateFolder(dir, 'vp-b')).rejects.toThrow(
+    "holds instance vp-a's state",
+  )
 })

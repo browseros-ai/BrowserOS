@@ -51,3 +51,15 @@ test("the pinned Bun is the agent package's packageManager", async () => {
     /^\d+\.\d+\.\d+$/,
   )
 })
+
+test('the printed command survives a checkout path with spaces or quotes', () => {
+  const stop = planDependencies({
+    missing: ['react'],
+    bunVersion: '1.3.6',
+    pinned: '1.4.2',
+    agentDir: "/Users/me/my repo's/agent",
+  })
+  expect(stop.kind === 'stop' && stop.message).toContain(
+    `cd '/Users/me/my repo'\\''s/agent' && npx`,
+  )
+})
