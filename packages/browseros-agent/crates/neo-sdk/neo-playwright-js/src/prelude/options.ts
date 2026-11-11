@@ -83,6 +83,13 @@ export function markHandle(object: object): void {
   handles.add(object)
 }
 
+/**
+ * Node's `util.inspect.custom`, which is this registry symbol. Upstream's client gives
+ * `ConsoleMessage` and `Locator` one, so `util.inspect(message)` prints the message's text and
+ * a locator its description; a realm without Node's `util` never reads it.
+ */
+export const inspectCustom = Symbol.for('nodejs.util.inspect.custom')
+
 /** One of the objects the prelude hands to scripts. */
 export function isHandle(value: unknown): boolean {
   return typeof value === 'object' && value !== null && handles.has(value)

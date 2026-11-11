@@ -8,7 +8,7 @@ use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
-use crate::page::OpPage;
+use crate::page::{OpPage, document_op};
 use crate::probe::{ExpectParams, ProbeFailure, ProbeRequest, ProbeTarget};
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{PageRef, Target};
@@ -116,8 +116,16 @@ async fn locator(
             None => Ok(expect.nothing_found()),
         }
     };
+    // Upstream snapshots the body of the frame `expect` ran on, the locator's own frame, not
+    // the frame its last chunk enters.
+    let root_snapshot = || document_op::expect_snapshot(&page, scope, target.frame.as_ref());
     expect
-        .run(scope, || locator_handler::checkpoint(scope, &page), poll)
+        .run(
+            scope,
+            || locator_handler::checkpoint(scope, &page),
+            poll,
+            root_snapshot,
+        )
         .await
 }
 
@@ -148,6 +156,7 @@ async fn page(
             scope,
             || locator_handler::checkpoint(scope, &page),
             || main_frame(&page, scope, &expect, &request),
+            || document_op::expect_snapshot(&page, scope, None),
         )
         .await
 }

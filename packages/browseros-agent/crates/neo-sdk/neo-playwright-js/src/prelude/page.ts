@@ -23,7 +23,10 @@ import {
 } from './errors'
 import {
   assertMaxArguments,
+  type Callbacks,
+  type CallForm,
   type EvaluateOptions,
+  exposesFunctions,
   pageCall,
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
@@ -79,6 +82,7 @@ import type {
   PageBrand,
   PageFact,
   PageHandle,
+  PageScript,
 } from './wire'
 
 /** Page-scoped preferences; omitted values are retained and null clears just that override. */
@@ -795,6 +799,53 @@ export class Page extends EventEmitter {
     return exposeOnPage(this, 'page.exposeFunction', name, (_source, ...args) =>
       Reflect.apply(callback, undefined, args),
     )
+  }
+
+  /**
+   * `pageCall` for an evaluate on this page. With `exposeFunctions`, each function in the
+   * argument is exposed as this page's binding off `window` before the op that names it goes
+   * out, as upstream's `serializeArgumentWithCallbacks` awaits `_exposeEvaluateCallback`. A
+   * refused script fails in its op (after the wait, for a locator) and exposes nothing. The
+   * callbacks last until the run ends, as every binding does; upstream also erases them when
+   * the main frame loads a new document, which no script there can reach them from anyway.
+   */
+  async _evaluationScript(
+    api: string,
+    form: CallForm,
+    pageFunction: unknown,
+    arg: unknown,
+    options: unknown,
+  ): Promise<PageScript> {
+    const callbacks: Callbacks | undefined = exposesFunctions(options)
+      ? []
+      : undefined
+    const script = pageCall(api, form, pageFunction, arg, options, callbacks)
+    if (!callbacks?.length || !('run' in script)) return script
+    const settled = await Promise.allSettled(
+      callbacks.map(([name, callback]) =>
+        exposeOnPage(
+          this,
+          api,
+          name,
+          (_source, ...args) => Reflect.apply(callback, undefined, args),
+          true,
+        ),
+      ),
+    )
+    const failed = settled.find((outcome) => outcome.status === 'rejected')
+    if (failed) {
+      // A failure part way (a refused tab) leaves nothing behind, as `addInitScript`'s
+      // `exposeFunctions` does: the evaluate never goes out, so no page can call these.
+      await Promise.all(
+        settled.map((outcome) =>
+          outcome.status === 'fulfilled'
+            ? outcome.value.dispose().catch(() => {})
+            : undefined,
+        ),
+      )
+      throw failed.reason
+    }
+    return script
   }
 
   /**

@@ -128,6 +128,7 @@ async function childSmoke() {
       stateDir: process.env.CLAW_SMOKE_STATE,
       executionDir: process.env.CLAW_SMOKE_EXECUTION,
       browserosVersion: process.env.CLAW_SMOKE_VERSION,
+      hostedMode: hosted,
     },
     { onUncaught: (error) => receivedError(error) },
   )

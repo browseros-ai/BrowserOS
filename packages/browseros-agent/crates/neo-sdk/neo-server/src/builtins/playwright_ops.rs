@@ -82,8 +82,9 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, init scripts \
     (`page.addInitScript`, `context.addInitScript`) that every new document runs in its main \
     world, bindings the page calls back into the script with (`exposeBinding`, \
-    `exposeFunction`, on a page or the context, and `addInitScript`'s `exposeFunctions`; the \
-    prelude answers each call with `bindingCall.resolve`), \
+    `exposeFunction`, on a page or the context, and the `exposeFunctions` option of \
+    `addInitScript` and of `evaluate`; the prelude answers each call with \
+    `bindingCall.resolve`), \
     `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), downloads \
     (`download.path()` waits for the file and returns where the browser saved it, which a later \
     run can upload with `setInputFiles`; `saveAs(path)` copies it; `failure()`), and `expect`: \
@@ -112,7 +113,8 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     before the run's first write to it, so a popup's first document and cross-site iframes run \
     without it. A page's call of a binding reaches the script through the event pump, so a \
     call the page does not await (from an event handler) may run after the op that caused it \
-    returned; `evaluate`'s `exposeFunctions` is not available.";
+    returned. A function `evaluate` passes stays exposed until the run ends; `evaluateHandle` \
+    has no `exposeFunctions`.";
 
 /// At a run's end, after its ops drained: removes the init scripts its ops registered from every
 /// tab, awaiting each removal (neo-playwright's `RunState::remove_init_scripts`). The run service
@@ -649,6 +651,10 @@ pub(super) fn leaf_error(error: &PlaywrightError) -> LeafError {
     let failure = match error.timed_out() {
         TimedOut::Yes => failure.timed_out(),
         TimedOut::No => failure,
+    };
+    let failure = match error.matcher_details() {
+        Some(facts) => failure.with_matcher(facts.clone()),
+        None => failure,
     };
     match error.answer() {
         Answer::Definite => LeafError::definite(failure),

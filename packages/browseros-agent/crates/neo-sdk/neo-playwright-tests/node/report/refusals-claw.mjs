@@ -29,15 +29,7 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
-    hint: 'init scripts are not available in Neo; run page.evaluate() after page.goto()',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
     hint: "permissions are the owner's profile settings",
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
-    hint: 'pages cannot call back into the script; read state with page.evaluate()',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
@@ -325,10 +317,6 @@ const hints = [
   {
     hint: 'this runtime has no timers; wait on the page instead',
     sources: ['neo-playwright-js/src/prelude/bridge.ts'],
-  },
-  {
-    hint: 'pages cannot call back into the script in Neo; return what the page computed instead',
-    sources: ['neo-playwright-js/src/prelude/evaluation.ts'],
   },
   {
     hint: 'an op cannot be aborted from the script in Neo; pass timeout instead',

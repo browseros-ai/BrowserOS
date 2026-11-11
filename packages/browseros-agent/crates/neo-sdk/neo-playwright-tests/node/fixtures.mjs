@@ -22,9 +22,13 @@ import { contextOptions } from './context-options.mjs'
 import { skipReason } from './curation.mjs'
 import { createExpect } from './expect-loop.mjs'
 import { productExpect } from './product-expect.mjs'
+import { screenshotReceiver } from './visual-screenshot.mjs'
 
 const require = createRequire(path.join(source, 'package.json'))
 const { expect: realExpect } = require('@playwright/test')
+const { server: visualServer } = require(
+  path.join(source, 'packages/playwright-core/lib/coreBundle.js'),
+)
 let neoPage
 let neoLocator
 let neoExpect
@@ -43,7 +47,11 @@ export function wrapExpect(original) {
     info: () => test.info(),
   }
   return process.env.NEO_NODE_MODE === 'claw'
-    ? productExpect(original, { ...options, provider: () => neoExpect })
+    ? productExpect(original, {
+        ...options,
+        provider: () => neoExpect,
+        visual: (actual) => screenshotReceiver(actual, visualServer),
+      })
     : createExpect(original, options)
 }
 

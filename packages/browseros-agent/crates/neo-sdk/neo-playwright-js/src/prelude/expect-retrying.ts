@@ -19,6 +19,11 @@ export type Retrying = {
   expectation: string
   /** Playwright's printed expectation, minus `not`. */
   expected: (isNot: boolean) => string
+  /**
+   * `matcherResult.expected`: the state word of toBeVisible and the other state matchers
+   * (`'visible'`, `'checked'`), else the script's own expected value.
+   */
+  value: unknown
   params: Omit<ExpectParams, 'isNot'>
   options: TimeoutOption | undefined
 }
@@ -61,6 +66,7 @@ function truthy(
     receiver: 'Locator',
     expectation: arg,
     expected: (isNot) => `Expected: ${isNot ? 'not ' : ''}${word}`,
+    value: word,
     params: { expression, ...extra },
     options,
   }
@@ -104,6 +110,7 @@ function text(
     expectation: 'expected',
     expected: (isNot) =>
       `Expected${suffix}: ${isNot ? 'not ' : ''}${stringify(expected)}`,
+    value: expected,
     params,
     options,
   }
@@ -124,6 +131,7 @@ function equal(
     expectation: 'expected',
     expected: (isNot) =>
       `Expected: ${isNot ? 'not ' : ''}${stringify(expected)}`,
+    value: expected,
     params,
     options,
   }
@@ -470,10 +478,8 @@ export async function retry(
       name,
       `${name} can be only used with ${matcher.receiver} object, was called with ${receiverText(actual)}`,
     )
-  const call = {
-    api,
-    timeoutMs: timeoutMs(api, matcher.options?.timeout ?? state.config.timeout),
-  }
+  const timeout = matcher.options?.timeout ?? state.config.timeout
+  const call = { api, timeoutMs: timeoutMs(api, timeout) }
   const shape = {
     matcher: name,
     expectation: matcher.expectation,
@@ -492,10 +498,56 @@ export async function retry(
         ...shape,
       })
   } catch (error) {
+    if (error instanceof Error)
+      completeMatcherResult(error, name, state, matcher, timeout)
     if (state.message && error instanceof Error)
       error.message = `${state.message}\n\n${error.message}`
     throw error
   }
+}
+
+/** What Rust's expect op saw when the matcher failed (`MatcherFacts`, expectation.rs). */
+type MatcherFacts = {
+  actual?: unknown
+  ariaSnapshot?: string
+  log: string[]
+  timedOut: boolean
+}
+
+function isMatcherFacts(value: unknown): value is MatcherFacts {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray(Reflect.get(value, 'log')) &&
+    typeof Reflect.get(value, 'timedOut') === 'boolean'
+  )
+}
+
+/**
+ * Playwright's `error.matcherResult` (matcherHint.ts, toBeTruthy.ts, toMatchText.ts and
+ * toEqual.ts at v1.64.1): Rust's facts, plus what only the script holds. `pass` is what the
+ * failing matcher answered, so `true` under `.not`; `message` is the matcher's own, before an
+ * `expect(x, message)` prefix; `timeout` is set only when the timeout ended the matcher.
+ */
+function completeMatcherResult(
+  error: Error,
+  name: string,
+  state: State,
+  matcher: Retrying,
+  timeout: number,
+): void {
+  const facts: unknown = Reflect.get(error, 'matcherResult')
+  if (!isMatcherFacts(facts)) return
+  Reflect.set(error, 'matcherResult', {
+    message: error.message,
+    pass: state.isNot,
+    actual: facts.actual,
+    name,
+    expected: matcher.value,
+    log: facts.log,
+    timeout: facts.timedOut ? timeout : undefined,
+    ariaSnapshot: facts.ariaSnapshot,
+  })
 }
 
 /** `toHaveURL(predicate)`: the predicate on each URL the page commits, until it passes. */
