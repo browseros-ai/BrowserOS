@@ -760,6 +760,24 @@ async fn a_view_display_drops_keys_and_pastes() -> TestResult {
 }
 
 #[tokio::test]
+async fn dropping_an_unserved_control_display_returns_the_owners_screen() -> TestResult {
+    let h = harness().await?;
+    let admitted = h
+        .displays
+        .admit(DisplayRequest::Control { binding: None })
+        .await?;
+    assert_eq!(
+        h.front().check(),
+        Err(OwnerHasScreen {
+            by: ScreenHolder::ControlDisplay
+        })
+    );
+    drop(admitted);
+    assert_eq!(h.front().check(), Ok(()), "a failed upgrade leaves no hold");
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_display_ends_when_xvnc_drops_it_and_is_refused_when_xvnc_is_gone() -> TestResult {
     let h = harness().await?;
     let control = h.control(None).await?;
@@ -777,6 +795,7 @@ async fn a_display_ends_when_xvnc_drops_it_and_is_refused_when_xvnc_is_gone() ->
     ] {
         let refused = h.displays.admit(request).await;
         assert!(matches!(refused, Err(PartError::Screen(_))));
+        assert_eq!(h.front().check(), Ok(()), "a failed dial leaves no hold");
     }
     Ok(())
 }
