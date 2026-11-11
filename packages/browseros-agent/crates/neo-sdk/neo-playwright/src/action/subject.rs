@@ -11,8 +11,12 @@
 //! action, and a handle action alone, so a handle whose node detaches fails at once where a
 //! locator looks again (server/dom.ts `throwRetargetableDOMError`). Every runner asks its
 //! [`Subject`] instead of branching on the target itself.
+//!
+//! Each pass starts with the page's locator-handler checkpoint, as both of upstream's loops do
+//! (`locator_handler.rs`): for a handle, the one pass stands for its first attempt's.
 
 use crate::PlaywrightError;
+use crate::locator_handler::{self, Prechecks};
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget};
@@ -60,8 +64,21 @@ impl<'a> Subject<'a> {
 
     /// Where the element is on outer pass `pass`: `None` while a locator matches nothing yet
     /// or a frame on its way is not there. A handle is found on the first pass only; a later
-    /// pass means its node went away under the action, and it fails `element_detached`.
-    pub(crate) async fn locate(&self, pass: usize) -> Result<Option<Resolved>, PlaywrightError> {
+    /// pass means its node went away under the action, and it fails `element_detached`. The
+    /// page's locator handlers run first unless `prechecks` skips them.
+    pub(crate) async fn locate(
+        &self,
+        pass: usize,
+        prechecks: Prechecks,
+    ) -> Result<Option<Resolved>, PlaywrightError> {
+        let runs = match prechecks {
+            Prechecks::Run => true,
+            Prechecks::LocatorPasses => matches!(self.of, Of::Locator { .. }),
+            Prechecks::Skip => false,
+        };
+        if runs {
+            self.run_handlers().await?;
+        }
         match &self.of {
             Of::Locator { resolver, .. } => resolver.locate().await,
             Of::Handle(_) if pass > 0 => Err(resolve::handle_detached(self.scope)),
@@ -70,6 +87,12 @@ impl<'a> Subject<'a> {
                 None => Err(resolve::handle_detached(self.scope)),
             },
         }
+    }
+
+    /// The page's locator-handler checkpoint, for an inner loop's retry. Unbounded, as
+    /// [`Subject::locate`] is: the runner races it with its op's timeout.
+    pub(crate) async fn run_handlers(&self) -> Result<(), PlaywrightError> {
+        locator_handler::checkpoint(self.scope, self.page).await
     }
 
     /// The target of each pass's first request, before anything is pinned: the locator's last

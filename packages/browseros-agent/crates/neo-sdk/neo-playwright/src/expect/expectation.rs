@@ -340,15 +340,20 @@ impl Expectation {
     /// Polls until the matcher's result differs from `.not`. `poll` runs one probe call and
     /// maps its reply with [`Expectation::poll_of`]; it fails only for what ends the op at
     /// once (a strict violation, an error the engine threw, a stale ref, a gone page).
-    /// `root_snapshot` reads the body's aria snapshot of the frame the matcher started in, for
-    /// a failure that found nothing, as upstream's `Frame._expectInternal` does.
-    pub(crate) async fn run<F, Fut, R, RFut>(
+    /// `checkpoint` is the page's locator-handler checkpoint, which upstream's `expect` runs
+    /// under the timeout before the one-shot and before every later poll. `root_snapshot` reads
+    /// the body's aria snapshot of the frame the matcher started in, for a failure that found
+    /// nothing, as upstream's `Frame._expectInternal` does.
+    pub(crate) async fn run<C, CFut, F, Fut, R, RFut>(
         &self,
         scope: &OpScope<'_>,
+        mut checkpoint: C,
         mut poll: F,
         root_snapshot: R,
     ) -> Result<Value, PlaywrightError>
     where
+        C: FnMut() -> CFut,
+        CFut: Future<Output = Result<(), PlaywrightError>>,
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<Poll, PlaywrightError>>,
         R: FnOnce() -> RFut,
@@ -363,6 +368,10 @@ impl Expectation {
         ));
         if let Receiver::Locator(display) = receiver {
             scope.log(format!("waiting for {display}"));
+        }
+        match scope.within(checkpoint()).await {
+            Ok(checked) => checked?,
+            Err(_expired) => return Err(self.timed_out(scope, None, None)),
         }
         // Upstream's one-shot finishes even past the timeout, so `toBeVisible({ timeout: 1 })`
         // passes on a visible element, and upstream drops its call-log lines. It gets at least
@@ -386,7 +395,11 @@ impl Expectation {
             if scope.sleep(backoff.wait(attempt)).await.is_err() {
                 break;
             }
-            let Ok(polled) = scope.within(poll()).await else {
+            let checked_poll = async {
+                checkpoint().await?;
+                poll().await
+            };
+            let Ok(polled) = scope.within(checked_poll).await else {
                 break;
             };
             let polled = polled?;
@@ -614,6 +627,11 @@ mod tests {
     use crate::test_env::TestEnv;
     use crate::{ErrorCode, PlaywrightError};
 
+    /// A page without locator handlers: the checkpoint passes at once.
+    async fn no_handlers() -> Result<(), PlaywrightError> {
+        Ok(())
+    }
+
     fn locator_scope(env: &TestEnv) -> Result<OpScope<'_>, Box<dyn Error>> {
         let op = Op::from_name("expect.locator").ok_or("expect.locator is an op")?;
         Ok(OpScope::new(
@@ -759,6 +777,7 @@ mod tests {
         let passed = expect
             .run(
                 &scope,
+                no_handlers,
                 || async {
                     time::sleep(Duration::from_millis(50)).await;
                     Ok(Poll::Ran {
@@ -786,6 +805,7 @@ mod tests {
         let error = expect
             .run(
                 &scope,
+                no_handlers,
                 future::pending::<Result<Poll, PlaywrightError>>,
                 no_snapshot,
             )
@@ -818,6 +838,7 @@ mod tests {
         let error = expect
             .run(
                 &scope,
+                no_handlers,
                 || async {
                     Ok(Poll::Ran {
                         matches: false,
@@ -847,6 +868,7 @@ mod tests {
         let missing = expect
             .run(
                 &scope,
+                no_handlers,
                 || async { Ok(Poll::Missing) },
                 || future::ready(Some("- heading \"Page\" [level=1]".to_owned())),
             )
@@ -860,7 +882,12 @@ mod tests {
         assert_eq!(facts["ariaSnapshot"], json!("- heading \"Page\" [level=1]"));
 
         let bare = expect
-            .run(&scope, || async { Ok(Poll::Missing) }, no_snapshot)
+            .run(
+                &scope,
+                no_handlers,
+                || async { Ok(Poll::Missing) },
+                no_snapshot,
+            )
             .await
             .err()
             .ok_or("nothing there fails toBeVisible")?;
@@ -874,6 +901,7 @@ mod tests {
         let empty = expect
             .run(
                 &scope,
+                no_handlers,
                 || async {
                     Ok(Poll::Ran {
                         matches: false,

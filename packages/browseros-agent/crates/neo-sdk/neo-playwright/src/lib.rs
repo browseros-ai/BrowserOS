@@ -41,6 +41,7 @@ mod expect;
 mod file_save;
 mod input;
 mod listed_enum;
+mod locator_handler;
 mod object_group;
 mod op;
 mod op_env;

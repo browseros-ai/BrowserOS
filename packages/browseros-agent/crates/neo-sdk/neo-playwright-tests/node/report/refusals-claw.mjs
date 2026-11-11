@@ -65,10 +65,6 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
-    hint: 'locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
     hint: 'adding tags is not available in Neo; change the page with page.evaluate()',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
@@ -113,10 +109,6 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
-    hint: 'locator handlers are not available in Neo',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
     hint: 'garbage collection is not available in Neo',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
@@ -148,15 +140,7 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
-    hint: 'read storage with page.evaluate(() => localStorage.getItem(key))',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
     hint: 'Neo records its own screencast of every tab',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
-    hint: 'read storage with page.evaluate(() => sessionStorage.getItem(key))',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {

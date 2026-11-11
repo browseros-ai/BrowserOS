@@ -10,6 +10,7 @@ use crate::action::ActionOp;
 use crate::events::EventOp;
 use crate::expect::ExpectOp;
 use crate::input::InputOp;
+use crate::locator_handler::LocatorHandlerOp;
 use crate::op_spec::OpSpec;
 use crate::page::{ContextOp, PageOp};
 use crate::read::ReadOp;
@@ -31,6 +32,7 @@ pub(crate) enum OpKind {
     Page(PageOp),
     Context(ContextOp),
     Event(EventOp),
+    LocatorHandler(LocatorHandlerOp),
 }
 
 impl Op {
@@ -45,6 +47,10 @@ impl Op {
         let pages = PageOp::ALL.iter().copied().map(OpKind::Page);
         let contexts = ContextOp::ALL.iter().copied().map(OpKind::Context);
         let events = EventOp::ALL.iter().copied().map(OpKind::Event);
+        let handlers = LocatorHandlerOp::ALL
+            .iter()
+            .copied()
+            .map(OpKind::LocatorHandler);
         actions
             .chain(reads)
             .chain(snapshots)
@@ -53,6 +59,7 @@ impl Op {
             .chain(pages)
             .chain(contexts)
             .chain(events)
+            .chain(handlers)
             .map(Op)
     }
 
@@ -74,6 +81,7 @@ impl Op {
             OpKind::Page(op) => op.spec(),
             OpKind::Context(op) => op.spec(),
             OpKind::Event(op) => op.spec(),
+            OpKind::LocatorHandler(op) => op.spec(),
         }
     }
 
@@ -118,7 +126,7 @@ mod tests {
 
     #[test]
     fn tests_that_names_are_playwright_receivers_and_methods() {
-        const RECEIVERS: [&str; 11] = [
+        const RECEIVERS: [&str; 12] = [
             "worker",
             "locator",
             "page",
@@ -130,6 +138,7 @@ mod tests {
             "dialog",
             "disposable",
             "bindingCall",
+            "webStorage",
         ];
         for op in Op::all() {
             let name = op.spec().name;
@@ -251,6 +260,8 @@ mod tests {
             ("page.addInitScript", &[MainWorld, HostFiles], true),
             ("page.exposeBinding", &[MainWorld], true),
             ("bindingCall.resolve", &[MainWorld], true),
+            ("webStorage.read", &[], true),
+            ("webStorage.write", &[], true),
             ("context.pages", &[], true),
             ("context.newPage", &[], true),
             ("context.addInitScript", &[MainWorld, HostFiles], true),
@@ -264,6 +275,10 @@ mod tests {
             ("dialog.dismiss", &[], true),
             ("download.path", &[], true),
             ("download.saveAs", &[], true),
+            ("page.addLocatorHandler", &[], true),
+            ("page.removeLocatorHandler", &[], true),
+            ("page.locatorHandlerTriggered", &[], true),
+            ("page.resolveLocatorHandler", &[], true),
         ];
         let mut audited: BTreeMap<_, _> = AUDITED
             .iter()
@@ -311,11 +326,12 @@ mod tests {
         }
     }
 
+    /// The two long polls the prelude keeps open: the event pump and the locator-handler pull.
     #[test]
-    fn tests_that_only_the_event_pump_runs_in_the_background() {
+    fn tests_that_only_the_prelude_pulls_run_in_the_background() {
         for op in Op::all() {
             let spec = op.spec();
-            let expected = if spec.name == "events.next" {
+            let expected = if matches!(spec.name, "events.next" | "page.locatorHandlerTriggered") {
                 OpLifetime::Background
             } else {
                 OpLifetime::Operation
@@ -355,12 +371,22 @@ mod tests {
             let expected = match (spec.name, receiver) {
                 // The screenshot client's filesystem step has no browser target.
                 ("page.saveScreenshot", _) => OpTarget::None,
-                ("expect.locator", _) | (_, Some("locator")) => OpTarget::Field("target"),
+                ("expect.locator" | "page.addLocatorHandler", _) | (_, Some("locator")) => {
+                    OpTarget::Field("target")
+                }
+                // They name a registration, not a page, and must answer after the handler
+                // closed its page.
+                (
+                    "page.removeLocatorHandler"
+                    | "page.locatorHandlerTriggered"
+                    | "page.resolveLocatorHandler",
+                    _,
+                ) => OpTarget::None,
                 (
                     _,
                     Some(
                         "page" | "keyboard" | "mouse" | "dialog" | "expect" | "bindingCall"
-                        | "worker",
+                        | "worker" | "webStorage",
                     ),
                 ) => OpTarget::Field("page"),
                 _ => OpTarget::None,

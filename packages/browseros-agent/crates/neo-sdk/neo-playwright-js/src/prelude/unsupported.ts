@@ -87,8 +87,6 @@ export const UNSUPPORTED = {
     tracing: { hint: TRACE, kind: 'property' },
   },
   Page: {
-    addLocatorHandler:
-      'locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting',
     bringToFront:
       'Neo keeps agent tabs in the background; act on the page directly',
     cancelPickLocator: NO_INSPECTOR,
@@ -104,7 +102,6 @@ export const UNSUPPORTED = {
       'Neo keeps no error history; hosted BrowserOS emits no pageerror events',
     pause: NO_INSPECTOR,
     pickLocator: NO_INSPECTOR,
-    removeLocatorHandler: 'locator handlers are not available in Neo',
     requests: 'Neo does not record network requests',
     route: NETWORK,
     routeFromHAR: NETWORK,
@@ -122,20 +119,12 @@ export const UNSUPPORTED = {
       kind: 'property',
     },
     coverage: { hint: 'coverage is not available in Neo', kind: 'property' },
-    localStorage: {
-      hint: 'read storage with page.evaluate(() => localStorage.getItem(key))',
-      kind: 'property',
-    },
     request: {
       hint: 'API requests are not available in Neo; fetch from the page with page.evaluate()',
       kind: 'property',
     },
     screencast: {
       hint: 'Neo records its own screencast of every tab',
-      kind: 'property',
-    },
-    sessionStorage: {
-      hint: 'read storage with page.evaluate(() => sessionStorage.getItem(key))',
       kind: 'property',
     },
     touchscreen: {

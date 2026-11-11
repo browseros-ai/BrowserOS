@@ -14,7 +14,7 @@ use crate::page::navigation::{GotoInput, NavigateInput, Navigation};
 use crate::page::{
     PageHandle, add_tag, document_op, element_evaluate, evaluate, evaluate_guard, frame_tree,
     init_script, media_emulation, navigation, pdf, save_screenshot, screenshot, viewport_size,
-    wait_for_navigation, wait_for_url,
+    wait_for_navigation, wait_for_url, web_storage,
 };
 use crate::probe::DocumentPart;
 use crate::target::PageRef;
@@ -54,6 +54,8 @@ listed_enum! {
         AddInitScript,
         ExposeBinding,
         ResolveBinding,
+        WebStorageRead,
+        WebStorageWrite,
     }
 }
 
@@ -73,6 +75,8 @@ impl PageOp {
             .using(&[Capability::MainWorld])
             .policed(),
             Self::SaveScreenshot => save_screenshot::SPEC,
+            Self::WebStorageRead => web_storage::READ_SPEC,
+            Self::WebStorageWrite => web_storage::WRITE_SPEC,
             Self::SetViewportSize => viewport_size::SPEC,
             Self::Goto => OpSpec::write(
                 "page.goto",
@@ -274,6 +278,8 @@ pub(crate) async fn invoke(
         PageOp::Frames => frame_tree::frames(pw, scope, args.decode(scope)?).await,
         PageOp::Screenshot => screenshot::capture(pw, scope, args.decode(scope)?).await,
         PageOp::SaveScreenshot => save_screenshot::save(scope, args.decode(scope)?).await,
+        PageOp::WebStorageRead => web_storage::call(pw, scope, args.decode(scope)?, false).await,
+        PageOp::WebStorageWrite => web_storage::call(pw, scope, args.decode(scope)?, true).await,
         PageOp::Pdf => pdf::print(pw, scope, args.decode(scope)?).await,
         PageOp::AddInitScript => init_script::add_to_page(pw, scope, args.decode(scope)?).await,
         PageOp::ExposeBinding => {

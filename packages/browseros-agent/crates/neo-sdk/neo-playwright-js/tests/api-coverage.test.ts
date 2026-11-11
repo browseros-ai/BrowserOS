@@ -34,6 +34,7 @@ async function instances(): Promise<Record<string, object>> {
   })
   return (await runtime.run(`return {
     Selectors: playwright.selectors,
+    WebStorage: page.localStorage,
     Browser: browser,
     BrowserContext: context,
     Page: page,

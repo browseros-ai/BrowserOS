@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::action::attempt_log::AttemptLog;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
+use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{
@@ -54,15 +55,22 @@ impl<'a> ElementRunner<'a> {
     }
 
     /// Resolves the element, then applies `edit` to it: upstream's `focus`, `blur` and
-    /// `dispatchEvent`, retried while the element is missing or detaches in between.
+    /// `dispatchEvent`, retried while the element is missing or detaches in between. A
+    /// locator's focus and blur run the locator handlers first; `dispatchEvent` never does, as
+    /// upstream runs it as a selector wait.
     pub(crate) async fn edit(&self, edit: Edit) -> Result<(), PlaywrightError> {
         self.subject.log_waiting();
+        let prechecks = if matches!(edit, Edit::DispatchEvent { .. }) {
+            Prechecks::Skip
+        } else {
+            Prechecks::LocatorPasses
+        };
         let backoff = Backoff::outer(self.scope.timeout());
         for attempt in 0.. {
             if self.scope.sleep(backoff.wait(attempt)).await.is_err() {
                 return Err(self.scope.timed_out(ErrorCode::NoMatch));
             }
-            let Some(located) = self.locate(attempt).await? else {
+            let Some(located) = self.locate(attempt, prechecks).await? else {
                 continue;
             };
             let resolve = ProbeRequest::Resolve {
@@ -139,7 +147,7 @@ impl<'a> ElementRunner<'a> {
             if self.scope.sleep(outer.wait(attempt)).await.is_err() {
                 return Err(timed_out(matched));
             }
-            let Some(located) = self.locate(attempt).await? else {
+            let Some(located) = self.locate(attempt, Prechecks::Run).await? else {
                 continue;
             };
             let inner = Backoff::inner();
@@ -158,6 +166,13 @@ impl<'a> ElementRunner<'a> {
                 }
                 if self.scope.sleep(wait).await.is_err() {
                     return Err(timed_out(matched));
+                }
+                // The outer pass ran the first attempt's checkpoint just before it.
+                if retry > 0 {
+                    match self.scope.within(self.subject.run_handlers()).await {
+                        Ok(checked) => checked?,
+                        Err(_expired) => return Err(timed_out(matched)),
+                    }
                 }
                 attempt.log("  waiting for element to be stable".to_owned());
                 let measured = self
@@ -238,10 +253,18 @@ impl<'a> ElementRunner<'a> {
         })
     }
 
-    /// One resolution on outer pass `pass`, bounded by the op's timeout. `None` while nothing
-    /// matches yet.
-    async fn locate(&self, pass: usize) -> Result<Option<Resolved>, PlaywrightError> {
-        match self.scope.within(self.subject.locate(pass)).await {
+    /// One resolution on outer pass `pass`, after the locator handlers unless `prechecks`
+    /// skips them, bounded by the op's timeout. `None` while nothing matches yet.
+    async fn locate(
+        &self,
+        pass: usize,
+        prechecks: Prechecks,
+    ) -> Result<Option<Resolved>, PlaywrightError> {
+        match self
+            .scope
+            .within(self.subject.locate(pass, prechecks))
+            .await
+        {
             Ok(located) => located,
             Err(_expired) => Err(self.scope.timed_out(ErrorCode::NoMatch)),
         }
