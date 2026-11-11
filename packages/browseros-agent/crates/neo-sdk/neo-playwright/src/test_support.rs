@@ -262,6 +262,12 @@ pub(crate) trait TabScript: Send + Sync + 'static {
         false
     }
 
+    /// A raw protocol reply outside the DOM probe, such as encoded screenshot bytes.
+    /// Returning None retains the scripted browser's ordinary infrastructure responses.
+    fn cdp_reply(&self, _method: &str, _params: &Value) -> Option<Value> {
+        None
+    }
+
     /// Whether the tab's main frame has left for a document no world can be made in yet: an
     /// install then fails as for a frame that is gone.
     fn left(&self) -> bool {
@@ -382,10 +388,16 @@ impl<S: TabScript> ScriptedTab<S> {
 
     /// Sends the browser event `method` with `params`, as Chromium sends it on the root session.
     pub(crate) fn emit(&self, method: &str, params: Value) {
+        self.emit_on(method, params, None);
+    }
+
+    /// A flattened target event must retain its session: identical frame names on another
+    /// session cannot invalidate the document an operation actually admitted.
+    pub(crate) fn emit_on(&self, method: &str, params: Value, session_id: Option<SessionId>) {
         let event = CdpEvent {
             method: method.to_owned(),
             params,
-            session_id: None,
+            session_id,
         };
         if let Some(event) = self.targeted.deliver(event) {
             let _ = self.events.send(event);
@@ -439,6 +451,9 @@ impl<S: TabScript> ScriptedTab<S> {
         if !delay.is_zero() {
             let _slowed = Slowed::new(&self.slowed);
             time::sleep(delay).await;
+        }
+        if let Some(reply) = self.script.cdp_reply(method, params) {
+            return Ok(reply);
         }
         let on_oopif = session.is_some_and(|session| {
             self.script.oopif() && session.as_str() == self.session_of(SCRIPTED_OOPIF)

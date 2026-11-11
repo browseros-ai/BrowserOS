@@ -1,7 +1,7 @@
 //! Aria snapshots through `Playwright::invoke` against a real browser: the required
 //! nested-frame tests F1, F2, F4, F5, F6 and F7 of design D22 on the 4-level fixture, a
-//! locator-level snapshot inside a frame, field values echoed in page text, and a child frame
-//! that answers too late, reported as a partial snapshot under its iframe.
+//! locator-level snapshot inside a frame, field values echoed unchanged in page text, and
+//! partial results for children that answer too late, on either the same or another site.
 //!
 //! The live tests need BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --test snapshot_live -- --ignored`. They serve the
@@ -530,8 +530,48 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
         .open(&server.url("127.0.0.1", "/nest/top.html?hang"))
         .await?;
     loaded(&live, &page).await?;
-    // hang.html spins forever from 1.5 s after its load event.
-    time::sleep(Duration::from_secs(2)).await;
+    // A cross-process message cannot leave a task that spins forever. Let the child announce
+    // readiness and return, command the spin from the parent, then confirm a read stalls.
+    // Fixture startup is outside the snapshot's measured budget, including delayed timers.
+    time::timeout(Duration::from_secs(10), async {
+        loop {
+            if live
+                .main_world(&page, "globalThis.__hangReady === true")
+                .await?
+                == json!(true)
+            {
+                break;
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        live.main_world(
+            &page,
+            "document.querySelector('iframe[title=hang]').contentWindow.postMessage('neo-fixture-spin', '*')",
+        )
+        .await?;
+        let button = locator(
+            &page,
+            &[attr("[title=\"hang\"s]"), enter_frame(), css("button")],
+            "hang fixture button",
+        );
+        let probe = json!({ "target": button });
+        loop {
+            let Ok(answer) = time::timeout(
+                Duration::from_millis(250),
+                live.invoke("locator.count", probe.clone()),
+            )
+            .await
+            else {
+                return TestResult::Ok(());
+            };
+            assert_eq!(answer??, json!(1), "the fixture button stays attached");
+            time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|elapsed| {
+        format!("the hang fixture did not become unresponsive within 10 s: {elapsed}")
+    })??;
 
     let started = Instant::now();
     let snapshot = live
