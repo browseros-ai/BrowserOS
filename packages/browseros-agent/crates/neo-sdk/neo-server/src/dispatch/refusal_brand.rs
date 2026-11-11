@@ -10,7 +10,7 @@
 
 use serde_json::Value;
 
-use super::{ErrorCode, OperationError, TEXT_CHARS, clip};
+use super::{ErrorCode, OperationError, TEXT_CHARS, operation_error};
 
 /// The codes a refusal may name: a method Neo does not serve, and an input it does not take, such
 /// as one option of a method it does serve.
@@ -52,7 +52,7 @@ impl<'a> RefusalBrand<'a> {
     pub(super) fn refusal(self, shown: &str) -> OperationError {
         match self {
             Self::Refused { code, reason } => {
-                OperationError::script(code, clip(reason.to_owned(), TEXT_CHARS))
+                OperationError::script(code, operation_error::clip(reason.to_owned(), TEXT_CHARS))
             }
             Self::Malformed => OperationError::script(
                 ErrorCode::INVALID_INPUT,

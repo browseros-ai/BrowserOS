@@ -23,7 +23,7 @@ use super::registry::DecodedCall;
 use super::{
     ActedTarget, Answer, Claim, ErrorCode, LeafError, MethodSpec, Observation, Observer, OpFailure,
     OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry, ResultHold, RunCtx,
-    Visibility, clip,
+    Visibility, operation_error,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 
@@ -391,10 +391,12 @@ impl Dispatcher {
         // typed, and the trace writer clips it there. A refusal is the door's own text: the name
         // and a brand's reason in it are cut here, which bounds its size.
         let decoded = match (brand, registered) {
-            (Some(brand), _) => Err(brand.refusal(&clip(name.clone(), NAME_CHARS))),
+            (Some(brand), _) => {
+                Err(brand.refusal(&operation_error::clip(name.clone(), NAME_CHARS)))
+            }
             (None, Some(registered)) if callable => registered.decode(&input),
             (None, Some(_) | None) => {
-                let shown = clip(name.clone(), NAME_CHARS);
+                let shown = operation_error::clip(name.clone(), NAME_CHARS);
                 Err(OperationError::script(
                     ErrorCode::METHOD_UNAVAILABLE,
                     format_args!("`{shown}` is not a Neo method"),

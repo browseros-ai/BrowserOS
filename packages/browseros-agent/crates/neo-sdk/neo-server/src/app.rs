@@ -142,11 +142,10 @@ impl App {
         log_startup(&config, address);
 
         let OpenedTrace { store, recovery } = open_trace(&config.env.trace_dir()).await?;
-        // One secret set for the process, neo-trace's: the trace writer masks its records with
-        // it, and the host API (`/v1/secrets`, the takeover journal) registers into it, reading
-        // it from `Privacy`. The door masks nothing with it: a script sees what its ops returned.
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
+        // neo-trace's writer still takes a secret set to mask records with. Neo hands it one that
+        // nothing registers into, so the trace keeps what each op produced, as the script got it.
+        let unmasked = Arc::new(SecretSet::new(SecretSetConfig::default()));
+        let redactor = Redactor::new(unmasked, RedactionLimits::default());
         let writer = WriterConfig {
             replay_window: Defaults::REPLAY_WINDOW,
             ..WriterConfig::default()
@@ -155,6 +154,9 @@ impl App {
         // once the browser links.
         let (shots, screenshots) = neo_trace::screenshot_queue();
         let trace = neo_trace::spawn_writer(&store, redactor, writer, Some(shots));
+        // The host API's secret set, which it reads from `Privacy` (`/v1/secrets`, the takeover
+        // journal). Neither the door nor the trace masks with it; housekeeping expires it.
+        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
         // Private flags committed by an earlier Neo still hold until their tabs are gone.
         let privacy = Privacy::new(
             Arc::clone(&secrets),

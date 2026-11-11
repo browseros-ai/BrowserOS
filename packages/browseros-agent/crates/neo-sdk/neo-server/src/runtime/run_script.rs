@@ -26,8 +26,8 @@ use crate::browser::PageRef;
 use crate::builtins::PLAYWRIGHT_PRELUDE;
 use crate::config::Defaults;
 use crate::dispatch::{
-    Dispatcher, ErrorCode, Observation, OpFailure, OperationError, PageFact, RunCtx, StopReason,
-    TEXT_CHARS, clip,
+    self, Dispatcher, ErrorCode, Observation, OpFailure, OperationError, PageFact, RunCtx,
+    StopReason, TEXT_CHARS,
 };
 
 /// The bootstrap: `NeoError`, the codec, envelopes, call sites, console, timers, `__neo.run`.
@@ -442,7 +442,10 @@ fn thrown_error(name: String, message: String, stack: &str) -> OperationError {
     if name == "InternalError" && message == "out of memory" {
         return out_of_memory();
     }
-    let (name, message) = (clip(name, TEXT_CHARS), clip(message, TEXT_CHARS));
+    let (name, message) = (
+        dispatch::clip(name, TEXT_CHARS),
+        dispatch::clip(message, TEXT_CHARS),
+    );
     let site = agent_site(stack);
     let text = if name.is_empty() {
         message
