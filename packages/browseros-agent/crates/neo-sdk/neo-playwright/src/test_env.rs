@@ -158,9 +158,27 @@ fn offline_view() -> BrowserView {
 pub(crate) struct Recording {
     sent: Mutex<Vec<(String, Value)>>,
     targeted: TargetedEvents,
+    events: Option<broadcast::Sender<CdpEvent>>,
 }
 
 impl Recording {
+    /// A recording connection with a live event stream, for watcher lifecycle tests.
+    pub(crate) fn streaming() -> Arc<Self> {
+        Arc::new(Self {
+            events: Some(broadcast::channel(32).0),
+            ..Self::default()
+        })
+    }
+
+    /// Delivers through the same targeted-before-broadcast routing as the real connection.
+    pub(crate) fn emit(&self, event: CdpEvent) {
+        if let Some(event) = self.targeted.deliver(event)
+            && let Some(events) = &self.events
+        {
+            let _ = events.send(event);
+        }
+    }
+
     /// A session on this connection.
     pub(crate) fn session(self: &Arc<Self>, id: &str) -> ProtocolSession {
         ProtocolSession::for_session(
@@ -202,7 +220,9 @@ impl CdpConnection for Recording {
     }
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
-        broadcast::channel(1).1
+        self.events
+            .as_ref()
+            .map_or_else(|| broadcast::channel(1).1, broadcast::Sender::subscribe)
     }
 
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {

@@ -16,7 +16,7 @@
 //! - **Sessions.** Page events arrive on page sessions. `Target.attachedToTarget` names each
 //!   session's tab (core's attaches and its OOPIF auto-attaches alike); a session attached
 //!   before the watcher started is looked up in core's page registry.
-//! - **Dialogs.** The facade delegates core's dialog handling to this watcher. Every dialog
+//! - **Dialogs.** Startup delegates core's dialog handling to this watcher. Every dialog
 //!   is held for the runs listening for dialogs on its tab, then
 //!   [`DIALOG_GRACE`] later held for whoever listens by then, or closed by Neo; the reap tick
 //!   closes held dialogs whose runs all ended (`dialog_table.rs`).
@@ -38,6 +38,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
+use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
@@ -89,8 +90,12 @@ impl TargetWatcher {
         attach_log: Arc<FrameAttachLog>,
     ) -> Self {
         let task = Handle::try_current().ok().map(|runtime| {
+            // Subscribe before taking dialog ownership from core: a page can open an alert
+            // before this task is first polled. Queue it here so grace/reap cannot miss it.
+            let events = browser.cdp_events();
+            browser.page_signals.delegate_dialog_handling();
             let (watcher, found) = Watcher::new(browser, writer, attach_log);
-            runtime.spawn(watcher.run(found))
+            runtime.spawn(watcher.run(found, events))
         });
         Self { task }
     }
@@ -281,9 +286,11 @@ impl Watcher {
         (watcher, found_rx)
     }
 
-    async fn run(mut self, mut found: UnboundedReceiver<OpenedPage>) {
-        // Subscribed before discovery, so no target is created unseen in between.
-        let mut events = self.browser.cdp_events();
+    async fn run(
+        mut self,
+        mut found: UnboundedReceiver<OpenedPage>,
+        mut events: broadcast::Receiver<CdpEvent>,
+    ) {
         let mut tick = time::interval(TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
@@ -874,4 +881,61 @@ fn parse<T: DeserializeOwned>(params: Value) -> Option<T> {
 
 fn decode<T: DeserializeOwned>(reply: Value) -> Result<T, CoreError> {
     serde_json::from_value(reply).map_err(|error| CoreError::Message(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use browseros_cdp::CdpEvent;
+    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, PageId, SessionId};
+    use serde_json::json;
+    use tokio::time;
+
+    use super::TargetWatcher;
+    use crate::events::EventHub;
+    use crate::test_env::Recording;
+    use crate::world::FrameAttachLog;
+
+    #[tokio::test]
+    async fn an_alert_before_the_watchers_first_poll_is_still_dismissed() {
+        let connection = Recording::streaming();
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        browser
+            .page_signals
+            .attach_page(PageId(7), SessionId::from("S"));
+        let (_hub, writer) = EventHub::new();
+        let _watcher = TargetWatcher::spawn(browser, writer, Arc::new(FrameAttachLog::default()));
+
+        // A current-thread runtime cannot poll the spawned watcher until we yield. The live
+        // page's alert must already be queued when SDK dialog ownership takes effect.
+        connection.emit(CdpEvent {
+            method: "Target.attachedToTarget".to_owned(),
+            params: json!({ "sessionId": "S", "targetInfo": { "targetId": "T", "type": "page" } }),
+            session_id: None,
+        });
+        connection.emit(CdpEvent {
+            method: "Page.javascriptDialogOpening".to_owned(),
+            params: json!({ "type": "alert", "message": "startup" }),
+            session_id: Some(SessionId::from("S")),
+        });
+        let answered = time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some((_, params)) = connection
+                    .sent()
+                    .into_iter()
+                    .find(|(method, _)| method == "Page.handleJavaScriptDialog")
+                {
+                    return params;
+                }
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert_eq!(answered.ok(), Some(json!({ "accept": false })));
+    }
 }
