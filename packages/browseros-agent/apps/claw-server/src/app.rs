@@ -63,6 +63,7 @@ pub struct AppState {
     pub error_reporter: Arc<crate::services::error_reporting::ErrorReporter>,
     pub feedback_cohort: Arc<crate::services::feedback_cohort::FeedbackCohort>,
     pub feedback_invites: Arc<crate::db::feedback_invite::FeedbackInviteRepository>,
+    pub tool_calls_daily: Arc<crate::db::tool_calls_daily::ToolCallsDailyRepository>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     /// Saved native-profile intent is separate from agent profiles and live browser state.
@@ -136,6 +137,9 @@ impl AppState {
         let feedback_invites = Arc::new(crate::db::feedback_invite::FeedbackInviteRepository::new(
             database.clone(),
         ));
+        let tool_calls_daily = Arc::new(
+            crate::db::tool_calls_daily::ToolCallsDailyRepository::new(database.clone()),
+        );
         let skill = load_browserclaw_skill(&config.resources_dir, config.behavior.tab_grouping)?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
             &home_dir,
@@ -261,6 +265,7 @@ impl AppState {
             error_reporter,
             feedback_cohort,
             feedback_invites,
+            tool_calls_daily,
             profiles,
             sessions,
             targets,

@@ -1368,6 +1368,17 @@ impl ServerHandler for ClawMcpService {
             result,
         )
         .await;
+        if !self.mode().is_hosted() {
+            crate::services::tool_usage::record_tool_call(
+                &self.state.tool_calls_daily,
+                &self.state.analytics,
+                &tool_name,
+                started.session.client_name(),
+                !matches!(&finished, Ok(result) if !result.is_error.unwrap_or(false)),
+                crate::clock::now_epoch_ms(),
+            )
+            .await;
+        }
         let mut result = session_handle::attach(finished, modern_handle, presented_handle)?;
         // The tip asks the agent to close the group the server made for it, so it has no place
         // where the server makes none.
