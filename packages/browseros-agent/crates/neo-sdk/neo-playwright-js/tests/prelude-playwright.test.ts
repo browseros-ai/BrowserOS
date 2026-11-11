@@ -39,7 +39,9 @@ describe('playwright', () => {
         const timeout = await page.waitForTimeout(0).then(() => null)
         let refused
         try { await playwright.selectors.register('tag', () => ({})) } catch (e) { refused = { name: e.name, message: e.message, code: e.code } }
+        const made = new playwright.errors.TimeoutError('caller deadline')
         return {
+          made: { name: made.name, message: made.message, timeout: made instanceof TimeoutError },
           same: playwright.errors.TimeoutError === TimeoutError,
           refused,
           timeout,
@@ -47,6 +49,7 @@ describe('playwright', () => {
       `),
     )
     expect(result).toEqual({
+      made: { name: 'TimeoutError', message: 'caller deadline', timeout: true },
       same: true,
       refused: {
         name: 'Error',
