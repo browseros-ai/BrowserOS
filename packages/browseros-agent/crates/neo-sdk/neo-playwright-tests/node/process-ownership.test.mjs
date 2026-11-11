@@ -20,10 +20,11 @@ test('cleanup survives noisy host listings and refuses a different profile', {
     `#!/usr/bin/env node
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
+const actual = () => { process.exitCode = spawnSync('/bin/ps', args, { stdio: 'inherit' }).status ?? 1; };
 if (args.includes('-axo') && args.some(arg => arg.includes('command='))) {
-  process.stdout.write(('999999 unrelated ' + 'x'.repeat(131072) + '\\n').repeat(16));
+  process.stdout.write(('999999 unrelated ' + 'x'.repeat(131072) + '\\n').repeat(16), actual);
 } else {
-  process.exitCode = spawnSync('/bin/ps', args, { stdio: 'inherit' }).status ?? 1;
+  actual();
 }
 `,
     { mode: 0o755 },
