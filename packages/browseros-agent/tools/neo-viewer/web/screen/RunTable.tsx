@@ -11,6 +11,7 @@ import { useMemo } from 'react'
 import type { RunSummary, TextSize } from '../../shared/api'
 import { firstStatement, formatCode } from '../../shared/code-format'
 import { useRunDetail } from '../use-viewer'
+import { CopyRunButton } from './CopyRun'
 import { type BarScale, barScale, type RunTotals } from './measures'
 import { RunBlock } from './RunBlock'
 import { RunRow } from './RunRow'
@@ -35,7 +36,7 @@ export function RunTable(props: RunTableProps) {
   const { runs, sort } = props
   const scale = barScale(runs)
   return (
-    <div className="flex min-w-[720px] flex-col">
+    <div className="flex min-w-[752px] flex-col">
       <div className="sticky top-0 z-10">
         <Header sort={sort} onSort={props.onSort} />
         <Legend />
@@ -121,6 +122,7 @@ function Header({
         <span className="text-neo-soft">■</span> code{' '}
         <span className="text-neo">■</span> reply
       </span>
+      <span className="w-8 shrink-0" />
     </div>
   )
 }
@@ -172,16 +174,21 @@ function RunEntry({
   )
   return (
     <>
-      <RunRow
-        run={run}
-        code={code}
-        detail={detail}
-        scale={scale}
-        open={open}
-        selected={selected}
-        onClick={() => onRow(run)}
-        nowMs={nowMs}
-      />
+      {/* Copy sits beside the row's button, over its end, so its click never toggles the row. */}
+      <div className="group relative">
+        <RunRow
+          run={run}
+          code={code}
+          detail={detail}
+          scale={scale}
+          open={open}
+          selected={selected}
+          onClick={() => onRow(run)}
+          nowMs={nowMs}
+        />
+        {/* A closed row's detail is a cache that stopped refreshing: Copy fetches the run afresh. */}
+        <CopyRunButton run={run} detail={open ? detail : null} open={open} />
+      </div>
       {open && (
         <RunBlock
           run={run}
@@ -245,6 +252,7 @@ function TotalsRow({
         </span>{' '}
         tok
       </span>
+      <span className="w-8 shrink-0" />
     </div>
   )
 }

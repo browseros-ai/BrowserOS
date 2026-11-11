@@ -208,6 +208,10 @@ at one small file and open only what a question needs: README.md stays under abo
 many runs there are. No host token or Authorization header is ever in an export. Screenshots are
 not exported.
 
+**Copy** on a run row (at its right end: on hover, on keyboard focus, always on an open row) puts that
+run's Markdown on the clipboard, from the same renderer as `runs/NNN.md` but with the whole reply:
+paste it into any agent and ask about the run. A closed row's run is fetched at the click.
+
 ## The API
 
 `shared/api.ts` holds the routes and their types; the server owns them and the page imports them.
@@ -296,7 +300,7 @@ script that opens displays and drops them mid-handshake can still block every di
 - `shared/api.ts`: the API's types; `shared/live-screen.ts`: the live screen's;
   `shared/code-format.ts` (with `code-gaps.ts`, `code-tree.ts`): a script laid out by statement,
   whitespace only, with sites mapped to display lines; `shared/run-markdown.ts`: one run as Markdown,
-  for an export's `runs/NNN.md`.
+  for an export's `runs/NNN.md` and a run row's Copy.
 
 ```sh
 bun run test                     # in this folder: unit tests, the proxy and the relay against a fake Neo, the screen
