@@ -225,116 +225,76 @@ const processAlive = (pid: number) => {
   }
 }
 
-type LockOptions = {
-  pid?: number
-  isAlive?: (pid: number) => boolean
-  wait?: () => void
-  onWait?: () => void
+const isReady = (source: string) =>
+  fs.existsSync(path.join(source, '.neo-source.json'))
+
+/** The prepared source this run uses, as an absolute path (git and npm run in other folders). */
+export function sourceDir(env: NodeJS.ProcessEnv): string {
+  if (env.NEO_TESTS_PLAYWRIGHT_SOURCE)
+    return path.resolve(env.NEO_TESTS_PLAYWRIGHT_SOURCE)
+  const cache =
+    env.NEO_SPEC_CACHE_DIR ||
+    path.join(
+      env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),
+      'browseros',
+      'neo-spec',
+    )
+  return path.resolve(cache, `playwright-${corpus.version}`)
 }
 
 /**
- * The pid in `lock`: a number, `undefined` while a new owner has not written it yet, or `null`
- * once the lock is gone (released between two reads).
+ * Prepares into a private `<source>.staging-<pid>` folder and publishes it with one rename, so
+ * `source` only ever appears complete. Two first runs each prepare their own copy; the first
+ * rename wins and the other discards only its own staging. No run ever deletes a folder another
+ * run is preparing or has published, which a shared lock could not promise once its holder died.
  */
-function lockOwner(lock: string): number | undefined | null {
-  try {
-    return Number(fs.readFileSync(path.join(lock, 'pid'), 'utf8')) || undefined
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error
-    return fs.existsSync(lock) ? undefined : null
-  }
-}
-
-/** A lock whose owner died, or that got no owner within a minute of being made. */
-function isStale(
-  lock: string,
-  owner: number | undefined,
-  isAlive: (pid: number) => boolean,
-): boolean {
-  if (owner) return !isAlive(owner)
-  try {
-    return Date.now() - fs.statSync(lock).mtimeMs > 60_000
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error
-    return false
-  }
-}
-
-/**
- * Removes `lock` if its owner died, and says whether to try for it again at once. Two waiting
- * runs can both see the dead owner, so the removal happens under `<lock>.takeover`, after
- * reading the owner again there: a run acting on what it saw earlier cannot delete the lock
- * another run has just taken. Every removal goes through the guard, so that reread is final.
- */
-function reclaim(lock: string, isAlive: (pid: number) => boolean): boolean {
-  const owner = lockOwner(lock)
-  if (owner === null) return true
-  if (!isStale(lock, owner, isAlive)) return false
-  const guard = `${lock}.takeover`
-  try {
-    fs.mkdirSync(guard)
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error
-    // The guard is held for a few file operations; one this old belongs to a run that died.
-    if (isStale(guard, undefined, isAlive))
-      fs.rmSync(guard, { recursive: true, force: true })
-    return false
-  }
-  try {
-    const current = lockOwner(lock)
-    if (current === owner && isStale(lock, current, isAlive))
-      fs.rmSync(lock, { recursive: true, force: true })
-    return true
-  } finally {
-    fs.rmSync(guard, { recursive: true, force: true })
-  }
-}
-
-/**
- * Takes `lock` (a directory, so taking it is one atomic mkdir) for this process, waiting while
- * a live process holds it and taking over from one that died. It keeps two first runs from
- * preparing, and deleting, the same cache folder at once.
- */
-export function acquireLock(
-  lock: string,
-  {
-    pid = process.pid,
-    isAlive = processAlive,
-    wait = () => Bun.sleepSync(2_000),
-    onWait = () => {},
-  }: LockOptions = {},
+export function publishSource(
+  source: string,
+  build: (staging: string) => void,
+  pid = process.pid,
 ) {
-  for (let waited = false; ; ) {
+  const staging = `${source}.staging-${pid}`
+  // Same pid, earlier run: whatever is here was left by a run that died.
+  fs.rmSync(staging, { recursive: true, force: true })
+  try {
+    build(staging)
     try {
-      fs.mkdirSync(lock)
-      fs.writeFileSync(path.join(lock, 'pid'), String(pid))
-      return
+      fs.renameSync(staging, source)
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error
+      // A rename onto a non-empty folder fails: another run published first.
+      if (!['ENOTEMPTY', 'EEXIST'].includes(error.code) || !isReady(source))
+        throw error
     }
-    if (reclaim(lock, isAlive)) continue
-    if (!waited) onWait()
-    waited = true
-    wait()
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true })
   }
 }
 
-/** Releases `lock` if `pid` still holds it. */
-export function releaseLock(lock: string, pid = process.pid) {
-  if (lockOwner(lock) === pid) fs.rmSync(lock, { recursive: true, force: true })
+/** Removes staging folders, checkouts and logs that runs which died left beside `source`. */
+export function sweepStaging(source: string, isAlive = processAlive) {
+  const name = path.basename(source)
+  const pattern = new RegExp(
+    `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.staging-(\\d+)(?:\\.checkout|\\.log)?$`,
+  )
+  for (const entry of fs.readdirSync(path.dirname(source))) {
+    const owner = Number(pattern.exec(entry)?.[1])
+    if (owner && owner !== process.pid && !isAlive(owner))
+      fs.rmSync(path.join(path.dirname(source), entry), {
+        recursive: true,
+        force: true,
+      })
+  }
 }
 
-/** Shallow-clones the pinned tag and prepares it into `source` with js/prepare.mjs. */
-function prepareSource(node: string, env: NodeJS.ProcessEnv, source: string) {
-  const checkout = `${source}.checkout`
-  const log = `${source}.prepare.log`
-  fs.rmSync(source, { recursive: true, force: true })
-  fs.rmSync(checkout, { recursive: true, force: true })
+/** Shallow-clones the pinned tag and prepares it into `target` with js/prepare.mjs. */
+function buildSource(node: string, env: NodeJS.ProcessEnv, target: string) {
+  const checkout = `${target}.checkout`
+  const log = `${target}.log`
   const out = fs.openSync(log, 'w')
   const step = (command: string, args: string[]) => {
     const result = spawnSync(command, args, {
       cwd: crate,
-      env: { ...env, NEO_TESTS_PLAYWRIGHT_SOURCE: source },
+      env: { ...env, NEO_TESTS_PLAYWRIGHT_SOURCE: target },
       stdio: ['ignore', out, out],
     })
     if (result.error || result.status !== 0)
@@ -363,40 +323,26 @@ function prepareSource(node: string, env: NodeJS.ProcessEnv, source: string) {
     fs.closeSync(out)
     fs.rmSync(checkout, { recursive: true, force: true })
   }
+  fs.rmSync(log, { force: true })
 }
 
 /**
  * NEO_TESTS_PLAYWRIGHT_SOURCE when set; else a folder per pinned release in the cache
- * (NEO_SPEC_CACHE_DIR, default ~/.cache/browseros/neo-spec), prepared the first time. The stamp prepare.mjs writes last marks a finished folder, so an interrupted
- * preparation is redone, not trusted.
+ * (NEO_SPEC_CACHE_DIR, default ~/.cache/browseros/neo-spec), prepared the first time.
  */
 function ensureSource(node: string, env: NodeJS.ProcessEnv): string {
-  if (env.NEO_TESTS_PLAYWRIGHT_SOURCE) return env.NEO_TESTS_PLAYWRIGHT_SOURCE
-  const cache =
-    env.NEO_SPEC_CACHE_DIR ||
-    path.join(
-      env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),
-      'browseros',
-      'neo-spec',
+  const source = sourceDir(env)
+  if (env.NEO_TESTS_PLAYWRIGHT_SOURCE || isReady(source)) return source
+  if (fs.existsSync(source))
+    throw new Error(
+      `${source} is incomplete: an earlier version of this command stopped while preparing it. Delete it and run again.`,
     )
-  const source = path.join(cache, `playwright-${corpus.version}`)
-  const ready = () => fs.existsSync(path.join(source, '.neo-source.json'))
-  if (ready()) return source
-  fs.mkdirSync(cache, { recursive: true })
-  const lock = `${source}.lock`
-  acquireLock(lock, {
-    onWait: () => console.log(`Waiting for another run to prepare ${source}.`),
-  })
-  try {
-    if (!ready()) {
-      console.log(
-        `Preparing Playwright v${corpus.version} test sources in ${source} (first run only: clone, npm ci, build; a few minutes).`,
-      )
-      prepareSource(node, env, source)
-    }
-  } finally {
-    releaseLock(lock)
-  }
+  fs.mkdirSync(path.dirname(source), { recursive: true })
+  sweepStaging(source)
+  console.log(
+    `Preparing Playwright v${corpus.version} test sources in ${source} (first run only: clone, npm ci, build; a few minutes).`,
+  )
+  publishSource(source, (staging) => buildSource(node, env, staging))
   return source
 }
 
@@ -467,12 +413,21 @@ export async function rerunLine(
     )
   const pick = (candidates: Row[]) =>
     candidates.find((row) => !excludedBy(scope, row)) ?? candidates[0]
+  // A test the run never reached: skipped with no attempt and no skip or fixme of its own.
+  const notRun = (row: Row) =>
+    row.test.status === 'skipped' &&
+    !row.test.results?.length &&
+    !(row.test.annotations ?? []).some((annotation: { type: string }) =>
+      ['skip', 'fixme'].includes(annotation.type),
+    )
   const failed = pick(rows.filter((row) => outcome(row) === 'fail'))
-  const row = failed ?? pick(rows.filter(cutOff))
   const stopped =
     signal || report.errors?.length || rows.some(cutOff)
       ? `Stopped${signal ? ` by ${signal}` : ''} before every test ran.`
       : ''
+  const interrupted = failed ? undefined : pick(rows.filter(cutOff))
+  const row =
+    failed ?? interrupted ?? (stopped ? pick(rows.filter(notRun)) : undefined)
   if (!row)
     return stopped ? `${stopped} Nothing had failed.` : 'Nothing failed.'
   const outOfScope = excludedBy(scope, row)?.reason
@@ -491,7 +446,8 @@ export async function rerunLine(
       suite.include && path.basename(suite.file, '.spec.ts') === fileName,
   )
   const name = sameName.length === 1 ? fileName : folderName
-  const label = `${row.caseId ?? 'one test'}${failed ? '' : ' (interrupted)'}${outOfScope ? ` (out of scope: ${outOfScope})` : ''}`
+  const status = failed ? '' : interrupted ? ' (interrupted)' : ' (not run)'
+  const label = `${row.caseId ?? 'one test'}${status}${outOfScope ? ` (out of scope: ${outOfScope})` : ''}`
   return `${stopped ? `${stopped} ` : ''}Rerun ${label}: ${['bun run test:neo-spec', name, ...rerunFlags(flags).map(quote), '--grep', quote(grep)].join(' ')}`
 }
 

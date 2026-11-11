@@ -4,16 +4,17 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  acquireLock,
   findBrowser,
   findNode,
   finish,
-  releaseLock,
+  publishSource,
   rerunFlags,
   rerunLine,
   resolveSuites,
   runnerEnv,
+  sourceDir,
   splitArgs,
+  sweepStaging,
 } from './spec'
 
 const corpus = JSON.parse(
@@ -233,51 +234,67 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true })
 })
 
-describe('the preparation lock', () => {
-  const dead = 4_000_001
-  const stop = new Error('waited')
+describe('preparing the source', () => {
+  const build = (marker: string) => (staging: string) => {
+    fs.mkdirSync(staging)
+    fs.writeFileSync(path.join(staging, '.neo-source.json'), marker)
+  }
 
-  it('a run that saw a dead owner cannot delete the lock another run took over', () => {
-    const lock = path.join(tempDir(), 'source.lock')
-    fs.mkdirSync(lock)
-    fs.writeFileSync(path.join(lock, 'pid'), String(dead))
-    let raced = false
-    const late = () =>
-      acquireLock(lock, {
-        pid: 2,
-        // Between this run reading the dead owner and acting on it, the other run takes over.
-        isAlive: (pid) => {
-          if (pid === dead && !raced) {
-            raced = true
-            acquireLock(lock, { pid: 1, isAlive: (other) => other === 1 })
-          }
-          return pid === 1
-        },
-        wait: () => {
-          throw stop
-        },
-      })
-    expect(late).toThrow(stop)
-    expect(fs.readFileSync(path.join(lock, 'pid'), 'utf8')).toBe('1')
+  it('two first runs never delete what the other prepared or published', () => {
+    const source = path.join(tempDir(), 'playwright-1.64.1')
+    // Run B starts first; while it builds, run A prepares and publishes.
+    publishSource(
+      source,
+      (staging) => {
+        build('B')(staging)
+        publishSource(source, build('A'), 1)
+        expect(
+          fs.readFileSync(path.join(staging, '.neo-source.json'), 'utf8'),
+        ).toBe('B')
+      },
+      2,
+    )
+    expect(fs.readFileSync(path.join(source, '.neo-source.json'), 'utf8')).toBe(
+      'A',
+    )
+    expect(fs.readdirSync(path.dirname(source))).toEqual(['playwright-1.64.1'])
   })
 
-  it('takes over a dead owner, waits for a live one, and retries a lock released meanwhile', () => {
-    const lock = path.join(tempDir(), 'source.lock')
-    fs.mkdirSync(lock)
-    fs.writeFileSync(path.join(lock, 'pid'), String(dead))
-    acquireLock(lock, { pid: 7, isAlive: () => false })
-    expect(fs.readFileSync(path.join(lock, 'pid'), 'utf8')).toBe('7')
-    let waits = 0
-    acquireLock(lock, {
-      pid: 8,
-      isAlive: () => true,
-      wait: () => {
-        waits++
-        releaseLock(lock, 7)
-      },
-    })
-    expect(waits).toBe(1)
-    expect(fs.readFileSync(path.join(lock, 'pid'), 'utf8')).toBe('8')
+  it('leaves nothing behind when preparation fails', () => {
+    const source = path.join(tempDir(), 'playwright-1.64.1')
+    expect(() =>
+      publishSource(source, (staging) => {
+        fs.mkdirSync(staging)
+        throw new Error('npm ci failed')
+      }),
+    ).toThrow('npm ci failed')
+    expect(fs.readdirSync(path.dirname(source))).toEqual([])
+  })
+
+  it('sweeps only what runs that died left behind', () => {
+    const cache = tempDir()
+    const source = path.join(cache, 'playwright-1.64.1')
+    const entries = [
+      'playwright-1.64.1',
+      'playwright-1.64.1.staging-11',
+      'playwright-1.64.1.staging-11.checkout',
+      'playwright-1.64.1.staging-11.log',
+      'playwright-1.64.1.staging-22',
+      'playwright-1.65.0.staging-11',
+    ]
+    for (const entry of entries) fs.mkdirSync(path.join(cache, entry))
+    sweepStaging(source, (pid) => pid === 22)
+    expect(fs.readdirSync(cache).sort()).toEqual([
+      'playwright-1.64.1',
+      'playwright-1.64.1.staging-22',
+      'playwright-1.65.0.staging-11',
+    ])
+  })
+
+  it('resolves a relative cache folder, since git and npm run elsewhere', () => {
+    expect(sourceDir({ NEO_SPEC_CACHE_DIR: 'neo-cache' })).toBe(
+      path.resolve('neo-cache', 'playwright-1.64.1'),
+    )
   })
 })
 
@@ -350,6 +367,22 @@ describe('the closing rerun line', () => {
     )
     return output
   }
+
+  it('offers a test that never started when a stopped run cut none off', async () => {
+    const output = runDir('SIGINT')
+    const results = JSON.parse(
+      fs.readFileSync(path.join(output, 'results.json'), 'utf8'),
+    )
+    // Stopped between tests: nothing interrupted, one test never started.
+    results.suites[0].specs.splice(1, 1)
+    fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results))
+    const line = await rerunLine(output, [])
+    expect(line).toStartWith('Stopped by SIGINT before every test ran. Rerun')
+    expect(line).toContain('(not run)')
+    expect(line).toContain(
+      'should not throw UnhandledPromiseRejection when page closes',
+    )
+  })
 
   it('says a stopped run stopped, and offers the test it cut off', async () => {
     const line = await rerunLine(runDir('SIGINT'), [])
