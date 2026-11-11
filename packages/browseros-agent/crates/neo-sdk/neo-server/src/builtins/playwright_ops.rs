@@ -76,7 +76,9 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, `screenshot` and \
-    `pdf`, events (`page.on`, `waitForEvent`), and `expect`: \
+    `pdf`, events (`page.on`, `waitForEvent`), downloads (`download.path()` waits for the file \
+    and returns where the browser saved it, which a later run can upload with `setInputFiles`; \
+    `saveAs(path)` copies it; `failure()`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
     `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
@@ -656,6 +658,7 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::ElementDetached => ErrorCode::ELEMENT_DETACHED,
         PlaywrightCode::PageError => ErrorCode::PAGE_ERROR,
         PlaywrightCode::NavigationFailed => ErrorCode::NAVIGATION_FAILED,
+        PlaywrightCode::DownloadFailed => ErrorCode::DOWNLOAD_FAILED,
         PlaywrightCode::WaitTimeout => ErrorCode::WAIT_TIMEOUT,
         PlaywrightCode::NavigationObservationTimeout => ErrorCode::NAVIGATION_OBSERVATION_TIMEOUT,
         PlaywrightCode::InvalidInput => ErrorCode::INVALID_INPUT,

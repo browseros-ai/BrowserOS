@@ -26,6 +26,8 @@ pub mod release_request;
 pub use self::release_request::ReleaseRequest;
 pub mod run;
 pub use self::run::Run;
+pub mod run_download;
+pub use self::run_download::RunDownload;
 pub mod run_list;
 pub use self::run_list::RunList;
 pub mod run_summary;
