@@ -40,6 +40,7 @@ listed_enum! {
         EvaluateOnElement,
         EvaluateOnAll,
         WaitForFunction,
+        WaitForFunctionOnElement,
         Screenshot,
         Pdf,
     }
@@ -124,6 +125,13 @@ impl PageOp {
             )
             .using(&[Capability::MainWorld])
             .policed(),
+            Self::WaitForFunctionOnElement => OpSpec::write(
+                "locator.waitForFunction",
+                TARGET,
+                "call a main-world function with the locator's element until it returns truthy",
+            )
+            .using(&[Capability::MainWorld])
+            .policed(),
             Self::Screenshot => OpSpec::read(
                 "page.screenshot",
                 PAGE,
@@ -205,6 +213,14 @@ pub(crate) async fn invoke(
         }
         PageOp::EvaluateOnAll => {
             Box::pin(element_evaluate::evaluate_on_all(
+                pw,
+                scope,
+                args.decode(scope)?,
+            ))
+            .await
+        }
+        PageOp::WaitForFunctionOnElement => {
+            Box::pin(element_evaluate::wait_for_function_on_element(
                 pw,
                 scope,
                 args.decode(scope)?,
