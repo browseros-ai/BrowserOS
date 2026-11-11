@@ -409,9 +409,7 @@ impl Watcher {
                 if let Some(session) = &session_id {
                     self.frame_lifecycle(&method, session, &params).await;
                 }
-                if let Some(navigation) = navigation_event::parse(&method, params) {
-                    self.writer.record(navigation);
-                }
+                self.navigated(&method, session_id.as_ref(), params).await;
             }
             "Target.targetCreated" => {
                 if let Some(TargetEvent { target_info }) = parse(params) {
@@ -621,6 +619,26 @@ impl Watcher {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Records a frame's navigation or removal, and marks a tab's main-frame navigation for the
+    /// host's URL facts (`EventWriter::main_frame_navigated`). A tab's main frame has the tab's
+    /// target id; an out-of-process frame's has its own.
+    async fn navigated(&mut self, method: &str, session: Option<&SessionId>, params: Value) {
+        let Some(navigation) = navigation_event::parse(method, params) else {
+            return;
+        };
+        let main_of = match (&navigation, session) {
+            (PageEvent::Navigation(event), Some(session)) => self
+                .target_of(session)
+                .await
+                .filter(|tab| tab.as_str() == event.frame.as_str()),
+            _ => None,
+        };
+        let seq = self.writer.record(navigation);
+        if let Some(tab) = main_of {
+            self.writer.main_frame_navigated(tab, seq);
         }
     }
 

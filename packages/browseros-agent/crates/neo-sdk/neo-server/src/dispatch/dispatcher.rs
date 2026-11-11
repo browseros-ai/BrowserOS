@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::{Mutex, PoisonError};
 
@@ -12,7 +13,7 @@ use browseros_core::{PageId, TabId};
 use neo_trace::{Delivery, Effect, OperationId, OperationReached, PageState, TraceSink};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 use super::close_release::close_release;
 use super::op_ctx::{OpCore, OpState, PageChange, PageReport};
@@ -26,6 +27,18 @@ use super::{
     Visibility, operation_error,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
+
+/// A tab's refresh bookkeeping, a per-tab slot dropped with the tab: the event seq through which
+/// the door last refreshed its entry in core's page cache, so a navigation the page made itself
+/// is refreshed once (`Dispatcher::refresh_if_navigated`), and the turn its refreshes take.
+#[derive(Debug, Default)]
+struct RefreshedThrough {
+    through: AtomicU64,
+    /// Core keeps the entry another refresh wrote while one was in flight and drops that one's
+    /// read (`refresh_with_epoch`), so two overlapping refreshes could leave the older read under
+    /// the newer mark. The door's refreshes of a tab take turns, each checking the mark again.
+    turn: AsyncMutex<()>,
+}
 
 /// The method the door calls, as Neo, to open a run's lazy default page: with `{}`, returning
 /// Playwright's page entry `{ page, url }` (`OpenedPage`) after reporting the page
@@ -668,7 +681,7 @@ impl Dispatcher {
                 }
                 PageChange::Navigated if !refreshed.contains(&page.tab) => {
                     refreshed.push(page.tab);
-                    refresh(run, &self.browser, page.tab).await;
+                    self.refresh_navigated(run, page).await;
                 }
                 PageChange::Navigated | PageChange::Linked => {}
                 PageChange::Gone { target, seq } => {
@@ -709,6 +722,8 @@ impl Dispatcher {
                 observed: None,
             };
         }
+        self.refresh_self_navigated(run, &pages, &closed, &refreshed)
+            .await;
         let reads: Vec<TabId> = pages
             .iter()
             .filter(|page| !closed.contains(&page.tab))
@@ -744,6 +759,73 @@ impl Dispatcher {
             observed.payload_current = None;
         }
         released
+    }
+
+    /// A navigation the page made itself (a link, `pushState`, a fragment, the Navigation API)
+    /// reaches core's cache only through a refresh, so each open tab of the reply whose main
+    /// frame the event log saw navigate since the door last refreshed it is refreshed once, as
+    /// a navigating op's tab is. Otherwise the reply would hand the prelude the URL from before,
+    /// over a fresher one it already has. `refreshed` are the tabs refreshed for this op already.
+    async fn refresh_self_navigated(
+        &self,
+        run: &RunCtx,
+        pages: &[PageRef],
+        closed: &[TabId],
+        refreshed: &[TabId],
+    ) {
+        for page in pages {
+            if closed.contains(&page.tab) || refreshed.contains(&page.tab) {
+                continue;
+            }
+            self.refresh_if_navigated(run, page).await;
+        }
+    }
+
+    /// Refreshes `page` once its main frame navigated past the event seq the door last refreshed
+    /// it through, then moves the mark to the log's head from just before the refresh read core.
+    /// Only a refresh that read core moves it: a failed or cancelled one leaves the navigation
+    /// owed, so a later reply tries again. A tab the registry does not track has no mark.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the turn orders one tab's cache refreshes; see RefreshedThrough"
+    )]
+    async fn refresh_if_navigated(&self, run: &RunCtx, page: &PageRef) {
+        let Some(mark) = self.tabs.slot::<RefreshedThrough>(page) else {
+            return;
+        };
+        let Some(info) = self.browser.page(page.tab).await else {
+            return;
+        };
+        let Some(navigated) = self.observer.navigated(&info.target_id) else {
+            return;
+        };
+        if navigated <= mark.through.load(Ordering::Relaxed) {
+            return;
+        }
+        let _turn = mark.turn.lock().await;
+        // A refresh that had the turn while this one waited may already cover it.
+        if navigated <= mark.through.load(Ordering::Relaxed) {
+            return;
+        }
+        let head = self.observer.head();
+        if refresh(run, &self.browser, page.tab).await {
+            mark.through.fetch_max(head, Ordering::Relaxed);
+        }
+    }
+
+    /// A navigating op's refresh, in its tab's turn, moving the mark as one above does.
+    async fn refresh_navigated(&self, run: &RunCtx, page: &PageRef) {
+        let mark = self.tabs.slot::<RefreshedThrough>(page);
+        let _turn = match &mark {
+            Some(mark) => Some(mark.turn.lock().await),
+            None => None,
+        };
+        let head = self.observer.head();
+        if refresh(run, &self.browser, page.tab).await
+            && let Some(mark) = &mark
+        {
+            mark.through.fetch_max(head, Ordering::Relaxed);
+        }
     }
 
     /// Facts and their reported close records cross policy together, after the async cache
@@ -893,18 +975,21 @@ fn ending_of(run: &RunCtx, state: &OpState, result: Result<Value, LeafError>) ->
 
 /// One `Browser.getTabInfo` so core's cache matches the page after an unbound navigation.
 /// Raced with the stop: a stopping run does not wait on it.
-async fn refresh(run: &RunCtx, browser: &BrowserLink, tab: TabId) {
+/// Reads `tab`'s entry in core's page cache again; `true` once it did.
+async fn refresh(run: &RunCtx, browser: &BrowserLink, tab: TabId) -> bool {
     let Some(info) = browser.page(tab).await else {
-        return;
+        return false;
     };
     tokio::select! {
         biased;
-        () = run.cancel_token().cancelled() => {}
-        refreshed = run.view().refresh_page(info.page_id) => {
-            if let Err(error) = refreshed {
+        () = run.cancel_token().cancelled() => false,
+        refreshed = run.view().refresh_page(info.page_id) => match refreshed {
+            Ok(_) => true,
+            Err(error) => {
                 tracing::debug!(%error, tab = tab.0, "could not refresh a navigated page; its facts may be stale");
+                false
             }
-        }
+        },
     }
 }
 
