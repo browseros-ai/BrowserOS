@@ -76,6 +76,26 @@ describe('shouldCatchUpScheduledJob', () => {
     ).toBe(true)
   })
 
+  it('prefers the latest start time over a later finish time', () => {
+    // An hourly job that started 70 minutes ago and finished 50 minutes ago:
+    // `lastRunAt` holds the finish time, so using it would report this job as
+    // current even though its next run was missed.
+    const startedAt = new Date(now - 70 * 60 * 1000).toISOString()
+    const completedAt = new Date(now - 50 * 60 * 1000).toISOString()
+
+    expect(
+      shouldCatchUpScheduledJob(
+        job({
+          scheduleType: 'hourly',
+          scheduleInterval: 1,
+          lastRunAt: completedAt,
+        }),
+        [run(startedAt, { completedAt })],
+        now,
+      ),
+    ).toBe(true)
+  })
+
   it('never starts a second run while one is running', () => {
     expect(
       shouldCatchUpScheduledJob(

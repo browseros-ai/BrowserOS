@@ -10,21 +10,25 @@ function latestRunTime(
   job: ScheduledJob,
   runs: ScheduledJobRun[],
 ): number | null {
+  // Prefer the latest start time from real run history. `lastRunAt` is written
+  // when a run *finishes*, so letting it win would hide a missed run whenever
+  // the previous one ran long: an hourly job that starts at 10:00 and finishes
+  // at 10:20 would still look current at 11:10 even though its 11:00 run never
+  // fired.
   let latest: number | null = null
-
-  const candidates = [
-    job.lastRunAt,
-    ...runs.filter((run) => run.jobId === job.id).map((run) => run.startedAt),
-  ]
-  for (const candidate of candidates) {
-    if (!candidate) continue
-    const time = new Date(candidate).getTime()
+  for (const run of runs) {
+    if (run.jobId !== job.id) continue
+    const time = new Date(run.startedAt).getTime()
     if (Number.isFinite(time) && (latest === null || time > latest)) {
       latest = time
     }
   }
+  if (latest !== null) return latest
 
-  return latest
+  // Only when run history is unavailable does the job's own bookkeeping stand in.
+  if (!job.lastRunAt) return null
+  const fallback = new Date(job.lastRunAt).getTime()
+  return Number.isFinite(fallback) ? fallback : null
 }
 
 /** Whether a startup pass should run this job after missed alarms. */
