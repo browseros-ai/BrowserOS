@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use browseros_cdp::{CdpClient, CdpError, ConnectOptions, ReconnectPolicy};
 use browseros_core::pages::{PageInfo, PageManagerHooks};
-use browseros_core::sensitive_fields::SensitiveValues;
 use browseros_core::viewport::Viewports;
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, NativeCapabilities, TabId,
@@ -239,8 +238,6 @@ impl BrowserLink {
             },
         };
         let session = BrowserSession::new_with_native(connection, hooks, native);
-        // sdk-privacy: snapshots show password, card and one-time-code values masked.
-        session.set_sensitive_values(SensitiveValues::Mask);
         tokio::spawn(tab_watch::tab_watch(
             Arc::clone(&session),
             self.tab_events.clone(),

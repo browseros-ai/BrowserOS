@@ -7,7 +7,6 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::sensitive_fields::SensitiveValues;
 use browseros_core::{NativeCapabilities, TabId, page_js};
 use tokio::sync::broadcast;
 use tokio::time;
@@ -91,12 +90,7 @@ async fn the_first_connect_is_retried_until_the_browser_answers() -> Result<(), 
         },
         "linked on the fake's first socket, and the last error is cleared"
     );
-    let session = link.session().ok_or("linked")?;
-    assert_eq!(
-        session.sensitive_values(),
-        SensitiveValues::Mask,
-        "snapshots mask sensitive fields from the first page on"
-    );
+    link.session().ok_or("linked")?;
     assert!(
         page_js::isolated_world_enabled(),
         "core's DOM scripts stay out of the page world"
