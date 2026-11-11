@@ -67,6 +67,23 @@ fn protocol_source_retains_hidden_compatibility_tombstones() -> Result<(), Box<d
 }
 
 #[test]
+fn close_tab_group_exposes_host_only_saved_group_cleanup() -> Result<(), Box<dyn Error>> {
+    let protocol: Value = serde_json::from_slice(PROTOCOL)?;
+    let browser = protocol["domains"]
+        .as_array()
+        .and_then(|domains| domains.iter().find(|domain| domain["domain"] == "Browser"))
+        .ok_or_else(|| io::Error::other("Browser domain should exist"))?;
+
+    assert!(has_property(
+        browser,
+        "commands",
+        "closeTabGroup",
+        "deleteSavedGroup"
+    ));
+    Ok(())
+}
+
+#[test]
 fn generated_surface_uses_canonical_identifier_names() {
     let window_id: browser::WindowID = 7;
     let target_id: target::TargetID = "target-7".to_string();

@@ -17,7 +17,7 @@ index 83bec7125e1fb966a61450bf93fc3aca6f46d438..4b28161eaf7de76a82aa032f21a2a01c
    protocol::Response GetWindowBounds(
        int window_id,
        std::unique_ptr<protocol::Browser::Bounds>* out_bounds) override;
-@@ -76,6 +84,116 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
+@@ -76,6 +84,118 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
    protocol::Response AddPrivacySandboxEnrollmentOverride(
        const std::string& in_url) override;
  
@@ -118,7 +118,9 @@ index 83bec7125e1fb966a61450bf93fc3aca6f46d438..4b28161eaf7de76a82aa032f21a2a01c
 +      std::optional<std::string> color,
 +      std::optional<bool> collapsed,
 +      std::unique_ptr<protocol::Browser::TabGroupInfo>* out_group) override;
-+  protocol::Response CloseTabGroup(const std::string& group_id) override;
++  protocol::Response CloseTabGroup(
++      const std::string& group_id,
++      std::optional<bool> delete_saved_group) override;
 +  protocol::Response AddTabsToGroup(
 +      const std::string& group_id,
 +      std::unique_ptr<protocol::Array<int>> tab_ids,

@@ -332,6 +332,7 @@ export interface UpdateTabGroupResult {
 
 export interface CloseTabGroupParams {
   groupId: TabGroupID
+  deleteSavedGroup?: boolean
 }
 
 export interface AddTabsToGroupParams {

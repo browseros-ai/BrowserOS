@@ -70,7 +70,7 @@ index 7e68ad976d8e1d480d4297e7ade562c2b2f693a7..a6b70cc256f15512be75ba704d654145
  Response BrowserHandlerAndroid::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -355,3 +409,190 @@ protocol::Response BrowserHandlerAndroid::AddPrivacySandboxEnrollmentOverride(
+@@ -355,3 +409,192 @@ protocol::Response BrowserHandlerAndroid::AddPrivacySandboxEnrollmentOverride(
      const std::string& in_url) {
    return Response::MethodNotFound(kNotImplemented);
  }
@@ -238,7 +238,9 @@ index 7e68ad976d8e1d480d4297e7ade562c2b2f693a7..a6b70cc256f15512be75ba704d654145
 +  return Response::MethodNotFound(kNotImplemented);
 +}
 +
-+Response BrowserHandlerAndroid::CloseTabGroup(const std::string& group_id) {
++Response BrowserHandlerAndroid::CloseTabGroup(
++    const std::string& group_id,
++    std::optional<bool> delete_saved_group) {
 +  return Response::MethodNotFound(kNotImplemented);
 +}
 +

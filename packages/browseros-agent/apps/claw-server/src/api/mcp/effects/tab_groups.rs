@@ -810,19 +810,19 @@ async fn retained_groups(
         // It does not execute a new browser call on behalf of the current target.
         let view = BrowserView::unbound(browser.clone(), None);
         let output_files = browseros_mcp::output_file::create_browser_output_file_access();
-        let args = if close {
-            json!({"action":"close", "groupId":group_id})
+        let result = if close {
+            close_retained_tab_group(&view, &group_id).await
         } else {
-            json!({"action":"update", "groupId":group_id, "collapsed":true})
+            dispatch_tab_groups(
+                cached_tab_groups_tool(),
+                &view,
+                CancellationToken::new(),
+                output_files.clone(),
+                json!({"action":"update", "groupId":group_id, "collapsed":true}),
+            )
+            .await
+            .map(|_| ())
         };
-        let result = dispatch_tab_groups(
-            cached_tab_groups_tool(),
-            &view,
-            CancellationToken::new(),
-            output_files.clone(),
-            args,
-        )
-        .await;
         let absent = result.is_err()
             && group_exists_unlocked(&view, &group_id, output_files).await == Some(false);
         if absent || result.is_ok() && close {
@@ -842,6 +842,26 @@ async fn retained_groups(
             .await
             .iter()
             .all(|group| !close && (group.collapsed || group.borrowed))
+}
+
+async fn close_retained_tab_group(browser: &BrowserView, group_id: &str) -> Result<(), String> {
+    let operation = timeout(
+        TAB_GROUP_OPERATION,
+        browser.cdp(
+            "Browser.closeTabGroup",
+            json!({"groupId":group_id, "deleteSavedGroup":true}),
+            None,
+        ),
+    )
+    .await;
+    match operation {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => Err(format!(
+            "saved tab group cleanup timed out after {}ms",
+            TAB_GROUP_OPERATION.as_millis()
+        )),
+    }
 }
 
 async fn group_exists_unlocked(
@@ -2514,10 +2534,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retained_group_close_succeeds_and_confirms_already_absent_groups() -> anyhow::Result<()>
-    {
+    async fn retained_group_close_deletes_only_its_exact_saved_group_and_confirms_absence()
+    -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
-        recorder.seed_group("group-1", [101]);
+        recorder.seed_group_titled("group-1", "duplicate", [101]);
+        recorder.seed_group_titled("group-2", "duplicate", [102]);
         let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let ownership = Arc::new(PageOwnership::new());
@@ -2527,6 +2548,23 @@ mod tests {
             .await;
 
         assert!(close_agent_tab_group(Some(&browser), &ownership, &key).await);
+        assert!(recorder.group_members("group-1").is_empty());
+        assert_eq!(recorder.group_members("group-2"), BTreeSet::from([102]));
+        let close = {
+            let calls = recorder
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            calls
+                .iter()
+                .find(|(method, _)| method == "Browser.closeTabGroup")
+                .map(|(_, params)| params.clone())
+        };
+        assert_eq!(
+            close,
+            Some(json!({"groupId":"group-1", "deleteSavedGroup":true}))
+        );
+
         ownership
             .set_tab_group_ref(key.clone(), Some("group-1".to_string()))
             .await;

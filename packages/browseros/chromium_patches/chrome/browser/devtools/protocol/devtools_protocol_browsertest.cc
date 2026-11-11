@@ -2,15 +2,16 @@ diff --git a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc b
 index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1e045f1d2 100644
 --- a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 +++ b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-@@ -23,6 +23,7 @@
+@@ -23,6 +23,8 @@
  #include "base/test/test_switches.h"
  #include "base/test/values_test_util.h"
  #include "base/threading/thread_restrictions.h"
 +#include "base/time/time.h"
++#include "base/token.h"
  #include "base/values.h"
  #include "build/build_config.h"
  #include "chrome/browser/apps/app_service/app_service_proxy.h"
-@@ -34,6 +35,7 @@
+@@ -34,6 +36,7 @@
  #include "chrome/browser/devtools/protocol/devtools_protocol_test_support.h"
  #include "chrome/browser/first_party_sets/first_party_sets_policy_service.h"
  #include "chrome/browser/first_party_sets/first_party_sets_policy_service_factory.h"
@@ -18,24 +19,28 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
  #include "chrome/browser/preloading/preloading_prefs.h"
  #include "chrome/browser/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations_mixin.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -48,6 +50,8 @@
+@@ -48,6 +51,11 @@
  #include "components/content_settings/core/browser/cookie_settings.h"
  #include "components/content_settings/core/common/pref_names.h"
  #include "components/custom_handlers/protocol_handler_registry.h"
 +#include "components/history/core/browser/history_service.h"
 +#include "components/history/core/test/history_service_test_util.h"
++#include "components/saved_tab_groups/public/tab_group_sync_service.h"
++#include "components/sync/base/collaboration_id.h"
++#include "components/tab_groups/tab_group_id.h"
  #include "components/infobars/content/content_infobar_manager.h"
  #include "components/infobars/core/infobar.h"
  #include "components/infobars/core/infobar_delegate.h"
-@@ -109,6 +113,7 @@
+@@ -109,6 +117,8 @@
  #include "chrome/browser/sessions/session_restore_test_helper.h"
  #include "chrome/browser/sessions/session_service_test_helper.h"
++#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
  #include "chrome/browser/ui/browser_commands.h"
 +#include "chrome/browser/ui/browser_window.h"
  #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
-@@ -480,8 +485,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, CreateTargetWithFocus) {
+@@ -480,8 +490,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, CreateTargetWithFocus) {
  }
  
  #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
@@ -46,7 +51,7 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
  #define MAYBE_AutoAttachToUnloadedTab DISABLED_AutoAttachToUnloadedTab
  #else
  #define MAYBE_AutoAttachToUnloadedTab AutoAttachToUnloadedTab
-@@ -1497,8 +1502,9 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, VisibleSecurityStateSecureState) {
+@@ -1497,8 +1507,9 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, VisibleSecurityStateSecureState) {
    net::SSLCipherSuiteToStrings(&page_key_exchange_str, &page_cipher, &page_mac,
                                 &is_aead, &is_tls13, page_cipher_suite);
    std::string page_key_exchange;
@@ -57,7 +62,7 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
  
    const char* page_key_exchange_group =
        SSL_get_curve_name(entry->GetSSL().key_exchange_group);
-@@ -2681,6 +2687,216 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
+@@ -2681,6 +2692,317 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
    EXPECT_EQ(group_id.ToString(),
              *second_get_target_info_data.FindString("tabGroupId"));
  }
@@ -230,6 +235,107 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
 +  EXPECT_EQ(tab_ids[0], *grouped_tab_ids->front().GetIfInt());
 +  EXPECT_EQ(tab_ids[2], *grouped_tab_ids->back().GetIfInt());
 +  EXPECT_EQ("Unsorted", *group->FindString("title"));
++}
++
++IN_PROC_BROWSER_TEST_F(
++    DevToolsProtocolTest,
++    BrowserCloseTabGroupDeletesOnlyRequestedNonSharedSavedGroup) {
++  AttachToBrowserTarget();
++
++  base::DictValue create_tab_params;
++  create_tab_params.Set("url", "about:blank");
++  create_tab_params.Set("background", true);
++  ASSERT_TRUE(SendCommandSync("Browser.createTab", create_tab_params.Clone()));
++  ASSERT_TRUE(SendCommandSync("Browser.createTab", std::move(create_tab_params)));
++
++  const base::DictValue* tabs_result = SendCommandSync("Browser.getTabs");
++  ASSERT_TRUE(tabs_result);
++  const base::ListValue* tabs = tabs_result->FindList("tabs");
++  ASSERT_TRUE(tabs);
++  ASSERT_GE(tabs->size(), 3u);
++  const int owned_tab_id = *(*tabs)[0].GetDict().FindInt("tabId");
++  const int shared_tab_id = *(*tabs)[1].GetDict().FindInt("tabId");
++
++  base::ListValue owned_tab_ids;
++  owned_tab_ids.Append(owned_tab_id);
++  const base::DictValue* owned_result = SendCommandSync(
++      "Browser.createTabGroup",
++      base::DictValue()
++          .Set("tabIds", std::move(owned_tab_ids))
++          .Set("title", "Duplicate"));
++  ASSERT_TRUE(owned_result);
++  const base::DictValue* owned_group = owned_result->FindDict("group");
++  ASSERT_TRUE(owned_group);
++  const std::string owned_group_id = *owned_group->FindString("groupId");
++
++  base::ListValue shared_tab_ids;
++  shared_tab_ids.Append(shared_tab_id);
++  const base::DictValue* shared_result = SendCommandSync(
++      "Browser.createTabGroup",
++      base::DictValue()
++          .Set("tabIds", std::move(shared_tab_ids))
++          .Set("title", "Duplicate"));
++  ASSERT_TRUE(shared_result);
++  const base::DictValue* shared_group = shared_result->FindDict("group");
++  ASSERT_TRUE(shared_group);
++  const std::string shared_group_id = *shared_group->FindString("groupId");
++
++  const std::optional<base::Token> owned_token =
++      base::Token::FromString(owned_group_id);
++  const std::optional<base::Token> shared_token =
++      base::Token::FromString(shared_group_id);
++  ASSERT_TRUE(owned_token);
++  ASSERT_TRUE(shared_token);
++  const tab_groups::TabGroupId owned_local_id =
++      tab_groups::TabGroupId::FromRawToken(*owned_token);
++  const tab_groups::TabGroupId shared_local_id =
++      tab_groups::TabGroupId::FromRawToken(*shared_token);
++
++  tab_groups::TabGroupSyncService* service =
++      tab_groups::TabGroupSyncServiceFactory::GetForProfile(
++          browser()->profile());
++  ASSERT_TRUE(service);
++  ASSERT_TRUE(service->GetGroup(owned_local_id));
++  ASSERT_TRUE(service->GetGroup(shared_local_id));
++  service->MakeTabGroupSharedForTesting(
++      shared_local_id, syncer::CollaborationId("host-cleanup-test"));
++  ASSERT_TRUE(service->GetGroup(shared_local_id)->is_shared_tab_group());
++
++  SendCommandSync(
++      "Browser.closeTabGroup",
++      base::DictValue()
++          .Set("groupId", owned_group_id)
++          .Set("deleteSavedGroup", true));
++  ASSERT_FALSE(error());
++  EXPECT_FALSE(service->GetGroup(owned_local_id));
++  ASSERT_TRUE(service->GetGroup(shared_local_id));
++  EXPECT_TRUE(service->GetGroup(shared_local_id)->is_shared_tab_group());
++
++  const base::DictValue* groups_result =
++      SendCommandSync("Browser.getTabGroups");
++  ASSERT_TRUE(groups_result);
++  const base::ListValue* groups = groups_result->FindList("groups");
++  ASSERT_TRUE(groups);
++  ASSERT_EQ(1u, groups->size());
++  EXPECT_EQ(shared_group_id,
++            *groups->front().GetDict().FindString("groupId"));
++
++  SendCommandSync(
++      "Browser.closeTabGroup",
++      base::DictValue()
++          .Set("groupId", shared_group_id)
++          .Set("deleteSavedGroup", true));
++  ASSERT_FALSE(error());
++  ASSERT_TRUE(service->GetGroup(shared_local_id));
++  EXPECT_TRUE(service->GetGroup(shared_local_id)->is_shared_tab_group());
++
++  groups_result = SendCommandSync("Browser.getTabGroups");
++  ASSERT_TRUE(groups_result);
++  groups = groups_result->FindList("groups");
++  ASSERT_TRUE(groups);
++  ASSERT_EQ(1u, groups->size());
++  EXPECT_EQ(shared_group_id,
++            *groups->front().GetDict().FindString("groupId"));
 +}
 +
 +IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, HistorySearchUsesVisitTime) {

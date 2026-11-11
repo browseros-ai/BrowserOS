@@ -13,20 +13,21 @@ index 2e694986c7617565320e7259f4548ba6e75561b4..34eaeedaa4997dcc9f6e907a6c36f7b3
      "protocol/pwa.cc",
      "protocol/pwa.h",
      "protocol/security.cc",
-@@ -410,8 +414,12 @@ static_library("devtools") {
+@@ -410,8 +414,13 @@ static_library("devtools") {
      deps += [
        "//chrome/app:command_ids",
        "//chrome/browser/badging",
 +      "//chrome/browser/bookmarks",
 +      # Keep BrowserOS CDP prefs independent of the browser aggregator.
 +      "//chrome/browser/browseros/core:prefs",
++      "//chrome/browser/tab_group_sync:factories",
        "//chrome/browser/custom_handlers",
        "//chrome/browser/first_party_sets",
 +      "//chrome/browser/history",
        "//chrome/browser/ui/media_router",
        "//chrome/browser/ui/startup",
        "//chrome/browser/ui/views/frame:contents_web_view",
-@@ -422,7 +430,11 @@ static_library("devtools") {
+@@ -422,7 +431,12 @@ static_library("devtools") {
        "//components/media_router/common/mojom:media_router",
        "//components/origin_gating/core",
        "//components/payments/content",
@@ -34,11 +35,12 @@ index 2e694986c7617565320e7259f4548ba6e75561b4..34eaeedaa4997dcc9f6e907a6c36f7b3
 +      "//components/history/core/browser",
        "//components/privacy_sandbox/privacy_sandbox_attestations",
 +      "//components/query_parser",
++      "//components/saved_tab_groups/public",
 +      "//components/tab_groups",
        "//components/security_state/content",
        "//components/subresource_filter/content/browser",
        "//components/web_package",
-@@ -439,8 +451,12 @@ static_library("devtools") {
+@@ -439,8 +453,12 @@ static_library("devtools") {
        "devtools_navigation_throttle.h",
        "protocol/ads_handler.cc",
        "protocol/ads_handler.h",

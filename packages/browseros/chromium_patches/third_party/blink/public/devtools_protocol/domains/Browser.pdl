@@ -32,7 +32,7 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..5aa39c3b542eab0929d2d62484a20fcc
  
    # The state of the browser window.
    experimental type WindowState extends string
-@@ -31,6 +54,251 @@ domain Browser
+@@ -31,6 +54,253 @@ domain Browser
        # The window state. Default to normal.
        optional WindowState windowState
  
@@ -258,6 +258,8 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..5aa39c3b542eab0929d2d62484a20fcc
 +  experimental command closeTabGroup
 +    parameters
 +      TabGroupID groupId
++      # Also delete a non-shared Saved Tab Group record. Reserved for host lifecycle cleanup.
++      optional boolean deleteSavedGroup
 +
 +  # Add tabs to an existing group.
 +  experimental command addTabsToGroup
@@ -284,7 +286,7 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..5aa39c3b542eab0929d2d62484a20fcc
    experimental type PermissionType extends string
      enum
        ar
-@@ -304,6 +572,28 @@ domain Browser
+@@ -304,6 +574,28 @@ domain Browser
        # position and size are returned.
        Bounds bounds
  

@@ -5354,6 +5354,12 @@
                         {
                             "name": "groupId",
                             "$ref": "TabGroupID"
+                        },
+                        {
+                            "name": "deleteSavedGroup",
+                            "description": "Also delete a non-shared Saved Tab Group record. Reserved for host lifecycle cleanup.",
+                            "optional": true,
+                            "type": "boolean"
                         }
                     ]
                 },

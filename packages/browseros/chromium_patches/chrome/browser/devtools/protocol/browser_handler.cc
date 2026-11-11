@@ -2,7 +2,7 @@ diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browse
 index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f697b01f6 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
-@@ -4,24 +4,41 @@
+@@ -4,24 +4,43 @@
  
  #include "chrome/browser/devtools/protocol/browser_handler.h"
  
@@ -24,6 +24,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  #include "chrome/browser/devtools/devtools_dock_tile.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/profiles/profile_manager.h"
++#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
  #include "chrome/browser/ui/browser_commands.h"
 +#include "chrome/browser/ui/browser_tabstrip.h"
  #include "chrome/browser/ui/browser_window.h"
@@ -37,6 +38,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  #include "components/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations.h"
 +#include "components/sessions/content/session_tab_helper.h"
  #include "components/sessions/core/session_id.h"
++#include "components/saved_tab_groups/public/tab_group_sync_service.h"
 +#include "components/tab_groups/tab_group_color.h"
 +#include "components/tab_groups/tab_group_id.h"
 +#include "components/tab_groups/tab_group_visual_data.h"
@@ -44,7 +46,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/devtools_agent_host.h"
-@@ -35,6 +52,49 @@ using protocol::Response;
+@@ -35,6 +54,49 @@ using protocol::Response;
  
  namespace {
  
@@ -94,7 +96,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  BrowserWindow* GetBrowserWindow(int window_id) {
    BrowserWindow* result = nullptr;
    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-@@ -76,6 +136,418 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+@@ -76,6 +138,418 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
        .Build();
  }
  
@@ -513,7 +515,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  }  // namespace
  
  BrowserHandler::BrowserHandler(protocol::UberDispatcher* dispatcher,
-@@ -126,6 +598,67 @@ Response BrowserHandler::GetWindowForTarget(
+@@ -126,6 +600,67 @@ Response BrowserHandler::GetWindowForTarget(
    return Response::Success();
  }
  
@@ -581,7 +583,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -305,3 +838,767 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -305,3 +840,786 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
@@ -1189,11 +1191,30 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
 +  return Response::Success();
 +}
 +
-+Response BrowserHandler::CloseTabGroup(const std::string& group_id) {
++Response BrowserHandler::CloseTabGroup(
++    const std::string& group_id,
++    std::optional<bool> delete_saved_group) {
 +  GroupLookupResult lookup;
 +  Response response = ResolveGroupId(group_id, &lookup);
 +  if (!response.IsSuccess()) {
 +    return response;
++  }
++
++  if (delete_saved_group.value_or(false)) {
++    tab_groups::TabGroupSyncService* service =
++        tab_groups::TabGroupSyncServiceFactory::GetForProfile(
++            lookup.bwi->GetProfile());
++    if (service) {
++      const std::optional<tab_groups::SavedTabGroup> saved_group =
++          service->GetGroup(lookup.group_id);
++      if (saved_group && saved_group->is_shared_tab_group()) {
++        // Shared groups belong to collaboration lifecycle, not host cleanup.
++        return Response::Success();
++      }
++      if (saved_group) {
++        service->RemoveGroup(lookup.group_id);
++      }
++    }
 +  }
 +
 +  lookup.bwi->GetTabStripModel()->CloseAllTabsInGroup(lookup.group_id);
