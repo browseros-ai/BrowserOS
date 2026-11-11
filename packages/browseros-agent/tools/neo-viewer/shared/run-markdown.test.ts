@@ -5,7 +5,7 @@ import {
   twoLineRecord,
 } from '../server/test-support/neo-records'
 import { clock } from '../web/screen/units'
-import { fenced, firstStatement, runMarkdown } from './run-markdown'
+import { cell, fenced, runMarkdown, statementPreview } from './run-markdown'
 
 const FULL = { replyChars: null }
 const EXPORT = {
@@ -24,7 +24,9 @@ describe('one run as Markdown', () => {
     expect(markdown.split('\n')[0]).toBe(
       `# Run 001 · ${clock(run.sentAt)} · claude-code · ok · round trip 1.00 s · Neo 900 ms · 4 method calls · code ≈15 tok · reply ≈4 tok`,
     )
-    expect(markdown).toContain(`## Code\n\n\`\`\`js\n${TWO_LINES}\n\`\`\``)
+    expect(markdown).toContain(
+      `one statement per line, as the viewer shows it (whitespace only); \`L<n>\` below is a line of it.\n\n\`\`\`js\n${TWO_LINES}\n\`\`\``,
+    )
     expect(markdown).toContain(
       '## Methods by line\n\n- L1 page.goto: +10 ms, 412 ms, ok\n- L2 locator.click: +425 ms, 80 ms, ok\n\n2 operations not on a code line.',
     )
@@ -111,16 +113,56 @@ describe('one run as Markdown', () => {
       replyFile: '005.reply.txt',
     })
     expect(markdown).toContain(
-      '10,000 chars, ≈2,500 tok. The first 2,000 characters; the full text is in [005.reply.txt](005.reply.txt).',
+      '10,000 chars, ≈2,500 tok.\n\nThe first 2,000 characters; the full text is in [005.reply.txt](005.reply.txt):',
     )
     expect(markdown).toContain(`\`\`\`text\n${'x'.repeat(2_000)}\n\`\`\``)
     expect(markdown.length).toBeLessThan(4_000)
   })
 
-  test('the first statement skips blank lines and comments, and is cut short', () => {
-    expect(
-      firstStatement('\n  // open it\n  await page.goto(url)\nreturn 1'),
-    ).toBe('await page.goto(url)')
-    expect(firstStatement('a'.repeat(80), 10)).toBe('aaaaaaaaa…')
+  test('the first statement is the page’s, on one line, and cut short', () => {
+    expect(statementPreview('await page.goto(url);await page.click("a")')).toBe(
+      'await page.goto(url);',
+    )
+    expect(statementPreview(`return ${'a'.repeat(80)}`, 10)).toBe('return aa…')
+  })
+
+  test('minified code is laid out as the page lays it out, and methods land on those lines', () => {
+    const code = "await page.goto('https://example.com');await page.click('a')"
+    const record = twoLineRecord()
+    // Neo records sites against the code as sent: both on line 1.
+    for (const operation of record.operations) {
+      if (operation.name === 'page.goto')
+        operation.site = { line: 1, column: 12 }
+      if (operation.name === 'locator.click')
+        operation.site = { line: 1, column: 51 }
+    }
+    const markdown = runMarkdown(
+      detailWith(6, { code, text: '1', neo: record }),
+      FULL,
+    )
+    expect(markdown).toContain(
+      "```js\nawait page.goto('https://example.com');\nawait page.click('a')\n```",
+    )
+    expect(markdown).toContain(
+      '- L1 page.goto: +10 ms, 412 ms, ok\n- L2 locator.click: +425 ms, 80 ms, ok',
+    )
+  })
+
+  test('a failed run’s error is cut at the limit too, pointing to the full text', () => {
+    const text = `script / huge: ${'e'.repeat(300_000)}`
+    const markdown = runMarkdown(
+      detailWith(7, { text, neo: null, isError: true }),
+      { ...EXPORT, replyFile: '007.reply.txt' },
+    )
+    expect(markdown.length).toBeLessThan(6_000)
+    expect(markdown).toContain(
+      '## Error\n\nThe first 2,000 characters; the full text is in [007.reply.txt](007.reply.txt):',
+    )
+  })
+
+  test('a table cell keeps a pipe in its cell, even behind a backslash', () => {
+    expect(cell('a | b')).toBe('a \\| b')
+    expect(cell('return /\\|/.test(x)')).toBe('return /\\\\\\|/.test(x)')
+    expect(cell('one\ntwo')).toBe('one two')
   })
 })

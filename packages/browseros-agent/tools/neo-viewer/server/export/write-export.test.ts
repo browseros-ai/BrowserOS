@@ -104,18 +104,19 @@ async function storeWith(dataDir: string, runs: Planned[]): Promise<RunStore> {
   return store
 }
 
-function sourceOf(store: RunStore): ExportSource {
+async function sourceOf(
+  store: RunStore,
+  info: ViewerInfo = INFO,
+): Promise<ExportSource> {
+  const { runs, log, toolsList, rawLog } = store.snapshot()
   return {
     instance: 'vp-test',
-    info: INFO,
+    info,
     viewerCommit: 'abc123def',
-    log: store.summary(),
-    runs: store
-      .list()
-      .map((run) => store.run(run.id))
-      .filter((run) => run !== null),
-    toolsList: store.toolsListReply(),
-    copyLog: (destination) => store.copyLog(destination),
+    log,
+    runs,
+    toolsList,
+    rawLog: await rawLog,
   }
 }
 
@@ -147,7 +148,7 @@ describe('an export', () => {
     ])
     const root = await tempDir('neo-viewer-export-root-')
     const now = new Date(2026, 10, 11, 22, 45, 1).getTime()
-    const written = await writeExport(sourceOf(store), { root, now })
+    const written = await writeExport(await sourceOf(store), { root, now })
 
     expect(written.dir).toBe(join(root, 'vp-test', 'export-20261111-224501'))
     expect(written.runs).toBe(4)
@@ -262,7 +263,7 @@ describe('an export', () => {
     )
 
     // A second export in the same second gets a folder of its own.
-    const again = await writeExport(sourceOf(store), { root, now })
+    const again = await writeExport(await sourceOf(store), { root, now })
     expect(again.dir).toBe(`${written.dir}-2`)
   })
 
@@ -276,7 +277,7 @@ describe('an export', () => {
       await tempDir('neo-viewer-export-state-'),
       runs,
     )
-    const written = await writeExport(sourceOf(store), {
+    const written = await writeExport(await sourceOf(store), {
       root: await tempDir('neo-viewer-export-root-'),
     })
     const readme = await readFile(join(written.dir, 'README.md'), 'utf8')
@@ -289,6 +290,117 @@ describe('an export', () => {
       await readFile(join(written.dir, 'session.json'), 'utf8'),
     )
     expect(session.runs).toHaveLength(TABLE_ROWS + 50)
+  })
+})
+
+describe('an export stays one coherent, separate thing', () => {
+  test('a Clear and a new run during an export change none of its files', async () => {
+    const stateDir = await tempDir('neo-viewer-export-state-')
+    const store = await storeWith(stateDir, [
+      { text: '1', neo: null },
+      { text: '2', neo: null },
+    ])
+    const { runs, log, toolsList, rawLog } = store.snapshot()
+    // Between the click and the files: the list is cleared and a new run arrives.
+    await store.clear()
+    store.startRun({
+      arrival: store.nextArrival(),
+      tool: 'run',
+      code: 'return "after"',
+      timeoutMs: null,
+      client: { name: 'claude-code' },
+      agentTaskId: null,
+      sentAt: new Date().toISOString(),
+      proxyMs: 0,
+      request: { raw: '{}', jsonRpcId: 9 },
+    })
+    await store.flush()
+    const written = await writeExport(
+      {
+        instance: 'vp-test',
+        info: INFO,
+        viewerCommit: null,
+        log,
+        runs,
+        toolsList,
+        rawLog: await rawLog,
+      },
+      { root: await tempDir('neo-viewer-export-root-') },
+    )
+    const session = JSON.parse(
+      await readFile(join(written.dir, 'session.json'), 'utf8'),
+    )
+    const logged = (await readFile(join(written.dir, 'log.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(session.runs.map((run: { id: string }) => run.id)).toEqual(
+      logged
+        .filter((line) => line.type === 'run-start')
+        .map((line) => line.run.id),
+    )
+    expect(logged[0].clearedAt).toBe(session.log.clearedAt)
+    expect(JSON.stringify(logged)).not.toContain('after')
+  })
+
+  test('an export refuses to be written inside the state folder, or around it', async () => {
+    const store = await storeWith(await tempDir('neo-viewer-export-state-'), [
+      { text: '1', neo: null },
+    ])
+    const root = await tempDir('neo-viewer-export-root-')
+    for (const dataDir of [
+      root,
+      join(root, 'vp-test'),
+      join(root, 'vp-test', 'deep'),
+    ])
+      await expect(
+        writeExport(await sourceOf(store, { ...INFO, dataDir }), { root }),
+      ).rejects.toThrow('overlap')
+    expect(await readdir(root)).toEqual([])
+  })
+
+  test('a JSON-RPC error is what the model read: it gets a reply file too', async () => {
+    const store = await RunStore.open(await tempDir('neo-viewer-export-state-'))
+    const id = store.startRun({
+      arrival: store.nextArrival(),
+      tool: 'run',
+      code: 'return 1',
+      timeoutMs: null,
+      client: { name: 'claude-code' },
+      agentTaskId: null,
+      sentAt: new Date().toISOString(),
+      proxyMs: 0,
+      request: { raw: '{}', jsonRpcId: 1 },
+    })
+    store.endRun(id, {
+      status: 'rpc-error',
+      answeredAt: new Date().toISOString(),
+      reply: {
+        httpStatus: 200,
+        contentType: 'application/json',
+        contentEncoding: null,
+        raw: '{}',
+        text: null,
+        structuredContent: null,
+        isError: null,
+        meta: null,
+        rpcError: { code: -32602, message: 'Invalid params' },
+        notifications: [],
+        keepAlives: 0,
+      },
+    })
+    const written = await writeExport(await sourceOf(store), {
+      root: await tempDir('neo-viewer-export-root-'),
+    })
+    expect(written.files).toContain('runs/001.reply.json')
+    expect(
+      JSON.parse(
+        await readFile(join(written.dir, 'runs/001.reply.json'), 'utf8'),
+      ),
+    ).toEqual({ code: -32602, message: 'Invalid params' })
+    expect(await readFile(join(written.dir, 'runs/001.md'), 'utf8')).toContain(
+      '## Error\n\nJSON-RPC error -32602: Invalid params',
+    )
   })
 })
 

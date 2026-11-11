@@ -117,15 +117,21 @@ export function useViewer(): ViewerState {
   }, [])
 
   const exportRuns = useCallback(async () => {
-    const response = await fetch(apiRoutes.export, { method: 'POST' })
-    if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as {
-        error?: string
-      } | null
-      setError(body?.error ?? `${apiRoutes.export}: HTTP ${response.status}`)
+    try {
+      const response = await fetch(apiRoutes.export, { method: 'POST' })
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          error?: string
+        } | null
+        setError(body?.error ?? `${apiRoutes.export}: HTTP ${response.status}`)
+        return null
+      }
+      return (await response.json()) as ExportResponse
+    } catch (cause) {
+      // The viewer stopped, or answered with something that is not an export.
+      setError(`${apiRoutes.export}: ${String(cause)}`)
       return null
     }
-    return (await response.json()) as ExportResponse
   }, [])
 
   return { info, runs: state.runs, log: state.log, clear, exportRuns, error }

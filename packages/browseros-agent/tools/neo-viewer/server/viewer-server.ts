@@ -73,21 +73,23 @@ export async function startViewer(
       : null,
   })
 
-  // Export: every run since the last Clear, read from the store as it is at the click.
+  // Export: every run since the last Clear, as the store holds them at the click (one snapshot,
+  // so a run or Clear during the export changes none of its files).
   const exportRuns = async () => {
-    const runs = store
-      .list()
-      .map((run) => store.run(run.id))
-      .filter((run) => run !== null)
+    const [viewerInfo, commit] = await Promise.all([
+      currentInfo(),
+      viewerCommit(),
+    ])
+    const { runs, log, toolsList, rawLog } = store.snapshot()
     const written = await writeExport(
       {
         instance: config.instance ?? 'default',
-        info: await currentInfo(),
-        viewerCommit: await viewerCommit(),
-        log: store.summary(),
+        info: viewerInfo,
+        viewerCommit: commit,
+        log,
         runs,
-        toolsList: store.toolsListReply(),
-        copyLog: (destination) => store.copyLog(destination),
+        toolsList,
+        rawLog: await rawLog,
       },
       {
         now: now(),

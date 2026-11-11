@@ -12,13 +12,20 @@
  *   log.jsonl            the raw log, for exactness
  * ```
  *
- * The folder is outside the instance's state folder, so an export survives the viewer stopping
- * and Clear. Nothing the viewer holds for Neo's host API (its token, an Authorization header) is
+ * The folder is outside the instance's state folder (an overlap is refused), so an export
+ * survives the viewer stopping and Clear. Nothing the viewer holds for Neo's host API (its token, an Authorization header) is
  * in a run's detail, so none of it can reach an export; a test greps every file for the token.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, realpath, writeFile } from 'node:fs/promises'
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from 'node:path'
 import type {
   ExportResponse,
   LogSummary,
@@ -26,10 +33,11 @@ import type {
   ViewerInfo,
 } from '../../shared/api'
 import {
-  firstStatement,
+  modelReadText,
   outcomeWord,
   runMarkdown,
   runNumber,
+  statementPreview,
 } from '../../shared/run-markdown'
 import { neoMs, runTotals } from '../../web/screen/measures'
 import { replyParts } from '../../web/screen/reply'
@@ -47,8 +55,8 @@ export interface ExportSource {
   runs: RunDetail[]
   /** The latest `tools/list` result a client read, or null. */
   toolsList: unknown
-  /** Copies the raw log to the given path. */
-  copyLog: (destination: string) => Promise<void>
+  /** The raw log, taken with the runs (`RunStore.snapshot`). */
+  rawLog: string
 }
 
 /** A run's files, relative to the export folder. */
@@ -64,10 +72,9 @@ export async function writeExport(
   options: { root?: string; now?: number } = {},
 ): Promise<ExportResponse> {
   const now = options.now ?? Date.now()
-  const dir = await newFolder(
-    join(options.root ?? EXPORT_ROOT, source.instance),
-    `export-${stamp(now)}`,
-  )
+  const parent = join(options.root ?? EXPORT_ROOT, source.instance)
+  await refuseStateFolder(parent, source.info.dataDir)
+  const dir = await newFolder(parent, `export-${stamp(now)}`)
   await mkdir(join(dir, 'runs'), { mode: 0o700 })
   const width = Math.max(3, String(source.runs.length).length)
   const files: string[] = ['README.md', 'session.json']
@@ -81,7 +88,7 @@ export async function writeExport(
       ...(written.reply ? [written.reply] : []),
     )
   }
-  await source.copyLog(join(dir, 'log.jsonl'))
+  await writeFile(join(dir, 'log.jsonl'), source.rawLog)
   files.push('log.jsonl')
   const session = sessionJson(source, runFiles, now, dir, width)
   await writeFile(
@@ -101,7 +108,7 @@ async function writeRun(
   width: number,
 ): Promise<RunFiles> {
   const number = runNumber(run, width)
-  const text = run.reply.text
+  const text = modelReadText(run)
   const replyName =
     text === null ? null : `${number}.reply.${parses(text) ? 'json' : 'txt'}`
   const files: RunFiles = {
@@ -194,7 +201,7 @@ function sessionJson(
       return {
         number: runNumber(run, width),
         outcome: outcomeWord(run),
-        firstStatement: firstStatement(code),
+        firstStatement: statementPreview(code, 120),
         neoMs: neoMs(run),
         ...pick(summary),
         files: runFiles.get(run.id),
@@ -225,6 +232,41 @@ function pick(run: Omit<RunDetail, 'code' | 'replyPreview'>) {
     neoRunId: run.neoRunId,
     neoStatus: run.neoStatus,
     neoEffects: run.neoEffects,
+  }
+}
+
+/**
+ * An export must outlive the viewer's state and its Clear, so it may not sit in the state folder,
+ * nor the state folder in it (`--data-dir /tmp/neo-viewer` would put one inside the other).
+ */
+async function refuseStateFolder(
+  parent: string,
+  stateDir: string,
+): Promise<void> {
+  const [exports, state] = await Promise.all([
+    canonical(parent),
+    canonical(stateDir),
+  ])
+  const inside = (child: string, of: string) => {
+    const path = relative(of, child)
+    return path === '' || (!path.startsWith('..') && !isAbsolute(path))
+  }
+  if (inside(exports, state) || inside(state, exports))
+    throw new Error(
+      `the export folder ${parent} and the state folder ${stateDir} overlap; give the viewer a --data-dir outside ${parent}`,
+    )
+}
+
+/** The path with symlinks resolved as far as it exists (`/tmp` is `/private/tmp` on macOS). */
+async function canonical(path: string): Promise<string> {
+  const absolute = resolve(path)
+  try {
+    return await realpath(absolute)
+  } catch {
+    const up = dirname(absolute)
+    return up === absolute
+      ? absolute
+      : join(await canonical(up), basename(absolute))
   }
 }
 

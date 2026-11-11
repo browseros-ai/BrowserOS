@@ -8,14 +8,7 @@
  * Appends and clears go through one queue, so lines land in the file they were made for, in order.
  */
 
-import {
-  appendFile,
-  copyFile,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from 'node:fs/promises'
+import { appendFile, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   ClientInfo,
@@ -109,13 +102,17 @@ export class RunLog {
   }
 
   /**
-   * Copies the file as it stands after every write queued so far (an export's `log.jsonl`).
-   * Unlike a write, a failed copy rejects, so the export can say so; later writes still run.
+   * The file's text as it stands after every write queued so far, and before any queued after
+   * (an export's `log.jsonl`, taken with the runs it lists). Unlike a write, a failed read
+   * rejects, so the export can say so; later writes still run.
    */
-  copyTo(destination: string): Promise<void> {
-    const copied = this.queue.then(() => copyFile(this.file, destination))
-    this.queue = copied.catch(() => {})
-    return copied
+  read(): Promise<string> {
+    const text = this.queue.then(() => readFile(this.file, 'utf8'))
+    this.queue = text.then(
+      () => {},
+      () => {},
+    )
+    return text
   }
 
   /** Waits for every queued write. */

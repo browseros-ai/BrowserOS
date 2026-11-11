@@ -85,9 +85,25 @@ export class RunStore {
     return this.log.flush()
   }
 
-  /** The raw log since the last Clear, copied after every line written so far. */
-  copyLog(destination: string): Promise<void> {
-    return this.log.copyTo(destination)
+  /**
+   * Everything since the last Clear, taken at one instant: the runs in full, the totals, the
+   * tools/list reply, and the raw log as written up to here. A run or Clear that comes later
+   * changes none of it, so an export's files all describe the same list.
+   */
+  snapshot(): {
+    runs: RunDetail[]
+    log: LogSummary
+    toolsList: unknown
+    rawLog: Promise<string>
+  } {
+    return {
+      runs: this.list()
+        .map((run) => this.run(run.id))
+        .filter((run) => run !== null),
+      log: this.summary(),
+      toolsList: this.toolsListResult,
+      rawLog: this.log.read(),
+    }
   }
 
   /**
@@ -185,11 +201,6 @@ export class RunStore {
       clearedAt: this.clearedAt,
     })
     this.emit({ type: 'clear', log: this.summary() })
-  }
-
-  /** The latest `tools/list` result a client read since the last Clear, or null. */
-  toolsListReply(): unknown {
-    return this.toolsListResult
   }
 
   /** Every run, in arrival order. */

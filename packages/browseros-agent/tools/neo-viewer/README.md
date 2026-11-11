@@ -130,7 +130,8 @@ for an agent to read, and shows its path with Copy path until dismissed; the ter
 /tmp/neo-viewer/<instance>/export-<YYYYMMDD-HHMMSS>/
   README.md            start here: what this is, totals, one row per run, how to read the rest
   session.json         the same facts as data, each run's file paths; no code or replies inline
-  runs/NNN.md          one run top to bottom (shared/run-markdown.ts); the reply's first 2,000 chars
+  runs/NNN.md          one run top to bottom (shared/run-markdown.ts): code as the page lays it
+                       out, each line's methods, every operation, the reply's first 2,000 chars
   runs/NNN.json        that run complete: request and reply as they crossed, Neo's record
   runs/NNN.reply.txt   the text the model read, alone (.reply.json when it is JSON)
   log.jsonl            the raw log

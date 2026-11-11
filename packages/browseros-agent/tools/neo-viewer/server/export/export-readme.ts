@@ -7,9 +7,9 @@
 
 import {
   cell,
-  firstStatement,
   outcomeWord,
   runNumber,
+  statementPreview,
 } from '../../shared/run-markdown'
 import { runTotals } from '../../web/screen/measures'
 import { clock, count, plural, seconds } from '../../web/screen/units'
@@ -19,7 +19,7 @@ import type { ExportSource, RunFiles } from './write-export'
 export const REPLY_INLINE_CHARS = 2_000
 
 /** The most runs the README lists one by one. */
-export const TABLE_ROWS = 150
+export const TABLE_ROWS = 200
 
 export function exportReadme(input: {
   source: ExportSource
@@ -87,7 +87,7 @@ export function exportReadme(input: {
         run,
       )} | ${run.operationCount ?? '–'} | ≈${count(run.codeSize.tokens)} | ${
         run.replySize ? `≈${count(run.replySize.tokens)}` : '–'
-      } | ${codeSpan(firstStatement(run.code))} |`,
+      } | ${codeSpan(statementPreview(run.code))} |`,
     )
   }
   if (runs.length > TABLE_ROWS)
@@ -136,7 +136,7 @@ const HOW_TO_READ = [
   '  - `log.clearedAt`: when this list began. `totals`: the numbers above, in ms and token estimates.',
   "  - `toolsList`: the `tools/list` reply the agent read (the `run` tool's description and input schema, which sits in the model's context), with its size; null if no client asked during this log.",
   "  - `runs[]`: one summary per run, in arrival order: `number`, `seq`, `outcome` (`ok`, `failed`, `cancelled`, `lost`, `running`), `status` (the viewer's: `ok`, `error`, `rpc-error`, `http-error`, …), `client` (the agent's MCP client name), `agentTaskId` (the agent's own task id, if it sent one), `sentAt`/`answeredAt` (ISO), `roundTripMs`, `neoMs` (time in Neo, as above), `neoDurationMs` (Neo's own record only), `gapMs` (since the previous reply; null when runs overlapped), `proxyMs` (the viewer's hold), `operationCount`, `codeSize`/`replySize` (`chars`, `tokens`), `neoRunId`, `neoStatus`, `firstStatement`, and `files` (this run's paths). No code or replies inline.",
-  `- **\`runs/NNN.md\`**: one run, top to bottom: a one-line header, the facts, the code as sent, each code line's methods (\`L3 locator.click: +415 ms, 80 ms, ok\` is line 3, started 415 ms into the run, took 80 ms), a table of every operation (\`seq\`, \`name\`, \`effect\` read or write, \`line\`, \`start\` offset, \`duration\`, \`outcome\`, \`error\`), the operations not on a code line (Neo's own work, or calls inside another operation), the console lines, the error if it failed, and what the model read: the first ${count(REPLY_INLINE_CHARS)} characters, with the full size and a link to the reply file.`,
+  `- **\`runs/NNN.md\`**: one run, top to bottom: a one-line header, the facts, the code laid out one statement per line as the viewer shows it (whitespace only; \`code\` in \`runs/NNN.json\` is as sent), each line's methods (\`L3 locator.click: +415 ms, 80 ms, ok\` is line 3, started 415 ms into the run, took 80 ms), a table of every operation (\`seq\`, \`name\`, \`effect\` read or write, \`line\`, \`start\` offset, \`duration\`, \`outcome\`, \`error\`), the operations not on a code line (Neo's own work, or calls inside another operation), the console lines, the error if it failed, and what the model read: the first ${count(REPLY_INLINE_CHARS)} characters, with the full size and a link to the reply file.`,
   "- **`runs/NNN.json`**: that run complete. `code` as sent; `request.raw`, the HTTP body the agent sent; `reply.raw`, the body Neo answered with (SSE framing included); `reply.text`, what the model read; `reply.structuredContent`, `reply.isError`, `reply.meta`, `reply.rpcError`, `reply.notifications`; `parsed` (`value`, the returned value when `valueIsJson`; `valueText`; `console`; `notes`, Neo's `[unknown outcome]`/`[not awaited]` lines); `neo`, Neo's record (null when there is none): `status`, `startedAt`/`endedAt` (epoch ms), `durationMs`, `complete`, `tabs`, `error`, and `operations[]` with each one's `seq`, `parentId`, `name`, `kind`, `effect`, `site` (`line`, `column`), `startOffsetMs`, `durationMs`, `tabId`, `args`, `result`, `argsTruncated`/`resultTruncated` (Neo bounds both), `outcome`, `delivery`, `error` (`owner`, `code`, `message`, `retryable`) and `notes` (its call log).",
   '- **`runs/NNN.reply.txt`** (`.reply.json` when the whole text is JSON): exactly the text the model read, alone, to grep. Absent when the model read nothing.',
   "- **`log.jsonl`**: the viewer's raw log since the last Clear, one JSON object per line: `log` (its start), `run-start`, `run-end`, `neo-run` (a later one replaces an earlier one for the same run), `tools-list`.",

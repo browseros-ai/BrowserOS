@@ -1,24 +1,30 @@
 /**
  * One run as Markdown, for an agent to read: the export's `runs/NNN.md` and the run row's Copy
  * render through this one function, so the two never drift. It is pure over the run's detail
- * (`GET /api/runs/:id`), and reads the run the way the page does, through the page's own pure
- * helpers in `web/screen` (operations placed on lines, the reply's parts, Neo time), so a number
- * here is the number on screen.
+ * (`GET /api/runs/:id`), and reads the run the way the page does: the code laid out by
+ * `shared/code-format.ts` (whitespace only), Neo's operations placed on those lines, the reply's
+ * parts and Neo time through the page's own helpers in `web/screen`. So a line number here is
+ * the line on screen, and a number here is the number on screen.
  *
- * Order: a one-line header, the facts, the code as sent, each code line's methods, (the export
- * only: every operation in a table, the ones not on a line, the console lines), the error if it
- * failed, then what the model read.
+ * Order: a one-line header, the facts, the code, each code line's methods, (the export only:
+ * every operation in a table, the ones on no line, the console lines), the error if it failed,
+ * then what the model read.
  */
 
 import { failed, neoMs } from '../web/screen/measures'
-import { namesWithCounts, placeOperations } from '../web/screen/operations'
+import {
+  namesWithCounts,
+  type PlacedOperations,
+  placeOperations,
+} from '../web/screen/operations'
 import { noReplyReason, replyParts } from '../web/screen/reply'
 import { clock, count, plural, seconds } from '../web/screen/units'
 import type { NeoOperation, RunDetail, RunSummary } from './api'
 import { textSize } from './api'
+import { firstStatement, formatCode } from './code-format'
 
 export interface RunMarkdownOptions {
-  /** Characters of the reply shown inline; null shows all of it. */
+  /** Characters of the reply (and of a failed run's error) shown inline; null shows all of it. */
   replyChars: number | null
   /** Where the full reply is (a link relative to the Markdown), named when only part is shown. */
   replyFile?: string
@@ -42,41 +48,18 @@ export function runNumber(run: RunSummary, width = 3): string {
   return String(run.seq).padStart(width, '0')
 }
 
-/** The code's first statement on one line: its first line that is not blank or a comment. */
-export function firstStatement(code: string, max = 60): string {
-  const line =
-    code
-      .split('\n')
-      .map((text) => text.trim())
-      .find((text) => text !== '' && !text.startsWith('//')) ?? ''
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line
-}
-
-/** `Neo 1.62 s`: Neo's record of the run, or what the viewer measured without one. */
-function neoTime(run: RunSummary): string {
-  const ms = neoMs(run)
-  return ms === null ? '–' : seconds(ms)
+/** The code's first statement on one line, as the page's closed row shows it, cut at `max`. */
+export function statementPreview(code: string, max = 60): string {
+  return cut(firstStatement(code), max)
 }
 
 /**
- * `Run 007 · 10:14:02 · claude-code · ok · round trip 1.85 s · Neo 1.62 s · 4 method calls ·
- * code ≈52 tok · reply ≈220 tok`.
+ * Exactly what the model read: the reply's text, or the JSON-RPC error it got instead; null when
+ * it read nothing. The export writes this to the run's reply file.
  */
-function runHeader(run: RunSummary, width = 3): string {
-  const parts = [
-    `Run ${runNumber(run, width)}`,
-    clock(run.sentAt),
-    run.client?.name ?? 'unknown client',
-    outcomeWord(run),
-    `round trip ${run.roundTripMs === null ? '–' : seconds(run.roundTripMs)}`,
-    `Neo ${neoTime(run)}`,
-    run.operationCount === null
-      ? 'method calls unknown'
-      : plural(run.operationCount, 'method call'),
-    `code ≈${count(run.codeSize.tokens)} tok`,
-    `reply ≈${run.replySize ? count(run.replySize.tokens) : '–'} tok`,
-  ]
-  return parts.join(' · ')
+export function modelReadText(detail: RunDetail): string | null {
+  const { reply } = detail
+  return reply.text ?? (reply.rpcError ? JSON.stringify(reply.rpcError) : null)
 }
 
 /**
@@ -92,67 +75,64 @@ export function fenced(text: string, info = ''): string {
   return `${fence}${info}\n${text}${text.endsWith('\n') ? '' : '\n'}${fence}`
 }
 
-/** A Markdown table cell: one line, pipes escaped. */
+/**
+ * A Markdown table cell: one line, and every pipe escaped. A table splits a row at a pipe behind
+ * an even number of backslashes (pairs escape each other), so the backslashes before a pipe are
+ * doubled and one more added: the pipe stays in its cell even inside a code span.
+ */
 export function cell(text: string): string {
-  return text.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|')
+  return text
+    .replace(/\r?\n/g, ' ')
+    .replace(/(\\*)\|/g, (_, slashes: string) => `${slashes}${slashes}\\|`)
 }
 
 export function runMarkdown(
   detail: RunDetail,
   options: RunMarkdownOptions,
 ): string {
-  const width = options.numberWidth ?? 3
-  const out: string[] = [`# ${runHeader(detail, width)}`, '', ...facts(detail)]
-  out.push('', '## Code', '', fenced(detail.code, 'js'))
-  const lineCount = detail.code.split('\n').length
-  out.push('', '## Methods by line', '')
-  if (!detail.neo) {
-    out.push(
-      'No record from Neo for this run (no host API, or it was not read yet), so no methods to show.',
-    )
-  } else {
-    const placed = placeOperations(detail.neo, lineCount)
-    const lines = [...placed.byLine.keys()].sort((a, b) => a - b)
-    if (lines.length === 0) out.push('No method was called from a code line.')
-    for (const line of lines)
-      for (const operation of placed.byLine.get(line) ?? [])
-        out.push(`- L${line} ${operation.name}: ${timing(operation)}`)
-    if (placed.unplaced.length > 0) {
-      out.push(
-        '',
-        `${plural(placed.unplaced.length, 'operation')} not on a code line${
-          options.allOperations ? ' (below)' : ''
-        }.`,
-      )
-    }
-    if (options.allOperations) {
-      out.push(
-        '',
-        '## Operations',
-        '',
-        ...operationTable(detail.neo.operations),
-      )
-      if (placed.unplaced.length > 0) {
-        out.push(
-          '',
-          '## Operations not on a line',
-          '',
-          "Neo's own work for the run (opening the page, listening for events, reading frames) or calls made inside another operation:",
-          '',
-          namesWithCounts(placed.unplaced),
-        )
-      }
-    }
-  }
-  if (options.allOperations && detail.reply.text !== null) {
-    const { console } = replyParts(detail.reply.text)
-    if (console.length > 0)
-      out.push('', '## Console', '', fenced(console.join('\n'), 'text'))
-  }
-  const error = errorText(detail)
-  if (error) out.push('', '## Error', '', error)
-  out.push('', '## What the model read', '', ...modelRead(detail, options))
-  return `${out.join('\n')}\n`
+  const formatted = formatCode(detail.code)
+  const placed = detail.neo
+    ? placeOperations(detail.neo, formatted.lines.length, formatted.lineOfSite)
+    : null
+  const sections = [
+    [`# ${runHeader(detail, options.numberWidth ?? 3)}`, '', ...facts(detail)],
+    [
+      '## Code',
+      '',
+      'Laid out one statement per line, as the viewer shows it (whitespace only); `L<n>` below is a line of it.',
+      '',
+      fenced(formatted.text, 'js'),
+    ],
+    ['## Methods by line', '', ...methodsByLine(placed, options)],
+    ...(options.allOperations && detail.neo && placed
+      ? everyOperation(detail.neo.operations, placed)
+      : []),
+    ...(options.allOperations ? consoleSection(detail) : []),
+    ...errorSection(detail, options),
+    ['## What the model read', '', ...modelRead(detail, options)],
+  ]
+  return `${sections.map((lines) => lines.join('\n')).join('\n\n')}\n`
+}
+
+/**
+ * `Run 007 · 10:14:02 · claude-code · ok · round trip 1.85 s · Neo 1.62 s · 4 method calls ·
+ * code ≈52 tok · reply ≈220 tok`.
+ */
+function runHeader(run: RunSummary, width: number): string {
+  const neo = neoMs(run)
+  return [
+    `Run ${runNumber(run, width)}`,
+    clock(run.sentAt),
+    run.client?.name ?? 'unknown client',
+    outcomeWord(run),
+    `round trip ${run.roundTripMs === null ? '–' : seconds(run.roundTripMs)}`,
+    `Neo ${neo === null ? '–' : seconds(neo)}`,
+    run.operationCount === null
+      ? 'method calls unknown'
+      : plural(run.operationCount, 'method call'),
+    `code ≈${count(run.codeSize.tokens)} tok`,
+    `reply ≈${run.replySize ? count(run.replySize.tokens) : '–'} tok`,
+  ].join(' · ')
 }
 
 function facts(detail: RunDetail): string[] {
@@ -178,18 +158,48 @@ function facts(detail: RunDetail): string[] {
   return lines
 }
 
+/** `- L3 locator.click: +415 ms, 80 ms, ok` per method, then how many are on no line. */
+function methodsByLine(
+  placed: PlacedOperations | null,
+  options: RunMarkdownOptions,
+): string[] {
+  if (!placed)
+    return [
+      'No record from Neo for this run (no host API, or it was not read yet), so no methods to show.',
+    ]
+  const out: string[] = []
+  for (const line of [...placed.byLine.keys()].sort((a, b) => a - b))
+    for (const operation of placed.byLine.get(line) ?? [])
+      out.push(`- L${line} ${operation.name}: ${timing(operation)}`)
+  if (out.length === 0) out.push('No method was called from a code line.')
+  if (placed.unplaced.length > 0)
+    out.push(
+      '',
+      `${plural(placed.unplaced.length, 'operation')} not on a code line${
+        options.allOperations ? ' (below)' : ''
+      }.`,
+    )
+  return out
+}
+
 /** `+415 ms, 80 ms, error strict_mode_violation`. */
 function timing(operation: NeoOperation): string {
   const duration =
     operation.durationMs === null ? 'running' : seconds(operation.durationMs)
-  const outcome = operation.outcome ?? 'running'
   const error = operation.error ? ` ${operation.error.code}` : ''
-  return `+${seconds(operation.startOffsetMs)}, ${duration}, ${outcome}${error}`
+  return `+${seconds(operation.startOffsetMs)}, ${duration}, ${operation.outcome ?? 'running'}${error}`
 }
 
 const ERROR_CELL_CHARS = 160
 
-function operationTable(operations: NeoOperation[]): string[] {
+/** The export's table of every operation, and the names of those on no code line. */
+function everyOperation(
+  operations: NeoOperation[],
+  placed: PlacedOperations,
+): string[][] {
+  const lineOf = new Map<string, number>()
+  for (const [line, onLine] of placed.byLine)
+    for (const operation of onLine) lineOf.set(operation.id, line)
   const rows = [
     '| seq | name | effect | line | start | duration | outcome | error |',
     '| --: | --- | --- | --: | --: | --: | --- | --- |',
@@ -198,63 +208,90 @@ function operationTable(operations: NeoOperation[]): string[] {
     const error = operation.error
       ? `${operation.error.code}: ${operation.error.message}`
       : ''
+    const duration =
+      operation.durationMs === null ? 'running' : seconds(operation.durationMs)
     rows.push(
       `| ${operation.seq} | ${cell(operation.name)} | ${operation.effect} | ${
-        operation.site?.line ?? '–'
-      } | +${seconds(operation.startOffsetMs)} | ${
-        operation.durationMs === null
-          ? 'running'
-          : seconds(operation.durationMs)
-      } | ${operation.outcome ?? 'running'} | ${cell(
-        error.length > ERROR_CELL_CHARS
-          ? `${error.slice(0, ERROR_CELL_CHARS - 1)}…`
-          : error,
-      )} |`,
+        lineOf.get(operation.id) ?? '–'
+      } | +${seconds(operation.startOffsetMs)} | ${duration} | ${
+        operation.outcome ?? 'running'
+      } | ${cell(cut(error, ERROR_CELL_CHARS))} |`,
     )
   }
-  return rows
+  const sections = [['## Operations', '', ...rows]]
+  if (placed.unplaced.length > 0)
+    sections.push([
+      '## Operations not on a line',
+      '',
+      "Neo's own work for the run (opening the page, listening for events, reading frames) or calls made inside another operation:",
+      '',
+      namesWithCounts(placed.unplaced),
+    ])
+  return sections
+}
+
+function consoleSection(detail: RunDetail): string[][] {
+  if (detail.reply.text === null) return []
+  const { console } = replyParts(detail.reply.text)
+  return console.length === 0
+    ? []
+    : [['## Console', '', fenced(console.join('\n'), 'text')]]
 }
 
 /** Why the run failed, in Neo's words: the error the model read, Neo's own, or the transport's. */
-function errorText(detail: RunDetail): string | null {
-  if (!failed(detail) && detail.status === 'ok') return null
-  const parts: string[] = []
+function errorSection(
+  detail: RunDetail,
+  options: RunMarkdownOptions,
+): string[][] {
+  if (detail.status === 'ok' || detail.status === 'running') return []
   const { reply } = detail
+  const parts: string[] = []
   if (reply.rpcError)
     parts.push(
-      `JSON-RPC error ${reply.rpcError.code}: ${reply.rpcError.message}`,
+      `JSON-RPC error ${reply.rpcError.code}: ${cut(reply.rpcError.message, options.replyChars)}`,
     )
   else if (reply.isError && reply.text !== null)
-    parts.push(fenced(replyParts(reply.text).value, 'text'))
+    parts.push(...bounded(replyParts(reply.text).value, options))
   else if (reply.text === null) parts.push(noReplyReason(detail))
   const neoError = detail.neo?.error
   // Neo's record usually holds the very error the model read; say it only when it adds something.
   if (neoError && !(reply.text ?? '').includes(neoError.message))
     parts.push(
-      `Neo's record: ${neoError.owner} / ${neoError.code}: ${neoError.message}${
+      `Neo's record: ${neoError.owner} / ${neoError.code}: ${cut(neoError.message, options.replyChars)}${
         neoError.retryable ? ' (retryable)' : ''
       }`,
     )
-  return parts.length > 0 ? parts.join('\n\n') : null
+  return parts.length > 0 ? [['## Error', '', parts.join('\n\n')]] : []
 }
 
 function modelRead(detail: RunDetail, options: RunMarkdownOptions): string[] {
-  const { reply } = detail
-  const text =
-    reply.text ?? (reply.rpcError ? JSON.stringify(reply.rpcError) : null)
+  const text = modelReadText(detail)
   if (text === null) return [noReplyReason(detail)]
   const size = textSize(text)
-  const sizeLine = `${plural(size.chars, 'char')}, ≈${count(size.tokens)} tok.`
-  const limit = options.replyChars
-  if (limit === null || text.length <= limit)
-    return [sizeLine, '', fenced(text, 'text')]
   return [
-    `${sizeLine} The first ${count(limit)} characters${
+    `${plural(size.chars, 'char')}, ≈${count(size.tokens)} tok.`,
+    '',
+    ...bounded(text, options),
+  ]
+}
+
+/** `text` fenced, cut at the inline limit with a pointer to the file that holds all of it. */
+function bounded(text: string, options: RunMarkdownOptions): string[] {
+  const limit = options.replyChars
+  if (limit === null || text.length <= limit) return [fenced(text, 'text')]
+  return [
+    `The first ${count(limit)} characters${
       options.replyFile
         ? `; the full text is in [${options.replyFile}](${options.replyFile})`
         : ''
-    }.`,
+    }:`,
     '',
     fenced(text.slice(0, limit), 'text'),
   ]
+}
+
+function cut(text: string, max: number | null): string {
+  return max === null || text.length <= max
+    ? text
+    : `${text.slice(0, max - 1)}…`
 }
