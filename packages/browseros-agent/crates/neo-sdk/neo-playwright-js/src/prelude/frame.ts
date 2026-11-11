@@ -982,6 +982,21 @@ export class Frame extends EventEmitter {
     return await invoke(op, this._call(api, 0), input)
   }
 
+  /**
+   * Upstream's `resolveSelector`: the selector Playwright's generator writes for the element
+   * `selector` matches now, from the main frame down through every `<iframe>` on the way.
+   */
+  async _normalize(api: string, selector: string): Promise<string> {
+    const target = await this._locatorBrand(api, selector)
+    const input = { target, selector }
+    const resolved = await invoke(
+      'locator.normalize',
+      this._call(api, 0),
+      input,
+    )
+    return resolved.selector
+  }
+
   async _boundingBox(
     api: string,
     selector: string,
