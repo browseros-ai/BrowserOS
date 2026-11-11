@@ -375,6 +375,135 @@ describe('retrying matchers', () => {
   })
 })
 
+describe('toMatchAriaSnapshot', () => {
+  it("tests that the template is trimmed and parsed as upstream's server parses it, and sent for the page to match", async () => {
+    const sent = await expectOps(`
+      await expect(page.locator('ul')).toMatchAriaSnapshot(\`
+        - list "my list":
+          - listitem: one
+          - link /Issues \\\\d+/:
+            - /url: /.*example.com/
+      \`)
+      await expect(page).not.toMatchAriaSnapshot('- heading "x" [level=2]', { timeout: 300 })
+    `)
+    expect(sent).toEqual([
+      {
+        name: 'expect.locator',
+        call: { api: 'expect.toMatchAriaSnapshot', timeoutMs: 5000 },
+        target: undefined,
+        matcher: 'toMatchAriaSnapshot',
+        expectation: 'expected',
+        expected:
+          'Expected: "- list \\"my list\\":\n  - listitem: one\n  - link /Issues \\\\d+/:\n    - /url: /.*example.com/"',
+        params: {
+          expression: 'to.match.aria',
+          expectedValue: {
+            kind: 'role',
+            role: 'list',
+            name: 'my list',
+            children: [
+              {
+                kind: 'role',
+                role: 'listitem',
+                name: '',
+                children: [
+                  { kind: 'text', text: { raw: 'one', normalized: 'one' } },
+                ],
+              },
+              {
+                kind: 'role',
+                role: 'link',
+                name: { pattern: 'Issues \\d+' },
+                children: [],
+                props: {
+                  url: {
+                    raw: '/.*example.com/',
+                    normalized: '/.*example.com/',
+                  },
+                },
+              },
+            ],
+          },
+          isNot: false,
+        },
+      },
+      {
+        name: 'expect.page',
+        call: { api: 'expect.toMatchAriaSnapshot', timeoutMs: 300 },
+        target: undefined,
+        page: { $neo: 'page', tab: 1007 },
+        matcher: 'toMatchAriaSnapshot',
+        expectation: 'expected',
+        expected: 'Expected: not "- heading \\"x\\" [level=2]"',
+        params: {
+          expression: 'to.match.aria',
+          expectedValue: { kind: 'role', role: 'heading', name: 'x', level: 2 },
+          isNot: true,
+        },
+      },
+    ])
+  })
+
+  it("tests that a template that does not parse still reaches Rust, with the parser's message for its Error line", async () => {
+    const sent = await expectOps(`
+      await expect(page).toMatchAriaSnapshot('- heading [level=a]')
+      await expect(page.locator('h1')).toMatchAriaSnapshot('heading "title"')
+    `)
+    expect(
+      sent.map(({ name, params, templateError }) => ({
+        name,
+        params,
+        templateError,
+      })),
+    ).toEqual([
+      {
+        name: 'expect.page',
+        params: { expression: 'to.match.aria', isNot: false },
+        templateError:
+          'Value of "level" attribute must be a number:\n\nheading [level=a]\n               ^\n',
+      },
+      {
+        name: 'expect.locator',
+        params: { expression: 'to.match.aria', isNot: false },
+        templateError:
+          'Aria snapshot must be a YAML sequence, elements starting with " -"',
+      },
+    ])
+  })
+
+  it('tests that snapshot files, an empty template and other receivers are refused before any op', async () => {
+    const runtime = loadPrelude({ seed: SEED })
+    const files =
+      'snapshot files are not available in Neo; pass the expected snapshot as a YAML string'
+    const empty =
+      'the expected snapshot is empty, and Neo writes no baselines; read the current one with await locator.ariaSnapshot()'
+    const receiver =
+      'toMatchAriaSnapshot can be only used with Page or Locator objects, was called with 42'
+    expect(
+      json(
+        await runtime.run(`
+          const messages = []
+          for (const assert of [
+            () => expect(page).toMatchAriaSnapshot(),
+            () => expect(page).toMatchAriaSnapshot({ name: 'cart.aria.yml' }),
+            () => expect(page.locator('ul')).toMatchAriaSnapshot('  \\n  '),
+            () => expect(42).toMatchAriaSnapshot('- list'),
+          ]) {
+            try { await assert() } catch (e) { messages.push(e.message) }
+          }
+          return messages
+        `),
+      ),
+    ).toEqual([files, files, empty, receiver])
+    expect(runtime.calls).toEqual([
+      refusalCall('expect.toMatchAriaSnapshot', 'invalid_input', files),
+      refusalCall('expect.toMatchAriaSnapshot', 'invalid_input', files),
+      refusalCall('expect.toMatchAriaSnapshot', 'invalid_input', empty),
+      refusalCall('expect.toMatchAriaSnapshot', 'invalid_input', receiver),
+    ])
+  })
+})
+
 describe('value matchers', () => {
   async function failure(code: string): Promise<unknown> {
     return await loadPrelude({ seed: SEED }).run(

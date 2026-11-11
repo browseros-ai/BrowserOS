@@ -195,8 +195,6 @@ export const UNSUPPORTED = {
     },
     toBeOK: 'use expect(response.ok()).toBe(true)',
     toHaveScreenshot: 'visual comparisons are not available in Neo',
-    toMatchAriaSnapshot:
-      'compare the text of await locator.ariaSnapshot() instead, such as with toContain()',
     toMatchSnapshot: 'snapshot files are not available in Neo',
   },
 } satisfies Record<string, Record<string, Entry>>

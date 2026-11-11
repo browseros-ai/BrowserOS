@@ -5,13 +5,28 @@
  */
 import type { FrameExpectParams } from '../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript'
 import type { ExpectPoll, ExpectRequest, ReplyTo } from './protocol'
-import { queryAll, resolveTarget } from './resolve'
+import { type Found, queryAll, resolveTarget } from './resolve'
 import {
   type ExpectCheck,
   expectChecks,
   expectFailureSnapshot,
   type World,
 } from './world'
+
+/**
+ * Where `expect(page).toMatchAriaSnapshot` matches its template: upstream's `body`
+ * (Frame._expectInternal's effectiveSelector), read as the document's own body. The selector
+ * also pierces shadow roots, and on BrowserOS the claw app mounts its takeover bar in a shadow
+ * root with a body of its own, so the selector would be a strict violation on every page. A
+ * frameset document's `document.body` is its frameset, which `body` does not match; `localName`
+ * holds for an XHTML document too, where `nodeName` is lowercase.
+ */
+function pageAriaRoot(world: World): Found {
+  const body = world.injected.document.body
+  return body?.localName === 'body'
+    ? { kind: 'one', element: body }
+    : { kind: 'none' }
+}
 
 export async function expect(
   world: World,
@@ -30,7 +45,12 @@ export async function expect(
     const count = `${elements.length} element${elements.length === 1 ? '' : 's'}`
     return poll(checks.every(elements, params), count)
   }
-  const found = resolveTarget(world, request.target, request.strictness, root)
+  // A page matcher's element is the document's root (upstream's `:root`), except an aria
+  // template's.
+  const found =
+    params.expression === 'to.match.aria' && request.target === 'document'
+      ? pageAriaRoot(world)
+      : resolveTarget(world, request.target, request.strictness, root)
   if (found.kind !== 'one') return found
   const { element } = found
   const resolved = world.injected.previewNode(element)

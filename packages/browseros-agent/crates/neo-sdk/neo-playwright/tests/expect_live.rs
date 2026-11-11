@@ -47,6 +47,16 @@ fn pages() -> HashMap<String, Page> {
         "/expect/page.html".to_owned(),
         Page::html(include_str!("data/expect/page.html")).with_header("cache-control", "no-store"),
     );
+    pages.insert(
+        "/expect/page.xhtml".to_owned(),
+        Page {
+            content_type: "application/xhtml+xml",
+            ..Page::html(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>XHTML</title></head>\
+                 <body><h1>XHTML heading</h1></body></html>",
+            )
+        },
+    );
     pages
 }
 
@@ -489,6 +499,30 @@ const MATCHERS: &[Case] = &[
         "expect(locator).not.toHaveCount(expected) failed",
     ),
     passes("not.toHaveTitle", "expect(page).not.toHaveTitle('Nope')"),
+    passes(
+        "toMatchAriaSnapshot",
+        "expect(page).toMatchAriaSnapshot('- heading \"Hullo\" [level=1]')",
+    ),
+    passes(
+        "toMatchAriaSnapshot locator",
+        "expect(page.locator('ul')).toMatchAriaSnapshot('- list:\\n  - listitem: one\\n  - listitem: /thr/')",
+    ),
+    passes(
+        "not.toMatchAriaSnapshot",
+        "expect(page).not.toMatchAriaSnapshot('- heading \"Nope\"')",
+    ),
+    fails(
+        "toMatchAriaSnapshot fails",
+        "expect(page.locator('#greeting')).toMatchAriaSnapshot('- heading \"Nope\"', { timeout: 300 })",
+        "assertion_failed",
+        "expect(locator).toMatchAriaSnapshot(expected) failed",
+    ),
+    fails(
+        "toMatchAriaSnapshot template",
+        "expect(page).toMatchAriaSnapshot('- heading [bogus]')",
+        "invalid_input",
+        "expect(page).toMatchAriaSnapshot(expected) failed",
+    ),
 ];
 
 #[tokio::test]
@@ -609,6 +643,35 @@ async fn tests_that_a_matcher_holds_once_the_page_changes() -> TestResult {
             Ok(())
         }
         .await;
+        (run, result)
+    })
+    .await
+}
+
+/// `expect(page).toMatchAriaSnapshot` matches from the document's body, as upstream's `body`
+/// selector does, in an XHTML document too (whose element names are lowercase).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_page_aria_template_matches_an_xhtml_body() -> TestResult {
+    on_page("/expect/page.xhtml", |run, page| async move {
+        let input = json!({
+            "call": { "api": "expect.toMatchAriaSnapshot", "timeoutMs": 2000 },
+            "page": brand(&page),
+            "matcher": "toMatchAriaSnapshot",
+            "expectation": "expected",
+            "expected": "Expected: \"- heading \\\"XHTML heading\\\"\"",
+            "params": {
+                "expression": "to.match.aria",
+                "expectedValue": { "kind": "role", "role": "heading", "name": "XHTML heading" },
+                "isNot": false,
+            },
+        });
+        let result = run.invoke("expect.page", input).await;
+        let result = match result {
+            Ok(Value::Null) => Ok(()),
+            Ok(value) => Err(format!("the matcher answered {value}").into()),
+            Err(error) => Err(error.into()),
+        };
         (run, result)
     })
     .await

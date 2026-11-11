@@ -37,7 +37,7 @@ impl ExpectOp {
             Self::Page => OpSpec::read(
                 "expect.page",
                 PAGE,
-                "one retrying page matcher (toHaveTitle, toHaveURL), with .not",
+                "one retrying page matcher (toHaveTitle, toHaveURL, toMatchAriaSnapshot), with .not",
             ),
         }
     }
@@ -53,9 +53,12 @@ struct LocatorInput {
     expectation: String,
     expected: String,
     params: ExpectParams,
+    /// Sent only when an aria template did not parse.
+    #[serde(default, rename = "templateError")]
+    template_error: Option<String>,
 }
 
-/// `expect(page).toHaveTitle` and `toHaveURL`, after `call`.
+/// `expect(page).toHaveTitle`, `toHaveURL` and `toMatchAriaSnapshot`, after `call`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PageInput {
@@ -64,6 +67,9 @@ struct PageInput {
     expectation: String,
     expected: String,
     params: ExpectParams,
+    /// Sent only when an aria template did not parse.
+    #[serde(default, rename = "templateError")]
+    template_error: Option<String>,
 }
 
 /// Runs one expect op. Boxed, as an action is: a poll loop holds a large state machine, and the
@@ -93,6 +99,7 @@ async fn locator(
         expectation,
         expected,
         params,
+        template_error,
     } = input;
     let Target::Locator(target) = target else {
         return Err(scope.fail(
@@ -105,6 +112,7 @@ async fn locator(
         expectation,
         expected,
         params,
+        template_error,
     };
     let expect = Expectation::new(Subject::Locator(target.display.clone()), args, scope)?;
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
@@ -129,7 +137,8 @@ async fn locator(
         .await
 }
 
-/// A page matcher, on the main frame's document (upstream's `:root`).
+/// A page matcher, on the main frame's document (upstream's `:root`; the probe matches an aria
+/// template from its `body`, as upstream does).
 async fn page(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -141,12 +150,14 @@ async fn page(
         expectation,
         expected,
         params,
+        template_error,
     } = input;
     let args = MatcherArgs {
         matcher,
         expectation,
         expected,
         params,
+        template_error,
     };
     let expect = Expectation::new(Subject::Page, args, scope)?;
     let page = OpPage::admit_handle(pw, scope, &page).await?;
