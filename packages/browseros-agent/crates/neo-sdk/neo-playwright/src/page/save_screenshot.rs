@@ -13,7 +13,7 @@ use tokio::fs;
 
 use crate::op_scope::{OpScope, Sent};
 use crate::op_spec::{OpSpec, OpTarget};
-use crate::{ErrorCode, PlaywrightError};
+use crate::{ErrorCode, PlaywrightError, file_save};
 
 /// The filesystem step has no tab target; capture already passed its own page policies.
 pub(crate) const SPEC: OpSpec = OpSpec::write(
@@ -55,17 +55,8 @@ pub(crate) async fn save(
         .await
         .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?
         .map_err(|error| {
-            let code = match error.kind() {
-                io::ErrorKind::PermissionDenied
-                | io::ErrorKind::NotADirectory
-                | io::ErrorKind::IsADirectory
-                | io::ErrorKind::ReadOnlyFilesystem
-                | io::ErrorKind::InvalidFilename
-                | io::ErrorKind::InvalidInput => ErrorCode::InvalidInput,
-                _ => ErrorCode::Internal,
-            };
             scope.fail(
-                code,
+                file_save::error_code(error.kind()),
                 &format!(
                     "cannot save screenshot to \"{}\": {error}",
                     target.display()

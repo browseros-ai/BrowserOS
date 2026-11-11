@@ -4,6 +4,31 @@ import { isRefusal, loadPrelude, SEED } from './support/prelude-runtime'
 
 const IMAGE = { $neo: 'bytes', base64: 'iVBORw0KGgo=' }
 
+it('saves element-handle screenshots with their pinned target, explicit type and API alias', async () => {
+  const element = { $neo: 'element', page: SEED.page, seq: 1, node: 9 }
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: ({ name }) => {
+      if (name === 'locator.elementHandle') return element
+      return name === 'page.screenshot' ? IMAGE : null
+    },
+  })
+  const result = await runtime.run(`
+    const handle = await page.locator('#a').elementHandle();
+    const image = await handle.screenshot({ path: 'nested/image.png', type: 'jpeg' });
+    return [Buffer.isBuffer(image), image.toString('base64')];
+  `)
+  expect(JSON.parse(JSON.stringify(result))).toEqual([true, IMAGE.base64])
+  const capture = runtime.sent('page.screenshot')[0]
+  expect(capture?.input.target).toMatchObject(element)
+  expect(capture?.input.type).toBe('jpeg')
+  expect(runtime.sent('page.saveScreenshot')[0]?.input).toEqual({
+    call: { api: 'elementHandle.screenshot', timeoutMs: 0 },
+    path: 'nested/image.png',
+    base64: IMAGE.base64,
+  })
+})
+
 it('infers upstream filename types, preserves explicit types and saves the captured bytes last', async () => {
   const runtime = loadPrelude({
     seed: SEED,

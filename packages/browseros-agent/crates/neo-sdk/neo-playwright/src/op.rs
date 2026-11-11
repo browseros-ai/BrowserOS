@@ -330,6 +330,8 @@ mod tests {
             let spec = op.spec();
             let receiver = spec.name.split_once('.').map(|(receiver, _)| receiver);
             let expected = match (spec.name, receiver) {
+                // The screenshot client's filesystem step has no browser target.
+                ("page.saveScreenshot", _) => OpTarget::None,
                 ("expect.locator", _) | (_, Some("locator")) => OpTarget::Field("target"),
                 (_, Some("page" | "keyboard" | "mouse" | "dialog" | "expect")) => {
                     OpTarget::Field("page")

@@ -8416,18 +8416,21 @@ ${value.stack}`;
     }
     async screenshot(options = {}) {
       const api = "elementHandle.screenshot";
-      if (options.path !== undefined)
-        throw unsupportedError(api, "Neo returns the image instead of writing a file; omit path");
       const refused = refusedScreenshotOption(options);
       if (refused !== undefined)
         throw unsupportedError(api, refused);
       const wire = pick(options, SCREENSHOT_KEYS);
-      return await invoke("page.screenshot", { api, timeoutMs: timeoutMs(api, this.#timeout(options)) }, {
+      if (!wire.type && options.path)
+        wire.type = screenshotType({ api, path: options.path });
+      const signal = signalOf(api, options);
+      const image = await invoke("page.screenshot", { api, timeoutMs: timeoutMs(api, this.#timeout(options)) }, {
         page: await this._page._brand(api),
         target: this._brand,
         strict: "strict",
         ...wire
-      });
+      }, signal);
+      await saveScreenshot({ api, bytes: image, path: options.path, signal });
+      return image;
     }
   }
 
