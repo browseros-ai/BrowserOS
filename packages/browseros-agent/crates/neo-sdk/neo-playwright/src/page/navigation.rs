@@ -385,21 +385,23 @@ pub(crate) async fn wait_for_load_state(
     let frame = input.frame.unwrap_or_else(|| main.clone());
     let root_id = admitted.session.session_id.clone();
     let root = pw.browser().protocol_session(root_id.clone());
-    let (session_id, session) = if frame == main {
-        (root_id, root)
-    } else {
-        frame_host(pw, scope, page, (root_id, root), &frame).await?
-    };
-    let mut watch = DocumentWatch::new(pw.browser(), session, session_id, frame);
     let wait = async {
-        watch.enable_page().await?;
-        watch.read_current().await?;
-        watch.enable_lifecycle().await?;
-        watch.reached(input.state).await
+        // Resolution can wait on another renderer too; setup belongs to the same deadline
+        // as lifecycle observation, rather than extending the caller's requested timeout.
+        let (session_id, session) = if frame == main {
+            (root_id, root)
+        } else {
+            frame_host(pw, scope, page, (root_id, root), &frame).await?
+        };
+        let mut watch = DocumentWatch::new(pw.browser(), session, session_id, frame);
+        let failed = |error| watch_error(scope, &error);
+        watch.enable_page().await.map_err(failed)?;
+        watch.read_current().await.map_err(failed)?;
+        watch.enable_lifecycle().await.map_err(failed)?;
+        watch.reached(input.state).await.map_err(failed)
     };
     match scope.within(wait).await {
-        Ok(Ok(())) => Ok(json!({})),
-        Ok(Err(error)) => Err(watch_error(scope, &error)),
+        Ok(result) => result.map(|()| json!({})),
         Err(_expired) => Err(scope.timed_out(ErrorCode::WaitTimeout)),
     }
 }
@@ -662,6 +664,51 @@ fn status_text(status: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{complete_user_url, status_text};
+    use crate::test_support::TestResult;
+
+    /// A renderer that never answers must not extend a child's requested wait deadline.
+    #[tokio::test]
+    async fn child_load_state_deadline_includes_frame_resolution() -> TestResult {
+        use super::{LoadStateInput, wait_for_load_state};
+        use crate::op::Op;
+        use crate::op_scope::OpScope;
+        use crate::target::CallHeader;
+        use crate::test_env::TestEnv;
+        use crate::test_support::{self, RecordingHooks};
+        use crate::{ErrorCode, Playwright};
+        use browseros_core::BrowserView;
+        use browseros_core::testing::{TestConnection, cdp_pending};
+        use serde_json::json;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tokio::time;
+
+        let connection = TestConnection::new([]);
+        let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let pw = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
+        let env = TestEnv::over(BrowserView::unbound(browser, None));
+        let op = Op::from_name("page.waitForLoadState").ok_or("load-state op is registered")?;
+        let scope = OpScope::new(
+            &env,
+            op,
+            CallHeader {
+                timeout_ms: Some(100),
+                ..CallHeader::default()
+            },
+        );
+        let input: LoadStateInput = serde_json::from_value(json!({
+            "page": { "$neo": "page", "tab": 7 }, "frame": "child", "state": "load"
+        }))?;
+        let result = time::timeout(
+            Duration::from_secs(1),
+            wait_for_load_state(&pw, &scope, input),
+        )
+        .await?;
+        let error = result.err().ok_or("a stalled frame lookup must time out")?;
+        assert_eq!(error.error_code(), Some(ErrorCode::WaitTimeout));
+        Ok(())
+    }
 
     #[test]
     fn tests_that_goto_normalizes_url_spelling_as_upstream_does() {
