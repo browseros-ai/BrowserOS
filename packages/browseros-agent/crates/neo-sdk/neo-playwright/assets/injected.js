@@ -7938,7 +7938,14 @@ ${value.stack}`;
       const [pin = 0] = this.addAll([element]);
       return pin;
     }
+    addFrame(element) {
+      const [pin = 0] = this.record([new WeakRef(element)]);
+      return pin;
+    }
     addAll(elements) {
+      return this.record(elements);
+    }
+    record(elements) {
       const pins = elements.map((element) => {
         const pin = this.next++;
         this.elements.set(pin, element);
@@ -7956,11 +7963,12 @@ ${value.stack}`;
       return pins;
     }
     live(pin) {
-      const element = this.elements.get(pin);
+      const element = this.held(pin);
       return element?.isConnected ? element : undefined;
     }
     held(pin) {
-      return this.elements.get(pin);
+      const entry = this.elements.get(pin);
+      return entry instanceof WeakRef ? entry.deref() : entry;
     }
     clear() {
       this.elements.clear();
@@ -8098,7 +8106,7 @@ ${value.stack}`;
       return { kind: "notFrame", preview: world.injected.previewNode(element) };
     return {
       kind: "frame",
-      pin: world.pins.add(element),
+      pin: world.pins.addFrame(element),
       key: world.refs.frameKey(element),
       visible: world.injected.utils.isElementVisible(element),
       src

@@ -329,6 +329,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.requestGC": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "page.close": {
       effect: "write",
       target: "page",
@@ -9772,6 +9777,10 @@ ${value.stack}`;
     waitForURL(url, options) {
       return this._waitForURL("page.waitForURL", this._mainFrame, url, options);
     }
+    async requestGC() {
+      const api = "page.requestGC";
+      await invoke("page.requestGC", { api, timeoutMs: 0 }, { page: await this._brand(api) });
+    }
     async title() {
       const api = "page.title";
       const title = await invoke("page.title", { api, timeoutMs: 0 }, { page: await this._brand(api) });
@@ -11226,7 +11235,6 @@ Timeout: ${timeout}ms`);
       pageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
       pause: NO_INSPECTOR,
       pickLocator: NO_INSPECTOR,
-      requestGC: "garbage collection is not available in Neo",
       requests: "Neo does not record network requests",
       route: NETWORK,
       routeFromHAR: NETWORK,

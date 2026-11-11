@@ -51,7 +51,7 @@ const PIN_LIMIT = 512
  * heals itself. Numbers never repeat within a document, so an old pin can only fail.
  */
 export class Pins {
-  private readonly elements = new Map<Pin, Element>()
+  private readonly elements = new Map<Pin, Element | WeakRef<Element>>()
   /** The pins of each entry, oldest first: one for `add`, all of a batch for `addAll`. */
   private readonly entries = new Map<number, Pin[]>()
   private next = 1
@@ -62,8 +62,22 @@ export class Pins {
     return pin
   }
 
+  /**
+   * A frame hop needs its iframe only while connected. Keep that reference weak so the
+   * parent's long-lived probe cannot retain an entire removed child document after an op.
+   * Element pins stay strong until Rust has converted them to CDP handles.
+   */
+  addFrame(element: Element): Pin {
+    const [pin = 0] = this.record([new WeakRef(element)])
+    return pin
+  }
+
   /** Pins every element, in order, as one entry toward the limit. */
   addAll(elements: Element[]): Pin[] {
+    return this.record(elements)
+  }
+
+  private record(elements: (Element | WeakRef<Element>)[]): Pin[] {
     const pins = elements.map((element) => {
       const pin = this.next++
       this.elements.set(pin, element)
@@ -81,17 +95,19 @@ export class Pins {
 
   /** The pinned element, while it is still in the document. */
   live(pin: Pin): Element | undefined {
-    const element = this.elements.get(pin)
+    const element = this.held(pin)
     return element?.isConnected ? element : undefined
   }
 
   /**
    * The pinned element, in the document or not, until its pin is evicted: what Rust makes a
    * handle of. A match that left the page after it was pinned still gets its handle, which
-   * then reads as detached, as upstream's handle to that element would.
+   * then reads as detached, as upstream's handle to that element would. Frame-hop pins may
+   * already be collected after removal; they are used only to enter a connected iframe.
    */
   held(pin: Pin): Element | undefined {
-    return this.elements.get(pin)
+    const entry = this.elements.get(pin)
+    return entry instanceof WeakRef ? entry.deref() : entry
   }
 
   /** Forgets every pin (a re-key). Numbering continues. */

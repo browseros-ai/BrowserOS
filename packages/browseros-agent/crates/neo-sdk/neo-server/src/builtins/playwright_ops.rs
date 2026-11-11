@@ -76,6 +76,7 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `locator.waitForFunction`, `elementHandle.evaluate`, \
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
+    `page.requestGC` (its main renderer's garbage collection), \
     `page.emulateMedia` (per page across runs and navigations), `page.setViewportSize` (the \
     tab keeps the size in later runs, until it closes), \
     `page.addScriptTag` and `page.addStyleTag` (also on frames), returning element handles, \
