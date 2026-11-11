@@ -29,6 +29,10 @@ pub(crate) fn router(state: Arc<ServiceState>) -> Router {
             get(record_routes::get_download),
         )
         .route(
+            "/v1/runs/{run_id}/blobs/{blob_id}",
+            get(record_routes::get_blob),
+        )
+        .route(
             "/v1/operations/{operation_id}",
             get(record_routes::get_operation),
         )

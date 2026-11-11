@@ -12,7 +12,8 @@
 //!      │                                                    ├─▶ broadcast    │ TraceStore reads
 //!      │                                                    └─ ShotJob ─▶ camera (service)
 //!      │                                     ShotAnswer ◀── writes screenshots/<run>/<seq>.jpg
-//!  run service, at a run's end ─▶ RunOutputs ─▶ outputs/<run>/ (kept downloads), beside trace.db
+//!  run service, at a run's end ─▶ RunOutputs ─▶ outputs/<run>/ (kept downloads and reply
+//!                                                blobs), beside trace.db
 //! ```
 //!
 //! The writer decides which operations get a screenshot and when a run is `complete`; the
@@ -34,6 +35,7 @@
     clippy::string_add
 )]
 
+mod blob_id;
 mod epoch_millis;
 mod error_record;
 mod ids;
@@ -53,6 +55,7 @@ mod trace_error;
 mod trace_store;
 mod trace_writer;
 
+pub use blob_id::{BlobId, NotABlobId};
 pub use epoch_millis::EpochMillis;
 pub use error_record::{ErrorOwner, ErrorRecord};
 pub use ids::{IdError, OperationId, RequestId, RunId, TaskId};
@@ -67,7 +70,7 @@ pub use read_model::{
 };
 pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};
 pub use run_download::{DownloadStatus, RunDownload};
-pub use run_outputs::RunOutputs;
+pub use run_outputs::{KeptFile, RunOutputs};
 pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus};
 pub use salvage::{Loss, Recovery, Salvage};
 pub use screenshot_queue::{Shot, ShotAnswer, ShotJob, ShotJobs, ShotQueue, screenshot_queue};
