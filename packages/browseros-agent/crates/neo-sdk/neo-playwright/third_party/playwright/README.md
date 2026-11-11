@@ -22,10 +22,11 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
   controller a binding's stub calls, which posts each call to the CDP binding and settles it
   when Neo delivers the agent's answer. Neo builds it into `assets/bindings-controller.js`,
   which runs in the page's main world, as upstream injects it there.
-- `packages/isomorphic/`. The 11 shared helpers the engine and the agent runtime use:
+- `packages/isomorphic/`. The 12 shared helpers the engine and the agent runtime use:
   `selectorParser.ts`, `cssParser.ts`, `cssTokenizer.ts`, `locatorUtils.ts`,
   `locatorGenerators.ts`, `stringUtils.ts`, `ariaSnapshot.ts`, `ariaSnapshotRenderer.ts`,
-  `yaml.ts`, `utilityScriptSerializers.ts`, `urlMatch.ts`. `cssTokenizer.ts` is CC0, from
+  `yaml.ts`, `utilityScriptSerializers.ts`, `urlMatch.ts`, `mimeType.ts`. The MIME helper
+  keeps screenshot filename inference and errors identical to the pinned client. `cssTokenizer.ts` is CC0, from
   tabatkins/parse-css, as its header says.
 - `packages/playwright-core/src/server/usKeyboardLayout.ts` and `macEditingCommands.ts`. The US
   keyboard table and the editing commands Playwright sends on macOS, kept as the source of the

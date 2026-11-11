@@ -48,6 +48,7 @@ FILES=(
   packages/isomorphic/cssTokenizer.ts
   packages/isomorphic/locatorGenerators.ts
   packages/isomorphic/locatorUtils.ts
+  packages/isomorphic/mimeType.ts
   packages/isomorphic/selectorParser.ts
   packages/isomorphic/stringUtils.ts
   packages/isomorphic/urlMatch.ts

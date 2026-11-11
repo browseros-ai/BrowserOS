@@ -335,13 +335,6 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/bridge.ts'],
   },
   {
-    hint: 'Neo returns the image instead of writing a file; omit path',
-    sources: [
-      'neo-playwright-js/src/prelude/element-handle.ts',
-      'neo-playwright-js/src/prelude/frame.ts',
-    ],
-  },
-  {
     hint: 'pages cannot call back into the script in Neo; return what the page computed instead',
     sources: ['neo-playwright-js/src/prelude/evaluation.ts'],
   },
