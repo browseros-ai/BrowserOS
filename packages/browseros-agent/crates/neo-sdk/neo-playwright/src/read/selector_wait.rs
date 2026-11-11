@@ -142,10 +142,7 @@ async fn poll_selector(
             continue;
         };
         let located: Located = match reply {
-            ProbeReply::Read { value, sensitive } => {
-                element_read::mark_sensitive(scope, sensitive);
-                element_read::read_value(scope, value.into_value())?
-            }
+            ProbeReply::Read { value, .. } => element_read::read_value(scope, value.into_value())?,
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {
                 if state.met_without_element() {
                     return Ok(Value::Null);

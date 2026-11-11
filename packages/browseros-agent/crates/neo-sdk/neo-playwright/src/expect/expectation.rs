@@ -406,7 +406,7 @@ impl Expectation {
                 sensitive,
             } => {
                 if sensitive.is_some() {
-                    self.mark_sensitive(scope);
+                    self.sensitive.store(true, Ordering::Relaxed);
                 }
                 Ok(Poll::Ran {
                     matches,
@@ -430,7 +430,7 @@ impl Expectation {
                 message,
                 class: ErrorClass::Unsupported,
             } => {
-                self.mark_sensitive(scope);
+                self.sensitive.store(true, Ordering::Relaxed);
                 Err(self.thrown(scope, ErrorCode::Unsupported, &message))
             }
             other => Err(resolve::refused(scope, other)),
@@ -483,14 +483,6 @@ impl Expectation {
             && let Some(line) = matcher_message::unexpected_value(received.as_ref())
         {
             scope.log(line);
-        }
-    }
-
-    /// The first poll that compared a sensitive field marks the target, so the trace redacts
-    /// the expected value in the op's input.
-    fn mark_sensitive(&self, scope: &OpScope<'_>) {
-        if !self.sensitive.swap(true, Ordering::Relaxed) {
-            scope.mark_sensitive_target();
         }
     }
 
@@ -550,7 +542,7 @@ mod tests {
     use crate::op_scope::OpScope;
     use crate::probe::{ExpectParams, ProbeReply};
     use crate::target::{CallHeader, Strictness};
-    use crate::test_env::{EnvCall, TestEnv};
+    use crate::test_env::TestEnv;
     use crate::{ErrorCode, PlaywrightError};
 
     fn locator_scope(env: &TestEnv) -> Result<OpScope<'_>, Box<dyn Error>> {
@@ -775,7 +767,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_a_sensitive_comparison_marks_the_target_and_hides_the_expected_value()
+    async fn tests_that_a_sensitive_comparison_hides_the_expected_value()
     -> Result<(), Box<dyn Error>> {
         let env = TestEnv::new();
         let scope = locator_scope(&env)?;
@@ -789,7 +781,7 @@ mod tests {
             "received": "••••", "sensitive": "password",
         }))?;
         let poll = value.poll_of(&scope, reply)?;
-        assert_eq!(env.calls(), [EnvCall::MarkSensitiveTarget]);
+        assert!(env.calls().is_empty(), "reads do not report effects");
         let error = value.timed_out(&scope, Some(&poll));
         assert_eq!(error.error_code(), Some(ErrorCode::AssertionFailed));
         assert!(
@@ -814,11 +806,7 @@ mod tests {
             refused.message().contains("\nError: no RegExp here\n"),
             "{refused}"
         );
-        assert_eq!(
-            env.calls(),
-            [EnvCall::MarkSensitiveTarget],
-            "the target is marked once"
-        );
+        assert!(env.calls().is_empty(), "reads do not report effects");
         Ok(())
     }
 }

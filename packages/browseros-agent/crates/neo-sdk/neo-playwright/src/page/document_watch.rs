@@ -153,6 +153,11 @@ impl DocumentWatch {
         self.frame.url.as_deref()
     }
 
+    /// The document last read or committed on this frame.
+    pub(crate) fn loader(&self) -> Option<&str> {
+        self.frame.current.as_deref()
+    }
+
     /// Turns on the `Page` domain for the session, for a watch whose frame may be an
     /// out-of-process iframe's. Chromium sends an OOPIF's `documentOpened`, `frameNavigated` and
     /// lifecycle events only on a session with `Page` enabled (measured, spike
@@ -252,6 +257,9 @@ impl DocumentWatch {
         loop {
             if self.frame.has_reached(state) {
                 return Ok(());
+            }
+            if self.frame.left {
+                return Err(WatchError::Left);
             }
             self.next().await?;
         }

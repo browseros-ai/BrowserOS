@@ -83,20 +83,17 @@ impl ActionOp {
                 "locator.fill",
                 TARGET,
                 "replace an editable element's value; also clear()",
-            )
-            .sensitive(&["/value"]),
+            ),
             Self::Press => OpSpec::write(
                 "locator.press",
                 TARGET,
                 "focus an element, then press a key or chord",
-            )
-            .sensitive(&["/key"]),
+            ),
             Self::PressSequentially => OpSpec::write(
                 "locator.pressSequentially",
                 TARGET,
                 "focus an element, then type text key by key; also type()",
-            )
-            .sensitive(&["/text"]),
+            ),
             Self::SelectOption => OpSpec::write(
                 "locator.selectOption",
                 TARGET,

@@ -182,8 +182,7 @@ pub(crate) async fn query_one(
         return Ok(Value::Null);
     };
     match reply {
-        ProbeReply::Read { value, sensitive } => {
-            element_read::mark_sensitive(scope, sensitive);
+        ProbeReply::Read { value, .. } => {
             let located: Located = element_read::read_value(scope, value.into_value())?;
             let brand =
                 element_brand(scope, &target.page, &world, located.pin, &located.preview).await?;

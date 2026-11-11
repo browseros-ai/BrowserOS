@@ -20,7 +20,6 @@ mod live_browser;
 mod locator;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use browseros_core::SessionId;
@@ -247,7 +246,6 @@ async fn tests_that_a_password_reads_masked_while_the_page_holds_it_raw() -> Tes
         "document.getElementById('pw').value = 'typed-secret'",
     )
     .await?;
-    let before = live.sensitive_marks.load(Ordering::Relaxed);
     assert_eq!(
         read(&live, &page, "locator.inputValue", "#pw").await?,
         json!("••••")
@@ -266,19 +264,8 @@ async fn tests_that_a_password_reads_masked_while_the_page_holds_it_raw() -> Tes
         "the value attribute is masked at the source too"
     );
     assert_eq!(
-        live.sensitive_marks.load(Ordering::Relaxed) - before,
-        3,
-        "each of the three reads told the host its target is sensitive"
-    );
-    let before = live.sensitive_marks.load(Ordering::Relaxed);
-    assert_eq!(
         read(&live, &page, "locator.inputValue", "#name").await?,
         json!("Ada")
-    );
-    assert_eq!(
-        live.sensitive_marks.load(Ordering::Relaxed),
-        before,
-        "a plain field is not marked"
     );
     assert_eq!(
         live.main_world(&page, "document.getElementById('pw').value")
@@ -566,14 +553,12 @@ async fn tests_that_an_element_handle_reads_its_node_until_the_node_goes() -> Te
         read(&live, &page, "locator.boundingBox", "#title").await?,
         "a handle's box is its locator's"
     );
-    let before = live.sensitive_marks.load(Ordering::Relaxed);
     let password = handle_of(&live, &at(&page, "#pw")).await?;
     assert_eq!(
         on_handle(&live, "locator.inputValue", &password).await??,
         json!("••••"),
         "a handle reads through the seal too"
     );
-    assert!(live.sensitive_marks.load(Ordering::Relaxed) > before);
 
     live.main_world(&page, "document.getElementById('title').remove()")
         .await?;

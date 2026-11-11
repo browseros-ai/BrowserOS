@@ -4,7 +4,6 @@
 //! element-handle forms. A locator is re-resolved on every attempt; an element handle's node
 //! is read once, because it is there or it is gone for good.
 
-use browseros_core::sensitive_fields::SensitiveKind;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -112,8 +111,7 @@ async fn poll_locator(
             continue;
         };
         match reply {
-            ProbeReply::Read { value, sensitive } => {
-                mark_sensitive(scope, sensitive);
+            ProbeReply::Read { value, .. } => {
                 return Ok(Reading {
                     value: value.into_value(),
                     path,
@@ -146,13 +144,10 @@ async fn read_handle(
         read: read.clone(),
     };
     match site.call(&request).await? {
-        ProbeReply::Read { value, sensitive } => {
-            mark_sensitive(scope, sensitive);
-            Ok(Some(Reading {
-                value: value.into_value(),
-                path: site.path().clone(),
-            }))
-        }
+        ProbeReply::Read { value, .. } => Ok(Some(Reading {
+            value: value.into_value(),
+            path: site.path().clone(),
+        })),
         ProbeReply::Detached => Ok(None),
         // A read of the handle's own node finds one element, so no strict violation.
         other => Err(resolve::refused(scope, other)),
@@ -198,18 +193,8 @@ pub(crate) async fn read_visibility(
     };
     match reply {
         ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(without_element),
-        ProbeReply::Read { value, sensitive } => {
-            mark_sensitive(scope, sensitive);
-            Ok(value.into_value())
-        }
+        ProbeReply::Read { value, .. } => Ok(value.into_value()),
         other => Err(resolve::refused(scope, other)),
-    }
-}
-
-/// Tells the host the op's target is a sensitive field when the seal says so.
-pub(crate) fn mark_sensitive(scope: &OpScope<'_>, sensitive: Option<SensitiveKind>) {
-    if sensitive.is_some() {
-        scope.mark_sensitive_target();
     }
 }
 

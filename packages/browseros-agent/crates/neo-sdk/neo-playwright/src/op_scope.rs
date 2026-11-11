@@ -24,6 +24,7 @@
 
 use std::future::Future;
 use std::mem;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
@@ -32,6 +33,7 @@ use browseros_core::pages::PageSession;
 use browseros_core::{
     BrowserSession, BrowserView, CoreError, PageId, ProtocolSession, TabId, TargetId,
 };
+use futures_util::future::{self, Either};
 use neo_trace::Effect;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
@@ -121,8 +123,9 @@ impl Drop for ObjectGroup {
     }
 }
 
-/// The op's own Playwright timeout passed. The leaf turns it into its timed-out code with
-/// [`OpScope::timed_out`].
+/// The op's own wait ended: its Playwright timeout passed, or the script aborted it through
+/// `signal`. The leaf turns it into its timed-out code with [`OpScope::timed_out`], which
+/// reports an abort instead when there was one, so every leaf's timeout path is its abort path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Expired;
 
@@ -255,12 +258,6 @@ impl<'env> OpScope<'env> {
         }
     }
 
-    /// The op's target is a password, card or one-time-code field: the trace redacts its
-    /// sensitive arguments.
-    pub(crate) fn mark_sensitive_target(&self) {
-        self.env.mark_sensitive_target();
-    }
-
     /// Records one call-log line, as Playwright's server logs it (leading spaces nest it under
     /// the line before), and mirrors it to the trace unless it repeats the line before.
     pub(crate) fn log(&self, line: String) {
@@ -272,37 +269,93 @@ impl<'env> OpScope<'env> {
     }
 
     /// Sleeps on Rust's clock, never the page's, so a background tab's throttled timers cannot
-    /// stall a retry. `Err` once the op's timeout passes, which may cut the sleep short.
+    /// stall a retry. `Err` once the op's timeout passes or the script aborts it, either of
+    /// which may cut the sleep short.
     pub(crate) async fn sleep(&self, wait: Duration) -> Result<(), Expired> {
-        let Some(deadline) = self.deadline() else {
-            time::sleep(wait).await;
-            return Ok(());
-        };
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if wait < remaining {
-            time::sleep(wait).await;
-            Ok(())
-        } else {
-            time::sleep(remaining).await;
-            Err(Expired)
-        }
+        let deadline = self.deadline();
+        self.unless_aborted(Box::pin(async move {
+            let Some(deadline) = deadline else {
+                time::sleep(wait).await;
+                return Ok(());
+            };
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if wait < remaining {
+                time::sleep(wait).await;
+                Ok(())
+            } else {
+                time::sleep(remaining).await;
+                Err(Expired)
+            }
+        }))
+        .await
     }
 
-    /// Runs `future` until the op's timeout; `Err` if the timeout comes first, dropping it.
+    /// Runs `future` until the op's timeout or the script's abort; `Err` if either comes first,
+    /// dropping it.
     pub(crate) async fn within<F: Future>(&self, future: F) -> Result<F::Output, Expired> {
-        match self.deadline() {
-            Some(deadline) => time::timeout_at(deadline, future)
-                .await
-                .map_err(|_elapsed| Expired),
-            None => Ok(future.await),
+        let deadline = self.deadline();
+        self.unless_aborted(Box::pin(async move {
+            match deadline {
+                Some(deadline) => time::timeout_at(deadline, future)
+                    .await
+                    .map_err(|_elapsed| Expired),
+                None => Ok(future.await),
+            }
+        }))
+        .await
+    }
+
+    /// `wait`'s own answer, unless the script aborts the op first. An abort already made wins
+    /// at once, so a leaf that retries never starts another attempt after it. `wait` is boxed:
+    /// the leaf's future stays on the heap, so racing it adds no copy of it to the future of
+    /// every leaf that waits (clippy's `large_futures`).
+    async fn unless_aborted<T>(
+        &self,
+        wait: Pin<Box<impl Future<Output = Result<T, Expired>>>>,
+    ) -> Result<T, Expired> {
+        if self.env.abort_reason().is_some() {
+            return Err(Expired);
+        }
+        match future::select(self.env.aborted(), wait).await {
+            Either::Left(((), _)) => Err(Expired),
+            Either::Right((waited, _)) => waited,
         }
     }
 
     /// Playwright's timeout error for `code`, one of the table's timed-out codes:
-    /// `locator.click: Timeout 5000ms exceeded.` and the call log.
+    /// `locator.click: Timeout 5000ms exceeded.` and the call log. When the wait ended because
+    /// the script aborted the op, the abort's error instead ([`OpScope::aborted_error`]).
     pub(crate) fn timed_out(&self, code: ErrorCode) -> PlaywrightError {
+        if let Some(aborted) = self.aborted_error() {
+            return aborted;
+        }
         let millis = self.timeout.map_or(0, |timeout| timeout.as_millis());
         self.fail(code, &format!("Timeout {millis}ms exceeded."))
+    }
+
+    /// The op's answer, unless the script aborted it while it ran. Upstream's progress race
+    /// rejects an aborted call even when its work would have finished, and a leaf's last steps
+    /// do not all wait through this scope (a snapshot's frame stitching, a script's final
+    /// sweep), so an op that answered after the abort reports the abort instead. A failure
+    /// stands: it is what the op met first.
+    pub(crate) fn settle(
+        &self,
+        answered: Result<Value, PlaywrightError>,
+    ) -> Result<Value, PlaywrightError> {
+        match answered {
+            Ok(value) => self.aborted_error().map_or(Ok(value), Err),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Upstream's abort of an op (`Progress.abort` and the client's `AbortError`): the call log
+    /// gains `operation was aborted: <reason>`, and the error reads `<api>: <reason>` with it.
+    /// `None` while the script has not aborted the op. A leaf with a timeout message of its own
+    /// asks this first.
+    pub(crate) fn aborted_error(&self) -> Option<PlaywrightError> {
+        let reason = self.env.abort_reason()?;
+        self.log(format!("operation was aborted: {reason}"));
+        Some(self.fail(ErrorCode::Aborted, &reason))
     }
 
     /// `<api>: <message>` and the call log, as Playwright prints a failed call.
@@ -374,6 +427,7 @@ mod sent {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::future::pending;
     use std::sync::{Arc, Mutex, PoisonError};
     use std::time::Duration;
 
@@ -382,7 +436,7 @@ mod tests {
     use futures_util::future::BoxFuture;
     use neo_trace::ErrorOwner;
     use serde_json::{Value, json};
-    use tokio::sync::{broadcast, mpsc};
+    use tokio::sync::{Notify, broadcast, mpsc};
     use tokio::task;
     use tokio::time::{self, Instant};
 
@@ -391,7 +445,7 @@ mod tests {
     use crate::op_spec::Capability;
     use crate::target::CallHeader;
     use crate::test_env::{self, EnvCall, TestEnv};
-    use crate::{Answer, ErrorCode, Refusal, TimedOut};
+    use crate::{Answer, ErrorCode, OpEnv, Refusal, RunState, TimedOut};
 
     fn op(name: &str) -> Result<Op, Box<dyn Error>> {
         Ok(Op::from_name(name).ok_or(format!("{name} is an op"))?)
@@ -552,16 +606,6 @@ mod tests {
             error.message(),
             "page.click: Timeout 5000ms exceeded.\nCall log:\n  - waiting for getByRole('button')\n    2 × element is not visible\n"
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn tests_that_marking_a_sensitive_target_reaches_the_host() -> Result<(), Box<dyn Error>>
-    {
-        let env = TestEnv::new();
-        let scope = OpScope::new(&env, op("locator.fill")?, CallHeader::default());
-        scope.mark_sensitive_target();
-        assert_eq!(env.calls(), [EnvCall::MarkSensitiveTarget]);
         Ok(())
     }
 
@@ -780,6 +824,150 @@ mod tests {
             !env.calls().contains(&EnvCall::MarkSent),
             "no input before admission"
         );
+        Ok(())
+    }
+
+    /// A host whose script can abort the op (Playwright's `signal`), as claw-sdk's door does
+    /// through `OpCtx::aborted`.
+    struct AbortingHost {
+        env: TestEnv,
+        reason: Mutex<Option<String>>,
+        wake: Notify,
+    }
+
+    impl AbortingHost {
+        fn new() -> Self {
+            Self {
+                env: TestEnv::new(),
+                reason: Mutex::new(None),
+                wake: Notify::new(),
+            }
+        }
+
+        fn abort(&self, reason: &str) {
+            *self.reason.lock().unwrap_or_else(PoisonError::into_inner) = Some(reason.to_owned());
+            self.wake.notify_waiters();
+        }
+    }
+
+    impl OpEnv for AbortingHost {
+        fn view(&self) -> &BrowserView {
+            self.env.view()
+        }
+
+        fn run_state(&self) -> &Arc<RunState> {
+            self.env.run_state()
+        }
+
+        fn recheck(&self) -> Result<(), Refusal> {
+            self.env.recheck()
+        }
+
+        fn mark_sent(&self) {
+            self.env.mark_sent();
+        }
+
+        fn note(&self, line: String) {
+            self.env.note(line);
+        }
+
+        fn abort_reason(&self) -> Option<String> {
+            self.reason
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+
+        fn aborted(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async move {
+                loop {
+                    let woken = self.wake.notified();
+                    if self.abort_reason().is_some() {
+                        return;
+                    }
+                    woken.await;
+                }
+            })
+        }
+    }
+
+    /// Upstream's `Progress.abort`: the wait in flight ends, and the op's timeout path reports
+    /// the abort, with the reason and an `operation was aborted` line under the call log.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_abort_ends_the_wait_in_flight_as_the_ops_abort()
+    -> Result<(), Box<dyn Error>> {
+        let host = AbortingHost::new();
+        let scope = OpScope::new(&host, op("locator.click")?, header(None, None));
+        scope.log("waiting for locator('button')".to_owned());
+        let (waited, ()) = tokio::join!(scope.within(pending::<()>()), async {
+            time::sleep(Duration::from_millis(500)).await;
+            host.abort("foo bar");
+        });
+        assert_eq!(waited, Err(Expired), "an op with no timeout still ends");
+        let error = scope.timed_out(ErrorCode::NotActionable);
+        assert_eq!(error.error_code(), Some(ErrorCode::Aborted));
+        assert_eq!(
+            (error.owner(), error.timed_out(), error.answer()),
+            (ErrorOwner::Script, TimedOut::No, Answer::Ambiguous),
+            "the script chose to stop it, and input it sent may have landed"
+        );
+        assert_eq!(
+            error.message(),
+            "locator.click: foo bar\nCall log:\n  - waiting for locator('button')\n  - \
+             operation was aborted: foo bar\n"
+        );
+        Ok(())
+    }
+
+    /// An op aborted between attempts never sleeps or waits again.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_aborted_op_waits_no_more() -> Result<(), Box<dyn Error>> {
+        let host = AbortingHost::new();
+        let scope = OpScope::new(&host, op("locator.click")?, header(None, Some(5_000)));
+        host.abort("already");
+        let started = Instant::now();
+        assert_eq!(scope.sleep(Duration::from_secs(1)).await, Err(Expired));
+        assert_eq!(scope.within(async {}).await, Err(Expired));
+        assert_eq!(Instant::now(), started, "neither waited");
+        Ok(())
+    }
+
+    /// An op whose last step finished after the abort reports the abort, not its value.
+    #[tokio::test]
+    async fn tests_that_an_answer_after_the_abort_settles_as_the_abort()
+    -> Result<(), Box<dyn Error>> {
+        let host = AbortingHost::new();
+        let scope = OpScope::new(&host, op("locator.ariaSnapshot")?, header(None, None));
+        assert_eq!(scope.settle(Ok(json!("before")))?, json!("before"));
+        host.abort("stop");
+        let error = scope
+            .settle(Ok(json!("after")))
+            .err()
+            .ok_or("an answer after the abort must fail")?;
+        assert_eq!(error.error_code(), Some(ErrorCode::Aborted));
+        assert!(error.message().starts_with("locator.ariaSnapshot: stop"));
+        let failed = scope.fail(ErrorCode::NoMatch, "gone");
+        let settled = scope
+            .settle(Err(failed))
+            .err()
+            .ok_or("a failure stays a failure")?;
+        assert_eq!(
+            settled.error_code(),
+            Some(ErrorCode::NoMatch),
+            "a failure stands"
+        );
+        Ok(())
+    }
+
+    /// Without an abort the timeout path reads as before, and the default host never aborts.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_timeout_stays_a_timeout_without_an_abort() -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let scope = OpScope::new(&env, op("locator.click")?, header(None, Some(100)));
+        assert_eq!(scope.within(pending::<()>()).await, Err(Expired));
+        let error = scope.timed_out(ErrorCode::NotActionable);
+        assert_eq!(error.error_code(), Some(ErrorCode::NotActionable));
+        assert_eq!(error.message(), "locator.click: Timeout 100ms exceeded.");
         Ok(())
     }
 }

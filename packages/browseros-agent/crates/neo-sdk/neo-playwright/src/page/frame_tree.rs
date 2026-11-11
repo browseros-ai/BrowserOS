@@ -191,6 +191,10 @@ async fn oopif_tree(
         .frames()
         .resolve_frame_target(page.clone(), Some(FrameId(frame.to_owned())), None, true)
         .await?;
+    // Publish a child Frame only after its session reports navigation. On adopted tabs,
+    // core has attached the OOPIF without enabling Page; enabling it when a waiter starts
+    // is too late for a simultaneous same-renderer navigation (which has no swap to replay).
+    target.session.send_value("Page.enable", json!({})).await?;
     frame_tree(&target.session).await
 }
 

@@ -381,7 +381,7 @@ export type FrameBox = {
 export type Value = { kind: 'value'; value: unknown }
 /**
  * One element's read, through the seal. `sensitive` is the seal's `kind` of the element the
- * value came from, so Rust can mark the op's target sensitive for the trace.
+ * value came from.
  */
 export type ReadValue = {
   kind: 'read'
@@ -405,7 +405,7 @@ export type Snapshot = {
  * `3 elements`). `received` is the value the matcher compared, already masked by the seal;
  * left out when it is `undefined`. `sensitive` is the seal's kind of a field whose value or
  * value attribute was compared through `__clawSeal.valueEquals` or `attributeEquals`, so
- * Rust can mark the op's target sensitive.
+ * Rust can mask the expected value in assertion messages.
  */
 export type ExpectPoll = {
   kind: 'expect'

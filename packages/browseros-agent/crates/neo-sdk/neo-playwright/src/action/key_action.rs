@@ -151,9 +151,6 @@ impl<'a> KeyRunner<'a> {
             Called::Gone => return self.subject.lost(located).map(|()| false),
         };
         self.matched = true;
-        if sensitive {
-            self.scope.mark_sensitive_target();
-        }
         self.scope.log(keys.log_line(sensitive));
 
         let mut input = input::hold(self.scope, self.page).await?;

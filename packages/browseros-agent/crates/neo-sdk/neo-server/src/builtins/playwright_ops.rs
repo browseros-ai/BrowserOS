@@ -6,7 +6,7 @@
 //!    `target.page` ─ the door resolves it to one tab and runs its rules on that tab
 //!      ─ PlaywrightOp::call: the resolved page written back into the input
 //!          ─ Playwright::invoke(OpCtxEnv, op, json), raced with the run's stop
-//!              ├─ recheck, recheck_reach, mark_sent, mark_sensitive_target, note ─▶ OpCtx
+//!              ├─ recheck, recheck_reach, mark_sent, note ─▶ OpCtx
 //!              └─ PlaywrightError ─ leaf_error ─▶ LeafError: owner, code, timeout, answer
 //!          ─ opened, navigated and closed pages reported to the door
 //!          ─ an event pull's events: each one's tabs through the rules (event_release.rs)
@@ -21,6 +21,7 @@ use std::future::{self, Future};
 use std::sync::{Arc, LazyLock};
 
 use browseros_core::{BrowserView, TabId, TargetId};
+use futures_util::future::BoxFuture;
 use neo_playwright::{
     Answer, ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Refusal, RunState, TimedOut,
 };
@@ -409,7 +410,12 @@ impl PageEffect {
         match name {
             "context.newPage" => Self::Opens,
             "page.opener" => Self::Links,
-            "page.goto" | "page.goBack" | "page.goForward" => Self::Navigates,
+            // A successful navigation wait observes a URL change started by another op or
+            // the page. Refresh core's cache too, so a later ordinary reply cannot restore
+            // the pre-navigation URL over the wait's fresh frame facts.
+            "page.goto" | "page.goBack" | "page.goForward" | "page.waitForNavigation" => {
+                Self::Navigates
+            }
             "page.reload" => Self::Reloads,
             "page.close" => Self::Closes,
             _ => Self::Untracked,
@@ -547,10 +553,6 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
         self.op.mark_sent();
     }
 
-    fn mark_sensitive_target(&self) {
-        self.op.mark_sensitive_target();
-    }
-
     fn note(&self, line: String) {
         self.op.note(line);
     }
@@ -572,6 +574,14 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
                 seq,
             },
         );
+    }
+
+    fn abort_reason(&self) -> Option<String> {
+        self.op.abort_reason()
+    }
+
+    fn aborted(&self) -> BoxFuture<'_, ()> {
+        Box::pin(self.op.aborted())
     }
 }
 
@@ -640,6 +650,7 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::SecretUploadRefused => ErrorCode::SECRET_UPLOAD_REFUSED,
         PlaywrightCode::TargetClosed => ErrorCode::TARGET_CLOSED,
         PlaywrightCode::BrowserDisconnected => ErrorCode::BROWSER_DISCONNECTED,
+        PlaywrightCode::Aborted => ErrorCode::ABORTED,
         PlaywrightCode::Internal => ErrorCode::INTERNAL_ERROR,
     }
 }

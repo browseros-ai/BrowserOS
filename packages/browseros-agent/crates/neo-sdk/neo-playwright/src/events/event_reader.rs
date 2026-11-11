@@ -255,8 +255,12 @@ pub(crate) async fn deliver(
                 suggested_filename: download.suggested_filename.clone(),
             },
         },
-        // The context receives only new tabs.
+        // Internal navigation facts are never public events; the context receives only new tabs.
         (
+            PageEvent::Navigation(_) | PageEvent::FrameDetached(_) | PageEvent::FrameSwapped(_),
+            _,
+        )
+        | (
             PageEvent::Closed(_)
             | PageEvent::Dialog(_)
             | PageEvent::Console(_)

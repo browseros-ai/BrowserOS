@@ -120,6 +120,11 @@ impl<'op> OpPage<'op> {
         Self::admit(pw, scope, page).await
     }
 
+    /// The tab.
+    pub(crate) fn tab(&self) -> TabId {
+        self.admitted.tab
+    }
+
     /// The core cache id, held only for this operation and passed directly to core.
     pub(crate) fn core_page(&self) -> &PageId {
         &self.admitted.core_page

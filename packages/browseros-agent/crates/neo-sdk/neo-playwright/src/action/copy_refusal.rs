@@ -1,6 +1,6 @@
 //! Where keyboard input lands, for design D14. A `keyboard.*` op asks before it sends: keys
-//! that reach a password, card or one-time-code field mark the op's target sensitive, so the
-//! trace redacts them. A burst with a key down that copies or cuts (`input::copies`: Meta+C
+//! that copy or cut from a password, card or one-time-code field are refused.
+//! A burst with a key down that copies or cuts (`input::copies`: Meta+C
 //! on a Mac, Control+C elsewhere, and their cut and Insert/Delete forms) is refused there
 //! instead, with nothing sent and the op not marked sent.
 //!

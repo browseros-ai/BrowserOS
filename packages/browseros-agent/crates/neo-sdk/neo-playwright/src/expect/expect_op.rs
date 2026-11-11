@@ -26,16 +26,14 @@ listed_enum! {
 
 impl ExpectOp {
     /// This op's registration metadata. Both are reads: a poll only looks at the page, so
-    /// neither ever marks itself sent. `toHaveValue` on a password field carries the password
-    /// in `expected` and `params`, which the trace redacts once a poll compared such a field.
+    /// neither ever marks itself sent.
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
             Self::Locator => OpSpec::read(
                 "expect.locator",
                 TARGET,
                 "one retrying locator matcher (toBeVisible, toHaveText, ...), with .not",
-            )
-            .sensitive(&["/expected", "/params"]),
+            ),
             Self::Page => OpSpec::read(
                 "expect.page",
                 PAGE,

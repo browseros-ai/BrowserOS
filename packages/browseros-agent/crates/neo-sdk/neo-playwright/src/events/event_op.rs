@@ -296,6 +296,9 @@ async fn wait(
     match scope.within(found).await {
         Ok(found) => to_output(scope, &found?),
         Err(_expired) => {
+            if let Some(aborted) = scope.aborted_error() {
+                return Err(aborted);
+            }
             let millis = scope.timeout().map_or(0, |timeout| timeout.as_millis());
             let message = format!(
                 "Timeout {millis}ms exceeded while waiting for event \"{}\"",

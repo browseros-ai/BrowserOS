@@ -1,9 +1,8 @@
 //! What a method gets: its op, its run, its checked target, and the door's services.
 
-use std::future::Future;
+use std::future::{self, Future};
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_cdp::CdpError;
@@ -15,8 +14,8 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    Caller, Dispatcher, ErrorCode, LeafError, MethodSpec, OpFailure, OperationError, PolicyCheck,
-    RunCtx, StopReason,
+    Caller, Dispatcher, ErrorCode, LeafError, MethodSpec, OpAbort, OpFailure, OperationError,
+    PolicyCheck, RunCtx, StopReason,
 };
 use crate::browser::PageRef;
 
@@ -90,7 +89,6 @@ pub(super) struct OpState {
     /// When the op, or one of its children, marked itself sent. Write-once: the first mark
     /// wins, and nothing unsets it.
     sent_at: OnceLock<EpochMillis>,
-    sensitive: AtomicBool,
     /// The latest `recheck` or `recheck_reach` refusal, until a later check clears it
     /// ([`StandingRefusal`]). However the method then ends, a value included, this is the op's
     /// error, so a refusal survives a crate's own error mapping (sdk-playwright returns its own
@@ -112,6 +110,8 @@ pub(super) struct OpState {
     /// releases what the script answered, since the script read those tabs as easily as its own;
     /// a tab only a refused send named can only withhold more there.
     reached: Mutex<Vec<TabId>>,
+    /// The script's abort switch for this op (Playwright's `signal`), or its parent's.
+    abort: Option<OpAbort>,
 }
 
 /// A refusal of the door's rules during an op, as it stands as the op's error ([`OpState`]) until
@@ -299,12 +299,6 @@ impl<M> OpCtx<M> {
         self.core.state.mark_sent(EpochMillis::now());
     }
 
-    /// The target turned out to be a password, card or one-time-code field: the trace redacts
-    /// the method's sensitive input fields.
-    pub(crate) fn mark_sensitive_target(&self) {
-        self.core.state.sensitive.store(true, Ordering::Relaxed);
-    }
-
     /// One call-log line for the op's record. The first lines are kept; a runaway method
     /// cannot grow its op without bound.
     pub(crate) fn note(&self, line: String) {
@@ -332,6 +326,21 @@ impl<M> OpCtx<M> {
                 "the page closed",
             ))
         })
+    }
+
+    /// The reason the script gave when it aborted this op (Playwright's `signal`), once it has.
+    #[must_use]
+    pub(crate) fn abort_reason(&self) -> Option<String> {
+        self.core.state.abort()?.reason().map(str::to_owned)
+    }
+
+    /// Resolves once the script aborts this op; never, for an op it cannot abort. The method
+    /// decides what an abort ends (`op_abort.rs`): the door does not cut the op for it.
+    pub(crate) async fn aborted(&self) {
+        match self.core.state.abort() {
+            Some(abort) => abort.requested().await,
+            None => future::pending().await,
+        }
     }
 
     /// Fires when the run stops. Crates that take a token (the CAPTCHA solver) get a clone.
@@ -469,13 +478,17 @@ impl OpCore {
 }
 
 impl OpState {
-    /// A fresh op under `parent`.
-    pub(super) fn new(id: OperationId, parent: Option<Arc<OpState>>) -> Arc<Self> {
+    /// A fresh op under `parent`, which the script can abort through `abort`.
+    pub(super) fn new(
+        id: OperationId,
+        parent: Option<Arc<OpState>>,
+        abort: Option<OpAbort>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             id,
             parent,
+            abort,
             sent_at: OnceLock::new(),
-            sensitive: AtomicBool::new(false),
             refusal: Mutex::new(None),
             notes: Mutex::new(Vec::new()),
             reports: Mutex::new(Vec::new()),
@@ -492,13 +505,14 @@ impl OpState {
         self.parent.as_ref().map(|parent| parent.id)
     }
 
+    /// The op's abort switch, which its child ops share.
+    pub(super) fn abort(&self) -> Option<&OpAbort> {
+        self.abort.as_ref()
+    }
+
     /// When the op, or one of its children, marked itself sent.
     pub(super) fn sent_at(&self) -> Option<EpochMillis> {
         self.sent_at.get().copied()
-    }
-
-    pub(super) fn is_sensitive(&self) -> bool {
-        self.sensitive.load(Ordering::Relaxed)
     }
 
     /// The refusal standing as the op's error, if any.

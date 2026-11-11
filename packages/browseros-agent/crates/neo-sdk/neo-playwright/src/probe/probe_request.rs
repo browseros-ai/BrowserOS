@@ -5,11 +5,6 @@
 //! read every example request in `probe-protocol.json` and write it back unchanged: a field
 //! one side has and the other lacks fails that round trip.
 
-#![expect(
-    dead_code,
-    reason = "the protocol is mirrored whole, and each op family sends its own requests"
-)]
-
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

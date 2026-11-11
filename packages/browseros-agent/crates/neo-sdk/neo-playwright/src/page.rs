@@ -20,6 +20,7 @@
 //!  page.setContent ─ document_op: the same gateway for a write from the sealed world, the
 //!                    frame's seq kept, then the load state; the HTML's scripts run in the main
 //!                    world
+//!  page.waitForNavigation ─ journal cursor ─ URL match ─ DocumentWatch lifecycle ─ timing entry
 //!  page.waitForURL ─ wait_for_url: each navigation matched in the sealed world, the load state
 //! ```
 
@@ -41,6 +42,7 @@ mod page_value;
 mod pdf;
 mod screenshot;
 mod screenshot_preparation;
+mod wait_for_navigation;
 mod wait_for_url;
 mod world_call;
 

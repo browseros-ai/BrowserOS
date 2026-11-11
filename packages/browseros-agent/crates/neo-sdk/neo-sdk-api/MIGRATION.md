@@ -86,3 +86,14 @@ codes they do not know.
   An image removed by retention still answers `410 expired`.
 - `Run.codeWithheld` only reports `unavailable` for a run interrupted by a restart. An older
   run recorded as `sensitive_input` can still have no stored `code`.
+
+## Trace arguments and sensitive targets
+
+Operation arguments no longer replace fields with `[redacted]` based on method metadata or a
+password, card or one-time-code target. Typing into these fields no longer withholds the run's
+code as `sensitive_input`. Arguments and code still wait for their end record before storage,
+with the existing secret-set masks and size bounds. `Run.codeWithheld: unavailable` still marks
+code that was never stored, for example after a restart.
+
+Existing trace rows remain readable: `[redacted]` arguments stay as recorded, and an older
+run whose code was withheld still has no code. No storage migration or reconstruction is done.

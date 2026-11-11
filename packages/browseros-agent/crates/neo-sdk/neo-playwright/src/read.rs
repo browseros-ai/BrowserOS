@@ -4,7 +4,7 @@
 //! ```text
 //!  read_op ── decodes the op's input, then
 //!    ├─ element_read    one element: waits for a locator's on the outer backoff, reads a
-//!    │                  handle's node once; marks the op's target sensitive when the seal says so
+//!    │                  handle's node once
 //!    │    └─ viewport_box   a box in the element's own frame, plus each parent iframe's
 //!    │                      content origin, is the box in the main frame's viewport
 //!    ├─ selector_wait   waitFor and waitForSelector: polls until the first match is in a state

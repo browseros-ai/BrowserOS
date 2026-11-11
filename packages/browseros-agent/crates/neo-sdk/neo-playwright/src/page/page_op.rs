@@ -13,7 +13,7 @@ use crate::page::document_watch::decode;
 use crate::page::navigation::{GotoInput, NavigateInput, Navigation};
 use crate::page::{
     PageHandle, document_op, element_evaluate, evaluate, frame_tree, navigation, pdf, screenshot,
-    wait_for_url,
+    wait_for_navigation, wait_for_url,
 };
 use crate::probe::DocumentPart;
 use crate::target::PageRef;
@@ -27,6 +27,7 @@ listed_enum! {
         Reload,
         GoBack,
         GoForward,
+        WaitForNavigation,
         WaitForUrl,
         WaitForLoadState,
         Title,
@@ -60,6 +61,11 @@ impl PageOp {
             Self::GoForward => {
                 OpSpec::write("page.goForward", PAGE, "go forward in the tab's history")
             }
+            Self::WaitForNavigation => OpSpec::read(
+                "page.waitForNavigation",
+                PAGE,
+                "wait for the next matching navigation and return its response or null",
+            ),
             Self::WaitForUrl => OpSpec::read(
                 "page.waitForURL",
                 PAGE,
@@ -177,6 +183,14 @@ pub(crate) async fn invoke(
         // Boxed for the same reason: each holds its frame's world install inside its timeout.
         PageOp::SetContent => {
             Box::pin(document_op::set_content(pw, scope, args.decode(scope)?)).await
+        }
+        PageOp::WaitForNavigation => {
+            Box::pin(wait_for_navigation::wait_for_navigation(
+                pw,
+                scope,
+                args.decode(scope)?,
+            ))
+            .await
         }
         PageOp::WaitForUrl => {
             Box::pin(wait_for_url::wait_for_url(pw, scope, args.decode(scope)?)).await
