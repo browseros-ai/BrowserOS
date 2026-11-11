@@ -51,6 +51,8 @@ listed_enum! {
         /// The page never reached a state the op waited for: a load state, a URL, an event, a
         /// function's truthy result, a finished download.
         WaitTimeout,
+        /// Neo did not finish observing a document already restored with all load states.
+        NavigationObservationTimeout,
         /// A bad selector, role, option or argument, a ref Neo never prints, or an input that
         /// does not decode.
         InvalidInput,
@@ -125,6 +127,9 @@ impl ErrorCode {
             Self::PageError => row("page_error", Website, No, Definite),
             Self::NavigationFailed => row("navigation_failed", Website, No, Definite),
             Self::WaitTimeout => row("wait_timeout", Website, Yes, Ambiguous),
+            Self::NavigationObservationTimeout => {
+                row("navigation_observation_timeout", Neo, Yes, Ambiguous)
+            }
             Self::InvalidInput => row("invalid_input", Script, No, Definite),
             Self::Unsupported => row("unsupported", Neo, No, Definite),
             Self::SensitiveCopyRefused => row("sensitive_copy_refused", Script, No, Definite),
@@ -351,7 +356,7 @@ mod tests {
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
-    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 16] = [
+    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 17] = [
         (
             "strict_mode_violation",
             ErrorOwner::Script,
@@ -397,6 +402,12 @@ mod tests {
         (
             "wait_timeout",
             ErrorOwner::Website,
+            TimedOut::Yes,
+            Answer::Ambiguous,
+        ),
+        (
+            "navigation_observation_timeout",
+            ErrorOwner::Neo,
             TimedOut::Yes,
             Answer::Ambiguous,
         ),
