@@ -23,7 +23,12 @@ import { answerBindingCall } from './bindings'
 import { invoke, invokeObserved, pumpDispatched } from './bridge'
 import { trackChooserSetup } from './chooser-setup'
 import type { EventEmitter } from './emitter'
-import { abortedError, prefixed, unsupportedError } from './errors'
+import {
+  abortedError,
+  internalError,
+  prefixed,
+  unsupportedError,
+} from './errors'
 import { EventDeadline } from './event-deadline'
 import {
   ConsoleMessage,
@@ -42,6 +47,7 @@ import type {
   EventName,
   EventRecord,
   FileChooserInfo,
+  NavigationCut,
   Observation,
 } from './wire'
 
@@ -132,6 +138,15 @@ type WaitOptions = {
   signal?: SignalLike
 }
 
+type NavigationWait = { page: Page | null; since: number; done: Promise<void> }
+type NavigationPublication = {
+  page: Page
+  cut: NavigationCut
+  finish: () => void
+  fail: (error: Error) => void
+  api: string
+}
+
 type ChooserLease = { ready: Promise<void>; release(): Promise<void> }
 
 /** What the hub needs from the context: its Page for a handle, and the context as an emitter. */
@@ -167,6 +182,17 @@ export class EventHub {
   /** A returning old pump cannot deliver into a context listener's replacement period. */
   private readonly contextSince = new Map<EventName, number>()
 
+  /** Action replies identify a committed journal record; these are its public consumers. */
+  private readonly navigationWaits = new Set<NavigationWait>()
+  /** The last log position a pump lost; later clicks may arrive after that pump reply. */
+  private navigationLostThrough = 0
+  private readonly navigationPublications = new Set<NavigationPublication>()
+  private readonly pageNavigationSince = new WeakMap<Page, number>()
+  private readonly navigationDelivered = new WeakMap<
+    Page,
+    { page: number; context: number }
+  >()
+
   constructor(owner: EventOwner) {
     this.owner = owner
   }
@@ -193,6 +219,10 @@ export class EventHub {
   listen(page: Page | null, event: EventName, on: boolean): void {
     const since = Date.now()
     this.listening += on ? 1 : -1
+    if (page && event === 'framenavigated') {
+      if (on) this.pageNavigationSince.set(page, since)
+      else this.pageNavigationSince.delete(page)
+    }
     if (page === null) {
       if (on) this.contextSince.set(event, since)
       else this.contextSince.delete(event)
@@ -212,6 +242,7 @@ export class EventHub {
       this.chooserChanges.set(page, changed)
       trackChooserSetup(changed)
     } else void this.sendListen(page, event, on, since)
+    this.settleNavigationPublications()
     if (on && !this.pumping) {
       this.pumping = true
       void this.pump()
@@ -271,6 +302,18 @@ export class EventHub {
     // signal too, so Rust stops waiting as well.
     const signal = signalOf(api, options)
     const lease = event === 'filechooser' && page ? this.intercept(page) : null
+    let finish = () => {}
+    const publication =
+      event === 'framenavigated' && !options.predicate
+        ? {
+            page,
+            since,
+            done: new Promise<void>((resolve) => {
+              finish = resolve
+            }),
+          }
+        : null
+    if (publication) this.navigationWaits.add(publication)
     try {
       return await untilAborted(
         signal,
@@ -292,6 +335,72 @@ export class EventHub {
       // Aborting a wait must not await native setup. The run owns unfinished leases too;
       // this cleanup follows setup and is a barrier for the script's next browser action.
       if (lease) void lease.release().catch(() => {})
+      if (publication) this.navigationWaits.delete(publication)
+      finish()
+    }
+  }
+
+  /**
+   * A click waits for the consumers of its own committed event, not for arbitrary pending
+   * browser work. Async predicates are deliberately excluded: they may themselves await the
+   * click. Listener callbacks run synchronously, just as EventEmitter does upstream.
+   */
+  async publishNavigation(
+    page: Page,
+    cut: NavigationCut,
+    api: string,
+    deadline: EventDeadline,
+    signal: SignalLike | undefined,
+  ): Promise<void> {
+    const waits = [...this.navigationWaits]
+      .filter(
+        (wait) =>
+          (wait.page === null || wait.page === page) && wait.since <= cut.at,
+      )
+      .map((wait) => wait.done)
+    let finish!: () => void
+    let fail!: (error: Error) => void
+    const delivered = new Promise<void>((resolve, reject) => {
+      finish = resolve
+      fail = reject
+    })
+    const publication = { page, cut, finish, fail, api }
+    this.navigationPublications.add(publication)
+    this.settleNavigationPublications()
+    try {
+      await untilAborted(
+        signal,
+        () => abortedError(api, signal as SignalLike),
+        () => deadline.race(Promise.all([...waits, delivered])),
+      )
+    } finally {
+      this.navigationPublications.delete(publication)
+    }
+  }
+
+  /** Removing a listener or closing its page releases its publication fence too. */
+  private settleNavigationPublications(): void {
+    for (const publication of this.navigationPublications) {
+      const { page, cut } = publication
+      const delivered = this.navigationDelivered.get(page)
+      const pagePending =
+        (this.pageNavigationSince.get(page) ?? Infinity) <= cut.at &&
+        (delivered?.page ?? 0) < cut.seq
+      const contextPending =
+        (this.contextSince.get('framenavigated') ?? Infinity) <= cut.at &&
+        (delivered?.context ?? 0) < cut.seq
+      if (page.isClosed() || (!pagePending && !contextPending)) {
+        this.navigationPublications.delete(publication)
+        publication.finish()
+      } else if (cut.seq <= this.navigationLostThrough) {
+        this.navigationPublications.delete(publication)
+        publication.fail(
+          internalError(
+            publication.api,
+            'Navigation events were lost before click completion',
+          ),
+        )
+      }
     }
   }
 
@@ -429,7 +538,8 @@ export class EventHub {
             'events.next',
             { api: 'events.next', timeoutMs: 0 },
             {},
-            ({ events }, observed) => this.deliverBatch(events, observed),
+            ({ events, lost }, observed) =>
+              this.deliverBatch(events, lost, observed),
           )
         } catch (error) {
           // An error reply is dispatched too: ops held on a reply Rust counted before it failed
@@ -453,12 +563,19 @@ export class EventHub {
    */
   private deliverBatch(
     events: EventRecord[],
+    lost: number,
     observed: Observation | null,
   ): void {
     this.stageBatch(events)
     try {
       for (const event of events) this.deliver(event, observed)
     } finally {
+      // Keep loss evidence before releasing the pump ledger: a click reply can arrive later.
+      if (lost > 0)
+        this.navigationLostThrough = Math.max(
+          this.navigationLostThrough,
+          observed?.events ?? Infinity,
+        )
       try {
         this.settleCloses(observed)
       } finally {
@@ -498,6 +615,7 @@ export class EventHub {
     this.owner._settleWorkerFacts(observed)
     for (const close of observed?.closes ?? [])
       this.page({ $neo: 'page', tab: close.tab })._settleClose(observed)
+    this.settleNavigationPublications()
   }
 
   private deliver(record: EventRecord, observed: Observation | null): void {
@@ -560,9 +678,22 @@ export class EventHub {
         const page = this.page(record.page)
         const frame = page._eventFrame(record.seq, record.event, record.frame)
         const emitter = record.context ? this.owner : page
-        frame._duringEvent(record.frame, record.event, () =>
-          emitter.emit(record.event, frame),
-        )
+        try {
+          frame._duringEvent(record.frame, record.event, () =>
+            emitter.emit(record.event, frame),
+          )
+        } finally {
+          if (record.event === 'framenavigated') {
+            const delivered = this.navigationDelivered.get(page) ?? {
+              page: 0,
+              context: 0,
+            }
+            const audience = record.context ? 'context' : 'page'
+            delivered[audience] = Math.max(delivered[audience], record.seq)
+            this.navigationDelivered.set(page, delivered)
+            this.settleNavigationPublications()
+          }
+        }
         return
       }
       case 'close':

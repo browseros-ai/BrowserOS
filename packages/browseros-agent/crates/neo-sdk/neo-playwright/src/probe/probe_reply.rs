@@ -22,7 +22,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 22;
+pub(crate) const PROBE_PROTOCOL: u32 = 23;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -405,7 +405,7 @@ mod tests {
     fn tests_that_a_reply_this_build_cannot_read_is_refused() {
         for bad in [
             json!({ "kind": "described", "protocol": 1, "seq": 0 }),
-            json!({ "kind": "element", "pin": 3, "preview": "<b>", "sensitive": null }),
+            json!({ "kind": "element", "pin": 3, "preview": "<b>", "unexpected": null }),
             json!({ "kind": "none", "staleRef": "e5", "extra": true }),
             json!({ "kind": "teleported" }),
         ] {

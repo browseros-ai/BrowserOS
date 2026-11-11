@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use crate::input::TabInput;
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
 use crate::resolve;
-use crate::world::SealedWorld;
+use crate::world::IsolatedWorld;
 
 /// An interceptor armed in one world. Playwright's interceptor blocks every later pointer
 /// event in its frame once it saw a miss (and every one in a trial), so one left armed would
@@ -31,7 +31,7 @@ use crate::world::SealedWorld;
 #[derive(Debug)]
 pub(crate) struct ArmGuard {
     /// `None` once the probe answered the verdict.
-    world: Option<SealedWorld>,
+    world: Option<IsolatedWorld>,
     token: u32,
     input: Arc<Mutex<TabInput>>,
     /// The tab's root session and pointer scale, for the owed releases.
@@ -42,7 +42,7 @@ pub(crate) struct ArmGuard {
 impl ArmGuard {
     /// The interceptor `act { arm }` armed with `token` in `world`.
     pub(crate) fn new(
-        world: SealedWorld,
+        world: IsolatedWorld,
         token: u32,
         input: Arc<Mutex<TabInput>>,
         session: ProtocolSession,
@@ -133,7 +133,7 @@ async fn flush_when_idle(input: &Mutex<TabInput>, session: &ProtocolSession, poi
     reason = "the releases and the disarm run while no op holds the tab's input; see ArmGuard"
 )]
 async fn disarm_when_idle(
-    world: SealedWorld,
+    world: IsolatedWorld,
     input: Arc<Mutex<TabInput>>,
     session: ProtocolSession,
     pointer_scale: f64,

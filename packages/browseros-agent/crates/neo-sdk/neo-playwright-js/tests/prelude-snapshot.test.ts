@@ -1,4 +1,4 @@
-// ariaSnapshot() as scripts see it: Rust returns the stitched, masked JSON, and the prelude
+// ariaSnapshot() as scripts see it: Rust returns the stitched JSON, and the prelude
 // renders it with the vendored renderer, adding a `# partial` comment under each iframe line
 // whose frame could not be read.
 import { expect, it } from 'bun:test'

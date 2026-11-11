@@ -1,5 +1,5 @@
 //! The probe protocol: the one contract between this crate and Neo's probe in each frame's
-//! sealed `browseros-engine` world.
+//! isolated `browseros-engine` world.
 //!
 //! ```text
 //!  Runtime.callFunctionOn {
@@ -29,5 +29,5 @@ pub(crate) use probe_reply::{
 pub(crate) use probe_request::{
     ArmPlan, DocumentPart, DropEntry, Edit, ElementState, ExpectParams, FilePayload, FillValue,
     HitAction, ParsedSelector, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll, Retarget,
-    ScrollPlan, SelectOption, SnapshotMode, UrlPattern, Want,
+    ScrollPlan, SelectOption, SnapshotMode, StorageAction, StorageKind, UrlPattern, Want,
 };

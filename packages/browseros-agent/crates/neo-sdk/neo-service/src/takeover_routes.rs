@@ -28,8 +28,8 @@ pub(crate) async fn start_takeover(
     body: Bytes,
 ) -> Result<Json<api::Takeover>, ApiError> {
     let request = wire::takeover_request(&body)?;
-    // Before the start makes the tab private, locks it and fits it, so a reconcile whose listing
-    // missed the tab keeps all three (`tab_stamps`).
+    // Before the start locks and fits the tab, so a reconcile whose listing missed it
+    // keeps both (`tab_stamps`).
     service.stamps.stamp(request.tab).await;
     let takeover = service.takeovers.start(request).await?;
     Ok(Json(wire::takeover(&takeover)))

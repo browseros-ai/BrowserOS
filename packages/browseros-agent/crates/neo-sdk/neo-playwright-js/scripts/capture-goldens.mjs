@@ -64,7 +64,7 @@ for (const name of ['playwright-core', '@playwright/test']) {
     process.exit(2)
   }
 }
-const { chromium } = require('playwright-core')
+const { chromium, selectors } = require('playwright-core')
 const {
   ws: WebSocket,
   wsServer: WebSocketServer,
@@ -434,6 +434,8 @@ async function captureApi(browser, page) {
   const handle = await page.$('body')
   try {
     const classes = {
+      Selectors: selectors,
+      WebStorage: page.localStorage,
       Browser: browser,
       BrowserContext: page.context(),
       Page: page,

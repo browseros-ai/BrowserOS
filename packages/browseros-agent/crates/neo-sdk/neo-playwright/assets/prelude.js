@@ -411,6 +411,16 @@
       target: "page",
       lifetime: "operation"
     },
+    "webStorage.read": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "webStorage.write": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "context.pages": {
       effect: "read",
       target: null,
@@ -658,6 +668,62 @@
     return error;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/publication.ts
+  var producers = new Map;
+  var acknowledged = new Set;
+  var nextPublication = 0;
+  function completedPublications(ids) {
+    if (!Array.isArray(ids))
+      return;
+    for (const id of ids) {
+      if (typeof id !== "number")
+        continue;
+      const entry = producers.get(id);
+      if (entry)
+        entry.ready = true;
+      acknowledged.add(id);
+    }
+  }
+
+  class Publications {
+    pending = new Set;
+    track(work) {
+      let finish;
+      const id = ++nextPublication;
+      const entry = {
+        id,
+        ready: false,
+        done: new Promise((resolve) => {
+          finish = resolve;
+        })
+      };
+      producers.set(id, entry);
+      this.pending.add(entry);
+      const published = () => {
+        this.pending.delete(entry);
+        producers.delete(id);
+        finish();
+      };
+      return Promise.resolve().then(() => {
+        const receipts = [...acknowledged];
+        acknowledged.clear();
+        return work(() => {
+          entry.ready = true;
+        }, { id, acknowledged: receipts });
+      }).then((value) => {
+        published();
+        return value;
+      }, (error) => {
+        published();
+        throw error;
+      });
+    }
+    async publishReady() {
+      const ready = [...this.pending].filter((entry) => entry.ready);
+      await Promise.all(ready.map((entry) => entry.done));
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/bridge.ts
   async function invoke(op, call, args, signal) {
     try {
@@ -712,6 +778,7 @@
       return;
     countingPumps = true;
     host().onReply((envelope) => {
+      completedPublications(field(envelope, "completedNavigations"));
       const pumped = field(envelope, "pumped");
       if (typeof pumped === "number" && pumped > pumpsNeeded)
         pumpsNeeded = pumped;
@@ -3562,6 +3629,56 @@ ${value.stack}`;
         error.message = bare;
       throw error;
     }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/event-deadline.ts
+  class EventDeadline {
+    api;
+    event;
+    timeout;
+    endsAt;
+    constructor(api, event, since, timeout) {
+      this.api = api;
+      this.event = event;
+      this.timeout = timeout;
+      this.endsAt = timeout === 0 ? null : since + timeout;
+    }
+    left() {
+      if (this.endsAt === null)
+        return 0;
+      const left = this.endsAt - Date.now();
+      if (left <= 0)
+        throw this.expired();
+      return left;
+    }
+    named(error) {
+      if (!(error instanceof Error) || Reflect.get(error, "code") !== "wait_timeout")
+        return error;
+      const [, ...log] = error.message.split(`
+`);
+      error.message = [`${this.api}: ${this.message()}`, ...log].join(`
+`);
+      return error;
+    }
+    race(verdict) {
+      const endsAt = this.endsAt;
+      if (endsAt === null || !isThenable(verdict))
+        return Promise.resolve(verdict);
+      let cancel = () => {};
+      const expired = new Promise((_, reject) => {
+        cancel = startTimer(Math.max(0, endsAt - Date.now()), () => reject(this.expired()));
+      });
+      return Promise.race([verdict, expired]).finally(cancel);
+    }
+    expired() {
+      return waitTimeoutError(this.api, this.message());
+    }
+    message() {
+      return this.event === null ? `Timeout ${this.timeout}ms exceeded.` : `Timeout ${this.timeout}ms exceeded while waiting for event "${this.event}"`;
+    }
+  }
+  function isThenable(value) {
+    return (typeof value === "object" || typeof value === "function") && value !== null && typeof Reflect.get(value, "then") === "function";
   }
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/stringUtils.ts
@@ -6610,8 +6727,12 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/locator.ts
+  var testIdAttribute = "data-testid";
   function testIdAttributeName() {
-    return "data-testid";
+    return testIdAttribute;
+  }
+  function setTestIdAttribute(attributeName) {
+    testIdAttribute = attributeName;
   }
 
   class Locator {
@@ -7373,9 +7494,24 @@ ${value.stack}`;
       return await invoke(op, this._call(api, wait.timeout), input, wait.signal);
     }
     async _click(api, selector, options = {}) {
-      await this._selectorOp("locator.click", api, selector, options.strict, this._wait(api, options), {
-        options: pick(options, POINTER_KEYS)
-      });
+      const wait = this._wait(api, options);
+      const deadline = new EventDeadline(api, null, Date.now(), wait.timeout);
+      const result = await this._selectorOp("locator.click", api, selector, options.strict, wait, { options: pick(options, POINTER_KEYS) });
+      if (result?.navigation) {
+        try {
+          await this._page._context._events.publishNavigation(this._page, result.navigation, api, deadline, wait.signal);
+        } catch (error) {
+          if (error instanceof Error) {
+            Object.assign(error, { delivery: "unknown", retryable: false });
+            if (Reflect.get(error, "code") === "wait_timeout")
+              Object.assign(error, {
+                code: "navigation_observation_timeout",
+                owner: "neo"
+              });
+          }
+          throw error;
+        }
+      }
     }
     async _dblclick(api, selector, options = {}) {
       await this._selectorOp("locator.dblclick", api, selector, options.strict, this._wait(api, options), {
@@ -7551,15 +7687,19 @@ ${value.stack}`;
         throw clientError(api, `url: expected string, got ${typeof url}`);
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      return await this._page._navigating(async () => {
+      return await this._page._navigating(async (ready, publication) => {
         const args = await this._frameArgs(api);
+        let completion;
         const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
           ...args,
           url,
           waitUntil,
+          publication,
           ...pick(options, ["referer"])
-        }, undefined, signal);
-        return await this._page._navigated(api, this, result, observed);
+        }, (result, observed) => {
+          completion = this._page._navigated(api, this, result, observed, ready);
+        }, signal);
+        return await (completion ?? this._page._navigated(api, this, result, observed, ready));
       });
     }
     async _waitForLoadState(api, state, options = {}) {
@@ -7611,6 +7751,7 @@ ${value.stack}`;
         script
       });
       this._page._evaluated(result.frames, observed);
+      await this._page._publishCompleted();
       return fromPageValue(api, result.value);
     }
     async _waitForFunction(api, pageFunction, arg, options = {}) {
@@ -8298,56 +8439,6 @@ ${value.stack}`;
     await invoke("bindingCall.resolve", { api, timeoutMs: 0 }, { page: await page._brand(api), context: record.executionContext, arg }).catch(() => {});
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/prelude/event-deadline.ts
-  class EventDeadline {
-    api;
-    event;
-    timeout;
-    endsAt;
-    constructor(api, event, since, timeout) {
-      this.api = api;
-      this.event = event;
-      this.timeout = timeout;
-      this.endsAt = timeout === 0 ? null : since + timeout;
-    }
-    left() {
-      if (this.endsAt === null)
-        return 0;
-      const left = this.endsAt - Date.now();
-      if (left <= 0)
-        throw this.expired();
-      return left;
-    }
-    named(error) {
-      if (!(error instanceof Error) || Reflect.get(error, "code") !== "wait_timeout")
-        return error;
-      const [, ...log] = error.message.split(`
-`);
-      error.message = [`${this.api}: ${this.message()}`, ...log].join(`
-`);
-      return error;
-    }
-    race(verdict) {
-      const endsAt = this.endsAt;
-      if (endsAt === null || !isThenable(verdict))
-        return Promise.resolve(verdict);
-      let cancel = () => {};
-      const expired = new Promise((_, reject) => {
-        cancel = startTimer(Math.max(0, endsAt - Date.now()), () => reject(this.expired()));
-      });
-      return Promise.race([verdict, expired]).finally(cancel);
-    }
-    expired() {
-      return waitTimeoutError(this.api, this.message());
-    }
-    message() {
-      return this.event === null ? `Timeout ${this.timeout}ms exceeded.` : `Timeout ${this.timeout}ms exceeded while waiting for event "${this.event}"`;
-    }
-  }
-  function isThenable(value) {
-    return (typeof value === "object" || typeof value === "function") && value !== null && typeof Reflect.get(value, "then") === "function";
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/prelude/event-values.ts
   class FileChooser {
     #pageValue;
@@ -8567,6 +8658,11 @@ ${value.stack}`;
     chooserChanges = new Map;
     contextChanges = new Map;
     contextSince = new Map;
+    navigationWaits = new Set;
+    navigationLostThrough = 0;
+    navigationPublications = new Set;
+    pageNavigationSince = new WeakMap;
+    navigationDelivered = new WeakMap;
     constructor(owner) {
       this.owner = owner;
     }
@@ -8583,6 +8679,12 @@ ${value.stack}`;
     listen(page, event, on) {
       const since = Date.now();
       this.listening += on ? 1 : -1;
+      if (page && event === "framenavigated") {
+        if (on)
+          this.pageNavigationSince.set(page, since);
+        else
+          this.pageNavigationSince.delete(page);
+      }
       if (page === null) {
         if (on)
           this.contextSince.set(event, since);
@@ -8603,6 +8705,7 @@ ${value.stack}`;
         trackChooserSetup(changed);
       } else
         this.sendListen(page, event, on, since);
+      this.settleNavigationPublications();
       if (on && !this.pumping) {
         this.pumping = true;
         this.pump();
@@ -8627,6 +8730,16 @@ ${value.stack}`;
       const deadline = new EventDeadline(api, event, since, timeoutMs(api, settings.timeout(options)));
       const signal = signalOf(api, options);
       const lease = event === "filechooser" && page ? this.intercept(page) : null;
+      let finish = () => {};
+      const publication = event === "framenavigated" && !options.predicate ? {
+        page,
+        since,
+        done: new Promise((resolve) => {
+          finish = resolve;
+        })
+      } : null;
+      if (publication)
+        this.navigationWaits.add(publication);
       try {
         return await untilAborted(signal, () => abortedError(api, signal), async () => {
           if (lease)
@@ -8636,6 +8749,41 @@ ${value.stack}`;
       } finally {
         if (lease)
           lease.release().catch(() => {});
+        if (publication)
+          this.navigationWaits.delete(publication);
+        finish();
+      }
+    }
+    async publishNavigation(page, cut, api, deadline, signal) {
+      const waits = [...this.navigationWaits].filter((wait) => (wait.page === null || wait.page === page) && wait.since <= cut.at).map((wait) => wait.done);
+      let finish;
+      let fail;
+      const delivered = new Promise((resolve, reject) => {
+        finish = resolve;
+        fail = reject;
+      });
+      const publication = { page, cut, finish, fail, api };
+      this.navigationPublications.add(publication);
+      this.settleNavigationPublications();
+      try {
+        await untilAborted(signal, () => abortedError(api, signal), () => deadline.race(Promise.all([...waits, delivered])));
+      } finally {
+        this.navigationPublications.delete(publication);
+      }
+    }
+    settleNavigationPublications() {
+      for (const publication of this.navigationPublications) {
+        const { page, cut } = publication;
+        const delivered = this.navigationDelivered.get(page);
+        const pagePending = (this.pageNavigationSince.get(page) ?? Infinity) <= cut.at && (delivered?.page ?? 0) < cut.seq;
+        const contextPending = (this.contextSince.get("framenavigated") ?? Infinity) <= cut.at && (delivered?.context ?? 0) < cut.seq;
+        if (page.isClosed() || !pagePending && !contextPending) {
+          this.navigationPublications.delete(publication);
+          publication.finish();
+        } else if (cut.seq <= this.navigationLostThrough) {
+          this.navigationPublications.delete(publication);
+          publication.fail(internalError(publication.api, "Navigation events were lost before click completion"));
+        }
       }
     }
     async waitFor(api, page, event, options, since, deadline, signal) {
@@ -8724,7 +8872,7 @@ ${value.stack}`;
       try {
         while (this.listening > 0) {
           try {
-            await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events }, observed) => this.deliverBatch(events, observed));
+            await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events, lost }, observed) => this.deliverBatch(events, lost, observed));
           } catch (error) {
             pumpDispatched();
             throw error;
@@ -8734,12 +8882,14 @@ ${value.stack}`;
         this.pumping = false;
       }
     }
-    deliverBatch(events, observed) {
+    deliverBatch(events, lost, observed) {
       this.stageBatch(events);
       try {
         for (const event of events)
           this.deliver(event, observed);
       } finally {
+        if (lost > 0)
+          this.navigationLostThrough = Math.max(this.navigationLostThrough, observed?.events ?? Infinity);
         try {
           this.settleCloses(observed);
         } finally {
@@ -8770,6 +8920,7 @@ ${value.stack}`;
       this.owner._settleWorkerFacts(observed);
       for (const close of observed?.closes ?? [])
         this.page({ $neo: "page", tab: close.tab })._settleClose(observed);
+      this.settleNavigationPublications();
     }
     deliver(record, observed) {
       if (record.event === "binding") {
@@ -8817,7 +8968,20 @@ ${value.stack}`;
           const page = this.page(record.page);
           const frame = page._eventFrame(record.seq, record.event, record.frame);
           const emitter = record.context ? this.owner : page;
-          frame._duringEvent(record.frame, record.event, () => emitter.emit(record.event, frame));
+          try {
+            frame._duringEvent(record.frame, record.event, () => emitter.emit(record.event, frame));
+          } finally {
+            if (record.event === "framenavigated") {
+              const delivered = this.navigationDelivered.get(page) ?? {
+                page: 0,
+                context: 0
+              };
+              const audience = record.context ? "context" : "page";
+              delivered[audience] = Math.max(delivered[audience], record.seq);
+              this.navigationDelivered.set(page, delivered);
+              this.settleNavigationPublications();
+            }
+          }
           return;
         }
         case "close":
@@ -9080,6 +9244,59 @@ ${value.stack}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/web-storage.ts
+  class WebStorage {
+    #page;
+    #kind;
+    constructor(page, kind) {
+      this.#page = page;
+      this.#kind = kind;
+    }
+    async items() {
+      const api = "webStorage.items";
+      const items = await invoke("webStorage.read", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "items" });
+      return Array.isArray(items) ? items : [];
+    }
+    async getItem(name) {
+      const api = "webStorage.getItem";
+      const value = await invoke("webStorage.read", { api, timeoutMs: 0 }, {
+        page: await this.#page._brand(api),
+        kind: this.#kind,
+        action: "getItem",
+        name: text(api, "name", name)
+      });
+      return typeof value === "string" ? value : null;
+    }
+    async setItem(name, value) {
+      const api = "webStorage.setItem";
+      await invoke("webStorage.write", { api, timeoutMs: 0 }, {
+        page: await this.#page._brand(api),
+        kind: this.#kind,
+        action: "setItem",
+        name: text(api, "name", name),
+        value: text(api, "value", value)
+      });
+    }
+    async removeItem(name) {
+      const api = "webStorage.removeItem";
+      await invoke("webStorage.write", { api, timeoutMs: 0 }, {
+        page: await this.#page._brand(api),
+        kind: this.#kind,
+        action: "removeItem",
+        name: text(api, "name", name)
+      });
+    }
+    async clear() {
+      const api = "webStorage.clear";
+      await invoke("webStorage.write", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "clear" });
+    }
+  }
+  function text(api, field, value) {
+    if (typeof value !== "string")
+      throw clientError(api, `${field}: expected string, got ${typeof value}`);
+    return value;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/worker.ts
   class Worker extends EventEmitter {
     #page;
@@ -9204,6 +9421,8 @@ ${value.stack}`;
     _mainFrame;
     keyboard;
     mouse;
+    localStorage;
+    sessionStorage;
     _url;
     #urlKnown;
     _title = "";
@@ -9217,6 +9436,7 @@ ${value.stack}`;
     #approvedClose = null;
     _working = false;
     _navigationsInFlight = 0;
+    #publications = new Publications;
     #childFrames = new Map;
     #knownFrames = new Map;
     #frameEvents = new Map;
@@ -9232,6 +9452,8 @@ ${value.stack}`;
       this._mainFrame = new Frame(this, null, null);
       this.keyboard = new Keyboard(this);
       this.mouse = new Mouse(this);
+      this.localStorage = new WebStorage(this, "local");
+      this.sessionStorage = new WebStorage(this, "session");
       markHandle(this);
     }
     context() {
@@ -9627,19 +9849,24 @@ ${value.stack}`;
       const brand = elementBrand(value);
       return brand ? new ElementHandle(this, brand) : null;
     }
-    async _navigating(work) {
+    _navigating(work) {
       this._navigationsInFlight++;
-      try {
-        return await work();
-      } finally {
-        this._navigationsInFlight--;
-      }
+      return this.#publications.track(async (ready, publication) => {
+        try {
+          return await work(ready, publication);
+        } finally {
+          this._navigationsInFlight--;
+        }
+      });
+    }
+    async _publishCompleted() {
+      await this.#publications.publishReady();
     }
     _evaluated(frames, at) {
       if (this.#payloadCurrent(at) && Array.isArray(frames))
         this._applyFrames(frames, at);
     }
-    async _navigated(api, frame, result, at) {
+    async _navigated(api, frame, result, at, ready) {
       if (this.#payloadCurrent(at)) {
         if (typeof result?.url === "string") {
           if (frame === this._mainFrame) {
@@ -9650,13 +9877,14 @@ ${value.stack}`;
         }
         if (Array.isArray(result?.frames))
           this._applyFrames(result.frames, at);
-        else
+        else if (!result?.frameSnapshotAttempted)
           await this._refreshFrames(api);
-      } else if (!this._closed) {
+      } else if (!this._closed && !result?.frameSnapshotAttempted) {
         await this._refreshFrames(api).catch(() => {
           return;
         });
       }
+      ready?.();
       return typeof result?.response?.status === "number" ? new Response(frame, result.response) : null;
     }
     #payloadCurrent(at) {
@@ -9989,9 +10217,12 @@ ${value.stack}`;
     async#history(api, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      return await this._navigating(async () => {
-        const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil }, undefined, signal);
-        return await this._navigated(api, this._mainFrame, result, observed);
+      return await this._navigating(async (ready, publication) => {
+        let completion;
+        const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil, publication }, (result, observed) => {
+          completion = this._navigated(api, this._mainFrame, result, observed, ready);
+        }, signal);
+        return await (completion ?? this._navigated(api, this._mainFrame, result, observed, ready));
       });
     }
   }
@@ -17091,7 +17322,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
   function argumentError(matcher, message) {
     return plainError(`expect.${matcher}`, message);
   }
-  function text(matcher, receiver, expression, expected, values, options, extra = {}) {
+  function text2(matcher, receiver, expression, expected, values, options, extra = {}) {
     if (typeof expected !== "string" && !(expected instanceof RegExp))
       throw argumentError(matcher, "expected value must be a string or regular expression");
     const substring = values[0]?.matchSubstring === true;
@@ -17163,20 +17394,20 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
         normalizeWhiteSpace: true,
         ignoreCase: options?.ignoreCase
       })
-    }) : text("toContainText", "Locator", "to.have.text", expected, textValues([expected], {
+    }) : text2("toContainText", "Locator", "to.have.text", expected, textValues([expected], {
       matchSubstring: true,
       normalizeWhiteSpace: true,
       ignoreCase: options?.ignoreCase
     }), options),
-    toHaveAccessibleDescription: (expected, options) => text("toHaveAccessibleDescription", "Locator", "to.have.accessible.description", expected, textValues([expected], {
+    toHaveAccessibleDescription: (expected, options) => text2("toHaveAccessibleDescription", "Locator", "to.have.accessible.description", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
-    toHaveAccessibleName: (expected, options) => text("toHaveAccessibleName", "Locator", "to.have.accessible.name", expected, textValues([expected], {
+    toHaveAccessibleName: (expected, options) => text2("toHaveAccessibleName", "Locator", "to.have.accessible.name", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
-    toHaveAccessibleErrorMessage: (expected, options) => text("toHaveAccessibleErrorMessage", "Locator", "to.have.accessible.error.message", expected, textValues([expected], {
+    toHaveAccessibleErrorMessage: (expected, options) => text2("toHaveAccessibleErrorMessage", "Locator", "to.have.accessible.error.message", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
@@ -17190,11 +17421,11 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
           expressionArg: name
         });
       const value = expected;
-      return text("toHaveAttribute", "Locator", "to.have.attribute.value", value, textValues([value], { ignoreCase: options?.ignoreCase }), options, { expressionArg: name });
+      return text2("toHaveAttribute", "Locator", "to.have.attribute.value", value, textValues([value], { ignoreCase: options?.ignoreCase }), options, { expressionArg: name });
     },
     toHaveClass: (expected, options) => Array.isArray(expected) ? equal("to.have.class.array", expected, options, {
       expectedText: textValues(expected)
-    }) : text("toHaveClass", "Locator", "to.have.class", expected, textValues([expected]), options),
+    }) : text2("toHaveClass", "Locator", "to.have.class", expected, textValues([expected]), options),
     toContainClass: (expected, options) => {
       if (Array.isArray(expected)) {
         if (expected.some((item) => item instanceof RegExp))
@@ -17205,14 +17436,14 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       }
       if (expected instanceof RegExp)
         throw argumentError("toContainClass", '"expected" argument in toContainClass cannot be a RegExp value');
-      return text("toContainClass", "Locator", "to.contain.class", expected, textValues([expected]), options);
+      return text2("toContainClass", "Locator", "to.contain.class", expected, textValues([expected]), options);
     },
     toHaveCount: (expected, options) => equal("to.have.count", expected, options, { expectedNumber: expected }),
-    toHaveCSS: (name, expected, options) => text("toHaveCSS", "Locator", "to.have.css", expected, textValues([expected]), options, {
+    toHaveCSS: (name, expected, options) => text2("toHaveCSS", "Locator", "to.have.css", expected, textValues([expected]), options, {
       expressionArg: name,
       ...options?.pseudo ? { pseudo: options.pseudo } : {}
     }),
-    toHaveId: (expected, options) => text("toHaveId", "Locator", "to.have.id", expected, textValues([expected]), options),
+    toHaveId: (expected, options) => text2("toHaveId", "Locator", "to.have.id", expected, textValues([expected]), options),
     toHaveJSProperty: (name, expected, options) => equal("to.have.property", expected, options, {
       expressionArg: name,
       expectedValue: expected
@@ -17220,22 +17451,22 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
     toHaveRole: (expected, options) => {
       if (typeof expected !== "string")
         throw argumentError("toHaveRole", '"role" argument in toHaveRole must be a string');
-      return text("toHaveRole", "Locator", "to.have.role", expected, textValues([expected]), options);
+      return text2("toHaveRole", "Locator", "to.have.role", expected, textValues([expected]), options);
     },
     toHaveText: (expected, options) => Array.isArray(expected) ? equal("to.have.text.array", expected, options, {
       expectedText: textValues(expected, {
         normalizeWhiteSpace: true,
         ignoreCase: options?.ignoreCase
       })
-    }) : text("toHaveText", "Locator", "to.have.text", expected, textValues([expected], {
+    }) : text2("toHaveText", "Locator", "to.have.text", expected, textValues([expected], {
       normalizeWhiteSpace: true,
       ignoreCase: options?.ignoreCase
     }), options),
-    toHaveValue: (expected, options) => text("toHaveValue", "Locator", "to.have.value", expected, textValues([expected]), options),
+    toHaveValue: (expected, options) => text2("toHaveValue", "Locator", "to.have.value", expected, textValues([expected]), options),
     toHaveValues: (expected, options) => equal("to.have.values", expected, options, {
       expectedText: textValues(expected)
     }),
-    toHaveTitle: (expected, options) => text("toHaveTitle", "Page", "to.have.title", expected, textValues([expected], { normalizeWhiteSpace: true }), options),
+    toHaveTitle: (expected, options) => text2("toHaveTitle", "Page", "to.have.title", expected, textValues([expected], { normalizeWhiteSpace: true }), options),
     toMatchAriaSnapshot: (expected, options) => {
       if (typeof expected !== "string")
         throw argumentError("toMatchAriaSnapshot", "snapshot files are not available in Neo; pass the expected snapshot as a YAML string");
@@ -17255,7 +17486,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
     },
     toHaveURL: (expected, options) => {
       const value = typeof expected === "string" ? normalizeUrl(expected) : expected;
-      return text("toHaveURL", "Page", "to.have.url", value, textValues([value], { ignoreCase: options?.ignoreCase }), options);
+      return text2("toHaveURL", "Page", "to.have.url", value, textValues([value], { ignoreCase: options?.ignoreCase }), options);
     }
   };
   async function retry(name, actual, state, matcher) {
@@ -17354,6 +17585,9 @@ Timeout: ${timeout}ms`);
   var TRACE = "Neo records its own trace of every run";
   var ROOTED = "element handles cannot root a selector in Neo; use locator.locator(selector) instead";
   var UNSUPPORTED2 = {
+    Selectors: {
+      register: "custom selector engines are not available in Neo; locate with CSS, text, role or test-id selectors"
+    },
     Browser: {
       bind: "Neo does not share its browser",
       browserType: {
@@ -17434,20 +17668,12 @@ Timeout: ${timeout}ms`);
         kind: "property"
       },
       coverage: { hint: "coverage is not available in Neo", kind: "property" },
-      localStorage: {
-        hint: "read storage with page.evaluate(() => localStorage.getItem(key))",
-        kind: "property"
-      },
       request: {
         hint: "API requests are not available in Neo; fetch from the page with page.evaluate()",
         kind: "property"
       },
       screencast: {
         hint: "Neo records its own screencast of every tab",
-        kind: "property"
-      },
-      sessionStorage: {
-        hint: "read storage with page.evaluate(() => sessionStorage.getItem(key))",
         kind: "property"
       },
       touchscreen: {
@@ -17708,8 +17934,25 @@ Call Log:
     return expect;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/playwright.ts
+  class Selectors {
+    setTestIdAttribute(attributeName) {
+      setTestIdAttribute(attributeName);
+    }
+  }
+  function createPlaywright() {
+    const sample = localTimeout("");
+    if (sample === null)
+      throw internalError("playwright", "claw-sdk's bootstrap has no TimeoutError");
+    return {
+      selectors: new Selectors,
+      errors: { TimeoutError: sample.constructor }
+    };
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/index.ts
   installUnsupported({
+    Selectors,
     Browser,
     BrowserContext,
     Page,
@@ -17741,5 +17984,6 @@ Call Log:
   provide("context", () => context);
   provide("browser", () => browser);
   provide("expect", () => expect);
+  provide("playwright", () => createPlaywright());
   provide("Buffer", () => Buffer);
 })();

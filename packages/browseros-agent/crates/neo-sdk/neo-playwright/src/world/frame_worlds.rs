@@ -1,4 +1,4 @@
-//! One page's sealed worlds: which frame documents have one, their seqs, and how each child
+//! One page's isolated worlds: which frame documents have one, their seqs, and how each child
 //! frame was reached from its parent.
 
 use std::collections::{HashMap, HashSet};
@@ -10,7 +10,7 @@ use tokio::sync::OnceCell;
 
 use crate::probe::ProbeFailure;
 use crate::world::frame_attach_log::{FrameAttachLog, FrameEvent, Taken};
-use crate::world::{Epoch, FrameSeq, Installed, SealedWorld, SessionKind, SessionSetup};
+use crate::world::{Epoch, FrameSeq, Installed, IsolatedWorld, SessionKind, SessionSetup};
 
 /// Where a world is installed: a frame on a raw session, and how that session was set up.
 #[derive(Clone, Debug)]
@@ -60,7 +60,7 @@ pub(crate) struct ParentLink {
 /// One parent of a frame, as a ref jump finds it: the parent's world and its iframe's key.
 #[derive(Clone, Debug)]
 pub(crate) struct LinkedParent {
-    pub(crate) world: SealedWorld,
+    pub(crate) world: IsolatedWorld,
     pub(crate) iframe_key: String,
 }
 
@@ -70,7 +70,7 @@ pub(crate) enum SeqLookup {
     /// Its world, and its parents from the main frame down (empty for a frame no hop reached).
     Live {
         /// Boxed: a world is large, and the other variants carry nothing.
-        world: Box<SealedWorld>,
+        world: Box<IsolatedWorld>,
         parents: Vec<LinkedParent>,
     },
     /// This page handed the seq out and its document is gone, or a parent's is: a ref into it
@@ -131,7 +131,7 @@ struct AttachLogBinding {
 
 #[derive(Debug)]
 struct WorldsInner {
-    cells: HashMap<WorldKey, Arc<OnceCell<SealedWorld>>>,
+    cells: HashMap<WorldKey, Arc<OnceCell<IsolatedWorld>>>,
     /// Live seqs, each with the key whose cell holds its world.
     live: HashMap<FrameSeq, WorldKey>,
     /// How each child document was last reached.
@@ -194,17 +194,17 @@ impl FrameWorlds {
     }
 
     /// The world of `endpoint`'s frame, installing it on first use: the session's setup, then
-    /// the seal, the engine and boot (`SealedWorld::install`). A child's parent link is
+    /// the engine and boot (`IsolatedWorld::install`). A child's parent link is
     /// recorded on every call, so a later ref jump into the frame finds its parents.
     pub(crate) async fn world(
         &self,
         installer: Installer<'_>,
         endpoint: &Endpoint,
         place: Place,
-    ) -> Result<SealedWorld, ProbeFailure> {
+    ) -> Result<IsolatedWorld, ProbeFailure> {
         let Some(session) = endpoint.session.session_id() else {
             return Err(ProbeFailure::Broken(
-                "a sealed world needs a target session".to_owned(),
+                "an isolated world needs a target session".to_owned(),
             ));
         };
         let key = WorldKey {
@@ -218,7 +218,7 @@ impl FrameWorlds {
                 .await?;
             // Subscribed here, before the create, so the new world's event cannot be missed.
             let watch = installer.sessions.watch_contexts();
-            SealedWorld::install(
+            IsolatedWorld::install(
                 endpoint.session.clone(),
                 endpoint.frame.clone(),
                 candidate,
@@ -236,7 +236,7 @@ impl FrameWorlds {
         key: WorldKey,
         place: Place,
         install: F,
-    ) -> Result<SealedWorld, ProbeFailure>
+    ) -> Result<IsolatedWorld, ProbeFailure>
     where
         F: FnOnce(FrameSeq) -> Fut,
         Fut: Future<Output = Result<Installed, ProbeFailure>>,
@@ -270,7 +270,7 @@ impl FrameWorlds {
     /// A call on `world` failed `Gone`: its document is gone. Drops its cell, only if the cell
     /// still holds this very install (a newer one by another op is kept), and retires its seq,
     /// only if the seq still belongs to this key.
-    pub(crate) fn invalidate(&self, world: &SealedWorld) {
+    pub(crate) fn invalidate(&self, world: &IsolatedWorld) {
         let Some(session) = world.session_id() else {
             return;
         };
@@ -459,7 +459,7 @@ impl WorldsInner {
         self.next = self.next.max(seq.0.saturating_add(1));
     }
 
-    fn live_world(&self, seq: FrameSeq) -> Option<SealedWorld> {
+    fn live_world(&self, seq: FrameSeq) -> Option<IsolatedWorld> {
         let key = self.live.get(&seq)?;
         self.cells.get(key)?.get().cloned()
     }
@@ -485,7 +485,7 @@ mod tests {
     use super::{FrameWorlds, ParentLink, Place, SeqLookup, WorldKey};
     use crate::probe::{ProbeFailure, Ran};
     use crate::test_env;
-    use crate::world::{FrameAttachLog, FrameEvent, FrameSeq, Installed, SealedWorld};
+    use crate::world::{FrameAttachLog, FrameEvent, FrameSeq, Installed, IsolatedWorld};
 
     type TestResult = Result<(), Box<dyn Error>>;
 
@@ -516,7 +516,7 @@ mod tests {
         at: (&str, &str),
         place: Place,
         installs: &AtomicU32,
-    ) -> Result<SealedWorld, ProbeFailure> {
+    ) -> Result<IsolatedWorld, ProbeFailure> {
         rekey(worlds, at, place, installs, None).await
     }
 
@@ -528,7 +528,7 @@ mod tests {
         place: Place,
         installs: &AtomicU32,
         retired: Option<u32>,
-    ) -> Result<SealedWorld, ProbeFailure> {
+    ) -> Result<IsolatedWorld, ProbeFailure> {
         boot(worlds, at, place, installs, retired, "about:blank").await
     }
 
@@ -540,13 +540,13 @@ mod tests {
         installs: &AtomicU32,
         retired: Option<u32>,
         url: &str,
-    ) -> Result<SealedWorld, ProbeFailure> {
+    ) -> Result<IsolatedWorld, ProbeFailure> {
         let (session_id, frame) = at;
         worlds
             .world_with(key(session_id, frame), place, |candidate| async move {
                 let count = installs.fetch_add(1, Ordering::SeqCst);
                 task::yield_now().await;
-                let world = SealedWorld::for_tests(
+                let world = IsolatedWorld::for_tests(
                     session(session_id),
                     frame,
                     candidate.0,
@@ -561,7 +561,7 @@ mod tests {
             .await
     }
 
-    fn installed(world: SealedWorld) -> Installed {
+    fn installed(world: IsolatedWorld) -> Installed {
         Installed {
             world,
             retired: None,
@@ -862,7 +862,7 @@ mod tests {
         // The same document through another session: the world keeps the seq it has.
         let reached = worlds
             .world_with(key("S2", "main"), Place::Main, |_| async {
-                Ok(installed(SealedWorld::for_tests(
+                Ok(installed(IsolatedWorld::for_tests(
                     session("S2"),
                     "main",
                     0,
@@ -878,7 +878,7 @@ mod tests {
         );
         let later = worlds
             .world_with(key("S3", "late"), child_of(0, "#2"), |_| async {
-                Ok(installed(SealedWorld::for_tests(
+                Ok(installed(IsolatedWorld::for_tests(
                     session("S3"),
                     "late",
                     9,

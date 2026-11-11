@@ -134,7 +134,7 @@ impl LiveBrowser {
         Err(format!("{url} did not load within 5 s").into())
     }
 
-    /// Evaluates `expression` in the page's own main world, which the seal leaves alone.
+    /// Evaluates `expression` in the page's own main world.
     pub(crate) async fn main_world(&self, page: &TestPage, expression: &str) -> TestResult<Value> {
         let session = self.browser.pages.get_session(page.id.clone()).await?;
         let result: Value = session
@@ -156,10 +156,20 @@ impl LiveBrowser {
         op: &str,
         input: Value,
     ) -> TestResult<Result<Value, PlaywrightError>> {
+        self.invoke_in_run(Arc::default(), op, input).await
+    }
+
+    /// Reuses one agent run's caches across native operations, as the server's host does.
+    pub(crate) async fn invoke_in_run(
+        &self,
+        run_state: Arc<RunState>,
+        op: &str,
+        input: Value,
+    ) -> TestResult<Result<Value, PlaywrightError>> {
         let op = Op::from_name(op).ok_or(format!("{op} is not an op"))?;
         let env = LiveEnv {
             view: BrowserView::unbound(Arc::clone(&self.browser), None),
-            run_state: Arc::default(),
+            run_state,
         };
         Ok(self.playwright.invoke(&env, op, input).await)
     }

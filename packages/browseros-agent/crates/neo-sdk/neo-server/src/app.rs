@@ -321,8 +321,7 @@ async fn housekeeping(janitor: TabJanitor, trace: TraceSink, shutdown: Cancellat
     }
 }
 
-/// Opens the trace store in `trace_dir` (`EnvConfig::trace_dir`, which Neo's secret files deny to
-/// uploads too), or, when the file does not open (a schema this build does not know, a corrupt
+/// Opens the trace store in `trace_dir` (`EnvConfig::trace_dir`), or, when the file does not open (a schema this build does not know, a corrupt
 /// file), moves it aside and opens a fresh one: Neo must not crash-loop on its own records. The
 /// old file is kept beside the new one for a human to look at.
 ///

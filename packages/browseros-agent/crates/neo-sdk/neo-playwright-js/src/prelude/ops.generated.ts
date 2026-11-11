@@ -403,6 +403,16 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'webStorage.read': {
+    effect: 'read',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'webStorage.write': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'context.pages': {
     effect: 'read',
     target: null,

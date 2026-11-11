@@ -65,7 +65,7 @@ fn typescript_below(dir: &Path, base: &Path) -> Result<Vec<(String, String)>, Bo
 
 /// `sync.sh` copies each file in its `FILES` list from an upstream tag and writes `SHA256SUMS`.
 /// Every vendored file must be on that list, in the manifest, and byte for byte as copied:
-/// the sealed world is reviewed as upstream's code, so a local edit must not slip in.
+/// the isolated world is reviewed as upstream's code, so a local edit must not slip in.
 #[test]
 fn tests_that_the_vendored_files_are_the_bytes_sync_sh_recorded() -> TestResult {
     vendored_as_synced(VENDORED)

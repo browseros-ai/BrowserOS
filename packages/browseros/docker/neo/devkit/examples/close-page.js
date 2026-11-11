@@ -1,4 +1,3 @@
-// Close the task's tab. A takeover leaves its tab private until it closes, and
-// view displays stay paused while a private tab is in front.
+// Close the task's example tab.
 await page.close();
 return { closed: true };

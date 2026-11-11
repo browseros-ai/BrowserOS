@@ -5,7 +5,7 @@
 //!  run_script ─ AsyncRuntime + AsyncContext ─ install_web_globals (pure URL/form natives),
 //!      │        js/bootstrap.js, neo-playwright's
 //!      │        prelude, js/neo_prelude.js, then the agent's code compiled as
-//!      │        `async function (console, …, page, context, browser, expect, neo)`
+//!      │        `async function (console, …, page, context, browser, expect, playwright, neo)`
 //!      │        natives: __neo_invoke(name, json, site) → Promise<string>, never rejects
 //!      │                 __neo_log(level, text)       __neo_sleep(ms) → Promise
 //!      ▼

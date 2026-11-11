@@ -30,6 +30,10 @@ const ROOTED =
   'element handles cannot root a selector in Neo; use locator.locator(selector) instead'
 
 export const UNSUPPORTED = {
+  Selectors: {
+    register:
+      'custom selector engines are not available in Neo; locate with CSS, text, role or test-id selectors',
+  },
   Browser: {
     bind: 'Neo does not share its browser',
     browserType: {
@@ -119,20 +123,12 @@ export const UNSUPPORTED = {
       kind: 'property',
     },
     coverage: { hint: 'coverage is not available in Neo', kind: 'property' },
-    localStorage: {
-      hint: 'read storage with page.evaluate(() => localStorage.getItem(key))',
-      kind: 'property',
-    },
     request: {
       hint: 'API requests are not available in Neo; fetch from the page with page.evaluate()',
       kind: 'property',
     },
     screencast: {
       hint: 'Neo records its own screencast of every tab',
-      kind: 'property',
-    },
-    sessionStorage: {
-      hint: 'read storage with page.evaluate(() => sessionStorage.getItem(key))',
       kind: 'property',
     },
     touchscreen: {

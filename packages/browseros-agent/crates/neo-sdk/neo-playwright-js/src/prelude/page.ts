@@ -57,6 +57,7 @@ import { addInitScript, type Disposable } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
 import { markHandle, pick } from './options'
+import { Publications } from './publication'
 import { Response } from './response'
 import type { LocatorOptions } from './selectors'
 import {
@@ -71,12 +72,14 @@ import {
   type ByRoleOptions,
   escapeRegExp,
 } from './vendored'
+import { WebStorage } from './web-storage'
 import type {
   DragOptions,
   FillOptions,
   FrameInfo,
   KeyOptions,
   LoadState,
+  NavigationPublication,
   NavigationResult,
   Observation,
   PageBrand,
@@ -123,6 +126,8 @@ export class Page extends EventEmitter {
   readonly _mainFrame: Frame
   readonly keyboard: Keyboard
   readonly mouse: Mouse
+  readonly localStorage: WebStorage
+  readonly sessionStorage: WebStorage
   _url: string
   /** Historical opening events fill an unknown URL once. Live observations keep it current. */
   #urlKnown: boolean
@@ -157,6 +162,7 @@ export class Page extends EventEmitter {
    * releases the navigation once it has slept. The navigation's own reply refreshes the tree.
    */
   _navigationsInFlight = 0
+  readonly #publications = new Publications()
   readonly #childFrames = new Map<string, Frame>()
   /** Snapshots may observe removal before the event reader delivers its retained record. */
   readonly #knownFrames = new Map<string, Frame>()
@@ -177,6 +183,8 @@ export class Page extends EventEmitter {
     this._mainFrame = new Frame(this, null, null)
     this.keyboard = new Keyboard(this)
     this.mouse = new Mouse(this)
+    this.localStorage = new WebStorage(this, 'local')
+    this.sessionStorage = new WebStorage(this, 'session')
     markHandle(this)
   }
 
@@ -1055,27 +1063,37 @@ export class Page extends EventEmitter {
   }
 
   /** Runs a navigation op, counted in `_navigationsInFlight` from the call until it settles. */
-  async _navigating<T>(work: () => Promise<T>): Promise<T> {
+  _navigating<T>(
+    work: (ready: () => void, publication: NavigationPublication) => Promise<T>,
+  ): Promise<T> {
     this._navigationsInFlight++
-    try {
-      return await work()
-    } finally {
-      this._navigationsInFlight--
-    }
+    return this.#publications.track(async (ready, publication) => {
+      try {
+        return await work(ready, publication)
+      } finally {
+        this._navigationsInFlight--
+      }
+    })
   }
 
-  /** Applies what a navigation or wait returned; the frame tree is fetched if it was not. */
+  /** Publish only a navigation whose requested load or native reply already completed. */
+  async _publishCompleted(): Promise<void> {
+    await this.#publications.publishReady()
+  }
+
   /** A script's supplemental facts must belong to this Page's current admitted binding. */
   _evaluated(frames: FrameInfo[] | undefined, at: Observation | null): void {
     if (this.#payloadCurrent(at) && Array.isArray(frames))
       this._applyFrames(frames, at)
   }
 
+  /** Applies native frame facts; older replies retain the fallback tree read. */
   async _navigated(
     api: string,
     frame: Frame,
     result: NavigationResult | null,
     at: Observation | null,
+    ready?: () => void,
   ): Promise<Response | null> {
     if (this.#payloadCurrent(at)) {
       if (typeof result?.url === 'string') {
@@ -1085,12 +1103,17 @@ export class Page extends EventEmitter {
         } else frame._url = result.url
       }
       if (Array.isArray(result?.frames)) this._applyFrames(result.frames, at)
-      else await this._refreshFrames(api)
-    } else if (!this._closed) {
+      else if (!result?.frameSnapshotAttempted) await this._refreshFrames(api)
+    } else if (!this._closed && !result?.frameSnapshotAttempted) {
       // Keep the original operation's return value even if a fresh read of the replacement
       // binding fails. The stale payload never becomes the replacement's cached state.
       await this._refreshFrames(api).catch(() => undefined)
     }
+    // A modern native reply already attempted its bounded snapshot. If superseded, discard
+    // those facts instead of reading a replacement renderer on an older op's completion.
+    // No browser await remains after this mark. A later evaluate may now publish this
+    // navigation's public promise before returning its own observation.
+    ready?.()
     return typeof result?.response?.status === 'number'
       ? new Response(frame, result.response)
       : null
@@ -1590,15 +1613,25 @@ export class Page extends EventEmitter {
   ): Promise<Response | null> {
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
-    return await this._navigating(async () => {
+    return await this._navigating(async (ready, publication) => {
+      let completion: Promise<Response | null> | undefined
       const { value: result, observed } = await invokeObserved(
         api,
         this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),
-        { page: await this._brand(api), waitUntil },
-        undefined,
+        { page: await this._brand(api), waitUntil, publication },
+        (result, observed) => {
+          completion = this._navigated(
+            api,
+            this._mainFrame,
+            result,
+            observed,
+            ready,
+          )
+        },
         signal,
       )
-      return await this._navigated(api, this._mainFrame, result, observed)
+      return await (completion ??
+        this._navigated(api, this._mainFrame, result, observed, ready))
     })
   }
 }

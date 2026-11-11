@@ -7,8 +7,9 @@ use crate::dispatch::{Listing, Registry};
 const USAGE: &str = "Runs JavaScript against the user's browser and returns what the script \
 returns. `code` is the body of an async function: `await` each SDK call and `return` a JSON \
 value. The function's parameters are the SDK: Playwright's `page` (this task's tab; a background \
-tab opens on the first call that needs one), `context`, `browser` and `expect`, Node's `Buffer` \
-(`screenshot` and `pdf` resolve to one, and a `setInputFiles` payload takes one), then `neo` (any \
+tab opens on the first call that needs one), `context`, `browser`, `expect` and `playwright` \
+(`selectors.setTestIdAttribute`, `errors.TimeoutError`), Node's `Buffer` (`screenshot` and `pdf` \
+resolve to one, and a `setInputFiles` payload takes one), then `neo` (any \
 `neo.*` method listed below), `console` (its lines come back with the result), `setTimeout`, \
 `clearTimeout`, `NeoError` and `TimeoutError`. Every run gets a fresh JavaScript realm; only the \
 browser's tabs carry over from one run to the next. The realm is QuickJS, which has no `Intl`.";

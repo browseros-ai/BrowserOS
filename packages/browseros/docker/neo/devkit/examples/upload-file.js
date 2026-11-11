@@ -1,6 +1,4 @@
-// Upload a file from Neo's disk into a file input, as Playwright does, and read back what the
-// page got. Neo's own secret files are refused: here the host token that compose.sdk-dev.yaml
-// mounts, which fails script / neo_secret_upload_refused with nothing sent and no path named.
+// Upload a local file and an in-memory payload into a file input, as Playwright does.
 const html = `<title>Upload</title><input type="file" id="file"><p id="seen"></p>
 <script>
   const input = document.getElementById('file');
@@ -18,8 +16,10 @@ await input.setInputFiles('/etc/os-release');
 await expect(seen).toContainText('os-release: ');
 const uploaded = await seen.textContent();
 
-const token = await input.setInputFiles('/run/neo-dev/host-token').then(
-  () => 'uploaded',
-  ({ owner, code, delivery, message }) => ({ owner, code, delivery, message }),
-);
-return { uploaded, token, shownAfterRefusal: await seen.textContent() };
+await input.setInputFiles({
+  name: 'note.txt',
+  mimeType: 'text/plain',
+  buffer: Buffer.from('hello from Neo'),
+});
+await expect(seen).toHaveText('note.txt: hello from Neo');
+return { uploaded, payload: await seen.textContent() };

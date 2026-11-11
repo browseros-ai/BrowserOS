@@ -1,12 +1,12 @@
-//! Sends probe requests into a sealed world and reads the replies. One of the three files in
-//! core's `tests/page_js_guard.rs` ALLOWED list (with `world/sealed_world.rs` and
+//! Sends probe requests into an isolated world and reads the replies. One of the three files in
+//! core's `tests/page_js_guard.rs` ALLOWED list (with `world/isolated_world.rs` and
 //! `page/evaluate_guard.rs`). It never logs params or results: a fill's text travels here
 //! (STYLE P4).
 //!
 //! Every call names the world by its global object's remote object id, never by
 //! `executionContextId`. Context ids are small per-renderer counters, so after a cross-process
 //! navigation a cached id names some context of the new process: measured on BrowserOS, the id
-//! of a sealed world reached the main world of a `srcdoc` iframe on the next site, where a
+//! of an isolated world reached the main world of a `srcdoc` iframe on the next site, where a
 //! hostile page could have defined `__neoProbe` and read the request. An object id carries its
 //! renderer isolate's id, and the same call on a stale handle fails with "Cannot find context
 //! with specified id", which [`ProbeFailure::from_core`] reads as gone.
@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use crate::op_scope::OpScope;
 use crate::probe::probe_reply::ProbeReply;
 use crate::probe::probe_request::ProbeRequest;
-use crate::world::{Pin, SealedWorld};
+use crate::world::{IsolatedWorld, Pin};
 
 /// The function declaration every request is sent with. It must equal `CALL_FUNCTION` in
 /// protocol.ts (a test checks it against probe-protocol.json). It runs on the world's global,
@@ -116,7 +116,7 @@ impl ProbeFailure {
 impl fmt::Display for ProbeFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Gone(_) => f.write_str("the sealed world's document or session is gone"),
+            Self::Gone(_) => f.write_str("the isolated world's document or session is gone"),
             Self::Cdp(error) => error.fmt(f),
             Self::Broken(why) => f.write_str(why),
         }
@@ -188,7 +188,7 @@ impl ExceptionDetails {
 
 /// One request, answered by value.
 pub(crate) async fn call(
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
     send(world, request, None, Gesture::None).await
@@ -198,7 +198,7 @@ pub(crate) async fn call(
 /// (`evaluateWithArguments`, `userGesture: true`): `setContent`'s write, whose HTML's scripts
 /// run inside the call and so with the frame's transient activation, as they do upstream.
 pub(crate) async fn call_with_gesture(
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
     send(world, request, None, Gesture::User).await
@@ -214,7 +214,7 @@ pub(crate) async fn call_with_gesture(
 /// and that refusal is `Gone`. So a stale id can fail the call, but can never hand a request
 /// to a page's own world, as calling on the node's object would.
 pub(crate) async fn call_on(
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     request: &ProbeRequest,
     root: &str,
 ) -> Result<ProbeReply, ProbeFailure> {
@@ -231,7 +231,7 @@ enum Gesture {
 
 /// One `Runtime.callFunctionOn` of [`CALL_FUNCTION`] on the world's global.
 async fn send(
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     request: &ProbeRequest,
     root: Option<&str>,
     gesture: Gesture,
@@ -300,7 +300,7 @@ pub(crate) fn reply_of(called: Value) -> Result<ProbeReply, ProbeFailure> {
 /// op ends), for `DOM.describeNode` and other by-node CDP calls. `None` once the pin is gone.
 pub(crate) async fn pinned_object(
     scope: &OpScope<'_>,
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     pin: Pin,
 ) -> Result<Option<String>, ProbeFailure> {
     let request = serde_json::to_value(ProbeRequest::Pinned { pin }).map_err(|error| {
