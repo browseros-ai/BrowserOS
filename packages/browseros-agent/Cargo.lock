@@ -530,6 +530,7 @@ dependencies = [
  "base64 0.22.1",
  "browseros-cdp",
  "browseros-core",
+ "browseros-decide",
  "browseros-mcp",
  "bytes",
  "chrono",

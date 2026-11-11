@@ -8,6 +8,7 @@ pub mod hosted;
 pub mod naming;
 pub mod observers;
 mod prompt;
+pub mod pursue;
 pub mod script_hook;
 mod service;
 mod session_handle;
