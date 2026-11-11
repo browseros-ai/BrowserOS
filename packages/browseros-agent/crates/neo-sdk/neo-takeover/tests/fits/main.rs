@@ -221,6 +221,65 @@ async fn restore_puts_back_the_agents_own_viewport_the_window_and_the_screen() -
 }
 
 #[tokio::test]
+async fn a_fit_waits_for_an_inflight_resize_before_saving_what_it_will_restore() -> TestResult {
+    let h = harness(&[3]).await?;
+    h.agent_sets_viewport(
+        3,
+        ViewportRequest::playwright(Size {
+            width: 640,
+            height: 480,
+        })?,
+    )
+    .await?;
+    let view =
+        BrowserView::unbound(Arc::clone(&h.session), None).with_viewports(Arc::clone(&h.viewports));
+    let pages = h.session.pages.resolve_tab_ids(&[TabId(3)]).await?;
+    let page = pages.get(&TabId(3)).ok_or("the script's tab is open")?;
+    let requested = ViewportRequest::playwright(Size {
+        width: 800,
+        height: 600,
+    })?;
+    let change = view
+        .prepare_playwright_viewport(page.clone(), requested)
+        .await?;
+    let reset = "Emulation.setTouchEmulationEnabled";
+    h.browser.hold(reset);
+    let applying = tokio::spawn(change.apply());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while h.browser.held(reset) == 0 {
+        if tokio::time::Instant::now() > deadline {
+            return Err("resize never reached its held acknowledgement".into());
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // A takeover's bounded settle can end while this acknowledged-metrics change still
+    // waits. Its fit must snapshot the configuration after that in-flight change commits.
+    let fits = Arc::clone(&h.fits);
+    let fitting = tokio::spawn(async move { fits.fit(TabId(3), PHONE).await });
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(!fitting.is_finished(), "the fit waits behind the resize");
+    h.browser.let_go(reset);
+    applying.await??;
+    let fit = fitting.await??;
+    h.fits.restore(fit.id).await?;
+    assert_eq!(
+        view.current_viewport(page),
+        Some(requested),
+        "the fit must save the last completed resize, not the configuration seen before waiting"
+    );
+    assert_eq!(
+        h.browser.metrics(3),
+        Metrics {
+            width: 800,
+            height: 600,
+            device_scale: 1.0,
+            touch: false
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_refitted_owner_view_restores_the_scripts_viewport_and_desktop_context() -> TestResult {
     let h = harness(&[3, 4]).await?;
     let size = Size {

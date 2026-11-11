@@ -372,10 +372,14 @@ impl BrowserTabs {
         Ok(())
     }
 
-    /// The request the tab's fixed viewport mode was set with, as core keeps it (decision 25);
-    /// `None` in the default mode.
-    pub(crate) fn viewport(&self, page: &PageInfo) -> Option<ViewportRequest> {
-        self.view().current_viewport(&page.page_id)
+    /// The request the fit will replace; `None` in the default mode. A takeover's bounded
+    /// settle can end before an in-flight resize acknowledges or rolls back, so wait for its
+    /// viewport lock before saving the request. Otherwise a fit could restore an older size
+    /// even though that resize succeeded before the fit's own override landed.
+    pub(crate) async fn viewport(&self, page: &PageInfo) -> Option<ViewportRequest> {
+        let view = self.view();
+        let _held = view.hold_viewport(page.page_id.clone()).await;
+        view.current_viewport(&page.page_id)
     }
 
     /// Sets the tab's viewport; `None` puts it in the default mode. Core waits for every

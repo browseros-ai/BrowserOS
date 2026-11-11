@@ -237,7 +237,7 @@ impl Fits {
         let mut surface = self.surface.lock().await;
         let seen = Seen {
             window: self.browser.window(&page).await?,
-            viewport: self.browser.viewport(&page),
+            viewport: self.browser.viewport(&page).await,
         };
         // The tab's active fit, or a new id (a `FitId` defaults to a fresh one).
         let id = self.active_fit(tab).unwrap_or_default();
