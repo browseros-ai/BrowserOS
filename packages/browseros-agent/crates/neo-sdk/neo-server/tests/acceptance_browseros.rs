@@ -85,19 +85,15 @@ async fn the_agent_opens_a_tab(client: &Client) -> Result<(String, i64), Box<dyn
     let value = value(&result)?;
     assert_eq!(value.get("title"), Some(&json!(FIRST_TITLE)), "{result:?}");
     let page = value.get("page").ok_or("the run returns its page")?;
-    assert_eq!(
-        page.get("$neo"),
-        Some(&json!("page")),
-        "a page leaves a run as its brand: {page}"
-    );
-    assert!(
-        page.get("id").is_some_and(Value::is_u64),
-        "the brand carries Neo's page id: {page}"
-    );
     let tab = page
         .get("tab")
         .and_then(Value::as_i64)
         .ok_or_else(|| format!("the brand carries the browser's tab: {page}"))?;
+    assert_eq!(
+        page,
+        &json!({ "$neo": "page", "tab": tab }),
+        "a page leaves a run with only its brand and the browser's tab"
+    );
     let (id, status, effects) = run_meta(&result)?;
     assert_eq!(
         (status.as_str(), effects.as_str()),
