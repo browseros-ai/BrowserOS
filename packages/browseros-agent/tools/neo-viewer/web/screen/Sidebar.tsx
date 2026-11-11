@@ -1,11 +1,14 @@
 /**
- * The right sidebar. On top, where the design docks the live screen, a placeholder of the same
- * size: the screen comes with Neo's display relay (PR C). Under it, "What the model read": the
- * selected run's full reply exactly as the proxy captured it, formatted or raw.
+ * The right sidebar. On top, the live screen docked (PR C2's `LiveScreen`: Follow agent / Control,
+ * Pop out, a small screen); while it is popped out the dock says where it went. Under it, "What
+ * the model read": the selected run's full reply exactly as the proxy captured it, formatted or
+ * raw.
  */
 
 import { useState } from 'react'
 import type { RunSummary } from '../../shared/api'
+import { LiveScreen } from '../live-screen/LiveScreen'
+import type { LiveScreenController } from '../live-screen/use-live-screen'
 import { useRunDetail } from '../use-viewer'
 import { formattedLines, noReplyReason, rawLines, replyFacts } from './reply'
 import { LineSpans, OpenIcon, REPLY_VIEWS, type ReplyView, Switch } from './ui'
@@ -14,10 +17,17 @@ export function Sidebar({
   width,
   run,
   onOpenFull,
+  live,
+  popped,
+  onPopOut,
 }: {
   width: number
   run: RunSummary | null
   onOpenFull: (run: RunSummary) => void
+  live: LiveScreenController
+  /** The screen is in the pop-up; the docked panel stays empty so only one view connects. */
+  popped: boolean
+  onPopOut: () => void
 }) {
   return (
     <aside
@@ -25,22 +35,12 @@ export function Sidebar({
       style={{ width }}
       className="flex min-h-0 shrink-0 flex-col gap-3 px-4 py-3.5"
     >
-      <section className="flex shrink-0 flex-col gap-2 border-line border-b pb-3">
-        <div className="flex h-[22px] items-center">
-          <h2 className="font-semibold text-[13px] text-ink leading-4">
-            Live screen
-          </h2>
-        </div>
-        <div className="flex h-[200px] flex-col items-center justify-center gap-1 rounded-md border border-control border-dashed bg-panel-2 px-6 text-center">
-          <p className="font-medium text-ink text-xs leading-4">
-            The live screen arrives with PR C
-          </p>
-          <p className="text-[11px] text-ink-2 leading-[14px]">
-            Neo's display, following the agent or under your control, docks
-            here.
-          </p>
-        </div>
-      </section>
+      <LiveScreen
+        live={live}
+        size="docked"
+        popped={popped}
+        onPopOut={onPopOut}
+      />
       {run ? (
         <ReplyPanel key={run.id} run={run} onOpenFull={() => onOpenFull(run)} />
       ) : (

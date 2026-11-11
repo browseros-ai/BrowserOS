@@ -4,13 +4,18 @@
  * the last Clear current from `/api/events`: a run appears when its call reaches the proxy and
  * fills in when Neo's reply passes back. Every agent's runs share one list (owner, 2026-11-11).
  *
- *   ┌ TopBar: name · container line · MCP URL + Copy · Clear ──────────────────────┐
+ *   ┌ TopBar: name · container line · MCP URL + Copy · Clear · Take over ──────────┐
  *   ├ TimeStrip: where the wall clock went, since the last Clear ──────────────────┤
  *   │ RunTable: one row per run(); open rows show RunBlock    ┃ Sidebar: live      │
  *   │ (code + "Model read"); totals row                       ┃ screen, then the   │
  *   │                                                Splitter ┃ selected reply     │
  *   └────────────────────────────────────────────────────────────────────────────────┘
  *   FullOutput: the pop-up "Open full" opens over all of it.
+ *   LiveScreenPopup: "Pop out" moves the live screen into a large pop-up; closing docks it again.
+ *
+ * The live screen is PR C2's (`web/live-screen/`): one controller (`useLiveScreen`) drives the
+ * docked panel, the pop-up and Take over, so they always agree on the mode and the takeover.
+ * It follows the agent: the tab its latest run used, the one Take over takes (`LiveStatus.tab`).
  *
  * Selection: until a row is clicked, the sidebar follows the latest run, so a new run
  * shows up there as it arrives; clicking a row opens it and pins the sidebar to it.
@@ -18,6 +23,8 @@
 
 import { useEffect, useState } from 'react'
 import type { RunSummary } from '../../shared/api'
+import { LiveScreenPopup } from '../live-screen/LiveScreen'
+import { useLiveScreen } from '../live-screen/use-live-screen'
 import { useViewer } from '../use-viewer'
 import { FullOutput } from './FullOutput'
 import { runTotals } from './measures'
@@ -49,6 +56,8 @@ export function ViewerScreen() {
   const [sort, setSort] = useState<RunSort>(DEFAULT_SORT)
   const [fullId, setFullId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
+  const live = useLiveScreen()
+  const [popped, setPopped] = useState(false)
   const nowMs = useNow(runs.some((run) => run.status === 'running'))
 
   // `runs` is in call order; with no row chosen the sidebar follows the newest.
@@ -83,7 +92,7 @@ export function ViewerScreen() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-plex text-ink text-xs leading-4 antialiased">
-      <TopBar info={info} onClear={onClear} />
+      <TopBar info={info} onClear={onClear} live={live} />
       {error && (
         <p
           role="alert"
@@ -114,8 +123,18 @@ export function ViewerScreen() {
           />
         </main>
         <Splitter width={sidebarWidth} onWidth={setSidebarWidth} />
-        <Sidebar width={sidebarWidth} run={selected} onOpenFull={openFull} />
+        <Sidebar
+          width={sidebarWidth}
+          run={selected}
+          onOpenFull={openFull}
+          live={live}
+          popped={popped}
+          onPopOut={() => setPopped(true)}
+        />
       </div>
+      {popped && (
+        <LiveScreenPopup live={live} onClose={() => setPopped(false)} />
+      )}
       {fullRun && (
         <FullOutput
           run={fullRun}

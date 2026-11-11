@@ -13,9 +13,9 @@ under `tools/`: not shipped, and not part of the image.
 ```
 
 The page at `/` is the designed Viewer C v2 screen (PR D1): the time strip, the run table with its
-bars, each run's code and the reply the model read, and the full-output pop-up. `/?plain` keeps
-the plain run list for debugging, with the live screen beside it (watch, control, take over) until
-the designed screen docks it. In an open run, each code line shows the methods it called, from
+bars, each run's code and the reply the model read, the full-output pop-up, and the live screen
+docked in the sidebar (Pop out opens it large; Take over is in the top bar). `/?plain` keeps the
+plain run list for debugging, with the same live screen beside it. In an open run, each code line shows the methods it called, from
 Neo's record of the run (`RunDetail.neo`): offset, name, outcome, a waterfall bar and read/write,
 and opening one shows its arguments, call log and result.
 
