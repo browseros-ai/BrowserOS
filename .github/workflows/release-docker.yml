@@ -137,6 +137,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-provider: warpbuild
+          # Do not restore archives containing the removed shared build-dir.
+          prefix-key: browseros-target-v1
           workspaces: packages/browseros-agent -> ../../target/neo-docker
           # One cache per target: each job only builds its own. The default
           # environment hash stays in the key and covers Cargo.lock, so a

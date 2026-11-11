@@ -101,6 +101,8 @@ jobs:
         if: matrix.needs_rust == true
         uses: Swatinem/rust-cache@v2
         with:
+          # Do not restore archives containing the removed shared build-dir.
+          prefix-key: browseros-target-v1
           workspaces: packages/browseros-agent
           # Without this the key embeds GITHUB_JOB, so the warm cache produced
           # on main by a differently named job could never be restored here.

@@ -84,6 +84,8 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
+          # Do not restore archives containing the removed shared build-dir.
+          prefix-key: browseros-target-v1
           workspaces: packages/browseros-agent
           # Must match the Tests workflow exactly. Without it the key embeds
           # GITHUB_JOB and this cache would be unreadable there.
