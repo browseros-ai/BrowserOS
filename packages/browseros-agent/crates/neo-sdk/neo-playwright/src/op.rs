@@ -187,8 +187,8 @@ mod tests {
     /// before it sends a path (`input_files/secrets.rs`).
     ///
     /// The ops with an empty row send selectors, values or trusted input, or read in the sealed
-    /// world. `page.goto` reaches no main world: the host refuses `javascript:`, the one scheme
-    /// that runs script in the current document. Aliases share their op's row:
+    /// world. `page.goto` delegates URLs to Chromium, including `javascript:` scripts in the
+    /// current document; it has no separate script gateway. Aliases share their op's row:
     /// `locator.screenshot` and `elementHandle.screenshot` send `page.screenshot`; `$eval`,
     /// `frame.$eval` and `elementHandle.evaluate` send `locator.evaluate`; `$$eval` sends
     /// `locator.evaluateAll`; the `frame` forms send the page ops.

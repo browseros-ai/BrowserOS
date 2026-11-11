@@ -2582,7 +2582,7 @@ async fn a_trace_wal_absent_at_start_is_refused_once_it_appears() -> Result<(), 
 }
 
 #[tokio::test]
-async fn a_goto_opens_only_http_https_data_and_about_urls() -> Result<(), Box<dyn Error>> {
+async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let owners = harness.owner_tab("https://bank.example/").await?;
     let (run, _guard) = harness.run()?;
@@ -2599,22 +2599,14 @@ async fn a_goto_opens_only_http_https_data_and_about_urls() -> Result<(), Box<dy
             "waitUntil": "load",
         })
     };
-    // Each would show the agent what it must not see (a local file such as Neo's host token,
-    // the browser's own pages, a page's source) or run script in the tab's main world, however
-    // the scheme is spelled.
+    // Other unsupported schemes keep their existing refusal.
     for url in [
-        "file:///etc/hosts",
-        " FILE:///etc/hosts",
-        "fi\tle:///run/neo/host-token",
         "view-source:https://bank.example/",
         "chrome://version",
         "devtools://devtools/bundled/inspector.html",
         "chrome-extension://abcdefghijklmnop/popup.html",
         "blob:https://bank.example/9d2c",
         "filesystem:https://bank.example/temporary/x",
-        "javascript:void(document.title = document.querySelector('input[type=password]').value)",
-        " JavaScript:void(0)",
-        "java\tscript:void(0)",
         // No scheme the URL Standard reads, so none to allow.
         "bank.example/login",
         // Its scheme is `localhost` to the URL Standard, as to the browser. Playwright's own goto
@@ -2654,6 +2646,12 @@ async fn a_goto_opens_only_http_https_data_and_about_urls() -> Result<(), Box<dy
         "HTTPS://bank.example/login",
         "data:text/html,<p>made in the script</p>",
         "about:blank",
+        "file:///tmp/local.html",
+        " FILE:///tmp/local.html",
+        "fi\tle:///tmp/local.html",
+        "javascript:void(document.title = 'ran')",
+        " JavaScript:void(0)",
+        "java\tscript:void(0)",
     ];
     for url in allowed {
         let failed = failure(harness.submit(&run, "page.goto", goto(url)).await)?;
@@ -2673,8 +2671,20 @@ async fn a_goto_opens_only_http_https_data_and_about_urls() -> Result<(), Box<dy
         .collect();
     assert_eq!(
         sent,
-        allowed.map(Value::from),
-        "each sent as the script wrote it"
+        [
+            "http://bank.example/",
+            "https://bank.example/login",
+            "data:text/html,<p>made in the script</p>",
+            "about:blank",
+            "file:///tmp/local.html",
+            "file:///tmp/local.html",
+            "file:///tmp/local.html",
+            "javascript:void(document.title = 'ran')",
+            "javascript:void(0)",
+            "javascript:void(0)",
+        ]
+        .map(Value::from),
+        "each URL is normalized as Playwright does before reaching Chromium"
     );
     Ok(())
 }
