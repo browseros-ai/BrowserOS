@@ -1576,6 +1576,63 @@ fn init_observation_orders_the_seed_before_later_replies() -> Result<(), TestErr
     })
 }
 
+/// A hand-made `AbortSignal` in the realm, which has no `AbortController` of its own.
+const SIGNAL: &str = r"
+    const listeners = []
+    const signal = {
+      aborted: false,
+      reason: undefined,
+      addEventListener(type, listener) { listeners.push(listener) },
+      removeEventListener(type, listener) { listeners.splice(listeners.indexOf(listener), 1) },
+    }
+    const abort = (reason) => {
+      signal.aborted = true
+      signal.reason = reason
+      for (const listener of [...listeners]) listener()
+    }
+";
+
+#[test]
+fn a_signal_aborts_the_op_it_was_given_through_the_bridge() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = format!(
+            "{SIGNAL}
+            const pending = __neo.invoke('test.abortable', {{}}, {{ signal }})
+              .catch((error) => [error.code, error.owner, error.delivery, error.message])
+            await new Promise((resolve) => setTimeout(resolve, 10))
+            abort(new Error('foo bar'))
+            return [await pending, listeners.length]"
+        );
+        assert_eq!(
+            returned(script(&rig, &code).await?)?,
+            json!([["aborted", "script", "not_sent", "foo bar"], 0]),
+            "the reason reaches the op, and the realm stops listening once it answered"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn an_abort_after_the_answer_and_a_call_without_a_signal_change_nothing() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = format!(
+            "{SIGNAL}
+            const echoed = await __neo.invoke('test.echo', {{ said: 'hi' }}, {{ signal }})
+            abort('too late')
+            const plain = await __neo.invoke('test.echo', {{ said: 'plain' }})
+            return [echoed, plain, listeners.length]"
+        );
+        assert_eq!(
+            returned(script(&rig, &code).await?)?,
+            json!([{ "said": "hi" }, { "said": "plain" }, 0]),
+            "an abortable call's input reaches the method unwrapped"
+        );
+        Ok(())
+    })
+}
+
 #[test]
 fn bridge_serializes_observations_only_with_page_facts() -> Result<(), TestError> {
     on_neo_runtime(async {

@@ -5,6 +5,8 @@
  * so it sits in a module of its own: errors.ts cannot import bridge.ts, which imports errors.ts.
  */
 
+import type { SignalLike } from './signal'
+
 /** The codes a refusal the prelude decides may carry: both script-owned (FR/RC C4). */
 export type RefusalCode = 'method_unavailable' | 'invalid_input'
 
@@ -17,6 +19,8 @@ export type Bootstrap = {
     options?: {
       observed?: boolean
       onResult?: (value: unknown, observed: unknown) => void
+      /** Makes the op abortable: the bootstrap aborts it when the signal fires. */
+      signal?: SignalLike
     },
   ): Promise<unknown>
   brands: {

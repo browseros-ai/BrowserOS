@@ -18,8 +18,6 @@ use crate::{OpEnv, Refusal, RunState};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum EnvCall {
     Recheck,
-    /// `OpEnv::recheck_reach`, with the other tabs of the op page's opener-linked group.
-    RecheckReach(Vec<TabId>),
     MarkSent,
     MarkSensitiveTarget,
     Note(String),
@@ -27,14 +25,12 @@ pub(crate) enum EnvCall {
     ReportClose(TabId, TargetId, u64),
 }
 
-/// An `OpEnv` that records every call and refuses `recheck`, or `recheck_reach`, when built
-/// with a refusal. Needs a tokio runtime, because the browser session it holds starts its
+/// An `OpEnv` that records every call and refuses `recheck` when built with a refusal. Needs a tokio runtime, because the browser session it holds starts its
 /// listener task.
 pub(crate) struct TestEnv {
     view: BrowserView,
     run_state: Arc<RunState>,
     refusal: Option<Refusal>,
-    reach_refusal: Option<Refusal>,
     calls: Mutex<Vec<EnvCall>>,
 }
 
@@ -50,7 +46,6 @@ impl TestEnv {
             view,
             run_state: Arc::default(),
             refusal: None,
-            reach_refusal: None,
             calls: Mutex::default(),
         }
     }
@@ -58,15 +53,6 @@ impl TestEnv {
     pub(crate) fn refusing(refusal: Refusal) -> Self {
         Self {
             refusal: Some(refusal),
-            ..Self::new()
-        }
-    }
-
-    /// An env whose `recheck` allows and whose `recheck_reach` refuses with `refusal`, as the
-    /// owner's takeover of another tab of the page's group would.
-    pub(crate) fn refusing_reach(refusal: Refusal) -> Self {
-        Self {
-            reach_refusal: Some(refusal),
             ..Self::new()
         }
     }
@@ -99,11 +85,6 @@ impl OpEnv for TestEnv {
     fn recheck(&self) -> Result<(), Refusal> {
         self.record(EnvCall::Recheck);
         self.refusal.clone().map_or(Ok(()), Err)
-    }
-
-    fn recheck_reach(&self, tabs: &[TabId]) -> Result<(), Refusal> {
-        self.record(EnvCall::RecheckReach(tabs.to_vec()));
-        self.reach_refusal.clone().map_or(Ok(()), Err)
     }
 
     fn mark_sent(&self) {

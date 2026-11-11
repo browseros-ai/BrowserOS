@@ -277,6 +277,9 @@ export type PageScript =
 
 /** The screenshot options Neo captures with; the prelude refuses the others before sending. */
 export type ScreenshotOptions = {
+  animations?: 'disabled' | 'allow'
+  caret?: 'hide' | 'initial'
+  style?: string
   type?: 'png' | 'jpeg'
   quality?: number
   fullPage?: boolean

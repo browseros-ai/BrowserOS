@@ -15,20 +15,12 @@ export class EventDeadline {
   private readonly timeout: number
   /** The `Date.now()` the wait times out at; null for a timeout of 0, which means none. */
   private readonly endsAt: number | null
-  private readonly signal: AbortSignal | undefined
 
-  constructor(
-    api: string,
-    event: string,
-    since: number,
-    timeout: number,
-    signal?: AbortSignal,
-  ) {
+  constructor(api: string, event: string, since: number, timeout: number) {
     this.api = api
     this.event = event
     this.timeout = timeout
     this.endsAt = timeout === 0 ? null : since + timeout
-    this.signal = signal
   }
 
   /**
@@ -36,11 +28,10 @@ export class EventDeadline {
    * because a 0 would tell Rust to wait forever.
    */
   left(): number {
-    if (this.signal?.aborted) throw this.aborted()
-    if (this.endsAt === null) return this.signal ? 100 : 0
+    if (this.endsAt === null) return 0
     const left = this.endsAt - Date.now()
     if (left <= 0) throw this.expired()
-    return this.signal ? Math.min(left, 100) : left
+    return left
   }
 
   /** An op's failure; a timeout names the script's timeout, not the time left that Rust saw. */
@@ -59,34 +50,16 @@ export class EventDeadline {
    * The predicate's verdict, or the TimeoutError if the deadline passes while it is pending. A
    * verdict that is not a promise is final at once, as it is upstream.
    */
-  race<T>(verdict: T | PromiseLike<T>): Promise<T> {
-    if (this.signal?.aborted) return Promise.reject(this.aborted())
+  race(verdict: unknown): Promise<unknown> {
     const endsAt = this.endsAt
-    if (!isThenable(verdict)) return Promise.resolve(verdict)
+    if (endsAt === null || !isThenable(verdict)) return Promise.resolve(verdict)
     let cancel = () => {}
     const expired = new Promise<never>((_, reject) => {
-      const stopTimer =
-        endsAt === null
-          ? () => {}
-          : startTimer(Math.max(0, endsAt - Date.now()), () =>
-              reject(this.expired()),
-            )
-      const abort = () => reject(this.aborted())
-      this.signal?.addEventListener('abort', abort, { once: true })
-      cancel = () => {
-        stopTimer()
-        this.signal?.removeEventListener('abort', abort)
-      }
+      cancel = startTimer(Math.max(0, endsAt - Date.now()), () =>
+        reject(this.expired()),
+      )
     })
     return Promise.race([verdict, expired]).finally(cancel)
-  }
-
-  private aborted(): Error {
-    const error = new Error('The operation was aborted', {
-      cause: this.signal?.reason,
-    })
-    error.name = 'AbortError'
-    return error
   }
 
   private expired(): Error {

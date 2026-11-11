@@ -1,5 +1,5 @@
 //! One op's page: the tab it admitted, the tab's state, the endpoints its worlds live on, and how
-//! long the op goes on trying a frame that missed its privacy budget.
+//! long the op goes on trying a frame that missed its budget for an install or a read's sweep.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -10,12 +10,10 @@ use browseros_core::{
 };
 use futures_util::FutureExt;
 use futures_util::future::Either;
-use serde::Deserialize;
-use serde_json::json;
 use tokio::time::{self, Instant};
 
 use crate::op_scope::{AdmittedPage, OpScope};
-use crate::page::{FRAME_BUDGET, PageState, document_watch};
+use crate::page::{FRAME_BUDGET, PageState};
 use crate::probe::ProbeFailure;
 use crate::target::PageRef;
 use crate::world::{Endpoint, FrameWorlds, Installer, Place, SealedWorld, SessionKind};
@@ -35,12 +33,12 @@ pub(crate) struct OpPage<'op> {
     deadline: Option<Instant>,
 }
 
-/// How long an op without a Playwright timeout (`page.evaluate`, `timeout: 0`) goes on trying a
-/// frame that missed its privacy budget, per stall: from the first try of a sweep or an install,
-/// and a new window only once the last one completed. It bounds each continuous stall, so a
-/// frame that stays late fails the op when its window ends. It is not one total for the op: an
-/// untimed poll (`waitForFunction` with `timeout: 0`, which upstream waits on forever) would then
-/// fail a later short stall for an earlier one that had already recovered.
+/// How long an op without a Playwright timeout (`timeout: 0`) goes on trying a frame that missed
+/// its budget, per stall: from the first try of a sweep or an install, and a new window only
+/// once the last one completed. It bounds each continuous stall, so a frame that stays late
+/// fails the op when its window ends. It is not one total for the op: an untimed poll (an
+/// `expect` with `timeout: 0`, which upstream waits on forever) would then fail a later short
+/// stall for an earlier one that had already recovered.
 ///
 /// Measured under 16 `yes` burners (load average 27 to 299): of 764 sweeps over 156 conformance
 /// cases, every one completed, the p99 in 150 ms and the slowest in 1.0 s, on its second try.
@@ -74,15 +72,12 @@ impl LateRetry {
     }
 }
 
-/// Where one try of a sweep or an install is cut. A read's or an install's first try is not
-/// ([`TryCut::default`]): it has its full frame budgets, so a frame late on it missed Neo's
-/// budget, and an op timeout that ends sooner is the op's own, inside `OpScope::within`. A
-/// main-world guard's first try is cut at the op's own deadline ([`OpPage::deadline_cut`]),
-/// because no guard sweep runs inside a timeout that would drop it with what it found: a frame
-/// the deadline cut there never had its whole budget, so the op times out as upstream's does.
-/// Every later try is cut at its [`LateRetry`] window's end, and a frame cut there is late, as
-/// one past its budget is: its try's values still go to the host, and the op fails with Neo's
-/// refusal, true to its word since the first try gave the frame its whole budget.
+/// Where one try of a sweep or an install is cut. The first try is not ([`TryCut::default`]): it
+/// has its full frame budgets, so a frame late on it missed Neo's budget, and an op timeout that
+/// ends sooner is the op's own, inside `OpScope::within`. Every later try is cut at its
+/// [`LateRetry`] window's end, and a frame cut there is late, as one past its budget is: its
+/// try's values still go to the host, and the op fails with Neo's refusal, true to its word
+/// since the first try gave the frame its whole budget.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TryCut(Option<Instant>);
 
@@ -91,11 +86,6 @@ impl TryCut {
     pub(crate) fn budget(self) -> Instant {
         let budget = Instant::now() + FRAME_BUDGET;
         self.0.map_or(budget, |until| budget.min(until))
-    }
-
-    /// Whether the cut has come: a try cut here ended at it.
-    pub(crate) fn passed(self) -> bool {
-        self.0.is_some_and(|until| Instant::now() >= until)
     }
 
     /// `work`'s output, or `None` when the cut came first. Not an `async fn`, whose state would
@@ -192,29 +182,6 @@ impl<'op> OpPage<'op> {
         }))
     }
 
-    /// The browser's tab on each of `mains`, a tab's page target, in order, for the host's rules
-    /// on the tabs a script on this op's page reaches (`OpEnv::recheck_reach`). Core's tab
-    /// registry names the tabs it knows, with no CDP call; for any other, the browser's own
-    /// tab list (`Browser.getTabs`) is read once, unfiltered. Core leaves the internal pages
-    /// out of its registry (`EXCLUDED_URL_PREFIXES`), but a page's script reaches an
-    /// extension's page it opened as it reaches any popup, so a tab is never dropped for being
-    /// one. `None` when the browser lists no tab on one of `mains` even then, as for a tab that
-    /// closed since the sweep read the targets: the host cannot be asked about it.
-    pub(crate) async fn tabs_on(&self, mains: &[FrameId]) -> Result<Option<Vec<TabId>>, CoreError> {
-        let pages = &self.pw.browser().pages;
-        let mut known = Vec::new();
-        for id in pages.known_page_ids().await {
-            known.extend(pages.get_info(id).await.map(|info| ListedTab {
-                target: info.target_id,
-                tab: info.tab_id,
-            }));
-        }
-        if mains.iter().any(|main| tab_on(&known, main).is_none()) {
-            known = browser_tabs(self.pw.browser()).await?;
-        }
-        Ok(mains.iter().map(|main| tab_on(&known, main)).collect())
-    }
-
     /// `tab`, which [`OpPage::linked_tab`] found, as a page the sweeps read. Its sealed worlds
     /// are the tab's own, so an op that acts on the tab later finds them installed. Only the
     /// sweeps build one, and nothing acts through it. It keeps the op's deadline, so an install
@@ -302,12 +269,6 @@ impl<'op> OpPage<'op> {
         }
     }
 
-    /// Where a main-world guard's first sweep try ends at the latest: the op's own deadline, or
-    /// nowhere for an op without a timeout.
-    pub(crate) fn deadline_cut(&self) -> TryCut {
-        TryCut(self.deadline)
-    }
-
     /// The window in which this op tries a frame that missed its privacy budget again, from
     /// now: each sweep and each install takes its own as it starts its first try, which for an
     /// op without a timeout opens [`UNTIMED_RETRY`] afresh.
@@ -353,37 +314,4 @@ impl<'op> OpPage<'op> {
             }
         }
     }
-}
-
-/// The tab whose page target is `main` among `tabs`.
-fn tab_on(tabs: &[ListedTab], main: &FrameId) -> Option<TabId> {
-    tabs.iter()
-        .find(|listed| listed.target.as_str() == main.as_str())
-        .map(|listed| listed.tab)
-}
-
-/// One tab by its page target, as core's tab registry or the browser's own tab list
-/// (`Browser.getTabs`, which [`browser_tabs`] reads) names it.
-#[derive(Deserialize)]
-struct ListedTab {
-    #[serde(rename = "targetId")]
-    target: TargetId,
-    #[serde(rename = "tabId")]
-    tab: TabId,
-}
-
-/// `Browser.getTabs`' reply.
-#[derive(Deserialize)]
-struct ListedTabs {
-    tabs: Vec<ListedTab>,
-}
-
-/// Every tab the browser lists, internal pages included: one browser-side call, which no
-/// renderer answers.
-async fn browser_tabs(browser: &BrowserSession) -> Result<Vec<ListedTab>, CoreError> {
-    let listed: ListedTabs = browser
-        .cdp("Browser.getTabs", json!({}), None)
-        .await
-        .and_then(document_watch::decode)?;
-    Ok(listed.tabs)
 }

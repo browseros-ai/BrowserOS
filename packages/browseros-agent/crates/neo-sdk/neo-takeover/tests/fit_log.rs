@@ -1,4 +1,4 @@
-//! What the fit logs, alone in its own test binary for the reason `journal_log.rs` gives. A
+//! What the fit logs, in its own binary so tracing callsite caches cannot race other tests. A
 //! navigation that fails logs core's error, which names the address, and an address can carry a
 //! registered secret: a token in a link, or what the owner typed into a form.
 

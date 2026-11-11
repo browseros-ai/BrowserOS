@@ -20,7 +20,7 @@
  */
 import { invoke, invokeObserved } from './bridge'
 import type { EventEmitter } from './emitter'
-import { prefixed, unsupportedError } from './errors'
+import { abortedError, prefixed, unsupportedError } from './errors'
 import { EventDeadline } from './event-deadline'
 import {
   ConsoleMessage,
@@ -30,6 +30,7 @@ import {
   pageError,
 } from './event-values'
 import type { Page } from './page'
+import { type SignalLike, signalOf, untilAborted } from './signal'
 import type { TimeoutSettings } from './timeouts'
 import { timeoutMs } from './timeouts'
 import type {
@@ -121,7 +122,7 @@ export function isReported(
 type WaitOptions = {
   predicate?: (value: never) => unknown
   timeout?: number
-  signal?: AbortSignal
+  signal?: SignalLike
 }
 
 /** What the hub needs from the context: its Page for a handle, and the context as an emitter. */
@@ -195,8 +196,28 @@ export class EventHub {
       event,
       since,
       timeoutMs(api, settings.timeout(options)),
-      options.signal,
     )
+    // upstream's Waiter rejects the whole wait when its signal fires, a pending predicate
+    // included, with a plain `The operation was aborted`; the `events.wait` in flight takes the
+    // signal too, so Rust stops waiting as well.
+    const signal = signalOf(api, options)
+    return await untilAborted(
+      signal,
+      () => abortedError(api, signal as SignalLike),
+      () => this.waitFor(api, page, event, options, since, deadline, signal),
+    )
+  }
+
+  /** `wait`'s loop: one `events.wait` per candidate, until the predicate accepts one. */
+  private async waitFor(
+    api: string,
+    page: Page | null,
+    event: EventName,
+    options: WaitOptions,
+    since: number,
+    deadline: EventDeadline,
+    signal: SignalLike | undefined,
+  ): Promise<unknown> {
     const target = page === null ? null : await page._openedBrand(api)
     let after: number | null = null
     for (;;) {
@@ -204,24 +225,14 @@ export class EventHub {
       let record: EventRecord
       let observed: Observation | null = null
       try {
-        ;({ value: record, observed } = await deadline.race(
-          invokeObserved(
-            'events.wait',
-            { api, timeoutMs: left },
-            { page: target, event, since, after },
-          ),
+        ;({ value: record, observed } = await invokeObserved(
+          'events.wait',
+          { api, timeoutMs: left },
+          { page: target, event, since, after },
+          undefined,
+          signal,
         ))
       } catch (error) {
-        // The bridge has no per-call cancellation. Signal-aware waits use bounded host
-        // polls, so aborting releases the host's waiting guard within 100ms even at timeout 0.
-        if (
-          options.signal &&
-          error instanceof Error &&
-          Reflect.get(error, 'code') === 'wait_timeout'
-        ) {
-          deadline.left()
-          continue
-        }
         throw deadline.named(error)
       }
       // The bootstrap registers a batch before resolving either consumer. A duplicate

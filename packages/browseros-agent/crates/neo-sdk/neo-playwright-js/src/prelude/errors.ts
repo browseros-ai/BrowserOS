@@ -20,12 +20,16 @@
  *   `waitTimeoutError` is the same idea for a wait deadline the prelude keeps across ops, and
  *   is not a refusal: Rust's own wait would have timed out.
  *
+ * An op the script aborted through `signal` (code `aborted`) is named `AbortError`, as upstream's
+ * client names one, and gets the signal's reason as its `cause` (signal.ts).
+ *
  * The first line names the method the script called (`page.click: ...`), as playwright-core's
  * client prefixes every API error. expect's errors are the exception: Playwright prints those
  * as `expect(locator).toHaveText(expected) failed`, named `Error`, never `TimeoutError`.
  */
 import { localTimeout, type RefusalCode, refuser } from './host'
 import type { OpName } from './ops.generated'
+import type { SignalLike } from './signal'
 
 /** What claw-sdk's error envelope says (runtime/bridge.rs `ErrBody`), on every error. */
 type ErrorFields = {
@@ -54,6 +58,14 @@ class TimeoutError extends PlaywrightError {
   constructor(message: string) {
     super(message)
     this.name = 'TimeoutError'
+  }
+}
+
+/** Thrown when the script aborted the call through `signal`, named as Node names one. */
+class AbortError extends PlaywrightError {
+  constructor(message: string, cause: unknown) {
+    super(message, { cause })
+    this.name = 'AbortError'
   }
 }
 
@@ -100,7 +112,13 @@ export function shapeBridgeError(
     read.timeout === true ||
     (thrown instanceof Error && thrown.name === 'TimeoutError')
   const assertion = op === 'expect.locator' || op === 'expect.page'
-  const named = timedOut && !assertion ? 'TimeoutError' : 'Error'
+  const named = assertion
+    ? 'Error'
+    : read.code === 'aborted'
+      ? 'AbortError'
+      : timedOut
+        ? 'TimeoutError'
+        : 'Error'
   if (thrown instanceof Error) {
     if (!assertion) thrown.message = apiMessage(api, op, thrown.message)
     thrown.name = named
@@ -114,8 +132,47 @@ export function shapeBridgeError(
   return withFields(
     named === 'TimeoutError'
       ? new TimeoutError(shaped)
-      : new PlaywrightError(shaped),
+      : named === 'AbortError'
+        ? new AbortError(shaped, undefined)
+        : new PlaywrightError(shaped),
     { ...read, timeout: timedOut },
+  )
+}
+
+/**
+ * Gives an op that `signal` aborted the signal's reason as its `cause`, the very value, as
+ * upstream's client does once the server answered the abort (connection.ts `dispatch`). Any
+ * other failure passes through: an op can fail for its own reason after the signal fired.
+ */
+export function withAbortCause(
+  error: Error,
+  signal: SignalLike | undefined,
+): Error {
+  if (signal?.aborted && error.name === 'AbortError')
+    Object.defineProperty(error, 'cause', {
+      value: signal.reason,
+      writable: true,
+      configurable: true,
+    })
+  return error
+}
+
+/**
+ * A call whose `signal` was aborted before it was sent, as upstream's client throws it without a
+ * channel call: `<api>: The operation was aborted`, its cause the signal's reason. It carries
+ * claw-sdk's fields with nothing sent, but no op: the door never saw it, so an uncaught one ends
+ * the run as the script's own error, which it is.
+ */
+export function abortedError(api: string, signal: SignalLike): Error {
+  return withFields(
+    new AbortError(`${api}: The operation was aborted`, signal.reason),
+    {
+      code: 'aborted',
+      owner: 'script',
+      delivery: 'not_sent',
+      retryable: true,
+      timeout: false,
+    },
   )
 }
 

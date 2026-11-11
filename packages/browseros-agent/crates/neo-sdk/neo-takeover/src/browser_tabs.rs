@@ -25,13 +25,11 @@
 use crate::PartError;
 use crate::limits::{ACTIVATE_TIMEOUT, FRONT_SHOWN_POLL, WINDOW_POLL, WINDOW_SETTLE};
 use crate::screen_rule::{ScreenFacts, ScreenHolder};
-use browseros_cdp::CdpEvent;
 use browseros_core::navigation::Navigation;
 use browseros_core::pages::PageInfo;
 use browseros_core::viewport::{ViewportMode, ViewportRequest, Viewports};
 use browseros_core::{
-    BrowserSession, BrowserView, CoreError, FrameId, PageId, ProtocolSession, SessionId, TabId,
-    TargetId, WindowId,
+    BrowserSession, BrowserView, CoreError, ProtocolSession, TabId, TargetId, WindowId,
 };
 use neo_trace::{EpochMillis, TaskId};
 use serde::Deserialize;
@@ -39,7 +37,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::watch;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -260,58 +258,6 @@ impl BrowserTabs {
             .map(|page| page.tab_id)
             .collect())
     }
-
-    /// The open tab's page, and the page target's session: the one core attached with the
-    /// Page, DOM and Runtime domains on. It is not admitted, so a send costs one round trip; a
-    /// bound view's session re-reads the tab around every send.
-    ///
-    /// # Errors
-    /// `TabNotFound` when no open tab has this id; `Browser` when the browser does not answer.
-    pub(crate) async fn page_session(
-        &self,
-        tab: TabId,
-    ) -> Result<(PageId, ProtocolSession), PartError> {
-        let page = self.page(tab).await?;
-        let session = self.session_for(&page).await?;
-        Ok((page.page_id, session))
-    }
-
-    /// The session of the target that hosts `frame`, an out-of-process frame of `page`. Core's
-    /// frame walk finds it (attaching on demand) and checks that the frame still belongs to the
-    /// page; the session it hands back is then used raw, because its per-send admission costs
-    /// several round trips and refuses `Page.addScriptToEvaluateOnNewDocument`.
-    pub(crate) async fn frame_session(
-        &self,
-        page: PageId,
-        frame: FrameId,
-    ) -> Result<ProtocolSession, CoreError> {
-        let bound = BrowserView::unbound(Arc::clone(&self.session), None)
-            .frame_session(page, frame)
-            .await?;
-        let id = bound
-            .session_id()
-            .cloned()
-            .ok_or_else(|| CoreError::Message("the frame has no session of its own".into()))?;
-        Ok(self.session(id))
-    }
-
-    /// A session an event named, such as a frame target the browser just attached.
-    pub(crate) fn session(&self, id: SessionId) -> ProtocolSession {
-        self.session.protocol_session(id)
-    }
-
-    /// The agent connection's shared event broadcast, from now on. It drops what a reader that
-    /// falls far behind has not read, and it carries no method that some reader takes on a
-    /// channel of its own, as [`Self::binding_calls`] does.
-    pub(crate) fn events(&self) -> broadcast::Receiver<CdpEvent> {
-        self.session.cdp_events()
-    }
-
-    /// Every `Runtime.bindingCalled` on the agent connection, from now on, on a channel of its
-    /// own that drops nothing. Each such channel gets every call, sdk-playwright's included.
-    pub(crate) fn binding_calls(&self) -> mpsc::UnboundedReceiver<CdpEvent> {
-        self.session.cdp_events_targeted("Runtime.bindingCalled")
-    }
 }
 
 /// A browser window's state, as Chromium reports it.
@@ -437,7 +383,8 @@ impl BrowserTabs {
     /// command, and Chromium takes Ctrl+0 as a browser accelerator only from a raw key with
     /// its native code (decision 24).
     pub(crate) async fn reset_zoom(&self, tab: TabId) -> Result<(), PartError> {
-        let (_, session) = self.page_session(tab).await?;
+        let page = self.page(tab).await?;
+        let session = self.session_for(&page).await?;
         for kind in ["rawKeyDown", "keyUp"] {
             session
                 .send_value(

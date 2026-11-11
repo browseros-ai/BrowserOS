@@ -15,7 +15,7 @@ pub enum PartError {
     #[error("tab {} is not open", .0.0)]
     TabNotFound(TabId),
     /// The lock belongs to a takeover. Ending it alone would let the agent act while the owner
-    /// still has control, before the takeover's sweep, so the host releases the takeover
+    /// still has control, before the takeover restores its fit, so the host releases the takeover
     /// instead (decision 29).
     #[error("the lock belongs to a takeover; release the takeover instead")]
     TakeoverLock,
