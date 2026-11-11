@@ -275,41 +275,47 @@ type Kind = 'container' | 'network' | 'volume'
 /** Marks one launch's objects, so its Ctrl-C removes what it made and not a later launch's. */
 const LAUNCH_LABEL = `${LABEL}.launch`
 
-/** A label of a named object, `undefined` when no object has that name. */
-async function labelOf(
+/**
+ * A named object's own reference (a container's or network's id; a volume's name) and one of its
+ * labels; `undefined` when no object has that name. Later commands use the reference, so an object
+ * another launch put under the same name meanwhile is never the one acted on.
+ */
+async function inspectLabel(
   run: Runner,
   kind: Kind,
   name: string,
   key: string,
-): Promise<string | undefined> {
+): Promise<{ ref: string; label: string } | undefined> {
   const labels = kind === 'container' ? '.Config.Labels' : '.Labels'
+  const ref = kind === 'volume' ? '{{.Name}}' : '{{.Id}}'
   const inspect = await run('docker', [
     kind,
     'inspect',
     '--format',
-    `{{index ${labels} "${key}"}}`,
+    `${ref}|{{index ${labels} "${key}"}}`,
     name,
   ])
   if (inspect.code !== 0) return undefined
-  return inspect.stdout.trim()
+  const [found = '', label = ''] = inspect.stdout.trim().split('|')
+  return { ref: found, label }
 }
 
 async function remove(
   run: Runner,
   kind: Kind,
-  name: string,
+  ref: string,
   keepData: boolean,
 ): Promise<void> {
   // A kept profile needs the image's graceful stop (25 s), so the browser saves its cookies.
   if (kind === 'container' && keepData)
-    await run('docker', ['stop', '--time', '25', name])
+    await run('docker', ['stop', '--time', '25', ref])
   const result = await run(
     'docker',
-    kind === 'container' ? ['rm', '-f', name] : [kind, 'rm', name],
+    kind === 'container' ? ['rm', '-f', ref] : [kind, 'rm', ref],
   )
   if (result.code !== 0) {
     throw new Error(
-      `neo-viewer: could not remove ${kind} ${name}: ${result.stderr.trim()}`,
+      `neo-viewer: could not remove ${kind} ${ref}: ${result.stderr.trim()}`,
     )
   }
 }
@@ -331,15 +337,15 @@ export async function removeLeftovers(
     ['volume', NAMES.volume],
   ]
   for (const [kind, name] of targets) {
-    const mark = await labelOf(run, kind, name, LABEL)
-    if (mark === undefined) continue
-    if (mark !== '1') {
+    const found = await inspectLabel(run, kind, name, LABEL)
+    if (found === undefined) continue
+    if (found.label !== '1') {
       throw new Error(
         `neo-viewer: a ${kind} named ${name} exists but the viewer did not create it; remove or rename it`,
       )
     }
     if (kind === 'volume' && keepData) continue
-    await remove(run, kind, name, keepData)
+    await remove(run, kind, found.ref, keepData)
     removed.push(`${kind} ${name}`)
   }
   return removed
@@ -392,6 +398,9 @@ export async function startContainer(
     '--shm-size=1g',
     '--stop-timeout',
     '25',
+    // On Linux a bind-mounted file keeps its host owner, so the 0600 token is readable only by
+    // that uid: Neo runs as it (the image's PUID/PGID). Docker Desktop on macOS needs no mapping.
+    ...ownerIds(),
     '-e',
     'NEO_MCP_REMOTE=true',
     '-e',
@@ -456,6 +465,12 @@ export async function createNetwork(
   )
 }
 
+function ownerIds(): string[] {
+  if (process.platform !== 'linux' || !process.getuid || !process.getgid)
+    return []
+  return ['-e', `PUID=${process.getuid()}`, '-e', `PGID=${process.getgid()}`]
+}
+
 /** Waits for the image's HEALTHCHECK (entrypoint done, `/system/ready` answers). */
 async function waitUntilHealthy(run: Runner): Promise<void> {
   const deadline = Date.now() + READY_TIMEOUT_MS
@@ -513,8 +528,9 @@ export async function stopContainer(
     ...(keepData ? [] : ([['volume', NAMES.volume]] as Array<[Kind, string]>)),
   ]
   for (const [kind, name] of targets) {
-    if ((await labelOf(run, kind, name, LAUNCH_LABEL)) !== launch) continue
-    await remove(run, kind, name, keepData)
+    const found = await inspectLabel(run, kind, name, LAUNCH_LABEL)
+    if (found?.label !== launch) continue
+    await remove(run, kind, found.ref, keepData)
   }
 }
 

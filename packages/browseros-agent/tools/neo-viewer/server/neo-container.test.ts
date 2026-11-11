@@ -44,7 +44,9 @@ function dockerWith(
       const labels = objects[kind]
       if (!labels) return missing
       const key = /"([^"]+)"/.exec(args[3] ?? '')?.[1] ?? ''
-      return ok(`${labels[key] ?? '<no value>'}\n`)
+      // A container's or network's id, a volume's name; then the label asked for.
+      const ref = kind === 'volume' ? NAMES.volume : `${kind}-id`
+      return ok(`${ref}|${labels[key] ?? '<no value>'}\n`)
     }
     return ok()
   })
@@ -162,8 +164,8 @@ describe('cleanup touches only what the viewer created', () => {
       `volume ${NAMES.volume}`,
     ])
     expect(removals(docker.calls)).toEqual([
-      ['docker', 'rm', '-f', NAMES.container],
-      ['docker', 'network', 'rm', NAMES.network],
+      ['docker', 'rm', '-f', 'container-id'],
+      ['docker', 'network', 'rm', 'network-id'],
       ['docker', 'volume', 'rm', NAMES.volume],
     ])
   })
@@ -174,8 +176,8 @@ describe('cleanup touches only what the viewer created', () => {
       `container ${NAMES.container}`,
     ])
     expect(removals(docker.calls)).toEqual([
-      ['docker', 'stop', '--time', '25', NAMES.container],
-      ['docker', 'rm', '-f', NAMES.container],
+      ['docker', 'stop', '--time', '25', 'container-id'],
+      ['docker', 'rm', '-f', 'container-id'],
     ])
   })
 
@@ -193,8 +195,8 @@ describe('cleanup touches only what the viewer created', () => {
     const mine = dockerWith({ container: ours, network: ours, volume: ours })
     await stopContainer(mine.run, 'launch-a', false)
     expect(removals(mine.calls)).toEqual([
-      ['docker', 'rm', '-f', NAMES.container],
-      ['docker', 'network', 'rm', NAMES.network],
+      ['docker', 'rm', '-f', 'container-id'],
+      ['docker', 'network', 'rm', 'network-id'],
       ['docker', 'volume', 'rm', NAMES.volume],
     ])
     const later = { ...ours, 'com.browseros.neo-viewer.launch': 'launch-b' }

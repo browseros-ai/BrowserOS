@@ -17,6 +17,7 @@ import {
   NAMES,
   newestImage,
   planImage,
+  type Runner,
   removeLeftovers,
   removeReplacedImage,
   runCommand,
@@ -43,6 +44,19 @@ let stoppingSince: number | null = null
  */
 const REPEATED_SIGNAL_MS = 3000
 
+/** Set by Ctrl-C: startup issues no further Docker command. */
+let cancelled = false
+/** The Docker command startup has in flight; cleanup waits for it, so nothing it creates is missed. */
+let inFlight: Promise<unknown> = Promise.resolve()
+
+/** Startup's Docker and git commands: refused once Ctrl-C began, and each one tracked. */
+const startupRun: Runner = (command, args, runOptions) => {
+  if (cancelled) return Promise.reject(new Error('neo-viewer: start cancelled'))
+  const result = runCommand(command, args, runOptions)
+  inFlight = result.catch(() => {})
+  return result
+}
+
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => void stop(0))
 }
@@ -63,14 +77,17 @@ try {
   Claude Code:    claude mcp add --transport http neo-viewer ${viewer.mcpUrl}
 `)
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error))
-  await stop(1)
+  // A start cut short by Ctrl-C is already being cleaned up by `stop`.
+  if (!cancelled) {
+    console.error(error instanceof Error ? error.message : String(error))
+    await stop(1)
+  }
 }
 
 /** Picks or builds the image, clears the last start, starts the container; returns its MCP URL. */
 async function startNeo(launch: LaunchOptions): Promise<URL> {
   await mkdir(launch.dataDir, { recursive: true })
-  const run = runCommand
+  const run = startupRun
   const removed = await removeLeftovers(run, launch.keepData)
   if (removed.length > 0)
     console.log(`Removed the last start's ${removed.join(', ')}`)
@@ -91,7 +108,7 @@ async function startNeo(launch: LaunchOptions): Promise<URL> {
 
 /** `--image`, `--no-build`'s newest image, or this checkout's image (built when missing or stale). */
 async function chooseImage(launch: LaunchOptions): Promise<string> {
-  const run = runCommand
+  const run = startupRun
   if (launch.image) {
     if ((await imageId(run, launch.image)) === null)
       throw new Error(`neo-viewer: no image ${launch.image} on this machine`)
@@ -169,6 +186,8 @@ async function stop(code: number): Promise<never> {
     process.exit(code)
   }
   stoppingSince = Date.now()
+  cancelled = true
+  await inFlight
   await viewer?.stop()
   if (ownsContainer) {
     console.log(
