@@ -1199,7 +1199,7 @@ async fn tests_that_frame_set_content_writes_the_child_frames_document() -> Test
                         json!({ "html": html }),
                     )
                     .await?;
-                    assert_eq!(written, json!({}), "{opened:?} {name}");
+                    assert_eq!(written, Value::Null, "{opened:?} {name}");
                     assert!(
                         started.elapsed() < Duration::from_secs(5),
                         "{opened:?} {name}: the write's load state was seen, after {:?}",
