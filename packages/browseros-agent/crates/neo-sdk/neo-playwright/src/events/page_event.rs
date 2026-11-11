@@ -18,6 +18,8 @@ pub(crate) enum PageEvent {
     Navigation(NavigationEvent),
     /// Actual frame removal, excluding renderer swaps.
     FrameDetached(FrameId),
+    /// A stable frame moved to a renderer whose Page domain may still be disabled.
+    FrameSwapped(FrameId),
     /// A new tab, recorded once it has a URL (1 to 30 ms after `Target.targetCreated`,
     /// measured) or after 1 s with whatever it has.
     Opened(OpenedPage),

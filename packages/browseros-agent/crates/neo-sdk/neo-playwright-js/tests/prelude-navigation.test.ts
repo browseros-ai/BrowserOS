@@ -48,3 +48,29 @@ it('bounds a pending URL predicate by the original navigation timeout', async ()
     message: 'page.waitForNavigation: Timeout 50ms exceeded.',
   })
 })
+
+it('keeps a post-navigation frame refresh inside the navigation deadline', async () => {
+  let frames = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: ({ name }) => {
+      if (name === 'page.frames')
+        return ++frames === 1 ? { frames: [] } : new Promise(() => {})
+      if (name === 'page.waitForNavigation')
+        return {
+          url: 'https://a.example/target',
+          response: null,
+          navigationSeq: 101,
+        }
+      return null
+    },
+  })
+  const error = json(
+    await runtime.run(`return await page.waitForNavigation({ timeout: 50 })
+    .catch(error => ({ name: error.name, message: error.message }))`),
+  )
+  expect(error).toEqual({
+    name: 'TimeoutError',
+    message: 'page.waitForNavigation: Timeout 50ms exceeded.',
+  })
+})

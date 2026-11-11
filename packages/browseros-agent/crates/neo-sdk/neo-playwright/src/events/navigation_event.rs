@@ -13,6 +13,8 @@ pub(crate) struct NavigationEvent {
     pub(crate) frame: FrameId,
     pub(crate) url: String,
     pub(crate) new_document: bool,
+    /// The selected document, for a timing read that must never return a later response.
+    pub(crate) loader: Option<String>,
     pub(crate) unreachable: Option<String>,
 }
 
@@ -25,6 +27,7 @@ struct Committed {
 #[serde(rename_all = "camelCase")]
 struct Document {
     id: FrameId,
+    loader_id: String,
     url: String,
     #[serde(default)]
     url_fragment: String,
@@ -56,6 +59,7 @@ pub(crate) fn parse(method: &str, params: Value) -> Option<PageEvent> {
                 frame: frame.id,
                 url: format!("{}{}", frame.url, frame.url_fragment),
                 new_document: true,
+                loader: Some(frame.loader_id),
                 unreachable: frame.unreachable_url,
             }))
         }
@@ -65,12 +69,17 @@ pub(crate) fn parse(method: &str, params: Value) -> Option<PageEvent> {
                 frame: navigation.frame_id,
                 url: navigation.url,
                 new_document: false,
+                loader: None,
                 unreachable: None,
             }))
         }
         "Page.frameDetached" => {
             let detached: Detached = serde_json::from_value(params).ok()?;
-            (detached.reason != "swap").then_some(PageEvent::FrameDetached(detached.frame_id))
+            Some(if detached.reason == "swap" {
+                PageEvent::FrameSwapped(detached.frame_id)
+            } else {
+                PageEvent::FrameDetached(detached.frame_id)
+            })
         }
         _ => None,
     }
@@ -92,7 +101,7 @@ mod tests {
                 "Page.frameDetached",
                 json!({"frameId":"child", "reason":"swap"})
             ),
-            None
+            Some(PageEvent::FrameSwapped(FrameId("child".to_owned())))
         );
         assert_eq!(
             parse(
@@ -109,7 +118,7 @@ mod tests {
         let Some(PageEvent::Navigation(committed)) = parse(
             "Page.frameNavigated",
             json!({
-                "frame": {"id":"main", "url":"https://a.test/", "urlFragment":"#part"}
+                "frame": {"id":"main", "loaderId":"L1", "url":"https://a.test/", "urlFragment":"#part"}
             }),
         ) else {
             return Err("a commit must be journaled".into());

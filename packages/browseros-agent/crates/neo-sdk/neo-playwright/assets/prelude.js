@@ -7937,9 +7937,11 @@ ${value.stack}`;
           ...url ? { url } : {},
           waitUntil: predicate ? "commit" : waitUntil
         }).catch(rethrow);
-        const response = await this._navigated(api, frame, result, observed);
-        if (!predicate)
+        const response = await deadline.race(this._navigated(api, frame, result, observed));
+        if (!predicate) {
+          deadline.left();
           return response;
+        }
         after = result.navigationSeq;
         let matched;
         try {
@@ -7948,7 +7950,8 @@ ${value.stack}`;
           throw prefixed(api, error);
         }
         if (matched) {
-          await frame._waitForLoadState(api, waitUntil, { timeout: deadline.left() }).catch(rethrow);
+          await deadline.race(frame._waitForLoadState(api, waitUntil, { timeout: deadline.left() }).catch(rethrow));
+          deadline.left();
           return response;
         }
       }

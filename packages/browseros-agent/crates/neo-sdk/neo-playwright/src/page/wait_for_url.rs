@@ -12,7 +12,8 @@
 //! The pattern is matched in the frame's sealed world, because a `RegExp` must run with
 //! JavaScript's semantics. The URL matched is the one the navigation reported, not the page's
 //! `location` later, so a page that moves on at once still matches the step it passed through.
-//! A function predicate stays in the prelude.
+//! A function predicate stays in the prelude. The frame-following and URL-matching helpers
+//! also serve `waitForNavigation` after it selects a journaled navigation.
 //!
 //! A child frame that navigates to another site moves to another renderer, and so to another
 //! session, while it stays the same frame, as upstream's frame model keeps it: the navigation

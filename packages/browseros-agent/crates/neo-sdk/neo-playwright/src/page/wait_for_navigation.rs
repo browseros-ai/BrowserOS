@@ -11,6 +11,7 @@ use crate::events::{NavigationEvent, PageEvent};
 use crate::op_output::to_output;
 use crate::op_scope::OpScope;
 use crate::page::document_watch::WatchError;
+use crate::page::frame_tree::{self, FrameTree};
 use crate::page::navigation::{self, NavigationResult};
 use crate::page::{LoadState, OpPage, wait_for_url};
 use crate::probe::UrlPattern;
@@ -33,11 +34,15 @@ pub(crate) struct WaitForNavigationInput {
     after: u64,
 }
 
+/// A bounded wait returns its cursor and complete frame facts together, so the client can
+/// refresh synchronous accessors without an additional untimed browser operation.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NavigationReply {
     #[serde(flatten)]
     navigation: NavigationResult,
+    #[serde(flatten)]
+    frames: FrameTree,
     navigation_seq: u64,
 }
 
@@ -62,25 +67,7 @@ pub(crate) async fn wait_for_navigation(
         // Enabling Page on the child's session is necessary for an OOPIF's events. The
         // journal was already subscribed before this op, so setup cannot lose a main-frame
         // navigation that races a Promise.all trigger.
-        if *frame != main.frame {
-            let root_id = main
-                .session
-                .session_id()
-                .cloned()
-                .ok_or_else(|| scope.fail(ErrorCode::Internal, "the page has no session"))?;
-            let (_, session) = navigation::frame_host(
-                pw,
-                scope,
-                page.tab(),
-                (root_id, main.session.clone()),
-                frame,
-            )
-            .await?;
-            session
-                .send_value("Page.enable", json!({}))
-                .await
-                .map_err(|error| scope.core_error(&error))?;
-        }
+        enable_frame(pw, scope, &page, frame).await?;
         let hub = pw.events();
         let mut after = input.after.max(hub.position_at(input.since));
         loop {
@@ -110,14 +97,29 @@ pub(crate) async fn wait_for_navigation(
                             scope.fail(ErrorCode::TargetClosed, "Navigating frame was detached!")
                         );
                     }
+                    PageEvent::FrameSwapped(swapped) if swapped == *frame => {
+                        let followed =
+                            wait_for_url::follow(pw, &page, scope, input.frame.as_ref()).await?;
+                        let event = NavigationEvent {
+                            frame: frame.clone(),
+                            url: followed.watch.url().unwrap_or_default().to_owned(),
+                            loader: followed.watch.loader().map(str::to_owned),
+                            new_document: true,
+                            unreachable: None,
+                        };
+                        if let Some(navigation) =
+                            complete_navigation(pw, scope, &page, &input, frame, event).await?
+                        {
+                            return navigation_reply(pw, scope, &page, navigation, record.seq)
+                                .await;
+                        }
+                    }
                     PageEvent::Navigation(navigation) if navigation.frame == *frame => {
                         if let Some(navigation) =
                             complete_navigation(pw, scope, &page, &input, frame, navigation).await?
                         {
-                            return Ok(NavigationReply {
-                                navigation,
-                                navigation_seq: record.seq,
-                            });
+                            return navigation_reply(pw, scope, &page, navigation, record.seq)
+                                .await;
                         }
                     }
                     _ => {}
@@ -170,8 +172,14 @@ async fn complete_navigation(
             Err(error) => return Err(navigation::watch_error(scope, &error)),
         }
     }
-    let response = if event.new_document {
-        navigation::read_response(&followed.frame.endpoint.session, &event.url, Some(frame)).await
+    let response = if event.new_document && event.loader.is_some() {
+        navigation::read_response(
+            &followed.frame.endpoint.session,
+            &event.url,
+            Some(frame),
+            event.loader.as_deref(),
+        )
+        .await
     } else {
         None
     };
@@ -179,4 +187,54 @@ async fn complete_navigation(
         response,
         url: Some(event.url),
     }))
+}
+
+/// Report frame facts under the same native timeout as the navigation; the prelude need not
+/// issue an untimed page.frames operation after a successful bounded wait.
+async fn navigation_reply(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    navigation: NavigationResult,
+    navigation_seq: u64,
+) -> Result<NavigationReply, PlaywrightError> {
+    let frames = frame_tree::read(
+        pw.browser(),
+        page.core_page(),
+        &page.main_endpoint().session,
+    )
+    .await
+    .map_err(|error| scope.core_error(&error))?;
+    Ok(NavigationReply {
+        navigation,
+        frames,
+        navigation_seq,
+    })
+}
+
+/// Existing page sessions already report navigation. Adopted child sessions need Page
+/// enabled explicitly; a later renderer swap is journaled so the wait can follow and replay
+/// the replacement's committed document even if it arrived before Page was enabled there.
+async fn enable_frame(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    frame: &FrameId,
+) -> Result<(), PlaywrightError> {
+    let main = page.main_endpoint();
+    if *frame == main.frame {
+        return Ok(());
+    }
+    let root_id = main
+        .session
+        .session_id()
+        .cloned()
+        .ok_or_else(|| scope.fail(ErrorCode::Internal, "the page has no session"))?;
+    let (_, session) =
+        navigation::frame_host(pw, scope, page.tab(), (root_id, main.session), frame).await?;
+    session
+        .send_value("Page.enable", json!({}))
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    Ok(())
 }

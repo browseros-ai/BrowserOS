@@ -56,7 +56,7 @@ export class EventDeadline {
    * The predicate's verdict, or the TimeoutError if the deadline passes while it is pending. A
    * verdict that is not a promise is final at once, as it is upstream.
    */
-  race(verdict: unknown): Promise<unknown> {
+  race<T>(verdict: T): Promise<Awaited<T>> {
     const endsAt = this.endsAt
     if (endsAt === null || !isThenable(verdict)) return Promise.resolve(verdict)
     let cancel = () => {}

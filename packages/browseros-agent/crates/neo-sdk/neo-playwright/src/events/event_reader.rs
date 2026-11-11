@@ -256,7 +256,10 @@ pub(crate) async fn deliver(
             },
         },
         // Internal navigation facts are never public events; the context receives only new tabs.
-        (PageEvent::Navigation(_) | PageEvent::FrameDetached(_), _)
+        (
+            PageEvent::Navigation(_) | PageEvent::FrameDetached(_) | PageEvent::FrameSwapped(_),
+            _,
+        )
         | (
             PageEvent::Closed(_)
             | PageEvent::Dialog(_)

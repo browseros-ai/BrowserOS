@@ -1060,8 +1060,13 @@ export class Page extends EventEmitter {
           waitUntil: predicate ? 'commit' : waitUntil,
         },
       ).catch(rethrow)
-      const response = await this._navigated(api, frame, result, observed)
-      if (!predicate) return response
+      const response = await deadline.race(
+        this._navigated(api, frame, result, observed),
+      )
+      if (!predicate) {
+        deadline.left()
+        return response
+      }
       after = result.navigationSeq
       let matched: unknown
       try {
@@ -1072,9 +1077,12 @@ export class Page extends EventEmitter {
         throw prefixed(api, error)
       }
       if (matched) {
-        await frame
-          ._waitForLoadState(api, waitUntil, { timeout: deadline.left() })
-          .catch(rethrow)
+        await deadline.race(
+          frame
+            ._waitForLoadState(api, waitUntil, { timeout: deadline.left() })
+            .catch(rethrow),
+        )
+        deadline.left()
         return response
       }
     }

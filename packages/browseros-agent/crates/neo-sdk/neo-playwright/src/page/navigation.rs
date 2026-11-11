@@ -271,7 +271,9 @@ async fn drive(
     }
     watch.reached(wait_until).await.map_err(failed)?;
     Ok(match arrival {
-        Arrival::NewDocument(commit) => read_response(session, &commit.url, None).await,
+        Arrival::NewDocument(commit) => {
+            read_response(session, &commit.url, None, Some(&commit.loader)).await
+        }
         Arrival::SameDocument => None,
     })
 }
@@ -452,11 +454,12 @@ pub(crate) async fn read_response(
     session: &ProtocolSession,
     url: &str,
     frame: Option<&FrameId>,
+    loader: Option<&str>,
 ) -> Option<Response> {
     if url.starts_with("about:") || url.starts_with("data:") {
         return None;
     }
-    let timing = time::timeout(TIMING_READ, timing_entry(session, frame))
+    let timing = time::timeout(TIMING_READ, correlated_timing(session, frame, loader))
         .await
         .ok()?
         .ok()
@@ -468,6 +471,40 @@ pub(crate) async fn read_response(
         status: timing.status,
         headers: Map::new(),
     })
+}
+
+/// Check on both sides of the isolated-world read: a commit between either CDP reply and
+/// the timing evaluation must fall back to unavailable, rather than borrow another document's
+/// response. This also distinguishes two reloads of the same URL.
+async fn correlated_timing(
+    session: &ProtocolSession,
+    frame: Option<&FrameId>,
+    loader: Option<&str>,
+) -> Result<Option<Timing>, CoreError> {
+    if let Some(loader) = loader
+        && current_loader(session, frame).await?.as_deref() != Some(loader)
+    {
+        return Ok(None);
+    }
+    let timing = timing_entry(session, frame).await?;
+    if let Some(loader) = loader
+        && current_loader(session, frame).await?.as_deref() != Some(loader)
+    {
+        return Ok(None);
+    }
+    Ok(timing)
+}
+
+async fn current_loader(
+    session: &ProtocolSession,
+    frame: Option<&FrameId>,
+) -> Result<Option<String>, CoreError> {
+    let tree: FrameTreeReply = decode(session.send_value("Page.getFrameTree", json!({})).await?)?;
+    Ok(tree
+        .frame_tree
+        .into_frames()
+        .find(|known| frame.is_none_or(|frame| known.id == frame.as_str()))
+        .map(|known| known.loader_id))
 }
 
 #[expect(

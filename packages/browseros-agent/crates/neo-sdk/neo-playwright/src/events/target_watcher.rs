@@ -1,4 +1,4 @@
-//! The background task that turns CDP's target, dialog, console and download events into the
+//! The background task that turns CDP's target, navigation, dialog and console events into the
 //! event log's records. One per `Playwright`, and the log's only writer.
 //!
 //! - **Discovery.** On start, after a lag in the event stream and on every connection epoch
