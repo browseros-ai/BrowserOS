@@ -6,15 +6,19 @@
 //!
 //! The script can send the brand itself through `__neo_invoke`, so a brand buys no more than the
 //! script's own mistake would (the spoof rule): its owner is always `script`, and its code one of
-//! the two a script's mistake carries, never a failure of Neo's, the host's or the website's.
+//! those a script's mistake carries, never a failure of Neo's, the host's or the website's.
 
 use serde_json::Value;
 
 use super::{ErrorCode, OperationError, TEXT_CHARS, operation_error};
 
-/// The codes a refusal may name: a method Neo does not serve, and an input it does not take, such
-/// as one option of a method it does serve.
-const REFUSAL_CODES: [ErrorCode; 2] = [ErrorCode::METHOD_UNAVAILABLE, ErrorCode::INVALID_INPUT];
+/// The codes a refusal may name: unsupported methods, invalid inputs and task lookup failures.
+const REFUSAL_CODES: [ErrorCode; 4] = [
+    ErrorCode::METHOD_UNAVAILABLE,
+    ErrorCode::INVALID_INPUT,
+    ErrorCode::TASK_NOT_FOUND,
+    ErrorCode::TASK_PAGE_MISSING,
+];
 
 /// The refusal brand a script call's input is, read once at admission. Only `code` and `reason`
 /// are read; the record keeps every field the brand carried, bounded like any input.
@@ -56,7 +60,7 @@ impl<'a> RefusalBrand<'a> {
             Self::Malformed => OperationError::script(
                 ErrorCode::INVALID_INPUT,
                 format_args!(
-                    "`{shown}`: a refusal may name only method_unavailable or invalid_input"
+                    "`{shown}`: a refusal may name only method_unavailable, invalid_input, task_not_found or task_page_missing"
                 ),
             ),
         }

@@ -174,6 +174,10 @@ error_codes! {
     METHOD_UNAVAILABLE = "method_unavailable";
     /// The input did not decode into the method's input type.
     INVALID_INPUT = "invalid_input";
+    /// The task is unknown or has been closed.
+    TASK_NOT_FOUND = "task_not_found";
+    /// The requested tab is not among this task's open pages.
+    TASK_PAGE_MISSING = "task_page_missing";
     /// The script returned while this op still ran.
     NOT_AWAITED = "not_awaited";
     /// The caller went away, or a crate's own cancel fired.
