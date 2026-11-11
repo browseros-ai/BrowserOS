@@ -8,12 +8,13 @@
  * reported.
  */
 
+import { type BindingCallback, exposeOnContext } from './bindings'
 import { invoke, type Reply, type RunInit } from './bridge'
 import type { Browser } from './browser'
 import { EventEmitter } from './emitter'
 import { internalError } from './errors'
 import { checkReported, EventHub, isReported } from './events'
-import { checkInitOptions, Disposable, initSource } from './init-script'
+import { addInitScript, type Disposable } from './init-script'
 import { LocatorHandlers } from './locator-handlers'
 import { markHandle } from './options'
 import { Page } from './page'
@@ -32,6 +33,8 @@ function pageFact(value: unknown): PageFact | null {
 export class BrowserContext extends EventEmitter {
   readonly _timeoutSettings = new TimeoutSettings()
   readonly _events: EventHub
+  /** The bindings the context exposed, which a page's calls fall back to. */
+  readonly _exposed = new Map<string, BindingCallback>()
   /** The run's locator handlers, on every page: one pull serves them all. */
   readonly _locatorHandlers = new LocatorHandlers()
   _browser: Browser | null = null
@@ -82,20 +85,52 @@ export class BrowserContext extends EventEmitter {
    * loads, in any tab, runs it until the run ends or the disposable is disposed. A popup's
    * first document, which loads before the run acts on the popup, does not.
    */
-  async addInitScript(
+  addInitScript(
     script: unknown,
     arg?: unknown,
     options?: unknown,
   ): Promise<Disposable> {
     const api = 'browserContext.addInitScript'
-    checkInitOptions(api, script, options)
-    const source = initSource(api, script, arg)
-    const { id } = await invoke(
-      'context.addInitScript',
-      { api, timeoutMs: 0 },
-      { script: source },
+    return addInitScript(
+      api,
+      {
+        register: async (source) =>
+          (
+            await invoke(
+              'context.addInitScript',
+              { api, timeoutMs: 0 },
+              { script: source },
+            )
+          ).id,
+        expose: (name, callback) =>
+          exposeOnContext(this, api, name, callback, true),
+      },
+      script,
+      arg,
+      options,
     )
-    return new Disposable(id)
+  }
+
+  /**
+   * upstream's `browserContext.exposeBinding`, reaching each tab as `addInitScript` does: a tab
+   * gets the binding at the run's first write to it, then every document of it has
+   * `window[name]`.
+   */
+  exposeBinding(name: string, callback: BindingCallback): Promise<Disposable> {
+    return exposeOnContext(this, 'browserContext.exposeBinding', name, callback)
+  }
+
+  /** upstream's `browserContext.exposeFunction`. */
+  exposeFunction(
+    name: string,
+    callback: (...args: unknown[]) => unknown,
+  ): Promise<Disposable> {
+    return exposeOnContext(
+      this,
+      'browserContext.exposeFunction',
+      name,
+      (_source, ...args) => Reflect.apply(callback, undefined, args),
+    )
   }
 
   async newPage(): Promise<Page> {

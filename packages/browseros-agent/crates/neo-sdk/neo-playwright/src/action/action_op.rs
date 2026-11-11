@@ -2,21 +2,24 @@
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::sync::Arc;
 
 use crate::action::actionability::PointerKind;
 use crate::action::element_action::ElementRunner;
 use crate::action::focus_lease::lease;
 use crate::action::form_action::{FormEdit, FormRunner};
-use crate::action::input_files::set_input_files;
+use crate::action::input_files::{DropFiles, drop_payloads, set_input_files};
 use crate::action::key_action::{KeyRunner, Keys};
-use crate::action::pointer_action::{DragPhases, Perform, PointerAction, PointerRunner, WaitAfter};
+use crate::action::pointer_action::{
+    DragPhases, DropData, Perform, PointerAction, PointerRunner, WaitAfter,
+};
 use crate::input::{ClickOptions, MouseButton, Typed, millis};
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{Capability, OpSpec, TARGET};
 use crate::page::OpPage;
-use crate::probe::{Edit, FillValue, Point, SelectOption};
+use crate::probe::{DropEntry, Edit, FillValue, Point, SelectOption};
 use crate::target::{Strictness, Target};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -32,6 +35,7 @@ listed_enum! {
         Check,
         Uncheck,
         DragTo,
+        Drop,
         Fill,
         Press,
         PressSequentially,
@@ -111,6 +115,13 @@ impl ActionOp {
             )
             .using(&[Capability::HostFiles])
             .policed(),
+            Self::Drop => OpSpec::write(
+                "locator.drop",
+                TARGET,
+                "drop external files and MIME data onto an element",
+            )
+            .using(&[Capability::HostFiles])
+            .policed(),
             Self::DispatchEvent => OpSpec::write(
                 "locator.dispatchEvent",
                 TARGET,
@@ -180,6 +191,17 @@ struct DragOptions {
     steps: Option<u32>,
     #[serde(default)]
     trial: bool,
+}
+
+/// External drop data; host files are prepared before resolving its target.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DropInput {
+    target: Target,
+    strict: Strictness,
+    files: Option<DropFiles>,
+    data: Vec<DropEntry>,
+    position: Option<Point>,
 }
 
 /// `locator.fill(value)` and `clear()` (wire.ts `FillOptions`).
@@ -482,6 +504,41 @@ async fn run(
             };
             KeyRunner::new(pw, scope, &page, &input.target, input.strict)
                 .run(&keys)
+                .await?;
+        }
+        ActionOp::Drop => {
+            scope.require(Capability::HostFiles)?;
+            let input: DropInput = args.decode(scope)?;
+            let payloads = match input.files {
+                Some(files) => scope
+                    .within(drop_payloads(files))
+                    .await
+                    .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))??,
+                None => Vec::new(),
+            };
+            if payloads.is_empty() && input.data.is_empty() {
+                return Err(scope.fail(
+                    ErrorCode::InvalidInput,
+                    "At least one of \"files\" or \"data\" must be provided.",
+                ));
+            }
+            let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
+            let _lease = lease(scope, &page).await?;
+            let action = PointerAction {
+                kind: PointerKind::Drop,
+                perform: Perform::Drop(Arc::new(DropData {
+                    payloads,
+                    data: input.data,
+                })),
+                wait_after: WaitAfter::Verdict,
+                force: false,
+                trial: false,
+                position: input.position,
+                modifiers: None,
+                scroll: true,
+            };
+            PointerRunner::new(pw, scope, &page, &input.target, input.strict)
+                .run(&action)
                 .await?;
         }
         ActionOp::SetInputFiles => set_input_files(pw, scope, args.decode(scope)?).await?,

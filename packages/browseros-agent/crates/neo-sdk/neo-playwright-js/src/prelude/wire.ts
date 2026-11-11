@@ -230,7 +230,21 @@ export type EventRecord = { seq: number; at: number } & (
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
   | { event: 'download'; page: PageBrand; download: DownloadInfo }
   | { event: 'filechooser'; page: PageBrand; chooser: FileChooserInfo }
+  | BindingRecord
 )
+
+/**
+ * A page's call of a binding the run exposed: the stub's JSON `payload` (`{ name, seq,
+ * serializedArgs }`), the `executionContext` to answer in (`bindingCall.resolve`), and that
+ * context's frame id, `null` for the main frame.
+ */
+export type BindingRecord = {
+  event: 'binding'
+  page: PageBrand
+  frame: string | null
+  executionContext: number
+  payload: string
+}
 
 /**
  * What the pump gets: the events of every listener that had some, in log order, and how many
@@ -376,6 +390,13 @@ export type OpInputs = {
   'locator.selectText': TargetArgs & { force?: boolean }
   'locator.focus': TargetArgs
   'locator.blur': TargetArgs
+  'locator.drop': TargetArgs & {
+    files?:
+      | { paths: { path: string; mimeType: string }[] }
+      | { payloads: { name: string; mimeType: string; buffer: string }[] }
+    data: { mimeType: string; value: string }[]
+    position?: { x: number; y: number }
+  }
   'locator.setInputFiles': TargetArgs & { files: FilesInput }
   'locator.dispatchEvent': TargetArgs & { type: string; eventInit: unknown }
   'locator.scrollIntoViewIfNeeded': TargetArgs
@@ -506,6 +527,10 @@ export type OpInputs = {
     viewportSize: { width: number; height: number }
   }
   'page.addInitScript': PageArgs & { script: InitSource }
+  /** `noGlobal`: the controller alone knows the binding (`exposeFunctions` callbacks). */
+  'page.exposeBinding': PageArgs & { name: string; noGlobal?: true }
+  /** `arg`: `{ name, seq, result }` or `{ name, seq, error }` as in-page JSON text. */
+  'bindingCall.resolve': PageArgs & { context: number; arg: string }
   /** A handler's locator, on the main frame of its page; `uid` names the registration. */
   'page.addLocatorHandler': { target: LocatorBrand; noWaitAfter?: true }
   'page.removeLocatorHandler': { uid: number }
@@ -519,6 +544,7 @@ export type OpInputs = {
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
   'context.addInitScript': { script: InitSource }
+  'context.exposeBinding': { name: string; noGlobal?: true }
   /** The id an `addInitScript` returned. */
   'disposable.dispose': { id: number }
   /**
@@ -576,6 +602,7 @@ export type OpOutputs = {
   'locator.selectText': null
   'locator.focus': null
   'locator.blur': null
+  'locator.drop': null
   'locator.setInputFiles': null
   'locator.dispatchEvent': null
   'locator.scrollIntoViewIfNeeded': null
@@ -642,6 +669,8 @@ export type OpOutputs = {
   'page.setViewportSize': Done
   /** The id `disposable.dispose` takes. */
   'page.addInitScript': { id: number }
+  'page.exposeBinding': { id: number }
+  'bindingCall.resolve': Done
   'page.addLocatorHandler': { uid: number }
   'page.removeLocatorHandler': Done
   'page.locatorHandlerTriggered': { uid: number | null }
@@ -649,6 +678,7 @@ export type OpOutputs = {
   'context.pages': { pages: PageEntry[] }
   'context.newPage': PageEntry
   'context.addInitScript': { id: number }
+  'context.exposeBinding': { id: number }
   'disposable.dispose': Done
   'events.listen': Done
   'events.next': Pumped

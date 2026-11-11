@@ -5,8 +5,8 @@
 //! Three invariants carry the design:
 //! - **Input after `Sent`.** Each attempt calls `OpScope::send_effect` right before its first
 //!   input event and never earlier, so the host re-runs its policies before every attempt
-//!   that sends, and a refused recheck sends nothing. Only [`PageInput`] dispatches, and each
-//!   of its sends takes the `Sent`.
+//!   that sends, and a refused recheck sends nothing. [`PageInput`] dispatches device events
+//!   with the `Sent`; external drops dispatch their synthetic drag events in the probe.
 //! - **Nothing left behind.** The interceptor is disarmed by its [`ArmGuard`] and held keys
 //!   and buttons are released by [`PageInput`] on every exit, the host dropping the future
 //!   included; `dragTo`'s button, held between its halves, by its [`Drag`]; the focus lease is
@@ -39,8 +39,8 @@ use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{
-    ArmPlan, Hit, HitAction, PageText, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
-    Read, Rect, ScrollPlan, Want,
+    ArmPlan, DropEntry, Edit, FilePayload, Hit, HitAction, PageText, Point, ProbeFailure,
+    ProbeReply, ProbeRequest, ProbeTarget, Ran, Read, Rect, ScrollPlan, Want,
 };
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
@@ -121,7 +121,7 @@ pub(crate) struct DragPhases {
 }
 
 /// What the input does at the element's point.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Perform {
     /// `mouse.click`: a move, then a press and a release per click.
     Click(ClickOptions),
@@ -131,6 +131,15 @@ pub(crate) enum Perform {
     MoveAndDown,
     /// `dragTo`'s second half: a move in `steps`, then the left button up.
     MoveAndUp { steps: u32 },
+    /// Synthetic external drag events, after the same pointer checks as mouse input.
+    Drop(Arc<DropData>),
+}
+
+/// External payload shared by pointer retries; bytes are prepared once before page work.
+#[derive(Clone, Debug)]
+pub(crate) struct DropData {
+    pub(crate) payloads: Vec<FilePayload>,
+    pub(crate) data: Vec<DropEntry>,
 }
 
 /// What a pointer action waits for once its input is out, upstream's `waitAfter`.
@@ -642,6 +651,44 @@ impl<'a> PointerRunner<'a> {
                 self.scope.log("  forcing action".to_owned());
             }
 
+            // External drops share the pointer's checks and input lock, but do not move
+            // the device. Chromium's DataTransfer survives this isolated-world dispatch.
+            if let Perform::Drop(payload) = &action.perform {
+                let request = ProbeRequest::Edit {
+                    pin,
+                    edit: Edit::Drop {
+                        payloads: payload.payloads.clone(),
+                        data: payload.data.clone(),
+                        point: measured.point,
+                    },
+                };
+                let _sent = self.scope.send_effect()?;
+                // A failed call that provably never ran may be resolved again. Once
+                // dispatch may have happened, do not replay the website's drop handler.
+                let reply = self
+                    .scope
+                    .within(self.subject.call(located, &request))
+                    .await;
+                match reply {
+                    Ok(Ok(ProbeReply::Value { value })) => {
+                        if value.into_value() == "accepted" {
+                            return Ok(Inner::Done);
+                        }
+                        return Err(self.scope.fail(ErrorCode::PageError,
+                            "Drop target did not accept the drop — its dragover handler did not call preventDefault()"));
+                    }
+                    Ok(Ok(ProbeReply::Detached)) => return self.detached_from_dom(),
+                    Ok(Ok(other)) => return Err(self.subject.refused(other).after_input()),
+                    Ok(Err(ProbeFailure::Gone(Ran::No))) => {
+                        return self.subject.lost(located).map(|()| Inner::Reresolve);
+                    }
+                    Ok(Err(failure)) => {
+                        return Err(resolve::failed(self.scope, failure).after_input());
+                    }
+                    Err(_expired) => return Err(self.timed_out().after_input()),
+                }
+            }
+
             // ③④⑤ The input. `send_effect` runs here, right before the first event, on every
             // attempt; a refusal returns before anything is marked or sent.
             // The frame's count of trusted moves before the approach, which the route check
@@ -1022,15 +1069,16 @@ fn burst(
         None => None,
     };
     let held = devices.keyboard.modifiers();
-    match action.perform {
-        Perform::Click(options) => steps.extend(devices.mouse.click(at, options, held)),
+    match &action.perform {
+        Perform::Click(options) => steps.extend(devices.mouse.click(at, *options, held)),
+        Perform::Drop(_) => {}
         Perform::Move => steps.extend(devices.mouse.move_to(at, 1, held)),
         Perform::MoveAndDown => {
             steps.extend(devices.mouse.move_to(at, 1, held));
             steps.extend(devices.mouse.down(MouseButton::Left, 1, held));
         }
         Perform::MoveAndUp { steps: moves } => {
-            steps.extend(devices.mouse.move_to(at, moves, held));
+            steps.extend(devices.mouse.move_to(at, *moves, held));
             steps.extend(devices.mouse.up(MouseButton::Left, 1, held));
         }
     }

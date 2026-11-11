@@ -1,6 +1,20 @@
 {
   "about": "Every op input the prelude sends, recorded by crates/neo-sdk/neo-playwright-js/scripts/wire-examples.ts. Do not edit: run bun run build in crates/neo-sdk/neo-playwright-js.",
   "ops": {
+    "bindingCall.resolve": [
+      {
+        "call": {
+          "api": "bindingCall.resolve",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "context": 3,
+        "arg": "{\"o\":[{\"k\":\"name\",\"v\":\"add\"},{\"k\":\"seq\",\"v\":1},{\"k\":\"result\",\"v\":3}],\"id\":1}"
+      }
+    ],
     "context.addInitScript": [
       {
         "call": {
@@ -10,6 +24,15 @@
         "script": {
           "source": "window.b = 1"
         }
+      }
+    ],
+    "context.exposeBinding": [
+      {
+        "call": {
+          "api": "browserContext.exposeFunction",
+          "timeoutMs": 0
+        },
+        "name": "c"
       }
     ],
     "context.newPage": [
@@ -723,6 +746,41 @@
           "display": "locator('#b')"
         },
         "options": {}
+      }
+    ],
+    "locator.drop": [
+      {
+        "call": {
+          "api": "locator.drop",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "data": [
+          {
+            "mimeType": "text/plain",
+            "value": "external"
+          }
+        ]
       }
     ],
     "locator.elementHandle": [
@@ -2038,6 +2096,19 @@
         "script": {
           "path": "Cargo.toml"
         }
+      },
+      {
+        "call": {
+          "api": "page.addInitScript",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "script": {
+          "source": "(({ cb }) => cb(1))(globalThis['__playwright__binding__controller__'].parseInitScriptArg({\"o\":[{\"k\":\"cb\",\"v\":{\"fn\":\"__pw_fn_40404040404040404040404040404040\"}}],\"id\":1}))"
+        }
       }
     ],
     "page.addLocatorHandler": [
@@ -2208,6 +2279,42 @@
             ]
           }
         }
+      }
+    ],
+    "page.exposeBinding": [
+      {
+        "call": {
+          "api": "page.exposeFunction",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "name": "add"
+      },
+      {
+        "call": {
+          "api": "page.exposeBinding",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "name": "source"
+      },
+      {
+        "call": {
+          "api": "page.addInitScript",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "name": "__pw_fn_40404040404040404040404040404040",
+        "noGlobal": true
       }
     ],
     "page.frames": [

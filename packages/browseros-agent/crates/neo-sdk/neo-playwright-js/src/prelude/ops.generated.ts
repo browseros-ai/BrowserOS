@@ -38,6 +38,11 @@ export const OPS = {
     target: 'target',
     lifetime: 'operation',
   },
+  'locator.drop': {
+    effect: 'write',
+    target: 'target',
+    lifetime: 'operation',
+  },
   'locator.fill': {
     effect: 'write',
     target: 'target',
@@ -383,6 +388,16 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.exposeBinding': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'bindingCall.resolve': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'context.pages': {
     effect: 'read',
     target: null,
@@ -394,6 +409,11 @@ export const OPS = {
     lifetime: 'operation',
   },
   'context.addInitScript': {
+    effect: 'write',
+    target: null,
+    lifetime: 'operation',
+  },
+  'context.exposeBinding': {
     effect: 'write',
     target: null,
     lifetime: 'operation',

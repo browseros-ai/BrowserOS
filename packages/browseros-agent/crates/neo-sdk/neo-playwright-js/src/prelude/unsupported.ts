@@ -51,10 +51,6 @@ export const UNSUPPORTED = {
     clearPermissions: "permissions are the owner's profile settings",
     close: OWNED,
     cookies: PROFILE,
-    exposeBinding:
-      'pages cannot call back into the script; read state with page.evaluate()',
-    exposeFunction:
-      'pages cannot call back into the script; read state with page.evaluate()',
     grantPermissions: "permissions are the owner's profile settings",
     newCDPSession: 'raw CDP sessions are not available in Neo',
     route: NETWORK,
@@ -97,10 +93,6 @@ export const UNSUPPORTED = {
     consoleMessages:
       'Neo keeps no console history; hosted BrowserOS emits no console events',
     evaluateHandle: NO_HANDLES,
-    exposeBinding:
-      'pages cannot call back into the script; read state with page.evaluate()',
-    exposeFunction:
-      'pages cannot call back into the script; read state with page.evaluate()',
     hideHighlight: NO_INSPECTOR,
     pageErrors:
       'Neo keeps no error history; hosted BrowserOS emits no pageerror events',
@@ -154,7 +146,6 @@ export const UNSUPPORTED = {
     webmcp: { hint: 'WebMCP is not available in Neo', kind: 'property' },
   },
   Locator: {
-    drop: 'dropping data is not available in Neo; use locator.dragTo()',
     evaluateHandle: NO_HANDLES,
     hideHighlight: NO_INSPECTOR,
     highlight: NO_INSPECTOR,

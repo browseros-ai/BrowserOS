@@ -44,6 +44,11 @@
       target: "target",
       lifetime: "operation"
     },
+    "locator.drop": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
     "locator.fill": {
       effect: "write",
       target: "target",
@@ -389,6 +394,16 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.exposeBinding": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "bindingCall.resolve": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "context.pages": {
       effect: "read",
       target: null,
@@ -400,6 +415,11 @@
       lifetime: "operation"
     },
     "context.addInitScript": {
+      effect: "write",
+      target: null,
+      lifetime: "operation"
+    },
+    "context.exposeBinding": {
       effect: "write",
       target: null,
       lifetime: "operation"
@@ -1747,706 +1767,6 @@
       return buffer;
     }
   }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/event-deadline.ts
-  class EventDeadline {
-    api;
-    event;
-    timeout;
-    endsAt;
-    constructor(api, event, since, timeout) {
-      this.api = api;
-      this.event = event;
-      this.timeout = timeout;
-      this.endsAt = timeout === 0 ? null : since + timeout;
-    }
-    left() {
-      if (this.endsAt === null)
-        return 0;
-      const left = this.endsAt - Date.now();
-      if (left <= 0)
-        throw this.expired();
-      return left;
-    }
-    named(error) {
-      if (!(error instanceof Error) || Reflect.get(error, "code") !== "wait_timeout")
-        return error;
-      const [, ...log] = error.message.split(`
-`);
-      error.message = [`${this.api}: ${this.message()}`, ...log].join(`
-`);
-      return error;
-    }
-    race(verdict) {
-      const endsAt = this.endsAt;
-      if (endsAt === null || !isThenable(verdict))
-        return Promise.resolve(verdict);
-      let cancel = () => {};
-      const expired = new Promise((_, reject) => {
-        cancel = startTimer(Math.max(0, endsAt - Date.now()), () => reject(this.expired()));
-      });
-      return Promise.race([verdict, expired]).finally(cancel);
-    }
-    expired() {
-      return waitTimeoutError(this.api, this.message());
-    }
-    message() {
-      return this.event === null ? `Timeout ${this.timeout}ms exceeded.` : `Timeout ${this.timeout}ms exceeded while waiting for event "${this.event}"`;
-    }
-  }
-  function isThenable(value) {
-    return (typeof value === "object" || typeof value === "function") && value !== null && typeof Reflect.get(value, "then") === "function";
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/event-values.ts
-  class FileChooser {
-    #pageValue;
-    #element;
-    #multiple;
-    constructor(page, info) {
-      this.#pageValue = page;
-      const element = page._handle(info.element);
-      if (!element)
-        throw new Error("Rust returned a chooser without its input");
-      this.#element = element;
-      this.#multiple = info.isMultiple;
-      markHandle(this);
-    }
-    element() {
-      return this.#element;
-    }
-    isMultiple() {
-      return this.#multiple;
-    }
-    page() {
-      return this.#pageValue;
-    }
-    async setFiles(files, options) {
-      await this.#element.setInputFiles(files, options);
-    }
-  }
-
-  class Dialog {
-    #pageValue;
-    #info;
-    constructor(page, info) {
-      this.#pageValue = page;
-      this.#info = info;
-      markHandle(this);
-    }
-    page() {
-      return this.#pageValue;
-    }
-    type() {
-      return this.#info.type;
-    }
-    message() {
-      return this.#info.message;
-    }
-    defaultValue() {
-      return this.#info.defaultValue;
-    }
-    async accept(promptText) {
-      const api = "dialog.accept";
-      await invoke("dialog.accept", { api, timeoutMs: 0 }, {
-        page: await this.#pageValue._brand(api),
-        dialog: this.#info.id,
-        ...promptText === undefined ? {} : { promptText }
-      });
-    }
-    async dismiss() {
-      const api = "dialog.dismiss";
-      const page = await this.#pageValue._brand(api);
-      try {
-        await invoke("dialog.dismiss", { api, timeoutMs: 0 }, { page, dialog: this.#info.id });
-      } catch (error) {
-        if (Reflect.get(Object(error), "code") === "target_closed")
-          return;
-        throw error;
-      }
-    }
-  }
-
-  class Download {
-    #pageValue;
-    #info;
-    constructor(page, info) {
-      this.#pageValue = page;
-      this.#info = info;
-      markHandle(this);
-    }
-    page() {
-      return this.#pageValue;
-    }
-    url() {
-      return this.#info.url;
-    }
-    suggestedFilename() {
-      return this.#info.suggestedFilename;
-    }
-    async path() {
-      const api = "download.path";
-      const done = await invoke("download.path", { api, timeoutMs: 0 }, { download: this.#info.id });
-      if (done.path === null)
-        throw new Error(`${api}: ${done.failure ?? "download failed"}`);
-      return done.path;
-    }
-    async failure() {
-      const api = "download.failure";
-      const done = await invoke("download.path", { api, timeoutMs: 0 }, { download: this.#info.id });
-      return done.failure;
-    }
-    async saveAs(path) {
-      const api = "download.saveAs";
-      await invoke("download.saveAs", { api, timeoutMs: 0 }, { download: this.#info.id, path });
-    }
-  }
-
-  class ConsoleMessage {
-    #pageValue;
-    #info;
-    constructor(page, info) {
-      this.#pageValue = page;
-      this.#info = info;
-      markHandle(this);
-    }
-    page() {
-      return this.#pageValue;
-    }
-    worker() {
-      return null;
-    }
-    type() {
-      return this.#info.type;
-    }
-    text() {
-      return this.#info.text;
-    }
-    location() {
-      const { url, lineNumber, columnNumber } = this.#info.location;
-      return {
-        url,
-        line: lineNumber,
-        column: columnNumber,
-        lineNumber,
-        columnNumber
-      };
-    }
-    timestamp() {
-      return this.#info.timestamp;
-    }
-    toString() {
-      return this.#info.text;
-    }
-  }
-  function pageError(info) {
-    const error = new Error(info.message);
-    error.name = info.name;
-    error.stack = info.stack;
-    return error;
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/signal.ts
-  function signalOf(api, options) {
-    if (typeof options !== "object" || options === null)
-      return;
-    const signal = Reflect.get(options, "signal");
-    if (signal === undefined)
-      return;
-    if (typeof signal !== "object" || signal === null || typeof Reflect.get(signal, "aborted") !== "boolean" || typeof Reflect.get(signal, "addEventListener") !== "function" || typeof Reflect.get(signal, "removeEventListener") !== "function")
-      throw clientError(api, "signal: expected an AbortSignal");
-    if (signal.aborted)
-      throw abortedError(api, signal);
-    return signal;
-  }
-  async function untilAborted(signal, aborted, work) {
-    if (signal === undefined)
-      return await work();
-    if (signal.aborted)
-      throw aborted();
-    let detach = () => {};
-    const abort = new Promise((_, reject) => {
-      const listener = () => reject(aborted());
-      signal.addEventListener("abort", listener, { once: true });
-      detach = () => signal.removeEventListener("abort", listener);
-    });
-    try {
-      return await Promise.race([work(), abort]);
-    } finally {
-      detach();
-    }
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/timeouts.ts
-  var DEFAULT_TIMEOUT = 5000;
-  var DEFAULT_NAVIGATION_TIMEOUT = 30000;
-  function timeoutMs(api, timeout) {
-    if (!Number.isFinite(timeout) || timeout < 0)
-      throw clientError(api, `timeout: expected a non-negative number, got ${timeout}`);
-    return Math.ceil(timeout);
-  }
-
-  class TimeoutSettings {
-    parent;
-    defaultTimeout;
-    defaultNavigationTimeout;
-    constructor(parent) {
-      this.parent = parent;
-    }
-    setDefaultTimeout(timeout) {
-      this.defaultTimeout = timeout;
-    }
-    setDefaultNavigationTimeout(timeout) {
-      this.defaultNavigationTimeout = timeout;
-    }
-    timeout(options) {
-      if (typeof options?.timeout === "number")
-        return options.timeout;
-      return this.inherited();
-    }
-    navigationTimeout(options) {
-      if (typeof options?.timeout === "number")
-        return options.timeout;
-      return this.inheritedNavigation();
-    }
-    inherited() {
-      return this.defaultTimeout ?? this.parent?.inherited() ?? DEFAULT_TIMEOUT;
-    }
-    inheritedNavigation() {
-      return this.defaultNavigationTimeout ?? this.defaultTimeout ?? this.parent?.inheritedNavigation() ?? DEFAULT_NAVIGATION_TIMEOUT;
-    }
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/events.ts
-  var PAGE_EVENTS = new Set([
-    "popup",
-    "close",
-    "dialog",
-    "dialogclosed",
-    "console",
-    "pageerror",
-    "download",
-    "filechooser",
-    "load",
-    "domcontentloaded",
-    "frameattached",
-    "framenavigated",
-    "framedetached"
-  ]);
-  var CONTEXT_EVENTS = new Set([
-    "page",
-    "pageload",
-    "dialogclosed",
-    "frameattached",
-    "framenavigated",
-    "framedetached"
-  ]);
-  var UNREPORTED = {
-    request: "Neo does not report network events; wait for what the page shows instead",
-    response: "Neo does not report network events; wait for what the page shows instead",
-    requestfailed: "Neo does not report network events; wait for what the page shows instead",
-    requestfinished: "Neo does not report network events; wait for what the page shows instead",
-    websocket: "Neo does not report WebSockets",
-    worker: "Neo does not report workers",
-    serviceworker: "Neo does not report service workers",
-    backgroundpage: "Neo does not report extension background pages",
-    crash: "Neo does not report crashes; a crashed page fails its next call",
-    pageclose: 'listen for close on the page itself: page.on("close")',
-    weberror: "the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS"
-  };
-  function checkReported(api, event, reported) {
-    if (typeof event !== "string")
-      return;
-    const ours = reported === "page" ? PAGE_EVENTS : CONTEXT_EVENTS;
-    if (ours.has(event))
-      return;
-    const other = reported === "page" ? CONTEXT_EVENTS : PAGE_EVENTS;
-    const hint = UNREPORTED[event] ?? (other.has(event) ? reported === "page" ? `"${event}" is a browser context event: context.on("${event}")` : `Neo reports "${event}" on pages: page.on("${event}")` : undefined);
-    if (hint !== undefined)
-      throw unsupportedError(`${api}('${event}')`, hint);
-  }
-  function isReported(event, on) {
-    return typeof event === "string" && (on === "page" ? PAGE_EVENTS : CONTEXT_EVENTS).has(event);
-  }
-
-  class EventHub {
-    owner;
-    listening = 0;
-    pumping = false;
-    batch = null;
-    dialogs = new Map;
-    downloads = new Map;
-    choosers = new Map;
-    nextChooserLease = 0;
-    chooserListeners = new Map;
-    chooserChanges = new Map;
-    contextChanges = new Map;
-    contextSince = new Map;
-    constructor(owner) {
-      this.owner = owner;
-    }
-    listen(page, event, on) {
-      const since = Date.now();
-      this.listening += on ? 1 : -1;
-      if (page === null) {
-        if (on)
-          this.contextSince.set(event, since);
-        else
-          this.contextSince.delete(event);
-        const previous = this.contextChanges.get(event) ?? Promise.resolve();
-        const changed = previous.then(() => this.sendListen(null, event, on, since));
-        this.contextChanges.set(event, changed);
-      } else if (event === "filechooser") {
-        const lease = on ? this.intercept(page) : this.chooserListeners.get(page);
-        if (on && lease)
-          this.chooserListeners.set(page, lease);
-        else
-          this.chooserListeners.delete(page);
-        const previous = this.chooserChanges.get(page) ?? Promise.resolve();
-        const changed = previous.then(() => this.sendListen(page, event, on, since, lease));
-        this.chooserChanges.set(page, changed);
-        trackChooserSetup(changed);
-      } else
-        this.sendListen(page, event, on, since);
-      if (on && !this.pumping) {
-        this.pumping = true;
-        this.pump();
-      }
-    }
-    async wait(api, page, event, optionsOrPredicate, since, settings) {
-      const kind = page === null ? "context" : "page";
-      checkReported(api, event, kind);
-      if (!isReported(event, kind))
-        throw unsupportedError(api, `Neo reports only Playwright's events, not "${event}"`);
-      const options = typeof optionsOrPredicate === "function" ? { predicate: optionsOrPredicate } : optionsOrPredicate ?? {};
-      const deadline = new EventDeadline(api, event, since, timeoutMs(api, settings.timeout(options)));
-      const signal = signalOf(api, options);
-      const lease = event === "filechooser" && page ? this.intercept(page) : null;
-      try {
-        return await untilAborted(signal, () => abortedError(api, signal), async () => {
-          if (lease)
-            await deadline.race(lease.ready);
-          return this.waitFor(api, page, event, options, since, deadline, signal);
-        });
-      } finally {
-        if (lease)
-          lease.release().catch(() => {});
-      }
-    }
-    async waitFor(api, page, event, options, since, deadline, signal) {
-      const target = page === null ? null : await page._openedBrand(api);
-      let after = null;
-      for (;; ) {
-        const left = deadline.left();
-        let record;
-        let observed = null;
-        try {
-          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }, undefined, signal));
-        } catch (error) {
-          throw deadline.named(error);
-        }
-        if (record.event === "close" && this.batch?.closes.has(record.seq))
-          await this.batch.done;
-        let value;
-        try {
-          value = this.value(record, observed);
-        } finally {
-          this.settleCloses(observed);
-        }
-        const predicate = options.predicate;
-        if (!predicate)
-          return value;
-        let accepted;
-        try {
-          accepted = await deadline.race(this.duringEvent(record, () => Reflect.apply(predicate, undefined, [value])));
-        } catch (error) {
-          throw prefixed(api, error);
-        }
-        if (accepted)
-          return value;
-        after = record.seq;
-      }
-    }
-    async sendListen(page, event, on, since, lease) {
-      const api = `${page === null ? "browserContext" : "page"}.${on ? "on" : "off"}`;
-      try {
-        if (on && lease)
-          await lease.ready;
-        await invoke("events.listen", { api, timeoutMs: 0 }, {
-          page: page === null ? null : await page._openedBrand(api),
-          event,
-          on,
-          since
-        });
-      } catch {
-        if (on && lease)
-          lease.release().catch(() => {});
-      } finally {
-        if (!on && lease)
-          await lease.release().catch(() => {});
-      }
-    }
-    intercept(page) {
-      const id = ++this.nextChooserLease;
-      const api = "page.filechooser";
-      const target = page._openedBrand(api);
-      const ready = target.then(async (page) => {
-        await invoke("events.interceptFileChooser", { api, timeoutMs: 0 }, { page, lease: id, on: true });
-      });
-      trackChooserSetup(ready);
-      let released = null;
-      return {
-        ready,
-        release: () => {
-          if (!released) {
-            released = ready.then(async () => {
-              await invoke("events.interceptFileChooser", { api, timeoutMs: 0 }, { page: await target, lease: id, on: false });
-            });
-            trackChooserSetup(released);
-          }
-          return released;
-        }
-      };
-    }
-    async pump() {
-      try {
-        while (this.listening > 0) {
-          const {
-            value: { events },
-            observed
-          } = await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events }) => this.stageBatch(events));
-          try {
-            for (const event of events)
-              this.deliver(event, observed);
-          } finally {
-            try {
-              this.settleCloses(observed);
-            } finally {
-              const batch = this.batch;
-              this.batch = null;
-              batch?.finish();
-            }
-          }
-        }
-      } catch {} finally {
-        this.pumping = false;
-      }
-    }
-    stageBatch(events) {
-      const closes = new Set(events.filter((event) => event.event === "close").map((event) => event.seq));
-      if (closes.size === 0)
-        return;
-      let finish;
-      const done = new Promise((resolve) => {
-        finish = resolve;
-      });
-      this.batch = { closes, done, finish };
-    }
-    page(value, url) {
-      const page = this.owner._pageFromResult(value, url);
-      if (!page)
-        throw new Error(`Rust named no page in an event: ${String(value)}`);
-      return page;
-    }
-    settleCloses(observed) {
-      for (const close of observed?.closes ?? [])
-        this.page({ $neo: "page", tab: close.tab })._settleClose(observed);
-    }
-    deliver(record, observed) {
-      const context = record.event === "page" || record.event === "pageload" || "context" in record && record.context;
-      if (context && typeof record.at === "number" && record.at < (this.contextSince.get(record.event) ?? Infinity))
-        return;
-      switch (record.event) {
-        case "popup":
-          this.page(record.page).emit("popup", this.page(record.popup.page, record.popup.url));
-          return;
-        case "page":
-          this.owner.emit("page", this.page(record.page, record.url));
-          return;
-        case "load":
-        case "domcontentloaded": {
-          const page = this.page(record.page);
-          page._eventFrame(record.seq, "framenavigated", record.frame);
-          this.duringEvent(record, () => page.emit(record.event, page));
-          return;
-        }
-        case "pageload": {
-          const page = this.page(record.page);
-          page._eventFrame(record.seq, "framenavigated", record.frame);
-          this.duringEvent(record, () => this.owner.emit("pageload", page));
-          return;
-        }
-        case "frameattached":
-        case "framenavigated":
-        case "framedetached": {
-          const page = this.page(record.page);
-          const frame = page._eventFrame(record.seq, record.event, record.frame);
-          const emitter = record.context ? this.owner : page;
-          frame._duringEvent(record.frame, record.event, () => emitter.emit(record.event, frame));
-          return;
-        }
-        case "close":
-          this.page(record.page)._closeEvent(record.seq, observed);
-          return;
-        case "dialogclosed": {
-          const page = this.page(record.page);
-          const emitter = record.context ? this.owner : page;
-          emitter.emit("dialogclosed", this.dialog(page, record.dialog));
-          return;
-        }
-        case "dialog": {
-          const page = this.page(record.page);
-          const dialog = this.dialog(page, record.dialog);
-          if (!page.emit("dialog", dialog))
-            (dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss()).catch(() => {});
-          return;
-        }
-        case "console": {
-          const page = this.page(record.page);
-          page.emit("console", new ConsoleMessage(page, record.message));
-          return;
-        }
-        case "pageerror":
-          this.page(record.page).emit("pageerror", pageError(record.error));
-          return;
-        case "download": {
-          const page = this.page(record.page);
-          page.emit("download", this.download(page, record.download));
-          return;
-        }
-        case "filechooser": {
-          const page = this.page(record.page);
-          page.emit("filechooser", this.chooser(record.seq, page, record.chooser));
-          return;
-        }
-      }
-    }
-    duringEvent(record, read) {
-      switch (record.event) {
-        case "frameattached":
-        case "framenavigated":
-        case "framedetached": {
-          const frame = this.page(record.page)._eventFrame(record.seq, record.event, record.frame);
-          return frame._duringEvent(record.frame, record.event, read);
-        }
-        case "load":
-        case "domcontentloaded":
-        case "pageload":
-          return this.page(record.page).mainFrame()._duringEvent(record.frame, "framenavigated", read);
-        default:
-          return read();
-      }
-    }
-    value(record, observed) {
-      switch (record.event) {
-        case "popup":
-          return this.page(record.popup.page, record.popup.url);
-        case "page":
-          return this.page(record.page, record.url);
-        case "load":
-        case "domcontentloaded":
-        case "pageload": {
-          const page = this.page(record.page);
-          page._eventFrame(record.seq, "framenavigated", record.frame);
-          return page;
-        }
-        case "frameattached":
-        case "framenavigated":
-        case "framedetached":
-          return this.page(record.page)._eventFrame(record.seq, record.event, record.frame);
-        case "close": {
-          const page = this.page(record.page);
-          page._closeEvent(record.seq, observed);
-          return page;
-        }
-        case "dialog":
-        case "dialogclosed":
-          return this.dialog(this.page(record.page), record.dialog);
-        case "console":
-          return new ConsoleMessage(this.page(record.page), record.message);
-        case "pageerror":
-          return pageError(record.error);
-        case "download":
-          return this.download(this.page(record.page), record.download);
-        case "filechooser":
-          return this.chooser(record.seq, this.page(record.page), record.chooser);
-      }
-    }
-    dialog(page, info) {
-      const known = this.dialogs.get(info.id);
-      if (known)
-        return known;
-      const dialog = new Dialog(page, info);
-      this.dialogs.set(info.id, dialog);
-      return dialog;
-    }
-    download(page, info) {
-      const known = this.downloads.get(info.id);
-      if (known)
-        return known;
-      const download = new Download(page, info);
-      this.downloads.set(info.id, download);
-      return download;
-    }
-    chooser(seq, page, info) {
-      const known = this.choosers.get(seq);
-      if (known)
-        return known;
-      const chooser = new FileChooser(page, info);
-      this.choosers.set(seq, chooser);
-      return chooser;
-    }
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/init-script.ts
-  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
-  function checkInitOptions(api, script, options) {
-    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw plainError(api, TOO_MANY_ARGUMENTS);
-    if (!options || !Reflect.get(options, "exposeFunctions"))
-      return;
-    if (typeof script !== "function")
-      throw plainError(api, "Passing functions requires the init script to be a function");
-    throw unsupportedError(api, "pages cannot call back into the script in Neo; pass values the page can use instead");
-  }
-  function initSource(api, script, arg) {
-    if (typeof script === "function") {
-      const argText = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
-      return { source: `(${String(script)})(${argText})` };
-    }
-    if (arg !== undefined)
-      throw plainError(api, "Cannot evaluate a string with arguments");
-    if (typeof script === "string")
-      return { source: script };
-    if (typeof script === "object" && script !== null) {
-      const content = Reflect.get(script, "content");
-      if (content !== undefined)
-        return { source: String(content) };
-      const path = Reflect.get(script, "path");
-      if (path !== undefined)
-        return { path: String(path) };
-    }
-    throw plainError(api, "Either path or content property must be present");
-  }
-
-  class Disposable {
-    #id;
-    constructor(id) {
-      this.#id = id;
-    }
-    async dispose() {
-      await invoke("disposable.dispose", { api: "disposable.dispose", timeoutMs: 0 }, { id: this.#id });
-    }
-  }
-  var asyncDispose = Reflect.get(Symbol, "asyncDispose");
-  if (typeof asyncDispose === "symbol")
-    Object.defineProperty(Disposable.prototype, asyncDispose, {
-      configurable: true,
-      writable: true,
-      value() {
-        return this.dispose();
-      }
-    });
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers.ts
   var kFunctionBindingPrefix = "__pw_fn_";
@@ -4117,6 +3437,17 @@ ${value.stack}`;
       }))
     };
   }
+  function dropFiles(api, files) {
+    const input = inputFiles(api, files);
+    if ("payloads" in input)
+      return input;
+    return {
+      paths: input.paths.map((path) => ({
+        path,
+        mimeType: src_default.getType(path) || "application/octet-stream"
+      }))
+    };
+  }
   function payloadBytes(api, items) {
     let total = 0;
     for (const item of items) {
@@ -4153,6 +3484,7 @@ ${value.stack}`;
   }
   var CLIENT_MESSAGES = [
     /^Multiple directories are not supported$/,
+    /^Dropping a directory is not supported/,
     /^File paths must be all files or a single directory$/,
     /^(?:E[A-Z0-9]+|UNKNOWN): [^,\n]+, stat '/
   ];
@@ -7148,31 +6480,6 @@ ${value.stack}`;
     tokens.push("$");
     return tokens.join("");
   }
-  // crates/neo-sdk/neo-playwright-js/src/prelude/screenshot.ts
-  function screenshotType({
-    api,
-    path
-  }) {
-    const mime = getMimeTypeForPath(path.toLowerCase());
-    if (mime === "image/png")
-      return "png";
-    if (mime === "image/jpeg")
-      return "jpeg";
-    if (mime === "image/webp")
-      return "webp";
-    throw plainError(api, `path: unsupported mime type "${mime}"`);
-  }
-  async function saveScreenshot({
-    api,
-    bytes,
-    path,
-    signal
-  }) {
-    if (!path)
-      return;
-    await invoke("page.saveScreenshot", { api, timeoutMs: 0 }, { path, base64: decode(bytes, "base64") }, signal);
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/prelude/selectors.ts
   function withLocatorOptions(api, frame, selector, options) {
     let result = selector;
@@ -7212,6 +6519,454 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/locator.ts
+  function testIdAttributeName() {
+    return "data-testid";
+  }
+
+  class Locator {
+    _frame;
+    _selector;
+    constructor(frame, selector) {
+      this._frame = frame;
+      this._selector = selector;
+      markHandle(this);
+    }
+    page() {
+      return this._frame.page();
+    }
+    toString() {
+      return asLocatorDescription("javascript", this._selector);
+    }
+    description() {
+      return locatorCustomDescription(this._selector) ?? null;
+    }
+    locator(selectorOrLocator, options) {
+      const api = "locator.locator";
+      if (typeof selectorOrLocator === "string")
+        return new Locator(this._frame, withLocatorOptions(api, this._frame, `${this._selector} >> ${selectorOrLocator}`, options));
+      if (selectorOrLocator._frame !== this._frame)
+        throw plainError(api, "Locators must belong to the same frame.");
+      return new Locator(this._frame, withLocatorOptions(api, this._frame, `${this._selector} >> internal:chain=${JSON.stringify(selectorOrLocator._selector)}`, options));
+    }
+    within(locator) {
+      return locator.locator(this);
+    }
+    getByTestId(testId) {
+      return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
+    }
+    getByAltText(text, options) {
+      return this.locator(getByAltTextSelector(text, options));
+    }
+    getByLabel(text, options) {
+      return this.locator(getByLabelSelector(text, options));
+    }
+    getByPlaceholder(text, options) {
+      return this.locator(getByPlaceholderSelector(text, options));
+    }
+    getByText(text, options) {
+      return this.locator(getByTextSelector(text, options));
+    }
+    getByTitle(text, options) {
+      return this.locator(getByTitleSelector(text, options));
+    }
+    getByRole(role, options = {}) {
+      return this.locator(getByRoleSelector(role, options));
+    }
+    frameLocator(selector) {
+      return new FrameLocator(this._frame, `${this._selector} >> ${selector}`);
+    }
+    contentFrame() {
+      return new FrameLocator(this._frame, this._selector);
+    }
+    filter(options) {
+      return new Locator(this._frame, withLocatorOptions("locator.filter", this._frame, this._selector, options));
+    }
+    visible() {
+      return new Locator(this._frame, withLocatorOptions("locator.visible", this._frame, this._selector, {
+        visible: true
+      }));
+    }
+    describe(description) {
+      return new Locator(this._frame, `${this._selector} >> internal:describe=${JSON.stringify(description)}`);
+    }
+    first() {
+      return new Locator(this._frame, `${this._selector} >> nth=0`);
+    }
+    last() {
+      return new Locator(this._frame, `${this._selector} >> nth=-1`);
+    }
+    nth(index) {
+      return new Locator(this._frame, `${this._selector} >> nth=${index}`);
+    }
+    and(locator) {
+      if (locator._frame !== this._frame)
+        throw plainError("locator.and", "Locators must belong to the same frame.");
+      return new Locator(this._frame, `${this._selector} >> internal:and=${JSON.stringify(locator._selector)}`);
+    }
+    or(locator) {
+      if (locator._frame !== this._frame)
+        throw plainError("locator.or", "Locators must belong to the same frame.");
+      return new Locator(this._frame, `${this._selector} >> internal:or=${JSON.stringify(locator._selector)}`);
+    }
+    click(options = {}) {
+      return this._frame._click("locator.click", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    dblclick(options = {}) {
+      return this._frame._dblclick("locator.dblclick", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    hover(options = {}) {
+      return this._frame._hover("locator.hover", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    check(options = {}) {
+      return this._frame._check("locator.check", this._selector, true, {
+        ...options,
+        strict: true
+      });
+    }
+    uncheck(options = {}) {
+      return this._frame._check("locator.uncheck", this._selector, false, {
+        ...options,
+        strict: true
+      });
+    }
+    setChecked(checked, options = {}) {
+      return this._frame._check("locator.setChecked", this._selector, checked, {
+        ...options,
+        strict: true
+      });
+    }
+    dragTo(target, options = {}) {
+      return this._frame._dragAndDrop("locator.dragTo", this._selector, target._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    fill(value, options = {}) {
+      return this._frame._fill("locator.fill", this._selector, value, {
+        ...options,
+        strict: true
+      });
+    }
+    clear(options = {}) {
+      return this._frame._fill("locator.clear", this._selector, "", {
+        ...options,
+        strict: true
+      });
+    }
+    press(key, options = {}) {
+      return this._frame._press("locator.press", this._selector, key, {
+        ...options,
+        strict: true
+      });
+    }
+    pressSequentially(text, options = {}) {
+      return this._frame._type("locator.pressSequentially", this._selector, text, {
+        ...options,
+        strict: true
+      });
+    }
+    type(text, options = {}) {
+      return this._frame._type("locator.type", this._selector, text, {
+        ...options,
+        strict: true
+      });
+    }
+    selectOption(values, options = {}) {
+      return this._frame._selectOption("locator.selectOption", this._selector, values, {
+        ...options,
+        strict: true
+      });
+    }
+    selectText(options = {}) {
+      return this._frame._selectText("locator.selectText", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    focus(options = {}) {
+      return this._frame._focus("locator.focus", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    blur(options = {}) {
+      return this._frame._blur("locator.blur", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    drop(payload, options = {}) {
+      return this._frame._drop(this._selector, payload, options);
+    }
+    setInputFiles(files, options = {}) {
+      return this._frame._setInputFiles("locator.setInputFiles", this._selector, files, {
+        ...options,
+        strict: true
+      });
+    }
+    dispatchEvent(type, eventInit = {}, options = {}) {
+      return this._frame._dispatchEvent("locator.dispatchEvent", this._selector, type, eventInit, {
+        ...options,
+        strict: true
+      });
+    }
+    scrollIntoViewIfNeeded(options = {}) {
+      return this._frame._scrollIntoViewIfNeeded("locator.scrollIntoViewIfNeeded", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    textContent(options = {}) {
+      return this._frame._read("locator.textContent", "locator.textContent", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    innerText(options = {}) {
+      return this._frame._read("locator.innerText", "locator.innerText", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    innerHTML(options = {}) {
+      return this._frame._read("locator.innerHTML", "locator.innerHTML", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    inputValue(options = {}) {
+      return this._frame._read("locator.inputValue", "locator.inputValue", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    getAttribute(name, options = {}) {
+      return this._frame._getAttribute("locator.getAttribute", this._selector, name, {
+        ...options,
+        strict: true
+      });
+    }
+    isChecked(options = {}) {
+      return this._frame._read("locator.isChecked", "locator.isChecked", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    isDisabled(options = {}) {
+      return this._frame._read("locator.isDisabled", "locator.isDisabled", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    isEditable(options = {}) {
+      return this._frame._read("locator.isEditable", "locator.isEditable", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    isEnabled(options = {}) {
+      return this._frame._read("locator.isEnabled", "locator.isEnabled", this._selector, {
+        ...options,
+        strict: true
+      });
+    }
+    isHidden(_options) {
+      return this._frame._isVisible("locator.isHidden", "locator.isHidden", this._selector, {
+        strict: true
+      });
+    }
+    isVisible(_options) {
+      return this._frame._isVisible("locator.isVisible", "locator.isVisible", this._selector, {
+        strict: true
+      });
+    }
+    count() {
+      return this._frame._everyMatch("locator.count", "locator.count", this._selector);
+    }
+    async normalize() {
+      const resolved = await this._frame._normalize("locator.normalize", this._selector);
+      return new Locator(this._frame, resolved);
+    }
+    async all() {
+      const count = await this._frame._everyMatch("locator.count", "locator.all", this._selector);
+      return Array.from({ length: count }, (_, index) => this.nth(index));
+    }
+    allTextContents() {
+      return this._frame._everyMatch("locator.allTextContents", "locator.allTextContents", this._selector);
+    }
+    allInnerTexts() {
+      return this._frame._everyMatch("locator.allInnerTexts", "locator.allInnerTexts", this._selector);
+    }
+    boundingBox(options = {}) {
+      return this._frame._boundingBox("locator.boundingBox", this._selector, options);
+    }
+    async waitFor(options = {}) {
+      await this._frame._waitForSelector("locator.waitFor", this._selector, { ...options, strict: true }, true);
+    }
+    async elementHandle(options = {}) {
+      const handle = await this._frame._elementHandle("locator.elementHandle", this._selector, true, false, options);
+      if (!handle)
+        throw internalError("locator.elementHandle", `Could not resolve ${this} to DOM Element`);
+      return handle;
+    }
+    elementHandles() {
+      return this._frame._elementHandles("locator.elementHandles", this._selector);
+    }
+    async evaluate(pageFunction, arg, options) {
+      const api = "locator.evaluate";
+      const script = pageCall(api, "locator", pageFunction, arg, options);
+      return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
+    }
+    async waitForFunction(pageFunction, arg, options) {
+      const api = "locator.waitForFunction";
+      const script = pageCall(api, "query", pageFunction, arg);
+      await this._frame._selectorOp("locator.waitForFunction", api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
+    }
+    async evaluateAll(pageFunction, arg) {
+      const api = "locator.evaluateAll";
+      return await this._frame._evaluateAll(api, this._selector, pageCall(api, "query", pageFunction, arg));
+    }
+    ariaSnapshot(options) {
+      return this._frame._ariaSnapshot("locator.ariaSnapshot", this._selector, options);
+    }
+    ariaSnapshotJSON(options) {
+      return this._frame._ariaSnapshotJSON("locator.ariaSnapshotJSON", this._selector, options);
+    }
+    screenshot(options) {
+      return this._frame._screenshot("locator.screenshot", this._selector, options);
+    }
+  }
+
+  class FrameLocator {
+    _frame;
+    _frameSelector;
+    constructor(frame, selector) {
+      this._frame = frame;
+      this._frameSelector = selector;
+      markHandle(this);
+    }
+    #childSelector(selector) {
+      if (this._frameSelector === kAnyFrameSelector)
+        return `${this._frameSelector} >> ${selector}`;
+      return `${this._frameSelector} >> internal:control=enter-frame >> ${selector}`;
+    }
+    locator(selectorOrLocator, options) {
+      const api = "frameLocator.locator";
+      if (typeof selectorOrLocator === "string")
+        return new Locator(this._frame, withLocatorOptions(api, this._frame, this.#childSelector(selectorOrLocator), options));
+      if (selectorOrLocator._frame !== this._frame)
+        throw plainError(api, "Locators must belong to the same frame.");
+      return new Locator(this._frame, withLocatorOptions(api, this._frame, this.#childSelector(selectorOrLocator._selector), options));
+    }
+    getByTestId(testId) {
+      return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
+    }
+    getByAltText(text, options) {
+      return this.locator(getByAltTextSelector(text, options));
+    }
+    getByLabel(text, options) {
+      return this.locator(getByLabelSelector(text, options));
+    }
+    getByPlaceholder(text, options) {
+      return this.locator(getByPlaceholderSelector(text, options));
+    }
+    getByText(text, options) {
+      return this.locator(getByTextSelector(text, options));
+    }
+    getByTitle(text, options) {
+      return this.locator(getByTitleSelector(text, options));
+    }
+    getByRole(role, options = {}) {
+      return this.locator(getByRoleSelector(role, options));
+    }
+    owner() {
+      return new Locator(this._frame, this._frameSelector);
+    }
+    frameLocator(selector) {
+      return new FrameLocator(this._frame, this.#childSelector(selector));
+    }
+    #nthSelector(api, nth) {
+      if (this._frameSelector === kAnyFrameSelector)
+        throw plainError(api, "Selecting the nth frame is not allowed on frameLocator().");
+      return `${this._frameSelector} >> nth=${nth}`;
+    }
+    first() {
+      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.first", "0"));
+    }
+    last() {
+      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.last", "-1"));
+    }
+    nth(index) {
+      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.nth", String(index)));
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/screenshot.ts
+  function screenshotType({
+    api,
+    path
+  }) {
+    const mime = getMimeTypeForPath(path.toLowerCase());
+    if (mime === "image/png")
+      return "png";
+    if (mime === "image/jpeg")
+      return "jpeg";
+    if (mime === "image/webp")
+      return "webp";
+    throw plainError(api, `path: unsupported mime type "${mime}"`);
+  }
+  async function saveScreenshot({
+    api,
+    bytes,
+    path,
+    signal
+  }) {
+    if (!path)
+      return;
+    await invoke("page.saveScreenshot", { api, timeoutMs: 0 }, { path, base64: decode(bytes, "base64") }, signal);
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/signal.ts
+  function signalOf(api, options) {
+    if (typeof options !== "object" || options === null)
+      return;
+    const signal = Reflect.get(options, "signal");
+    if (signal === undefined)
+      return;
+    if (typeof signal !== "object" || signal === null || typeof Reflect.get(signal, "aborted") !== "boolean" || typeof Reflect.get(signal, "addEventListener") !== "function" || typeof Reflect.get(signal, "removeEventListener") !== "function")
+      throw clientError(api, "signal: expected an AbortSignal");
+    if (signal.aborted)
+      throw abortedError(api, signal);
+    return signal;
+  }
+  async function untilAborted(signal, aborted, work) {
+    if (signal === undefined)
+      return await work();
+    if (signal.aborted)
+      throw aborted();
+    let detach = () => {};
+    const abort = new Promise((_, reject) => {
+      const listener = () => reject(aborted());
+      signal.addEventListener("abort", listener, { once: true });
+      detach = () => signal.removeEventListener("abort", listener);
+    });
+    try {
+      return await Promise.race([work(), abort]);
+    } finally {
+      detach();
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot.ts
   function comment(partial) {
     return `# partial: ${partial.frame} not read (${partial.reason})`;
@@ -7246,6 +7001,46 @@ ${value.stack}`;
     }
     return [...lines, ...unplaced].join(`
 `);
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/timeouts.ts
+  var DEFAULT_TIMEOUT = 5000;
+  var DEFAULT_NAVIGATION_TIMEOUT = 30000;
+  function timeoutMs(api, timeout) {
+    if (!Number.isFinite(timeout) || timeout < 0)
+      throw clientError(api, `timeout: expected a non-negative number, got ${timeout}`);
+    return Math.ceil(timeout);
+  }
+
+  class TimeoutSettings {
+    parent;
+    defaultTimeout;
+    defaultNavigationTimeout;
+    constructor(parent) {
+      this.parent = parent;
+    }
+    setDefaultTimeout(timeout) {
+      this.defaultTimeout = timeout;
+    }
+    setDefaultNavigationTimeout(timeout) {
+      this.defaultNavigationTimeout = timeout;
+    }
+    timeout(options) {
+      if (typeof options?.timeout === "number")
+        return options.timeout;
+      return this.inherited();
+    }
+    navigationTimeout(options) {
+      if (typeof options?.timeout === "number")
+        return options.timeout;
+      return this.inheritedNavigation();
+    }
+    inherited() {
+      return this.defaultTimeout ?? this.parent?.inherited() ?? DEFAULT_TIMEOUT;
+    }
+    inheritedNavigation() {
+      return this.defaultNavigationTimeout ?? this.defaultTimeout ?? this.parent?.inheritedNavigation() ?? DEFAULT_NAVIGATION_TIMEOUT;
+    }
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/url.ts
@@ -7571,6 +7366,18 @@ ${value.stack}`;
     }
     async _selectText(api, selector, options = {}) {
       await this._selectorOp("locator.selectText", api, selector, options.strict, this._wait(api, options), pick(options, ["force"]));
+    }
+    async _drop(selector, payload, options) {
+      const api = "locator.drop";
+      const files = payload.files === undefined ? undefined : dropFiles(api, payload.files);
+      await withClientErrors(api, () => this._selectorOp("locator.drop", api, selector, true, this._wait(api, options), {
+        files,
+        data: Object.entries(payload.data ?? {}).map(([mimeType, value]) => ({
+          mimeType,
+          value
+        })),
+        position: options.position
+      }));
     }
     async _setInputFiles(api, selector, files, options = {}) {
       const input = inputFiles(api, files);
@@ -8066,7 +7873,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
-  var TOO_MANY_ARGUMENTS2 = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
   var REFUSALS = {
     unsupported: unsupportedError,
     client: clientError,
@@ -8082,11 +7889,11 @@ ${value.stack}`;
   }
   function assertMaxArguments(api, count, max) {
     if (count > max)
-      throw plainError(api, TOO_MANY_ARGUMENTS2);
+      throw plainError(api, TOO_MANY_ARGUMENTS);
   }
   function assertEvaluateOptions(options) {
     if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS2);
+      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS);
   }
   function refuseExposedFunctions(api, options) {
     if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
@@ -8193,6 +8000,17 @@ ${value.stack}`;
       validateValue(entry.v, `${path}.o[${index}].v`);
     });
   }
+  function inPageArgument(value) {
+    const serialized = serializeValue(value, (item) => {
+      if (isHandle(item) || item instanceof WaitHandle)
+        throw new Error("Neo answers a binding with values, not handles; return the value itself");
+      return fallThrough(item);
+    });
+    return JSON.stringify(serializeAsCallArgument(parseSerializedValue(serialized, []), fallThrough));
+  }
+  function fromInPageArgument(value) {
+    return parseEvaluationResultValue(value);
+  }
   function fromPageValue(api, value) {
     try {
       return parseEvaluationResultValue(value);
@@ -8222,392 +8040,791 @@ ${value.stack}`;
     return expression;
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/prelude/locator.ts
-  function testIdAttributeName() {
-    return "data-testid";
+  // crates/neo-sdk/neo-playwright-js/src/prelude/init-script.ts
+  var TOO_MANY_ARGUMENTS2 = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  async function addInitScript(api, owner, script, arg, options) {
+    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+      throw plainError(api, TOO_MANY_ARGUMENTS2);
+    if (options && Reflect.get(options, "exposeFunctions")) {
+      if (typeof script !== "function")
+        throw plainError(api, "Passing functions requires the init script to be a function");
+      return await withExposedFunctions(owner, script, arg);
+    }
+    return registration(await owner.register(initSource(api, script, arg)));
+  }
+  async function withExposedFunctions(owner, script, arg) {
+    const exposing = [];
+    const undo = async (error) => {
+      const settled = await Promise.allSettled(exposing);
+      await Promise.all(settled.map((outcome) => outcome.status === "fulfilled" ? outcome.value.dispose().catch(() => {}) : undefined));
+      throw error;
+    };
+    let serialized;
+    try {
+      serialized = serializeAsCallArgument(arg, (value) => {
+        if (typeof value === "function") {
+          const name = kFunctionBindingPrefix + guid();
+          exposing.push(owner.expose(name, (_source, ...args) => Reflect.apply(value, undefined, args)));
+          return { fn: name };
+        }
+        return { fallThrough: value };
+      });
+    } catch (error) {
+      return await undo(error);
+    }
+    let bindings;
+    let init;
+    try {
+      bindings = await Promise.all(exposing);
+      const source = `(${String(script)})(globalThis['${kBindingsControllerProperty}'].parseInitScriptArg(${JSON.stringify(serialized)}))`;
+      init = registration(await owner.register({ source }));
+    } catch (error) {
+      return await undo(error);
+    }
+    let disposed = false;
+    return new Disposable(async () => {
+      if (disposed)
+        return;
+      disposed = true;
+      await Promise.all(bindings.map((binding) => binding.dispose().catch(() => {})));
+      await init.dispose();
+    });
+  }
+  function guid() {
+    let text = "";
+    for (let index = 0;index < 16; index++)
+      text += Math.floor(Math.random() * 256).toString(16).padStart(2, "0");
+    return text;
+  }
+  function initSource(api, script, arg) {
+    if (typeof script === "function") {
+      const argText = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
+      return { source: `(${String(script)})(${argText})` };
+    }
+    if (arg !== undefined)
+      throw plainError(api, "Cannot evaluate a string with arguments");
+    if (typeof script === "string")
+      return { source: script };
+    if (typeof script === "object" && script !== null) {
+      const content = Reflect.get(script, "content");
+      if (content !== undefined)
+        return { source: String(content) };
+      const path = Reflect.get(script, "path");
+      if (path !== undefined)
+        return { path: String(path) };
+    }
+    throw plainError(api, "Either path or content property must be present");
   }
 
-  class Locator {
-    _frame;
-    _selector;
-    constructor(frame, selector) {
-      this._frame = frame;
-      this._selector = selector;
+  class Disposable {
+    #dispose;
+    constructor(dispose) {
+      this.#dispose = dispose;
+    }
+    async dispose() {
+      await this.#dispose();
+    }
+  }
+  function registration(id, forget) {
+    return new Disposable(async () => {
+      try {
+        await invoke("disposable.dispose", { api: "disposable.dispose", timeoutMs: 0 }, { id });
+      } finally {
+        forget?.();
+      }
+    });
+  }
+  var asyncDispose = Reflect.get(Symbol, "asyncDispose");
+  if (typeof asyncDispose === "symbol")
+    Object.defineProperty(Disposable.prototype, asyncDispose, {
+      configurable: true,
+      writable: true,
+      value() {
+        return this.dispose();
+      }
+    });
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/bindings.ts
+  async function exposeOnPage(page, api, name, callback, noGlobal = false) {
+    if (page._exposed.has(name))
+      throw clientError(api, `Function "${name}" has been already registered`);
+    if (page._context._exposed.has(name))
+      throw clientError(api, `Function "${name}" has been already registered in the browser context`);
+    page._exposed.set(name, (source, ...args) => callback(source, ...args));
+    const events = page._context._events;
+    events.bindingAdded();
+    const forget = once(() => {
+      page._exposed.delete(name);
+      events.bindingRemoved();
+    });
+    try {
+      const { id } = await invoke("page.exposeBinding", { api, timeoutMs: 0 }, {
+        page: await page._brand(api),
+        name,
+        ...noGlobal ? { noGlobal: true } : {}
+      });
+      return registration(id, forget);
+    } catch (error) {
+      forget();
+      throw error;
+    }
+  }
+  async function exposeOnContext(context, api, name, callback, noGlobal = false) {
+    if (context._exposed.has(name))
+      throw clientError(api, `Function "${name}" has been already registered`);
+    if (context.pages().some((page) => page._exposed.has(name)))
+      throw clientError(api, `Function "${name}" has been already registered in one of the pages`);
+    context._exposed.set(name, (source, ...args) => callback(source, ...args));
+    context._events.bindingAdded();
+    const forget = once(() => {
+      context._exposed.delete(name);
+      context._events.bindingRemoved();
+    });
+    try {
+      const { id } = await invoke("context.exposeBinding", { api, timeoutMs: 0 }, { name, ...noGlobal ? { noGlobal: true } : {} });
+      return registration(id, forget);
+    } catch (error) {
+      forget();
+      throw error;
+    }
+  }
+  function once(forget) {
+    let done = false;
+    return () => {
+      if (done)
+        return;
+      done = true;
+      forget();
+    };
+  }
+  async function answerBindingCall(page, record) {
+    let payload;
+    try {
+      payload = JSON.parse(record.payload);
+    } catch {
+      return;
+    }
+    const { name, seq } = payload;
+    if (typeof name !== "string")
+      return;
+    const callback = page._exposed.get(name) ?? page._context._exposed.get(name);
+    if (!callback)
+      return;
+    let answer;
+    try {
+      if (!Array.isArray(payload.serializedArgs))
+        throw new Error("serializedArgs is not an array. This can happen when Array.prototype.toJSON is defined incorrectly");
+      const args = payload.serializedArgs.map(fromInPageArgument);
+      const frame = await page._bindingFrame(record.frame);
+      const result = await callback({ context: page._context, page, frame }, ...args);
+      answer = { name, seq, result };
+    } catch (error) {
+      answer = { name, seq, error };
+    }
+    if ((page._exposed.get(name) ?? page._context._exposed.get(name)) !== callback)
+      return;
+    let arg;
+    try {
+      arg = inPageArgument(answer);
+    } catch (error) {
+      arg = inPageArgument({ name, seq, error });
+    }
+    const api = "bindingCall.resolve";
+    await invoke("bindingCall.resolve", { api, timeoutMs: 0 }, { page: await page._brand(api), context: record.executionContext, arg }).catch(() => {});
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/event-deadline.ts
+  class EventDeadline {
+    api;
+    event;
+    timeout;
+    endsAt;
+    constructor(api, event, since, timeout) {
+      this.api = api;
+      this.event = event;
+      this.timeout = timeout;
+      this.endsAt = timeout === 0 ? null : since + timeout;
+    }
+    left() {
+      if (this.endsAt === null)
+        return 0;
+      const left = this.endsAt - Date.now();
+      if (left <= 0)
+        throw this.expired();
+      return left;
+    }
+    named(error) {
+      if (!(error instanceof Error) || Reflect.get(error, "code") !== "wait_timeout")
+        return error;
+      const [, ...log] = error.message.split(`
+`);
+      error.message = [`${this.api}: ${this.message()}`, ...log].join(`
+`);
+      return error;
+    }
+    race(verdict) {
+      const endsAt = this.endsAt;
+      if (endsAt === null || !isThenable(verdict))
+        return Promise.resolve(verdict);
+      let cancel = () => {};
+      const expired = new Promise((_, reject) => {
+        cancel = startTimer(Math.max(0, endsAt - Date.now()), () => reject(this.expired()));
+      });
+      return Promise.race([verdict, expired]).finally(cancel);
+    }
+    expired() {
+      return waitTimeoutError(this.api, this.message());
+    }
+    message() {
+      return this.event === null ? `Timeout ${this.timeout}ms exceeded.` : `Timeout ${this.timeout}ms exceeded while waiting for event "${this.event}"`;
+    }
+  }
+  function isThenable(value) {
+    return (typeof value === "object" || typeof value === "function") && value !== null && typeof Reflect.get(value, "then") === "function";
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/event-values.ts
+  class FileChooser {
+    #pageValue;
+    #element;
+    #multiple;
+    constructor(page, info) {
+      this.#pageValue = page;
+      const element = page._handle(info.element);
+      if (!element)
+        throw new Error("Rust returned a chooser without its input");
+      this.#element = element;
+      this.#multiple = info.isMultiple;
+      markHandle(this);
+    }
+    element() {
+      return this.#element;
+    }
+    isMultiple() {
+      return this.#multiple;
+    }
+    page() {
+      return this.#pageValue;
+    }
+    async setFiles(files, options) {
+      await this.#element.setInputFiles(files, options);
+    }
+  }
+
+  class Dialog {
+    #pageValue;
+    #info;
+    constructor(page, info) {
+      this.#pageValue = page;
+      this.#info = info;
       markHandle(this);
     }
     page() {
-      return this._frame.page();
+      return this.#pageValue;
     }
-    toString() {
-      return asLocatorDescription("javascript", this._selector);
+    type() {
+      return this.#info.type;
     }
-    description() {
-      return locatorCustomDescription(this._selector) ?? null;
+    message() {
+      return this.#info.message;
     }
-    locator(selectorOrLocator, options) {
-      const api = "locator.locator";
-      if (typeof selectorOrLocator === "string")
-        return new Locator(this._frame, withLocatorOptions(api, this._frame, `${this._selector} >> ${selectorOrLocator}`, options));
-      if (selectorOrLocator._frame !== this._frame)
-        throw plainError(api, "Locators must belong to the same frame.");
-      return new Locator(this._frame, withLocatorOptions(api, this._frame, `${this._selector} >> internal:chain=${JSON.stringify(selectorOrLocator._selector)}`, options));
+    defaultValue() {
+      return this.#info.defaultValue;
     }
-    within(locator) {
-      return locator.locator(this);
-    }
-    getByTestId(testId) {
-      return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
-    }
-    getByAltText(text, options) {
-      return this.locator(getByAltTextSelector(text, options));
-    }
-    getByLabel(text, options) {
-      return this.locator(getByLabelSelector(text, options));
-    }
-    getByPlaceholder(text, options) {
-      return this.locator(getByPlaceholderSelector(text, options));
-    }
-    getByText(text, options) {
-      return this.locator(getByTextSelector(text, options));
-    }
-    getByTitle(text, options) {
-      return this.locator(getByTitleSelector(text, options));
-    }
-    getByRole(role, options = {}) {
-      return this.locator(getByRoleSelector(role, options));
-    }
-    frameLocator(selector) {
-      return new FrameLocator(this._frame, `${this._selector} >> ${selector}`);
-    }
-    contentFrame() {
-      return new FrameLocator(this._frame, this._selector);
-    }
-    filter(options) {
-      return new Locator(this._frame, withLocatorOptions("locator.filter", this._frame, this._selector, options));
-    }
-    visible() {
-      return new Locator(this._frame, withLocatorOptions("locator.visible", this._frame, this._selector, {
-        visible: true
-      }));
-    }
-    describe(description) {
-      return new Locator(this._frame, `${this._selector} >> internal:describe=${JSON.stringify(description)}`);
-    }
-    first() {
-      return new Locator(this._frame, `${this._selector} >> nth=0`);
-    }
-    last() {
-      return new Locator(this._frame, `${this._selector} >> nth=-1`);
-    }
-    nth(index) {
-      return new Locator(this._frame, `${this._selector} >> nth=${index}`);
-    }
-    and(locator) {
-      if (locator._frame !== this._frame)
-        throw plainError("locator.and", "Locators must belong to the same frame.");
-      return new Locator(this._frame, `${this._selector} >> internal:and=${JSON.stringify(locator._selector)}`);
-    }
-    or(locator) {
-      if (locator._frame !== this._frame)
-        throw plainError("locator.or", "Locators must belong to the same frame.");
-      return new Locator(this._frame, `${this._selector} >> internal:or=${JSON.stringify(locator._selector)}`);
-    }
-    click(options = {}) {
-      return this._frame._click("locator.click", this._selector, {
-        ...options,
-        strict: true
+    async accept(promptText) {
+      const api = "dialog.accept";
+      await invoke("dialog.accept", { api, timeoutMs: 0 }, {
+        page: await this.#pageValue._brand(api),
+        dialog: this.#info.id,
+        ...promptText === undefined ? {} : { promptText }
       });
     }
-    dblclick(options = {}) {
-      return this._frame._dblclick("locator.dblclick", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    hover(options = {}) {
-      return this._frame._hover("locator.hover", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    check(options = {}) {
-      return this._frame._check("locator.check", this._selector, true, {
-        ...options,
-        strict: true
-      });
-    }
-    uncheck(options = {}) {
-      return this._frame._check("locator.uncheck", this._selector, false, {
-        ...options,
-        strict: true
-      });
-    }
-    setChecked(checked, options = {}) {
-      return this._frame._check("locator.setChecked", this._selector, checked, {
-        ...options,
-        strict: true
-      });
-    }
-    dragTo(target, options = {}) {
-      return this._frame._dragAndDrop("locator.dragTo", this._selector, target._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    fill(value, options = {}) {
-      return this._frame._fill("locator.fill", this._selector, value, {
-        ...options,
-        strict: true
-      });
-    }
-    clear(options = {}) {
-      return this._frame._fill("locator.clear", this._selector, "", {
-        ...options,
-        strict: true
-      });
-    }
-    press(key, options = {}) {
-      return this._frame._press("locator.press", this._selector, key, {
-        ...options,
-        strict: true
-      });
-    }
-    pressSequentially(text, options = {}) {
-      return this._frame._type("locator.pressSequentially", this._selector, text, {
-        ...options,
-        strict: true
-      });
-    }
-    type(text, options = {}) {
-      return this._frame._type("locator.type", this._selector, text, {
-        ...options,
-        strict: true
-      });
-    }
-    selectOption(values, options = {}) {
-      return this._frame._selectOption("locator.selectOption", this._selector, values, {
-        ...options,
-        strict: true
-      });
-    }
-    selectText(options = {}) {
-      return this._frame._selectText("locator.selectText", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    focus(options = {}) {
-      return this._frame._focus("locator.focus", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    blur(options = {}) {
-      return this._frame._blur("locator.blur", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    setInputFiles(files, options = {}) {
-      return this._frame._setInputFiles("locator.setInputFiles", this._selector, files, {
-        ...options,
-        strict: true
-      });
-    }
-    dispatchEvent(type, eventInit = {}, options = {}) {
-      return this._frame._dispatchEvent("locator.dispatchEvent", this._selector, type, eventInit, {
-        ...options,
-        strict: true
-      });
-    }
-    scrollIntoViewIfNeeded(options = {}) {
-      return this._frame._scrollIntoViewIfNeeded("locator.scrollIntoViewIfNeeded", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    textContent(options = {}) {
-      return this._frame._read("locator.textContent", "locator.textContent", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    innerText(options = {}) {
-      return this._frame._read("locator.innerText", "locator.innerText", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    innerHTML(options = {}) {
-      return this._frame._read("locator.innerHTML", "locator.innerHTML", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    inputValue(options = {}) {
-      return this._frame._read("locator.inputValue", "locator.inputValue", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    getAttribute(name, options = {}) {
-      return this._frame._getAttribute("locator.getAttribute", this._selector, name, {
-        ...options,
-        strict: true
-      });
-    }
-    isChecked(options = {}) {
-      return this._frame._read("locator.isChecked", "locator.isChecked", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    isDisabled(options = {}) {
-      return this._frame._read("locator.isDisabled", "locator.isDisabled", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    isEditable(options = {}) {
-      return this._frame._read("locator.isEditable", "locator.isEditable", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    isEnabled(options = {}) {
-      return this._frame._read("locator.isEnabled", "locator.isEnabled", this._selector, {
-        ...options,
-        strict: true
-      });
-    }
-    isHidden(_options) {
-      return this._frame._isVisible("locator.isHidden", "locator.isHidden", this._selector, {
-        strict: true
-      });
-    }
-    isVisible(_options) {
-      return this._frame._isVisible("locator.isVisible", "locator.isVisible", this._selector, {
-        strict: true
-      });
-    }
-    count() {
-      return this._frame._everyMatch("locator.count", "locator.count", this._selector);
-    }
-    async normalize() {
-      const resolved = await this._frame._normalize("locator.normalize", this._selector);
-      return new Locator(this._frame, resolved);
-    }
-    async all() {
-      const count = await this._frame._everyMatch("locator.count", "locator.all", this._selector);
-      return Array.from({ length: count }, (_, index) => this.nth(index));
-    }
-    allTextContents() {
-      return this._frame._everyMatch("locator.allTextContents", "locator.allTextContents", this._selector);
-    }
-    allInnerTexts() {
-      return this._frame._everyMatch("locator.allInnerTexts", "locator.allInnerTexts", this._selector);
-    }
-    boundingBox(options = {}) {
-      return this._frame._boundingBox("locator.boundingBox", this._selector, options);
-    }
-    async waitFor(options = {}) {
-      await this._frame._waitForSelector("locator.waitFor", this._selector, { ...options, strict: true }, true);
-    }
-    async elementHandle(options = {}) {
-      const handle = await this._frame._elementHandle("locator.elementHandle", this._selector, true, false, options);
-      if (!handle)
-        throw internalError("locator.elementHandle", `Could not resolve ${this} to DOM Element`);
-      return handle;
-    }
-    elementHandles() {
-      return this._frame._elementHandles("locator.elementHandles", this._selector);
-    }
-    async evaluate(pageFunction, arg, options) {
-      const api = "locator.evaluate";
-      const script = pageCall(api, "locator", pageFunction, arg, options);
-      return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
-    }
-    async waitForFunction(pageFunction, arg, options) {
-      const api = "locator.waitForFunction";
-      const script = pageCall(api, "query", pageFunction, arg);
-      await this._frame._selectorOp("locator.waitForFunction", api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
-    }
-    async evaluateAll(pageFunction, arg) {
-      const api = "locator.evaluateAll";
-      return await this._frame._evaluateAll(api, this._selector, pageCall(api, "query", pageFunction, arg));
-    }
-    ariaSnapshot(options) {
-      return this._frame._ariaSnapshot("locator.ariaSnapshot", this._selector, options);
-    }
-    ariaSnapshotJSON(options) {
-      return this._frame._ariaSnapshotJSON("locator.ariaSnapshotJSON", this._selector, options);
-    }
-    screenshot(options) {
-      return this._frame._screenshot("locator.screenshot", this._selector, options);
+    async dismiss() {
+      const api = "dialog.dismiss";
+      const page = await this.#pageValue._brand(api);
+      try {
+        await invoke("dialog.dismiss", { api, timeoutMs: 0 }, { page, dialog: this.#info.id });
+      } catch (error) {
+        if (Reflect.get(Object(error), "code") === "target_closed")
+          return;
+        throw error;
+      }
     }
   }
 
-  class FrameLocator {
-    _frame;
-    _frameSelector;
-    constructor(frame, selector) {
-      this._frame = frame;
-      this._frameSelector = selector;
+  class Download {
+    #pageValue;
+    #info;
+    constructor(page, info) {
+      this.#pageValue = page;
+      this.#info = info;
       markHandle(this);
     }
-    #childSelector(selector) {
-      if (this._frameSelector === kAnyFrameSelector)
-        return `${this._frameSelector} >> ${selector}`;
-      return `${this._frameSelector} >> internal:control=enter-frame >> ${selector}`;
+    page() {
+      return this.#pageValue;
     }
-    locator(selectorOrLocator, options) {
-      const api = "frameLocator.locator";
-      if (typeof selectorOrLocator === "string")
-        return new Locator(this._frame, withLocatorOptions(api, this._frame, this.#childSelector(selectorOrLocator), options));
-      if (selectorOrLocator._frame !== this._frame)
-        throw plainError(api, "Locators must belong to the same frame.");
-      return new Locator(this._frame, withLocatorOptions(api, this._frame, this.#childSelector(selectorOrLocator._selector), options));
+    url() {
+      return this.#info.url;
     }
-    getByTestId(testId) {
-      return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
+    suggestedFilename() {
+      return this.#info.suggestedFilename;
     }
-    getByAltText(text, options) {
-      return this.locator(getByAltTextSelector(text, options));
+    async path() {
+      const api = "download.path";
+      const done = await invoke("download.path", { api, timeoutMs: 0 }, { download: this.#info.id });
+      if (done.path === null)
+        throw new Error(`${api}: ${done.failure ?? "download failed"}`);
+      return done.path;
     }
-    getByLabel(text, options) {
-      return this.locator(getByLabelSelector(text, options));
+    async failure() {
+      const api = "download.failure";
+      const done = await invoke("download.path", { api, timeoutMs: 0 }, { download: this.#info.id });
+      return done.failure;
     }
-    getByPlaceholder(text, options) {
-      return this.locator(getByPlaceholderSelector(text, options));
+    async saveAs(path) {
+      const api = "download.saveAs";
+      await invoke("download.saveAs", { api, timeoutMs: 0 }, { download: this.#info.id, path });
     }
-    getByText(text, options) {
-      return this.locator(getByTextSelector(text, options));
+  }
+
+  class ConsoleMessage {
+    #pageValue;
+    #info;
+    constructor(page, info) {
+      this.#pageValue = page;
+      this.#info = info;
+      markHandle(this);
     }
-    getByTitle(text, options) {
-      return this.locator(getByTitleSelector(text, options));
+    page() {
+      return this.#pageValue;
     }
-    getByRole(role, options = {}) {
-      return this.locator(getByRoleSelector(role, options));
+    worker() {
+      return null;
     }
-    owner() {
-      return new Locator(this._frame, this._frameSelector);
+    type() {
+      return this.#info.type;
     }
-    frameLocator(selector) {
-      return new FrameLocator(this._frame, this.#childSelector(selector));
+    text() {
+      return this.#info.text;
     }
-    #nthSelector(api, nth) {
-      if (this._frameSelector === kAnyFrameSelector)
-        throw plainError(api, "Selecting the nth frame is not allowed on frameLocator().");
-      return `${this._frameSelector} >> nth=${nth}`;
+    location() {
+      const { url, lineNumber, columnNumber } = this.#info.location;
+      return {
+        url,
+        line: lineNumber,
+        column: columnNumber,
+        lineNumber,
+        columnNumber
+      };
     }
-    first() {
-      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.first", "0"));
+    timestamp() {
+      return this.#info.timestamp;
     }
-    last() {
-      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.last", "-1"));
+    toString() {
+      return this.#info.text;
     }
-    nth(index) {
-      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.nth", String(index)));
+  }
+  function pageError(info) {
+    const error = new Error(info.message);
+    error.name = info.name;
+    error.stack = info.stack;
+    return error;
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/events.ts
+  var PAGE_EVENTS = new Set([
+    "popup",
+    "close",
+    "dialog",
+    "dialogclosed",
+    "console",
+    "pageerror",
+    "download",
+    "filechooser",
+    "load",
+    "domcontentloaded",
+    "frameattached",
+    "framenavigated",
+    "framedetached"
+  ]);
+  var CONTEXT_EVENTS = new Set([
+    "page",
+    "pageload",
+    "dialogclosed",
+    "frameattached",
+    "framenavigated",
+    "framedetached"
+  ]);
+  var UNREPORTED = {
+    request: "Neo does not report network events; wait for what the page shows instead",
+    response: "Neo does not report network events; wait for what the page shows instead",
+    requestfailed: "Neo does not report network events; wait for what the page shows instead",
+    requestfinished: "Neo does not report network events; wait for what the page shows instead",
+    websocket: "Neo does not report WebSockets",
+    worker: "Neo does not report workers",
+    serviceworker: "Neo does not report service workers",
+    backgroundpage: "Neo does not report extension background pages",
+    crash: "Neo does not report crashes; a crashed page fails its next call",
+    pageclose: 'listen for close on the page itself: page.on("close")',
+    weberror: "the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS"
+  };
+  function checkReported(api, event, reported) {
+    if (typeof event !== "string")
+      return;
+    const ours = reported === "page" ? PAGE_EVENTS : CONTEXT_EVENTS;
+    if (ours.has(event))
+      return;
+    const other = reported === "page" ? CONTEXT_EVENTS : PAGE_EVENTS;
+    const hint = UNREPORTED[event] ?? (other.has(event) ? reported === "page" ? `"${event}" is a browser context event: context.on("${event}")` : `Neo reports "${event}" on pages: page.on("${event}")` : undefined);
+    if (hint !== undefined)
+      throw unsupportedError(`${api}('${event}')`, hint);
+  }
+  function isReported(event, on) {
+    return typeof event === "string" && (on === "page" ? PAGE_EVENTS : CONTEXT_EVENTS).has(event);
+  }
+
+  class EventHub {
+    owner;
+    listening = 0;
+    pumping = false;
+    batch = null;
+    dialogs = new Map;
+    downloads = new Map;
+    choosers = new Map;
+    nextChooserLease = 0;
+    chooserListeners = new Map;
+    chooserChanges = new Map;
+    contextChanges = new Map;
+    contextSince = new Map;
+    constructor(owner) {
+      this.owner = owner;
+    }
+    listen(page, event, on) {
+      const since = Date.now();
+      this.listening += on ? 1 : -1;
+      if (page === null) {
+        if (on)
+          this.contextSince.set(event, since);
+        else
+          this.contextSince.delete(event);
+        const previous = this.contextChanges.get(event) ?? Promise.resolve();
+        const changed = previous.then(() => this.sendListen(null, event, on, since));
+        this.contextChanges.set(event, changed);
+      } else if (event === "filechooser") {
+        const lease = on ? this.intercept(page) : this.chooserListeners.get(page);
+        if (on && lease)
+          this.chooserListeners.set(page, lease);
+        else
+          this.chooserListeners.delete(page);
+        const previous = this.chooserChanges.get(page) ?? Promise.resolve();
+        const changed = previous.then(() => this.sendListen(page, event, on, since, lease));
+        this.chooserChanges.set(page, changed);
+        trackChooserSetup(changed);
+      } else
+        this.sendListen(page, event, on, since);
+      if (on && !this.pumping) {
+        this.pumping = true;
+        this.pump();
+      }
+    }
+    bindingAdded() {
+      this.listening++;
+      if (!this.pumping) {
+        this.pumping = true;
+        this.pump();
+      }
+    }
+    bindingRemoved() {
+      this.listening--;
+    }
+    async wait(api, page, event, optionsOrPredicate, since, settings) {
+      const kind = page === null ? "context" : "page";
+      checkReported(api, event, kind);
+      if (!isReported(event, kind))
+        throw unsupportedError(api, `Neo reports only Playwright's events, not "${event}"`);
+      const options = typeof optionsOrPredicate === "function" ? { predicate: optionsOrPredicate } : optionsOrPredicate ?? {};
+      const deadline = new EventDeadline(api, event, since, timeoutMs(api, settings.timeout(options)));
+      const signal = signalOf(api, options);
+      const lease = event === "filechooser" && page ? this.intercept(page) : null;
+      try {
+        return await untilAborted(signal, () => abortedError(api, signal), async () => {
+          if (lease)
+            await deadline.race(lease.ready);
+          return this.waitFor(api, page, event, options, since, deadline, signal);
+        });
+      } finally {
+        if (lease)
+          lease.release().catch(() => {});
+      }
+    }
+    async waitFor(api, page, event, options, since, deadline, signal) {
+      const target = page === null ? null : await page._openedBrand(api);
+      let after = null;
+      for (;; ) {
+        const left = deadline.left();
+        let record;
+        let observed = null;
+        try {
+          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }, undefined, signal));
+        } catch (error) {
+          throw deadline.named(error);
+        }
+        if (record.event === "close" && this.batch?.closes.has(record.seq))
+          await this.batch.done;
+        let value;
+        try {
+          value = this.value(record, observed);
+        } finally {
+          this.settleCloses(observed);
+        }
+        const predicate = options.predicate;
+        if (!predicate)
+          return value;
+        let accepted;
+        try {
+          accepted = await deadline.race(this.duringEvent(record, () => Reflect.apply(predicate, undefined, [value])));
+        } catch (error) {
+          throw prefixed(api, error);
+        }
+        if (accepted)
+          return value;
+        after = record.seq;
+      }
+    }
+    async sendListen(page, event, on, since, lease) {
+      const api = `${page === null ? "browserContext" : "page"}.${on ? "on" : "off"}`;
+      try {
+        if (on && lease)
+          await lease.ready;
+        await invoke("events.listen", { api, timeoutMs: 0 }, {
+          page: page === null ? null : await page._openedBrand(api),
+          event,
+          on,
+          since
+        });
+      } catch {
+        if (on && lease)
+          lease.release().catch(() => {});
+      } finally {
+        if (!on && lease)
+          await lease.release().catch(() => {});
+      }
+    }
+    intercept(page) {
+      const id = ++this.nextChooserLease;
+      const api = "page.filechooser";
+      const target = page._openedBrand(api);
+      const ready = target.then(async (page) => {
+        await invoke("events.interceptFileChooser", { api, timeoutMs: 0 }, { page, lease: id, on: true });
+      });
+      trackChooserSetup(ready);
+      let released = null;
+      return {
+        ready,
+        release: () => {
+          if (!released) {
+            released = ready.then(async () => {
+              await invoke("events.interceptFileChooser", { api, timeoutMs: 0 }, { page: await target, lease: id, on: false });
+            });
+            trackChooserSetup(released);
+          }
+          return released;
+        }
+      };
+    }
+    async pump() {
+      try {
+        while (this.listening > 0) {
+          const {
+            value: { events },
+            observed
+          } = await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events }) => this.stageBatch(events));
+          try {
+            for (const event of events)
+              this.deliver(event, observed);
+          } finally {
+            try {
+              this.settleCloses(observed);
+            } finally {
+              const batch = this.batch;
+              this.batch = null;
+              batch?.finish();
+            }
+          }
+        }
+      } catch {} finally {
+        this.pumping = false;
+      }
+    }
+    stageBatch(events) {
+      const closes = new Set(events.filter((event) => event.event === "close").map((event) => event.seq));
+      if (closes.size === 0)
+        return;
+      let finish;
+      const done = new Promise((resolve) => {
+        finish = resolve;
+      });
+      this.batch = { closes, done, finish };
+    }
+    page(value, url) {
+      const page = this.owner._pageFromResult(value, url);
+      if (!page)
+        throw new Error(`Rust named no page in an event: ${String(value)}`);
+      return page;
+    }
+    settleCloses(observed) {
+      for (const close of observed?.closes ?? [])
+        this.page({ $neo: "page", tab: close.tab })._settleClose(observed);
+    }
+    deliver(record, observed) {
+      if (record.event === "binding") {
+        answerBindingCall(this.page(record.page), record).catch(() => {});
+        return;
+      }
+      const context = record.event === "page" || record.event === "pageload" || "context" in record && record.context;
+      if (context && typeof record.at === "number" && record.at < (this.contextSince.get(record.event) ?? Infinity))
+        return;
+      switch (record.event) {
+        case "popup":
+          this.page(record.page).emit("popup", this.page(record.popup.page, record.popup.url));
+          return;
+        case "page":
+          this.owner.emit("page", this.page(record.page, record.url));
+          return;
+        case "load":
+        case "domcontentloaded": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          this.duringEvent(record, () => page.emit(record.event, page));
+          return;
+        }
+        case "pageload": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          this.duringEvent(record, () => this.owner.emit("pageload", page));
+          return;
+        }
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached": {
+          const page = this.page(record.page);
+          const frame = page._eventFrame(record.seq, record.event, record.frame);
+          const emitter = record.context ? this.owner : page;
+          frame._duringEvent(record.frame, record.event, () => emitter.emit(record.event, frame));
+          return;
+        }
+        case "close":
+          this.page(record.page)._closeEvent(record.seq, observed);
+          return;
+        case "dialogclosed": {
+          const page = this.page(record.page);
+          const emitter = record.context ? this.owner : page;
+          emitter.emit("dialogclosed", this.dialog(page, record.dialog));
+          return;
+        }
+        case "dialog": {
+          const page = this.page(record.page);
+          const dialog = this.dialog(page, record.dialog);
+          if (!page.emit("dialog", dialog))
+            (dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss()).catch(() => {});
+          return;
+        }
+        case "console": {
+          const page = this.page(record.page);
+          page.emit("console", new ConsoleMessage(page, record.message));
+          return;
+        }
+        case "pageerror":
+          this.page(record.page).emit("pageerror", pageError(record.error));
+          return;
+        case "download": {
+          const page = this.page(record.page);
+          page.emit("download", this.download(page, record.download));
+          return;
+        }
+        case "filechooser": {
+          const page = this.page(record.page);
+          page.emit("filechooser", this.chooser(record.seq, page, record.chooser));
+          return;
+        }
+      }
+    }
+    duringEvent(record, read) {
+      switch (record.event) {
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached": {
+          const frame = this.page(record.page)._eventFrame(record.seq, record.event, record.frame);
+          return frame._duringEvent(record.frame, record.event, read);
+        }
+        case "load":
+        case "domcontentloaded":
+        case "pageload":
+          return this.page(record.page).mainFrame()._duringEvent(record.frame, "framenavigated", read);
+        default:
+          return read();
+      }
+    }
+    value(record, observed) {
+      switch (record.event) {
+        case "popup":
+          return this.page(record.popup.page, record.popup.url);
+        case "page":
+          return this.page(record.page, record.url);
+        case "load":
+        case "domcontentloaded":
+        case "pageload": {
+          const page = this.page(record.page);
+          page._eventFrame(record.seq, "framenavigated", record.frame);
+          return page;
+        }
+        case "frameattached":
+        case "framenavigated":
+        case "framedetached":
+          return this.page(record.page)._eventFrame(record.seq, record.event, record.frame);
+        case "close": {
+          const page = this.page(record.page);
+          page._closeEvent(record.seq, observed);
+          return page;
+        }
+        case "dialog":
+        case "dialogclosed":
+          return this.dialog(this.page(record.page), record.dialog);
+        case "console":
+          return new ConsoleMessage(this.page(record.page), record.message);
+        case "pageerror":
+          return pageError(record.error);
+        case "download":
+          return this.download(this.page(record.page), record.download);
+        case "filechooser":
+          return this.chooser(record.seq, this.page(record.page), record.chooser);
+        case "binding":
+          return;
+      }
+    }
+    dialog(page, info) {
+      const known = this.dialogs.get(info.id);
+      if (known)
+        return known;
+      const dialog = new Dialog(page, info);
+      this.dialogs.set(info.id, dialog);
+      return dialog;
+    }
+    download(page, info) {
+      const known = this.downloads.get(info.id);
+      if (known)
+        return known;
+      const download = new Download(page, info);
+      this.downloads.set(info.id, download);
+      return download;
+    }
+    chooser(seq, page, info) {
+      const known = this.choosers.get(seq);
+      if (known)
+        return known;
+      const chooser = new FileChooser(page, info);
+      this.choosers.set(seq, chooser);
+      return chooser;
     }
   }
 
@@ -8842,6 +9059,7 @@ ${value.stack}`;
     #knownFrames = new Map;
     #frameEvents = new Map;
     #frameSequences = new Map;
+    _exposed = new Map;
     constructor(context, tab, url) {
       super();
       this._context = context;
@@ -9099,12 +9317,27 @@ ${value.stack}`;
       assertMaxArguments("page.evaluate", arguments.length, 3);
       return await this._mainFrame._evaluate("page.evaluate", pageFunction, arg, options);
     }
-    async addInitScript(script, arg, options) {
+    addInitScript(script, arg, options) {
       const api = "page.addInitScript";
-      checkInitOptions(api, script, options);
-      const source = initSource(api, script, arg);
-      const { id } = await invoke("page.addInitScript", { api, timeoutMs: 0 }, { page: await this._brand(api), script: source });
-      return new Disposable(id);
+      return addInitScript(api, {
+        register: async (source) => (await invoke("page.addInitScript", { api, timeoutMs: 0 }, { page: await this._brand(api), script: source })).id,
+        expose: (name, callback) => exposeOnPage(this, api, name, callback, true)
+      }, script, arg, options);
+    }
+    exposeBinding(name, callback) {
+      return exposeOnPage(this, "page.exposeBinding", name, callback);
+    }
+    exposeFunction(name, callback) {
+      return exposeOnPage(this, "page.exposeFunction", name, (_source, ...args) => Reflect.apply(callback, undefined, args));
+    }
+    async _bindingFrame(id) {
+      if (id === null)
+        return this._mainFrame;
+      const known = this.#childFrames.get(id);
+      if (known)
+        return known;
+      await this._refreshFrames("page.exposeBinding").catch(() => {});
+      return this.#childFrames.get(id) ?? this._mainFrame;
     }
     waitForFunction(pageFunction, arg, options) {
       return this._mainFrame._waitForFunction("page.waitForFunction", pageFunction, arg, options);
@@ -9536,6 +9769,7 @@ ${value.stack}`;
   class BrowserContext extends EventEmitter {
     _timeoutSettings = new TimeoutSettings;
     _events;
+    _exposed = new Map;
     _locatorHandlers = new LocatorHandlers;
     _browser = null;
     #byTab = new Map;
@@ -9567,12 +9801,18 @@ ${value.stack}`;
     serviceWorkers() {
       return [];
     }
-    async addInitScript(script, arg, options) {
+    addInitScript(script, arg, options) {
       const api = "browserContext.addInitScript";
-      checkInitOptions(api, script, options);
-      const source = initSource(api, script, arg);
-      const { id } = await invoke("context.addInitScript", { api, timeoutMs: 0 }, { script: source });
-      return new Disposable(id);
+      return addInitScript(api, {
+        register: async (source) => (await invoke("context.addInitScript", { api, timeoutMs: 0 }, { script: source })).id,
+        expose: (name, callback) => exposeOnContext(this, api, name, callback, true)
+      }, script, arg, options);
+    }
+    exposeBinding(name, callback) {
+      return exposeOnContext(this, "browserContext.exposeBinding", name, callback);
+    }
+    exposeFunction(name, callback) {
+      return exposeOnContext(this, "browserContext.exposeFunction", name, (_source, ...args) => Reflect.apply(callback, undefined, args));
     }
     async newPage() {
       return await this.#openPage("browserContext.newPage");
@@ -10349,8 +10589,6 @@ Timeout: ${timeout}ms`);
       clearPermissions: "permissions are the owner's profile settings",
       close: OWNED,
       cookies: PROFILE,
-      exposeBinding: "pages cannot call back into the script; read state with page.evaluate()",
-      exposeFunction: "pages cannot call back into the script; read state with page.evaluate()",
       grantPermissions: "permissions are the owner's profile settings",
       newCDPSession: "raw CDP sessions are not available in Neo",
       route: NETWORK,
@@ -10389,8 +10627,6 @@ Timeout: ${timeout}ms`);
       clearPageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
       consoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
       evaluateHandle: NO_HANDLES,
-      exposeBinding: "pages cannot call back into the script; read state with page.evaluate()",
-      exposeFunction: "pages cannot call back into the script; read state with page.evaluate()",
       hideHighlight: NO_INSPECTOR,
       pageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
       pause: NO_INSPECTOR,
@@ -10440,7 +10676,6 @@ Timeout: ${timeout}ms`);
       webmcp: { hint: "WebMCP is not available in Neo", kind: "property" }
     },
     Locator: {
-      drop: "dropping data is not available in Neo; use locator.dragTo()",
       evaluateHandle: NO_HANDLES,
       hideHighlight: NO_INSPECTOR,
       highlight: NO_INSPECTOR,

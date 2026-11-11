@@ -37,6 +37,20 @@ const DOWNLOAD = {
     suggestedFilename: 'f.csv',
   },
 }
+/** One call of `add`, which the script exposes first: the pump's first answer carries it. */
+const BINDING_CALL = {
+  seq: 3,
+  at: RECORDED_AT,
+  event: 'binding',
+  page: { $neo: 'page', tab: 1007 },
+  frame: null,
+  executionContext: 3,
+  payload: JSON.stringify({
+    name: 'add',
+    seq: 1,
+    serializedArgs: [1, 2],
+  }),
+}
 /** The main frame and one child, so the script can drive the frame forms of page ops. */
 const FRAMES = {
   frames: [
@@ -69,30 +83,46 @@ const ANSWERS: Record<string, unknown> = {
   'download.path': { path: '/runs/r/f.csv', failure: null },
   'page.addInitScript': { id: 1 },
   'context.addInitScript': { id: 2 },
+  'page.exposeBinding': { id: 3 },
+  'context.exposeBinding': { id: 4 },
   'page.addLocatorHandler': { uid: 1 },
 }
 
-/** The locator-handler pull triggers the one handler once per recording, so its resolve is
- * recorded too. */
-let handlerTriggered = false
-
-/** A plausible result for each op, so the script runs to its end. The pulls idle forever. */
-function everyOpAnswer(call: Call): unknown {
-  if (call.name === 'events.wait')
-    return call.input.event === 'dialog' ? DIALOG : DOWNLOAD
-  if (call.name === 'events.next') return new Promise(() => {})
-  if (call.name === 'page.locatorHandlerTriggered') {
-    if (handlerTriggered) return new Promise(() => {})
-    handlerTriggered = true
-    return { uid: 1 }
+/**
+ * A plausible result for each op, so the script runs to its end. The pump's first pull answers
+ * one binding call, which makes the prelude send `bindingCall.resolve`; the locator-handler
+ * pull's first answer triggers the one handler, which makes it send `page.resolveLocatorHandler`.
+ * Both idle after that.
+ */
+function everyOpAnswer(): (call: Call) => unknown {
+  let pulled = false
+  let triggered = false
+  return (call) => {
+    if (call.name === 'events.wait')
+      return call.input.event === 'dialog' ? DIALOG : DOWNLOAD
+    if (call.name === 'events.next') {
+      if (pulled) return new Promise(() => {})
+      pulled = true
+      return { events: [BINDING_CALL], lost: 0 }
+    }
+    if (call.name === 'page.locatorHandlerTriggered') {
+      if (triggered) return new Promise(() => {})
+      triggered = true
+      return { uid: 1 }
+    }
+    return ANSWERS[call.name] ?? null
   }
-  return ANSWERS[call.name] ?? null
 }
 
 /** Every method that reaches Rust, once; `context.pages()` is synchronous and sends nothing. */
 const EVERY_OP = `
+  // exposeFunctions names its callbacks at random; a fixed draw keeps the recording stable.
+  Math.random = () => 0.25
+  await page.exposeFunction('add', (a, b) => a + b)
+  await page.exposeBinding('source', (source, a) => a); await context.exposeFunction('c', () => 1)
   const l = page.getByRole('button')
   await l.click(); await l.dblclick(); await l.hover(); await l.check(); await l.uncheck()
+  await l.drop({ data: { 'text/plain': 'external' } });
   await l.dragTo(page.locator('#b')); await l.fill('x'); await l.press('a'); await l.pressSequentially('ab')
   await l.selectOption('a'); await l.selectText(); await l.focus(); await l.blur()
   // Rust stats paths before any page work, so the offline decode needs one that exists: '.'.
@@ -126,6 +156,7 @@ const EVERY_OP = `
   const script = await page.addInitScript((a) => { window.a = a }, 1)
   // Rust reads a path before any page work, so the offline decode needs a file that exists.
   await page.addInitScript({ path: 'Cargo.toml' }); await context.addInitScript('window.b = 1')
+  await page.addInitScript(({ cb }) => cb(1), { cb: () => 2 }, { exposeFunctions: true })
   await script.dispose()
   await page.addLocatorHandler(page.getByText('Accept cookies'), async () => {}, { noWaitAfter: true, times: 2 })
   await page.removeLocatorHandler(page.getByText('Accept cookies'))
@@ -141,10 +172,9 @@ const EVERY_OP = `
 
 /** Runs `EVERY_OP` and returns every op the prelude sent, in order. */
 export async function recordEveryOp(prelude?: string): Promise<Call[]> {
-  handlerTriggered = false
   const runtime = loadPrelude({
     seed: SEED,
-    answer: everyOpAnswer,
+    answer: everyOpAnswer(),
     now: RECORDED_AT,
     ...(prelude === undefined ? {} : { prelude }),
   })

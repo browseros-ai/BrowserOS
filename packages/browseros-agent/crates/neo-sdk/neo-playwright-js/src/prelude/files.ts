@@ -73,6 +73,18 @@ export function inputFiles(api: string, files: unknown): FilesInput {
   }
 }
 
+/** Path MIME types come from the same vendored table as in-memory payloads. */
+export function dropFiles(api: string, files: unknown) {
+  const input = inputFiles(api, files)
+  if ('payloads' in input) return input
+  return {
+    paths: input.paths.map((path) => ({
+      path,
+      mimeType: mime.getType(path) || 'application/octet-stream',
+    })),
+  }
+}
+
 /**
  * upstream's `filePayloadExceedsSizeLimit`: `item.buffer ? item.buffer.byteLength : 0` summed,
  * with JavaScript's own arithmetic on whatever a buffer's `byteLength` is. Reading `buffer` off
@@ -143,6 +155,7 @@ function validString(api: string, path: string, value: unknown): string {
  */
 const CLIENT_MESSAGES = [
   /^Multiple directories are not supported$/,
+  /^Dropping a directory is not supported/,
   /^File paths must be all files or a single directory$/,
   /^(?:E[A-Z0-9]+|UNKNOWN): [^,\n]+, stat '/,
 ]
