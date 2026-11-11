@@ -1,7 +1,7 @@
 # Playwright corpus on Claw v1
 
 One runner uses Playwright Test's workers and pinned upstream specs. The unchanged
-v2 run-B curation selects 2,439 tests; `expectLoop` passes remain a separate verdict.
+v2 run-B curation selects 2,439 tests; legacy `expectLoop` passes remain a separate verdict.
 No tests are translated into SDK calls.
 
 ```sh
@@ -64,10 +64,19 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
   Closing tabs destroys their sessionStorage; retained server-origin tabs have
   sessionStorage cleared through DOMStorage. This substitutes for fresh-context isolation;
   it adds no SDK methods.
-- `expectLoop` wraps real v1 Page/Locator assertions through the same public-read
-  polling table as v2. Other assertions retain Playwright's expect. Unsupported
-  checks skip; passing loop checks are counted separately. `--no-expect-loop`
-  and `--no-curation` reproduce the unadapted selection.
+- Claw Page/Locator assertions use the active run's real `expect` parameter. Neo
+  owns retries, matcher options, cancellation, refusals and assertion errors;
+  the harness passes them through unchanged. Playwright retains ordinary value
+  assertions and its statics, including extended value matchers. Configured expect
+  imports retain the run binding and the generated config's assertion timeout.
+  `neoExpect` annotations record this path; these passes count as product passes.
+  The legacy v2 adapter still uses `expectLoop` and reports its passes separately.
+  The historical `--no-expect-loop` flag disables either assertion import adapter.
+- Claw ignores only curation skips whose reason is an uncovered `expectLoop`
+  matcher. The manifest, corpus, spec bodies and existing diagnostic patches
+  remain unchanged. Product matcher refusals fail rather than skip, so unsupported
+  assertions remain visible as product gaps. `run.json.assertions` records which
+  assertion engine ran; `--no-curation` disables all curation as before.
 - The implicit `data-testid` selector attribute already matches v1. Explicit
   overrides reach its absent `playwright.selectors` namespace.
 - Curation, `_setupArtifacts`, `_browserOptions`, `toImplInWorkerScope` and
@@ -81,6 +90,27 @@ QuickJS Buffer implementation has separate run-realm tests.
 Fidelity costs: Node/V8 replaces QuickJS; one SDK run and profile span a worker;
 `context.pages()` includes the launch tab; trace screenshots have no host camera.
 These are harness differences, not SDK features.
+
+The 71 previously skipped tests need the following matcher surface. Options and
+expected values are forwarded to Neo, including negative assertion chains.
+
+| Matcher | Tests | Arguments and options used |
+|---|---:|---|
+| `toMatchAriaSnapshot` | 36 | YAML strings/templates, regular expressions in snapshots, `timeout`, `signal` |
+| `toHaveAccessibleErrorMessage` | 12 | string/RegExp, `ignoreCase` |
+| `toBe` | 6 | object identity |
+| `toHaveScreenshot` | 4 | snapshot filename |
+| `toContainClass` | 3 | string/string array; invalid RegExp inputs |
+| `toBeInViewport` | 3 | `ratio` (0.1 through 1) |
+| `toHaveAccessibleName` | 2 | string/RegExp, `ignoreCase` |
+| `toHaveRole` | 2 | role string; invalid RegExp input; `timeout` |
+| `toHaveAccessibleDescription` | 1 | string/RegExp, `ignoreCase` |
+| `toBeOK` | 1 | invalid Page receiver |
+| `toBeTruthy` | 1 | Page receiver |
+
+The neighboring assertion cases also exercise `signal`, `.rejects`, nested JS
+properties, shadow DOM text and select values through labels. Missing product
+`matcherResult` fields are not filled in by the harness.
 
 ## Tests and reports
 
@@ -100,8 +130,11 @@ SDK gaps; add-on loading and fixture setup failures are harness errors.
 
 The runner prints **All tests** and **In-scope tests** after execution and writes
 `scores.json`. Both count Playwright expected/flaky outcomes (including expectLoop
-passes); totals include skips and incomplete cases. An empty denominator prints
-`n/a`. The offline report prints the same scores alongside its unchanged verdicts.
+passes). A skipped test ran nothing, so it stays out of the rate: each score reports
+`skipped` beside it, and `skippedByHarness` for the skips this harness made (curation's
+internals list, expectLoop's uncovered checks) rather than the spec itself. Incomplete
+cases stay in the denominator. An empty denominator prints `n/a`. The offline report
+prints the same scores alongside its unchanged verdicts.
 
 `node/scope.json` is reviewed reporting policy, separate from curation. Entries name
 a corpus-relative spec `file`, optionally narrowed with `ids`; omitting `ids` covers

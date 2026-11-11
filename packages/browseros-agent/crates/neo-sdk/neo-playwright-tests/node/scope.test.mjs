@@ -10,6 +10,7 @@ import {
   recordScope,
   scopeForRun,
   scoreResults,
+  scoreText,
   validateScope,
 } from './scope.mjs'
 
@@ -39,7 +40,7 @@ function results(statuses) {
   }
 }
 
-test('both scores use selected Playwright outcomes; unknown failures and skips stay in scope', () => {
+test('both scores use selected Playwright outcomes; unknown failures stay in scope, skips leave the rate', () => {
   const report = results([
     ['EX-001', 'expected'],
     ['EX-002', 'unexpected'],
@@ -67,8 +68,22 @@ test('both scores use selected Playwright outcomes; unknown failures and skips s
       { file: 'tests/page/elsewhere.spec.ts', reason: 'drift' },
     ]),
   )
-  assert.deepEqual(scores.all, { passed: 4, total: 8 })
-  assert.deepEqual(scores.inScope, { passed: 2, total: 5 })
+  assert.deepEqual(scores.all, {
+    passed: 4,
+    total: 7,
+    skipped: 1,
+    skippedByHarness: 0,
+  })
+  assert.deepEqual(scores.inScope, {
+    passed: 2,
+    total: 4,
+    skipped: 1,
+    skippedByHarness: 0,
+  })
+  assert.equal(
+    scoreText(scores.inScope),
+    '2/4 (50.0%); 1 skipped, not counted (0 by the harness)',
+  )
   assert.deepEqual(scores.byReason.network, { total: 2, passed: 1 })
   assert.deepEqual(scores.byReason.handles, { total: 1, passed: 1 })
   assert.deepEqual(scores.byReason.drift, { total: 0, passed: 0 })
@@ -85,11 +100,13 @@ test('file selectors count each selected case once and empty selections have no 
   ])
   assert.deepEqual(
     scoreResults(results([['EX-001', 'expected']]), manifest).inScope,
-    { passed: 0, total: 0 },
+    { passed: 0, total: 0, skipped: 0, skippedByHarness: 0 },
   )
   assert.deepEqual(scoreResults({ suites: [] }, manifest).all, {
     passed: 0,
     total: 0,
+    skipped: 0,
+    skippedByHarness: 0,
   })
 })
 
@@ -116,11 +133,42 @@ test('repeat-each instances count independently while offline joins still requir
       },
     ]),
   )
-  assert.deepEqual(scores.all, { passed: 2, total: 4 })
-  assert.deepEqual(scores.inScope, { passed: 1, total: 2 })
+  const none = { skipped: 0, skippedByHarness: 0 }
+  assert.deepEqual(scores.all, { passed: 2, total: 4, ...none })
+  assert.deepEqual(scores.inScope, { passed: 1, total: 2, ...none })
   assert.deepEqual(scores.byReason.network, { passed: 1, total: 2 })
   assert.equal(scores.passingExcluded.length, 1)
   assert.throws(() => flattenResults(report), /Duplicate case identity/)
+})
+
+test('skips are split by who made them: the harness, or the spec itself', () => {
+  const report = results([
+    ['EX-001', 'expected'],
+    ['EX-002', 'skipped', []],
+    ['EX-003', 'skipped', []],
+    ['EX-004', 'skipped', []],
+    ['EX-005', 'skipped', []],
+  ])
+  const [, loop, internals, spec, fixme] = report.suites[0].specs
+  loop.tests[0].annotations = [
+    { type: 'expectLoop', description: 'toBe' },
+    { type: 'skip', description: 'expectLoop: toBe is not covered' },
+  ]
+  internals.tests[0].annotations = [
+    { type: 'skip', description: 'needs Playwright internals: toImpl' },
+  ]
+  spec.tests[0].annotations = [
+    { type: 'skip', description: 'needs workerScriptLoaded event' },
+  ]
+  fixme.tests[0].annotations = [{ type: 'fixme' }]
+  const scores = scoreResults(report, policy([]))
+  assert.deepEqual(scores.inScope, {
+    passed: 1,
+    total: 1,
+    skipped: 4,
+    skippedByHarness: 2,
+  })
+  assert.deepEqual(scores.all, scores.inScope)
 })
 
 test('policy rejects unknown reasons, malformed IDs and overlapping selectors', () => {

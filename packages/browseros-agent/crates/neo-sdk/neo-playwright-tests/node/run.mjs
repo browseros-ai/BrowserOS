@@ -36,7 +36,13 @@ const run = {
     undefined,
     options.hostedMode,
   ),
-  expectLoop: options.expectLoop,
+  expectLoop: options.expectLoop && options.engine !== 'claw',
+  assertions:
+    options.reference || !options.expectLoop
+      ? 'playwright'
+      : options.engine === 'claw'
+        ? 'neo-expect'
+        : 'expect-loop',
   argv,
   workers: options.workers,
   startedAt: new Date().toISOString(),

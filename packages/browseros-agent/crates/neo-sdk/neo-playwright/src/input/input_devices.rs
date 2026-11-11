@@ -129,14 +129,6 @@ impl InputEvent {
     }
 }
 
-/// Whether a key down in `steps` copies or cuts the selection on `platform` (D14): such a
-/// burst first checks that no sensitive field has the focus.
-pub(crate) fn copies(steps: &[InputStep], platform: Platform) -> bool {
-    steps.iter().any(|step| {
-        matches!(step, InputStep::Dispatch(InputEvent::Key(event)) if event.copies(platform))
-    })
-}
-
 /// How long `steps` wait in all, the `delay`s between their events.
 pub(crate) fn waits(steps: &[InputStep]) -> Duration {
     steps

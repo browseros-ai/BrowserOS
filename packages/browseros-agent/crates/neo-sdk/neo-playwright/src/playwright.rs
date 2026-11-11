@@ -13,7 +13,7 @@ use crate::input::input_op;
 use crate::op::{Op, OpKind};
 use crate::op_input::OpInput;
 use crate::op_scope::OpScope;
-use crate::page::{PageRegistry, context_op, page_op};
+use crate::page::{MediaSessions, PageRegistry, context_op, page_op};
 use crate::read::read_op;
 use crate::snapshot::snapshot_op;
 use crate::world::{Epoch, FrameAttachLog, SessionSetup};
@@ -36,6 +36,8 @@ pub struct Playwright {
     sessions: Arc<SessionSetup>,
     /// Every tab the instance acted on.
     pages: Arc<PageRegistry>,
+    /// Replays page-owned media into newly attached iframe sessions.
+    media: MediaSessions,
 }
 
 // A hand-written `Debug`: the session is not worth printing.
@@ -62,6 +64,7 @@ impl Playwright {
         drop(tokio::spawn(async move {
             registry.note_open_tabs(&reader).await;
         }));
+        let media = MediaSessions::new(&browser);
         Arc::new(Self {
             browser,
             events,
@@ -69,6 +72,7 @@ impl Playwright {
             epoch: Epoch::random(),
             sessions,
             pages,
+            media,
         })
     }
 
@@ -109,6 +113,11 @@ impl Playwright {
     /// Per-session setup for sealed worlds.
     pub(crate) fn sessions(&self) -> &SessionSetup {
         &self.sessions
+    }
+
+    /// Session replay for preferences owned by a tab, independent of any one run.
+    pub(crate) fn media(&self) -> &MediaSessions {
+        &self.media
     }
 
     /// Every tab the instance acted on.
@@ -156,6 +165,7 @@ mod tests {
 
     use browseros_core::TabId;
     use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
+    use neo_trace::ErrorOwner;
     use serde_json::{Value, json};
     use tokio::time;
 
@@ -257,7 +267,18 @@ mod tests {
         for (name, inputs) in ops {
             let op = Op::from_name(name).ok_or(format!("{name} is not an op"))?;
             for input in inputs.as_array().ok_or("each op lists its inputs")? {
-                let env = TestEnv::new();
+                // Decode the filesystem step, then refuse its first effect. Recorded paths
+                // are examples, not destinations this offline contract test owns.
+                let env = if name == "page.saveScreenshot" {
+                    TestEnv::refusing(Refusal {
+                        owner: ErrorOwner::Host,
+                        code: "fixture_write_refused".to_owned(),
+                        message: "the wire decoder does not write fixture files".to_owned(),
+                        host_code: None,
+                    })
+                } else {
+                    TestEnv::new()
+                };
                 let invoked = playwright.invoke(&env, op, input.clone());
                 if let Ok(Err(error)) = time::timeout(Duration::from_secs(60), invoked).await
                     && error.error_code() == Some(ErrorCode::InvalidInput)

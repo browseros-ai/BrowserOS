@@ -7,14 +7,17 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { corpus, sha256, source } from '../js/prepare.mjs'
-import { flattenResults } from './report/classify.mjs'
+import {
+  flattenResults,
+  isGeneratedSkip,
+  internalsSkipPrefix as skipPrefix,
+} from './report/classify.mjs'
 
 export const manifestPath = fileURLToPath(
   new URL('./curation.json', import.meta.url),
 )
 export const patchReason =
   'error diagnostics: remove wording and call logs; retain behavior and error classes'
-const skipPrefix = 'needs Playwright internals: '
 export const entryKey = (entry) =>
   JSON.stringify([entry.file, entry.id, entry.title])
 const caseEntry = (row) => ({
@@ -353,20 +356,26 @@ export function curationArgs(args, output) {
   return filtered
 }
 
-export function skipReason(entries, file, titles) {
-  return entries.find(
+/** Product assertions supersede only skips caused by the old polling shim's matcher table. */
+const uncoveredCheck = /^expectLoop: \w+ is not covered$/
+
+export function skipReason(
+  entries,
+  file,
+  titles,
+  { productExpect = false } = {},
+) {
+  const reason = entries.find(
     (entry) =>
       entry.action === 'skip' &&
       entry.file === file &&
       entry.title === titles.join(' › '),
   )?.reason
+  // The manifest records limitations of the old polling shim. A run that uses Neo's
+  // expect must exercise those assertions, including the product's own refusals. Keep
+  // the manifest and its diagnostic patches intact, and retain unrelated internals skips.
+  return productExpect && uncoveredCheck.test(reason) ? undefined : reason
 }
-
-/** expectLoop's runtime skip for a check its table does not cover (`expect-loop.mjs`). */
-const uncoveredCheck = /^expectLoop: \w+ is not covered$/
-
-const isGeneratedSkip = (reason) =>
-  reason.startsWith(skipPrefix) || uncoveredCheck.test(reason)
 
 /** The skip the owner's order 2 adds for a case, or `null`: needs-internals, or an uncovered expectLoop check. */
 function generatedSkipReason(row, key) {

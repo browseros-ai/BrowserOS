@@ -1,6 +1,6 @@
 //! Sealed-world facts no op can observe, against a real browser: where a page's seqs start,
 //! that concurrent first uses share one install, that a navigation retires a seq, that the
-//! seal masks what the probe reads, that a strict CSP does not stop the install, that a second
+//! probe reads a field as the page has it, that a strict CSP does not stop the install, that a second
 //! `Playwright` re-keys a world, that `page.setContent` keeps the seq while an old ref fails,
 //! and that the install takes its handle by the new world's unique id in every kind of frame
 //! and fails `Gone` when the document changes renderer inside its window.
@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use browseros_cdp::{CdpError, CdpEvent, ObservedEvents};
-use browseros_core::sensitive_fields::{SEALED_WORLD, SensitiveKind};
 use browseros_core::{CdpConnection, FrameId, ProtocolSession, SessionId};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -25,11 +24,13 @@ use crate::op::Op;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{
-    self, PROBE_PROTOCOL, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want,
+    self, PROBE_PROTOCOL, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
+    Read, Want,
 };
 use crate::target::{CallHeader, Strictness};
 use crate::test_support::fixture_server::{FixtureServer, Page};
 use crate::test_support::{LiveBrowser, Tab, TestResult, count_op};
+use crate::world::sealed_world::SEALED_WORLD;
 use crate::world::{
     ContextWatch, FrameSeq, ParentLink, Pin, Place, SealedWorld, SeqLookup, SessionKind,
 };
@@ -395,8 +396,10 @@ async fn tests_that_a_navigation_retires_the_seq_even_across_processes() -> Test
         page.frames().by_seq(FrameSeq(1)),
         SeqLookup::Live { .. }
     ));
+    // Child frames reserve seqs when they attach, even before their worlds install. The
+    // fixture's iframe can already own seq 2; use an unallocated seq for the unknown case.
     assert!(matches!(
-        page.frames().by_seq(FrameSeq(2)),
+        page.frames().by_seq(FrameSeq(u32::MAX)),
         SeqLookup::Unknown
     ));
 
@@ -411,7 +414,7 @@ async fn tests_that_a_navigation_retires_the_seq_even_across_processes() -> Test
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_the_probe_reads_a_password_masked_while_the_page_reads_it_raw() -> TestResult {
+async fn tests_that_the_probe_reads_a_password_as_the_page_has_it() -> TestResult {
     let live = LiveBrowser::connect().await?;
     let server = fixtures().await?;
     let tab = live
@@ -424,16 +427,12 @@ async fn tests_that_the_probe_reads_a_password_masked_while_the_page_reads_it_ra
     let world = main_world(&live, &scope, &tab).await?;
 
     let resolved = resolve_element(&world, css("#pw")?).await?;
-    let Ok(ProbeReply::Element {
-        preview, sensitive, ..
-    }) = resolved
-    else {
+    let Ok(ProbeReply::Element { preview, .. }) = resolved else {
         return Err(format!("the password field did not resolve: {resolved:?}").into());
     };
-    assert_eq!(sensitive, Some(SensitiveKind::Password));
     assert!(
-        preview.contains("value=\"••••\"") && !preview.contains("hunter2"),
-        "the probe reads through the seal: {preview}"
+        preview.contains("value=\"hunter2-attribute\""),
+        "the preview is upstream's, of the page's markup: {preview}"
     );
     let raw = tab
         .main_world("document.getElementById('pw').value")
@@ -566,6 +565,57 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
         "the world answers with the new instance's numbering"
     );
     first.close(&tab).await;
+    Ok(())
+}
+
+/// A world an earlier claw-sdk sealed keeps core's seal, and its replaced `value` getter, for
+/// as long as its document lives; the engine installs in a world of its own name, so it reads a
+/// field as the page holds it on such a page too.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn tests_that_a_world_an_earlier_build_sealed_is_never_the_engines() -> TestResult {
+    let live = LiveBrowser::connect().await?;
+    let server = fixtures().await?;
+    let tab = live
+        .open(&server.url("127.0.0.1", "/password.html"))
+        .await?;
+    tab.main_world("document.getElementById('pw').value = 'typed-secret'")
+        .await?;
+    // What an earlier build left in the document: the seal's getter in its `browseros-sdk` world.
+    let created: Value = tab
+        .session
+        .send(
+            "Page.createIsolatedWorld",
+            json!({ "frameId": tab.target.as_str(), "worldName": "browseros-sdk" }),
+        )
+        .await?;
+    let sealed = "Object.defineProperty(HTMLInputElement.prototype, 'value', \
+                  { configurable: true, get() { return '••••' } }); 1";
+    tab.session
+        .send::<_, Value>(
+            "Runtime.evaluate",
+            json!({ "expression": sealed, "contextId": created["executionContextId"] }),
+        )
+        .await?;
+
+    let env = live.env();
+    let scope = OpScope::new(&env, count_op()?, CallHeader::default());
+    let world = main_world(&live, &scope, &tab).await?;
+    let read = ProbeRequest::Read {
+        target: ProbeTarget::Chunk(css("#pw")?),
+        strictness: Strictness::Strict,
+        frame_visible: true,
+        read: Read::InputValue,
+    };
+    let Ok(ProbeReply::Read { value }) = probe::call(&world, &read).await else {
+        return Err("the password field did not read".into());
+    };
+    assert_eq!(
+        value.into_value(),
+        json!("typed-secret"),
+        "the engine's world is not the one the earlier build sealed"
+    );
+    live.close(&tab).await;
     Ok(())
 }
 
@@ -874,7 +924,7 @@ async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_pag
          {installed:?} in {landed}"
     );
 
-    // The retry a gone world gets: the next document's own world, sealed.
+    // The retry a gone world gets: the next document's own world.
     let world = install_over(&live, &recorder, main, 1).await??;
     assert_eq!(
         world_url(&world).await?,

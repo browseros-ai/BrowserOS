@@ -1,15 +1,14 @@
 /**
  * Live smoke for the page asset, over raw CDP from Node against a real BrowserOS (or
  * Chromium) on BROWSEROS_CDP_PORT (default 9005). It installs the probe the way the crate
- * will, in an isolated world named browseros-sdk:
+ * will, in an isolated world named browseros-engine:
  *
- *   (() => { <core's seal_source()>; if (!globalThis.__neoProbe) { <assets/injected.js> }
+ *   (() => { if (!globalThis.__neoProbe) { <assets/injected.js> }
  *            return globalThis.__neoProbe.boot({ frameSeq, epoch }) })()
  *
  * then sends requests with the CALL_FUNCTION from tests/data/probe-protocol.json, and checks
  * what the probe must guarantee before Rust builds on it. Chunks are parsed by the prelude
- * asset's vendored selectorParser, as the agent runtime will parse them. The seal source is
- * core's seal.js with rules.json substituted, exactly what seal_source() returns.
+ * asset's vendored selectorParser, as the agent runtime will parse them.
  *
  *   BROWSEROS_CDP_PORT=9361 node scripts/probe-smoke.mjs
  *
@@ -25,31 +24,54 @@ import { runInNewContext } from 'node:vm'
 const here = dirname(fileURLToPath(import.meta.url))
 const agentRoot = resolve(here, '../../../..')
 const crate = resolve(agentRoot, 'crates/neo-sdk/neo-playwright')
-const sealDir = resolve(agentRoot, 'crates/browseros-core/src/sensitive_fields')
 
 const ASSET = readFileSync(resolve(crate, 'assets/injected.js'), 'utf8')
 const PRELUDE = readFileSync(resolve(crate, 'assets/prelude.js'), 'utf8')
 const PROTOCOL = JSON.parse(
   readFileSync(resolve(crate, 'tests/data/probe-protocol.json'), 'utf8'),
 )
-const SEAL = readFileSync(resolve(sealDir, 'seal.js'), 'utf8').replace(
-  '__RULES__',
-  readFileSync(resolve(sealDir, 'rules.json'), 'utf8').trim(),
-)
 const PORT = Number(process.env.BROWSEROS_CDP_PORT ?? 9005)
-const WORLD = 'browseros-sdk'
+const WORLD = 'browseros-engine'
 
-const isomorphic = (() => {
-  const context = {}
-  runInNewContext(PRELUDE, context)
-  return context.__neoIsomorphic
-})()
-const chunk = (selector) => ({
-  chunk: isomorphic.selectorParser.parseSelector(selector),
-})
+// The prelude supplies the SDK as function parameters after the real bootstrap. Parse
+// selectors through that SDK's wire path so this smoke follows the same parser and no
+// longer depends on an exported helper global. No browser operation runs in this realm.
+let parsedChunk
+const realm = {
+  URL,
+  URLSearchParams,
+  atob,
+  btoa,
+  DOMException,
+  __neo_log() {},
+  __neo_sleep: async () => {},
+  __neo_invoke: async (name, input) => {
+    if (name !== 'locator.count')
+      throw new Error(`unexpected parser op: ${name}`)
+    parsedChunk = JSON.parse(input).target.chunks[0]
+    return JSON.stringify({ ok: 0 })
+  },
+}
+const bootstrap = readFileSync(
+  resolve(agentRoot, 'crates/neo-sdk/neo-server/src/runtime/js/bootstrap.js'),
+  'utf8',
+)
+runInNewContext(`'use strict';${bootstrap};\n${PRELUDE}`, realm)
+let parserPage
+const parameterNames = realm.__neo.parameters().split(', ')
+await realm.__neo.run(
+  (...args) => {
+    parserPage = args[parameterNames.indexOf('page')]
+  },
+  JSON.stringify({ page: null }),
+)
+const chunk = async (selector) => {
+  await parserPage.locator(selector).count()
+  return { chunk: parsedChunk }
+}
 
 const install = ({ frameSeq, epoch }) =>
-  `(() => { ${SEAL};\n if (!globalThis.__neoProbe) { ${ASSET}\n }\n return globalThis.__neoProbe.boot(${JSON.stringify({ frameSeq, epoch })}) })()`
+  `(() => { if (!globalThis.__neoProbe) { ${ASSET}\n }\n return globalThis.__neoProbe.boot(${JSON.stringify({ frameSeq, epoch })}) })()`
 
 const BODY = `
   <h1>Pay</h1>
@@ -239,26 +261,15 @@ async function plainPage(cdp, server, epoch) {
         described.protocol === PROTOCOL.protocol &&
         described.seq === 0 &&
         described.url === url,
-      'seal, asset and boot install in the browseros-sdk world in one script',
+      'asset and boot install in the browseros-engine world in one script',
       described,
-    )
-    const sealed = await tab.evaluate(
-      'typeof __clawSeal + " " + typeof __neoProbe',
-      contextId,
-    )
-    check(
-      sealed === 'object object',
-      'the sealed world holds the seal and the probe',
-      sealed,
     )
     const describe = await tab.call(contextId, { op: 'describe' })
     check(describe.seq === 0, 'describe returns the seq', describe)
-    const pageSees = await tab.evaluate(
-      'typeof __neoProbe + " " + typeof __clawSeal',
-    )
+    const pageSees = await tab.evaluate('typeof __neoProbe')
     check(
-      pageSees === 'undefined undefined',
-      "the page's main world cannot see __neoProbe or the seal",
+      pageSees === 'undefined',
+      "the page's main world cannot see __neoProbe",
       pageSees,
     )
 
@@ -271,13 +282,14 @@ async function plainPage(cdp, server, epoch) {
       'the main world reads the password raw',
       raw,
     )
-    const resolved = await tab.call(contextId, resolveRequest(chunk('#pw')))
+    const resolved = await tab.call(
+      contextId,
+      resolveRequest(await chunk('#pw')),
+    )
     check(
       resolved.kind === 'element' &&
-        resolved.sensitive === 'password' &&
-        resolved.preview.includes('value="••••"') &&
-        !resolved.preview.includes('hunter2'),
-      'the probe resolves the password field as sensitive and previews it masked',
+        resolved.preview.includes('value="hunter2-attribute"'),
+      "the probe resolves the password field and previews the page's markup",
       resolved,
     )
     const inWorld = await tab.evaluate(
@@ -285,21 +297,14 @@ async function plainPage(cdp, server, epoch) {
       contextId,
     )
     check(
-      inWorld[0] === '••••' && inWorld[1] === 'Ada',
-      "the probe's world reads •••• for the password and the plain field as is",
+      inWorld[0] === 'typed-secret' && inWorld[1] === 'Ada',
+      "the probe's world reads each field's live value, as the page does",
       inWorld,
-    )
-    await tab.evaluate("document.getElementById('pw').focus()")
-    const focused = await tab.call(contextId, { op: 'focused' })
-    check(
-      focused.sensitive === true && focused.iframe === null,
-      'focused reports a focused password field as sensitive',
-      focused,
     )
 
     const frame = await tab.call(
       contextId,
-      resolveRequest(chunk('#frame'), 'frame'),
+      resolveRequest(await chunk('#frame'), 'frame'),
     )
     check(
       frame.kind === 'frame' && frame.key === '#1' && frame.visible === true,
@@ -308,7 +313,7 @@ async function plainPage(cdp, server, epoch) {
     )
     const button = await tab.call(
       contextId,
-      resolveRequest(chunk('internal:role=button[name="Go"i]')),
+      resolveRequest(await chunk('internal:role=button[name="Go"i]')),
     )
     check(
       button.kind === 'element',
@@ -317,7 +322,7 @@ async function plainPage(cdp, server, epoch) {
     )
     const strict = await tab.call(
       contextId,
-      resolveRequest(chunk('internal:role=button')),
+      resolveRequest(await chunk('internal:role=button')),
     )
     check(
       strict.kind === 'strict' &&
@@ -335,7 +340,7 @@ async function plainPage(cdp, server, epoch) {
     )
     const keyAfterSame = await tab.call(
       contextId,
-      resolveRequest(chunk('aria-ref=#1')),
+      resolveRequest(await chunk('aria-ref=#1')),
     )
     check(
       same.seq === 0 &&
@@ -354,11 +359,11 @@ async function plainPage(cdp, server, epoch) {
     )
     const keyAfter = await tab.call(
       contextId,
-      resolveRequest(chunk('aria-ref=#1')),
+      resolveRequest(await chunk('aria-ref=#1')),
     )
     const freshFrame = await tab.call(
       contextId,
-      resolveRequest(chunk('#frame'), 'frame'),
+      resolveRequest(await chunk('#frame'), 'frame'),
     )
     check(
       rekeyed.seq === 347 &&
@@ -376,7 +381,10 @@ async function plainPage(cdp, server, epoch) {
       },
     )
 
-    const hint = await tab.call(contextId, resolveRequest(chunk('ref=e5')))
+    const hint = await tab.call(
+      contextId,
+      resolveRequest(await chunk('ref=e5')),
+    )
     check(
       hint.kind === 'error' &&
         hint.class === 'selector' &&
@@ -439,19 +447,19 @@ async function cspPage(cdp, server, epoch) {
     )
     const frame = await tab.call(
       contextId,
-      resolveRequest(chunk('#frame'), 'frame'),
+      resolveRequest(await chunk('#frame'), 'frame'),
     )
     const byRef = await tab.call(
       contextId,
-      resolveRequest(chunk('aria-ref=#1')),
+      resolveRequest(await chunk('aria-ref=#1')),
     )
     const scoped = await tab.call(
       contextId,
-      resolveRequest(chunk('#checkout >> aria-ref=#1')),
+      resolveRequest(await chunk('#checkout >> aria-ref=#1')),
     )
     const outside = await tab.call(
       contextId,
-      resolveRequest(chunk('#outside >> aria-ref=#1')),
+      resolveRequest(await chunk('#outside >> aria-ref=#1')),
     )
     check(
       frame.key === '#1' &&
@@ -466,7 +474,7 @@ async function cspPage(cdp, server, epoch) {
     await tab.evaluate("document.getElementById('frame').remove()")
     const removed = await tab.call(
       contextId,
-      resolveRequest(chunk('aria-ref=#1')),
+      resolveRequest(await chunk('aria-ref=#1')),
     )
     check(
       removed.kind === 'none' && removed.staleRef === '#1',
@@ -482,7 +490,7 @@ async function cspPage(cdp, server, epoch) {
 
 /**
  * A second DevTools connection stands in for a restarted claw-sdk on a tab that stayed open.
- * Whether it shares the first connection's browseros-sdk world is measured and printed; either
+ * Whether it shares the first connection's browseros-engine world is measured and printed; either
  * way its install, with its own epoch, must leave nothing the first one handed out usable.
  */
 async function secondConnection(tab, epoch) {
@@ -507,12 +515,9 @@ async function secondConnection(tab, epoch) {
       { frameId: frameTree.frame.id, worldName: WORLD },
       sessionId,
     )
-    const seen = await evaluate(
-      'typeof __neoProbe + " " + typeof __clawSeal',
-      executionContextId,
-    )
+    const seen = await evaluate('typeof __neoProbe', executionContextId)
     console.log(
-      `   measured: a second CDP connection's ${WORLD} world ${seen === 'object object' ? 'is the same world: it already holds the probe and the seal' : `is a new world (${seen})`}`,
+      `   measured: a second CDP connection's ${WORLD} world ${seen === 'object' ? 'is the same world: it already holds the probe' : `is a new world (${seen})`}`,
     )
     const described = await evaluate(
       install({ frameSeq: 512, epoch: `${epoch}-restart` }),
@@ -523,7 +528,7 @@ async function secondConnection(tab, epoch) {
       {
         functionDeclaration: PROTOCOL.callFunction,
         executionContextId,
-        arguments: [{ value: resolveRequest(chunk('aria-ref=#2')) }],
+        arguments: [{ value: resolveRequest(await chunk('aria-ref=#2')) }],
         returnByValue: true,
       },
       sessionId,

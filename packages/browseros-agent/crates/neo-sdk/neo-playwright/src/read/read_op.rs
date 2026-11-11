@@ -72,7 +72,7 @@ impl ReadOp {
             Self::InputValue => OpSpec::read(
                 "locator.inputValue",
                 TARGET,
-                "a form control's value through the seal, masked when sensitive",
+                "a form control's value, as upstream's inputValue reads it",
             ),
             Self::IsEnabled => OpSpec::read(
                 "locator.isEnabled",

@@ -18,10 +18,11 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
   `injectedScript.ts`, `roleUtils.ts`, `roleSelectorEngine.ts`, `selectorEvaluator.ts`,
   `selectorGenerator.ts`, `selectorUtils.ts`, `domUtils.ts`, `layoutSelectorUtils.ts`,
   `xpathSelectorEngine.ts`, `ariaSnapshot.ts`, `ariaSnapshotDistiller.ts`, `utilityScript.ts`.
-- `packages/isomorphic/`. The 11 shared helpers the engine and the agent runtime use:
+- `packages/isomorphic/`. The 12 shared helpers the engine and the agent runtime use:
   `selectorParser.ts`, `cssParser.ts`, `cssTokenizer.ts`, `locatorUtils.ts`,
   `locatorGenerators.ts`, `stringUtils.ts`, `ariaSnapshot.ts`, `ariaSnapshotRenderer.ts`,
-  `yaml.ts`, `utilityScriptSerializers.ts`, `urlMatch.ts`. `cssTokenizer.ts` is CC0, from
+  `yaml.ts`, `utilityScriptSerializers.ts`, `urlMatch.ts`, `mimeType.ts`. The MIME helper
+  keeps screenshot filename inference and errors identical to the pinned client. `cssTokenizer.ts` is CC0, from
   tabatkins/parse-css, as its header says.
 - `packages/playwright-core/src/server/usKeyboardLayout.ts` and `macEditingCommands.ts`. The US
   keyboard table and the editing commands Playwright sends on macOS, kept as the source of the

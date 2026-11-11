@@ -39,6 +39,8 @@ uuid.workspace = true
 rquickjs.workspace = true
 # tests/engine_sources.rs checks the vendored bytes against third_party's SHA256SUMS.
 sha2.workspace = true
+# Filesystem-save tests isolate their outputs, including relative-path cases.
+tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 # claw-sdk's lint table: paste below `[package]` in crates/neo-sdk/neo-server/Cargo.toml.

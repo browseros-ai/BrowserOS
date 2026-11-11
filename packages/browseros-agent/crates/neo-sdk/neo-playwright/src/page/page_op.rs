@@ -12,8 +12,9 @@ use crate::op_spec::{Capability, OpSpec, PAGE, TARGET};
 use crate::page::document_watch::decode;
 use crate::page::navigation::{GotoInput, NavigateInput, Navigation};
 use crate::page::{
-    PageHandle, add_tag, document_op, element_evaluate, evaluate, frame_tree, navigation, pdf,
-    screenshot, viewport_size, wait_for_navigation, wait_for_url,
+    PageHandle, add_tag, document_op, element_evaluate, evaluate, frame_tree, init_script,
+    media_emulation, navigation, pdf, save_screenshot, screenshot, viewport_size,
+    wait_for_navigation, wait_for_url,
 };
 use crate::probe::DocumentPart;
 use crate::target::PageRef;
@@ -35,6 +36,7 @@ listed_enum! {
         SetContent,
         AddScriptTag,
         AddStyleTag,
+        EmulateMedia,
         Close,
         Opener,
         Frames,
@@ -44,8 +46,10 @@ listed_enum! {
         WaitForFunction,
         WaitForFunctionOnElement,
         Screenshot,
+        SaveScreenshot,
         Pdf,
         SetViewportSize,
+        AddInitScript,
     }
 }
 
@@ -57,6 +61,7 @@ impl PageOp {
     )]
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
+            Self::SaveScreenshot => save_screenshot::SPEC,
             Self::SetViewportSize => viewport_size::SPEC,
             Self::Goto => OpSpec::write(
                 "page.goto",
@@ -112,6 +117,11 @@ impl PageOp {
             )
             .using(&[Capability::MainWorld, Capability::HostFiles])
             .policed(),
+            Self::EmulateMedia => OpSpec::write(
+                "page.emulateMedia",
+                PAGE,
+                "set page media preferences across renderer and run lifetimes",
+            ),
             Self::Close => OpSpec::write("page.close", PAGE, "close the tab"),
             Self::Opener => OpSpec::read("page.opener", PAGE, "the page that opened this one"),
             Self::Frames => OpSpec::read(
@@ -168,9 +178,20 @@ impl PageOp {
             )
             .using(&[Capability::Capture])
             .policed(),
+            Self::AddInitScript => ADD_INIT_SCRIPT,
         }
     }
 }
+
+/// `page.addInitScript`'s registration: it reaches the main world of every later document, and
+/// its `{ path }` form reads a file from Neo's disk (`page/init_script.rs`).
+const ADD_INIT_SCRIPT: OpSpec = OpSpec::write(
+    "page.addInitScript",
+    PAGE,
+    "run a script in the main world of every new document of the page, until the run ends",
+)
+.using(&[Capability::MainWorld, Capability::HostFiles])
+.policed();
 
 /// Runs one page op. The ops that run in the page's sealed world (title, content, setContent,
 /// waitForURL) or its main world (evaluate, waitForFunction, the element scripts) are built with
@@ -212,11 +233,16 @@ pub(crate) async fn invoke(
             ))
             .await
         }
+        PageOp::EmulateMedia => {
+            Box::pin(media_emulation::emulate(pw, scope, args.decode(scope)?)).await
+        }
         PageOp::Close => close(pw, scope, args.decode(scope)?).await,
         PageOp::Opener => opener(pw, scope, args.decode(scope)?).await,
         PageOp::Frames => frame_tree::frames(pw, scope, args.decode(scope)?).await,
         PageOp::Screenshot => screenshot::capture(pw, scope, args.decode(scope)?).await,
+        PageOp::SaveScreenshot => save_screenshot::save(scope, args.decode(scope)?).await,
         PageOp::Pdf => pdf::print(pw, scope, args.decode(scope)?).await,
+        PageOp::AddInitScript => init_script::add_to_page(pw, scope, args.decode(scope)?).await,
         // Boxed, as the other families box their leaves: a script's guard and its polls are the
         // largest state a page op holds, and every op's future is as large as its largest leaf.
         PageOp::Evaluate => Box::pin(evaluate::evaluate(pw, scope, args.decode(scope)?)).await,

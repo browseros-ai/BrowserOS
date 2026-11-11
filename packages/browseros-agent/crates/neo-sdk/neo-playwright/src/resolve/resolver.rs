@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
-use crate::page::{FRAME_BUDGET, OpPage};
+use crate::page::OpPage;
 use crate::probe::{
     self, ErrorClass, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
     QueryState, Read, Want,
@@ -488,38 +488,6 @@ async fn hop_from(
     Box::pin(enter_pinned(page, scope, parent, pin, key, visible)).await
 }
 
-/// Into the child frame behind the `<iframe>` that `pin` names in `parent`, as [`hop`] does
-/// with a chunk: the way down to the frame a focused iframe hands keyboard input to. An
-/// element that is gone or is no iframe any more is [`Hopped::Missing`].
-pub(crate) async fn hop_pinned(
-    page: &OpPage<'_>,
-    scope: &OpScope<'_>,
-    parent: &SealedWorld,
-    pin: Pin,
-) -> Result<Hopped, PlaywrightError> {
-    let request = ProbeRequest::Resolve {
-        target: ProbeTarget::Pin(pin),
-        strictness: Strictness::Strict,
-        want: Want::Frame,
-    };
-    // A pin names one element; one that is no iframe any more is missing here, its preview
-    // unread.
-    let (pin, key, visible) = match probe::call(parent, &request).await {
-        Ok(ProbeReply::Frame {
-            pin, key, visible, ..
-        }) => (pin, key, visible),
-        Ok(
-            ProbeReply::None { stale_ref: None }
-            | ProbeReply::Detached
-            | ProbeReply::NotFrame { .. },
-        ) => return Ok(Hopped::Missing),
-        Ok(other) => return Err(refused(scope, other)),
-        Err(ProbeFailure::Gone(_)) => return Ok(Hopped::ParentGone),
-        Err(failure) => return Err(failed(scope, failure)),
-    };
-    enter_pinned(page, scope, parent, pin, key, visible).await
-}
-
 /// A hop's iframe, pinned in `parent`, by handle, then [`enter_iframe`].
 async fn enter_pinned(
     page: &OpPage<'_>,
@@ -711,14 +679,6 @@ pub(crate) fn failed(scope: &OpScope<'_>, failure: ProbeFailure) -> PlaywrightEr
         }
         ProbeFailure::Cdp(error) => scope.core_error(&error),
         ProbeFailure::Broken(why) => scope.fail(ErrorCode::Internal, &why),
-        ProbeFailure::Late => scope.fail(
-            ErrorCode::Unsupported,
-            &format!(
-                "a frame did not answer Neo's privacy scan within {}ms, so Neo cannot see every \
-                 shadow root of its page and refuses the op; try again once the frame responds",
-                FRAME_BUDGET.as_millis()
-            ),
-        ),
     }
 }
 

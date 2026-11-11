@@ -90,6 +90,7 @@ function runDetails(label, run) {
     `Started: ${cell(meta.startedAt)}. Ended: ${cell(meta.endedAt)}. SDK SHA-256: ${cell(meta.sdkSha256)}.`,
     `Specs verified: ${cell(meta.specsVerified)}. Context option omissions: ${cell(JSON.stringify(meta.contextOptionOmissions || []))}.`,
     `expectLoop: ${cell(meta.expectLoop ?? false)}.`,
+    ...(meta.assertions ? [`Assertions: ${cell(meta.assertions)}.`] : []),
     ...(meta.engine
       ? [
           `Engine: ${cell(meta.engine)}. BrowserOS: ${cell(meta.browserosVersion)}. SDK sources: ${cell(JSON.stringify(meta.sdkSources || {}))}. Add-on: ${cell(JSON.stringify(meta.addon || {}))}.`,
@@ -159,7 +160,7 @@ export function renderReport({ neo, reference, bridge, corpus = [], scope }) {
     '',
     `All tests: **${scoreText(scores.all)}**. In-scope tests: **${scoreText(scores.inScope)}**.`,
     '',
-    'Scores count Playwright expected/flaky outcomes as passing, including expectLoop passes. Totals include skips and incomplete cases; scope changes only the denominator and matching pass count, never execution or verdicts. Counts below cover this selection.',
+    'Scores count Playwright expected/flaky outcomes as passing, including expectLoop passes. Skipped tests ran nothing: they are counted beside each score, split by who skipped them, and left out of its rate. Incomplete cases stay in. Scope changes only the denominator and matching pass count, never execution or verdicts. Counts below cover this selection.',
     '',
     neo.metadata.scope
       ? `Scope manifest SHA-256: ${neo.metadata.scope.manifestSha256} (recorded with this run).`

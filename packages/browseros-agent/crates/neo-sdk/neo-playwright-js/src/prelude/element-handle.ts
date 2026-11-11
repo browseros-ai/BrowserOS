@@ -13,13 +13,13 @@
 import type { Rect } from '../probe/protocol'
 import { invoke } from './bridge'
 import { EventEmitter } from './emitter'
-import { clientError, unsupportedError } from './errors'
+import { clientError } from './errors'
 import { type EvaluateOptions, fromPageValue, pageCall } from './evaluation'
 import { inputFiles, withClientErrors } from './files'
 import {
   type ClickOptions,
-  refusedScreenshotOption,
   type ScreenshotOptionsInput,
+  screenshotOptions,
 } from './frame'
 import type { OpName } from './ops.generated'
 import {
@@ -31,11 +31,12 @@ import {
   markHandle,
   POINTER_KEYS,
   pick,
-  SCREENSHOT_KEYS,
   selectOptionValues,
 } from './options'
 import type { Page } from './page'
+import { saveScreenshot, screenshotType } from './screenshot'
 import { locatorBrand } from './selectors'
+import { signalOf } from './signal'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import type {
   ElementBrand,
@@ -45,7 +46,6 @@ import type {
   LocatorBrand,
   OpInputs,
   OpOutputs,
-  ScreenshotOptions,
   Strictness,
 } from './wire'
 
@@ -455,15 +455,11 @@ export class ElementHandle extends EventEmitter {
 
   async screenshot(options: ScreenshotOptionsInput = {}): Promise<unknown> {
     const api = 'elementHandle.screenshot'
-    if (options.path !== undefined)
-      throw unsupportedError(
-        api,
-        'Neo returns the image instead of writing a file; omit path',
-      )
-    const refused = refusedScreenshotOption(options)
-    if (refused !== undefined) throw unsupportedError(api, refused)
-    const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
-    return await invoke(
+    const wire = await screenshotOptions(api, options)
+    if (!wire.type && options.path)
+      wire.type = screenshotType({ api, path: options.path })
+    const signal = signalOf(api, options)
+    const image = await invoke(
       'page.screenshot',
       { api, timeoutMs: timeoutMs(api, this.#timeout(options)) },
       {
@@ -472,6 +468,9 @@ export class ElementHandle extends EventEmitter {
         strict: 'strict',
         ...wire,
       },
+      signal,
     )
+    await saveScreenshot({ api, bytes: image, path: options.path, signal })
+    return image
   }
 }

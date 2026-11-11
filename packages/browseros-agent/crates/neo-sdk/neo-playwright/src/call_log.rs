@@ -8,8 +8,7 @@
 //! rendered lines (the first and the latest 11), so a long retry keeps its context line and its
 //! latest state.
 //!
-//! The lines are mirrored into the op's trace record (`OpEnv::note`), so they never carry a
-//! typed value: a fill logs `fill("••••")`.
+//! The lines are mirrored into the op's trace record (`OpEnv::note`).
 
 /// Rendered lines kept in an error: the first one and the latest `MAX_LINES - 1`.
 const MAX_LINES: usize = 12;

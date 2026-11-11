@@ -279,10 +279,6 @@ mod tests {
     /// change on either side, the crate's declarations or the door's policing, fails here until
     /// the snapshot is redone on purpose.
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one explicit row per capability operation keeps the host contract auditable"
-    )]
     fn claw_sdk_places_every_capability_op() {
         use Capability::{Capture, HostFiles, MainWorld};
         use Placement::{Held, Served};
@@ -297,84 +293,29 @@ mod tests {
             policed: Vec<Capability>,
             placement: Placement,
         }
+        // Every capability op is gated, policed in full by the door, and served: `served` is that
+        // row. One that stops being so needs a `Row` of its own here.
+        let served = |op, declared: &[Capability]| Row {
+            op,
+            declared: declared.to_vec(),
+            gated: true,
+            policed: declared.to_vec(),
+            placement: Served,
+        };
         let expected = vec![
-            Row {
-                op: "locator.setInputFiles",
-                declared: vec![HostFiles],
-                gated: true,
-                policed: vec![HostFiles],
-                placement: Served,
-            },
-            Row {
-                op: "page.setContent",
-                declared: vec![MainWorld],
-                gated: true,
-                policed: vec![MainWorld],
-                placement: Served,
-            },
-            Row {
-                op: "page.addScriptTag",
-                declared: vec![MainWorld, HostFiles],
-                gated: true,
-                policed: vec![MainWorld, HostFiles],
-                placement: Served,
-            },
-            Row {
-                op: "page.addStyleTag",
-                declared: vec![MainWorld, HostFiles],
-                gated: true,
-                policed: vec![MainWorld, HostFiles],
-                placement: Served,
-            },
-            Row {
-                op: "page.evaluate",
-                declared: vec![MainWorld],
-                gated: true,
-                policed: vec![MainWorld],
-                placement: Served,
-            },
-            Row {
-                op: "locator.evaluate",
-                declared: vec![MainWorld],
-                gated: true,
-                policed: vec![MainWorld],
-                placement: Served,
-            },
-            Row {
-                op: "locator.evaluateAll",
-                declared: vec![MainWorld],
-                gated: true,
-                policed: vec![MainWorld],
-                placement: Served,
-            },
-            Row {
-                op: "page.waitForFunction",
-                declared: vec![MainWorld],
-                gated: true,
-                policed: vec![MainWorld],
-                placement: Served,
-            },
-            Row {
-                op: "locator.waitForFunction",
-                declared: vec![MainWorld],
-                gated: true,
-                policed: vec![MainWorld],
-                placement: Served,
-            },
-            Row {
-                op: "page.screenshot",
-                declared: vec![Capture],
-                gated: true,
-                policed: vec![Capture],
-                placement: Served,
-            },
-            Row {
-                op: "page.pdf",
-                declared: vec![Capture],
-                gated: true,
-                policed: vec![Capture],
-                placement: Served,
-            },
+            served("locator.setInputFiles", &[HostFiles]),
+            served("page.setContent", &[MainWorld]),
+            served("page.addScriptTag", &[MainWorld, HostFiles]),
+            served("page.addStyleTag", &[MainWorld, HostFiles]),
+            served("page.evaluate", &[MainWorld]),
+            served("locator.evaluate", &[MainWorld]),
+            served("locator.evaluateAll", &[MainWorld]),
+            served("page.waitForFunction", &[MainWorld]),
+            served("locator.waitForFunction", &[MainWorld]),
+            served("page.screenshot", &[Capture]),
+            served("page.pdf", &[Capture]),
+            served("page.addInitScript", &[MainWorld, HostFiles]),
+            served("context.addInitScript", &[MainWorld, HostFiles]),
         ];
         let placed: Vec<Row> = Op::all()
             .map(Op::spec)
@@ -542,6 +483,18 @@ mod tests {
     /// The BrowserOS cases of the ops that reach past their page's sealed world into the main
     /// world, Neo's files or Neo's screen, where no fake browser shows what a real one does.
     const BROWSEROS_CASES: &[BrowserosCase] = &[
+        BrowserosCase {
+            op: "page.addInitScript",
+            file: "init_scripts_browseros.rs",
+            test: "init_scripts_run_in_every_new_document_until_the_run_ends",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "context.addInitScript",
+            file: "init_scripts_browseros.rs",
+            test: "init_scripts_run_in_every_new_document_until_the_run_ends",
+            proves: Proves::Served,
+        },
         BrowserosCase {
             op: "page.addScriptTag",
             file: "main_world_browseros.rs",

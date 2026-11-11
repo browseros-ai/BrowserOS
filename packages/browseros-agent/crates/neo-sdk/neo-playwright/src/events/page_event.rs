@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::events::PageEventKind;
+use crate::events::frame_lifecycle::{EventFrame, FrameLifecycle};
 use crate::events::navigation_event::NavigationEvent;
 use crate::world::BackendNodeId;
 
@@ -17,6 +18,14 @@ use crate::world::BackendNodeId;
 pub(crate) enum PageEvent {
     /// Internal facts for navigation waiters; never delivered as public page events.
     Navigation(NavigationEvent),
+    /// Public frame state at the transition, retained after the frame disappears.
+    FrameLifecycle(FrameLifecycle),
+    /// A main document fired a load event; OOPIF loads never become page loads.
+    Load {
+        target: TargetId,
+        kind: PageEventKind,
+        frame: EventFrame,
+    },
     /// Actual frame removal, excluding renderer swaps.
     FrameDetached(FrameId),
     /// A stable frame moved to a renderer whose Page domain may still be disabled.
@@ -28,6 +37,8 @@ pub(crate) enum PageEvent {
     Closed(TargetId),
     /// A JavaScript dialog opened.
     Dialog(DialogOpened),
+    /// The same dialog closed, by a script, the browser, or automatic handling.
+    DialogClosed(DialogOpened),
     /// A console message, recorded only while some run listens for it on that page.
     Console(ConsoleMessage),
     /// An uncaught exception, recorded only while some run listens for it on that page.
@@ -42,9 +53,19 @@ impl PageEvent {
     /// Whether this is an event of `kind` for the page whose target is `target`.
     pub(crate) fn concerns(&self, kind: PageEventKind, target: &TargetId) -> bool {
         match (kind, self) {
+            (kind, Self::FrameLifecycle(frame)) => frame.target == *target && frame.kind == kind,
+            (
+                kind,
+                Self::Load {
+                    target: page,
+                    kind: load,
+                    ..
+                },
+            ) => page == target && *load == kind,
             (PageEventKind::Popup, Self::Opened(opened)) => opened.opener.as_ref() == Some(target),
             (PageEventKind::Close, Self::Closed(closed)) => closed == target,
-            (PageEventKind::Dialog, Self::Dialog(dialog)) => dialog.target == *target,
+            (PageEventKind::Dialog, Self::Dialog(dialog))
+            | (PageEventKind::DialogClosed, Self::DialogClosed(dialog)) => dialog.target == *target,
             (PageEventKind::Console, Self::Console(message)) => message.target == *target,
             (PageEventKind::PageError, Self::PageError(error)) => error.target == *target,
             (PageEventKind::Download, Self::Download(download)) => {

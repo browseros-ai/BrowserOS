@@ -4,13 +4,14 @@
 //! then restores temporary rendering state. Its queue remains held through cancellation cleanup.
 
 use browseros_core::screenshot::{
-    ScreenshotBackground, ScreenshotCaptureOptions, ScreenshotFormat,
+    ScreenshotBackground, ScreenshotCapture, ScreenshotCaptureOptions, ScreenshotFormat,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::backoff::Backoff;
 use crate::page::screenshot_geometry::{GeometryOptions, Scale, ScreenshotGeometry};
+use crate::page::screenshot_masks::MaskLocator;
 use crate::page::screenshot_preparation::ScreenshotPreparation;
 use crate::page::{OpPage, screenshot_png};
 use crate::probe::Rect;
@@ -52,6 +53,11 @@ pub(crate) struct ScreenshotInput {
     /// JPEG and WebP, 0 to 100.
     #[serde(default)]
     quality: Option<u8>,
+    /// Only caller-selected locators; unrelated page captures never inherit these overlays.
+    #[serde(default)]
+    mask: Vec<MaskLocator>,
+    #[serde(default)]
+    mask_color: Option<String>,
 }
 
 impl ScreenshotInput {
@@ -168,7 +174,16 @@ pub(crate) async fn capture(
                 preparation
                     .wait_for_fonts(&page, scope, target.as_deref())
                     .await?;
-                capture_pixels(pw, &page, scope, &input, target.as_deref(), format).await
+                capture_pixels(
+                    pw,
+                    &page,
+                    scope,
+                    &input,
+                    target.as_deref(),
+                    format,
+                    &mut preparation,
+                )
+                .await
             }
             .await;
             preparation.restore().await;
@@ -204,6 +219,7 @@ async fn capture_pixels(
     input: &ScreenshotInput,
     target: Option<&Target>,
     format: ScreenshotFormat,
+    preparation: &mut ScreenshotPreparation,
 ) -> Result<String, PlaywrightError> {
     let default_viewport = input.target.is_none()
         && !input.full_page
@@ -216,7 +232,7 @@ async fn capture_pixels(
     };
     // The default opaque path needs no layout or utility-world support. Transparent captures
     // use the normalized core path, which owns background isolation from audit captures.
-    if default_viewport && background == ScreenshotBackground::Default {
+    if default_viewport && background == ScreenshotBackground::Default && input.mask.is_empty() {
         return scope
             .view()
             .screenshot(
@@ -269,22 +285,55 @@ async fn capture_pixels(
     if let Some(quality) = input.encoding_quality() {
         params.insert("quality".to_owned(), json!(quality));
     }
-    if format == ScreenshotFormat::Png
-        && let Some(geometry) = geometry.as_ref()
-        && screenshot_png::needs_tiles(geometry)
-    {
+    if !input.mask.is_empty() {
         let capture = scope
             .view()
             .begin_screenshot(page.core_page().clone(), background)
             .await
             .map_err(|error| scope.core_error(&error))?;
-        let data = screenshot_png::capture(&capture, params, geometry, scope).await;
-        capture.finish().await;
-        return data;
+        preparation.hold_capture(capture);
+        preparation
+            .mask(
+                page,
+                scope,
+                &input.mask,
+                input
+                    .mask_color
+                    .as_deref()
+                    .filter(|color| !color.is_empty())
+                    .unwrap_or("#F0F"),
+            )
+            .await?;
+        let capture = preparation.capture().ok_or_else(|| {
+            scope.fail(ErrorCode::Internal, "Screenshot capture lease is missing")
+        })?;
+        return capture_normalized(capture, params, geometry.as_ref(), format, scope).await;
     }
-    scope
+    let capture = scope
         .view()
-        .screenshot_cdp_with_background(page.core_page().clone(), Value::Object(params), background)
+        .begin_screenshot(page.core_page().clone(), background)
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    let data = capture_normalized(&capture, params, geometry.as_ref(), format, scope).await;
+    capture.finish().await;
+    data
+}
+
+async fn capture_normalized(
+    capture: &ScreenshotCapture,
+    params: Map<String, Value>,
+    geometry: Option<&ScreenshotGeometry>,
+    format: ScreenshotFormat,
+    scope: &OpScope<'_>,
+) -> Result<String, PlaywrightError> {
+    if format == ScreenshotFormat::Png
+        && let Some(geometry) = geometry
+        && screenshot_png::needs_tiles(geometry)
+    {
+        return screenshot_png::capture(capture, params, geometry, scope).await;
+    }
+    capture
+        .capture(Value::Object(params))
         .await
         .map_err(|error| scope.core_error(&error))
 }

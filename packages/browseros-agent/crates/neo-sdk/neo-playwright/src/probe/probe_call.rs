@@ -45,9 +45,6 @@ pub(crate) enum ProbeFailure {
     /// The page asset and the crate disagree: a reply this build cannot read, a probe that
     /// threw, a stale asset.
     Broken(String),
-    /// An install's scan for hidden shadow roots missed the frame's budget (`FRAME_BUDGET`).
-    /// A world whose closed roots the seal may not see is not sealed, so the op is refused.
-    Late,
 }
 
 /// Whether a call whose world went away ran there.
@@ -91,6 +88,10 @@ impl Ran {
         if CUT_OFF.iter().any(|cut| message.contains(cut)) {
             Some(Self::Maybe)
         } else if message.contains("No frame for given id found")
+            // Chromium can keep the document's context while retiring its remote handles,
+            // for example across history restoration. Reinstall the probe before a read
+            // retries; the missing receiver guarantees this call ran nothing.
+            || message.contains("Could not find object with given id")
             || is_stale_context(error)
             || matches!(error, CoreError::Cdp(CdpError::SessionGone))
         {
@@ -118,7 +119,6 @@ impl fmt::Display for ProbeFailure {
             Self::Gone(_) => f.write_str("the sealed world's document or session is gone"),
             Self::Cdp(error) => error.fmt(f),
             Self::Broken(why) => f.write_str(why),
-            Self::Late => f.write_str("the frame did not answer Neo's privacy scan in time"),
         }
     }
 }
@@ -376,16 +376,16 @@ mod tests {
 
     #[test]
     fn tests_that_a_call_sends_the_request_then_its_root() -> Result<(), Box<dyn Error>> {
-        let request = ProbeRequest::Focused;
+        let request = ProbeRequest::Describe;
         assert_eq!(
             call_arguments(&request, None)?,
-            [json!({ "value": { "op": "focused" } })],
+            [json!({ "value": { "op": "describe" } })],
             "a call on the world's global sends the request alone"
         );
         assert_eq!(
             call_arguments(&request, Some("node-1"))?,
             [
-                json!({ "value": { "op": "focused" } }),
+                json!({ "value": { "op": "describe" } }),
                 json!({ "objectId": "node-1" }),
             ],
             "an element handle's node follows as the call's root"
@@ -408,6 +408,10 @@ mod tests {
                 Ran::No,
             ),
             (protocol_error("No frame for given id found"), Ran::No),
+            (
+                protocol_error("Could not find object with given id"),
+                Ran::No,
+            ),
             (CoreError::Cdp(CdpError::SessionGone), Ran::No),
             (
                 protocol_error("Inspected target navigated or closed"),

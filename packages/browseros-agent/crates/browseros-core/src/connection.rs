@@ -1,15 +1,12 @@
 use crate::{CoreError, SessionId, TargetError};
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, ObservedEvents};
 use futures_util::future::BoxFuture;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::{
-    fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc};
 
 pub const EXCLUDED_URL_PREFIXES: &[&str] = &[
@@ -262,6 +259,22 @@ impl ProtocolSession {
                 expected: self.connection.connection_epoch(),
                 invalidated: crate::TargetError::CdpUnsupported {
                     method: "credential cancellation".into(),
+                },
+            });
+        }
+        endpoint
+    }
+
+    /// Pin this endpoint to the current websocket incarnation without changing admission.
+    /// Background renderer setup must never publish an old session id onto a new connection.
+    #[must_use]
+    pub fn at_connection_epoch(&self) -> Self {
+        let mut endpoint = self.clone();
+        if endpoint.epoch_guard.is_none() {
+            endpoint.epoch_guard = Some(EpochGuard {
+                expected: self.connection.connection_epoch(),
+                invalidated: crate::TargetError::CdpUnsupported {
+                    method: "renderer initialization".into(),
                 },
             });
         }

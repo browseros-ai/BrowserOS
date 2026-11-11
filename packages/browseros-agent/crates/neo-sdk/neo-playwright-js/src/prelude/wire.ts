@@ -155,10 +155,17 @@ export type EventName =
   | 'popup'
   | 'close'
   | 'dialog'
+  | 'dialogclosed'
   | 'console'
   | 'pageerror'
   | 'download'
   | 'filechooser'
+  | 'load'
+  | 'domcontentloaded'
+  | 'frameattached'
+  | 'framenavigated'
+  | 'framedetached'
+  | 'pageload'
   | 'page'
 
 export type DialogInfo = {
@@ -201,7 +208,24 @@ export type EventRecord = { seq: number; at: number } & (
   | { event: 'popup'; page: PageBrand; popup: PageEntry }
   | { event: 'page'; page: PageBrand; url: string; opener: PageBrand | null }
   | { event: 'close'; page: PageBrand }
+  | {
+      event: 'load' | 'domcontentloaded' | 'pageload'
+      page: PageBrand
+      frame: FrameInfo
+    }
+  | {
+      event: 'frameattached' | 'framenavigated' | 'framedetached'
+      page: PageBrand
+      frame: FrameInfo
+      context: boolean
+    }
   | { event: 'dialog'; page: PageBrand; dialog: DialogInfo }
+  | {
+      event: 'dialogclosed'
+      page: PageBrand
+      dialog: DialogInfo
+      context: boolean
+    }
   | { event: 'console'; page: PageBrand; message: ConsoleInfo }
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
   | { event: 'download'; page: PageBrand; download: DownloadInfo }
@@ -262,6 +286,12 @@ export type ElementStateName =
  * ready to run, or the message of the server-side check upstream fails first, which Rust raises
  * at its point with nothing sent.
  */
+/**
+ * An init script's source as upstream's client builds it (`evaluationScript`), or the path of a
+ * file on Neo's disk that Rust reads as upstream's client reads it, `//# sourceURL` appended.
+ */
+export type InitSource = { source: string } | { path: string }
+
 export type PageScript =
   | {
       run: {
@@ -287,6 +317,9 @@ export type ScreenshotOptions = {
   quality?: number
   fullPage?: boolean
   clip?: Rect
+  /** Only the locators the caller explicitly asks to cover. */
+  mask?: LocatorBrand[]
+  maskColor?: string
 }
 
 /** `page.pdf`'s options with upstream's names, sizes and margins already in CSS units. */
@@ -426,6 +459,13 @@ export type OpInputs = {
   'page.waitForLoadState': FrameArgs & { state: LoadState }
   'page.title': FrameArgs
   'page.content': FrameArgs
+  'page.emulateMedia': PageArgs & {
+    media?: string
+    colorScheme?: string
+    reducedMotion?: string
+    forcedColors?: string
+    contrast?: string
+  }
   'page.addScriptTag': FrameArgs & {
     url?: string
     path?: string
@@ -460,11 +500,17 @@ export type OpInputs = {
     strict?: Strictness
   } & ScreenshotOptions
   'page.pdf': PageArgs & PdfOptions
+  /** The client-side save step, on Neo's filesystem and without a browser target. */
+  'page.saveScreenshot': { path: string; base64: string }
   'page.setViewportSize': PageArgs & {
     viewportSize: { width: number; height: number }
   }
+  'page.addInitScript': PageArgs & { script: InitSource }
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
+  'context.addInitScript': { script: InitSource }
+  /** The id an `addInitScript` returned. */
+  'disposable.dispose': { id: number }
   /**
    * `since` is the script's `Date.now()` when it attached the listener (or removed it). The
    * event ops name no target the door resolves, so their page always has its tab: the
@@ -565,6 +611,7 @@ export type OpOutputs = {
   'page.waitForLoadState': NavigationResult | null
   'page.title': string
   'page.content': string
+  'page.emulateMedia': null
   'page.addScriptTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.addStyleTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.setContent': NavigationResult | null
@@ -579,11 +626,16 @@ export type OpOutputs = {
   'page.waitForFunction': { value: SerializedValue; preview: string }
   'locator.waitForFunction': null
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
-  'page.screenshot': unknown
+  'page.screenshot': Uint8Array
+  'page.saveScreenshot': null
   'page.pdf': unknown
   'page.setViewportSize': Done
+  /** The id `disposable.dispose` takes. */
+  'page.addInitScript': { id: number }
   'context.pages': { pages: PageEntry[] }
   'context.newPage': PageEntry
+  'context.addInitScript': { id: number }
+  'disposable.dispose': Done
   'events.listen': Done
   'events.next': Pumped
   'events.wait': EventRecord
