@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use browseros_core::TargetId;
+use browseros_core::{FrameId, TargetId};
 use serde::Serialize;
 
 use crate::events::event_hub::EventRecord;
@@ -13,6 +13,7 @@ use crate::events::frame_lifecycle::{EventFrame, FrameLifecycle};
 use crate::events::page_event::{
     DialogId, DialogOpened, Location, OpenedPage, PageEvent, WindowKind,
 };
+use crate::events::run_events::QueuedCall;
 use crate::events::{PageEventKind, Subscription};
 use crate::op_scope::OpScope;
 use crate::page::PageHandle;
@@ -117,6 +118,17 @@ enum Payload {
     FileChooser {
         page: PageHandle,
         chooser: FileChooser,
+    },
+    /// A call of a binding the run exposed: the stub's JSON `payload`, the execution context to
+    /// answer it in (`bindingCall.resolve`), and that context's frame, `null` for the main frame
+    /// or a frame the watcher did not see made. Named `executionContext`, not `context`, which the
+    /// prelude reads as a context-level event's flag.
+    #[serde(rename = "binding", rename_all = "camelCase")]
+    Binding {
+        page: PageHandle,
+        frame: Option<FrameId>,
+        execution_context: i64,
+        payload: String,
     },
 }
 
@@ -416,35 +428,6 @@ async fn ordinary_payload(
             scope.report_close(page.tab(), target, seq);
             Payload::Close { page }
         }
-        (PageEvent::Dialog(dialog), Some(page)) => Payload::Dialog {
-            page,
-            dialog: dialog_info(dialog),
-        },
-        (PageEvent::Console(message), Some(page)) => Payload::Console {
-            page,
-            message: ConsoleMessage {
-                kind: message.kind.clone(),
-                text: message.text.clone(),
-                location: message.location.clone(),
-                timestamp: message.timestamp,
-            },
-        },
-        (PageEvent::PageError(error), Some(page)) => Payload::PageError {
-            page,
-            error: PageError {
-                name: error.name.clone(),
-                message: error.message.clone(),
-                stack: error.stack.clone(),
-            },
-        },
-        (PageEvent::Download(download), Some(page)) => Payload::Download {
-            page,
-            download: Download {
-                id: download.guid.clone(),
-                url: download.url.clone(),
-                suggested_filename: download.suggested_filename.clone(),
-            },
-        },
         (PageEvent::FileChooser(opened), Some(page)) => {
             // World installation is a large future; keep it off every event reader's stack.
             let Some(chooser) = Box::pin(FileChooser::adopt(pw, scope, &page, opened)).await?
@@ -453,27 +436,80 @@ async fn ordinary_payload(
             };
             Payload::FileChooser { page, chooser }
         }
-        // Navigation waiters consume loader facts; public lifecycles were handled above.
-        (
-            PageEvent::Navigation(_)
-            | PageEvent::FrameDetached(_)
-            | PageEvent::FrameSwapped(_)
-            | PageEvent::FrameLifecycle(_)
-            | PageEvent::DialogClosed(_)
-            | PageEvent::Load { .. },
-            _,
-        )
-        | (
-            PageEvent::Closed(_)
-            | PageEvent::Dialog(_)
-            | PageEvent::Console(_)
-            | PageEvent::PageError(_)
-            | PageEvent::Download(_)
-            | PageEvent::FileChooser(_),
-            None,
-        ) => return Ok(None),
+        (event, Some(page)) => match plain(event, page) {
+            Some(payload) => payload,
+            None => return Ok(None),
+        },
+        // The context receives only new tabs.
+        (_, None) => return Ok(None),
     };
     Ok(Some(payload))
+}
+
+/// A queued binding call as the pump hands it to the prelude.
+pub(crate) fn binding_call(queued: QueuedCall) -> Delivered {
+    let QueuedCall {
+        seq,
+        at_ms,
+        tab,
+        call,
+    } = queued;
+    Delivered {
+        seq,
+        at: at_ms,
+        payload: Payload::Binding {
+            page: PageHandle::new(tab),
+            frame: call.frame,
+            execution_context: call.context,
+            payload: call.payload,
+        },
+    }
+}
+
+/// The payload of an event a page listener receives as recorded, with nothing to look up:
+/// `None` for the internal navigation facts, and for the events [`deliver`] builds itself
+/// (lifecycles, new tabs, closes, choosers) or drops.
+fn plain(event: &PageEvent, page: PageHandle) -> Option<Payload> {
+    Some(match event {
+        PageEvent::Dialog(dialog) => Payload::Dialog {
+            page,
+            dialog: dialog_info(dialog),
+        },
+        PageEvent::Console(message) => Payload::Console {
+            page,
+            message: ConsoleMessage {
+                kind: message.kind.clone(),
+                text: message.text.clone(),
+                location: message.location.clone(),
+                timestamp: message.timestamp,
+            },
+        },
+        PageEvent::PageError(error) => Payload::PageError {
+            page,
+            error: PageError {
+                name: error.name.clone(),
+                message: error.message.clone(),
+                stack: error.stack.clone(),
+            },
+        },
+        PageEvent::Download(download) => Payload::Download {
+            page,
+            download: Download {
+                id: download.guid.clone(),
+                url: download.url.clone(),
+                suggested_filename: download.suggested_filename.clone(),
+            },
+        },
+        PageEvent::Navigation(_)
+        | PageEvent::FrameDetached(_)
+        | PageEvent::FrameSwapped(_)
+        | PageEvent::FrameLifecycle(_)
+        | PageEvent::DialogClosed(_)
+        | PageEvent::Load { .. }
+        | PageEvent::Opened(_)
+        | PageEvent::Closed(_)
+        | PageEvent::FileChooser(_) => return None,
+    })
 }
 
 /// Opening and closing share one protocol representation and one client Dialog identity.

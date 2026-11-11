@@ -346,6 +346,7 @@
         "playwright": "1.64.1",
         "playwright-core": "1.64.1",
         "pngjs": "7.0.0",
+        "yaml": "2.9.1",
       },
     },
     "crates/neo-sdk/neo-service": {

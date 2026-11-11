@@ -132,6 +132,16 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       },
     },
     { op: 'edit', pin: 3, edit: { kind: 'setFiles', payloads: [] } },
+    {
+      op: 'edit',
+      pin: 3,
+      edit: {
+        kind: 'drop',
+        payloads: [],
+        data: [{ mimeType: 'text/plain', value: 'external' }],
+        point: { x: 20, y: 30 },
+      },
+    },
   ],
   read: [
     {

@@ -24,7 +24,7 @@ export const verdicts = [
   'skip',
 ]
 
-export function normalizeSuite(file, corpus = []) {
+function normalizeSuite(file, corpus = []) {
   const normalized = file.replaceAll('\\', '/').replace(/^\.\//, '')
   const candidates = corpus
     .map((suite) => (typeof suite === 'string' ? suite : suite.file))

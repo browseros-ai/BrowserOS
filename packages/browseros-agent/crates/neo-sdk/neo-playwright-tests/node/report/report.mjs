@@ -337,7 +337,7 @@ function readRun(directory, mode) {
   return { directory: path.resolve(directory), metadata, results }
 }
 
-export function main(args = process.argv.slice(2)) {
+function main(args = process.argv.slice(2)) {
   const { values } = parseArgs({
     args,
     options: {

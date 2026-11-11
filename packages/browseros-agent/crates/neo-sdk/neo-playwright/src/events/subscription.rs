@@ -22,6 +22,9 @@ listed_enum! {
         FrameAttached,
         FrameNavigated,
         FrameDetached,
+        /// A page's call of a binding the run exposed (`exposeBinding`). Not one of
+        /// Playwright's events: only the run's own binding ops listen for it.
+        Binding,
     }
 }
 
@@ -37,6 +40,7 @@ impl PageEventKind {
             Self::PageError => "pageerror",
             Self::Download => "download",
             Self::FileChooser => "filechooser",
+            Self::Binding => "binding",
             Self::Load => "load",
             Self::DomContentLoaded => "domcontentloaded",
             Self::FrameAttached => "frameattached",
@@ -60,7 +64,11 @@ impl PageEventKind {
     /// The kind Playwright calls `name`. A page event Neo does not report gets a hint, so the
     /// script learns what to use instead of waiting for nothing.
     pub(crate) fn parse(name: &str) -> Result<Self, Unknown> {
-        if let Some(kind) = Self::ALL.iter().copied().find(|kind| kind.name() == name) {
+        if let Some(kind) = Self::ALL
+            .iter()
+            .copied()
+            .find(|kind| *kind != Self::Binding && kind.name() == name)
+        {
             return Ok(kind);
         }
         let hint = match name {
@@ -150,7 +158,15 @@ mod tests {
     #[test]
     fn tests_that_every_kind_parses_from_its_playwright_name() {
         for kind in PageEventKind::ALL {
-            assert_eq!(PageEventKind::parse(kind.name()), Ok(*kind));
+            if *kind == PageEventKind::Binding {
+                assert_eq!(
+                    PageEventKind::parse(kind.name()),
+                    Err(Unknown::NotAnEvent),
+                    "binding calls are no event a script listens for"
+                );
+            } else {
+                assert_eq!(PageEventKind::parse(kind.name()), Ok(*kind));
+            }
         }
     }
 

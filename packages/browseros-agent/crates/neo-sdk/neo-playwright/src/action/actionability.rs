@@ -12,6 +12,7 @@ pub(crate) enum PointerKind {
     Click,
     Dblclick,
     Hover,
+    Drop,
     /// `dragTo`'s first half, upstream's `move and down` on the source.
     DragSource,
     /// `dragTo`'s second half, upstream's `move and up` on the target.
@@ -69,6 +70,12 @@ pub(crate) const fn requirements(kind: PointerKind) -> Requirements {
             name: "dblclick",
             retarget: Retarget::ButtonLink,
             states: &[Visible, Enabled],
+            hit: HitAction::Mouse,
+        },
+        PointerKind::Drop => Requirements {
+            name: "drop",
+            retarget: Retarget::ButtonLink,
+            states: &[Visible],
             hit: HitAction::Mouse,
         },
         PointerKind::Hover => Requirements {

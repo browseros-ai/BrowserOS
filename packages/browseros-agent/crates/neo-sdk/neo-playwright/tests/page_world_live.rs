@@ -1120,6 +1120,52 @@ async fn tests_that_frame_wait_for_url_follows_its_frame_out_of_process() -> Tes
                 "it waited for the navigation, {:?}",
                 started.elapsed()
             );
+            // Keep the same Frame through both directions of a renderer handoff. A route
+            // cached by the previous wait must not keep naming its retired OOPIF session.
+            for (host, path) in [("127.0.0.1", "filled.html"), ("[::1]", "moved.html")] {
+                run.eval(
+                    &page,
+                    &format!(
+                        "setTimeout(() => {{ document.querySelector('iframe[name=same]').src = \
+                         `http://{host}:${{location.port}}/{path}`; }}, 100), true"
+                    ),
+                )
+                .await?;
+                let waited = frame_wait_for_url(&run, &page, &same, &format!("**/{path}")).await?;
+                assert!(
+                    waited["url"]
+                        .as_str()
+                        .is_some_and(|url| url.starts_with(&format!("http://{host}:"))),
+                    "the same frame followed its current renderer: {waited}"
+                );
+            }
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_url_wait_rejects_when_its_page_closes() -> TestResult {
+    on_page("/login.html", |run, _server, page| async move {
+        let result = async {
+            // Both native operations retain state while pending; box the wait before joining.
+            let waiting = Box::pin(run.invoke(
+                "page.waitForURL",
+                json!({ "call": { "timeoutMs": 2000 }, "page": brand(&page),
+                        "url": { "glob": "**/never" }, "waitUntil": "load" }),
+            ));
+            let (waited, closed) = tokio::join!(waiting, async {
+                time::sleep(Duration::from_millis(50)).await;
+                run.invoke("page.close", json!({ "page": brand(&page) }))
+                    .await
+            });
+            closed?;
+            let error = waited.err().ok_or("a closed page must reject its wait")?;
+            assert_eq!(error.error_code(), Some(ErrorCode::TargetClosed));
             Ok(())
         }
         .await;

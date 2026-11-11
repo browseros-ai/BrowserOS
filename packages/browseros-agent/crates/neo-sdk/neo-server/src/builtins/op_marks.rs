@@ -300,6 +300,7 @@ mod tests {
             placement: Served,
         };
         let expected = vec![
+            served("locator.drop", &[HostFiles]),
             served("locator.setInputFiles", &[HostFiles]),
             served("page.setContent", &[MainWorld]),
             served("page.addScriptTag", &[MainWorld, HostFiles]),
@@ -310,7 +311,10 @@ mod tests {
             served("page.waitForFunction", &[MainWorld]),
             served("locator.waitForFunction", &[MainWorld]),
             served("page.addInitScript", &[MainWorld, HostFiles]),
+            served("page.exposeBinding", &[MainWorld]),
+            served("bindingCall.resolve", &[MainWorld]),
             served("context.addInitScript", &[MainWorld, HostFiles]),
+            served("context.exposeBinding", &[MainWorld]),
         ];
         let placed: Vec<Row> = Op::all()
             .map(Op::spec)
@@ -496,6 +500,24 @@ mod tests {
             proves: Proves::Served,
         },
         BrowserosCase {
+            op: "page.exposeBinding",
+            file: "init_scripts_browseros.rs",
+            test: "pages_call_back_into_the_script_until_the_run_ends",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "context.exposeBinding",
+            file: "init_scripts_browseros.rs",
+            test: "pages_call_back_into_the_script_until_the_run_ends",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "bindingCall.resolve",
+            file: "init_scripts_browseros.rs",
+            test: "pages_call_back_into_the_script_until_the_run_ends",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
             op: "page.evaluate",
             file: "main_world_browseros.rs",
             test: "page_evaluate_behaves_as_playwright_on_browseros",
@@ -535,6 +557,12 @@ mod tests {
             op: "page.setContent",
             file: "main_world_browseros.rs",
             test: "set_content_behaves_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "locator.drop",
+            file: "drop_browseros.rs",
+            test: "external_drop_preserves_files_and_mime_data",
             proves: Proves::Served,
         },
         BrowserosCase {
