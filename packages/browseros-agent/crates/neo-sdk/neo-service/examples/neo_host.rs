@@ -24,9 +24,8 @@
 //!   write on that same tab, each time the answer changes: `allowed`, or `refused by <lock>`.
 //!   It stands in for the dispatcher, which would refuse the agent's next click there.
 //! - `--surface-calls`: also serves test-only calls under `/surface`, behind the same auth.
-//!   `POST /surface/runs <json>` records a run with that result (`{"runId"}`, committed when it answers) so a mask can be read back from
-//!   `/v1/runs/{id}`, and `GET /surface/secrets` counts the secret set, in all and by source
-//!   (`{"count", "host", "owner", "agent", "page"}`).
+//!   `POST /surface/runs <json>` records a run with that result (`{"runId"}`, committed when it
+//!   answers), which can be read back from `/v1/runs/{id}`.
 //!   `POST /surface/paint-run {"tab": N, "colors": [[r, g, b], ..], "busyMs": n}` records one
 //!   run of real writes on tab N, each repainting the page in its color with its number in
 //!   large type. A write waits for the screenshot of the one before, so no picture can show a
