@@ -183,7 +183,7 @@ export class Page extends EventEmitter {
   }
 
   url(): string {
-    return this._url
+    return this._mainFrame.url()
   }
 
   isClosed(): boolean {

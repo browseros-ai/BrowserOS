@@ -156,6 +156,10 @@ export class EventHub {
   private readonly chooserListeners = new Map<Page, ChooserLease>()
   /** Preserve synchronous on/off order even when native interception setup is asynchronous. */
   private readonly chooserChanges = new Map<Page, Promise<void>>()
+  /** Native context observation setup must not let a later off overtake its on. */
+  private readonly contextChanges = new Map<EventName, Promise<void>>()
+  /** A returning old pump cannot deliver into a context listener's replacement period. */
+  private readonly contextSince = new Map<EventName, number>()
 
   constructor(owner: EventOwner) {
     this.owner = owner
@@ -169,7 +173,15 @@ export class EventHub {
   listen(page: Page | null, event: EventName, on: boolean): void {
     const since = Date.now()
     this.listening += on ? 1 : -1
-    if (event === 'filechooser' && page) {
+    if (page === null) {
+      if (on) this.contextSince.set(event, since)
+      else this.contextSince.delete(event)
+      const previous = this.contextChanges.get(event) ?? Promise.resolve()
+      const changed = previous.then(() =>
+        this.sendListen(null, event, on, since),
+      )
+      this.contextChanges.set(event, changed)
+    } else if (event === 'filechooser') {
       const lease = on ? this.intercept(page) : this.chooserListeners.get(page)
       if (on && lease) this.chooserListeners.set(page, lease)
       else this.chooserListeners.delete(page)
@@ -282,11 +294,14 @@ export class EventHub {
       } finally {
         this.settleCloses(observed)
       }
-      if (!options.predicate) return value
+      const predicate = options.predicate
+      if (!predicate) return value
       let accepted: unknown
       try {
         accepted = await deadline.race(
-          Reflect.apply(options.predicate, undefined, [value]),
+          this.duringEvent(record, () =>
+            Reflect.apply(predicate, undefined, [value]),
+          ),
         )
       } catch (error) {
         throw prefixed(api, error)
@@ -420,6 +435,16 @@ export class EventHub {
   }
 
   private deliver(record: EventRecord, observed: Observation | null): void {
+    const context =
+      record.event === 'page' ||
+      record.event === 'pageload' ||
+      ('context' in record && record.context)
+    if (
+      context &&
+      typeof record.at === 'number' &&
+      record.at < (this.contextSince.get(record.event) ?? Infinity)
+    )
+      return
     switch (record.event) {
       case 'popup':
         this.page(record.page).emit(
@@ -434,13 +459,13 @@ export class EventHub {
       case 'domcontentloaded': {
         const page = this.page(record.page)
         page._eventFrame(record.seq, 'framenavigated', record.frame)
-        page.emit(record.event, page)
+        this.duringEvent(record, () => page.emit(record.event, page))
         return
       }
       case 'pageload': {
         const page = this.page(record.page)
         page._eventFrame(record.seq, 'framenavigated', record.frame)
-        this.owner.emit('pageload', page)
+        this.duringEvent(record, () => this.owner.emit('pageload', page))
         return
       }
       case 'frameattached':
@@ -449,7 +474,9 @@ export class EventHub {
         const page = this.page(record.page)
         const frame = page._eventFrame(record.seq, record.event, record.frame)
         const emitter = record.context ? this.owner : page
-        emitter.emit(record.event, frame)
+        frame._duringEvent(record.frame, record.event, () =>
+          emitter.emit(record.event, frame),
+        )
         return
       }
       case 'close':
@@ -486,6 +513,30 @@ export class EventHub {
         page.emit('filechooser', this.chooser(record.seq, page, record.chooser))
         return
       }
+    }
+  }
+
+  /** Invocation-time metadata is separate from the canonical object's newest cached state. */
+  private duringEvent<T>(record: EventRecord, read: () => T): T {
+    switch (record.event) {
+      case 'frameattached':
+      case 'framenavigated':
+      case 'framedetached': {
+        const frame = this.page(record.page)._eventFrame(
+          record.seq,
+          record.event,
+          record.frame,
+        )
+        return frame._duringEvent(record.frame, record.event, read)
+      }
+      case 'load':
+      case 'domcontentloaded':
+      case 'pageload':
+        return this.page(record.page)
+          .mainFrame()
+          ._duringEvent(record.frame, 'framenavigated', read)
+      default:
+        return read()
     }
   }
 

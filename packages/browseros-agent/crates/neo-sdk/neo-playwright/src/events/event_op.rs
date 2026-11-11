@@ -252,12 +252,9 @@ async fn subscription(
             })
         }
         None if event == "page" => Ok(Subscription::ContextPage),
-        None if PageEventKind::context(event).is_some() => {
-            observe_context(scope).await?;
-            Ok(Subscription::Context(
-                PageEventKind::context(event).ok_or_else(|| context_event(scope, event))?,
-            ))
-        }
+        None if PageEventKind::context(event).is_some() => Ok(Subscription::Context(
+            PageEventKind::context(event).ok_or_else(|| context_event(scope, event))?,
+        )),
         None => Err(context_event(scope, event)),
     }
 }
@@ -324,8 +321,14 @@ async fn listen(
     let since = input.since.unwrap_or_else(now_ms);
     let hub = pw.events();
     hub.bind(run);
+    let observes_context = matches!(subscription, Subscription::Context(_));
     run.events
         .listen(subscription, since, hub.position_at(since));
+    // Register before asynchronous observation setup: an off arriving during setup removes
+    // the actual listener and cannot be undone when this on finishes.
+    if observes_context {
+        observe_context(scope).await?;
+    }
     // A pump that already read past an event this listener should get reads again.
     hub.wake();
     Ok(json!({}))
@@ -344,11 +347,22 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
         let mut lost = 0;
         let mut read_up_to = Vec::new();
         let mut tabs = Tabs::default();
-        for (subscription, listening) in run.events.listeners() {
-            let read = hub.read_after(listening.after);
-            lost += read.lost;
+        let listeners = run.events.listeners();
+        let after = listeners
+            .iter()
+            .map(|(_, listening)| listening.after)
+            .min()
+            .unwrap_or_else(|| hub.head());
+        // All audiences share one journal cut. Appends during a tab lookup belong to the
+        // next batch for everyone, so page/context mirrors cannot split across batches.
+        let read = hub.read_after(after);
+        for (subscription, listening) in listeners {
+            lost += read
+                .lost
+                .saturating_sub(listening.after.saturating_sub(after));
             for record in &read.records {
-                if receives(&subscription, listening.since_ms, record)
+                if record.seq > listening.after
+                    && receives(&subscription, listening.since_ms, record)
                     && let Some(event) = deliver(
                         pw,
                         scope,
@@ -387,6 +401,9 @@ async fn wait(
     pw.events().bind(run);
     // While it waits, the watcher records and holds what this wait could receive.
     let _waiting = run.events.waiting(subscription.clone());
+    if matches!(subscription, Subscription::Context(_)) {
+        observe_context(scope).await?;
+    }
     let found = first_event(
         pw,
         scope,

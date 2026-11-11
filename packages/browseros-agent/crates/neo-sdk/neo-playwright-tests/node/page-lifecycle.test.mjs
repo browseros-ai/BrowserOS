@@ -132,6 +132,8 @@ test('lifecycle events preserve existing and new frame identity', {
     assert.equal(frame.parentFrame(), page.mainFrame())
     record('page and context receive the same attached Frame')
 
+    const onNavigation = () => {}
+    page.on('framenavigated', onNavigation)
     const navigated = page.waitForEvent('framenavigated', {
       timeout: 3000,
       predicate: (candidate) => candidate.url().endsWith('#target'),
@@ -139,9 +141,13 @@ test('lifecycle events preserve existing and new frame identity', {
     await page.evaluate(() => {
       history.pushState({}, '', '#ignored')
       history.pushState({}, '', '#target')
+      history.pushState({}, '', '#later')
     })
     assert.equal(await navigated, page.mainFrame())
-    record('navigation predicates see transient same-document URLs')
+    page.off('framenavigated', onNavigation)
+    record(
+      'navigation predicates see transient same-document URLs while a listener pumps events',
+    )
 
     const loaded = page.waitForEvent('load', { timeout: 3000 })
     const contextLoaded = sdk.context.waitForEvent('pageload', {

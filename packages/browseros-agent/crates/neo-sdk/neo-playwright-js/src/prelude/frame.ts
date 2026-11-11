@@ -179,6 +179,8 @@ export class Frame extends EventEmitter {
   _url = ''
   _parentFrame: Frame | null
   _detached = false
+  /** An event's synchronous callback sees its metadata without rewinding the live cache. */
+  #eventView: { info: FrameInfo; detached: boolean } | null = null
 
   constructor(page: Page, id: string | null, parent: Frame | null) {
     super()
@@ -193,11 +195,33 @@ export class Frame extends EventEmitter {
   }
 
   name(): string {
-    return this._name
+    return this.#eventView?.info.name ?? this._name
   }
 
   url(): string {
-    return this._id === null ? this._page._url : this._url
+    return (
+      this.#eventView?.info.url ??
+      (this._id === null ? this._page._url : this._url)
+    )
+  }
+
+  /**
+   * Different readers can receive one journal record after a newer transition. Callbacks and
+   * predicate invocation still read that record's fields on the canonical Frame. The view ends
+   * before awaiting an async callback, whose continuation sees live state as in Playwright.
+   */
+  _duringEvent<T>(
+    info: FrameInfo,
+    event: 'frameattached' | 'framenavigated' | 'framedetached',
+    read: () => T,
+  ): T {
+    const previous = this.#eventView
+    this.#eventView = { info, detached: event === 'framedetached' }
+    try {
+      return read()
+    } finally {
+      this.#eventView = previous
+    }
   }
 
   parentFrame(): Frame | null {
@@ -209,7 +233,7 @@ export class Frame extends EventEmitter {
   }
 
   isDetached(): boolean {
-    return this._detached
+    return this.#eventView?.detached ?? this._detached
   }
 
   toJSON(): { name: string; url: string } {

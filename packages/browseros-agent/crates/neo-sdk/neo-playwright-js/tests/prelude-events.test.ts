@@ -702,3 +702,109 @@ it('does not let an older frame event resurrect a frame or replace a newer URL',
     ),
   ).toEqual({ gone: true, url: 'https://new.test/' })
 })
+
+it('checks each navigation predicate against its event when the pump has advanced', async () => {
+  let push: ((value: unknown) => void) | undefined
+  let candidate: ((value: unknown) => void) | undefined
+  let pulls = 0
+  const record = (seq: number, url: string) => ({
+    seq,
+    at: Date.now(),
+    event: 'framenavigated',
+    page: brand(7),
+    context: false,
+    frame: { id: 'main', parentId: null, name: '', url },
+  })
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      if (call.name === 'events.next') {
+        pulls++
+        return new Promise((resolve) => {
+          push = resolve
+        })
+      }
+      if (call.name === 'events.wait')
+        return new Promise((resolve) => {
+          candidate = resolve
+        })
+      return null
+    },
+  })
+  const pending = runtime.run(`
+    const callbacks = []
+    let matched
+    page.on('framenavigated', frame => callbacks.push(frame.url()))
+    const frame = await page.waitForEvent('framenavigated', { timeout: 1000, predicate: frame => { matched = frame.url(); return matched.endsWith('#target') } })
+    return { callbacks, matched, same: frame === page.mainFrame(), latest: page.url() }
+  `)
+  await eventually(() => push !== undefined && candidate !== undefined)
+  const first = record(21, 'https://a.test/#target')
+  push?.({ events: [first, record(22, 'https://a.test/#later')], lost: 0 })
+  await eventually(() => pulls === 2)
+  candidate?.(first)
+  expect(json(await pending)).toEqual({
+    callbacks: ['https://a.test/#target', 'https://a.test/#later'],
+    matched: 'https://a.test/#target',
+    same: true,
+    latest: 'https://a.test/#later',
+  })
+})
+
+it('orders context on/off around async setup and rejects an old pump period', async () => {
+  let finishSetup: (() => void) | undefined
+  let push: ((value: unknown) => void) | undefined
+  let pulls = 0
+  const changes: unknown[] = []
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      if (call.name === 'events.listen') {
+        changes.push(call.input.on)
+        if (changes.length === 1)
+          return new Promise<void>((resolve) => {
+            finishSetup = resolve
+          })
+      }
+      if (call.name === 'events.next') {
+        pulls++
+        return new Promise((resolve) => {
+          push = resolve
+        })
+      }
+      return null
+    },
+  })
+  let done = false
+  const pending = runtime
+    .run(`
+    const old = () => { throw new Error('removed listener fired') }
+    context.on('pageload', old)
+    context.off('pageload', old)
+    return await new Promise(resolve => context.once('pageload', value => resolve(value === page && value.url())))
+  `)
+    .then((value) => {
+      done = true
+      return value
+    })
+  await eventually(() => finishSetup !== undefined && push !== undefined)
+  expect(changes).toEqual([true])
+  finishSetup?.()
+  await eventually(() => changes.length >= 3)
+  expect(changes.slice(0, 3)).toEqual([true, false, true])
+  const load = (seq: number, at: number, url: string) => ({
+    seq,
+    at,
+    event: 'pageload',
+    page: brand(7),
+    frame: { id: 'main', parentId: null, name: '', url },
+  })
+  push?.({
+    events: [load(30, Date.now() - 1000, 'https://old.test/')],
+    lost: 0,
+  })
+  await eventually(() => pulls === 2)
+  expect(done).toBe(false)
+  push?.({ events: [load(31, Date.now(), 'https://new.test/')], lost: 0 })
+  expect(await pending).toBe('https://new.test/')
+})
