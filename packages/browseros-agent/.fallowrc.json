@@ -17,6 +17,7 @@
     "scripts/patch-windows-exe.ts",
     "crates/neo-sdk/neo-server/src/runtime/js/abort_globals.js",
     "crates/neo-sdk/neo-playwright-tests/node/filechooser-lifetime.test.mjs",
+    "crates/neo-sdk/neo-playwright-tests/node/child-frame-goto.test.mjs",
     "packages/agent-cursor/src/index.ts",
     "packages/agent-cursor/scripts/classic-entry.ts",
     "crates/neo-sdk/neo-server/conformance/conformance.mjs",

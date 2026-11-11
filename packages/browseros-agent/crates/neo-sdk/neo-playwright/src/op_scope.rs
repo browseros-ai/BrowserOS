@@ -129,7 +129,13 @@ impl<'env> OpScope<'env> {
 
     /// Carries delivered-close evidence to the host before the operation returns its value.
     pub(crate) fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
+        self.run_state().frames.forget(tab);
         self.env.report_close(tab, target, seq);
+    }
+
+    /// Carries a page event's possible URL change to hosts that keep synchronous page facts.
+    pub(crate) fn report_navigation(&self, tab: TabId) {
+        self.env.report_navigation(tab);
     }
 
     /// Resolves a native tab in core's cache, listing once only on a miss, then performs the
@@ -177,6 +183,13 @@ impl<'env> OpScope<'env> {
         let session = self
             .view()
             .page_session(info.page_id.clone())
+            .await
+            .map_err(|error| self.core_error(&error))?;
+        // Raw SDK calls bypass core's operation leases. Recover an interrupted earlier
+        // resize here, before any page read can observe its rejected metrics. This path
+        // takes no lease when the viewport is already applied and leaves dialogs usable.
+        self.view()
+            .repair_viewport(&info.page_id, &session)
             .await
             .map_err(|error| self.core_error(&error))?;
         Ok(Some(AdmittedPage {
@@ -336,7 +349,12 @@ impl<'env> OpScope<'env> {
 
     /// A core or CDP failure the leaf could not recover from, as one of the crate's codes.
     pub(crate) fn core_error(&self, error: &CoreError) -> PlaywrightError {
-        self.fail(ErrorCode::from_core(error), &error.to_string())
+        let code = ErrorCode::from_core(error);
+        if code == ErrorCode::TargetClosed {
+            self.fail(code, "Target page, context or browser has been closed")
+        } else {
+            self.fail(code, &error.to_string())
+        }
     }
 
     /// `neo / internal`: this op's leaf is not built yet.

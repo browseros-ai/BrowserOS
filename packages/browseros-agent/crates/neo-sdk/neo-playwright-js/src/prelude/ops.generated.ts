@@ -178,6 +178,11 @@ export const OPS = {
     target: 'target',
     lifetime: 'operation',
   },
+  'locator.normalize': {
+    effect: 'read',
+    target: 'target',
+    lifetime: 'operation',
+  },
   'page.ariaSnapshot': {
     effect: 'read',
     target: 'page',
@@ -345,6 +350,11 @@ export const OPS = {
   },
   'page.pdf': {
     effect: 'read',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'page.setViewportSize': {
+    effect: 'write',
     target: 'page',
     lifetime: 'operation',
   },

@@ -6,6 +6,9 @@
 //!   then `Target.setDiscoverTargets` on the root session (nothing in core sends it) and
 //!   `Browser.setDownloadBehavior { behavior: 'default', eventsEnabled }` (what core's own
 //!   download tool sends), so downloads keep Chrome's destination and report events.
+//! - **Downloads.** `Browser.downloadWillBegin` lists the download in the hub's download table
+//!   before the `download` record names it, so an op handed that record always finds it there;
+//!   `Browser.downloadProgress` reports how it ended, with the saved file's path.
 //! - **New tabs.** `Target.targetCreated` has no URL yet (measured, every popup kind), so a tab
 //!   is recorded once `Target.targetInfoChanged` gives it one, or after 1 s with `about:blank`.
 //!   A tab with an opener is a popup: a short task looks up its window type first, so a popup
@@ -244,6 +247,16 @@ struct DownloadParams {
     suggested_filename: String,
 }
 
+/// `Browser.downloadProgress`. `filePath` comes with `completed` only.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProgressParams {
+    guid: String,
+    state: String,
+    #[serde(default)]
+    file_path: Option<String>,
+}
+
 impl Watcher {
     fn new(
         browser: Arc<BrowserSession>,
@@ -396,9 +409,7 @@ impl Watcher {
                 if let Some(session) = &session_id {
                     self.frame_lifecycle(&method, session, &params).await;
                 }
-                if let Some(navigation) = navigation_event::parse(&method, params) {
-                    self.writer.record(navigation);
-                }
+                self.navigated(&method, session_id.as_ref(), params).await;
             }
             "Target.targetCreated" => {
                 if let Some(TargetEvent { target_info }) = parse(params) {
@@ -484,6 +495,7 @@ impl Watcher {
                     self.download(download);
                 }
             }
+            "Browser.downloadProgress" => self.download_progress(params),
             _ => {}
         }
     }
@@ -607,6 +619,26 @@ impl Watcher {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Records a frame's navigation or removal, and marks a tab's main-frame navigation for the
+    /// host's URL facts (`EventWriter::main_frame_navigated`). A tab's main frame has the tab's
+    /// target id; an out-of-process frame's has its own.
+    async fn navigated(&mut self, method: &str, session: Option<&SessionId>, params: Value) {
+        let Some(navigation) = navigation_event::parse(method, params) else {
+            return;
+        };
+        let main_of = match (&navigation, session) {
+            (PageEvent::Navigation(event), Some(session)) => self
+                .target_of(session)
+                .await
+                .filter(|tab| tab.as_str() == event.frame.as_str()),
+            _ => None,
+        };
+        let seq = self.writer.record(navigation);
+        if let Some(tab) = main_of {
+            self.writer.main_frame_navigated(tab, seq);
         }
     }
 
@@ -740,6 +772,21 @@ impl Watcher {
         });
     }
 
+    /// How a download is going; the table keeps only how it ended.
+    fn download_progress(&self, params: Value) {
+        if let Some(ProgressParams {
+            guid,
+            state,
+            file_path,
+        }) = parse(params)
+        {
+            self.writer
+                .hub()
+                .downloads()
+                .progress(&guid, &state, file_path);
+        }
+    }
+
     fn download(&mut self, download: DownloadParams) {
         let frame_target = TargetId(download.frame_id.clone());
         let page = match self.pages.get(&frame_target) {
@@ -752,6 +799,11 @@ impl Watcher {
             Some(_) => Some(frame_target),
             None => self.frames.get(&download.frame_id).cloned(),
         };
+        self.writer.hub().downloads().begin(
+            download.guid.clone(),
+            download.url.clone(),
+            download.suggested_filename.clone(),
+        );
         self.writer.record(PageEvent::Download(DownloadStarted {
             page,
             frame: FrameId(download.frame_id),

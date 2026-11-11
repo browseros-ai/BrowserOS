@@ -184,6 +184,11 @@
       target: "target",
       lifetime: "operation"
     },
+    "locator.normalize": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
     "page.ariaSnapshot": {
       effect: "read",
       target: "page",
@@ -351,6 +356,11 @@
     },
     "page.pdf": {
       effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.setViewportSize": {
+      effect: "write",
       target: "page",
       lifetime: "operation"
     },
@@ -685,12 +695,21 @@
       const url = Reflect.get(page, "url");
       const title = Reflect.get(page, "title");
       const closed = Reflect.get(page, "closed");
+      const viewport = Reflect.get(page, "viewportSize");
       if (typeof url === "string")
         fact.url = url;
       if (typeof title === "string")
         fact.title = title;
       if (typeof closed === "boolean")
         fact.closed = closed;
+      if (viewport === null)
+        fact.viewportSize = null;
+      else if (typeof viewport === "object" && viewport !== null) {
+        const width = Reflect.get(viewport, "width");
+        const height = Reflect.get(viewport, "height");
+        if (typeof width === "number" && typeof height === "number")
+          fact.viewportSize = { width, height };
+      }
       facts.push(fact);
     }
     return facts;
@@ -885,6 +904,33 @@
   function isHandle(value) {
     return typeof value === "object" && value !== null && handles.has(value);
   }
+  function selectOption(api, path, item) {
+    if (typeof item !== "object" || item === null)
+      throw clientError(api, `${path}: expected object, got ${item === null ? "null" : typeof item}`);
+    const option = item;
+    const picked = {};
+    for (const key of ["valueOrLabel", "value", "label"]) {
+      const given = option[key];
+      if (given === undefined)
+        continue;
+      if (given instanceof String)
+        picked[key] = given.valueOf();
+      else if (typeof given === "string")
+        picked[key] = given;
+      else
+        throw clientError(api, `${path}.${key}: expected string, got ${typeof given}`);
+    }
+    const index = option.index;
+    if (index !== undefined) {
+      const value = index instanceof Number ? index.valueOf() : typeof index === "number" ? index : null;
+      if (value === null)
+        throw clientError(api, `${path}.index: expected integer, got ${typeof index}`);
+      if (!Number.isInteger(value))
+        throw clientError(api, `${path}.index: expected integer, got float ${value}`);
+      picked.index = value;
+    }
+    return picked;
+  }
   function selectOptionValues(api, values) {
     if (values === null || values === undefined)
       return { options: [], elements: [] };
@@ -903,19 +949,7 @@
         elements.push(brand);
         continue;
       }
-      const option = item;
-      const given = ["valueOrLabel", "value", "label", "index"].filter((key) => option[key] !== undefined);
-      if (given.length !== 1)
-        throw clientError(api, `options[${index}]: Neo matches an option by one of value, label or index; got ${JSON.stringify(item)}`);
-      const [key] = given;
-      if (key === "index")
-        options.push({ index: Number(option.index) });
-      else if (key === "value")
-        options.push({ value: String(option.value) });
-      else if (key === "label")
-        options.push({ label: String(option.label) });
-      else
-        options.push({ valueOrLabel: String(option.valueOrLabel) });
+      options.push(selectOption(api, `options[${index}]`, item));
     }
     return { options, elements };
   }
@@ -6785,6 +6819,10 @@ ${value.stack}`;
     count() {
       return this._frame._everyMatch("locator.count", "locator.count", this._selector);
     }
+    async normalize() {
+      const resolved = await this._frame._normalize("locator.normalize", this._selector);
+      return new Locator(this._frame, resolved);
+    }
     async all() {
       const count = await this._frame._everyMatch("locator.count", "locator.all", this._selector);
       return Array.from({ length: count }, (_, index) => this.nth(index));
@@ -7268,6 +7306,12 @@ ${value.stack}`;
       const input = { target };
       return await invoke(op, this._call(api, 0), input);
     }
+    async _normalize(api, selector) {
+      const target = await this._locatorBrand(api, selector);
+      const input = { target, selector };
+      const resolved = await invoke("locator.normalize", this._call(api, 0), input);
+      return resolved.selector;
+    }
     async _boundingBox(api, selector, options = {}) {
       return await this._selectorOp("locator.boundingBox", api, selector, true, this._wait(api, options), {});
     }
@@ -7369,11 +7413,12 @@ ${value.stack}`;
     }
     async _evaluate(api, pageFunction, arg, options) {
       const script = pageCall(api, "frame", pageFunction, arg, options);
-      const value = await invoke("page.evaluate", this._call(api, 0), {
+      const { value: result, observed } = await invokeObserved("page.evaluate", this._call(api, 0), {
         ...await this._frameArgs(api),
         script
       });
-      return fromPageValue(api, value);
+      this._page._evaluated(result.frames, observed);
+      return fromPageValue(api, result.value);
     }
     async _waitForFunction(api, pageFunction, arg, options = {}) {
       if (typeof options.polling === "string" && options.polling !== "raf")
@@ -8016,6 +8061,8 @@ ${value.stack}`;
     #urlKnown;
     _title = "";
     _closed = false;
+    #viewportSize = null;
+    #viewportSet = false;
     #observedSeq = 0;
     #liveHead = 0;
     #closeEvent = 0;
@@ -8067,7 +8114,17 @@ ${value.stack}`;
       return null;
     }
     viewportSize() {
-      return null;
+      return this.#viewportSize || null;
+    }
+    async setViewportSize(viewportSize) {
+      this.#viewportSize = viewportSize;
+      this.#viewportSet = true;
+      for (const side of ["width", "height"]) {
+        if (!Number.isInteger(viewportSize?.[side]))
+          throw clientError("page.setViewportSize", `viewportSize.${side}: expected integer`);
+      }
+      const size = { width: viewportSize.width, height: viewportSize.height };
+      await invoke("page.setViewportSize", { api: "page.setViewportSize", timeoutMs: 0 }, { page: await this._brand("page.setViewportSize"), viewportSize: size });
     }
     workers() {
       return [];
@@ -8277,7 +8334,7 @@ ${value.stack}`;
     }
     async close(options = {}) {
       const api = "page.close";
-      if (this._tab === null) {
+      if (this._closed || this._tab === null) {
         this.#close();
         return;
       }
@@ -8288,7 +8345,7 @@ ${value.stack}`;
           ...options.runBeforeUnload ? { runBeforeUnload: true } : {}
         });
       } catch (error) {
-        if (Reflect.get(Object(error), "code") !== "target_closed" || options.runBeforeUnload)
+        if (!["target_closed", "page_closed"].includes(String(Reflect.get(Object(error), "code"))) || options.runBeforeUnload)
           throw error;
       }
     }
@@ -8333,6 +8390,10 @@ ${value.stack}`;
       } finally {
         this._navigationsInFlight--;
       }
+    }
+    _evaluated(frames, at) {
+      if (this.#payloadCurrent(at) && Array.isArray(frames))
+        this._applyFrames(frames);
     }
     async _navigated(api, frame, result, at) {
       if (this.#payloadCurrent(at)) {
@@ -8398,10 +8459,17 @@ ${value.stack}`;
         frame._parentFrame = info.parentId === main?.id ? this._mainFrame : this.#childFrames.get(info.parentId ?? "") ?? this._mainFrame;
       }
     }
+    #applyViewport(size) {
+      if (this.#viewportSet || size === undefined)
+        return;
+      if (this.#viewportSize === null || size === null || this.#viewportSize.width !== size.width || this.#viewportSize.height !== size.height)
+        this.#viewportSize = size;
+    }
     _applyFact(fact, at, approved = null) {
       if (fact.tab !== undefined)
         this._tab = fact.tab;
       if (at === null) {
+        this.#applyViewport(fact.viewportSize);
         if (fact.url !== undefined && !this.#urlKnown) {
           this._url = fact.url;
           this.#urlKnown = true;
@@ -8411,6 +8479,7 @@ ${value.stack}`;
       if (at.seq < this.#observedSeq)
         return;
       this.#observedSeq = at.seq;
+      this.#applyViewport(fact.viewportSize);
       if (fact.url !== undefined) {
         this._url = fact.url;
         this.#urlKnown = true;
@@ -9451,7 +9520,6 @@ Timeout: ${timeout}ms`);
       routeFromHAR: NETWORK,
       routeWebSocket: NETWORK,
       setExtraHTTPHeaders: "network settings are not available in Neo",
-      setViewportSize: "the hosted viewport is fixed",
       tap: NO_TOUCH,
       unroute: NETWORK,
       unrouteAll: NETWORK,
@@ -9497,7 +9565,6 @@ Timeout: ${timeout}ms`);
       evaluateHandle: NO_HANDLES,
       hideHighlight: NO_INSPECTOR,
       highlight: NO_INSPECTOR,
-      normalize: "not available in Neo; use the locator as built",
       tap: NO_TOUCH
     },
     FrameLocator: {},

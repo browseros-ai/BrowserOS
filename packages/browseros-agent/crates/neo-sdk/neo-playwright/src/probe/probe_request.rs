@@ -133,6 +133,9 @@ pub(crate) enum ProbeRequest {
     ScreenshotMask { target: ProbeTarget, color: String },
     /// Remove this world's caller-selected screenshot overlays. Idempotent.
     ScreenshotMaskCleanup,
+    /// Upstream's `generateSelectorSimple` for the first element `target` matches now
+    /// (`locator.normalize`, one frame's part).
+    Selector { target: ProbeTarget },
     /// `ariaSnapshotJSON` of `root` and this frame's rendered iframe refs. `root: document` is
     /// upstream's frame root, `body,frameset`.
     Snapshot {
@@ -158,8 +161,8 @@ pub(crate) enum ProbeRequest {
     Pinned { pin: Pin },
     /// The document's title, or its doctype and root markup, read through the seal.
     Document { part: DocumentPart },
-    /// `document.open`, `write` and `close` with `html`; the probe then unboots itself, so
-    /// the new document is booted under a new seq.
+    /// `document.open`, `write` and `close` with `html`. The Document and this world outlive
+    /// the write, so the world keeps its engine and its seq.
     SetContent { html: String },
     /// A directory upload's `input` wait, armed on the pinned element, connected or not, before
     /// Rust sends `DOM.setFileInputFiles`. Answers `value` null, or `detached` for an evicted
@@ -244,14 +247,20 @@ pub(crate) struct ArmPlan {
     pub(crate) expect_rect: Option<Rect>,
 }
 
-/// One `selectOptions` option, as upstream's client sends it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// One `selectOptions` option, as upstream's client sends it: an option matches when every
+/// attribute named here does (injected `selectOptions`), so `{ value, label }` picks the option
+/// with both, and one that names none matches any option, as upstream's does.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum SelectOption {
-    ValueOrLabel(String),
-    Value(String),
-    Label(String),
-    Index(u32),
+pub(crate) struct SelectOption {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) value_or_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) index: Option<u32>,
 }
 
 /// An edit of a pinned element.
@@ -423,9 +432,30 @@ mod tests {
 
     use serde_json::{Number, Value, json};
 
-    use super::{Edit, FillValue, ParsedSelector, ProbeRequest};
+    use super::{Edit, FillValue, ParsedSelector, ProbeRequest, SelectOption};
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
+
+    /// An option names any of its attributes, all of which must match (SO-008), and one the
+    /// probe does not know is refused.
+    #[test]
+    fn tests_that_a_select_option_keeps_every_attribute_it_names() -> Result<(), Box<dyn Error>> {
+        let both: SelectOption = serde_json::from_value(json!({ "value": "g", "label": "Green" }))?;
+        assert_eq!(
+            both,
+            SelectOption {
+                value: Some("g".to_owned()),
+                label: Some("Green".to_owned()),
+                ..SelectOption::default()
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&both)?,
+            json!({ "value": "g", "label": "Green" })
+        );
+        assert!(serde_json::from_value::<SelectOption>(json!({ "text": "Green" })).is_err());
+        Ok(())
+    }
 
     /// Integral numbers decode into `f64` fields and come back as `5.0`, which `Value` keeps
     /// apart from `5`; JavaScript has one number type, so compare as it would.

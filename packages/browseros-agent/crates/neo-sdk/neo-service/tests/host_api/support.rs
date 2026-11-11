@@ -1,5 +1,5 @@
-//! The harness the host API tests share: a trace store in a temp dir, its writer, `Privacy`
-//! over the same secret set the writer masks with, a scripted browser, a scripted capture
+//! The harness the host API tests share: a trace store in a temp dir, its writer, a scripted
+//! browser, a scripted capture
 //! connection for the live views, and the started service's router. Plus recorders for runs and
 //! operations, and a reader for the event stream.
 
@@ -20,9 +20,8 @@ use neo_takeover::ScreenSize;
 use neo_takeover::testing::FakeXvnc;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, Privacy, PrivacyStore, RedactionLimits, Redactor, RequestId, RunEnded, RunId,
-    RunStarted, RunStatus, TaskId, TraceSink, TraceStore, WriterConfig, screenshot_queue,
-    spawn_writer,
+    Outcome, RedactionLimits, Redactor, RequestId, RunEnded, RunId, RunStarted, RunStatus, TaskId,
+    TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -61,7 +60,6 @@ fn authenticated(service: &Service) -> Result<Router, BoxError> {
 pub(crate) struct Harness {
     pub(crate) dir: tempfile::TempDir,
     pub(crate) sink: TraceSink,
-    pub(crate) privacy: Arc<Privacy>,
     pub(crate) browser: Arc<ScriptedBrowser>,
     /// Neo's screen, which the fits resize.
     pub(crate) xvnc: FakeXvnc,
@@ -96,15 +94,7 @@ struct Boot {
 /// A started service over a fresh store, with no camera: no screenshot is taken, and a run is
 /// complete when it ends.
 pub(crate) async fn harness() -> Result<Harness, BoxError> {
-    harness_with(|sink| Arc::new(sink.clone())).await
-}
-
-/// A started service with no camera, whose private flags go to the store `privacy_store`
-/// returns.
-pub(crate) async fn harness_with(
-    privacy_store: impl FnOnce(&TraceSink) -> Arc<dyn PrivacyStore>,
-) -> Result<Harness, BoxError> {
-    start(privacy_store, Boot::default()).await
+    start(Boot::default()).await
 }
 
 /// A started service whose camera takes the writer's screenshots on the scripted browser.
@@ -113,7 +103,7 @@ pub(crate) async fn harness_with_camera() -> Result<Harness, BoxError> {
         camera: true,
         ..Boot::default()
     };
-    start(|sink| Arc::new(sink.clone()), boot).await
+    start(boot).await
 }
 
 /// A service started over what a Neo restart in the middle of a fit leaves: the screen at the
@@ -124,7 +114,7 @@ pub(crate) async fn harness_after_a_crash_mid_fit(screen: ScreenSize) -> Result<
         window: "fullscreen",
         ..Boot::default()
     };
-    start(|sink| Arc::new(sink.clone()), boot).await
+    start(boot).await
 }
 
 /// A started service whose live views capture over `transport` rather than the scripted
@@ -136,7 +126,7 @@ pub(crate) async fn harness_with_capture(
         capture_transport: Some(transport),
         ..Boot::default()
     };
-    start(|sink| Arc::new(sink.clone()), boot).await
+    start(boot).await
 }
 
 impl Default for Boot {
@@ -151,7 +141,6 @@ impl Default for Boot {
 }
 
 async fn start(
-    privacy_store: impl FnOnce(&TraceSink) -> Arc<dyn PrivacyStore>,
     Boot {
         camera,
         screen,
@@ -170,7 +159,6 @@ async fn start(
         WriterConfig::default(),
         camera.then_some(queue),
     );
-    let privacy = Privacy::new(privacy_store(&sink), store.private_tabs().await?);
     let browser = ScriptedBrowser::new();
     browser.set_window(window);
     let xvnc = FakeXvnc::start(screen).await?;
@@ -179,7 +167,6 @@ async fn start(
         ServiceInputs {
             store: store.clone(),
             sink: sink.clone(),
-            privacy: Arc::clone(&privacy),
             browser: browser.session(),
             viewports: Arc::new(Viewports::default()),
             screenshots: jobs,
@@ -200,7 +187,6 @@ async fn start(
     Ok(Harness {
         dir,
         sink,
-        privacy,
         browser,
         xvnc,
         capture,

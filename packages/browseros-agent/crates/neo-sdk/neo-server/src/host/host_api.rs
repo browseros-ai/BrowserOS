@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use neo_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, TokenError};
 use neo_takeover::Xvnc;
-use neo_trace::{Privacy, ShotJobs, TraceSink, TraceStore};
+use neo_trace::{ShotJobs, TraceSink, TraceStore};
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
@@ -42,8 +42,6 @@ pub(crate) struct HostInputs {
     pub(crate) store: TraceStore,
     /// The trace writer: its committed events feed `/v1/events`, and a lock flushes it.
     pub(crate) sink: TraceSink,
-    /// Compatibility input still required by neo-service; the server seeds no private flags.
-    pub(crate) privacy: Arc<Privacy>,
     /// The camera's end of the writer's screenshot queue (`spawn_writer` has the other).
     pub(crate) screenshots: ShotJobs,
     /// Neo's screen, from `CLAW_XVNC_ADDR` and `NEO_SCREEN`. The service puts it home as it
@@ -113,7 +111,6 @@ impl HostApi {
         let HostInputs {
             store,
             sink,
-            privacy,
             screenshots,
             xvnc,
             cdp_port,
@@ -121,7 +118,6 @@ impl HostApi {
         let service = Service::start(ServiceInputs {
             store,
             sink,
-            privacy,
             browser: session,
             viewports: link.viewports(),
             screenshots,

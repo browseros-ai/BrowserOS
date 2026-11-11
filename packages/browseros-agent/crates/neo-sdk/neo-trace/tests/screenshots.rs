@@ -274,14 +274,17 @@ async fn a_run_is_complete_only_once_every_job_is_answered() -> TestResult {
     h.sink.flush().await?;
     assert!(!is_complete(&h.store, run).await?, "one job still out");
 
-    at_end.answer.send(Shot::Withheld);
+    take(at_end, b"\xff\xd8 title \xff\xd9").await?;
     completed(&mut events, run).await?;
     assert!(is_complete(&h.store, run).await?);
     assert_eq!(
         h.store.screenshot(click).await?,
         ShotRead::Jpeg(b"\xff\xd8 click \xff\xd9".to_vec())
     );
-    assert_eq!(h.store.screenshot(title).await?, ShotRead::Withheld);
+    assert_eq!(
+        h.store.screenshot(title).await?,
+        ShotRead::Jpeg(b"\xff\xd8 title \xff\xd9".to_vec())
+    );
     let detail = h.store.run(run).await?.ok_or("no run")?;
     assert_eq!(
         detail
@@ -289,7 +292,7 @@ async fn a_run_is_complete_only_once_every_job_is_answered() -> TestResult {
             .iter()
             .map(|op| op.screenshot)
             .collect::<Vec<_>>(),
-        vec![Some(ShotState::Stored), Some(ShotState::Withheld)]
+        vec![Some(ShotState::Stored), Some(ShotState::Stored)]
     );
     Ok(())
 }
@@ -309,7 +312,7 @@ async fn an_answer_that_reaches_the_writer_with_its_runs_end_completes_the_run()
     let job = next_job(&mut h.jobs).await?;
     // Both are queued before the writer runs again, so one batch counts the answer and ends the
     // run.
-    job.answer.send(Shot::Withheld);
+    job.answer.send(Shot::Dropped);
     end_run(&h.sink, run, 100);
     completed(&mut events, run).await?;
     assert!(is_complete(&h.store, run).await?);

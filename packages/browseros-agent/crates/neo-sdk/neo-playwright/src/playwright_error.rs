@@ -48,9 +48,14 @@ listed_enum! {
         PageError,
         /// A navigation failed with a net error.
         NavigationFailed,
+        /// A download the script waited on, through `download.saveAs`, was canceled or
+        /// interrupted, or finished where Neo cannot read it.
+        DownloadFailed,
         /// The page never reached a state the op waited for: a load state, a URL, an event, a
         /// function's truthy result, a finished download.
         WaitTimeout,
+        /// Neo did not finish observing a document already restored with all load states.
+        NavigationObservationTimeout,
         /// A bad selector, role, option or argument, a ref Neo never prints, or an input that
         /// does not decode.
         InvalidInput,
@@ -124,7 +129,11 @@ impl ErrorCode {
             Self::ElementDetached => row("element_detached", Website, No, Definite),
             Self::PageError => row("page_error", Website, No, Definite),
             Self::NavigationFailed => row("navigation_failed", Website, No, Definite),
+            Self::DownloadFailed => row("download_failed", Website, No, Definite),
             Self::WaitTimeout => row("wait_timeout", Website, Yes, Ambiguous),
+            Self::NavigationObservationTimeout => {
+                row("navigation_observation_timeout", Neo, Yes, Ambiguous)
+            }
             Self::InvalidInput => row("invalid_input", Script, No, Definite),
             Self::Unsupported => row("unsupported", Neo, No, Definite),
             Self::SensitiveCopyRefused => row("sensitive_copy_refused", Script, No, Definite),
@@ -168,6 +177,15 @@ impl ErrorCode {
         match error {
             CoreError::Cdp(cdp) => match cdp {
                 CdpError::SessionGone => Self::TargetClosed,
+                // Tab/target lookup can race a close before the detached event reaches the
+                // journal. These exact missing-identity replies are closure evidence; other
+                // protocol failures remain Internal.
+                CdpError::Protocol { message, .. }
+                    if message == "No tab with given id"
+                        || message == "No target with given id found" =>
+                {
+                    Self::TargetClosed
+                }
                 CdpError::ConnectionLost
                 | CdpError::NotConnected
                 | CdpError::ConnectionEpochChanged { .. }
@@ -342,7 +360,7 @@ mod tests {
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
-    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 16] = [
+    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 18] = [
         (
             "strict_mode_violation",
             ErrorOwner::Script,
@@ -386,8 +404,20 @@ mod tests {
             Answer::Definite,
         ),
         (
+            "download_failed",
+            ErrorOwner::Website,
+            TimedOut::No,
+            Answer::Definite,
+        ),
+        (
             "wait_timeout",
             ErrorOwner::Website,
+            TimedOut::Yes,
+            Answer::Ambiguous,
+        ),
+        (
+            "navigation_observation_timeout",
+            ErrorOwner::Neo,
             TimedOut::Yes,
             Answer::Ambiguous,
         ),
@@ -517,6 +547,21 @@ mod tests {
             Answer::Definite,
             "nothing was sent before a refusal"
         );
+    }
+
+    #[test]
+    fn missing_tab_and_target_replies_mean_closed_but_other_protocol_errors_do_not() {
+        for (message, expected) in [
+            ("No tab with given id", ErrorCode::TargetClosed),
+            ("No target with given id found", ErrorCode::TargetClosed),
+            ("Cannot find context with specified id", ErrorCode::Internal),
+        ] {
+            let error = CoreError::Cdp(CdpError::Protocol {
+                code: -32000,
+                message: message.to_owned(),
+            });
+            assert_eq!(ErrorCode::from_core(&error), expected, "{message}");
+        }
     }
 
     #[test]

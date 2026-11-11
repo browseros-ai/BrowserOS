@@ -982,6 +982,21 @@ export class Frame extends EventEmitter {
     return await invoke(op, this._call(api, 0), input)
   }
 
+  /**
+   * Upstream's `resolveSelector`: the selector Playwright's generator writes for the element
+   * `selector` matches now, from the main frame down through every `<iframe>` on the way.
+   */
+  async _normalize(api: string, selector: string): Promise<string> {
+    const target = await this._locatorBrand(api, selector)
+    const input = { target, selector }
+    const resolved = await invoke(
+      'locator.normalize',
+      this._call(api, 0),
+      input,
+    )
+    return resolved.selector
+  }
+
   async _boundingBox(
     api: string,
     selector: string,
@@ -1255,11 +1270,16 @@ export class Frame extends EventEmitter {
     options: EvaluateOptions | undefined,
   ): Promise<unknown> {
     const script = pageCall(api, 'frame', pageFunction, arg, options)
-    const value = await invoke('page.evaluate', this._call(api, 0), {
-      ...(await this._frameArgs(api)),
-      script,
-    })
-    return fromPageValue(api, value)
+    const { value: result, observed } = await invokeObserved(
+      'page.evaluate',
+      this._call(api, 0),
+      {
+        ...(await this._frameArgs(api)),
+        script,
+      },
+    )
+    this._page._evaluated(result.frames, observed)
+    return fromPageValue(api, result.value)
   }
 
   /** upstream's `Frame.waitForFunction`: its polling check, unprefixed, comes first. */

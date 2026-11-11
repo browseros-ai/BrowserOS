@@ -30,6 +30,20 @@ async fn tests_that_an_op_ends_at_its_timeout_while_its_frames_world_never_insta
     // The session's setup for its worlds answers, and the world itself never installs.
     connection.always("Runtime.addBinding", json!({}))?;
     connection.always("Page.createIsolatedWorld", testing::cdp_pending())?;
+    // URL waits now subscribe and read the raw frame before installing its matching world.
+    connection.always("Target.getTargets", json!({ "targetInfos": [] }))?;
+    connection.always("Page.enable", json!({}))?;
+    connection.always("Page.setLifecycleEventsEnabled", json!({}))?;
+    connection.always(
+        "Page.getFrameTree",
+        json!({ "frameTree": {
+            "frame": { "id": "main", "loaderId": "main-loader", "url": "https://a.test/" },
+            "childFrames": [{ "frame": {
+                "id": "child-frame", "parentId": "main", "loaderId": "child-loader",
+                "url": "https://a.test/child"
+            }}]
+        }}),
+    )?;
     let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
     let brand = json!({ "$neo": "page", "tab": 7 });
     let script = json!({ "run": { "expression": "() => true", "isFunction": true,

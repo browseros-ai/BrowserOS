@@ -4,15 +4,14 @@ use std::path::PathBuf;
 use neo_captcha::config::CaptchaConfig;
 
 use super::HostedError;
-use crate::config::{AppConfig, EnvConfig, LaunchConfig, SecretFiles};
+use crate::config::{AppConfig, EnvConfig, LaunchConfig};
 
 /// The host's launch facts. No process environment is changed.
 #[derive(Clone, Debug, Default)]
 pub struct HostedOptions {
     /// Required state root; the trace is stored in `claw-sdk/trace.db` underneath it.
     pub state_dir: PathBuf,
-    /// Chromium's `<user-data-dir>/.browseros`, used to locate the secret browser profile.
-    /// When absent, the product's secret-file policy refuses all uploads from file paths.
+    /// Chromium's `<user-data-dir>/.browseros`, passed through as a browser launch fact.
     pub execution_dir: Option<PathBuf>,
     /// The installed browser's version, as `instance.browseros_version` names it.
     pub browseros_version: Option<String>,
@@ -25,8 +24,8 @@ impl HostedOptions {
                 "state_dir must name a private state directory".to_owned(),
             ));
         }
-        // Read the product's secret paths and policy settings without mutating Node's
-        // process environment. The host owns its state root and asserts hosted operation.
+        // Read the product settings without mutating Node's process environment. The host
+        // owns its state root and asserts hosted operation.
         let lookup = |name: &str| match name {
             "BROWSERCLAW_DIR" => Some("/".to_owned()),
             "BROWSERCLAW_HOSTED_MODE" => Some("1".to_owned()),
@@ -43,7 +42,6 @@ impl HostedOptions {
             browseros_version: self.browseros_version,
         };
         Ok(AppConfig {
-            secret_files: SecretFiles::locate(&env, &launch, &env::current_dir()),
             captcha: CaptchaConfig::from_lookup(lookup),
             env,
             launch,

@@ -36,7 +36,7 @@ import {
   type ValueOp,
 } from './protocol'
 import { read, readAll } from './read'
-import { pinned, resolve } from './resolve'
+import { generatedSelector, pinned, resolve } from './resolve'
 import { screenshotMask, screenshotMaskCleanup } from './screenshot'
 import { focused, sealIn } from './sensitive'
 import { snapshot } from './snapshot'
@@ -75,6 +75,7 @@ const HANDLERS: Handlers = {
   edit,
   read,
   readAll,
+  selector: generatedSelector,
   snapshot,
   expect,
   focused,

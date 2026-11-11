@@ -115,6 +115,16 @@ struct Download {
     suggested_filename: String,
 }
 
+impl Delivered {
+    /// The browser's guid of the download this event hands the script, if it is a `download`.
+    pub(crate) fn download(&self) -> Option<&str> {
+        match &self.payload {
+            Payload::Download { download, .. } => Some(&download.id),
+            _ => None,
+        }
+    }
+}
+
 /// What a read does with a popup that opened as a separate window (D9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WindowPopup {
@@ -194,18 +204,17 @@ pub(crate) async fn deliver(
         Subscription::Page { tab, .. } => Some(PageHandle::new(*tab)),
         Subscription::ContextPage => None,
     };
+    report_navigation(scope, listener.as_ref(), &record.event);
     let payload = match (&record.event, listener) {
         (PageEvent::Opened(opened), Some(page)) => {
             let Some(popup) = popup_tab(scope, opened, tabs, windows).await? else {
                 return Ok(None);
             };
-            Payload::Popup {
-                page,
-                popup: NewTab {
-                    page: popup,
-                    url: opened.url.clone(),
-                },
-            }
+            let popup = NewTab {
+                page: popup,
+                url: opened.url.clone(),
+            };
+            Payload::Popup { page, popup }
         }
         (PageEvent::Opened(opened), None) => {
             if opened.window == WindowKind::Window {
@@ -290,6 +299,16 @@ pub(crate) async fn deliver(
         at: record.at_ms,
         payload,
     }))
+}
+
+/// A console/dialog/etc. can follow renderer-initiated navigation. Delivery synchronizes
+/// `page.url()` even when no SDK navigation ran, while a close carries its own terminal facts.
+fn report_navigation(scope: &OpScope<'_>, page: Option<&PageHandle>, event: &PageEvent) {
+    if let Some(page) = page
+        && !matches!(event, PageEvent::Closed(_))
+    {
+        scope.report_navigation(page.tab());
+    }
 }
 
 /// The popup's page, or what the read does with a window.

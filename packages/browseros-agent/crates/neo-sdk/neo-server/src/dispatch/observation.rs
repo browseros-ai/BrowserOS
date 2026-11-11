@@ -22,6 +22,11 @@ pub(crate) trait EventLog: Send + Sync {
     fn head(&self) -> u64;
     /// Retained close evidence for the exact current target from the cache read.
     fn closed(&self, target: &TargetId) -> Option<u64>;
+    /// The newest retained navigation of the target's main frame, including one the page made
+    /// itself, which core's cache does not follow. `None` when the log has none.
+    fn navigated(&self, _target: &TargetId) -> Option<u64> {
+        None
+    }
 }
 
 /// Freshness of a batch of page facts. Neither counter is a page identity.
@@ -79,6 +84,16 @@ impl Observer {
             serial: Mutex::new(0),
             log,
         }
+    }
+
+    /// The event log's head, before a refresh reads core.
+    pub(crate) fn head(&self) -> u64 {
+        self.log.head()
+    }
+
+    /// The newest retained main-frame navigation of `target`.
+    pub(crate) fn navigated(&self, target: &TargetId) -> Option<u64> {
+        self.log.navigated(target)
     }
 
     /// Groups all delivered closes by tab. Multiple target-bound subscriptions can coexist

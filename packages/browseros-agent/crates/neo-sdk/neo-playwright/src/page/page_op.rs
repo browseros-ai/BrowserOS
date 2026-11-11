@@ -13,7 +13,7 @@ use crate::page::document_watch::decode;
 use crate::page::navigation::{GotoInput, NavigateInput, Navigation};
 use crate::page::{
     PageHandle, document_op, element_evaluate, evaluate, frame_tree, navigation, pdf, screenshot,
-    wait_for_navigation, wait_for_url,
+    viewport_size, wait_for_navigation, wait_for_url,
 };
 use crate::probe::DocumentPart;
 use crate::target::PageRef;
@@ -43,6 +43,7 @@ listed_enum! {
         WaitForFunctionOnElement,
         Screenshot,
         Pdf,
+        SetViewportSize,
     }
 }
 
@@ -50,6 +51,7 @@ impl PageOp {
     /// This op's registration metadata.
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
+            Self::SetViewportSize => viewport_size::SPEC,
             Self::Goto => OpSpec::write(
                 "page.goto",
                 PAGE,
@@ -160,6 +162,7 @@ pub(crate) async fn invoke(
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
     match op {
+        PageOp::SetViewportSize => viewport_size::set(pw, scope, args.decode(scope)?).await,
         PageOp::Goto => {
             let (page, navigation, wait_until) = args.decode::<GotoInput>(scope)?.into_parts();
             let page = page.tab();
@@ -275,6 +278,9 @@ async fn close(
             .close_page(admitted.core_page.clone())
             .await
             .map_err(core)?;
+    }
+    if !input.run_before_unload {
+        scope.run_state().frames.forget(page);
     }
     Ok(json!({}))
 }

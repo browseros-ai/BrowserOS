@@ -1,5 +1,5 @@
 {
-  "protocol": 15,
+  "protocol": 16,
   "callFunction": "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -49,6 +49,11 @@
     ],
     "readAll": [
       "values"
+    ],
+    "selector": [
+      "selector",
+      "none",
+      "detached"
     ],
     "snapshot": [
       "snapshot",
@@ -777,6 +782,26 @@
       "read": "pins"
     },
     {
+      "op": "selector",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "button",
+              "source": "button"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "selector",
+      "target": {
+        "pin": 4
+      }
+    },
+    {
       "op": "snapshot",
       "root": "document",
       "mode": "ai"
@@ -933,19 +958,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 15,
+      "protocol": 16,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 15,
+      "protocol": 16,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 15,
+      "protocol": 16,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1192,6 +1217,14 @@
           "preview": "<li>Two</li>"
         }
       ]
+    },
+    {
+      "kind": "selector",
+      "selector": "internal:role=button[name=\"Go\"i]"
+    },
+    {
+      "kind": "selector",
+      "selector": "iframe[name=\"pay\"]"
     },
     {
       "kind": "snapshot",

@@ -78,6 +78,7 @@ pub(crate) fn run_detail(
         result: json_column(row.result.as_deref())?,
         result_truncated: row.result_truncated,
         operations,
+        downloads: Vec::new(),
     })
 }
 

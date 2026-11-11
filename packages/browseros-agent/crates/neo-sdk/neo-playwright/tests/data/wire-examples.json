@@ -1542,6 +1542,35 @@
         "strict": "strict"
       }
     ],
+    "locator.normalize": [
+      {
+        "call": {
+          "api": "locator.normalize",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "selector": "internal:role=button"
+      }
+    ],
     "locator.press": [
       {
         "call": {
@@ -2305,6 +2334,22 @@
         },
         "html": "<p>hi</p>",
         "waitUntil": "load"
+      }
+    ],
+    "page.setViewportSize": [
+      {
+        "call": {
+          "api": "page.setViewportSize",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "viewportSize": {
+          "width": 640,
+          "height": 480
+        }
       }
     ],
     "page.title": [

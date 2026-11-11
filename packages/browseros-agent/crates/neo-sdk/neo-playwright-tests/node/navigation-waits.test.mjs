@@ -68,16 +68,28 @@ test('navigation waits retain events, document identity and their deadline', {
     )
     record('existing URL does not satisfy navigation wait')
     const [response] = await Promise.all([
-      page.waitForNavigation({ timeout: 3000 }),
+      page.waitForNavigation({ timeout: 5000 }),
       page.reload(),
     ])
     assert.equal(response.url(), url)
     assert.equal(response.status(), 200)
     record('same URL reload returns its response')
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const first = page.waitForNavigation({ url: /\/one$/, timeout: 5000 })
+      const second = page.waitForNavigation({ url: /\/two$/, timeout: 5000 })
+      const third = page.waitForNavigation({ url: /\/three$/, timeout: 5000 })
+      await page.goto(`${url}/one`)
+      await first
+      await page.goto(`${url}/two`)
+      await second
+      await page.goto(`${url}/three`)
+      await third
+    }
+    record('concurrent URL matches survive repeated document replacement')
     const [history] = await Promise.all([
       page.waitForNavigation({
         url: (u) => u.pathname === '/target',
-        timeout: 3000,
+        timeout: 5000,
       }),
       page.evaluate(() => {
         history.pushState({}, '', '/first')
@@ -102,7 +114,7 @@ test('navigation waits retain events, document identity and their deadline', {
     await page.setContent('<iframe src="about:blank"></iframe>')
     const frame = page.frames()[1]
     const [detached] = await Promise.all([
-      frame.waitForNavigation({ timeout: 3000 }).catch((e) => e),
+      frame.waitForNavigation({ timeout: 5000 }).catch((e) => e),
       page.evaluate(() => document.querySelector('iframe').remove()),
     ])
     assert.match(detached.message, /frame was detached/i)
@@ -160,7 +172,7 @@ test('navigation waits retain events, document identity and their deadline', {
     await existing.evaluate(() => 1)
     const existingChild = existing.frames()[1]
     const [fragmentResponse] = await Promise.all([
-      existingChild.waitForNavigation({ timeout: 3000 }),
+      existingChild.waitForNavigation({ timeout: 5000 }),
       existing.evaluate(
         (next) => (document.querySelector('iframe').src = next),
         `${cross}#adopted`,

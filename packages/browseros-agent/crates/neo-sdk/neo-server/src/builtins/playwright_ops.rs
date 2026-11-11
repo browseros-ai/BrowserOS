@@ -76,7 +76,9 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, `screenshot` and \
-    `pdf`, events (`page.on`, `waitForEvent`), and `expect`: \
+    `pdf`, events (`page.on`, `waitForEvent`), downloads (`download.path()` waits for the file \
+    and returns where the browser saved it, which a later run can upload with `setInputFiles`; \
+    `saveAs(path)` copies it; `failure()`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
     `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
@@ -274,6 +276,11 @@ impl OpInput {
     /// same op; reload checks the current URL instead, and history follows a previous entry.
     fn refused_navigation(&self) -> Option<OperationError> {
         let url = self.json.get("url")?.as_str()?;
+        // The engine's completeUserURL supplies http:// for bare local addresses.
+        // Validate that completed scheme rather than mistaking localhost:port for a scheme.
+        if url.starts_with("localhost") || url.starts_with("127.0.0.1") {
+            return None;
+        }
         let which = match url_scheme(url) {
             Some(scheme)
                 if NAVIGABLE_SCHEMES.contains(&scheme.as_str())
@@ -413,9 +420,13 @@ impl PageEffect {
             // A successful navigation wait observes a URL change started by another op or
             // the page. Refresh core's cache too, so a later ordinary reply cannot restore
             // the pre-navigation URL over the wait's fresh frame facts.
-            "page.goto" | "page.goBack" | "page.goForward" | "page.waitForNavigation" => {
-                Self::Navigates
-            }
+            "page.goto"
+            | "page.goBack"
+            | "page.goForward"
+            | "page.waitForNavigation"
+            | "page.waitForURL"
+            | "page.waitForLoadState"
+            | "page.evaluate" => Self::Navigates,
             "page.reload" => Self::Reloads,
             "page.close" => Self::Closes,
             _ => Self::Untracked,
@@ -576,6 +587,10 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
         );
     }
 
+    fn report_navigation(&self, tab: TabId) {
+        self.op.report_page(&PageRef { tab }, PageChange::Navigated);
+    }
+
     fn abort_reason(&self) -> Option<String> {
         self.op.abort_reason()
     }
@@ -643,7 +658,9 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::ElementDetached => ErrorCode::ELEMENT_DETACHED,
         PlaywrightCode::PageError => ErrorCode::PAGE_ERROR,
         PlaywrightCode::NavigationFailed => ErrorCode::NAVIGATION_FAILED,
+        PlaywrightCode::DownloadFailed => ErrorCode::DOWNLOAD_FAILED,
         PlaywrightCode::WaitTimeout => ErrorCode::WAIT_TIMEOUT,
+        PlaywrightCode::NavigationObservationTimeout => ErrorCode::NAVIGATION_OBSERVATION_TIMEOUT,
         PlaywrightCode::InvalidInput => ErrorCode::INVALID_INPUT,
         PlaywrightCode::Unsupported => ErrorCode::UNSUPPORTED,
         PlaywrightCode::SensitiveCopyRefused => ErrorCode::SENSITIVE_COPY_REFUSED,

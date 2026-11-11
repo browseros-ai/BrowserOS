@@ -101,6 +101,7 @@ export type PageFact = {
   url?: string
   title?: string
   closed?: boolean
+  viewportSize?: { width: number; height: number } | null
 }
 
 /** One frame of a page's tree, main frame first; `parentId` null only for the main frame. */
@@ -306,6 +307,8 @@ export type FilePayload = { name: string; mimeType: string; buffer: string }
 export type FilesInput = { paths: string[] } | { payloads: FilePayload[] }
 export type TargetArgs = { target: Target; strict: Strictness }
 export type EveryMatchArgs = { target: Target }
+/** `locator.normalize`: the locator's own selector rides along for upstream's messages. */
+export type NormalizeArgs = { target: Target; selector: string }
 export type PageArgs = { page: PageHandle }
 /** A page op on one of the page's frames; `frame` is left out for the main frame. */
 export type FrameArgs = PageArgs & { frame?: string }
@@ -362,6 +365,7 @@ export type OpInputs = {
   'locator.isVisible': TargetArgs
   'locator.isHidden': TargetArgs
   'locator.count': EveryMatchArgs
+  'locator.normalize': NormalizeArgs
   'locator.allTextContents': EveryMatchArgs
   'locator.allInnerTexts': EveryMatchArgs
   'locator.boundingBox': TargetArgs
@@ -443,6 +447,9 @@ export type OpInputs = {
     strict?: Strictness
   } & ScreenshotOptions
   'page.pdf': PageArgs & PdfOptions
+  'page.setViewportSize': PageArgs & {
+    viewportSize: { width: number; height: number }
+  }
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
   /**
@@ -515,6 +522,7 @@ export type OpOutputs = {
   'locator.isVisible': boolean
   'locator.isHidden': boolean
   'locator.count': number
+  'locator.normalize': { selector: string }
   'locator.allTextContents': string[]
   'locator.allInnerTexts': string[]
   'locator.boundingBox': Rect | null
@@ -547,9 +555,9 @@ export type OpOutputs = {
   'page.setContent': NavigationResult | null
   'page.close': Done
   'page.opener': { opener: PageBrand | null }
-  'page.frames': FrameTree
+  'page.frames': Partial<FrameTree>
   /** The script's result in Playwright's in-page format, masked. */
-  'page.evaluate': SerializedValue
+  'page.evaluate': { value: SerializedValue; frames?: FrameInfo[] }
   'locator.evaluate': SerializedValue
   'locator.evaluateAll': SerializedValue
   /** The predicate's truthy value, masked, and upstream's preview of it (`toString()`). */
@@ -558,6 +566,7 @@ export type OpOutputs = {
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
   'page.screenshot': unknown
   'page.pdf': unknown
+  'page.setViewportSize': Done
   'context.pages': { pages: PageEntry[] }
   'context.newPage': PageEntry
   'events.listen': Done

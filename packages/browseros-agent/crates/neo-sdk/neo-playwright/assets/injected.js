@@ -8140,6 +8140,15 @@ ${value.stack}`;
       src
     };
   }
+  function generatedSelector(world, request, root) {
+    const found = resolveTarget(world, request.target, "firstMatch", root);
+    if (found.kind !== "one")
+      return found.kind === "strict" ? { kind: "none" } : found;
+    return {
+      kind: "selector",
+      selector: world.injected.generateSelectorSimple(found.element)
+    };
+  }
   function pinned(world, request) {
     return world.pins.held(request.pin) ?? null;
   }
@@ -8605,7 +8614,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 15;
+  var PROTOCOL = 16;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -9022,6 +9031,7 @@ ${value.stack}`;
     edit,
     read,
     readAll,
+    selector: generatedSelector,
     snapshot,
     expect,
     focused,

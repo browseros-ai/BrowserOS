@@ -316,7 +316,7 @@ impl<M> OpCtx<M> {
         });
     }
 
-    /// Per-tab feature state for the target (sdk-playwright's facade, sdk-privacy's journal),
+    /// Per-tab feature state for the target (sdk-playwright's facade),
     /// dropped when the tab closes.
     pub(crate) fn tab_slot<T: Default + Send + Sync + 'static>(&self) -> Result<Arc<T>, LeafError> {
         let page = self.page()?;

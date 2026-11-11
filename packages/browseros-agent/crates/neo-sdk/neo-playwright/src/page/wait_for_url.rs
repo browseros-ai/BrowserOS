@@ -33,9 +33,8 @@ use crate::op_output::to_output;
 use crate::op_scope::OpScope;
 use crate::page::document_watch::{DocumentWatch, WatchError};
 use crate::page::evaluate_guard::{self, TreeFrame};
-use crate::page::navigation::watch_error;
-use crate::page::world_call::{self, unexpected, with_world};
-use crate::page::{LoadState, OpPage};
+use crate::page::world_call::{unexpected, with_world};
+use crate::page::{LoadState, OpPage, navigation, subtree_load};
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, UrlPattern};
 use crate::resolve::failed;
 use crate::target::PageRef;
@@ -100,7 +99,7 @@ pub(crate) async fn wait_for_url(
             return Err(scope.fail(ErrorCode::TargetClosed, "Frame was detached"));
         };
         let probed = |failure| failed(scope, failure);
-        let watched = |error| watch_error(scope, &error);
+        let watched = |error| navigation::watch_error(scope, &error);
         if !followed
             .matches_current(&page, &pattern)
             .await
@@ -141,6 +140,10 @@ pub(crate) async fn wait_for_url(
             .reached(input.wait_until)
             .await
             .map_err(watched)?;
+        if input.wait_until == LoadState::NetworkIdle {
+            subtree_load::network_idle(pw, scope, page.tab(), &followed.frame.endpoint.frame)
+                .await?;
+        }
         Ok(followed.watch.url().map(str::to_owned))
     };
     let url = match scope.within(wait).await {
@@ -179,22 +182,31 @@ impl Followed {
         scope: &OpScope<'_>,
         id: Option<&FrameId>,
     ) -> Result<Self, PlaywrightError> {
-        let Some(world) = world_call::listed_frame_world(page, scope, id).await? else {
-            return Ok(Self::Detached);
-        };
-        let frame = evaluate_guard::frame_endpoint(page, world.session(), world.frame().clone());
-        let session_id = frame
-            .endpoint
+        // Subscribe before installing any sealed world. Installation belongs to URL matching
+        // after the document read; doing it here lets a simultaneous goto destroy setup and
+        // fail a wait that should simply observe the new document.
+        let main = page.main_endpoint();
+        let frame_id = id.unwrap_or(&main.frame).clone();
+        let root_id = main
             .session
             .session_id()
             .cloned()
             .ok_or_else(|| scope.fail(ErrorCode::Internal, "the frame has no session"))?;
-        let mut watch = DocumentWatch::new(
-            pw.browser(),
-            frame.endpoint.session.clone(),
-            session_id,
-            frame.endpoint.frame.clone(),
-        );
+        let (session_id, session) = if frame_id == main.frame {
+            (root_id, main.session)
+        } else {
+            match navigation::frame_host(pw, scope, page.tab(), (root_id, main.session), &frame_id)
+                .await
+            {
+                Ok(host) => host,
+                Err(error) if error.error_code() == Some(ErrorCode::TargetClosed) => {
+                    return Ok(Self::Detached);
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        let frame = evaluate_guard::frame_endpoint(page, &session, frame_id.clone());
+        let mut watch = DocumentWatch::new(pw.browser(), session, session_id, frame_id);
         let started = async {
             watch.enable_page().await?;
             watch.read_current().await?;
@@ -203,7 +215,7 @@ impl Followed {
         match started.await {
             Ok(()) => Ok(Self::Watching(Box::new(Watching { frame, watch }))),
             Err(WatchError::FrameDetached) => Ok(Self::Moving),
-            Err(error) => Err(watch_error(scope, &error)),
+            Err(error) => Err(navigation::watch_error(scope, &error)),
         }
     }
 }
