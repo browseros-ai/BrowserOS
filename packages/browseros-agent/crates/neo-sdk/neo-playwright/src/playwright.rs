@@ -160,12 +160,13 @@ mod tests {
     use std::error::Error;
     use std::time::Duration;
 
+    use neo_trace::ErrorOwner;
     use serde_json::{Value, json};
     use tokio::time;
 
     use super::Playwright;
     use crate::test_env::{self, TestEnv};
-    use crate::{ErrorCode, Op};
+    use crate::{ErrorCode, Op, Refusal};
 
     /// An op either answers `not built yet` or decodes its input before it reaches the host, so
     /// an empty call names the missing field and nothing is sent or noted. The ops whose
@@ -251,7 +252,18 @@ mod tests {
         for (name, inputs) in ops {
             let op = Op::from_name(name).ok_or(format!("{name} is not an op"))?;
             for input in inputs.as_array().ok_or("each op lists its inputs")? {
-                let env = TestEnv::new();
+                // Decode the filesystem step, then refuse its first effect. Recorded paths
+                // are examples, not destinations this offline contract test owns.
+                let env = if name == "page.saveScreenshot" {
+                    TestEnv::refusing(Refusal {
+                        owner: ErrorOwner::Host,
+                        code: "fixture_write_refused".to_owned(),
+                        message: "the wire decoder does not write fixture files".to_owned(),
+                        host_code: None,
+                    })
+                } else {
+                    TestEnv::new()
+                };
                 let invoked = playwright.invoke(&env, op, input.clone());
                 if let Ok(Err(error)) = time::timeout(Duration::from_secs(60), invoked).await
                     && error.error_code() == Some(ErrorCode::InvalidInput)

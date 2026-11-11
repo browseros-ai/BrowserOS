@@ -33,14 +33,42 @@ const PROTOCOL = JSON.parse(
 const PORT = Number(process.env.BROWSEROS_CDP_PORT ?? 9005)
 const WORLD = 'browseros-engine'
 
-const isomorphic = (() => {
-  const context = {}
-  runInNewContext(PRELUDE, context)
-  return context.__neoIsomorphic
-})()
-const chunk = (selector) => ({
-  chunk: isomorphic.selectorParser.parseSelector(selector),
-})
+// The prelude supplies the SDK as function parameters after the real bootstrap. Parse
+// selectors through that SDK's wire path so this smoke follows the same parser and no
+// longer depends on an exported helper global. No browser operation runs in this realm.
+let parsedChunk
+const realm = {
+  URL,
+  URLSearchParams,
+  atob,
+  btoa,
+  DOMException,
+  __neo_log() {},
+  __neo_sleep: async () => {},
+  __neo_invoke: async (name, input) => {
+    if (name !== 'locator.count')
+      throw new Error(`unexpected parser op: ${name}`)
+    parsedChunk = JSON.parse(input).target.chunks[0]
+    return JSON.stringify({ ok: 0 })
+  },
+}
+const bootstrap = readFileSync(
+  resolve(agentRoot, 'crates/neo-sdk/neo-server/src/runtime/js/bootstrap.js'),
+  'utf8',
+)
+runInNewContext(`'use strict';${bootstrap};\n${PRELUDE}`, realm)
+let parserPage
+const parameterNames = realm.__neo.parameters().split(', ')
+await realm.__neo.run(
+  (...args) => {
+    parserPage = args[parameterNames.indexOf('page')]
+  },
+  JSON.stringify({ page: null }),
+)
+const chunk = async (selector) => {
+  await parserPage.locator(selector).count()
+  return { chunk: parsedChunk }
+}
 
 const install = ({ frameSeq, epoch }) =>
   `(() => { if (!globalThis.__neoProbe) { ${ASSET}\n }\n return globalThis.__neoProbe.boot(${JSON.stringify({ frameSeq, epoch })}) })()`
@@ -254,7 +282,10 @@ async function plainPage(cdp, server, epoch) {
       'the main world reads the password raw',
       raw,
     )
-    const resolved = await tab.call(contextId, resolveRequest(chunk('#pw')))
+    const resolved = await tab.call(
+      contextId,
+      resolveRequest(await chunk('#pw')),
+    )
     check(
       resolved.kind === 'element' &&
         resolved.preview.includes('value="hunter2-attribute"'),
@@ -273,7 +304,7 @@ async function plainPage(cdp, server, epoch) {
 
     const frame = await tab.call(
       contextId,
-      resolveRequest(chunk('#frame'), 'frame'),
+      resolveRequest(await chunk('#frame'), 'frame'),
     )
     check(
       frame.kind === 'frame' && frame.key === '#1' && frame.visible === true,
@@ -282,7 +313,7 @@ async function plainPage(cdp, server, epoch) {
     )
     const button = await tab.call(
       contextId,
-      resolveRequest(chunk('internal:role=button[name="Go"i]')),
+      resolveRequest(await chunk('internal:role=button[name="Go"i]')),
     )
     check(
       button.kind === 'element',
@@ -291,7 +322,7 @@ async function plainPage(cdp, server, epoch) {
     )
     const strict = await tab.call(
       contextId,
-      resolveRequest(chunk('internal:role=button')),
+      resolveRequest(await chunk('internal:role=button')),
     )
     check(
       strict.kind === 'strict' &&
@@ -309,7 +340,7 @@ async function plainPage(cdp, server, epoch) {
     )
     const keyAfterSame = await tab.call(
       contextId,
-      resolveRequest(chunk('aria-ref=#1')),
+      resolveRequest(await chunk('aria-ref=#1')),
     )
     check(
       same.seq === 0 &&
@@ -328,11 +359,11 @@ async function plainPage(cdp, server, epoch) {
     )
     const keyAfter = await tab.call(
       contextId,
-      resolveRequest(chunk('aria-ref=#1')),
+      resolveRequest(await chunk('aria-ref=#1')),
     )
     const freshFrame = await tab.call(
       contextId,
-      resolveRequest(chunk('#frame'), 'frame'),
+      resolveRequest(await chunk('#frame'), 'frame'),
     )
     check(
       rekeyed.seq === 347 &&
@@ -350,7 +381,10 @@ async function plainPage(cdp, server, epoch) {
       },
     )
 
-    const hint = await tab.call(contextId, resolveRequest(chunk('ref=e5')))
+    const hint = await tab.call(
+      contextId,
+      resolveRequest(await chunk('ref=e5')),
+    )
     check(
       hint.kind === 'error' &&
         hint.class === 'selector' &&
@@ -413,19 +447,19 @@ async function cspPage(cdp, server, epoch) {
     )
     const frame = await tab.call(
       contextId,
-      resolveRequest(chunk('#frame'), 'frame'),
+      resolveRequest(await chunk('#frame'), 'frame'),
     )
     const byRef = await tab.call(
       contextId,
-      resolveRequest(chunk('aria-ref=#1')),
+      resolveRequest(await chunk('aria-ref=#1')),
     )
     const scoped = await tab.call(
       contextId,
-      resolveRequest(chunk('#checkout >> aria-ref=#1')),
+      resolveRequest(await chunk('#checkout >> aria-ref=#1')),
     )
     const outside = await tab.call(
       contextId,
-      resolveRequest(chunk('#outside >> aria-ref=#1')),
+      resolveRequest(await chunk('#outside >> aria-ref=#1')),
     )
     check(
       frame.key === '#1' &&
@@ -440,7 +474,7 @@ async function cspPage(cdp, server, epoch) {
     await tab.evaluate("document.getElementById('frame').remove()")
     const removed = await tab.call(
       contextId,
-      resolveRequest(chunk('aria-ref=#1')),
+      resolveRequest(await chunk('aria-ref=#1')),
     )
     check(
       removed.kind === 'none' && removed.staleRef === '#1',
@@ -494,7 +528,7 @@ async function secondConnection(tab, epoch) {
       {
         functionDeclaration: PROTOCOL.callFunction,
         executionContextId,
-        arguments: [{ value: resolveRequest(chunk('aria-ref=#2')) }],
+        arguments: [{ value: resolveRequest(await chunk('aria-ref=#2')) }],
         returnByValue: true,
       },
       sessionId,

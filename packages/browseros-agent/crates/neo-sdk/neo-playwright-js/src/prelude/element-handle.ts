@@ -13,7 +13,7 @@
 import type { Rect } from '../probe/protocol'
 import { invoke } from './bridge'
 import { EventEmitter } from './emitter'
-import { clientError, unsupportedError } from './errors'
+import { clientError } from './errors'
 import { type EvaluateOptions, fromPageValue, pageCall } from './evaluation'
 import { inputFiles, withClientErrors } from './files'
 import {
@@ -34,7 +34,9 @@ import {
   selectOptionValues,
 } from './options'
 import type { Page } from './page'
+import { saveScreenshot, screenshotType } from './screenshot'
 import { locatorBrand } from './selectors'
+import { signalOf } from './signal'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import type {
   ElementBrand,
@@ -453,13 +455,11 @@ export class ElementHandle extends EventEmitter {
 
   async screenshot(options: ScreenshotOptionsInput = {}): Promise<unknown> {
     const api = 'elementHandle.screenshot'
-    if (options.path !== undefined)
-      throw unsupportedError(
-        api,
-        'Neo returns the image instead of writing a file; omit path',
-      )
     const wire = await screenshotOptions(api, options)
-    return await invoke(
+    if (!wire.type && options.path)
+      wire.type = screenshotType({ api, path: options.path })
+    const signal = signalOf(api, options)
+    const image = await invoke(
       'page.screenshot',
       { api, timeoutMs: timeoutMs(api, this.#timeout(options)) },
       {
@@ -468,6 +468,9 @@ export class ElementHandle extends EventEmitter {
         strict: 'strict',
         ...wire,
       },
+      signal,
     )
+    await saveScreenshot({ api, bytes: image, path: options.path, signal })
+    return image
   }
 }
