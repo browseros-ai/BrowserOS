@@ -56,8 +56,7 @@ const fn policing(capability: Capability) -> Policing {
         // `CaptureGuard` until the pixels go out (`PrivacyHooks`).
         Capability::Capture => Policing::Ready,
         // Such a script reads fields no seal masks. The crate's evaluate guard sweeps before and
-        // after every send and masks the answer with what it swept; the door then masks every
-        // reply into the realm with what the op's run holds (`RunMask`), and releases a script's
+        // after every send and masks the answer with what it swept; the door releases a script's
         // answer only past the rules again, as a read of its tab (`PageScript::MainWorld`).
         Capability::MainWorld => Policing::Ready,
         // The crate's upload refuses, before it reads a file, every path into Neo's own secret
@@ -562,12 +561,6 @@ mod tests {
         BrowserosCase {
             op: "page.evaluate",
             file: "main_world_browseros.rs",
-            test: "a_password_field_reaches_neither_the_realm_nor_the_record_raw",
-            proves: Proves::Served,
-        },
-        BrowserosCase {
-            op: "page.evaluate",
-            file: "main_world_browseros.rs",
             test: "an_owner_lock_that_blocks_reads_withholds_what_a_running_script_read",
             proves: Proves::Served,
         },
@@ -575,18 +568,6 @@ mod tests {
             op: "page.waitForFunction",
             file: "main_world_browseros.rs",
             test: "wait_for_function_behaves_as_playwright_on_browseros",
-            proves: Proves::Served,
-        },
-        BrowserosCase {
-            op: "page.waitForFunction",
-            file: "main_world_browseros.rs",
-            test: "a_password_field_reaches_neither_the_realm_nor_the_record_raw",
-            proves: Proves::Served,
-        },
-        BrowserosCase {
-            op: "page.waitForFunction",
-            file: "main_world_browseros.rs",
-            test: "a_long_wait_on_a_password_field_registers_its_value_once_not_once_per_poll",
             proves: Proves::Served,
         },
         BrowserosCase {
@@ -599,12 +580,6 @@ mod tests {
             op: "locator.evaluateAll",
             file: "main_world_browseros.rs",
             test: "evaluate_all_and_dollar_dollar_eval_behave_as_playwright_on_browseros",
-            proves: Proves::Served,
-        },
-        BrowserosCase {
-            op: "locator.evaluateAll",
-            file: "main_world_browseros.rs",
-            test: "a_password_field_reaches_neither_the_realm_nor_the_record_raw",
             proves: Proves::Served,
         },
         BrowserosCase {

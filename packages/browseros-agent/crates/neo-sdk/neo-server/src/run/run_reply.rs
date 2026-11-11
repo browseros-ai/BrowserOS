@@ -2,17 +2,14 @@
 
 use neo_trace::{
     Delivery, ErrorOwner, ErrorRecord, OperationId, RequestId, RunEffects, RunId, RunStatus,
-    SecretSet,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::dispatch::{
-    ErrorCode, Held, OpFailure, OpLine, OperationError, RunCtx, RunEnd, StopReason,
-};
+use crate::dispatch::{ErrorCode, OpFailure, OpLine, OperationError, RunCtx, RunEnd, StopReason};
 use crate::runtime::{LogLine, ScriptEnd, ScriptOutcome};
 
-/// What one `run` call answers, already masked: the MCP layer renders it, and the trace keeps
+/// What one `run` call answers: the MCP layer renders it, and the trace keeps
 /// it as the run's replay, so a repeat of its `requestId` gets back exactly this, `id`
 /// included, and renders the same way. A plain data bag.
 ///
@@ -120,11 +117,11 @@ pub(crate) struct OpNote {
 }
 
 impl RunReply {
-    /// The reply for a run that went through its script, masked. A stop the run did not cause
+    /// The reply for a run that went through its script. A stop the run did not cause
     /// itself (the deadline, the caller, shutdown, a crash) decides the status, whatever the
     /// script did after it; otherwise the script's outcome does.
     #[must_use]
-    pub(crate) fn build(run: &RunCtx, end: ScriptEnd, secrets: &SecretSet) -> Self {
+    pub(crate) fn build(run: &RunCtx, end: ScriptEnd) -> Self {
         let report = run.report();
         let effects = ReplyEffects::from(report.effects);
         // Repeating a run is safe only when it changed nothing.
@@ -160,7 +157,7 @@ impl RunReply {
             ),
         };
         let (logs, logs_dropped) = end.logs.into_parts();
-        let mut reply = Self {
+        Self {
             id: run.id(),
             status,
             effects,
@@ -170,47 +167,13 @@ impl RunReply {
             logs_dropped,
             unknown: report.unknown.iter().map(OpNote::from).collect(),
             not_awaited: report.not_awaited.iter().map(OpNote::from).collect(),
-        };
-        reply.mask(secrets);
-        reply
-    }
-
-    /// Replaces every value `secrets` knows in what the caller reads: the value, each console
-    /// line and the error's message. `RunLogs` masked each line before cutting it; this pass also
-    /// catches a secret registered after the line was logged.
-    pub(crate) fn mask(&mut self, secrets: &SecretSet) {
-        secrets.mask_json(&mut self.value);
-        for line in &mut self.logs {
-            secrets.mask_str(&mut line.text);
-        }
-        self.mask_error(secrets);
-    }
-
-    /// Masks the reply with the values held since its run began, as well as the process's set
-    /// ([`RunReply::mask`]). Once the run lost one of them, nothing could mask it out of what the
-    /// script and its pages produced, so all of it is withheld instead: the value, the console
-    /// lines and the error give way to the error that says why, and only Neo's own facts stay
-    /// (the run's id, its effects and its op lines).
-    pub(crate) fn mask_held(&mut self, held: &Held) {
-        if let Some(withheld) = held.withheld() {
-            self.status = ReplyStatus::Error;
-            self.value = Value::Null;
-            self.logs.clear();
-            self.error = Some(ReplyError::from_error(
-                &withheld,
-                self.effects == ReplyEffects::None,
-            ));
-        } else if let Some(set) = held.set() {
-            self.mask(&set);
         }
     }
 
     /// A call refused before it ran: nothing happened, so repeating it is safe.
     #[must_use]
-    pub(crate) fn refused(id: RunId, error: &OperationError, secrets: &SecretSet) -> Self {
-        let mut reply = Self::failed(id, ReplyEffects::None, ReplyError::from_error(error, true));
-        reply.mask_error(secrets);
-        reply
+    pub(crate) fn refused(id: RunId, error: &OperationError) -> Self {
+        Self::failed(id, ReplyEffects::None, ReplyError::from_error(error, true))
     }
 
     /// The run's own task ended without a reply (it panicked). Its ops may have sent anything.
@@ -273,12 +236,6 @@ impl RunReply {
             logs_dropped: 0,
             unknown: Vec::new(),
             not_awaited: Vec::new(),
-        }
-    }
-
-    fn mask_error(&mut self, secrets: &SecretSet) {
-        if let Some(error) = &mut self.error {
-            secrets.mask_str(&mut error.message);
         }
     }
 }
@@ -397,7 +354,7 @@ fn is_zero(count: &usize) -> bool {
 mod tests {
     use std::error::Error;
 
-    use neo_trace::{ErrorOwner, OperationId, RunId, SecretSet, SecretSetConfig};
+    use neo_trace::{ErrorOwner, OperationId, RunId};
 
     use super::{OpNote, ReplyDelivery, ReplyEffects, ReplyStatus, RunReply};
     use crate::dispatch::{ErrorCode, OperationError};
@@ -432,9 +389,8 @@ mod tests {
 
     #[test]
     fn a_refused_call_changed_nothing_and_says_so() {
-        let secrets = SecretSet::new(SecretSetConfig::default());
         let error = OperationError::neo(ErrorCode::BROWSER_UNAVAILABLE, "not connected yet");
-        let reply = RunReply::refused(RunId::new(), &error, &secrets);
+        let reply = RunReply::refused(RunId::new(), &error);
         assert_eq!(reply.status, ReplyStatus::Error);
         assert_eq!(reply.effects, ReplyEffects::None);
         let error = reply.error.as_ref();

@@ -2,21 +2,18 @@
 //! runtime/'s and run/'s tests share. The dispatcher's own tests keep their harness
 //! (dispatch/tests/harness.rs), which exercises the door one rule at a time.
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::future::{self, Future};
 use std::panic;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
+use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
-use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
-use browseros_core::{NativeCapabilities, TabId};
-use neo_playwright::{PlaywrightHooks, TypedBy};
 use neo_trace::{
-    Effect, Privacy, RedactionLimits, Redactor, RunId, SecretSet, SecretSetConfig, TaskId,
-    TraceSink, TraceStore, WriterConfig, spawn_writer,
+    Effect, RedactionLimits, Redactor, RunId, SecretSet, SecretSetConfig, TaskId, TraceSink,
+    TraceStore, WriterConfig, spawn_writer,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -26,18 +23,14 @@ use tokio::sync::Barrier;
 use tokio::task;
 use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
-use zeroize::Zeroizing;
 
 use crate::app::App;
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
-use crate::builtins::{PrivacyHooks, TypedValues};
-use crate::config::{Defaults, SecretFiles};
 use crate::dispatch::{
     Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, Observer, OpCtx,
     OperationError, PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard,
     RunStart,
 };
-use crate::host::FlagRecovery;
 use crate::run::{RunService, RunServiceParts};
 use crate::test_support::FakeCdp;
 
@@ -51,17 +44,8 @@ pub(crate) struct TestRig {
     pub(crate) tabs: Arc<TabRegistry>,
     pub(crate) store: TraceStore,
     pub(crate) sink: TraceSink,
-    pub(crate) secrets: Arc<SecretSet>,
-    /// neo-playwright's privacy callbacks, as app.rs builds them: what its journal and
-    /// reads report reaches `typed` through them.
-    pub(crate) hooks: Arc<PrivacyHooks>,
-    /// What the journal reported and the secret set has not learned yet: the door the rig's run
-    /// services run through masks every run's records and reply with it.
-    pub(crate) typed: Arc<TypedValues>,
     /// Where `test.gate` waits for the test, so the test acts between two of a script's ops.
     pub(crate) gate: Arc<Barrier>,
-    /// What the rig's pages hold in their sensitive fields, which `test.title` sweeps.
-    pub(crate) fields: Arc<PageFields>,
     pub(crate) dispatcher: Arc<Dispatcher>,
     /// What SIGTERM would cancel.
     pub(crate) shutdown: CancellationToken,
@@ -105,16 +89,6 @@ impl TestRig {
     /// As [`TestRig::new`], with the trace writer configured, e.g. a replay window that has
     /// already passed.
     pub(crate) async fn with_writer(writer: WriterConfig) -> Result<Self, TestError> {
-        Self::build(writer, SecretSetConfig::default()).await
-    }
-
-    /// As [`TestRig::new`], with the process's secret set configured, e.g. small enough for a
-    /// test to fill.
-    pub(crate) async fn with_secret_set(secrets: SecretSetConfig) -> Result<Self, TestError> {
-        Self::build(WriterConfig::default(), secrets).await
-    }
-
-    async fn build(writer: WriterConfig, secrets: SecretSetConfig) -> Result<Self, TestError> {
         let fake = FakeCdp::new();
         let tabs = Arc::new(TabRegistry::new());
         let connect = Arc::clone(&fake);
@@ -131,33 +105,19 @@ impl TestRig {
         .await?;
         let dir = tempfile::tempdir()?;
         let store = open_store(dir.path().join("trace.db")).await?;
-        let secrets = Arc::new(SecretSet::new(secrets));
-        let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
+        // neo-trace's redactor still takes a secret set; the rig registers nothing in it.
+        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
+        let redactor = Redactor::new(secrets, RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, writer, None);
-        let privacy = Privacy::new(Arc::clone(&secrets), Arc::new(sink.clone()), HashMap::new());
-        // No test on this rig uploads a file, so it names no secret files.
-        let hooks = Arc::new(PrivacyHooks::new(
-            privacy,
-            Arc::clone(&tabs),
-            FlagRecovery::none(),
-            SecretFiles::Named(Vec::new()),
-            Defaults::TYPED_QUIET,
-        ));
-        let typed = hooks.typed();
         let gate = Arc::new(Barrier::new(2));
-        let fields = Arc::new(PageFields::default());
-        let dispatcher = dispatcher(&link, &tabs, &sink, &secrets, &gate, &hooks, &fields)?;
+        let dispatcher = dispatcher(&link, &tabs, &sink, &gate)?;
         Ok(Self {
             fake,
             link,
             tabs,
             store,
             sink,
-            secrets,
-            hooks,
-            typed,
             gate,
-            fields,
             dispatcher,
             shutdown: CancellationToken::new(),
             dir,
@@ -180,15 +140,7 @@ impl TestRig {
         orphan_grace: Duration,
     ) -> Result<Arc<RunService>, TestError> {
         let tabs = Arc::new(TabRegistry::new());
-        let dispatcher = dispatcher(
-            &self.link,
-            &tabs,
-            &self.sink,
-            &self.secrets,
-            &self.gate,
-            &self.hooks,
-            &self.fields,
-        )?;
+        let dispatcher = dispatcher(&self.link, &tabs, &self.sink, &self.gate)?;
         Ok(self.service_over(dispatcher, tabs, orphan_grace))
     }
 
@@ -204,7 +156,6 @@ impl TestRig {
             tabs,
             store: self.store.clone(),
             trace: self.sink.clone(),
-            secrets: Arc::clone(&self.secrets),
             shutdown: self.shutdown.clone(),
             orphan_grace,
         })
@@ -230,16 +181,6 @@ impl TestRig {
             .find(|page| page.tab_id == tab)
             .ok_or("core lists the fake's tab")?;
         Ok(PageRef::from(info))
-    }
-
-    /// Holds `value` as if the agent just typed it into a password field: every run holds it,
-    /// and the process's set learns it only once the field goes quiet.
-    pub(crate) fn hold(&self, value: &str) {
-        let typed = JournalEntry {
-            kind: SensitiveKind::Password,
-            value: value.to_owned().into(),
-        };
-        self.typed.note(TabId(0), typed, TypedBy::Agent);
     }
 
     /// A recorded run with `budget` left and no default page yet.
@@ -272,47 +213,18 @@ pub(crate) async fn open_store(path: PathBuf) -> Result<TraceStore, TestError> {
     Ok(opened?)
 }
 
-/// What the rig's pages hold in their password, card and code fields, by tab.
-#[derive(Default)]
-pub(crate) struct PageFields {
-    values: Mutex<HashMap<TabId, Vec<String>>>,
-}
-
-impl PageFields {
-    /// `page`'s sensitive field now holds `value`, as the owner's earlier typing left it.
-    pub(crate) fn fill(&self, page: &PageRef, value: &str) {
-        self.lock()
-            .entry(page.tab)
-            .or_default()
-            .push(value.to_owned());
-    }
-
-    fn on(&self, tab: TabId) -> Vec<String> {
-        self.lock().get(&tab).cloned().unwrap_or_default()
-    }
-
-    fn lock(&self) -> MutexGuard<'_, HashMap<TabId, Vec<String>>> {
-        self.values.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
 fn dispatcher(
     link: &Arc<BrowserLink>,
     tabs: &Arc<TabRegistry>,
     sink: &TraceSink,
-    secrets: &Arc<SecretSet>,
     gate: &Arc<Barrier>,
-    hooks: &Arc<PrivacyHooks>,
-    fields: &Arc<PageFields>,
 ) -> Result<Arc<Dispatcher>, RegistryError> {
     let mut registry = RegistryBuilder::default();
-    test_methods(&mut registry, gate, hooks, fields)?;
+    test_methods(&mut registry, gate)?;
     Ok(Arc::new(Dispatcher::new(
         registry.build(),
         Vec::new(),
-        Arc::clone(secrets),
         sink.clone(),
-        hooks.typed(),
         Arc::clone(link),
         Arc::clone(tabs),
         Observer::unrecorded(),
@@ -320,17 +232,9 @@ fn dispatcher(
 }
 
 /// The methods the rig's runs can call, each written the way a built-in would be.
-fn test_methods(
-    registry: &mut RegistryBuilder,
-    gate: &Arc<Barrier>,
-    hooks: &Arc<PrivacyHooks>,
-    fields: &Arc<PageFields>,
-) -> Result<(), RegistryError> {
+fn test_methods(registry: &mut RegistryBuilder, gate: &Arc<Barrier>) -> Result<(), RegistryError> {
     registry.define(Echo)?;
-    registry.define(Title {
-        hooks: Arc::clone(hooks),
-        fields: Arc::clone(fields),
-    })?;
+    registry.define(Title)?;
     registry.define(Gate(Arc::clone(gate)))?;
     registry.define(Fail)?;
     registry.define(SlowAnswer)?;
@@ -375,12 +279,7 @@ impl Method for Echo {
 }
 
 /// `test.title`: its page's title, read from the browser, as `page.title()` reads the document's.
-/// Like every sealed-world read, it also finds what the page's sensitive fields hold, reports it
-/// to the privacy hooks, and masks it out of its own result.
-struct Title {
-    hooks: Arc<PrivacyHooks>,
-    fields: Arc<PageFields>,
-}
+struct Title;
 
 impl Method for Title {
     type Input = OnPage;
@@ -397,18 +296,11 @@ impl Method for Title {
     async fn call(&self, op: &OpCtx<Self>, _input: OnPage) -> Result<Value, LeafError> {
         let page = op.page()?.clone();
         let listing = op.race(Box::pin(op.run().view().list_pages())).await?;
-        let mut title = listing
+        let title = listing
             .pages
             .into_iter()
             .find(|info| info.tab_id == page.tab)
             .map(|info| info.title);
-        let found = FieldValues::new(self.fields.on(page.tab).into_iter().map(Zeroizing::new));
-        if !found.is_empty() {
-            self.hooks.values_swept(page.tab, &found);
-            if let Some(title) = &mut title {
-                found.mask_str(title);
-            }
-        }
         Ok(json!(title))
     }
 }
