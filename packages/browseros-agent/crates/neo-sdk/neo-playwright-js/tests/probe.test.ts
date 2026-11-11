@@ -370,7 +370,7 @@ it('tests that document reads the title, or the doctype and the markup, with the
   })
 })
 
-it('tests that setContent unboots the world once the document is open, so the next boot takes a new seq', () => {
+it("tests that setContent keeps the world booted under its seq, as upstream's frame keeps its seq", () => {
   const probe = open()
   probe.boot({ frameSeq: 0, epoch: 'a' })
   const steps: string[] = []
@@ -396,15 +396,16 @@ it('tests that setContent unboots the world once the document is open, so the ne
     kind: 'replaced',
   })
   expect(steps).toEqual(['open', '<p>new</p>', 'close'])
-  expect(probe.call({ op: 'describe' })).toEqual({ kind: 'uninstalled' })
-  expect(probe.boot({ frameSeq: 7, epoch: 'a' })).toMatchObject({
+  expect(probe.call({ op: 'describe' })).toMatchObject({
     kind: 'described',
-    seq: 7,
-    retired: 0,
+    seq: 0,
   })
+  const again = probe.boot({ frameSeq: 7, epoch: 'a' })
+  expect(again).toMatchObject({ kind: 'described', seq: 0 })
+  expect(again).not.toHaveProperty('retired')
   expect(
     probe.boot({ frameSeq: 512340, epoch: 'a restarted claw-sdk' }),
-  ).toMatchObject({ seq: 512340, retired: 7 })
+  ).toMatchObject({ seq: 512340, retired: 0 })
 })
 
 it("tests that matchUrl runs upstream's glob and the script's RegExp against the URL Rust names", () => {

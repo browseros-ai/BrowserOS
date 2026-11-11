@@ -283,9 +283,9 @@ export type DocumentPart = 'title' | 'content'
 /** The title, or the doctype and the root's outerHTML, read through the seal. */
 export type DocumentRequest = { op: 'document'; part: DocumentPart }
 /**
- * `page.setContent`: document.open, write and close, from this world. The window and this
- * world outlive document.open, so the probe unboots itself: Rust boots the new document under
- * a new seq, as for any other new document.
+ * `page.setContent`: document.open, write and close, from this world. The Document, its window
+ * and this world outlive document.open, so the world keeps its engine and its seq, as upstream's
+ * frame keeps its seq when no new document commits.
  */
 export type SetContentRequest = { op: 'setContent'; html: string }
 /**
@@ -337,9 +337,9 @@ export type Described = {
   seq: number
   url: string
   /**
-   * Only on a boot that replaced the world's numbering: the seq it last booted with, kept
-   * across an unboot. Under another epoch, another `Playwright` printed refs under that seq,
-   * so Rust never hands it out on this page. Every protocol version keeps this field.
+   * Only on a boot that replaced the world's numbering: the seq it last booted with. Under
+   * another epoch, another `Playwright` printed refs under that seq, so Rust never hands it out
+   * on this page. Every protocol version keeps this field.
    */
   retired?: number
 }
@@ -456,7 +456,7 @@ export type DocumentText = {
   text: string
   sweep: string[]
 }
-/** The document was replaced and this world unbooted: later requests answer `uninstalled`. */
+/** The document's content was replaced; the world stays booted under the same seq. */
 export type Replaced = { kind: 'replaced' }
 /**
  * The reply would have held page text the engine cuts or quotes (a preview, a strict

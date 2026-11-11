@@ -8478,10 +8478,9 @@ ${value.stack}`;
       markup += ` "${doctype.systemId}"`;
     return `${markup}>`;
   }
-  function replaceDocument(world, request, opened) {
+  function replaceDocument(world, request) {
     const { document } = world.injected;
     document.open();
-    opened();
     try {
       document.write(request.html);
     } finally {
@@ -9099,6 +9098,7 @@ ${value.stack}`;
     focused,
     matchUrl,
     document: documentText,
+    setContent: replaceDocument,
     armInput,
     inputArrived
   };
@@ -9116,15 +9116,10 @@ ${value.stack}`;
     const pins = new Pins;
     const refs = new RefMap;
     let world;
-    let lastSeq;
     function answer(booted, request, scope) {
       try {
         if (request.op === "pinned")
           return pinned(booted, request);
-        if (request.op === "setContent")
-          return replaceDocument(booted, request, () => {
-            world = undefined;
-          });
         const reply = dispatch(booted, request.op, request, scope);
         return reply instanceof Promise ? reply.catch(thrownReply) : reply;
       } catch (error) {
@@ -9145,9 +9140,8 @@ ${value.stack}`;
         const injected = createEngine(frameSeq);
         injected.onGlobalListenersRemoved.add(listenForMoves);
         refs.install(engineTable(injected), injected.utils);
+        const retired = world?.seq;
         world = { epoch, seq: frameSeq, injected, seal, pins, refs };
-        const retired = lastSeq;
-        lastSeq = frameSeq;
         return retired === undefined ? described2(world) : { ...described2(world), retired };
       },
       call(request, root, mask) {
@@ -9176,7 +9170,7 @@ ${value.stack}`;
     if (typeof request !== "object" || request === null)
       return false;
     const op = Reflect.get(request, "op");
-    return typeof op === "string" && (op === "pinned" || op === "setContent" || Object.hasOwn(HANDLERS, op));
+    return typeof op === "string" && (op === "pinned" || Object.hasOwn(HANDLERS, op));
   }
   function parseBootOptions(options) {
     const frameSeq = typeof options === "object" && options !== null ? Reflect.get(options, "frameSeq") : undefined;

@@ -177,7 +177,7 @@ pub(crate) enum ProbeReply {
         #[serde(deserialize_with = "field_values")]
         sweep: FieldValues,
     },
-    /// `setContent` replaced the document, and the world answers `uninstalled` from now on.
+    /// `setContent` replaced the document's content; the world stays booted under its seq.
     Replaced,
     /// The reply would have held page text Playwright's engine cut or quoted (a preview, a
     /// strict violation's hints), and the call carried no mask to put on it first: the request

@@ -8,10 +8,9 @@
 //!                  of the frame's site, to the op's deadline at the latest
 //!  write           DocumentWatch on the frame's session (subscribe, Page and lifecycle on) ──
 //!                  send_effect_reaching(the group's other tabs) ── probe `setContent` with a
-//!                  user gesture: document.open, write, close; the probe unboots ── the old seq
-//!                  retires, the new document's world installs ── Page.documentOpened ──
-//!                  waitUntil, each step within the op's timeout, a retry's sweep to its
-//!                  deadline ──▶ Pending, holding how it ended
+//!                  user gesture: document.open, write, close; the world and its seq stay ──
+//!                  Page.documentOpened ── waitUntil, each step within the op's timeout, a
+//!                  retry's sweep to its deadline ──▶ Pending, holding how it ended
 //!  Pending::sweep  the same sweep, now of the new document's frames too
 //!  close           `{}`, or the failure with every swept value masked in its text
 //! ```
@@ -135,23 +134,18 @@ impl GuardCore<'_> {
             watch.enable_lifecycle().await.map_err(watched)
         })
         .await?;
-        let old = self.replace_document(scope, html).await?;
-        // The world outlived document.open, unbooted: its seq retires, and the new document is
-        // booted under the next one before any other op can mint a ref in it, so a ref from
-        // before fails instead of naming a new element.
-        self.page.frames().invalidate(&old);
+        // The world outlives document.open with its engine and its seq, as upstream's frame
+        // keeps its seq when no new document commits: the next snapshot's refs keep the frame's
+        // prefix, and a ref or pin from before names a removed element, so it fails as stale.
+        self.replace_document(scope, html).await?;
         bounded(scope, async {
-            self.page
-                .world(&endpoint, self.frame.place.clone())
-                .await
-                .map_err(|failure| resolve::failed(scope, failure))?;
             watch.opened().await.map_err(watched)?;
             watch.reached(wait_until).await.map_err(watched)
         })
         .await
     }
 
-    /// Writes `html` in the frame's world and returns that world, now unbooted. A world whose
+    /// Writes `html` in the frame's world, which stays booted. A world whose
     /// document changed since its install fails `Gone(Ran::No)` without running the request, so
     /// the write is tried once more in the new document's world. That document is not the one
     /// the sweep before the first write saw, and its scripts may have copied a value anywhere
@@ -170,7 +164,7 @@ impl GuardCore<'_> {
         &mut self,
         scope: &OpScope<'_>,
         html: &str,
-    ) -> Result<SealedWorld, PlaywrightError> {
+    ) -> Result<(), PlaywrightError> {
         let installed = |world: Result<SealedWorld, ProbeFailure>| {
             world.map_err(|failure| resolve::failed(scope, failure))
         };
@@ -192,7 +186,7 @@ impl GuardCore<'_> {
             })
             .await?;
             match written {
-                Ok(ProbeReply::Replaced) => return Ok(world),
+                Ok(ProbeReply::Replaced) => return Ok(()),
                 Ok(other) => {
                     return Err(resolve::failed(
                         scope,

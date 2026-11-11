@@ -102,7 +102,8 @@ struct WorldKey {
 /// - **A seq names one document forever.** Seqs come from one counter and are never handed
 ///   out twice; the world's reply wins over the candidate, and a world this instance booted
 ///   keeps its seq. A new document always gets a new seq, so an old `f7e3` can only resolve
-///   in document 7 or fail.
+///   in document 7 or fail. `document.open()` (setContent) keeps the Document, so it keeps its
+///   seq, as upstream's frame does when no new document commits.
 /// - **An earlier process's seqs stay retired.** A re-key reports the seq the world held
 ///   under another `Playwright`; the counter skips it for good, so a ref that process printed
 ///   into that document can never name a document of this one.
@@ -296,8 +297,8 @@ impl WorldsInner {
 
     /// `key`'s install reported `seq`: the world's answer wins. A seq this page already knew
     /// under another key is the same document reached through another session, whose old
-    /// handle is dropped. `retired` is the seq the boot replaced. It is kept even when this
-    /// page handed it out itself (a boot after `setContent`), where it is retired already.
+    /// handle is dropped. `retired` is the seq an earlier `Playwright` gave the world, which the
+    /// boot replaced.
     fn adopt(&mut self, key: &WorldKey, seq: FrameSeq, retired: Option<FrameSeq>) {
         self.foreign.extend(retired);
         if let Some(previous) = self.live.insert(seq, key.clone())
