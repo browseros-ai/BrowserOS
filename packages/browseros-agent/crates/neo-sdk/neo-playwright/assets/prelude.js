@@ -8073,7 +8073,7 @@ ${value.stack}`;
       return null;
     }
     viewportSize() {
-      return this.#viewportSize;
+      return this.#viewportSize || null;
     }
     async setViewportSize(viewportSize) {
       this.#viewportSize = viewportSize;

@@ -1904,7 +1904,6 @@ dependencies = [
  "serde_path_to_error",
  "sha2",
  "tokio",
- "tokio-util",
  "url",
  "uuid",
 ]

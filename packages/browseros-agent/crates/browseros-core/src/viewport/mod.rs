@@ -6,7 +6,9 @@
 //! Hosts enable the feature by attaching one [`Viewports`] to their views; every entry point is
 //! on [`BrowserView`], so admission and scope stay where they are.
 
+mod change;
 mod device;
+pub use change::ViewportChange;
 #[cfg(test)]
 mod tests;
 

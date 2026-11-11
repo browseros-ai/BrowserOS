@@ -407,6 +407,20 @@ impl BrowserView {
     pub fn playwright_viewport(&self, page: &PageId) -> Option<crate::viewport::Size> {
         self.viewports.as_ref()?.playwright_size(page)
     }
+    /// Admits and locks a Playwright resize without sending it. The caller checks permission
+    /// after this await, then immediately applies the change. Fits keep their measured path.
+    pub async fn prepare_playwright_viewport(
+        &self,
+        page: PageId,
+        request: crate::viewport::ViewportRequest,
+    ) -> Result<crate::viewport::ViewportChange, CoreError> {
+        match &self.viewports {
+            Some(viewports) => viewports.prepare_change(self, page, request).await,
+            None => Err(CoreError::Message(
+                "setViewport is only available on a hosted BrowserOS neo server".to_owned(),
+            )),
+        }
+    }
     /// Holds the page without changing anything, for work outside a page operation that must
     /// not overlap viewport changes, such as a background screenshot: a capture
     /// rewrites the page's emulation until it finishes.

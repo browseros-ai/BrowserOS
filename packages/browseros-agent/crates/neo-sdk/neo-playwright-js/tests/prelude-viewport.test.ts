@@ -71,3 +71,13 @@ it('rejects non-integer dimensions before any browser write', async () => {
     runtime.sent('page.setViewportSize').filter((call) => !isRefusal(call)),
   ).toEqual([])
 })
+
+it('normalizes a failed undefined viewport argument to null like upstream', async () => {
+  const runtime = loadPrelude({ seed: SEED })
+  expect(
+    await runtime.run(`
+    try { await page.setViewportSize(undefined) } catch {}
+    return page.viewportSize()
+  `),
+  ).toBeNull()
+})

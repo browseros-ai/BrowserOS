@@ -427,6 +427,95 @@ struct Fixture {
     view: BrowserView,
 }
 
+#[tokio::test]
+async fn playwright_changes_need_no_renderer_probe_and_publish_only_after_success() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    let request = ViewportRequest::playwright(Size {
+        width: 50,
+        height: 5000,
+    })?;
+    fixture.native.lock().fail = Some("Runtime.evaluate");
+    fixture
+        .view
+        .prepare_playwright_viewport(page.clone(), request)
+        .await?
+        .apply()
+        .await?;
+    assert_eq!(fixture.view.current_viewport(&page), Some(request));
+    assert_eq!(fixture.view.playwright_viewport(&page), request.size());
+    assert!(
+        fixture.native.calls("Runtime.evaluate").is_empty(),
+        "a CDP resize must not depend on a live document or isolated world"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_and_cancelled_playwright_changes_restore_the_previous_host_configuration()
+-> TestResult {
+    for cancelled in [false, true] {
+        let fixture = Fixture::new(&[(1, 10)]);
+        let page = fixture.page(1).await?;
+        let old = ViewportRequest::playwright(Size {
+            width: 640,
+            height: 480,
+        })?;
+        fixture
+            .view
+            .prepare_playwright_viewport(page.clone(), old)
+            .await?
+            .apply()
+            .await?;
+        let new = ViewportRequest::playwright(Size {
+            width: 800,
+            height: 600,
+        })?;
+        let change = fixture
+            .view
+            .prepare_playwright_viewport(page.clone(), new)
+            .await?;
+        let stopped_at = "Emulation.setTouchEmulationEnabled";
+        if cancelled {
+            fixture.native.lock().stall = Some(stopped_at);
+            let mut applying = Box::pin(change.apply());
+            assert!(
+                still_waiting(&mut applying).await,
+                "the first metrics write landed but its context reset is held"
+            );
+            fixture.native.lock().stall = None;
+            drop(applying);
+        } else {
+            fixture.native.lock().fail = Some(stopped_at);
+            assert!(
+                change.apply().await.is_err(),
+                "the resize fails after its metrics write"
+            );
+            fixture.native.lock().fail = None;
+        }
+        assert_eq!(
+            fixture.view.current_viewport(&page),
+            Some(old),
+            "a rejected request must never become a fit's saved request"
+        );
+        assert_eq!(
+            fixture.view.playwright_viewport(&page),
+            old.size(),
+            "the next run must see the last successful size"
+        );
+        // Cleanup keeps the exclusive lock through its rollback. Sharing the viewport here
+        // waits for that cleanup, as the next capture or fit must, without a timing guess.
+        drop(fixture.view.hold_viewport(page.clone()).await);
+        let metrics = fixture.native.calls("Emulation.setDeviceMetricsOverride");
+        let restored = metrics
+            .last()
+            .ok_or("rollback sends the original metrics")?;
+        assert_eq!(restored.params["width"], 640);
+        assert_eq!(restored.params["height"], 480);
+    }
+    Ok(())
+}
+
 impl Fixture {
     /// Tabs as (tab id, window id).
     fn new(tabs: &[(i64, i64)]) -> Self {

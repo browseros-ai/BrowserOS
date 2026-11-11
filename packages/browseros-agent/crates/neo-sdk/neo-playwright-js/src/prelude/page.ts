@@ -196,7 +196,7 @@ export class Page extends EventEmitter {
   }
 
   viewportSize(): { width: number; height: number } | null {
-    return this.#viewportSize
+    return this.#viewportSize || null
   }
 
   async setViewportSize(viewportSize: {

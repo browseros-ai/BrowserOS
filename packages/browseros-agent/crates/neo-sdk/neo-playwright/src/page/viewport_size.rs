@@ -3,7 +3,6 @@
 use browseros_core::viewport::{Size, ViewportRequest};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio_util::sync::CancellationToken;
 
 use crate::op_scope::OpScope;
 use crate::target::PageRef;
@@ -36,16 +35,16 @@ pub(crate) async fn set(
     let request = ViewportRequest::playwright(size)
         .map_err(|error| scope.fail(ErrorCode::InvalidInput, &error))?;
     let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
-    // This is a tab write: the door's takeover recheck precedes the first CDP effect. Core
-    // owns the request and the viewport lock, so a fit saves it and restores it unchanged.
-    let _sent = scope.send_effect()?;
-    scope
+    let change = scope
         .view()
-        .set_viewport(
-            admitted.core_page.clone(),
-            request,
-            &CancellationToken::new(),
-        )
+        .prepare_playwright_viewport(admitted.core_page.clone(), request)
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    // Admission and the viewport queue may wait while the owner takes the tab. Check after
+    // those waits, immediately before CDP; dropping an unauthorized change sends nothing.
+    let _sent = scope.send_effect()?;
+    change
+        .apply()
         .await
         .map_err(|error| scope.core_error(&error))?;
     Ok(json!({}))

@@ -535,6 +535,52 @@ async fn a_closed_page_names_who_closed_it() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn a_takeover_while_a_viewport_change_waits_prevents_its_first_send()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let page = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let info = run
+        .view()
+        .list_pages()
+        .await?
+        .pages
+        .into_iter()
+        .find(|info| info.tab_id == page.tab)
+        .ok_or("the opened tab is listed")?;
+    let held = run.view().hold_viewport(info.page_id).await;
+    let input = json!({ "page": handle(&page), "viewportSize": { "width": 640, "height": 480 } });
+    let pending = harness.submit(&run, "page.setViewportSize", input);
+    tokio::pin!(pending);
+    tokio::select! {
+        _ = &mut pending => return Err("the viewport change must queue behind the held capture".into()),
+        () = time::sleep(Duration::from_millis(25)) => {}
+    }
+    let lock = harness.lock(page.tab, Reads::Allow).await?;
+    let before = harness.fake.calls().len();
+    drop(held);
+    let refused = failure(pending.await)?;
+    assert_eq!(
+        refused.delivery,
+        Delivery::NotSent,
+        "the final recheck sees the takeover acquired during preparation"
+    );
+    assert!(
+        harness
+            .fake
+            .calls()
+            .iter()
+            .skip(before)
+            .all(|call| call.method != "Emulation.setDeviceMetricsOverride"),
+        "no queued resize may overwrite an owner fit"
+    );
+    harness.locks.unlock_host(lock.id)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_viewport_write_is_refused_before_cdp_while_the_owner_locks_the_tab()
 -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
