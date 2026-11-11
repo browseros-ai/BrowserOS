@@ -274,6 +274,30 @@ function validateValue(
 }
 
 /**
+ * `value` as a page receives an argument, JSON text in Playwright's in-page format, for what Neo
+ * hands a page outside an evaluate: a binding call's answer, which upstream's client serializes
+ * (`serializeArgument`) and its server re-serializes for the page. A value the protocol cannot
+ * carry throws its plain error, and so does a handle: a binding answers with values only.
+ */
+export function inPageArgument(value: unknown): string {
+  const serialized = serializeValue(value, (item) => {
+    if (isHandle(item) || item instanceof WaitHandle)
+      throw new Error(
+        'Neo answers a binding with values, not handles; return the value itself',
+      )
+    return fallThrough(item)
+  })
+  return JSON.stringify(
+    serializeAsCallArgument(parseSerializedValue(serialized, []), fallThrough),
+  )
+}
+
+/** One argument a page sent in its own format (a binding call's), as the agent's value. */
+export function fromInPageArgument(value: unknown): unknown {
+  return parseEvaluationResultValue(value as never)
+}
+
+/**
  * The op's masked result, in the page's format, as the agent's value: the vendored
  * `parseEvaluationResultValue`. Rust already applied upstream's server-to-client step (an
  * ArrayBuffer is `{}`), so this one walk gives what upstream's three do.
