@@ -8378,30 +8378,33 @@ ${value.stack}`;
     return BROWSEROS_UI_HOSTS.has(element.localName);
   }
   var installed = false;
+  function shadowRootReader() {
+    let owner = Element.prototype;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, "shadowRoot");
+      if (descriptor) {
+        if (typeof descriptor.get !== "function")
+          throw new ProbeError("internal", "this world's Element.prototype.shadowRoot is not an accessor");
+        return descriptor.get;
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    return;
+  }
   function hideBrowserOSUi() {
     if (installed)
       return;
-    let owner = Element.prototype;
-    let descriptor;
-    while (owner && !descriptor) {
-      descriptor = Object.getOwnPropertyDescriptor(owner, "shadowRoot");
-      owner = Object.getPrototypeOf(owner);
-    }
-    if (!descriptor) {
-      installed = true;
+    installed = true;
+    const read = shadowRootReader();
+    if (!read)
       return;
-    }
-    const read = descriptor.get;
-    if (typeof read !== "function")
-      throw new ProbeError("internal", "this world's Element.prototype.shadowRoot is not an accessor");
     Object.defineProperty(Element.prototype, "shadowRoot", {
       configurable: true,
-      enumerable: descriptor.enumerable ?? true,
+      enumerable: true,
       get() {
         return isBrowserOSUi(this) ? null : Reflect.apply(read, this, []);
       }
     });
-    installed = true;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/document.ts
