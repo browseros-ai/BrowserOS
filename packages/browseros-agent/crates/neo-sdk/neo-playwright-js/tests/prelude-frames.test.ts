@@ -76,6 +76,37 @@ it('tests that a refused frames read keeps the main frame and starts the run', a
   expect(runtime.calls.map((call) => call.name)).toEqual(['page.title'])
 })
 
+it('tests that an omitted metadata tree preserves retained Frame objects', async () => {
+  let reads = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) =>
+      call.name === 'page.frames' ? (reads++ === 0 ? TREE : {}) : null,
+  })
+  const result = json(
+    await runtime.run(`
+      const saved = page.frame('cross')
+      const frames = page.frames()
+      await page.waitForTimeout(1)
+      return {
+        identity: saved === page.frame('cross'),
+        attached: !saved.isDetached(),
+        url: saved.url(),
+        frames: page.frames().every((frame, index) => frame === frames[index]),
+        parent: saved.parentFrame() === page.mainFrame(),
+      }
+    `),
+  )
+  expect(result).toEqual({
+    identity: true,
+    attached: true,
+    url: 'https://b.example/',
+    frames: true,
+    parent: true,
+  })
+  expect(reads).toBe(2)
+})
+
 it('tests that an older bootstrap gets the run page at once and reads no frames', async () => {
   const runtime = loadPrelude({
     seed: SEED,

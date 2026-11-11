@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../neo-playwright/third_party/playwri
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 21
+export const PROTOCOL = 22
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -323,6 +323,27 @@ export type ScreenshotMaskRequest = {
   color: string
 }
 export type ScreenshotMaskCleanupRequest = { op: 'screenshotMaskCleanup' }
+/** Which Storage of the document a `webStorage` request reads or changes. */
+export type StorageKind = 'local' | 'session'
+/** Upstream's WebStorage methods (server/page.ts `webStorage*` at v1.64.1). */
+export type StorageAction =
+  | 'items'
+  | 'getItem'
+  | 'setItem'
+  | 'removeItem'
+  | 'clear'
+/**
+ * `page.localStorage` and `page.sessionStorage`: one Storage call in this world, which shares
+ * the document's storage, as upstream evaluates each one in its utility world. Answers `value`:
+ * `[{ name, value }]` for `items`, the string or null for `getItem`, null for the writes.
+ */
+export type WebStorageRequest = {
+  op: 'webStorage'
+  kind: StorageKind
+  action: StorageAction
+  name?: string
+  value?: string
+}
 
 export type ProbeRequest =
   | DescribeRequest
@@ -346,6 +367,7 @@ export type ProbeRequest =
   | InputArrivedRequest
   | ScreenshotMaskRequest
   | ScreenshotMaskCleanupRequest
+  | WebStorageRequest
 export type Op = ProbeRequest['op']
 /** Each request by its op, as a map so a handler table keyed by op type-checks per op. */
 export type RequestMap = { [R in ProbeRequest as R['op']]: R }
@@ -515,6 +537,7 @@ export const REPLY_KINDS = {
   inputArrived: ['value', 'detached'],
   screenshotMask: ['value'],
   screenshotMaskCleanup: ['value'],
+  webStorage: ['value'],
 } as const satisfies Record<ValueOp, readonly ReplyKind[]>
 
 /** Everything a request may answer by value. */

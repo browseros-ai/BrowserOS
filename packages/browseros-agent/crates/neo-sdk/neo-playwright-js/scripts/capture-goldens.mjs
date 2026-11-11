@@ -435,6 +435,7 @@ async function captureApi(browser, page) {
   try {
     const classes = {
       Selectors: selectors,
+      WebStorage: page.localStorage,
       Browser: browser,
       BrowserContext: page.context(),
       Page: page,

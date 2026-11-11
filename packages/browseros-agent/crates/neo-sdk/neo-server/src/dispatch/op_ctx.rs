@@ -107,6 +107,8 @@ pub(super) struct OpState {
     /// How many event-pump replies the script must have dispatched before it takes this op's
     /// answer ([`OpCtx::answer_after_pump`]); the reply carries it as `pumped`.
     after_pump: AtomicU64,
+    /// Run-local completion identities reported by a method, carried as reply metadata only.
+    completed_publications: Mutex<Vec<u64>>,
 }
 
 /// A page's viewport lease, held or inherited from an ancestor op. A method keeps it for as
@@ -216,6 +218,12 @@ impl<M> OpCtx<M> {
             .state
             .after_pump
             .fetch_max(replies, Ordering::AcqRel);
+    }
+
+    /// Carry a method's completion facts to the runtime without letting runtime reach its
+    /// browser implementation. These identities affect publication ordering, never delivery.
+    pub(crate) fn report_publications(&self, completed: Vec<u64>) {
+        *lock(&self.core.state.completed_publications) = completed;
     }
 
     /// Reports a page this op opened, navigated or closed.
@@ -404,6 +412,7 @@ impl OpState {
             reports: Mutex::new(Vec::new()),
             viewports: Mutex::new(Vec::new()),
             after_pump: AtomicU64::new(0),
+            completed_publications: Mutex::default(),
         })
     }
 
@@ -423,6 +432,10 @@ impl OpState {
     /// When the op, or one of its children, marked itself sent.
     pub(super) fn sent_at(&self) -> Option<EpochMillis> {
         self.sent_at.get().copied()
+    }
+
+    pub(super) fn take_publications(&self) -> Vec<u64> {
+        mem::take(&mut *lock(&self.completed_publications))
     }
 
     /// What [`OpCtx::answer_after_pump`] last raised it to, 0 when nothing did.

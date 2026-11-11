@@ -140,15 +140,7 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
-    hint: 'read storage with page.evaluate(() => localStorage.getItem(key))',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
     hint: 'Neo records its own screencast of every tab',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
-    hint: 'read storage with page.evaluate(() => sessionStorage.getItem(key))',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {

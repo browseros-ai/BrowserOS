@@ -37,6 +37,7 @@ import { generatedSelector, pinned, resolve } from './resolve'
 import { screenshotMask, screenshotMaskCleanup } from './screenshot'
 import { snapshot } from './snapshot'
 import { matchUrl } from './url'
+import { webStorage } from './web-storage'
 import {
   createEngine,
   engineTable,
@@ -79,6 +80,7 @@ const HANDLERS: Handlers = {
   setContent: replaceDocument,
   armInput,
   inputArrived,
+  webStorage,
 }
 
 const UNINSTALLED: Uninstalled = { kind: 'uninstalled' }

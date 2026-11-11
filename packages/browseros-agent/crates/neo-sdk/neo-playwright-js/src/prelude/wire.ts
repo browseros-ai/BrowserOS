@@ -139,7 +139,15 @@ export type NavigationResult = {
   response?: ResponseInfo | null
   url?: string | null
   frames?: FrameInfo[]
+  /** Native navigation already attempted its bounded snapshot; absence means keep cached facts. */
+  frameSnapshotAttempted?: boolean
 }
+
+/** The frame-event journal cut reached by one pointer action's actual navigations. */
+/** Run-local completion identity; acknowledgments keep the host receipt ledger bounded by in-flight work. */
+export type NavigationPublication = { id: number; acknowledged: number[] }
+
+export type NavigationCut = { seq: number; at: number }
 
 /** `page.frames`: every frame of the tab, the main frame first, each parent before its children. */
 export type FrameTree = { frames: FrameInfo[] }
@@ -478,13 +486,23 @@ export type OpInputs = {
   }
   'mouse.wheel': PageArgs & { deltaX: number; deltaY: number }
   'page.goto': FrameArgs & {
+    publication?: NavigationPublication
     url: string
     waitUntil: LoadState
     referer?: string
   }
-  'page.reload': PageArgs & { waitUntil: LoadState }
-  'page.goBack': PageArgs & { waitUntil: LoadState }
-  'page.goForward': PageArgs & { waitUntil: LoadState }
+  'page.reload': PageArgs & {
+    publication?: NavigationPublication
+    waitUntil: LoadState
+  }
+  'page.goBack': PageArgs & {
+    publication?: NavigationPublication
+    waitUntil: LoadState
+  }
+  'page.goForward': PageArgs & {
+    publication?: NavigationPublication
+    waitUntil: LoadState
+  }
   /** Matched in the page with vendored `urlMatches`, so globs and RegExps keep JS semantics. */
   'page.waitForNavigation': FrameArgs & {
     url?: UrlPattern
@@ -548,6 +566,17 @@ export type OpInputs = {
   'page.exposeBinding': PageArgs & { name: string; noGlobal?: true }
   /** `arg`: `{ name, seq, result }` or `{ name, seq, error }` as in-page JSON text. */
   'bindingCall.resolve': PageArgs & { context: number; arg: string }
+  'webStorage.read': PageArgs & {
+    kind: 'local' | 'session'
+    action: 'items' | 'getItem'
+    name?: string
+  }
+  'webStorage.write': PageArgs & {
+    kind: 'local' | 'session'
+    action: 'setItem' | 'removeItem' | 'clear'
+    name?: string
+    value?: string
+  }
   /** A handler's locator, on the main frame of its page; `uid` names the registration. */
   'page.addLocatorHandler': { target: LocatorBrand; noWaitAfter?: true }
   'page.removeLocatorHandler': { uid: number }
@@ -610,7 +639,7 @@ export type OpInputs = {
  */
 export type OpOutputs = {
   'events.interceptFileChooser': Done
-  'locator.click': null
+  'locator.click': { navigation: NavigationCut } | null
   'locator.dblclick': null
   'locator.hover': null
   'locator.check': null
@@ -693,6 +722,9 @@ export type OpOutputs = {
   'page.addInitScript': { id: number }
   'page.exposeBinding': { id: number }
   'bindingCall.resolve': Done
+  /** `items`'s name/value pairs, or `getItem`'s string, null when absent. */
+  'webStorage.read': { name: string; value: string }[] | string | null
+  'webStorage.write': null
   'page.addLocatorHandler': { uid: number }
   'page.removeLocatorHandler': Done
   'page.locatorHandlerTriggered': { uid: number | null }

@@ -27,6 +27,7 @@ use crate::page::document_watch::{
     Arrival, CommitOutcome, DocumentWatch, Expect, FrameTreeReply, WatchError, decode,
 };
 use crate::page::frame_routes::RootAttachment;
+use crate::page::frame_tree::FrameTree;
 use crate::page::{LoadState, frame_tree, subtree_load};
 use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError};
@@ -44,6 +45,9 @@ const ERROR_PAGE_COMMIT: Duration = Duration::from_secs(1);
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct GotoInput {
     page: PageRef,
+    /// Run-local publication correlation, shared with the bridge rather than a browser identity.
+    #[serde(default, rename = "publication")]
+    publication: Option<NavigationPublication>,
     /// The frame `frame.goto` names, a frame id from `page.frames()`; absent is the main frame.
     #[serde(default)]
     frame: Option<FrameId>,
@@ -61,8 +65,19 @@ pub(crate) struct GotoInput {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct NavigateInput {
     page: PageRef,
+    /// Run-local publication correlation, shared with the bridge rather than a browser identity.
+    #[serde(default, rename = "publication")]
+    publication: Option<NavigationPublication>,
     #[serde(default)]
     wait_until: LoadState,
+}
+
+/// A run-local receipt identity shared with the host bridge, never a browser identity.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NavigationPublication {
+    id: u64,
+    acknowledged: Vec<u64>,
 }
 
 /// `page.waitForLoadState(state)` and `frame.waitForLoadState(state)`: `{ page, frame?, state? }`.
@@ -96,9 +111,26 @@ pub(crate) enum Navigation {
 
 /// The addressed frame's result; only a main-frame URL also changes `page.url()`.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct NavigationResult {
     pub(crate) response: Option<Response>,
     pub(crate) url: Option<String>,
+    #[serde(flatten)]
+    frames: Option<FrameTree>,
+    /// A missing optional snapshot must not trigger an unbounded client-side renderer read.
+    frame_snapshot_attempted: bool,
+}
+
+impl NavigationResult {
+    /// A wait supplies its own frame snapshot in the enclosing navigation reply.
+    pub(crate) fn observed(response: Option<Response>, url: String) -> Self {
+        Self {
+            response,
+            url: Some(url),
+            frames: None,
+            frame_snapshot_attempted: true,
+        }
+    }
 }
 
 /// Playwright's `Response` for the selected document, from its navigation timing entry.
@@ -115,20 +147,27 @@ pub(crate) struct Response {
 
 impl GotoInput {
     /// The page, the navigation and its `waitUntil`.
-    pub(crate) fn into_parts(self) -> (PageRef, Navigation, LoadState) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        PageRef,
+        Navigation,
+        LoadState,
+        Option<NavigationPublication>,
+    ) {
         let navigation = Navigation::Goto {
             frame: self.frame,
             url: complete_user_url(self.url),
             referer: self.referer,
         };
-        (self.page, navigation, self.wait_until)
+        (self.page, navigation, self.wait_until, self.publication)
     }
 }
 
 impl NavigateInput {
     /// The page and its `waitUntil`.
-    pub(crate) fn into_parts(self) -> (PageRef, LoadState) {
-        (self.page, self.wait_until)
+    pub(crate) fn into_parts(self) -> (PageRef, LoadState, Option<NavigationPublication>) {
+        (self.page, self.wait_until, self.publication)
     }
 }
 
@@ -151,7 +190,15 @@ pub(crate) async fn navigate(
     page: TabId,
     navigation: Navigation,
     wait_until: LoadState,
+    publication: Option<NavigationPublication>,
 ) -> Result<Value, PlaywrightError> {
+    if let Some(publication) = &publication {
+        scope
+            .run_state()
+            .navigation_publications
+            .acknowledge(&publication.acknowledged);
+    }
+    let after = pw.events().head();
     let admitted = scope.admit(pw.browser(), page).await?;
     let session_id = admitted.session.session_id.clone();
     let session = pw.browser().protocol_session(session_id.clone());
@@ -184,7 +231,12 @@ pub(crate) async fn navigate(
     if frame != main {
         watch.follow_frame_events(main);
     }
+    let publication = publication
+        .map(|publication| publication.id)
+        .filter(|_| frame == main_frame(admitted));
     let target = NavigationFrame {
+        publication,
+        after,
         pw,
         page,
         id: frame.clone(),
@@ -216,9 +268,23 @@ pub(crate) async fn navigate(
             Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
         }
     }
+    // Frame facts belong to this operation's deadline and observation. Fetching them in
+    // JS after the reply can overtake a later evaluate or stall on a replacement renderer.
+    let frames = scope
+        .within(time::timeout(
+            TIMING_READ,
+            frame_tree::snapshot(pw, scope, page),
+        ))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .and_then(Result::ok)
+        .flatten();
     let result = NavigationResult {
         response,
         url: watch.url().map(str::to_owned),
+        frames,
+        frame_snapshot_attempted: true,
     };
     to_output(scope, &result)
 }
@@ -330,6 +396,7 @@ async fn drive(
         let message = format!("the browser could not load {unreachable}");
         return Err(scope.fail(ErrorCode::NavigationFailed, &message));
     }
+    target.register_load_publication(scope, &arrival, wait_until);
     // Keep the selected document's response while it still exists. A later navigation can
     // finish this load wait, but its timing entry must never stand in for the earlier one.
     let current_session = watch.session().clone();
@@ -351,6 +418,8 @@ async fn drive(
 /// A stable Frame identity across CDP session changes. Following is read-only: the original
 /// navigation command is never replayed when an OOPIF moves to another renderer.
 struct NavigationFrame<'a> {
+    publication: Option<u64>,
+    after: u64,
     pw: &'a Playwright,
     page: TabId,
     id: FrameId,
@@ -359,6 +428,28 @@ struct NavigationFrame<'a> {
 }
 
 impl NavigationFrame<'_> {
+    /// Register the arriving loader before supplemental metadata can delay its publication.
+    fn register_load_publication(
+        &self,
+        scope: &OpScope<'_>,
+        arrival: &Arrival,
+        wait_until: LoadState,
+    ) {
+        use std::sync::Arc;
+        if let Some(id) = self.publication
+            && let Arrival::NewDocument(commit) = &arrival
+        {
+            scope.run_state().navigation_publications.watch(
+                id,
+                Arc::clone(self.pw.event_hub()),
+                self.id.clone(),
+                commit.loader.clone(),
+                wait_until,
+                self.after,
+            );
+        }
+    }
+
     async fn committed(
         &self,
         scope: &OpScope<'_>,

@@ -1,14 +1,18 @@
 //! One run's Playwright state, owned by the host so it lives exactly as long as the run.
 
+mod navigation_publications;
+
+use navigation_publications::NavigationPublications;
+
 use crate::DownloadFacts;
 use crate::events::{RunDownloads, RunEvents};
 use crate::locator_handler::LocatorHandlers;
 use crate::object_group::ObjectGroup;
 use crate::page::{FrameRoutes, InitScripts};
 
-/// One run's Playwright state: event cursors, discovered frame endpoints, retained element
-/// objects, the downloads it was handed and its init scripts. The host creates it with
-/// `Default`, keeps it in its run slot and drops it with the run; the crate reaches it through
+/// One run's Playwright state: event cursors, navigation publication receipts, discovered
+/// frame endpoints, retained element objects, downloads and init scripts. The host creates it
+/// with `Default`, keeps it in its run slot and drops it with the run; the crate reaches it through
 /// `OpEnv::run_state`. Opaque, so its contents can change without the host noticing.
 ///
 /// The event hub holds runs weakly, so dropping this is how a run's listeners and the dialogs
@@ -17,6 +21,7 @@ use crate::page::{FrameRoutes, InitScripts};
 #[non_exhaustive]
 pub struct RunState {
     pub(crate) events: RunEvents,
+    pub(crate) navigation_publications: NavigationPublications,
     pub(crate) frames: FrameRoutes,
     /// Returned tags and chooser inputs retained until the script and all its handles end.
     pub(crate) objects: ObjectGroup,
@@ -37,6 +42,14 @@ impl RunState {
     #[must_use]
     pub fn pump_replies(&self) -> u64 {
         self.events.pump_replies()
+    }
+
+    /// Navigation publication identities whose requested document reached its load state.
+    /// The bridge combines these with fully settled native replies; a genuinely pending
+    /// document never makes a later evaluate wait for it.
+    #[must_use]
+    pub fn completed_navigation_loads(&self) -> Vec<u64> {
+        self.navigation_publications.ready()
     }
 
     /// Every download a `download` event handed this run, in the order it first saw each (the
