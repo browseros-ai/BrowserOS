@@ -669,44 +669,59 @@ mod tests {
     /// A renderer that never answers must not extend a child's requested wait deadline.
     #[tokio::test]
     async fn child_load_state_deadline_includes_frame_resolution() -> TestResult {
-        use super::{LoadStateInput, wait_for_load_state};
+        use super::{LoadState, LoadStateInput, wait_for_load_state};
+        use crate::ErrorCode;
         use crate::op::Op;
         use crate::op_scope::OpScope;
         use crate::target::CallHeader;
-        use crate::test_env::TestEnv;
-        use crate::test_support::{self, RecordingHooks};
-        use crate::{ErrorCode, Playwright};
-        use browseros_core::BrowserView;
-        use browseros_core::testing::{TestConnection, cdp_pending};
-        use serde_json::json;
-        use std::sync::Arc;
+        use crate::test_support::{
+            ProbeAnswer, SCRIPTED_CHILD, ScriptedRun, ScriptedTab, TabScript,
+        };
+        use browseros_core::FrameId;
+        use serde_json::Value;
         use std::time::Duration;
         use tokio::time;
 
-        let connection = TestConnection::new([]);
-        let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
-        connection.always("Page.getFrameTree", cdp_pending())?;
-        let pw = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
-        let env = TestEnv::over(BrowserView::unbound(browser, None));
+        struct StalledFrames;
+        impl TabScript for StalledFrames {
+            fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+                panic!("native load-state setup must not install a JavaScript world")
+            }
+            fn child(&self) -> bool {
+                true
+            }
+            fn delay(&self, method: &str) -> Duration {
+                if method == "Page.getFrameTree" {
+                    Duration::from_secs(30)
+                } else {
+                    Duration::ZERO
+                }
+            }
+        }
+        let tab = ScriptedTab::new(StalledFrames);
+        let run = ScriptedRun::over(&tab).await?;
         let op = Op::from_name("page.waitForLoadState").ok_or("load-state op is registered")?;
         let scope = OpScope::new(
-            &env,
+            &run.env,
             op,
             CallHeader {
                 timeout_ms: Some(100),
                 ..CallHeader::default()
             },
         );
-        let input: LoadStateInput = serde_json::from_value(json!({
-            "page": { "$neo": "page", "tab": 7 }, "frame": "child", "state": "load"
-        }))?;
+        let input = LoadStateInput {
+            page: run.page,
+            frame: Some(FrameId(SCRIPTED_CHILD.to_owned())),
+            state: LoadState::Load,
+        };
         let result = time::timeout(
             Duration::from_secs(1),
-            wait_for_load_state(&pw, &scope, input),
+            wait_for_load_state(&run.playwright, &scope, input),
         )
         .await?;
         let error = result.err().ok_or("a stalled frame lookup must time out")?;
         assert_eq!(error.error_code(), Some(ErrorCode::WaitTimeout));
+        assert_eq!(tab.slowed_in_flight(), 0, "the expired lookup is cancelled");
         Ok(())
     }
 
