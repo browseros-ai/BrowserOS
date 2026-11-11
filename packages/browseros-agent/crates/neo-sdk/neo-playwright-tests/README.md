@@ -30,10 +30,11 @@ node packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/run.mjs -
 
 Every engine launches its own headless BrowserOS with a private profile and leased
 server ports. Guardians clean and verify only their own process groups, even after
-a worker crashes. Normal mode uses `--window-size=1520,801`: BrowserOS's chrome
-leaves a 1280×720 viewport. Before connecting the SDK, the harness verifies both the
-launch tab and a temporary native `Browser.createTab` at device scale 1. A mismatch
-fails setup. `run.json` records flags, environment, version, viewport probes, the
+a worker crashes. Normal mode uses `--window-size=1520,801`: BrowserOS 0.52.1.1's chrome
+leaves a 1280×720 viewport. Other releases size their chrome differently (0.52.2 takes
+34 px less), so the harness measures the launch tab and resizes the window by the
+difference. It then verifies both the launch tab and a temporary native
+`Browser.createTab` at device scale 1. A mismatch fails setup. `run.json` records flags, environment, version, viewport probes, the
 three v1 script hashes, and the add-on build/hash. Profiles are deleted after use.
 
 `--hosted-mode` sets `BROWSERCLAW_HOSTED_MODE=1` for either engine and uses a

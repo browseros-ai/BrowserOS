@@ -37,7 +37,7 @@ export function browserLaunch(
     ],
     env: { BROWSERCLAW_HOSTED_MODE: hostedMode ? '1' : null },
     viewportReason:
-      'BrowserOS window chrome consumes 240x81px in normal mode, 0x121px in hosted mode; both sizes must verify 1280x720@1 in launch and native tabs',
+      'Window sizes fit BrowserOS 0.52.1.1 chrome (240x81px normal, 0x121px hosted); other releases are resized to the measured chrome, and both launch and native tabs must verify 1280x720@1',
   }
 }
 
@@ -80,8 +80,12 @@ export async function stopBrowser(owner) {
     ['SIGKILL', 60],
   ]) {
     if (!isAlive(-owner.pid)) return
-    if (!groupOwned(owner.pid, owner.profile))
+    if (!groupOwned(owner.pid, owner.profile)) {
+      // The group can finish exiting between the liveness probe and the ps listing; a group
+      // that is gone needs no signal. One that is alive but unproven is never signalled.
+      if (!isAlive(-owner.pid)) return
       throw new Error(`Cannot revalidate browser group ${owner.pid}`)
+    }
     try {
       process.kill(-owner.pid, signal)
     } catch (error) {
