@@ -193,6 +193,10 @@ mod tests {
     /// `frame.$eval` and `elementHandle.evaluate` send `locator.evaluate`; `$$eval` sends
     /// `locator.evaluateAll`; the `frame` forms send the page ops.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one explicit audited capability row per operation keeps additions reviewable"
+    )]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
         use Capability::{Capture, HostFiles, MainWorld};
         const AUDITED: [(&str, &[Capability], bool); 76] = [
