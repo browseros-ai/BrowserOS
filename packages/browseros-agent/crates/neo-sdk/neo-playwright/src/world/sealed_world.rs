@@ -131,15 +131,6 @@ impl Drop for WatchHold {
     }
 }
 
-/// How much of its document one watch scans for hidden shadow roots.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Scan {
-    /// The whole document, and every host the seal reported: at install and before a sweep.
-    Document,
-    /// Only the hosts the seal reported, for the sweep a journal report starts.
-    Reported,
-}
-
 /// What an install leaves: the world, and the seq its boot took over from, if it did.
 #[derive(Debug)]
 pub(crate) struct Installed {
@@ -273,8 +264,8 @@ impl SealedWorld {
     /// Creates (or finds, by name) the frame's `browseros-sdk` world and installs the seal and
     /// the engine there, or re-keys the probe already there. `candidate` is the seq for a new
     /// document; the reply's seq wins, because a world this `Playwright` already booted keeps
-    /// the one it has, and a re-key reports the seq it replaced. The session's journal binding
-    /// must already exist (`SessionSetup`).
+    /// the one it has, and a re-key reports the seq it replaced. `Runtime` must already be
+    /// enabled on the session (`SessionSetup`) so the watch observes context creation.
     ///
     /// ```text
     ///  watch (subscribed by the caller)                       Runtime events of the session
@@ -291,9 +282,9 @@ impl SealedWorld {
     ///  watch_hidden_roots                                     the seal watches each closed root
     /// ```
     ///
-    /// The last step is what makes the journal hear input inside a closed root from the world's
-    /// first moment, a value the page sets with its own events included. A scan that fails
-    /// fails the install: a world whose closed roots the seal cannot see is not sealed. So does
+    /// The last step makes the seal see fields inside closed roots from the world's first
+    /// moment. A scan that fails also fails the install: a world whose closed roots the seal
+    /// cannot see is not sealed. So does
     /// one that is not done within the frame's budget from the install's start (`FRAME_BUDGET`):
     /// it fails `Late`, and `OpPage::world` installs again while the op's window has room, as a
     /// sweep past the budget sweeps again. A first read installs its world outside any sweep, so
@@ -409,7 +400,7 @@ impl SealedWorld {
             context,
             roots: Arc::new(WatchedRoots::new(document)),
         };
-        drop(world.watch_hidden_roots(Scan::Document).await?);
+        drop(world.watch_hidden_roots().await?);
         Ok(world)
     }
 
@@ -427,12 +418,11 @@ impl SealedWorld {
         reason = "a lease on this document's watches: the seal hands each reported host out \
                   once, so a sweep must wait while another watch holds one it has not watched yet"
     )]
-    pub(crate) async fn watch_hidden_roots(&self, scan: Scan) -> Result<WatchHold, ProbeFailure> {
+    pub(crate) async fn watch_hidden_roots(&self) -> Result<WatchHold, ProbeFailure> {
         let mut watched = self.roots.lock().await;
-        self.roots.unqueue_report();
         let hold = WatchHold::new(self.session.clone());
         // Boxed: every op's future holds an install's, inside `Playwright::invoke`'s.
-        Box::pin(self.watch_found(&mut watched, &hold.group, scan)).await?;
+        Box::pin(self.watch_found(&mut watched, &hold.group)).await?;
         Ok(hold)
     }
 
@@ -441,30 +431,21 @@ impl SealedWorld {
         &self,
         watched: &mut HashSet<BackendNodeId>,
         group: &str,
-        scan: Scan,
     ) -> Result<(), ProbeFailure> {
-        let (in_document, hosts) = match scan {
-            // The trees out of the document that the seal watches (a node a main-world script
-            // was handed, then removed) are scanned as a reported host is, at every sweep: the
-            // page can attach a closed root under one at any time.
-            Scan::Document => {
-                let (in_document, hosts, tops) = future::join3(
-                    HiddenRoots::scan(&self.session, self.roots.document()),
-                    self.take_hosts(group),
-                    self.detached_tops(group),
-                )
-                .await;
-                (in_document?, [hosts?, tops?].concat())
-            }
-            Scan::Reported => (HiddenRoots::default(), self.take_hosts(group).await?),
-        };
+        // Detached trees can gain closed roots between sweeps, so scan them alongside the
+        // document and the hosts retained by the seal. The lock covers discovery and watching.
+        let (in_document, hosts, tops) = future::join3(
+            HiddenRoots::scan(&self.session, self.roots.document()),
+            self.take_hosts(group),
+            self.detached_tops(group),
+        )
+        .await;
+        let (in_document, hosts) = (in_document?, [hosts?, tops?].concat());
         let mut found = in_document;
         for host in hosts {
             found.extend(HiddenRoots::scan(&self.session, &host).await?);
         }
-        if scan == Scan::Document {
-            hidden_roots::keep_found(watched, &found);
-        }
+        hidden_roots::keep_found(watched, &found);
         let fresh = hidden_roots::unwatched(watched, &found);
         if fresh.is_empty() {
             return Ok(());
@@ -591,17 +572,6 @@ impl SealedWorld {
                 "the seal did not take the hidden shadow roots to watch".to_owned(),
             )),
         }
-    }
-
-    /// Queues the sweep a journal report of this world asks for; `false` when one is queued
-    /// already, which takes this report's host too.
-    pub(crate) fn queue_report(&self) -> bool {
-        self.roots.queue_report()
-    }
-
-    /// The queued report's sweep gave up before its watch took the reported hosts.
-    pub(crate) fn unqueue_report(&self) {
-        self.roots.unqueue_report();
     }
 
     /// The raw session calls into this world go to.
@@ -799,7 +769,7 @@ mod tests {
     use tokio::sync::{broadcast, mpsc};
     use tokio::{task, time};
 
-    use super::{ContextWatch, Installed, Scan, SealedWorld};
+    use super::{ContextWatch, Installed, SealedWorld};
     use crate::page::FRAME_BUDGET;
     use crate::probe::{PROBE_PROTOCOL, ProbeFailure};
     use crate::world::{Epoch, FrameSeq};
@@ -1196,13 +1166,16 @@ mod tests {
 
     #[tokio::test]
     async fn tests_that_a_watch_dropped_mid_way_still_releases_its_object_group() -> TestResult {
-        let connection = TestConnection::new([("Runtime.callFunctionOn", cdp_pending())]);
+        let connection = TestConnection::new([
+            ("Runtime.callFunctionOn", cdp_pending()),
+            ("DOM.describeNode", cdp_pending()),
+        ]);
         let session = ProtocolSession::for_session(
             Arc::clone(&connection) as Arc<dyn CdpConnection>,
             SessionId::from(SESSION),
         );
         let world = SealedWorld::for_tests(session, FRAME, 3, "1.7.1");
-        let watch = world.watch_hidden_roots(Scan::Reported);
+        let watch = world.watch_hidden_roots();
         assert!(
             time::timeout(Duration::from_millis(50), watch)
                 .await

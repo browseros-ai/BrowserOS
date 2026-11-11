@@ -38,8 +38,8 @@
 //! deviation with upstream's adoption error.
 //!
 //! The site sweep at the end of this file (`sweep_site` and what it calls) is not the scripts':
-//! read masking (`site_sweep`) sweeps a read's site with it, and the journal sweeps a reported
-//! world with `sweep_reported`. No main-world send here sweeps or masks anything.
+//! read masking (`site_sweep`) sweeps a read's site with it. No main-world send here sweeps or
+//! masks anything.
 
 use std::future::Future;
 use std::time::Duration;
@@ -65,7 +65,7 @@ use crate::page::world_call::{self, unexpected, with_world};
 use crate::probe::{self, NAVIGATED_OR_CLOSED, ProbeFailure, ProbeReply, ProbeRequest, Ran};
 use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, PageRef};
-use crate::world::{BackendNodeId, Endpoint, FrameSeq, Place, Scan, SealedWorld, SeqLookup};
+use crate::world::{BackendNodeId, Endpoint, FrameSeq, Place, SealedWorld, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 mod document_write;
@@ -505,20 +505,13 @@ fn returned(scope: &OpScope<'_>, value: PageValue) -> Result<Value, PlaywrightEr
 /// The scan shares the frame's budget, so a frame whose roots cannot be watched in time is
 /// `Unswept::Late` like any other late frame, and the op is refused.
 async fn sweep_world(world: SealedWorld) -> Result<FieldValues, ProbeFailure> {
-    sweep_watched(&world, Scan::Document).await
-}
-
-/// The sweep a journal report of `world` starts (`HIDDEN_ROOT_REPORT`): the seal watches the
-/// roots of the hosts it reported, and the world is swept while their fields still exist, so
-/// the host learns a value typed into a closed root the page removes before any op sweeps.
-pub(crate) async fn sweep_reported(world: &SealedWorld) -> Result<FieldValues, ProbeFailure> {
-    sweep_watched(world, Scan::Reported).await
+    sweep_watched(&world).await
 }
 
 /// The watch's hold lives until the sweep has read, so a root whose host the page removed is
 /// still alive for it.
-async fn sweep_watched(world: &SealedWorld, scan: Scan) -> Result<FieldValues, ProbeFailure> {
-    let _held = world.watch_hidden_roots(scan).await?;
+async fn sweep_watched(world: &SealedWorld) -> Result<FieldValues, ProbeFailure> {
+    let _held = world.watch_hidden_roots().await?;
     match probe::call(world, &ProbeRequest::Sweep).await? {
         ProbeReply::Sweep { values } => Ok(values),
         other => Err(unexpected("sweep", other)),

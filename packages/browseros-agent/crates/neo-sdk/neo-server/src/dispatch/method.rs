@@ -19,7 +19,7 @@ use super::{LeafError, OpCtx, PageTarget};
 pub(crate) trait Method: Send + Sync + Sized + 'static {
     /// The decoded input. Every input type says `#[serde(deny_unknown_fields)]`.
     type Input: DeserializeOwned + Send + 'static;
-    /// The output. The door encodes it to JSON and masks it before the script sees it.
+    /// The output. The door encodes it to JSON for the script.
     type Output: Serialize + Send + 'static;
 
     /// The method's facts, read once at registration.
@@ -108,7 +108,7 @@ pub(crate) enum Listing {
 /// What a method's result holds, as far as tab privacy cares (sdk-traces D6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Output {
-    /// Values and text: the door masks known secrets out of them.
+    /// Values and text, which reach the script as the method produced them.
     Data,
     /// An image or a print of the target tab (`page.screenshot`, `page.pdf`). No mask reaches
     /// into pixels, so the tab-privacy rule refuses the method while the tab is private, and

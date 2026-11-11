@@ -239,21 +239,17 @@ fn op(name: &str) -> Result<Op, PlaywrightError> {
 }
 
 /// The host's privacy layer: every capture is allowed until a test refuses them, and every value
-/// a read's sweep found or the journal reported is kept, as the host would register it. It
-/// names no secret files until a test names some, so every path a test uploads is served, as
-/// real Playwright serves it.
+/// a read's sweep found is kept, as the host would register it. It names no secret files until a
+/// test names some, so every path a test uploads is served, as real Playwright serves it.
 #[derive(Default)]
 struct LiveHooks {
     capture: Mutex<Option<Refusal>>,
     swept: Mutex<Vec<String>>,
-    journaled: Mutex<Vec<String>>,
     secrets: Mutex<Vec<PathBuf>>,
 }
 
 impl PlaywrightHooks for LiveHooks {
-    fn field_entered(&self, _page: TabId, entry: JournalEntry, _by: TypedBy) {
-        lock(&self.journaled).push(entry.value.to_string());
-    }
+    fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
 
     fn values_swept(&self, _page: TabId, values: &FieldValues) {
         self.swept
@@ -501,11 +497,6 @@ impl LiveRun {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
-    }
-
-    /// The values the seal's journal reported so far, as entered into sensitive fields.
-    pub(crate) fn journaled(&self) -> Vec<String> {
-        lock(&self.hooks.journaled).clone()
     }
 
     /// Names `secrets` as Neo's secret files from the next `setInputFiles` on.

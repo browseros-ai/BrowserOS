@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant as StdInstant};
 
 use futures_util::future::BoxFuture;
-use neo_trace::{OperationId, SecretSet};
+use neo_trace::OperationId;
 use rquickjs::context::EvalOptions;
 use rquickjs::function::{Async, Func};
 use rquickjs::runtime::InterruptHandler;
@@ -26,7 +26,7 @@ use crate::browser::PageRef;
 use crate::builtins::PLAYWRIGHT_PRELUDE;
 use crate::config::Defaults;
 use crate::dispatch::{
-    Dispatcher, ErrorCode, Observation, OpFailure, OperationError, PageFact, RunCtx, RunMask,
+    self, Dispatcher, ErrorCode, Observation, OpFailure, OperationError, PageFact, RunCtx,
     StopReason, TEXT_CHARS,
 };
 
@@ -64,9 +64,9 @@ pub(crate) struct Script {
     /// The `page` parameter's tab: the task's tab when the run service knows one, else `None`,
     /// and the run opens a tab on the first call that needs it.
     pub(crate) page: Option<PageRef>,
-    /// Every tab open when the run started, as reply facts describe them and masked the same
-    /// way, so `context.pages()`, which is synchronous in Playwright, lists each one before the
-    /// script's first op. Empty when the run service could not list them.
+    /// Every tab open when the run started, as reply facts describe them, so `context.pages()`,
+    /// which is synchronous in Playwright, lists each one before the script's first op. Empty
+    /// when the run service could not list them.
     pub(crate) pages: Vec<PageFact>,
     /// The host observation that produced `pages`, shared with subsequent operation replies.
     pub(crate) observed: Option<Observation>,
@@ -162,7 +162,7 @@ pub(crate) fn run_script<'a>(
         let bridge = Arc::new(Bridge::new(Arc::clone(run), Arc::clone(dispatcher)));
         let cause = Arc::new(HaltCause::default());
         let outcome = match evaluate(run, &bridge, &cause, script).await {
-            Evaluated::Settled(json) => settle(&json, &bridge, run, dispatcher.secrets()),
+            Evaluated::Settled(json) => settle(&json, &bridge),
             Evaluated::Uncompiled(message) => {
                 ScriptOutcome::Failed(OperationError::script(ErrorCode::SYNTAX_ERROR, message))
             }
@@ -396,9 +396,9 @@ fn interrupt_handler(
     })
 }
 
-fn settle(json: &str, bridge: &Bridge, run: &RunCtx, secrets: &SecretSet) -> ScriptOutcome {
+fn settle(json: &str, bridge: &Bridge) -> ScriptOutcome {
     // Before parsing, so a huge value is refused without building its tree. A thrown error's
-    // text is not held to it: it parses into three strings, masked and clipped below.
+    // text is not held to it: it parses into three strings, clipped below.
     if json.starts_with(SETTLED_OK) && json.len() > Defaults::MAX_RESULT_BYTES + SETTLED_OVERHEAD {
         return ScriptOutcome::Failed(OperationError::script(
             ErrorCode::RESULT_TOO_LARGE,
@@ -427,12 +427,7 @@ fn settle(json: &str, bridge: &Bridge, run: &RunCtx, secrets: &SecretSet) -> Scr
             name,
             message,
             stack,
-        })) => ScriptOutcome::Failed(thrown_error(
-            name,
-            message,
-            &stack,
-            &RunMask::of(secrets, &run.held_values()),
-        )),
+        })) => ScriptOutcome::Failed(thrown_error(name, message, &stack)),
         Err(error) => ScriptOutcome::Failed(OperationError::neo(
             ErrorCode::INTERNAL_ERROR,
             format_args!("the bootstrap settled the run with JSON Neo cannot read: {error}"),
@@ -440,18 +435,16 @@ fn settle(json: &str, bridge: &Bridge, run: &RunCtx, secrets: &SecretSet) -> Scr
     }
 }
 
-/// What the script threw, as the run's error, its name and message each masked, then cut to
-/// [`TEXT_CHARS`]. `mask` holds what the run holds as well as the process's set: the realm never
-/// receives a held value, but the script can know one itself, a password it typed, and a cut
-/// through it would leave a prefix that no later mask recognizes (graft G3). QuickJS reports a
-/// full heap as a catchable `InternalError`, which the bootstrap caught like any other throw.
-fn thrown_error(name: String, message: String, stack: &str, mask: &RunMask<'_>) -> OperationError {
+/// What the script threw, as the run's error, its name and message each cut to [`TEXT_CHARS`].
+/// QuickJS reports a full heap as a catchable `InternalError`, which the bootstrap caught like any
+/// other throw.
+fn thrown_error(name: String, message: String, stack: &str) -> OperationError {
     if name == "InternalError" && message == "out of memory" {
         return out_of_memory();
     }
     let (name, message) = (
-        mask.shown(name, TEXT_CHARS),
-        mask.shown(message, TEXT_CHARS),
+        dispatch::clip(name, TEXT_CHARS),
+        dispatch::clip(message, TEXT_CHARS),
     );
     let site = agent_site(stack);
     let text = if name.is_empty() {

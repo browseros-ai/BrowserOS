@@ -3,8 +3,7 @@
 //!
 //! ```text
 //!  first use of (session, frame) in a page ── FrameWorlds::world        single-flight cell
-//!     ├─ SessionSetup::ensure(session)       once per session: Runtime.enable (OOPIF only),
-//!     │                                      then Runtime.addBinding(__neoJournal, browseros-sdk)
+//!     ├─ SessionSetup::ensure(session)       once per session: Runtime.enable (OOPIF only)
 //!     └─ SealedWorld::install                Page.createIsolatedWorld, then the handle to its
 //!          │                                 global by the new world's uniqueId (its
 //!          │                                 executionContextCreated, watched from before the
@@ -49,7 +48,6 @@ mod engine_source;
 mod frame_seq;
 mod frame_worlds;
 mod hidden_roots;
-mod journal;
 mod sealed_world;
 mod session_setup;
 
@@ -57,8 +55,7 @@ pub(crate) use frame_seq::{BackendNodeId, ContextId, Epoch, FrameSeq, Pin};
 pub(crate) use frame_worlds::{
     Endpoint, FrameWorlds, Installer, LinkedParent, ParentLink, Place, SeqLookup,
 };
-pub(crate) use journal::Journal;
-pub(crate) use sealed_world::{ContextWatch, Installed, Scan, SealedWorld};
+pub(crate) use sealed_world::{ContextWatch, Installed, SealedWorld};
 pub(crate) use session_setup::{SessionKind, SessionSetup};
 
 #[cfg(test)]

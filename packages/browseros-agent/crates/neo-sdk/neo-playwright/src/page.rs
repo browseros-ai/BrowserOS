@@ -6,8 +6,7 @@
 //! session for the admitted session id (decisions.md: admission per op, not per send). Tab
 //! lifecycle (listing, opening, closing) and captures go through core's view, so core's tab
 //! registry stays the one owner of native tab admission. Every tab an op acts on also gets one
-//! [`PageState`] in the instance's [`PageRegistry`]: its sealed worlds and seqs, and its typing
-//! window for the journal.
+//! [`PageState`] in the instance's [`PageRegistry`]: its sealed worlds and seqs, input and focus.
 //!
 //! ```text
 //!  page.goto ─ navigation ─ DocumentWatch (commits, lifecycle per loader) ─ timing entry
@@ -47,7 +46,7 @@ mod wait_for_url;
 mod world_call;
 
 pub(crate) use context_op::ContextOp;
-pub(crate) use evaluate_guard::{FRAME_BUDGET, sweep_reported};
+pub(crate) use evaluate_guard::FRAME_BUDGET;
 pub(crate) use load_state::LoadState;
 pub(crate) use op_page::OpPage;
 pub(crate) use page_handle::PageHandle;
