@@ -187,7 +187,9 @@ impl RequestedNavigations {
             changed.as_mut().enable();
             let read = hub.read_after(after);
             for record in read.records {
-                if matches!(&record.event, PageEvent::Closed(closed) if closed == target) {
+                if !pending.is_empty()
+                    && matches!(&record.event, PageEvent::Closed(closed) if closed == target)
+                {
                     return Err(scope
                         .fail(
                             ErrorCode::TargetClosed,
