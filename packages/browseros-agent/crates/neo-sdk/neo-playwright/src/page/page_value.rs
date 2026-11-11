@@ -1,9 +1,9 @@
-//! Values in Playwright's in-page serialized format, read strictly from the page's text and
-//! masked by their structure: the one way a main-world script's result leaves an op.
+//! Values in Playwright's in-page serialized format, read strictly from the page's text: the one
+//! way a main-world script's result leaves an op.
 //!
 //! ```text
 //!  page    assets/main-world.js: serializeAsCallArgument(value) ─▶ JSON.stringify ─▶ one string
-//!  here    depth_of ─▶ strict parse ─▶ PageValue ─▶ masked(every sweep's values) ─▶ MaskedValue
+//!  here    depth_of ─▶ strict parse ─▶ PageValue ─▶ into_json, the format again
 //!  agent   the prelude's vendored parseEvaluationResultValue ─▶ the script's value
 //! ```
 //!
@@ -11,26 +11,17 @@
 //! strings, numbers and booleans, and a tagged object for everything else (`{v}`, `{d}`, `{bi}`,
 //! `{a, id}`, `{o: [{k, v}], id}`, `{ref}`, ...). The page hands it over as text rather than by
 //! value: the format nests about three JSON levels per object level, and browseros-cdp drops a
-//! reply nested deeper than 128.
-//!
-//! Masking walks the tree, so it tells the page's text from Playwright's structure. A string, an
-//! object's key and an error's fields are masked in place. A number, a `BigInt`, a `Date`, a URL,
-//! a `RegExp` or a typed array whose text holds a value cannot hold `[private]`, so it becomes the
-//! string of its masked text (`Number(otp.value)` must not leave as a number). Tags, ids, refs
-//! and the enumerated `v` and typed-array kinds are never page text, and are never touched:
-//! `mask_json` over the raw JSON would rename a tag spelled like a short value, turn ids into
-//! strings and leave a masked `{bi}` unreadable.
+//! reply nested deeper than 128. Rust reads it, rather than passing the text through, to give
+//! upstream's server's own failures: a result deeper than its CDP limit, and a `{fn}` it cannot
+//! serialize again ([`PageValue::binding_position`]).
 //!
 //! The page owns the globals the serializer runs on and can tamper with them, so the parse admits
-//! only the shapes the format has. Anything else fails closed, and nothing of it leaves. The ids
-//! are the page's too: a page can write a code as an id, which no mask reads. So the parse
-//! renumbers every `id` in order of appearance, as upstream's server writes them again, and
-//! rewrites every `ref` to match; a `ref` to an id not seen yet fails closed. No number the page
-//! chose survives as structure.
+//! only the shapes the format has. Anything else fails as the page's, and nothing of it leaves.
+//! The parse renumbers every `id` in order of appearance, as upstream's server writes them
+//! again, and rewrites every `ref` to match; a `ref` to an id not seen yet fails too.
 
 use std::collections::HashMap;
 
-use browseros_core::sensitive_fields::FieldValues;
 use serde::Deserialize;
 use serde_json::{Map, Number, Value, json};
 
@@ -46,8 +37,8 @@ pub(crate) const MAX_DEPTH: usize = 297;
 /// upstream's message for a result deeper than [`MAX_DEPTH`] (`rewriteError`, PW:36883).
 pub(crate) const TOO_DEEP: &str = "Cannot serialize result: object reference chain is too long.";
 
-/// One value of Playwright's in-page format. No `Serialize` and no `Debug`: it may hold a
-/// field's raw value, so its only way out is [`PageValue::masked`].
+/// One value of Playwright's in-page format. No `Debug`: it is page text, which no log line
+/// carries (STYLE P4).
 pub(crate) enum PageValue {
     /// A bare string, number or boolean, as the format keeps them.
     Str(String),
@@ -72,13 +63,10 @@ pub(crate) enum PageValue {
         message: String,
         stack: String,
     },
-    /// `{ta: {b, k}}`: the bytes in base64 as the page wrote them, read for the mask two ways:
-    /// as lossy UTF-8 text, and as the array's elements, each spelled as `String(element)`.
+    /// `{ta: {b, k}}`: the bytes in base64 as the page wrote them, whole elements of `kind`.
     TypedArray {
         base64: String,
         kind: TypedKind,
-        text: String,
-        elements: Vec<String>,
     },
     /// `{a, id}` and `{o: [{k, v}], id}`. `id` is the serializer's counter, which `{ref}` names
     /// for cycles and shared objects.
@@ -92,7 +80,7 @@ pub(crate) enum PageValue {
     },
     Ref(u64),
     /// `{fn}`: a function whose name starts with `__pw_fn_`, which the serializer writes as its
-    /// name, the name masked as page text.
+    /// name.
     Function(String),
     /// A value the serializer dropped, a function: JSON writes it as `null` in an array and
     /// leaves `v` out of an object's member, and the agent reads `null` and `undefined` there.
@@ -152,24 +140,6 @@ impl TypedKind {
         }
     }
 
-    /// One element, little-endian as the page's buffer holds it, spelled as `String(element)`
-    /// spells it: Number's digits for the integer and float kinds, `BigInt`'s for the 64-bit
-    /// ones. `None` for a chunk of the wrong width, which only a tampered serializer writes.
-    fn spell(self, chunk: &[u8]) -> Option<String> {
-        Some(match self {
-            Self::I8 => i8::from_le_bytes(chunk.try_into().ok()?).to_string(),
-            Self::Ui8 | Self::Ui8c => u8::from_le_bytes(chunk.try_into().ok()?).to_string(),
-            Self::I16 => i16::from_le_bytes(chunk.try_into().ok()?).to_string(),
-            Self::Ui16 => u16::from_le_bytes(chunk.try_into().ok()?).to_string(),
-            Self::I32 => i32::from_le_bytes(chunk.try_into().ok()?).to_string(),
-            Self::Ui32 => u32::from_le_bytes(chunk.try_into().ok()?).to_string(),
-            Self::F32 => js_number(f64::from(f32::from_le_bytes(chunk.try_into().ok()?))),
-            Self::F64 => js_number(f64::from_le_bytes(chunk.try_into().ok()?)),
-            Self::Bi64 => i64::from_le_bytes(chunk.try_into().ok()?).to_string(),
-            Self::Bui64 => u64::from_le_bytes(chunk.try_into().ok()?).to_string(),
-        })
-    }
-
     const fn tag(self) -> &'static str {
         match self {
             Self::I8 => "i8",
@@ -187,13 +157,10 @@ impl TypedKind {
     }
 }
 
-/// A value masked with every sweep's values, ready to leave the op.
-pub(crate) struct MaskedValue(PageValue);
-
-impl MaskedValue {
+impl PageValue {
     /// The value in Playwright's format, as the prelude reads it back.
     pub(crate) fn into_json(self) -> Value {
-        written(self.0)
+        written(self)
     }
 
     /// Where the first `{fn}` is, as upstream's server names it when it cannot serialize the
@@ -203,7 +170,7 @@ impl MaskedValue {
     /// The walk is the server's: items and members in order, a ref not entered again.
     pub(crate) fn binding_position(&self) -> Option<String> {
         let mut chain = Vec::new();
-        binding_chain(&self.0, &mut chain).then(|| {
+        binding_chain(self, &mut chain).then(|| {
             let at = chain
                 .iter()
                 .enumerate()
@@ -250,12 +217,12 @@ pub(crate) enum Unreadable {
     /// Deeper than [`MAX_DEPTH`]: upstream's [`TOO_DEEP`].
     TooDeep,
     /// A shape the format does not have, or text that is not JSON. Only a page that tampered
-    /// with the serializer's globals gets here, so it fails closed as `website / page_error`.
+    /// with the serializer's globals gets here, so it fails as `website / page_error`.
     Shape,
 }
 
 impl PageValue {
-    /// Parses the page's text, failing closed on anything the format does not have.
+    /// Parses the page's text, failing on anything the format does not have.
     ///
     /// `{m}`, `{s}` and `{h}` are refused: a result is serialized without extended types or
     /// handles. `{fn}` is read: the serializer writes one for any function named `__pw_fn_…`. `{ab}` reads as `{o: [], id: 0}`, because upstream's server→client protocol
@@ -277,72 +244,6 @@ impl PageValue {
     /// value at all.
     pub(crate) fn undefined() -> Self {
         Self::Special(Special::Undefined)
-    }
-
-    /// The value with every one of `values` masked, by the rules in the module's docs. It is the
-    /// only way to a [`MaskedValue`]. Every item, key and field is visited: stopping at the
-    /// first change would leak the rest.
-    pub(crate) fn masked(self, values: &FieldValues) -> MaskedValue {
-        MaskedValue(self.mask(values))
-    }
-
-    fn mask(self, values: &FieldValues) -> Self {
-        match self {
-            Self::Str(text) => Self::Str(mask_text(values, text)),
-            Self::Num(number) => typed(values, number.to_string(), |_| Self::Num(number)),
-            Self::BigInt(digits) => typed(values, digits, Self::BigInt),
-            Self::Url(href) => typed(values, href, Self::Url),
-            Self::Date(Some(iso)) => {
-                let (iso, held) = mask_leaf(values, iso);
-                if held {
-                    return Self::Str(iso);
-                }
-                // `new Date(Number(code))` holds the code in its time value, not its ISO text.
-                match time_value(&iso) {
-                    Some(millis) => typed(values, millis.to_string(), |_| Self::Date(Some(iso))),
-                    None => Self::Date(Some(iso)),
-                }
-            }
-            Self::RegExp { source, flags } => {
-                let (source, in_source) = mask_leaf(values, source);
-                let (flags, in_flags) = mask_leaf(values, flags);
-                if in_source || in_flags {
-                    Self::Str(format!("/{source}/{flags}"))
-                } else {
-                    Self::RegExp { source, flags }
-                }
-            }
-            Self::Error {
-                name,
-                message,
-                stack,
-            } => Self::Error {
-                name: mask_text(values, name),
-                message: mask_text(values, message),
-                stack: mask_text(values, stack),
-            },
-            Self::TypedArray {
-                base64,
-                kind,
-                text,
-                elements,
-            } => mask_typed_array(values, base64, kind, text, elements),
-            Self::Array { items, id } => Self::Array {
-                items: items.into_iter().map(|item| item.mask(values)).collect(),
-                id,
-            },
-            Self::Object { fields, id } => Self::Object {
-                fields: fields
-                    .into_iter()
-                    .map(|(key, value)| (mask_text(values, key), value.mask(values)))
-                    .collect(),
-                id,
-            },
-            Self::Function(name) => Self::Function(mask_text(values, name)),
-            Self::Special(_) | Self::Bool(_) | Self::Ref(_) | Self::Dropped | Self::Date(None) => {
-                self
-            }
-        }
     }
 
     /// The value with its ids renumbered from 1 in order of appearance, each id given as its
@@ -512,17 +413,7 @@ fn read_typed_array(json: Value) -> Result<PageValue, Unreadable> {
     if !bytes.len().is_multiple_of(kind.width()) {
         return Err(Unreadable::Shape);
     }
-    let elements = bytes
-        .chunks(kind.width())
-        .map(|chunk| kind.spell(chunk))
-        .collect::<Option<_>>()
-        .ok_or(Unreadable::Shape)?;
-    Ok(PageValue::TypedArray {
-        base64,
-        kind,
-        text: String::from_utf8_lossy(&bytes).into_owned(),
-        elements,
-    })
+    Ok(PageValue::TypedArray { base64, kind })
 }
 
 fn read_function(json: Value) -> Result<PageValue, Unreadable> {
@@ -609,8 +500,7 @@ fn counter(json: &Value) -> Result<u64, Unreadable> {
     json.as_u64().ok_or(Unreadable::Shape)
 }
 
-/// The value as JSON in the format, the inverse of the parse. Only [`MaskedValue::into_json`]
-/// calls it, so a value leaves this module masked.
+/// The value as JSON in the format, the inverse of the parse.
 fn written(value: PageValue) -> Value {
     match value {
         PageValue::Str(text) => Value::String(text),
@@ -626,7 +516,7 @@ fn written(value: PageValue) -> Value {
             message,
             stack,
         } => json!({ "e": { "n": name, "m": message, "s": stack } }),
-        PageValue::TypedArray { base64, kind, .. } => {
+        PageValue::TypedArray { base64, kind } => {
             json!({ "ta": { "b": base64, "k": kind.tag() } })
         }
         PageValue::Array { items, id } => {
@@ -647,70 +537,6 @@ fn written(value: PageValue) -> Value {
         // An array's item; an object's member leaves its `v` out above.
         PageValue::Dropped => Value::Null,
     }
-}
-
-/// A typed leaf whose `text` holds a value becomes the string of its masked text; otherwise
-/// `rebuild` makes it again from the text, unchanged.
-fn typed(
-    values: &FieldValues,
-    text: String,
-    rebuild: impl FnOnce(String) -> PageValue,
-) -> PageValue {
-    let (text, held) = mask_leaf(values, text);
-    if held {
-        PageValue::Str(text)
-    } else {
-        rebuild(text)
-    }
-}
-
-/// A typed array that holds a value in any element's spelling, or in its bytes read as text,
-/// becomes one string: its elements joined with `,` as `String(array)` writes them, each masked,
-/// or else its masked text. `Int32Array.of(Number(otp.value))` carries the code only as an
-/// element, whose bytes never spell its digits. A value spread across several elements, or
-/// encoded some other way, is not found.
-fn mask_typed_array(
-    values: &FieldValues,
-    base64: String,
-    kind: TypedKind,
-    text: String,
-    elements: Vec<String>,
-) -> PageValue {
-    let mut in_elements = false;
-    let spelled: Vec<String> = elements
-        .iter()
-        .map(|element| {
-            let (masked, held) = mask_leaf(values, element.clone());
-            in_elements |= held;
-            masked
-        })
-        .collect();
-    if in_elements {
-        return PageValue::Str(spelled.join(","));
-    }
-    typed(values, text, |text| PageValue::TypedArray {
-        base64,
-        kind,
-        text,
-        elements,
-    })
-}
-
-/// `text` masked as a JSON string leaf is, and whether that changed it.
-fn mask_leaf(values: &FieldValues, text: String) -> (String, bool) {
-    let mut leaf = Value::String(text);
-    let changed = values.mask_json(&mut leaf);
-    let text = match leaf {
-        Value::String(text) => text,
-        other => other.to_string(),
-    };
-    (text, changed)
-}
-
-/// Page text with every swept value masked, as `mask_json` masks a string: a long value
-/// wherever it occurs (with its newlines, unlike `mask_str`), a short one only as the whole text.
-pub(crate) fn mask_text(values: &FieldValues, text: String) -> String {
-    mask_leaf(values, text).0
 }
 
 /// `Number.prototype.toString()`: the shortest round-trip digits, in exponent form only from
@@ -765,52 +591,6 @@ pub(crate) fn depth_of(text: &str) -> usize {
         }
     }
     deepest
-}
-
-/// A Date's time value, what `Number(date)` gives, from its `toJSON` text:
-/// `YYYY-MM-DDTHH:mm:ss.sssZ`, with a signed six-digit year outside 0 to 9999. `None` for any
-/// other text, whose ISO form alone is then masked.
-fn time_value(iso: &str) -> Option<i64> {
-    let (sign, unsigned) = match iso.strip_prefix('-') {
-        Some(rest) => (-1, rest),
-        None => (1, iso.strip_prefix('+').unwrap_or(iso)),
-    };
-    let year_digits = if unsigned.len() == iso.len() { 4 } else { 6 };
-    let (date, time) = unsigned.split_once('T')?;
-    let (hms, millis) = time.strip_suffix('Z')?.split_once('.')?;
-    let mut date = date.split('-');
-    let mut hms = hms.split(':');
-    let year = sign * field(date.next()?, year_digits)?;
-    let month = field(date.next()?, 2)?;
-    let day = field(date.next()?, 2)?;
-    let hours = field(hms.next()?, 2)?;
-    let minutes = field(hms.next()?, 2)?;
-    let seconds = field(hms.next()?, 2)?;
-    let millis = field(millis, 3)?;
-    if date.next().is_some() || hms.next().is_some() {
-        return None;
-    }
-    let days = days_from_civil(year, month, day);
-    Some(days * 86_400_000 + hours * 3_600_000 + minutes * 60_000 + seconds * 1000 + millis)
-}
-
-/// `digits`, exactly `width` ASCII digits, as a number. The width also bounds every product
-/// [`time_value`] makes.
-fn field(digits: &str, width: usize) -> Option<i64> {
-    (digits.len() == width && digits.bytes().all(|byte| byte.is_ascii_digit()))
-        .then(|| digits.parse().ok())
-        .flatten()
-}
-
-/// Days from 1970-01-01 to a date of the proleptic Gregorian calendar, as ECMAScript's `MakeDay`
-/// counts them (Howard Hinnant's `days_from_civil`).
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = year.div_euclid(400);
-    let year_of_era = year.rem_euclid(400);
-    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
 }
 
 /// Standard base64 with padding, as `btoa` and `Uint8Array.prototype.toBase64` write it.

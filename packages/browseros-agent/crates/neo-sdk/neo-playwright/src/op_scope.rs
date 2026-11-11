@@ -7,20 +7,16 @@
 //!                                            │ sleep, within  Rust's clock against the op's own timeout
 //!                                            │ require(cap)   at a capability's gateway: declared?
 //!                                            └ send_effect()  recheck, then mark_sent ──▶ Sent
-//!                                              send_effect_reaching(tabs)
-//!                                                             recheck, recheck_reach(tabs), then
-//!                                                             mark_sent ──▶ Sent
 //!                                                             └▶ input, navigation, element edits,
 //!                                                                main-world script: each takes &Sent
 //! ```
 //!
 //! Delivery is derived from one fact, whether the op was marked sent before its first write
 //! (skeleton D7.5), so that fact is not left to convention. The host's env is private to the
-//! scope, [`OpScope::send_effect_reaching`] is the only code that reaches `OpEnv::mark_sent`
-//! ([`OpScope::send_effect`] is it with no other tab), it always re-runs the host's
-//! attempt-stage policies first, and the [`Sent`] it returns is the only way to call a function
-//! that changes the page. A leaf that never calls either, which is every read, can neither mark
-//! itself sent nor reach an effect.
+//! scope, [`OpScope::send_effect`] is the only code that reaches `OpEnv::mark_sent`, it always
+//! re-runs the host's attempt-stage policies first, and the [`Sent`] it returns is the only way
+//! to call a function that changes the page. A leaf that never calls it, which is every read,
+//! can neither mark itself sent nor reach an effect.
 //!
 //! The scope also owns the op's CDP object group: every remote object the op asks for (an
 //! iframe it hops through) lives in it, and dropping the scope releases it, whether the op
@@ -28,6 +24,7 @@
 
 use std::future::Future;
 use std::mem;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
@@ -36,6 +33,7 @@ use browseros_core::pages::PageSession;
 use browseros_core::{
     BrowserSession, BrowserView, CoreError, PageId, ProtocolSession, TabId, TargetId,
 };
+use futures_util::future::{self, Either};
 use neo_trace::Effect;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
@@ -52,8 +50,7 @@ pub(crate) use sent::Sent;
 /// One operation in flight. Lives for one `Playwright::invoke`; every method takes `&self`,
 /// so a leaf can log and read its deadline while it holds a [`Sent`].
 pub(crate) struct OpScope<'env> {
-    /// The host's side of this op. Private: leaves reach `mark_sent` only via `send_effect`
-    /// or `send_effect_reaching`.
+    /// The host's side of this op. Private: leaves reach `mark_sent` only via `send_effect`.
     env: &'env dyn OpEnv,
     op: Op,
     /// The method the script called (`page.click`); every message starts with it.
@@ -128,8 +125,9 @@ impl Drop for ObjectGroup {
     }
 }
 
-/// The op's own Playwright timeout passed. The leaf turns it into its timed-out code with
-/// [`OpScope::timed_out`].
+/// The op's own wait ended: its Playwright timeout passed, or the script aborted it through
+/// `signal`. The leaf turns it into its timed-out code with [`OpScope::timed_out`], which
+/// reports an abort instead when there was one, so every leaf's timeout path is its abort path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Expired;
 
@@ -249,31 +247,17 @@ impl<'env> OpScope<'env> {
     /// proof every effect takes. Call it right before each attempt's effect: an action that
     /// retries its input re-checks before every attempt, because the owner can take over
     /// between a missed attempt and its retry. A refusal passes through with the policy's
-    /// owner and code, and nothing is marked. It is [`OpScope::send_effect_reaching`] for an
-    /// effect that reaches no other tab.
+    /// owner and code, and nothing is marked. A main-world send runs the rules on the op's own
+    /// tab only, as every other effect does, though its script can reach the tab's opener and
+    /// popups.
     pub(crate) fn send_effect(&self) -> Result<Sent<'_>, PlaywrightError> {
-        self.send_effect_reaching(&[])
-    }
-
-    /// [`OpScope::send_effect`] for a main-world send, which also reaches `reach`: the other
-    /// tabs of the op page's opener-linked group, from the privacy sweep before the send. The
-    /// host's rules run on the op's tab (`OpEnv::recheck`), then on those tabs
-    /// (`OpEnv::recheck_reach`), and only then is the op marked sent, all in `mod sent`'s one
-    /// constructor, with no await between them and the send. An empty `reach` asks the host
-    /// nothing more, so a page with no opener link records `[Recheck, MarkSent]` as before.
-    pub(crate) fn send_effect_reaching(
-        &self,
-        reach: &[TabId],
-    ) -> Result<Sent<'_>, PlaywrightError> {
         match self.op.spec().effect {
             // `OpSpec` promises hosts that a read never marks itself sent.
             Effect::Read => Err(self.fail(
                 ErrorCode::Internal,
                 "a read operation cannot change the page",
             )),
-            Effect::Write => {
-                Sent::after_recheck_reaching(self.env, reach).map_err(PlaywrightError::from)
-            }
+            Effect::Write => Sent::after_recheck(self.env).map_err(PlaywrightError::from),
         }
     }
 
@@ -294,37 +278,93 @@ impl<'env> OpScope<'env> {
     }
 
     /// Sleeps on Rust's clock, never the page's, so a background tab's throttled timers cannot
-    /// stall a retry. `Err` once the op's timeout passes, which may cut the sleep short.
+    /// stall a retry. `Err` once the op's timeout passes or the script aborts it, either of
+    /// which may cut the sleep short.
     pub(crate) async fn sleep(&self, wait: Duration) -> Result<(), Expired> {
-        let Some(deadline) = self.deadline() else {
-            time::sleep(wait).await;
-            return Ok(());
-        };
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if wait < remaining {
-            time::sleep(wait).await;
-            Ok(())
-        } else {
-            time::sleep(remaining).await;
-            Err(Expired)
-        }
+        let deadline = self.deadline();
+        self.unless_aborted(Box::pin(async move {
+            let Some(deadline) = deadline else {
+                time::sleep(wait).await;
+                return Ok(());
+            };
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if wait < remaining {
+                time::sleep(wait).await;
+                Ok(())
+            } else {
+                time::sleep(remaining).await;
+                Err(Expired)
+            }
+        }))
+        .await
     }
 
-    /// Runs `future` until the op's timeout; `Err` if the timeout comes first, dropping it.
+    /// Runs `future` until the op's timeout or the script's abort; `Err` if either comes first,
+    /// dropping it.
     pub(crate) async fn within<F: Future>(&self, future: F) -> Result<F::Output, Expired> {
-        match self.deadline() {
-            Some(deadline) => time::timeout_at(deadline, future)
-                .await
-                .map_err(|_elapsed| Expired),
-            None => Ok(future.await),
+        let deadline = self.deadline();
+        self.unless_aborted(Box::pin(async move {
+            match deadline {
+                Some(deadline) => time::timeout_at(deadline, future)
+                    .await
+                    .map_err(|_elapsed| Expired),
+                None => Ok(future.await),
+            }
+        }))
+        .await
+    }
+
+    /// `wait`'s own answer, unless the script aborts the op first. An abort already made wins
+    /// at once, so a leaf that retries never starts another attempt after it. `wait` is boxed:
+    /// the leaf's future stays on the heap, so racing it adds no copy of it to the future of
+    /// every leaf that waits (clippy's `large_futures`).
+    async fn unless_aborted<T>(
+        &self,
+        wait: Pin<Box<impl Future<Output = Result<T, Expired>>>>,
+    ) -> Result<T, Expired> {
+        if self.env.abort_reason().is_some() {
+            return Err(Expired);
+        }
+        match future::select(self.env.aborted(), wait).await {
+            Either::Left(((), _)) => Err(Expired),
+            Either::Right((waited, _)) => waited,
         }
     }
 
     /// Playwright's timeout error for `code`, one of the table's timed-out codes:
-    /// `locator.click: Timeout 5000ms exceeded.` and the call log.
+    /// `locator.click: Timeout 5000ms exceeded.` and the call log. When the wait ended because
+    /// the script aborted the op, the abort's error instead ([`OpScope::aborted_error`]).
     pub(crate) fn timed_out(&self, code: ErrorCode) -> PlaywrightError {
+        if let Some(aborted) = self.aborted_error() {
+            return aborted;
+        }
         let millis = self.timeout.map_or(0, |timeout| timeout.as_millis());
         self.fail(code, &format!("Timeout {millis}ms exceeded."))
+    }
+
+    /// The op's answer, unless the script aborted it while it ran. Upstream's progress race
+    /// rejects an aborted call even when its work would have finished, and a leaf's last steps
+    /// do not all wait through this scope (a snapshot's frame stitching, a script's final
+    /// sweep), so an op that answered after the abort reports the abort instead. A failure
+    /// stands: it is what the op met first.
+    pub(crate) fn settle(
+        &self,
+        answered: Result<Value, PlaywrightError>,
+    ) -> Result<Value, PlaywrightError> {
+        match answered {
+            Ok(value) => self.aborted_error().map_or(Ok(value), Err),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Upstream's abort of an op (`Progress.abort` and the client's `AbortError`): the call log
+    /// gains `operation was aborted: <reason>`, and the error reads `<api>: <reason>` with it.
+    /// `None` while the script has not aborted the op. A leaf with a timeout message of its own
+    /// asks this first.
+    pub(crate) fn aborted_error(&self) -> Option<PlaywrightError> {
+        let reason = self.env.abort_reason()?;
+        self.log(format!("operation was aborted: {reason}"));
+        Some(self.fail(ErrorCode::Aborted, &reason))
     }
 
     /// `<api>: <message>` and the call log, as Playwright prints a failed call.
@@ -364,38 +404,27 @@ impl<'env> OpScope<'env> {
 
 /// Kept in its own module so that nothing outside it can build a [`Sent`]: its field is private
 /// to this module, and its one constructor is visible only to `op_scope.rs`, whose only call is
-/// in `OpScope::send_effect_reaching` (a unit test below checks that). The constructor itself
-/// runs `recheck`, then `recheck_reach`, then `mark_sent`, so even a second caller could not
-/// skip any of them.
+/// in `OpScope::send_effect` (a unit test below checks that). The constructor itself runs
+/// `recheck`, then `mark_sent`, so even a second caller could not skip either.
 mod sent {
     use std::marker::PhantomData;
 
-    use browseros_core::TabId;
-
     use crate::{OpEnv, Refusal};
 
-    /// Proof that the host re-ran its attempt-stage policies, on the op's tab and on every
-    /// other tab a main-world script reaches, and marked this op sent. Every function that
-    /// dispatches input, navigates, edits an element or runs main-world script takes `&Sent`.
-    /// Zero-sized; it borrows its `OpScope`, so it cannot outlive the op.
+    /// Proof that the host re-ran its attempt-stage policies on the op's tab and marked this op
+    /// sent. Every function that dispatches input, navigates, edits an element or runs
+    /// main-world script takes `&Sent`. Zero-sized; it borrows its `OpScope`, so it cannot
+    /// outlive the op.
     #[derive(Debug)]
     pub(crate) struct Sent<'scope> {
         _scope: PhantomData<&'scope ()>,
     }
 
     impl<'scope> Sent<'scope> {
-        /// `recheck`, then `recheck_reach(reach)` when `reach` is not empty, then `mark_sent`,
-        /// in the order STYLE P6 requires: a refusal returns before anything is marked. Every
-        /// effect but a main-world send passes an empty `reach`, so its host hears exactly
-        /// `recheck`, `mark_sent`.
-        pub(super) fn after_recheck_reaching(
-            env: &'scope dyn OpEnv,
-            reach: &[TabId],
-        ) -> Result<Self, Refusal> {
+        /// `recheck`, then `mark_sent`, in the order STYLE P6 requires: a refusal returns before
+        /// anything is marked.
+        pub(super) fn after_recheck(env: &'scope dyn OpEnv) -> Result<Self, Refusal> {
             env.recheck()?;
-            if !reach.is_empty() {
-                env.recheck_reach(reach)?;
-            }
             env.mark_sent();
             Ok(Self {
                 _scope: PhantomData,
@@ -407,6 +436,7 @@ mod sent {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::future::pending;
     use std::sync::{Arc, Mutex, PoisonError};
     use std::time::Duration;
 
@@ -415,7 +445,7 @@ mod tests {
     use futures_util::future::BoxFuture;
     use neo_trace::ErrorOwner;
     use serde_json::{Value, json};
-    use tokio::sync::{broadcast, mpsc};
+    use tokio::sync::{Notify, broadcast, mpsc};
     use tokio::task;
     use tokio::time::{self, Instant};
 
@@ -424,7 +454,7 @@ mod tests {
     use crate::op_spec::Capability;
     use crate::target::CallHeader;
     use crate::test_env::{self, EnvCall, TestEnv};
-    use crate::{Answer, ErrorCode, OpEnv, Refusal, RunState, TimedOut};
+    use crate::{Answer, ErrorCode, Refusal, TimedOut};
 
     fn op(name: &str) -> Result<Op, Box<dyn Error>> {
         Ok(Op::from_name(name).ok_or(format!("{name} is an op"))?)
@@ -538,153 +568,31 @@ mod tests {
     }
 
     /// The `Sent` module's guarantee, checked on this file's source: the constructor is called
-    /// once outside the module that defines it, and that call is in `send_effect_reaching`.
+    /// once outside the module that defines it, and that call is in `send_effect`.
     #[test]
-    fn tests_that_only_send_effect_reaching_mints_sent() {
+    fn tests_that_only_send_effect_mints_sent() {
         let source = include_str!("op_scope.rs");
         let code = source.split("#[cfg(test)]").next().unwrap_or_default();
         let outside_module = code.split("mod sent {").next().unwrap_or_default();
-        let call = concat!("Sent::", "after_recheck_reaching(");
+        let call = concat!("Sent::", "after_recheck(");
         assert_eq!(
             outside_module.matches(call).count(),
             1,
             "one call site mints Sent"
         );
-        let body = |name: &str| {
-            outside_module
-                .split(&format!("fn {name}("))
-                .nth(1)
-                .and_then(|body| body.split("\n    pub(crate) fn ").next())
-                .unwrap_or_default()
-                .to_owned()
-        };
+        let send_effect = outside_module
+            .split("fn send_effect(")
+            .nth(1)
+            .and_then(|body| body.split("\n    pub(crate) fn ").next())
+            .unwrap_or_default();
         assert!(
-            body("send_effect_reaching").contains(call),
-            "the one call site is send_effect_reaching"
+            send_effect.contains(call),
+            "the one call site is send_effect"
         );
         assert!(
-            body("send_effect").contains("self.send_effect_reaching(&[])"),
-            "send_effect goes through it with no other tab"
-        );
-        assert!(
-            code.contains("pub(super) fn after_recheck_reaching(")
-                && code.contains("_scope: PhantomData<"),
+            code.contains("pub(super) fn after_recheck(") && code.contains("_scope: PhantomData<"),
             "the constructor and the field stay private to the module"
         );
-    }
-
-    /// A main-world send's host hears its rules asked of the op's tab, then of the group's
-    /// other tabs, and only then the mark; one that reaches no other tab is asked nothing more.
-    #[tokio::test]
-    async fn tests_that_send_effect_reaching_rechecks_the_other_tabs_before_it_marks()
-    -> Result<(), Box<dyn Error>> {
-        let env = TestEnv::new();
-        let scope = OpScope::new(&env, op("page.evaluate")?, CallHeader::default());
-        let _linked = scope.send_effect_reaching(&[TabId(7), TabId(9)])?;
-        let _alone = scope.send_effect_reaching(&[])?;
-        assert_eq!(
-            env.calls(),
-            [
-                EnvCall::Recheck,
-                EnvCall::RecheckReach(vec![TabId(7), TabId(9)]),
-                EnvCall::MarkSent,
-                EnvCall::Recheck,
-                EnvCall::MarkSent,
-            ]
-        );
-        Ok(())
-    }
-
-    /// A refusal on another tab of the group passes through as the host made it, and nothing
-    /// is marked: the script never goes out.
-    #[tokio::test]
-    async fn tests_that_a_refusal_on_another_tab_marks_nothing() -> Result<(), Box<dyn Error>> {
-        let refusal = Refusal {
-            owner: ErrorOwner::Host,
-            code: "owner_has_control".to_owned(),
-            message: "The owner is using a tab this page's scripts reach.".to_owned(),
-            host_code: None,
-        };
-        let env = TestEnv::refusing_reach(refusal);
-        let scope = OpScope::new(&env, op("page.evaluate")?, CallHeader::default());
-        let error = scope
-            .send_effect_reaching(&[TabId(7)])
-            .err()
-            .ok_or("a refused reach must fail")?;
-        assert_eq!(
-            env.calls(),
-            [EnvCall::Recheck, EnvCall::RecheckReach(vec![TabId(7)])],
-            "nothing is marked sent after the refusal"
-        );
-        assert_eq!(
-            (error.owner(), error.code(), error.message()),
-            (
-                ErrorOwner::Host,
-                "owner_has_control",
-                "The owner is using a tab this page's scripts reach."
-            )
-        );
-        Ok(())
-    }
-
-    /// A host that implements only what `OpEnv` requires.
-    struct BareHost(TestEnv);
-
-    impl OpEnv for BareHost {
-        fn view(&self) -> &BrowserView {
-            self.0.view()
-        }
-
-        fn run_state(&self) -> &Arc<RunState> {
-            self.0.run_state()
-        }
-
-        fn recheck(&self) -> Result<(), Refusal> {
-            self.0.recheck()
-        }
-
-        fn mark_sent(&self) {
-            self.0.mark_sent();
-        }
-
-        fn mark_sensitive_target(&self) {
-            self.0.mark_sensitive_target();
-        }
-
-        fn note(&self, line: String) {
-            self.0.note(line);
-        }
-    }
-
-    /// `OpEnv::recheck_reach`'s default fails closed: a host that never implemented it refuses
-    /// every send that reaches another tab, as `neo / unsupported` with nothing marked, and
-    /// still lets through one that reaches none.
-    #[tokio::test]
-    async fn tests_that_the_default_recheck_reach_refuses_any_other_tab()
-    -> Result<(), Box<dyn Error>> {
-        let host = BareHost(TestEnv::new());
-        let scope = OpScope::new(&host, op("page.evaluate")?, CallHeader::default());
-        let error = scope
-            .send_effect_reaching(&[TabId(7)])
-            .err()
-            .ok_or("the default refuses another tab")?;
-        assert_eq!(
-            (error.owner(), error.code()),
-            (ErrorOwner::Neo, "unsupported")
-        );
-        assert!(
-            error.message().contains("window.opener")
-                && error.message().contains("nothing was sent"),
-            "the refusal says why and what became of the call: {error}"
-        );
-        assert_eq!(host.0.calls(), [EnvCall::Recheck], "nothing is marked sent");
-        let _alone = scope.send_effect_reaching(&[])?;
-        assert_eq!(
-            host.0.calls(),
-            [EnvCall::Recheck, EnvCall::Recheck, EnvCall::MarkSent],
-            "a send that reaches no other tab is not refused"
-        );
-        Ok(())
     }
 
     #[tokio::test]
@@ -935,6 +843,154 @@ mod tests {
             !env.calls().contains(&EnvCall::MarkSent),
             "no input before admission"
         );
+        Ok(())
+    }
+
+    /// A host whose script can abort the op (Playwright's `signal`), as claw-sdk's door does
+    /// through `OpCtx::aborted`.
+    struct AbortingHost {
+        env: TestEnv,
+        reason: Mutex<Option<String>>,
+        wake: Notify,
+    }
+
+    impl AbortingHost {
+        fn new() -> Self {
+            Self {
+                env: TestEnv::new(),
+                reason: Mutex::new(None),
+                wake: Notify::new(),
+            }
+        }
+
+        fn abort(&self, reason: &str) {
+            *self.reason.lock().unwrap_or_else(PoisonError::into_inner) = Some(reason.to_owned());
+            self.wake.notify_waiters();
+        }
+    }
+
+    impl OpEnv for AbortingHost {
+        fn view(&self) -> &BrowserView {
+            self.env.view()
+        }
+
+        fn run_state(&self) -> &Arc<RunState> {
+            self.env.run_state()
+        }
+
+        fn recheck(&self) -> Result<(), Refusal> {
+            self.env.recheck()
+        }
+
+        fn mark_sent(&self) {
+            self.env.mark_sent();
+        }
+
+        fn mark_sensitive_target(&self) {
+            self.env.mark_sensitive_target();
+        }
+
+        fn note(&self, line: String) {
+            self.env.note(line);
+        }
+
+        fn abort_reason(&self) -> Option<String> {
+            self.reason
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+
+        fn aborted(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async move {
+                loop {
+                    let woken = self.wake.notified();
+                    if self.abort_reason().is_some() {
+                        return;
+                    }
+                    woken.await;
+                }
+            })
+        }
+    }
+
+    /// Upstream's `Progress.abort`: the wait in flight ends, and the op's timeout path reports
+    /// the abort, with the reason and an `operation was aborted` line under the call log.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_abort_ends_the_wait_in_flight_as_the_ops_abort()
+    -> Result<(), Box<dyn Error>> {
+        let host = AbortingHost::new();
+        let scope = OpScope::new(&host, op("locator.click")?, header(None, None));
+        scope.log("waiting for locator('button')".to_owned());
+        let (waited, ()) = tokio::join!(scope.within(pending::<()>()), async {
+            time::sleep(Duration::from_millis(500)).await;
+            host.abort("foo bar");
+        });
+        assert_eq!(waited, Err(Expired), "an op with no timeout still ends");
+        let error = scope.timed_out(ErrorCode::NotActionable);
+        assert_eq!(error.error_code(), Some(ErrorCode::Aborted));
+        assert_eq!(
+            (error.owner(), error.timed_out(), error.answer()),
+            (ErrorOwner::Script, TimedOut::No, Answer::Ambiguous),
+            "the script chose to stop it, and input it sent may have landed"
+        );
+        assert_eq!(
+            error.message(),
+            "locator.click: foo bar\nCall log:\n  - waiting for locator('button')\n  - \
+             operation was aborted: foo bar\n"
+        );
+        Ok(())
+    }
+
+    /// An op aborted between attempts never sleeps or waits again.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_aborted_op_waits_no_more() -> Result<(), Box<dyn Error>> {
+        let host = AbortingHost::new();
+        let scope = OpScope::new(&host, op("locator.click")?, header(None, Some(5_000)));
+        host.abort("already");
+        let started = Instant::now();
+        assert_eq!(scope.sleep(Duration::from_secs(1)).await, Err(Expired));
+        assert_eq!(scope.within(async {}).await, Err(Expired));
+        assert_eq!(Instant::now(), started, "neither waited");
+        Ok(())
+    }
+
+    /// An op whose last step finished after the abort reports the abort, not its value.
+    #[tokio::test]
+    async fn tests_that_an_answer_after_the_abort_settles_as_the_abort()
+    -> Result<(), Box<dyn Error>> {
+        let host = AbortingHost::new();
+        let scope = OpScope::new(&host, op("locator.ariaSnapshot")?, header(None, None));
+        assert_eq!(scope.settle(Ok(json!("before")))?, json!("before"));
+        host.abort("stop");
+        let error = scope
+            .settle(Ok(json!("after")))
+            .err()
+            .ok_or("an answer after the abort must fail")?;
+        assert_eq!(error.error_code(), Some(ErrorCode::Aborted));
+        assert!(error.message().starts_with("locator.ariaSnapshot: stop"));
+        let failed = scope.fail(ErrorCode::NoMatch, "gone");
+        let settled = scope
+            .settle(Err(failed))
+            .err()
+            .ok_or("a failure stays a failure")?;
+        assert_eq!(
+            settled.error_code(),
+            Some(ErrorCode::NoMatch),
+            "a failure stands"
+        );
+        Ok(())
+    }
+
+    /// Without an abort the timeout path reads as before, and the default host never aborts.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_timeout_stays_a_timeout_without_an_abort() -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let scope = OpScope::new(&env, op("locator.click")?, header(None, Some(100)));
+        assert_eq!(scope.within(pending::<()>()).await, Err(Expired));
+        let error = scope.timed_out(ErrorCode::NotActionable);
+        assert_eq!(error.error_code(), Some(ErrorCode::NotActionable));
+        assert_eq!(error.message(), "locator.click: Timeout 100ms exceeded.");
         Ok(())
     }
 }

@@ -65,6 +65,12 @@ struct IframeTarget {
 }
 
 impl FrameTree {
+    /// Frame identities for page-wide operations; worlds are resolved on each frame's own
+    /// CDP session, so the JavaScript never crosses renderer or origin boundaries.
+    pub(crate) fn ids(&self) -> impl Iterator<Item = &FrameId> {
+        self.frames.iter().map(|frame| &frame.id)
+    }
+
     fn add(&mut self, tree: FrameTreeNode, embedder: Option<&str>) {
         let root = tree.frame.id.clone();
         for frame in tree.into_frames() {

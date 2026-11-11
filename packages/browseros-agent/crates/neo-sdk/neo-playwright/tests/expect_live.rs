@@ -123,10 +123,7 @@ fn notes(run: &LiveRun) -> Vec<String> {
         .into_iter()
         .filter_map(|call| match call {
             EnvCall::Note(line) => Some(line),
-            EnvCall::Recheck
-            | EnvCall::RecheckReach(_)
-            | EnvCall::MarkSent
-            | EnvCall::MarkSensitiveTarget => None,
+            EnvCall::Recheck | EnvCall::MarkSent | EnvCall::MarkSensitiveTarget => None,
         })
         .collect()
 }

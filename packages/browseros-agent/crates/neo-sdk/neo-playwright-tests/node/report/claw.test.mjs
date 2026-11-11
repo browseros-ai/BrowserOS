@@ -43,6 +43,17 @@ test('tests that claw refusals are selected by engine and preserve error precede
   assert.equal(classify(`Expected: ${message}`).verdict, 'neo-differs')
 })
 
+test('tests that a Claw setup failure is the harness, never an SDK difference', () => {
+  // claw-loader.mjs marks every failure before the run's first test call this way.
+  const setup =
+    'Error: harness-error: Claw setup failed: connecting to BrowserOS: deadline has elapsed'
+  assert.equal(classify(setup).verdict, 'harness-error')
+  assert.equal(
+    classify('Error: connecting to BrowserOS: deadline has elapsed').verdict,
+    'neo-differs',
+  )
+})
+
 test('tests that all listed v1 unsupported members and events have refusal evidence', () => {
   const require = createRequire(`${source}/package.json`)
   const ts = require('typescript')

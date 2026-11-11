@@ -12,7 +12,13 @@ import { invoke, invokeObserved, sleep } from './bridge'
 import type { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
 import { EventEmitter } from './emitter'
-import { clientError, plainError, prefixed, unsupportedError } from './errors'
+import {
+  abortedError,
+  clientError,
+  plainError,
+  prefixed,
+  unsupportedError,
+} from './errors'
 import {
   assertMaxArguments,
   type EvaluateOptions,
@@ -42,6 +48,12 @@ import type { FrameLocator, Locator } from './locator'
 import { markHandle, pick } from './options'
 import { Response } from './response'
 import type { LocatorOptions } from './selectors'
+import {
+  type SignalLike,
+  type SignalOption,
+  signalOf,
+  untilAborted,
+} from './signal'
 import { type TimeoutOption, TimeoutSettings } from './timeouts'
 import {
   type AriaSnapshotJSON,
@@ -947,13 +959,32 @@ export class Page extends EventEmitter {
     api: string,
     frame: Frame,
     url: UrlMatcher,
-    options: TimeoutOption & { waitUntil?: LoadState } = {},
+    options: TimeoutOption & SignalOption & { waitUntil?: LoadState } = {},
   ): Promise<void> {
     // Neo's waitForURL keeps the prefix it always gave; upstream's depends on whether the URL
     // already matched (waitForLoadState's check, or waitForNavigation's wrapped one).
     const waitUntil = knownLoadState(options.waitUntil ?? 'load')
     if (waitUntil === null) throw clientError(api, loadStateError('waitUntil'))
     const timeout = frame._navigationTimeout(options)
+    const signal = signalOf(api, options)
+    // upstream waits for a URL with a Waiter (waitForNavigation, or waitForLoadState once it
+    // matched), whose abort rejects the whole wait; each op inside takes the signal too.
+    await untilAborted(
+      signal,
+      () => abortedError(api, signal as SignalLike),
+      () => this.#waitForURL(api, frame, url, waitUntil, timeout, signal),
+    )
+  }
+
+  /** `_waitForURL`'s waits, once its options are checked. */
+  async #waitForURL(
+    api: string,
+    frame: Frame,
+    url: UrlMatcher,
+    waitUntil: LoadState,
+    timeout: number,
+    signal: SignalLike | undefined,
+  ): Promise<void> {
     const args = await frame._frameArgs(api)
     if (typeof url !== 'function') {
       const pattern =
@@ -972,6 +1003,8 @@ export class Page extends EventEmitter {
           url: pattern,
           waitUntil,
         },
+        undefined,
+        signal,
       )
       await this._navigated(api, frame, result, observed)
       return
@@ -988,7 +1021,10 @@ export class Page extends EventEmitter {
       const elapsed = Date.now() - started
       const remaining = timeout === 0 ? 0 : Math.max(1, timeout - elapsed)
       if (matched) {
-        await frame._waitForLoadState(api, waitUntil, { timeout: remaining })
+        await frame._waitForLoadState(api, waitUntil, {
+          timeout: remaining,
+          signal,
+        })
         return
       }
       const { value: result, observed } = await invokeObserved(
@@ -1002,6 +1038,8 @@ export class Page extends EventEmitter {
           },
           waitUntil: 'commit',
         },
+        undefined,
+        signal,
       )
       await this._navigated(api, frame, result, observed)
     }
@@ -1012,10 +1050,13 @@ export class Page extends EventEmitter {
     options: NavigateOptions = {},
   ): Promise<Response | null> {
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
+    const signal = signalOf(api, options)
     const { value: result, observed } = await invokeObserved(
       api,
       this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),
       { page: await this._brand(api), waitUntil },
+      undefined,
+      signal,
     )
     return await this._navigated(api, this._mainFrame, result, observed)
   }
