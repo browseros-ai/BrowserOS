@@ -1,8 +1,13 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { claimStateFolder, liveViewer, portFree } from './running-viewer'
+import {
+  claimStateFolder,
+  liveViewer,
+  otherInstanceStates,
+  portFree,
+} from './running-viewer'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -68,4 +73,34 @@ test('a port another server holds is not free; a released one is', () => {
   expect(portFree(port)).toBe(false)
   holder.stop(true)
   expect(portFree(port)).toBe(true)
+})
+
+test("other instances' states: the folders beside this one and under the state root, never its own", async () => {
+  const base = await mkdtemp(join(tmpdir(), 'neo-viewer-states-'))
+  dirs.push(base)
+  const state = (tag: string) =>
+    JSON.stringify({
+      lastBuild: { tag, id: `sha256:${tag}`, fingerprint: null },
+    })
+  const write = async (folder: string, text: string | null) => {
+    await mkdir(folder, { recursive: true })
+    if (text !== null) await writeFile(join(folder, 'start-state.json'), text)
+  }
+  await write(join(base, 'scratch', 'mine'), state('mine'))
+  await write(join(base, 'scratch', 'beside'), state('beside'))
+  await write(join(base, 'scratch', 'never-built'), null)
+  await write(join(base, 'scratch', 'torn'), '{"lastBuild":')
+  await write(join(base, 'root', 'default'), state('default'))
+  const tags = (
+    await otherInstanceStates(join(base, 'scratch', 'mine'), join(base, 'root'))
+  )
+    .map((other) => other.lastBuild?.tag)
+    .sort()
+  expect(tags).toEqual(['beside', 'default'])
+  // An instance under the root sees the others there, and not itself twice.
+  const fromRoot = await otherInstanceStates(
+    join(base, 'root', 'default'),
+    join(base, 'root'),
+  )
+  expect(fromRoot).toEqual([])
 })

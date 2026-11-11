@@ -9,7 +9,7 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { type LaunchOptions, launchOptionsFrom } from './config'
+import { type LaunchOptions, launchOptionsFrom, stateRoot } from './config'
 import { describeError } from './errors'
 import type { HostApiConfig } from './hostApi'
 import { LOG_FILE } from './log/run-log'
@@ -18,14 +18,15 @@ import {
   checkoutAt,
   checkoutImage,
   imageId,
+  imageLabel,
   instanceNames,
   newestImage,
   planImage,
   type Runner,
   removeLeftovers,
-  removeReplacedImage,
   runCommand,
   type StartState,
+  settleImages,
   startContainer,
   stopContainer,
 } from './neo-container'
@@ -33,6 +34,7 @@ import { buildPage } from './page'
 import {
   claimStateFolder,
   liveViewer,
+  otherInstanceStates,
   portFree,
   readViewerFile,
 } from './running-viewer'
@@ -179,36 +181,48 @@ async function chooseImage(launch: LaunchOptions): Promise<string> {
     },
     state,
   )
+  /** Set when this start built the image. */
+  let newBuild: StartState['lastBuild'] = null
+  let currentId: string | null
   if (plan.kind === 'reuse') {
     console.log(`Using ${plan.tag}, already built`)
+    currentId = await imageId(run, plan.tag)
+  } else {
+    console.log(
+      `Building ${plan.tag} with build.sh (a first build takes about 7 minutes)…`,
+    )
+    const built = await run(
+      'bash',
+      [buildScript(checkout), '--tag', plan.tag],
+      { inherit: true },
+    )
+    if (built.code !== 0)
+      throw new Error(`neo-viewer: build.sh failed (exit ${built.code})`)
+    currentId = await imageId(run, plan.tag)
+    if (!currentId)
+      throw new Error(
+        `neo-viewer: build.sh finished but ${plan.tag} is not on the machine`,
+      )
+    newBuild = { tag: plan.tag, id: currentId, fingerprint: plan.fingerprint }
+  }
+  // Without the id of the image this start runs, cleanup could not tell it from the ones to retire.
+  if (!currentId) {
+    console.log(
+      `Could not read ${plan.tag}'s id; no image is removed this start`,
+    )
     return plan.tag
   }
-  console.log(
-    `Building ${plan.tag} with build.sh (a first build takes about 7 minutes)…`,
+  const settled = await settleImages(
+    run,
+    state,
+    { built: newBuild, running: currentId },
+    await otherInstanceStates(launch.dataDir, stateRoot(process.env)),
   )
-  const built = await run('bash', [buildScript(checkout), '--tag', plan.tag], {
-    inherit: true,
-  })
-  if (built.code !== 0)
-    throw new Error(`neo-viewer: build.sh failed (exit ${built.code})`)
-  const id = await imageId(run, plan.tag)
-  if (!id)
-    throw new Error(
-      `neo-viewer: build.sh finished but ${plan.tag} is not on the machine`,
-    )
-  const replaced = await removeReplacedImage(run, state.lastBuild, id)
-  if (replaced)
-    console.log(`Removed the image the last build made: ${replaced}`)
-  await writeFile(
-    statePath,
-    JSON.stringify(
-      {
-        lastBuild: { tag: plan.tag, id, fingerprint: plan.fingerprint },
-      } satisfies StartState,
-      null,
-      2,
-    ),
-  )
+  for (const image of settled.removed)
+    console.log(`Removed the image an earlier build made: ${imageLabel(image)}`)
+  for (const image of settled.kept)
+    console.log(`Kept ${imageLabel(image)}: ${image.reason}`)
+  await writeFile(statePath, JSON.stringify(settled.state, null, 2))
   return plan.tag
 }
 

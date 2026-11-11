@@ -9,7 +9,9 @@ import {
   planImage,
   type Runner,
   removeLeftovers,
-  removeReplacedImage,
+  retireImages,
+  type StartState,
+  settleImages,
   stopContainer,
 } from './neo-container'
 
@@ -272,21 +274,226 @@ describe('cleanup touches only what the viewer created', () => {
     )
   })
 
-  test('removes only the image its own last build recorded, once a new build replaced it', async () => {
-    const docker = fakeDocker(() => ok())
-    const previous = {
-      tag: 'neo-sdk:old-arm64',
+  test('an image this instance replaced stays while any container or another instance holds it, and goes once nothing does', async () => {
+    const image = {
+      tag: 'neo-sdk:0.52.1.2-aaaaaaaaa-arm64',
       id: 'sha256:0123456789abcdef',
-      fingerprint: null,
     }
-    expect(await removeReplacedImage(docker.run, null, 'sha256:new')).toBeNull()
+    let containers = 'neo-viewer-default\n'
+    const docker = fakeDocker((args) => {
+      if (args[0] === 'image' && args[1] === 'inspect')
+        return ok(`${image.id}\n`)
+      if (args[0] === 'ps') return ok(containers)
+      return ok()
+    })
+    const other = { lastBuild: { ...image, fingerprint: null } }
+    // Another instance's container runs it (running or stopped: `ps -a`).
+    expect(await retireImages(docker.run, [image], [])).toEqual({
+      removed: [],
+      kept: [{ ...image, reason: 'used by container neo-viewer-default' }],
+    })
+    // No container, but another instance's next start would reuse it.
+    containers = ''
     expect(
-      await removeReplacedImage(docker.run, previous, previous.id),
-    ).toBeNull()
+      (await retireImages(docker.run, [image], [other])).kept[0]?.reason,
+    ).toBe("another instance's last build")
+    // Nothing holds it: removed, by a plain rm, never forced.
     expect(
-      await removeReplacedImage(docker.run, previous, 'sha256:new'),
-    ).toContain('neo-sdk:old-arm64')
-    expect(docker.calls).toEqual([['docker', 'image', 'rm', previous.id]])
+      await retireImages(docker.run, [image], [{ lastBuild: null }]),
+    ).toEqual({ removed: [image], kept: [] })
+    const removals = docker.calls.filter(
+      (call) => call[1] === 'image' && call[2] === 'rm',
+    )
+    expect(removals).toEqual([['docker', 'image', 'rm', image.id]])
+  })
+
+  test('two instances on one image: a later start of one keeps it while the other uses it, and removes it once nothing does', async () => {
+    const x = {
+      tag: 'neo-sdk:0.52.1.2-aaaaaaaaa-arm64',
+      id: 'sha256:aaaaaaaaaaaaaaaa',
+    }
+    const y = {
+      tag: 'neo-sdk:0.52.1.2-bbbbbbbbb-arm64',
+      id: 'sha256:bbbbbbbbbbbbbbbb',
+    }
+    const images = new Set([x.id, y.id])
+    // Which containers, running or stopped, use each image.
+    const users = new Map<string, string[]>([[x.id, ['neo-viewer-b']]])
+    const docker = fakeDocker((args) => {
+      if (args[0] === 'image' && args[1] === 'inspect') {
+        const ref = args.at(-1) ?? ''
+        return images.has(ref)
+          ? ok(`${ref}\n`)
+          : { code: 1, stdout: '', stderr: 'No such image' }
+      }
+      if (args[0] === 'ps') {
+        const ancestor =
+          args
+            .find((arg) => arg.startsWith('ancestor='))
+            ?.slice('ancestor='.length) ?? ''
+        return ok(
+          (users.get(ancestor) ?? []).map((name) => `${name}\n`).join(''),
+        )
+      }
+      if (args[0] === 'image' && args[1] === 'rm') {
+        images.delete(args.at(-1) ?? '')
+        return ok()
+      }
+      return ok()
+    })
+    // Instance a built x; instance b reused it (a reuse records no build) and its container runs it.
+    let a: StartState = { lastBuild: { ...x, fingerprint: null } }
+    const b: StartState = { lastBuild: null, kept: [] }
+
+    // a moves to a new commit and builds y: x stays, for b's container.
+    const first = await settleImages(
+      docker.run,
+      a,
+      { built: { ...y, fingerprint: null }, running: y.id },
+      [b],
+    )
+    expect(first.kept).toEqual([
+      { ...x, reason: 'used by container neo-viewer-b' },
+    ])
+    expect(first.removed).toEqual([])
+    expect(images.has(x.id)).toBe(true)
+    a = first.state
+    expect(a).toEqual({ lastBuild: { ...y, fingerprint: null }, kept: [x] })
+
+    // b stops (its container is removed); a's next start reuses y and removes x.
+    users.clear()
+    const second = await settleImages(
+      docker.run,
+      a,
+      { built: null, running: y.id },
+      [b],
+    )
+    expect(second.removed).toEqual([x])
+    expect(second.state).toEqual({
+      lastBuild: { ...y, fingerprint: null },
+      kept: [],
+    })
+    expect(images.has(x.id)).toBe(false)
+    // Never forced, and never the image a start runs.
+    const removals = docker.calls.filter(
+      (call) => call[1] === 'image' && call[2] === 'rm',
+    )
+    expect(removals).toEqual([['docker', 'image', 'rm', x.id]])
+  })
+
+  test('two instances that both kept one image do not wait on each other; an unanswered docker ps keeps it', async () => {
+    const x = { tag: 'neo-sdk:x-arm64', id: 'sha256:aaaaaaaaaaaaaaaa' }
+    let psFails = true
+    const docker = fakeDocker((args) => {
+      if (args[0] === 'image' && args[1] === 'inspect') return ok(`${x.id}\n`)
+      if (args[0] === 'ps')
+        return psFails
+          ? {
+              code: 1,
+              stdout: '',
+              stderr: 'Cannot connect to the Docker daemon\n',
+            }
+          : ok()
+      return ok()
+    })
+    const other: StartState = { lastBuild: null, kept: [x] }
+    const mine: StartState = { lastBuild: null, kept: [x] }
+    const unknown = await settleImages(
+      docker.run,
+      mine,
+      { built: null, running: 'sha256:cccccccccccccccc' },
+      [other],
+    )
+    expect(unknown.kept[0]?.reason).toBe(
+      'docker ps failed (Cannot connect to the Docker daemon)',
+    )
+    psFails = false
+    expect(
+      (
+        await settleImages(
+          docker.run,
+          mine,
+          { built: null, running: 'sha256:cccccccccccccccc' },
+          [other],
+        )
+      ).removed,
+    ).toEqual([x])
+  })
+
+  test('a Docker that does not answer an inspect keeps the image on the list; one that says it is gone drops it', async () => {
+    const x = { tag: 'neo-sdk:x-arm64', id: 'sha256:aaaaaaaaaaaaaaaa' }
+    let inspect: CommandResult = {
+      code: 1,
+      stdout: '',
+      stderr: 'Cannot connect to the Docker daemon\n',
+    }
+    const docker = fakeDocker((args) =>
+      args[0] === 'image' && args[1] === 'inspect' ? inspect : ok(),
+    )
+    const state: StartState = { lastBuild: null, kept: [x] }
+    const unanswered = await settleImages(
+      docker.run,
+      state,
+      { built: null, running: 'sha256:cccccccccccccccc' },
+      [],
+    )
+    expect(unanswered.state.kept).toEqual([x])
+    expect(unanswered.kept[0]?.reason).toBe(
+      'docker image inspect failed (Cannot connect to the Docker daemon)',
+    )
+    inspect = {
+      code: 1,
+      stdout: '',
+      stderr:
+        'Error response from daemon: No such image: sha256:aaaaaaaaaaaaaaaa\n',
+    }
+    const gone = await settleImages(
+      docker.run,
+      state,
+      { built: null, running: 'sha256:cccccccccccccccc' },
+      [],
+    )
+    expect(gone.state.kept).toEqual([])
+    expect(docker.calls.some((call) => call[2] === 'rm')).toBe(false)
+  })
+
+  test('the image a start runs is never retired, even when an earlier start kept it', async () => {
+    const x = { tag: 'neo-sdk:x-arm64', id: 'sha256:aaaaaaaaaaaaaaaa' }
+    const y = { tag: 'neo-sdk:y-arm64', id: 'sha256:bbbbbbbbbbbbbbbb' }
+    const docker = fakeDocker(() => ok(`${x.id}\n`))
+    const settled = await settleImages(
+      docker.run,
+      { lastBuild: { ...y, fingerprint: null }, kept: [x] },
+      { built: null, running: x.id },
+      [],
+    )
+    // Not removed, and still recorded: once this instance moves off it, a later start removes it.
+    expect(settled).toEqual({
+      state: { lastBuild: { ...y, fingerprint: null }, kept: [x] },
+      removed: [],
+      kept: [],
+    })
+    expect(docker.calls.some((call) => call[2] === 'rm')).toBe(false)
+  })
+
+  test("Docker's own refusal keeps the image too, with its reason", async () => {
+    const image = { tag: 'neo-sdk:x-arm64', id: 'sha256:fedcba9876543210' }
+    const docker = fakeDocker((args) => {
+      if (args[0] === 'image' && args[1] === 'inspect')
+        return ok(`${image.id}\n`)
+      if (args[0] === 'image' && args[1] === 'rm') {
+        return {
+          code: 1,
+          stdout: '',
+          stderr:
+            'Error response from daemon: conflict: unable to delete (must be forced)\n',
+        }
+      }
+      return ok()
+    })
+    expect(
+      (await retireImages(docker.run, [image], [])).kept[0]?.reason,
+    ).toContain('must be forced')
   })
 })
 
