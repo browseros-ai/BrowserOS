@@ -21,6 +21,13 @@
       reason === undefined
         ? new Exception('This operation was aborted', 'AbortError')
         : reason
+    // Dependency propagation is an abort algorithm, not a public event listener. A
+    // listener's stopImmediatePropagation must not keep combined signals alive.
+    const dependents = [...value.dependents]
+    value.dependents.clear()
+    for (const source of value.sources) state(source).dependents.delete(signal)
+    value.sources.clear()
+    for (const dependent of dependents) abort(dependent, value.reason)
     // Set state before dispatch: callbacks can synchronously observe the reason or
     // abort a dependent signal. A second abort never changes either state or listeners.
     dispatch.call(signal, { type: 'abort' })
@@ -34,6 +41,8 @@
         reason: undefined,
         listeners: [],
         onabort: null,
+        dependents: new Set(),
+        sources: new Set(),
       })
     }
 
@@ -187,21 +196,15 @@
         return source
       })
       const signal = new AbortSignal(token)
-      const cleanups = []
       for (const source of list) {
         if (source.aborted) {
           abort(signal, source.reason)
           break
         }
-        const forward = () => abort(signal, source.reason)
-        source.addEventListener('abort', forward, { once: true })
-        cleanups.push(() => source.removeEventListener('abort', forward))
+        const dependents = state(source).dependents
+        dependents.add(signal)
+        state(signal).sources.add(source)
       }
-      const cleanup = () => {
-        for (const remove of cleanups) remove()
-      }
-      if (signal.aborted) cleanup()
-      else signal.addEventListener('abort', cleanup, { once: true })
       return signal
     }
   }

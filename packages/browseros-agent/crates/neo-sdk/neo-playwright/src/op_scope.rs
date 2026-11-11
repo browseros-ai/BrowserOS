@@ -23,9 +23,7 @@
 //! returned or the host dropped its future.
 
 use std::future::Future;
-use std::mem;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -35,11 +33,11 @@ use browseros_core::{
 };
 use futures_util::future::{self, Either};
 use neo_trace::Effect;
-use serde_json::{Value, json};
-use tokio::runtime::Handle;
+use serde_json::Value;
 use tokio::time::{self, Instant};
 
 use crate::call_log::CallLog;
+use crate::object_group::ObjectGroup;
 use crate::op::Op;
 use crate::op_spec::Capability;
 use crate::target::CallHeader;
@@ -78,53 +76,6 @@ pub(crate) struct AdmittedPage {
     pub(crate) session: PageSession,
 }
 
-/// Names the op's objects so they go together: one group per op, released on every session
-/// that holds one of them when the scope drops.
-struct ObjectGroup {
-    /// `neo-playwright-op-<n>`, unique in the process.
-    name: String,
-    /// The sessions that hold an object in the group. A std mutex, never held across an await.
-    sessions: Mutex<Vec<ProtocolSession>>,
-}
-
-/// Numbers the ops' object groups.
-static NEXT_GROUP: AtomicU64 = AtomicU64::new(1);
-
-impl ObjectGroup {
-    fn new() -> Self {
-        Self {
-            name: format!(
-                "neo-playwright-op-{}",
-                NEXT_GROUP.fetch_add(1, Ordering::Relaxed)
-            ),
-            sessions: Mutex::default(),
-        }
-    }
-}
-
-/// Releases the group with the op, cancelled or not. The release is spawned, so it runs after
-/// a dropped future too; it is idempotent, and a session that is gone has nothing left to free.
-impl Drop for ObjectGroup {
-    fn drop(&mut self) {
-        let sessions =
-            mem::take(&mut *self.sessions.lock().unwrap_or_else(PoisonError::into_inner));
-        if sessions.is_empty() {
-            return;
-        }
-        let Ok(runtime) = Handle::try_current() else {
-            return;
-        };
-        let name = mem::take(&mut self.name);
-        drop(runtime.spawn(async move {
-            for session in sessions {
-                let _released = session
-                    .send::<_, Value>("Runtime.releaseObjectGroup", json!({ "objectGroup": name }))
-                    .await;
-            }
-        }));
-    }
-}
-
 /// The op's own wait ended: its Playwright timeout passed, or the script aborted it through
 /// `signal`. The leaf turns it into its timed-out code with [`OpScope::timed_out`], which
 /// reports an abort instead when there was one, so every leaf's timeout path is its abort path.
@@ -152,15 +103,7 @@ impl<'env> OpScope<'env> {
     /// The object group for remote objects this op asks `session` for. Naming it registers
     /// the session, so the group is released there when the op ends.
     pub(crate) fn object_group(&self, session: &ProtocolSession) -> &str {
-        let mut sessions = self
-            .objects
-            .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if !sessions.iter().any(|known| known.same_session(session)) {
-            sessions.push(session.clone());
-        }
-        &self.objects.name
+        self.objects.on(session)
     }
 
     /// The op's Playwright timeout; `None` waits until the host drops the op.
@@ -762,6 +705,21 @@ mod tests {
                 .unwrap_or_else(PoisonError::into_inner)
                 .push((method.to_owned(), params, session.cloned()));
             Box::pin(async { Ok(json!({})) })
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            if expected_epoch != self.connection_epoch() {
+                return Box::pin(async {
+                    Err(CdpError::Transport("fixture epoch changed".into()))
+                });
+            }
+            self.send(method, params, session)
         }
 
         fn send_raw_json<'a>(

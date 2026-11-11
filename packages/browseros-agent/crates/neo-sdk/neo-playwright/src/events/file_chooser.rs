@@ -2,8 +2,8 @@
 //! use `locator.setInputFiles`, including its host-file permission and native file validation.
 
 use browseros_cdp::CdpError;
-use browseros_core::CoreError;
-use serde::{Deserialize, Serialize};
+use browseros_core::{CoreError, PageJs};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::events::page_event::FileChooserOpened;
@@ -19,27 +19,6 @@ use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
 pub(crate) struct FileChooser {
     element: Value,
     is_multiple: bool,
-}
-
-#[derive(Deserialize)]
-struct Resolved {
-    object: RemoteNode,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RemoteNode {
-    object_id: String,
-}
-
-#[derive(Deserialize)]
-struct Multiple {
-    result: MultipleValue,
-}
-
-#[derive(Deserialize)]
-struct MultipleValue {
-    value: bool,
 }
 
 impl FileChooser {
@@ -76,31 +55,23 @@ impl FileChooser {
         let node: BackendNodeId = opened.node;
         let resolved = world
             .session()
-            .send::<_, Resolved>(
+            .send::<_, Value>(
                 "DOM.resolveNode",
                 json!({
                     "backendNodeId": node,
                     "executionContextId": world.context(),
-                    "objectGroup": scope.object_group(world.session()),
+                    "objectGroup": scope.run_state().objects.on(world.session()),
                 }),
             )
             .await;
-        let resolved = match resolved {
-            Ok(resolved) => resolved,
-            Err(error) => return disappeared(scope, error),
-        };
+        if let Err(error) = resolved {
+            return disappeared(scope, error);
+        }
         // Only this boolean crosses the protocol boundary; the native node becomes the
         // same document/node brand used by page.$ and locator.elementHandle.
-        let multiple = world
-            .session()
-            .send::<_, Multiple>(
-                "Runtime.callFunctionOn",
-                json!({
-                    "objectId": resolved.object.object_id,
-                    "functionDeclaration": "function() { return !!this.multiple; }",
-                    "returnByValue": true,
-                }),
-            )
+        let multiple = PageJs::isolated_only(world.session())
+            .in_frame(&opened.frame)
+            .call::<bool>(node.0, "function() { return !!this.multiple; }", &[])
             .await;
         let multiple = match multiple {
             Ok(multiple) => multiple,
@@ -111,7 +82,7 @@ impl FileChooser {
                 "$neo": "element", "page": page, "seq": world.seq(), "node": node,
                 "display": "<input type=\"file\">",
             }),
-            is_multiple: multiple.result.value,
+            is_multiple: multiple,
         }))
     }
 }

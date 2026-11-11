@@ -26,6 +26,7 @@ listed_enum! {
         Listen,
         Next,
         Wait,
+        FileChooserIntercept,
         DialogAccept,
         DialogDismiss,
         DownloadPath,
@@ -37,6 +38,11 @@ impl EventOp {
     /// This op's registration metadata.
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
+            Self::FileChooserIntercept => OpSpec::read(
+                "events.interceptFileChooser",
+                OpTarget::None,
+                "acquire or release this run's native file chooser interception lease",
+            ),
             Self::Listen => OpSpec::read(
                 "events.listen",
                 OpTarget::None,
@@ -106,6 +112,15 @@ struct WaitInput {
 #[serde(deny_unknown_fields)]
 struct NextInput {}
 
+/// A synchronous JS interest owns one lease before an activation can be dispatched.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InterceptInput {
+    page: PageRef,
+    lease: u64,
+    on: bool,
+}
+
 /// `dialog.accept { page, dialog, promptText? }` and `dialog.dismiss { page, dialog }`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -142,6 +157,7 @@ pub(crate) async fn invoke(
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
     match op {
+        EventOp::FileChooserIntercept => intercept(pw, scope, args.decode(scope)?).await,
         EventOp::Listen => listen(pw, scope, args.decode(scope)?).await,
         EventOp::Next => {
             let NextInput {} = args.decode(scope)?;
@@ -159,6 +175,34 @@ pub(crate) async fn invoke(
             ))
         }
     }
+}
+
+async fn intercept(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: InterceptInput,
+) -> Result<Value, PlaywrightError> {
+    let tab = input.page.tab();
+    if input.on {
+        let admitted = scope.admit(pw.browser(), tab).await?;
+        let lease = scope
+            .view()
+            .files()
+            .intercept_choosers(admitted.core_page.clone())
+            .await
+            .map_err(|error| scope.core_error(&error))?;
+        scope
+            .run_state()
+            .events
+            .keep_interception(input.lease, tab, lease);
+    } else if let Some(mut lease) = scope.run_state().events.take_interception(input.lease, tab) {
+        // Cleanup uses its original epoch/session binding, even if the page closed or moved.
+        lease
+            .release()
+            .await
+            .map_err(|error| scope.core_error(&error))?;
+    }
+    Ok(json!({}))
 }
 
 /// The page event `name`, or the failure a script gets for it.

@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use browseros_core::TargetId;
+use browseros_core::file_transfers::FileChooserInterception;
+use browseros_core::{TabId, TargetId};
 
 use crate::events::{ListenerKey, PageEventKind, Subscription};
 
@@ -17,11 +18,19 @@ pub(crate) struct RunEvents {
 
 #[derive(Debug, Default)]
 struct Inner {
+    /// Explicit per-interest leases; run teardown releases any setup whose JS cleanup was cut.
+    intercepting: HashMap<u64, Intercepting>,
     /// `page.on` and `context.on` listeners.
     listening: HashMap<Subscription, Listening>,
     /// `waitForEvent` ops in flight, by what they wait for. Counted, because two may wait for
     /// the same thing at once.
     waiting: HashMap<Subscription, usize>,
+}
+
+#[derive(Debug)]
+struct Intercepting {
+    tab: TabId,
+    lease: FileChooserInterception,
 }
 
 /// One listener's place in the log.
@@ -54,6 +63,24 @@ impl Drop for Waiting<'_> {
 }
 
 impl RunEvents {
+    pub(crate) fn keep_interception(&self, id: u64, tab: TabId, lease: FileChooserInterception) {
+        self.lock()
+            .intercepting
+            .insert(id, Intercepting { tab, lease });
+    }
+
+    pub(crate) fn take_interception(&self, id: u64, tab: TabId) -> Option<FileChooserInterception> {
+        let mut inner = self.lock();
+        if inner
+            .intercepting
+            .get(&id)
+            .is_some_and(|held| held.tab == tab)
+        {
+            inner.intercepting.remove(&id).map(|held| held.lease)
+        } else {
+            None
+        }
+    }
     /// Starts listening for `subscription` from `since_ms`, reading the log after seq `after`.
     /// Listening again keeps the first attachment, which is the earlier one.
     pub(crate) fn listen(&self, subscription: Subscription, since_ms: u64, after: u64) {

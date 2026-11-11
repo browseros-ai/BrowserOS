@@ -12,6 +12,405 @@
  * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
  */
 (() => {
+  // crates/neo-sdk/neo-playwright-js/src/prelude/ops.generated.ts
+  var OPS = {
+    "locator.click": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.dblclick": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.hover": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.check": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.uncheck": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.dragTo": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.fill": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.press": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.pressSequentially": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.selectOption": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.selectText": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.focus": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.blur": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.setInputFiles": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.dispatchEvent": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.scrollIntoViewIfNeeded": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.textContent": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.innerText": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.innerHTML": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.getAttribute": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.inputValue": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.isEnabled": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.isDisabled": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.isEditable": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.isChecked": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.isVisible": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.isHidden": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.count": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.allTextContents": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.allInnerTexts": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.boundingBox": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.waitFor": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.elementHandle": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.elementHandles": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "page.ariaSnapshot": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "locator.ariaSnapshot": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "expect.locator": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "expect.page": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "keyboard.down": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "keyboard.up": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "keyboard.press": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "keyboard.type": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "keyboard.insertText": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "mouse.move": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "mouse.down": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "mouse.up": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "mouse.click": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "mouse.wheel": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.goto": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.reload": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.goBack": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.goForward": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.waitForURL": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.waitForLoadState": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.title": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.content": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.setContent": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.close": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.opener": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.frames": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.evaluate": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "locator.evaluate": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "locator.evaluateAll": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
+    "page.waitForFunction": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.screenshot": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.pdf": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "context.pages": {
+      effect: "read",
+      target: null,
+      lifetime: "operation"
+    },
+    "context.newPage": {
+      effect: "write",
+      target: null,
+      lifetime: "operation"
+    },
+    "events.listen": {
+      effect: "read",
+      target: null,
+      lifetime: "operation"
+    },
+    "events.next": {
+      effect: "read",
+      target: null,
+      lifetime: "background"
+    },
+    "events.wait": {
+      effect: "read",
+      target: null,
+      lifetime: "operation"
+    },
+    "events.interceptFileChooser": {
+      effect: "read",
+      target: null,
+      lifetime: "operation"
+    },
+    "dialog.accept": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "dialog.dismiss": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "download.path": {
+      effect: "read",
+      target: null,
+      lifetime: "operation"
+    },
+    "download.saveAs": {
+      effect: "write",
+      target: null,
+      lifetime: "operation"
+    }
+  };
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/chooser-setup.ts
+  var pending = new Set;
+  function trackChooserSetup(setup) {
+    pending.add(setup);
+    const remove = () => {
+      pending.delete(setup);
+    };
+    setup.then(remove, remove);
+  }
+  function readyChoosers(op) {
+    if (OPS[op].effect === "read")
+      return null;
+    return pending.size ? Promise.all([...pending]) : null;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/host.ts
   function localTimeout(message) {
     const neo = Reflect.get(globalThis, "__neo");
@@ -180,6 +579,9 @@
   // crates/neo-sdk/neo-playwright-js/src/prelude/bridge.ts
   async function invoke(op, call, args, signal) {
     try {
+      const ready = readyChoosers(op);
+      if (ready)
+        await ready;
       return await host().invoke(op, { call, ...args }, signal === undefined ? undefined : { signal });
     } catch (thrown) {
       throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal);
@@ -187,6 +589,9 @@
   }
   async function invokeObserved(op, call, args, onResult, signal) {
     try {
+      const ready = readyChoosers(op);
+      if (ready)
+        await ready;
       const reply = await host().invoke(op, { call, ...args }, {
         observed: true,
         signal,
@@ -1529,13 +1934,27 @@
     dialogs = new Map;
     downloads = new Map;
     choosers = new Map;
+    nextChooserLease = 0;
+    chooserListeners = new Map;
+    chooserChanges = new Map;
     constructor(owner) {
       this.owner = owner;
     }
     listen(page, event, on) {
       const since = Date.now();
       this.listening += on ? 1 : -1;
-      this.sendListen(page, event, on, since);
+      if (event === "filechooser" && page) {
+        const lease = on ? this.intercept(page) : this.chooserListeners.get(page);
+        if (on && lease)
+          this.chooserListeners.set(page, lease);
+        else
+          this.chooserListeners.delete(page);
+        const previous = this.chooserChanges.get(page) ?? Promise.resolve();
+        const changed = previous.then(() => this.sendListen(page, event, on, since, lease));
+        this.chooserChanges.set(page, changed);
+        trackChooserSetup(changed);
+      } else
+        this.sendListen(page, event, on, since);
       if (on && !this.pumping) {
         this.pumping = true;
         this.pump();
@@ -1549,7 +1968,17 @@
       const options = typeof optionsOrPredicate === "function" ? { predicate: optionsOrPredicate } : optionsOrPredicate ?? {};
       const deadline = new EventDeadline(api, event, since, timeoutMs(api, settings.timeout(options)));
       const signal = signalOf(api, options);
-      return await untilAborted(signal, () => abortedError(api, signal), () => this.waitFor(api, page, event, options, since, deadline, signal));
+      const lease = event === "filechooser" && page ? this.intercept(page) : null;
+      try {
+        return await untilAborted(signal, () => abortedError(api, signal), async () => {
+          if (lease)
+            await deadline.race(lease.ready);
+          return this.waitFor(api, page, event, options, since, deadline, signal);
+        });
+      } finally {
+        if (lease)
+          lease.release().catch(() => {});
+      }
     }
     async waitFor(api, page, event, options, since, deadline, signal) {
       const target = page === null ? null : await page._openedBrand(api);
@@ -1584,16 +2013,46 @@
         after = record.seq;
       }
     }
-    async sendListen(page, event, on, since) {
+    async sendListen(page, event, on, since, lease) {
       const api = `${page === null ? "browserContext" : "page"}.${on ? "on" : "off"}`;
       try {
+        if (on && lease)
+          await lease.ready;
         await invoke("events.listen", { api, timeoutMs: 0 }, {
           page: page === null ? null : await page._openedBrand(api),
           event,
           on,
           since
         });
-      } catch {}
+      } catch {
+        if (on && lease)
+          lease.release().catch(() => {});
+      } finally {
+        if (!on && lease)
+          await lease.release().catch(() => {});
+      }
+    }
+    intercept(page) {
+      const id = ++this.nextChooserLease;
+      const api = "page.filechooser";
+      const target = page._openedBrand(api);
+      const ready = target.then(async (page) => {
+        await invoke("events.interceptFileChooser", { api, timeoutMs: 0 }, { page, lease: id, on: true });
+      });
+      trackChooserSetup(ready);
+      let released = null;
+      return {
+        ready,
+        release: () => {
+          if (!released) {
+            released = ready.then(async () => {
+              await invoke("events.interceptFileChooser", { api, timeoutMs: 0 }, { page: await target, lease: id, on: false });
+            });
+            trackChooserSetup(released);
+          }
+          return released;
+        }
+      };
     }
     async pump() {
       try {

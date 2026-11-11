@@ -316,6 +316,7 @@ export type ExpectArgs = {
 
 /** Each op's input after `call`. */
 export type OpInputs = {
+  'events.interceptFileChooser': PageArgs & { lease: number; on: boolean }
   'locator.click': TargetArgs & { options: PointerOptions }
   'locator.dblclick': TargetArgs & { options: PointerOptions }
   'locator.hover': TargetArgs & { options: PointerOptions }
@@ -473,6 +474,7 @@ export type OpInputs = {
  * (`__neo.brands.register`); the revivers and the classes read the raw brands.
  */
 export type OpOutputs = {
+  'events.interceptFileChooser': Done
   'locator.click': null
   'locator.dblclick': null
   'locator.hover': null

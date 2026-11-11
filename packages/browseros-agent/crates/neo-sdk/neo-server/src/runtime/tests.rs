@@ -1170,6 +1170,28 @@ fn abort_signals_cancel_an_event_wait_in_the_production_realm() -> Result<(), Te
     })
 }
 
+/// Signal dependencies are internal abort algorithms, unaffected by user event propagation.
+#[test]
+fn combined_abort_signals_survive_stopped_public_events() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const source = new AbortController();
+            source.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+            const combined = AbortSignal.any([source.signal]);
+            const waiting = context.waitForEvent('page', { signal: combined, timeout: 0 });
+            source.abort('cancelled');
+            const error = await waiting.catch(error => error);
+            return [combined.aborted, combined.reason, error.name, error.cause];";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([true, "cancelled", "AbortError", "cancelled"]),
+            "a public event handler cannot suppress cancellation of a dependent wait"
+        );
+        Ok(())
+    })
+}
+
 /// A deadline can pass before dispatch, so it must use the same class as host timeouts.
 #[test]
 fn local_event_deadlines_use_the_public_timeout_error_class() -> Result<(), TestError> {
