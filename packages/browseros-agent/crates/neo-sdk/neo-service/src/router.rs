@@ -11,7 +11,7 @@ use crate::host_service::Authenticated;
 use crate::service::ServiceState;
 use crate::{
     display_route, events_route, fit_routes, live_tabs, part_routes, record_routes, response_id,
-    secret_routes, tab_routes, takeover_routes,
+    takeover_routes,
 };
 use axum::extract::Request;
 use axum::middleware::Next;
@@ -34,8 +34,6 @@ pub(crate) fn router(state: Arc<ServiceState>) -> Router {
         )
         .route("/v1/trace", get(record_routes::get_trace))
         .route("/v1/events", get(events_route::stream_events))
-        .route("/v1/tabs/{tab_id}/private", post(tab_routes::make_private))
-        .route("/v1/tabs/{tab_id}/sweep", post(tab_routes::sweep_tab))
         .route("/v1/tabs/{tab_id}/screencast", get(live_tabs::screencast))
         .route("/v1/tabs/{tab_id}/video", get(live_tabs::video))
         .route("/v1/locks", post(part_routes::create_lock))
@@ -47,7 +45,6 @@ pub(crate) fn router(state: Arc<ServiceState>) -> Router {
         .route("/v1/fits/{fit_id}", get(fit_routes::get_fit))
         .route("/v1/fits/{fit_id}/navigate", post(fit_routes::navigate_fit))
         .route("/v1/fits/{fit_id}/restore", post(fit_routes::restore_fit))
-        .route("/v1/secrets", post(secret_routes::register_secret))
         .route("/v1/display", get(display_route::open_display))
         .route("/v1/takeovers", post(takeover_routes::start_takeover))
         .route(

@@ -3,7 +3,7 @@
 //! document a frame shows now.
 //!
 //! ```text
-//!  (goto: a javascript: URL refused) ── admit ── DocumentWatch (subscribe, lifecycle on) ──
+//!  admit ── DocumentWatch (subscribe, lifecycle on) ──
 //!     send_effect ── Page.navigate, reload or navigateToHistoryEntry ── that document's
 //!     commit ── its waitUntil state ── the response
 //! ```
@@ -112,46 +112,15 @@ struct Response {
 }
 
 impl GotoInput {
-    /// The page, the navigation and its `waitUntil`. A `javascript:` URL is refused here, before
-    /// the page is admitted or anything is sent: Chromium runs it in the current document's main
-    /// world, outside the sweep that guards every other main-world script, and only then
-    /// reports the navigation aborted. That refusal is why `page.goto` does not declare
-    /// `Capability::MainWorld`: every URL it sends runs the new document's own script in that
-    /// document's origin, as a link would, or the agent's in a `data:` document's opaque
-    /// origin, which reaches no other document.
-    pub(crate) fn into_parts(
-        self,
-        scope: &OpScope<'_>,
-    ) -> Result<(PageRef, Navigation, LoadState), PlaywrightError> {
-        if runs_script(&self.url) {
-            return Err(scope.fail(
-                ErrorCode::Unsupported,
-                "Neo does not open javascript: URLs, whose script runs in the page's main world \
-                 outside Neo's privacy sweep; run the script with page.evaluate",
-            ));
-        }
+    /// The page, the navigation and its `waitUntil`.
+    pub(crate) fn into_parts(self) -> (PageRef, Navigation, LoadState) {
         let navigation = Navigation::Goto {
             frame: self.frame,
             url: complete_user_url(self.url),
             referer: self.referer,
         };
-        Ok((self.page, navigation, self.wait_until))
+        (self.page, navigation, self.wait_until)
     }
-}
-
-/// Whether `url` is a `javascript:` URL, its scheme read as the URL Standard and Chromium read
-/// it: the C0 controls and spaces around the URL dropped, the tabs and newlines inside it
-/// removed, then everything before the first `:`, compared without ASCII case. So
-/// ` JavaScript:` and `java\tscript:` are, and `/javascript:` (no scheme) and `java script:`
-/// (no URL Chromium navigates to) are not.
-fn runs_script(url: &str) -> bool {
-    let url: String = url
-        .trim_matches(|c: char| c <= ' ')
-        .chars()
-        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
-        .collect();
-    url.split_once(':')
-        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("javascript"))
 }
 
 impl NavigateInput {
@@ -161,8 +130,11 @@ impl NavigateInput {
     }
 }
 
-/// Upstream's `completeUserURL`: a bare `localhost` or `127.0.0.1` address gets `http://`.
+/// Upstream first constructs a URL (without a base here), then `completeUserURL` adds
+/// `http://` to bare local addresses. Use that same spelling in the command and its error:
+/// Chromium executes `javascript:` before replying `net::ERR_ABORTED`, even with URL whitespace.
 fn complete_user_url(url: String) -> String {
+    let url = url::Url::parse(&url).map_or(url, String::from);
     if url.starts_with("localhost") || url.starts_with("127.0.0.1") {
         format!("http://{url}")
     } else {
@@ -247,6 +219,9 @@ async fn drive(
                 return Err(scope.fail(ErrorCode::NavigationFailed, "Download is starting"));
             }
             if let Some(error) = reply.error_text.filter(|error| !error.is_empty()) {
+                // `javascript:` executes in the current document before Chromium reports
+                // ERR_ABORTED. Forward the browser's failure as Playwright does; it does not
+                // mean the script had no effect.
                 // Chromium answers before it commits its error page, under the same loader
                 // (measured: 2 ms later). Waiting for that commit keeps it in this op; left
                 // for the next navigation, it would read as that one being interrupted.
@@ -562,70 +537,21 @@ fn status_text(status: u16) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
-    use std::sync::Arc;
-
-    use neo_trace::ErrorOwner;
-    use serde_json::json;
-
-    use super::{complete_user_url, runs_script, status_text};
-    use crate::test_env::{self, TestEnv};
-    use crate::test_support::RecordingHooks;
-    use crate::{Answer, ErrorCode, Op, Playwright};
+    use super::{complete_user_url, status_text};
 
     #[test]
-    fn tests_that_a_javascript_url_is_script_however_it_is_spelled() {
-        for (url, script) in [
-            ("javascript:void(document.title = 'x')", true),
-            ("JavaScript:void(0)", true),
-            // The browser drops what surrounds a URL, and the tabs and newlines inside it.
-            (" \u{1}java\tscr\nipt:void(0)\r\n", true),
-            ("https://bank.example/javascript:void(0)", false),
-            (
-                "data:text/html,<script>document.title = 'x'</script>",
-                false,
-            ),
-            ("about:blank", false),
-            ("/javascript:void(0)", false),
-            ("java script:void(0)", false),
-            ("javascript", false),
+    fn tests_that_goto_normalizes_url_spelling_as_upstream_does() {
+        for url in [
+            "javascript:void(0)",
+            " JavaScript:void(0)",
+            "java\tscr\nipt:void(0)",
         ] {
-            assert_eq!(runs_script(url), script, "{url:?}");
+            assert_eq!(complete_user_url(url.to_owned()), "javascript:void(0)");
         }
-    }
-
-    /// Offline, any op that reaches the browser fails as disconnected, so `unsupported` with no
-    /// host call shows the refusal came first.
-    #[tokio::test]
-    async fn tests_that_goto_refuses_a_javascript_url_before_anything_is_sent()
-    -> Result<(), Box<dyn Error>> {
-        let playwright = Playwright::new(
-            test_env::offline_session(),
-            Arc::new(RecordingHooks::default()),
+        assert_eq!(
+            complete_user_url(" FILE:///tmp/a b.html".to_owned()),
+            "file:///tmp/a%20b.html"
         );
-        let goto = Op::from_name("page.goto").ok_or("page.goto is an op")?;
-        for frame in [None, Some("child-frame")] {
-            let env = TestEnv::new();
-            let input = json!({ "page": { "$neo": "page", "tab": 1007 },
-                                "frame": frame, "url": " JavaScript:void(document.title = 'ran')" });
-            let error = playwright
-                .invoke(&env, goto, input)
-                .await
-                .err()
-                .ok_or("a javascript: URL is refused")?;
-            assert_eq!(
-                (error.error_code(), error.owner(), error.answer()),
-                (
-                    Some(ErrorCode::Unsupported),
-                    ErrorOwner::Neo,
-                    Answer::Definite
-                ),
-                "{error}"
-            );
-            assert!(error.message().contains("javascript:"), "{error}");
-            assert!(env.calls().is_empty(), "nothing was rechecked or sent");
-        }
-        Ok(())
     }
 
     #[test]
@@ -640,7 +566,7 @@ mod tests {
         );
         assert_eq!(
             complete_user_url("https://example.com".to_owned()),
-            "https://example.com"
+            "https://example.com/"
         );
     }
 

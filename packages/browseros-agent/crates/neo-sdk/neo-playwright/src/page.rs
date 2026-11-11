@@ -1,5 +1,5 @@
 //! Pages and the browser context: navigation, page state and content, the frame tree,
-//! main-world scripts behind the sensitive-value sweep, captures after the host allows them,
+//! main-world scripts behind the sensitive-value sweep, screenshots and PDFs,
 //! and the context's tab list.
 //!
 //! Every page op admits its page once through the run's view, then sends its calls on a raw
@@ -11,7 +11,7 @@
 //! ```text
 //!  page.goto ─ navigation ─ DocumentWatch (commits, lifecycle per loader) ─ timing entry
 //!  page.frames ─ frame_tree ─ getFrameTree per session, OOPIFs via core's FrameRegistry
-//!  page.screenshot / page.pdf ─ PlaywrightHooks::capture_allowed ─ the capture
+//!  page.screenshot / page.pdf ─ page admission ─ the capture
 //!  page.evaluate / waitForFunction ─ EvaluateGuard: a sweep before and after every script (each
 //!                                    covers the script's site, sweep_scope); the answer read in
 //!                                    Playwright's format and masked by its structure (page_value)

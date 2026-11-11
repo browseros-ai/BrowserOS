@@ -7,7 +7,7 @@ use crate::support::{BoxError, EventStream, Harness, Sse, TestResult, harness};
 use axum::http::StatusCode;
 use browseros_core::TabId;
 use neo_takeover::{LockTarget, OwnerHasScreen, ScreenHolder, TakeoverId};
-use neo_trace::Effect;
+use neo_trace::{Effect, PrivateReason};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
@@ -59,8 +59,10 @@ async fn a_takeover_starts_and_is_released_through_the_routes() -> TestResult {
     );
     let fit = format!("/v1/fits/{}", takeover["fitId"].as_str().ok_or("no fitId")?);
 
-    let private = h.post("/v1/tabs/12/private", "").await?;
-    assert_eq!(private.body["reason"], "takeover", "{}", private.body);
+    assert_eq!(
+        h.privacy.is_private(TabId(12)).map(|record| record.reason),
+        Some(PrivateReason::Takeover)
+    );
     assert!(
         h.service
             .locks()

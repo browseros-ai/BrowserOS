@@ -7,7 +7,7 @@ use browseros_core::TabId;
 use futures_util::{SinkExt, StreamExt};
 use neo_service::{HostAuth, HostToken, PeerRule, host_service};
 use neo_takeover::{OwnerHasScreen, ScreenHolder};
-use neo_trace::PrivateReason;
+use neo_trace::{EpochMillis, PrivateReason};
 use std::future::IntoFuture;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -301,13 +301,9 @@ async fn a_view_closes_with_4001_when_the_host_makes_the_tab_in_front_private() 
         "an update from the screen"
     );
 
-    let private = h.post("/v1/tabs/12/private", "").await?;
-    assert_eq!(
-        private.status,
-        axum::http::StatusCode::OK,
-        "{}",
-        private.body
-    );
+    h.privacy
+        .make_private(TabId(12), PrivateReason::Host, EpochMillis::now())
+        .await?;
     let (code, reason) = closed(&mut view).await?;
     assert_eq!(code, 4001, "{reason}");
     assert!(reason.starts_with("paused"), "{reason}");
@@ -450,13 +446,9 @@ async fn the_agents_move_onto_a_private_tab_closes_a_routed_view_with_4001() -> 
         h.browser.open_tab(tab);
     }
     h.browser.bring_to_front(12);
-    let private = h.post("/v1/tabs/13/private", "").await?;
-    assert_eq!(
-        private.status,
-        axum::http::StatusCode::OK,
-        "{}",
-        private.body
-    );
+    h.privacy
+        .make_private(TabId(13), PrivateReason::Host, EpochMillis::now())
+        .await?;
     let socket = serve(&h)?;
     let (mut view, _) = handshake(&socket.path, Open::new("mode=view")).await?;
 

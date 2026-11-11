@@ -116,10 +116,6 @@ async fn a_tab_the_browser_does_not_have_is_a_404() -> TestResult {
         .await?
         .assert_error(StatusCode::NOT_FOUND, "tab_not_found");
     assert!(agent_may(&h, 99, Effect::Write), "no lock was taken");
-    h.post("/v1/tabs/999999/private", "")
-        .await?
-        .assert_error(StatusCode::NOT_FOUND, "tab_not_found");
-    assert!(h.privacy.is_private(TabId(999_999)).is_none());
     Ok(())
 }
 
@@ -197,38 +193,27 @@ async fn lock_state_reaches_the_tabs_event_stream_when_taken_and_when_its_ttl_en
     assert_eq!(h.get(&lock_uri(&lock)?).await?.body, expired.data["lock"]);
     assert!(agent_may(&h, 3, Effect::Write));
 
-    assert_eq!(
-        h.post("/v1/tabs/4/private", "").await?.status,
-        StatusCode::OK
-    );
+    h.browser.close_tab(4);
+    h.service.tab_closed(TabId(4)).await;
     assert_eq!(
         tab4.next().await?.kind,
-        "tab.private",
+        "tab.closed",
         "the tab-4 stream saw neither of tab 3's lock events"
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn a_closed_tab_loses_its_locks_and_flag_then_says_so() -> TestResult {
+async fn a_closed_tab_loses_its_locks_then_says_so() -> TestResult {
     let h = harness().await?;
     h.browser.open_tab(3);
     let mut stream = EventStream::open(&h, "/v1/events?tab=3", None).await?;
-    assert_eq!(
-        h.post("/v1/tabs/3/private", "").await?.status,
-        StatusCode::OK
-    );
-    assert_eq!(stream.next().await?.kind, "tab.private");
     let lock = take_lock(&h, json!({"tabId": 3, "ttlSeconds": 60})).await?;
     assert_eq!(stream.next().await?.kind, "lock.state");
 
     h.browser.close_tab(3);
     h.service.tab_closed(TabId(3)).await;
     assert!(agent_may(&h, 3, Effect::Write));
-    assert!(
-        h.privacy.is_private(TabId(3)).is_none(),
-        "its flag ended with it"
-    );
     let read = h.get(&lock_uri(&lock)?).await?;
     assert!(read.body["releasedAt"].is_i64(), "{}", read.body);
 
@@ -279,10 +264,6 @@ async fn a_browser_that_does_not_answer_is_a_503() -> TestResult {
         .await?
         .assert_error(StatusCode::SERVICE_UNAVAILABLE, "browser_unavailable");
     assert!(agent_may(&h, 3, Effect::Write));
-    h.post("/v1/tabs/3/private", "")
-        .await?
-        .assert_error(StatusCode::SERVICE_UNAVAILABLE, "browser_unavailable");
-    assert!(h.privacy.is_private(TabId(3)).is_none());
     Ok(())
 }
 

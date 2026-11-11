@@ -11,7 +11,6 @@ pub(crate) mod fixture_server;
 
 use std::env;
 use std::error::Error;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -36,23 +35,13 @@ use crate::{Playwright, PlaywrightHooks, Refusal, TypedBy};
 
 pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
-/// Hooks that remember every value a sweep told the host. They name no secret files unless
-/// built with [`RecordingHooks::naming_secrets`], so path uploads are refused, as a host's default.
+/// Hooks that remember every value a sweep told the host.
 #[derive(Default)]
 pub(crate) struct RecordingHooks {
     swept: Mutex<Vec<String>>,
-    secrets: Option<Vec<PathBuf>>,
 }
 
 impl RecordingHooks {
-    /// Hooks that name `secrets` as Neo's secret files.
-    pub(crate) fn naming_secrets(secrets: Vec<PathBuf>) -> Self {
-        Self {
-            secrets: Some(secrets),
-            ..Self::default()
-        }
-    }
-
     /// Every value `values_swept` was told so far, long enough to register, in order.
     pub(crate) fn swept(&self) -> Vec<String> {
         self.swept
@@ -73,11 +62,7 @@ impl PlaywrightHooks for RecordingHooks {
     }
 
     fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
-        Ok(())
-    }
-
-    fn secret_paths(&self) -> Option<Vec<PathBuf>> {
-        self.secrets.clone()
+        panic!("captures must not consult the retained host hook")
     }
 }
 

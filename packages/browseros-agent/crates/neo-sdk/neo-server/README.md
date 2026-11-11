@@ -4,6 +4,63 @@ claw-sdk is hosted BrowserOS Neo's sidecar. Chromium launches it beside the brow
 
 The binary is `browseros-claw-sdk`. Code style and review rules are in [STYLE.md](STYLE.md).
 
+## Hosting the real SDK in Node
+
+The default-off Cargo feature `hosted-run` exports `hosted::{HostedRuntime, HostedOptions,
+HostedRun}`. It builds the real trace store, secrets, privacy hooks, browser link, Playwright
+facade, built-ins, dispatcher and tab janitor. It binds no listeners and disables the trace
+screenshot queue. Feature-off builds retain the product path.
+
+Each connection owns an `App::runtime()` executor with the product's worker stack size.
+`open_run(timeout)` starts a real `RunCtx` and seeds the same tab listing as MCP runs.
+`invoke(name, json, site)` enters that executor and calls `Bridge::submit` synchronously; its
+returned future always resolves to the bridge envelope. `log` and `sleep` use the same bridge.
+`finish()` stops, drains operations, builds the reply and records the end exactly once; a
+deadline or dropped run also ends through that path. `close()` drains runs, flushes traces
+and releases the private executor, including core's background tasks and CDP socket.
+
+`state_dir` is required; the store is `<state_dir>/claw-sdk/trace.db`. Pass Chromium's
+`<user-data-dir>/.browseros` as `execution_dir` to locate the secret profile, and the installed
+app's version as `browseros_version` for native capability gates. Without an execution directory,
+the product refuses path uploads. An initial run has `init.page = null`; `init.pages` includes
+all existing tabs, including the launch tab. The lazy default page opens when the SDK needs it.
+
+The isolated N-API crate is `../neo-playwright-tests/node/claw-addon` (its own workspace and
+lockfile, seeded from the agent lock). From `packages/browseros-agent`:
+
+```sh
+cargo build --release --locked --manifest-path crates/neo-sdk/neo-playwright-tests/node/claw-addon/Cargo.toml
+cp "$CARGO_TARGET_DIR/release/libclaw_node.dylib" crates/neo-sdk/neo-playwright-tests/node/claw-addon/claw_node.node
+node --test crates/neo-sdk/neo-playwright-tests/node/claw-smoke.test.mjs
+```
+
+The loader `openClaw(cdpPort, { timeoutMs, stateDir, executionDir, browserosVersion },
+{ onUncaught })` returns the real SDK parameters, the native run, runtime, source hashes and
+an idempotent `finish()`. `CLAW_NODE_ADDON` overrides the add-on path. Omitted `stateDir`
+uses a temporary directory removed at close. The default run timeout is 24 hours.
+
+The loader reads bootstrap, Playwright prelude and Neo prelude verbatim, adds the production
+strict-mode prefix and evaluates them with `vm.compileFunction` in Node's main realm. A
+`globalThis` parameter holds the natives and `__neo` privately. The SDK's Promise, Error and
+Uint8Array have Node's identity; QuickJS's memory and CPU limits do not apply. `__neo.run`
+keeps every provided parameter and stays pending until finish. Listener throws surface through
+Node's `unhandledRejection` event and are forwarded to `onUncaught` for the worker's lifetime;
+existing Node listeners still observe them. Use one loader run per worker.
+
+Web globals (`URL`, `URLSearchParams`, `atob`, `btoa`, `DOMException`) also come from Node's
+main realm, as in the prelude's VM test rig. The loader does not evaluate `web_globals.js`:
+its factory requires QuickJS's Rust natives. Production URL parsing uses Rust's `url` 2.5.8,
+which retains older opaque-path trailing-space rules and exposes no `URL.createObjectURL`
+or `URL.revokeObjectURL`. Node uses its own URL implementation and blob URL methods, so the
+comparison does not prove parity for these globals. `sources` still hashes the three
+production bootstrap and prelude files.
+
+The smoke skips without `NEO_E2E_BROWSER`. It owns a headless browser on a throwaway profile,
+verifies its process group before cleanup, and requires its Node child to exit naturally.
+The primary launch leaves `BROWSERCLAW_HOSTED_MODE` unset to match the comparison runner;
+`CLAW_SMOKE_HOSTED=1` repeats it with BrowserOS hosted mode and reports console, popup and
+`setContent` differences. `NEO_NODE_OUTPUT_DIR` retains proof, logs and cleanup records.
+
 ## How it runs
 
 To run it beside the browser in a container, use the Neo SDK image in [docker/](docker/README.md).
@@ -41,7 +98,7 @@ Neo binds two listeners:
 
 State lives under `$BROWSERCLAW_DIR`:
 
-- `claw-sdk/trace.db` is the SQLite trace store. Supported older files are upgraded in place. If it does not open (including an unknown newer migration or the earliest session-era schema), Neo moves it aside to `trace.db.broken-<millis>` and starts a fresh one. Rolling back across a newer migration loses the live trace and request-id history; open tabs are made private again before capture resumes.
+- `claw-sdk/trace.db` is the SQLite trace store. Supported older files are upgraded in place. If it does not open (including an unknown newer migration or the earliest session-era schema), Neo moves it aside to `trace.db.broken-<millis>` and starts a fresh one. Rolling back across a newer migration loses the live trace and request-id history.
 - `logs/claw-sdk.log.<date>` is the daily log. The same lines go to stderr. `logs/claw-sdk-panics.log` gets each panic, written synchronously.
 - `host.sock` is the host socket, unless `CLAW_HOST_SOCKET` moves it.
 
@@ -80,7 +137,7 @@ A `requestId` never runs twice. A repeat while its run is going joins it and get
 | `run` | One `run` call from admission to reply: replay, joins, the orphan grace, and the deadline. |
 | `runtime` | The per-run QuickJS realm, the JS bootstrap and the `neo` prelude in `runtime/js/` plus neo-playwright's prelude, and the strings-only bridge to the dispatcher. The only module that names rquickjs. |
 | `dispatch` | The door: `Dispatcher`, the `Method` trait, the `Registry`, the policy rules, and the error model. |
-| `builtins` | The methods Neo serves: every neo-playwright op but those it holds, and a `goto` to any URL but `http`, `https`, `data` and `about`, or a `reload` of a page on one (a local file would show Neo's own secrets), on the process's one `Playwright` (`playwright_ops.rs`, with the privacy hooks it reports to, which also name Neo's secret files to the crate's upload deny list, and `event_release.rs`, which puts every event an event pull returns through the rules on its own tab) and `neo.solveCaptcha`; and the idle-tab janitor. `op_marks.rs` reads each op's declared capabilities: Neo holds an op the crate does not guard at its gateways, and one that declares a capability the door does not police yet (Neo's screen), so a held op answers `method_unavailable` with nothing sent. The crate has no such op today. It marks each main-world script, whose answer the door releases only as a read of its tab. |
+| `builtins` | The methods Neo serves: every neo-playwright op but those it holds, and a `goto` to any URL but `http`, `https`, `data` and `about`, or a `reload` of a page on one (a local file would show Neo's own secrets), on the process's one `Playwright` (`playwright_ops.rs`, with the hooks that name Neo's secret files to the crate's upload deny list, and `event_release.rs`, which puts every event an event pull returns through the rules on its own tab) and `neo.solveCaptcha`; and the idle-tab janitor. `op_marks.rs` reads each op's declared capabilities: Neo holds an op the crate does not guard at its gateways, and one that declares a capability the door does not police yet (Neo's screen), so a held op answers `method_unavailable` with nothing sent. The crate has no such op today. It marks each main-world script, whose answer the door releases only as a read of its tab. |
 | `browser` | The CDP link to Chromium, its reconnects, and what Neo knows about each tab. |
 | `host` | The host API's lifecycle and the takeover lock the door checks. |
 | `test_rig` | The unit tests' rig: a fake browser, a real trace store, and test methods. |

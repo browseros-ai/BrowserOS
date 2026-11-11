@@ -9,8 +9,8 @@ use axum::http::StatusCode;
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, OperationEnded, OperationId, OperationKind, OperationStarted, Outcome,
-    PageState, RunEnded, RunId, RunStarted, RunStatus, SecretSet, SecretSetConfig, SecretSource,
-    SecretValue, TargetSensitivity, TaskId,
+    PageState, Registration, RunEnded, RunId, RunStarted, RunStatus, SecretSet, SecretSetConfig,
+    SecretSource, SecretValue, TargetSensitivity, TaskId,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -258,7 +258,6 @@ async fn the_trace_tail_keeps_the_latest_matching_operations_with_their_runs() -
         [first, third].map(|run| json!(run.to_string()))
     );
     assert_eq!(tail.body["truncated"], true);
-    assert_eq!(tail.body["visuals"], "available");
 
     let tab = h.get("/v1/trace?tab=3").await?;
     assert_eq!(
@@ -281,13 +280,14 @@ async fn the_trace_tail_keeps_the_latest_matching_operations_with_their_runs() -
 async fn an_operations_notes_read_back_masked_on_the_operation_and_its_run() -> TestResult {
     let h = harness().await?;
     let secret = "hunter2-swordfish";
-    let registered = h
-        .post(
-            "/v1/secrets",
-            &json!({"value": secret, "ttlSeconds": 600}).to_string(),
-        )
-        .await?;
-    assert_eq!(registered.status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        h.privacy.secrets().register_from(
+            SecretValue::new(secret.to_owned()),
+            None,
+            SecretSource::Host,
+        ),
+        Registration::Registered
+    );
     let run = start_run(&h.sink, Start::default());
     let click = OperationId::new(run, 1);
     let title = OperationId::new(run, 2);

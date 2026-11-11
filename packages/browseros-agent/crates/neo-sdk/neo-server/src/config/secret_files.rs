@@ -12,7 +12,7 @@
 //!  CaptchaKey      BROWSEROS_*_API_KEY_FILE         file  <keys>/capsolver-api-key, <rig>/…-key
 //!  CaptchaKeyDir   $HOME/.config/browseros/captcha  dir   <keys>, the image's 0700 keys-only dir
 //!                  (HOME unset, as in an `env -i` launch: the passwd entry's home)
-//!  TraceStore      $BROWSERCLAW_DIR/claw-sdk        dir   trace.db, -wal, -shm, flags-lost,
+//!  TraceStore      $BROWSERCLAW_DIR/claw-sdk        dir   trace.db, -wal, -shm,
 //!                                                         broken stores, screenshots
 //!  BrowserProfile  parent(directories.execution)    dir   /data/profile, <rig>/profile
 //!  not listed      logs/, host.sock, downloads (/data/downloads, beside every entry)
@@ -65,7 +65,7 @@ pub(crate) enum SecretKind {
     /// the passwd entry names a home.
     CaptchaKeyDir,
     /// The trace store's directory: `trace.db` and its `-wal` and `-shm`, which come and go, the
-    /// flags-lost marker, broken stores moved aside, and the trace screenshots.
+    /// broken stores moved aside, and the trace screenshots.
     TraceStore,
     /// The browser's user-data directory, the parent of `directories.execution`: the cookies,
     /// saved logins and `Local State` of every profile under it.

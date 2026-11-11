@@ -1,7 +1,7 @@
 //! The built-ins through the real door, on the fake browser, with a real trace store read back
 //! from a temp dir.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
 use std::future::Future;
@@ -18,9 +18,9 @@ use neo_playwright::{
 };
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
 use neo_trace::{
-    Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationRow, Outcome, Privacy,
-    PrivateReason, RedactionLimits, Redactor, RunId, RunStatus, SecretSet, SecretSetConfig,
-    TraceSink, TraceStore, WriterConfig, spawn_writer,
+    Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationRow, Outcome, RedactionLimits,
+    Redactor, RunId, RunStatus, SecretSet, SecretSetConfig, TraceSink, TraceStore, WriterConfig,
+    spawn_writer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -41,12 +41,12 @@ use crate::dispatch::{
     PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart,
     StopReason, Visibility,
 };
-use crate::host::{FlagRecovery, TakeoverLock};
+use crate::host::TakeoverLock;
 use crate::test_support::{FakeCdp, test_config};
 
 /// The built-ins' door on the fake browser, with the app's own rules in the app's order
-/// (`door_rules`): the takeover lock over neo-takeover's real `Locks`, then tab privacy,
-/// then the CAPTCHA claims. A plain data bag.
+/// (`door_rules`): the takeover lock over neo-takeover's real `Locks`, then the CAPTCHA claims.
+/// A plain data bag.
 struct Harness {
     fake: Arc<FakeCdp>,
     link: Arc<BrowserLink>,
@@ -59,10 +59,8 @@ struct Harness {
     takeover: Arc<TakeoverLock>,
     /// The facade every Playwright op of `dispatcher` runs on, as app.rs builds it.
     playwright: Arc<PlaywrightFacade>,
-    /// The privacy callbacks the facade's crate calls, for tests that play its journal.
+    /// The facade's hooks, used to check the upload deny list.
     hooks: Arc<PrivacyHooks>,
-    /// Tab privacy, which the host API's routes and a takeover set.
-    privacy: Arc<Privacy>,
     dispatcher: Arc<Dispatcher>,
     /// Keeps the store's directory for the test's life.
     _dir: TempDir,
@@ -116,13 +114,7 @@ impl Harness {
         let takeover = Arc::new(TakeoverLock::default());
         takeover.arm(Arc::clone(&locks));
         let claims = Arc::new(CaptchaClaims::default());
-        let privacy = Privacy::new(Arc::clone(&secrets), Arc::new(sink.clone()), HashMap::new());
-        let hooks = Arc::new(PrivacyHooks::new(
-            Arc::clone(&privacy),
-            Arc::clone(&tabs),
-            FlagRecovery::none(),
-            secret_files,
-        ));
+        let hooks = Arc::new(PrivacyHooks::new(secret_files));
         let playwright = PlaywrightFacade::start(Arc::clone(&link), Arc::clone(&hooks) as _);
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
@@ -133,7 +125,7 @@ impl Harness {
         super::builtin_set(&mut registry, deps)?;
         let dispatcher = Arc::new(Dispatcher::new(
             registry.build(),
-            super::door_rules(&takeover, &hooks, &claims),
+            super::door_rules(&takeover, &claims),
             sink.clone(),
             Arc::clone(&link),
             Arc::clone(&tabs),
@@ -149,7 +141,6 @@ impl Harness {
             takeover,
             playwright,
             hooks,
-            privacy,
             dispatcher,
             _dir: dir,
         })
@@ -715,59 +706,6 @@ async fn the_owners_lock_keeps_the_agent_off_their_tab() -> Result<(), Box<dyn E
     Ok(())
 }
 
-#[tokio::test]
-async fn a_capture_that_ends_after_its_tab_went_private_is_withheld_closed_or_not()
--> Result<(), Box<dyn Error>> {
-    let harness = Harness::new().await?;
-    let (run, _guard) = harness.run()?;
-    for closed in [false, true] {
-        for (op, capture, pixels) in [
-            ("page.screenshot", "Page.captureScreenshot", "cGl4ZWxz"),
-            ("page.pdf", "Page.printToPDF", "JVBERi0xLjQ="),
-        ] {
-            let owners = harness.owner_tab("https://bank.example/").await?;
-            harness.fake.answer(capture, json!({ "data": pixels }));
-            harness.fake.hold_next(capture);
-            let input =
-                json!({ "call": { "api": op, "timeoutMs": 30000 }, "page": handle(&owners) });
-            let sent = harness.fake.count(capture);
-            let pending = harness
-                .dispatcher
-                .submit(&run, Call::script(op.to_owned(), input, None));
-            // The browser took the capture while the tab was not private yet. The owner takes
-            // the tab before the pixels reach Neo, and may type a password into the frame they
-            // show. A tab that then closes ends its flag, but not what that frame shows.
-            within(async {
-                while harness.fake.count(capture) == sent {
-                    time::sleep(Duration::from_millis(5)).await;
-                }
-            })
-            .await?;
-            harness
-                .privacy
-                .make_private(owners.tab, PrivateReason::Takeover, EpochMillis::now())
-                .await?;
-            if closed {
-                harness.privacy.tab_closed(owners.tab).await;
-            }
-            harness.fake.release_held();
-            let withheld = failure(within(pending.wait()).await?)
-                .map_err(|error| format!("{op}, closed: {closed}: {error}"))?;
-            assert_eq!(
-                (
-                    withheld.error.owner(),
-                    withheld.error.code(),
-                    withheld.delivery
-                ),
-                (ErrorOwner::Host, ErrorCode::PAGE_PRIVATE, Delivery::NotSent),
-                "{op}, closed: {closed}: {}",
-                withheld.error
-            );
-        }
-    }
-    Ok(())
-}
-
 /// What the page shows once the owner took it, which a script that ran before the lock still
 /// read: what the owner typed into a field no seal masks.
 const OWNERS_TEXT: &str = "the owner typed 4 Elm St";
@@ -879,10 +817,10 @@ async fn answer_after_a_takeover(
         answer: Arc::clone(&answer),
     };
     let claims = Arc::new(CaptchaClaims::default());
-    let door = harness.dispatcher_with(
-        super::door_rules(&harness.takeover, &harness.hooks, &claims),
-        |registry| registry.define(write),
-    )?;
+    let door = harness
+        .dispatcher_with(super::door_rules(&harness.takeover, &claims), |registry| {
+            registry.define(write)
+        })?;
     let (run, _guard) = harness.run()?;
     let input = json!({
         "page": handle(takeover.page),
@@ -1330,37 +1268,6 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     assert!(
         !harness.is_open(held.tab).await?,
         "once the owner lets go, the next sweep closes it"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn no_tab_is_captured_until_neo_made_up_for_lost_private_flags() -> Result<(), Box<dyn Error>>
-{
-    let harness = Harness::new().await?;
-    let owners = harness.owner_tab("https://bank.example/").await?;
-    harness.tabs.touched(&owners, harness.tabs.seen(), None);
-    // A replaced trace store, before the host API has made the open tabs private.
-    let dir = tempfile::tempdir()?;
-    let recovery = FlagRecovery::before_replacing(&dir.path().join("trace.db")).await?;
-    let hooks = PrivacyHooks::new(
-        Arc::clone(&harness.privacy),
-        Arc::clone(&harness.tabs),
-        Arc::clone(&recovery),
-        SecretFiles::Named(Vec::new()),
-    );
-    assert_eq!(
-        hooks
-            .capture_allowed(owners.tab)
-            .err()
-            .map(|refusal| refusal.code),
-        Some("page_private".to_owned()),
-        "no capture while it is unknown which tabs were private"
-    );
-    recovery.recover(&harness.privacy, &[]).await;
-    assert!(
-        hooks.capture_allowed(owners.tab).is_ok(),
-        "once the open tabs are private, a tab that is not may be captured"
     );
     Ok(())
 }
@@ -1902,10 +1809,10 @@ fn reach_door(harness: &Harness) -> Result<ReachDoor, Box<dyn Error>> {
         Arc::clone(&probe.paused),
         Arc::clone(&probe.resume),
     );
-    let door = harness.dispatcher_with(
-        super::door_rules(&harness.takeover, &harness.hooks, &claims),
-        |registry| registry.define(probe),
-    )?;
+    let door = harness
+        .dispatcher_with(super::door_rules(&harness.takeover, &claims), |registry| {
+            registry.define(probe)
+        })?;
     Ok(ReachDoor {
         door,
         seen,
@@ -2431,158 +2338,8 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
     Ok(())
 }
 
-/// The browser calls Neo makes since `before` other than its own background ones (tab listings,
-/// target discovery, the download policy, the crate's one read of the platform): what an op
-/// sent the browser.
-fn sent_since(harness: &Harness, before: usize) -> Vec<String> {
-    harness
-        .fake
-        .calls()
-        .into_iter()
-        .skip(before)
-        .map(|call| call.method)
-        .filter(|method| {
-            ![
-                "Browser.getTabs",
-                "Target.getTargets",
-                "Target.setDiscoverTargets",
-                "Browser.setDownloadBehavior",
-                "Browser.getVersion",
-            ]
-            .contains(&method.as_str())
-        })
-        .collect()
-}
-
-/// `locator.setInputFiles` of `path` into a file input on `page`, as the prelude sends it.
-fn upload(page: &PageRef, path: &Path) -> Value {
-    json!({
-        "call": { "api": "locator.setInputFiles", "timeoutMs": 500 },
-        "target": locator(&handle(page)),
-        "strict": "strict",
-        "files": { "paths": [path] },
-    })
-}
-
-/// An upload of one of Neo's own secret files is refused before the crate touches the page, and
-/// names no path; any other file goes on to the page. The fake browser has no sealed world to
-/// find the input in, so that upload stops there, before anything is sent:
-/// `tests/uploads_browseros.rs` hands a real page the file.
 #[tokio::test]
-async fn a_file_upload_refuses_neos_own_secrets_and_uploads_the_rest() -> Result<(), Box<dyn Error>>
-{
-    let root = tempfile::tempdir()?;
-    let token = root.path().join("host-token");
-    fs::write(&token, "the token a host presents")?;
-    let harness = Harness::naming(secret_files_under(root.path())).await?;
-    // The agent's own file, in a directory of its own.
-    let own = tempfile::tempdir()?;
-    let report = own.path().join("report.csv");
-    fs::write(&report, "id,total\n")?;
-    let page = harness.owner_tab("https://forms.example/").await?;
-    let (run, _guard) = harness.run()?;
-
-    let before = harness.fake.calls().len();
-    let (operation, reply) = harness
-        .submit_op(&run, "locator.setInputFiles", upload(&page, &token))
-        .await;
-    let refused = failure(reply)?;
-    assert_eq!(
-        (
-            refused.error.owner(),
-            refused.error.code(),
-            refused.delivery
-        ),
-        (
-            ErrorOwner::Script,
-            ErrorCode::SECRET_UPLOAD_REFUSED,
-            Delivery::NotSent
-        ),
-        "{}",
-        refused.error
-    );
-    let message = refused.error.message();
-    assert!(
-        !message.contains(&token.display().to_string()) && !message.contains("host-token"),
-        "the refusal names no path: {message}"
-    );
-    assert_eq!(
-        harness.row(operation).await?.error.map(|error| error.code),
-        Some("neo_secret_upload_refused".to_owned()),
-        "the trace records the refusal"
-    );
-    assert_eq!(
-        sent_since(&harness, before),
-        Vec::<String>::new(),
-        "refused before the crate touched the page"
-    );
-
-    let before = harness.fake.calls().len();
-    let passed = failure(
-        harness
-            .submit(&run, "locator.setInputFiles", upload(&page, &report))
-            .await,
-    )?;
-    assert_ne!(
-        passed.error.code(),
-        ErrorCode::SECRET_UPLOAD_REFUSED,
-        "an ordinary file passes the deny list: {}",
-        passed.error
-    );
-    assert!(
-        !sent_since(&harness, before).is_empty(),
-        "and the crate goes on to the page to find its input: {}",
-        passed.error
-    );
-    assert_eq!(
-        harness.fake.count("DOM.setFileInputFiles"),
-        0,
-        "the secret never reached the browser"
-    );
-    Ok(())
-}
-
-/// SQLite deletes the trace store's WAL when the last connection closes and writes it again on
-/// the next write, so the WAL is often absent when Neo locates its secret files. The trace
-/// store's directory is the entry, and the crate resolves it again on each upload.
-#[tokio::test]
-async fn a_trace_wal_absent_at_start_is_refused_once_it_appears() -> Result<(), Box<dyn Error>> {
-    let root = tempfile::tempdir()?;
-    let trace_dir = root.path().join("claw-sdk");
-    fs::create_dir(&trace_dir)?;
-    fs::write(trace_dir.join("trace.db"), "")?;
-    let harness = Harness::naming(secret_files_under(root.path())).await?;
-    let wal = trace_dir.join("trace.db-wal");
-    assert!(!wal.exists(), "no WAL when Neo located its secret files");
-    fs::write(&wal, "frames a later write left")?;
-    let page = harness.owner_tab("https://forms.example/").await?;
-    let (run, _guard) = harness.run()?;
-
-    let refused = failure(
-        harness
-            .submit(&run, "locator.setInputFiles", upload(&page, &wal))
-            .await,
-    )?;
-    assert_eq!(
-        (
-            refused.error.owner(),
-            refused.error.code(),
-            refused.delivery
-        ),
-        (
-            ErrorOwner::Script,
-            ErrorCode::SECRET_UPLOAD_REFUSED,
-            Delivery::NotSent
-        ),
-        "{}",
-        refused.error
-    );
-    assert_eq!(harness.fake.count("DOM.setFileInputFiles"), 0);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_goto_opens_only_http_https_data_and_about_urls() -> Result<(), Box<dyn Error>> {
+async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let owners = harness.owner_tab("https://bank.example/").await?;
     let (run, _guard) = harness.run()?;
@@ -2599,22 +2356,14 @@ async fn a_goto_opens_only_http_https_data_and_about_urls() -> Result<(), Box<dy
             "waitUntil": "load",
         })
     };
-    // Each would show the agent what it must not see (a local file such as Neo's host token,
-    // the browser's own pages, a page's source) or run script in the tab's main world, however
-    // the scheme is spelled.
+    // Other unsupported schemes keep their existing refusal.
     for url in [
-        "file:///etc/hosts",
-        " FILE:///etc/hosts",
-        "fi\tle:///run/neo/host-token",
         "view-source:https://bank.example/",
         "chrome://version",
         "devtools://devtools/bundled/inspector.html",
         "chrome-extension://abcdefghijklmnop/popup.html",
         "blob:https://bank.example/9d2c",
         "filesystem:https://bank.example/temporary/x",
-        "javascript:void(document.title = document.querySelector('input[type=password]').value)",
-        " JavaScript:void(0)",
-        "java\tscript:void(0)",
         // No scheme the URL Standard reads, so none to allow.
         "bank.example/login",
         // Its scheme is `localhost` to the URL Standard, as to the browser. Playwright's own goto
@@ -2654,6 +2403,12 @@ async fn a_goto_opens_only_http_https_data_and_about_urls() -> Result<(), Box<dy
         "HTTPS://bank.example/login",
         "data:text/html,<p>made in the script</p>",
         "about:blank",
+        "file:///tmp/local.html",
+        " FILE:///tmp/local.html",
+        "fi\tle:///tmp/local.html",
+        "javascript:void(document.title = 'ran')",
+        " JavaScript:void(0)",
+        "java\tscript:void(0)",
     ];
     for url in allowed {
         let failed = failure(harness.submit(&run, "page.goto", goto(url)).await)?;
@@ -2673,8 +2428,20 @@ async fn a_goto_opens_only_http_https_data_and_about_urls() -> Result<(), Box<dy
         .collect();
     assert_eq!(
         sent,
-        allowed.map(Value::from),
-        "each sent as the script wrote it"
+        [
+            "http://bank.example/",
+            "https://bank.example/login",
+            "data:text/html,<p>made in the script</p>",
+            "about:blank",
+            "file:///tmp/local.html",
+            "file:///tmp/local.html",
+            "file:///tmp/local.html",
+            "javascript:void(document.title = 'ran')",
+            "javascript:void(0)",
+            "javascript:void(0)",
+        ]
+        .map(Value::from),
+        "each URL is normalized as Playwright does before reaching Chromium"
     );
     Ok(())
 }
@@ -4017,17 +3784,15 @@ async fn a_late_read_lock_withholds_the_close_and_its_binding_fact() -> Result<(
         let copied = Arc::new(Notify::new());
         let resume = Arc::new(Notify::new());
         let claims = Arc::new(CaptchaClaims::default());
-        let door = harness.dispatcher_with(
-            super::door_rules(&harness.takeover, &harness.hooks, &claims),
-            |registry| {
+        let door =
+            harness.dispatcher_with(super::door_rules(&harness.takeover, &claims), |registry| {
                 registry.define(InFlightClose {
                     name: "events.next",
                     playwright: Arc::clone(&harness.playwright),
                     copied: Arc::clone(&copied),
                     resume: Arc::clone(&resume),
                 })
-            },
-        )?;
+            })?;
         let pending = door.submit(&run, Call::script("events.next".into(), json!({}), None));
         assert!(harness.fake.page_event(
             page.tab,
