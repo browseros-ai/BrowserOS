@@ -54,6 +54,18 @@ use crate::events::page_event::{
 use crate::events::{PageEventKind, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
+/// Events that establish a dialog's target and lifetime. Attachment must precede opening even
+/// when core is still attaching the page, and target closure must follow earlier dialog events.
+const DIALOG_LIFECYCLE: &[&str] = &[
+    "Target.targetCreated",
+    "Target.targetInfoChanged",
+    "Target.targetDestroyed",
+    "Target.attachedToTarget",
+    "Target.detachedFromTarget",
+    "Page.javascriptDialogOpening",
+    "Page.javascriptDialogClosed",
+];
+
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
 /// click that opened it (build-design graft 7).
 const DIALOG_GRACE: Duration = Duration::from_millis(250);
@@ -95,10 +107,7 @@ impl TargetWatcher {
             // Keep opening/closing in one ordered queue outside the lossy broadcast ring.
             // Discovery can await replies while another tab floods that ring; losing or
             // reordering these events could strand a dialog or close the wrong generation.
-            let dialogs = browser.connection().observe_events(&[
-                "Page.javascriptDialogOpening",
-                "Page.javascriptDialogClosed",
-            ]);
+            let dialogs = browser.connection().observe_events(DIALOG_LIFECYCLE);
             let events = browser.cdp_events();
             browser.page_signals.delegate_dialog_handling();
             let (watcher, found) = Watcher::new(browser, writer, attach_log);
@@ -316,8 +325,7 @@ impl Watcher {
                 },
                 received = events.recv() => match received {
                     Ok(event) => {
-                        if !observed_dialogs || !matches!(event.method.as_str(),
-                            "Page.javascriptDialogOpening" | "Page.javascriptDialogClosed") {
+                        if !observed_dialogs || !DIALOG_LIFECYCLE.contains(&event.method.as_str()) {
                             self.handle(event).await;
                         }
                     },
@@ -912,13 +920,17 @@ mod tests {
     use std::time::Duration;
 
     use browseros_cdp::CdpEvent;
-    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, PageId, SessionId};
+    use browseros_core::{
+        BrowserSession, BrowserSessionHooks, CdpConnection, PageId, SessionId, TabId, TargetId,
+    };
     use serde_json::json;
     use tokio::sync::broadcast::error::TryRecvError;
     use tokio::time;
 
     use super::TargetWatcher;
-    use crate::events::EventHub;
+    use crate::RunState;
+    use crate::events::page_event::DialogId;
+    use crate::events::{EventHub, PageEventKind, Subscription};
     use crate::test_env::Recording;
     use crate::world::FrameAttachLog;
 
@@ -930,6 +942,56 @@ mod tests {
     #[tokio::test]
     async fn dialog_order_and_answers_survive_broadcast_overflow() {
         verify_unanswered_alert(64).await;
+    }
+
+    #[tokio::test]
+    async fn an_attach_before_a_dialog_preserves_its_listener_through_overflow() {
+        let connection = Recording::streaming();
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (hub, writer) = EventHub::new();
+        let run = Arc::new(RunState::default());
+        let target = TargetId("T".to_owned());
+        run.events.listen(
+            Subscription::Page {
+                tab: TabId(7),
+                target: target.clone(),
+                event: PageEventKind::Dialog,
+            },
+            0,
+            0,
+        );
+        hub.bind(&run);
+        let _watcher = TargetWatcher::spawn(browser, writer, Arc::new(FrameAttachLog::default()));
+        // The attach event is the source of this session's target until core's attachment
+        // finishes. Losing it, or letting the dialog overtake it, would dismiss a listened dialog.
+        connection.emit(CdpEvent {
+            method: "Target.attachedToTarget".to_owned(),
+            params: json!({ "sessionId": "S", "targetInfo": { "targetId": "T", "type": "page" } }),
+            session_id: None,
+        });
+        connection.emit(CdpEvent {
+            method: "Page.javascriptDialogOpening".to_owned(),
+            params: json!({ "type": "alert", "message": "held" }),
+            session_id: Some(SessionId::from("S")),
+        });
+        for _ in 0..64 {
+            connection.emit(CdpEvent {
+                method: "Test.noise".to_owned(),
+                params: json!({}),
+                session_id: None,
+            });
+        }
+        time::sleep(Duration::from_millis(600)).await;
+        assert!(hub.dialogs().is_open(DialogId(1), &target));
+        assert!(
+            !connection
+                .sent()
+                .iter()
+                .any(|(method, _)| method == "Page.handleJavaScriptDialog")
+        );
     }
 
     async fn verify_unanswered_alert(noise: usize) {
