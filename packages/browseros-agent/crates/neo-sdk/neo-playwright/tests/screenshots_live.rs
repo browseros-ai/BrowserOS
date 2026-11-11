@@ -101,12 +101,12 @@ async fn encoded_dimensions_follow_element_geometry_and_css_scale() -> TestResul
             }
             await page.setContent('<style>body{margin:0}</style><div id=box style="width:1200px;height:1000px;background:red"></div>');
             const box = page.locator('#box');
-            const largeCss = size(await box.screenshot({ scale: 'css' }));
-            const largeDevice = size(await box.screenshot());
-            const viewport = size(await page.screenshot());
-            const clipped = size(await page.screenshot({ fullPage: true, scale: 'css', clip: { x: 200, y: 300, width: 500, height: 400 } }));
+            const largeCss = size(await box.screenshot({ scale: 'css', timeout: 20000 }));
+            const largeDevice = size(await box.screenshot({ timeout: 20000 }));
+            const viewport = size(await page.screenshot({ timeout: 20000 }));
+            const clipped = size(await page.screenshot({ fullPage: true, scale: 'css', timeout: 20000, clip: { x: 200, y: 300, width: 500, height: 400 } }));
             await page.setContent('<style>body{margin:0}</style><div id=box style="width:48.51px;height:19.8px;border:1px solid black"></div>');
-            const fractional = size(await page.locator('#box').screenshot({ scale: 'css' }));
+            const fractional = size(await page.locator('#box').screenshot({ scale: 'css', timeout: 20000 }));
             return { largeCss, largeDevice, viewport, clipped, fractional };
         "#).await?;
         Ok::<_, Box<dyn Error>>(value)
