@@ -61,6 +61,7 @@ export async function hostFetch(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
+  checkPath(path)
   const current = target
   if (!current) {
     return problem(
@@ -119,10 +120,22 @@ export function hostWebSocketTarget(path: string): HostWebSocketTarget {
 
 /** The route on the host API's origin. Only a path is taken, so no caller can send the token elsewhere. */
 function routeUrl(base: URL, path: string): URL {
+  checkPath(path)
+  const url = new URL(path, base.origin)
+  // The URL parser reads `\` as `/` and drops tabs and newlines, so `/\other:9/x` names another
+  // host; only the parsed origin tells.
+  if (url.origin !== base.origin) {
+    throw new Error(
+      `neo-viewer: a host API path stays on the host API: ${path}`,
+    )
+  }
+  return url
+}
+
+function checkPath(path: string): void {
   if (!path.startsWith('/') || path.startsWith('//')) {
     throw new Error(`neo-viewer: a host API path starts with one "/": ${path}`)
   }
-  return new URL(path, base.origin)
 }
 
 function problem(status: number, code: string, message: string): Response {
