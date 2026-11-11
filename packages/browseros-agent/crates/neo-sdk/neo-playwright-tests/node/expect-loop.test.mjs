@@ -133,7 +133,7 @@ test('tests that a read error cannot pass negation and missing methods retain th
   )
 })
 
-test('tests that the deadline bounds pending reads and read options', async () => {
+test('tests that the first read gets the one-shot floor and later reads end at the deadline', async () => {
   const started = performance.now()
   await assert.rejects(
     expectLoop({ title: () => new Promise(() => {}) }).toHaveTitle('x', {
@@ -141,15 +141,60 @@ test('tests that the deadline bounds pending reads and read options', async () =
     }),
     /^AssertionError.*expectLoop: toHaveTitle/,
   )
-  assert.ok(performance.now() - started < 500)
-  let options
+  const hung = performance.now() - started
+  assert.ok(
+    hung >= 900 && hung < 1500,
+    `a hung read ends at the floor: ${hung}ms`,
+  )
+  const options = []
   await expectLoop({
     inputValue: async (value) => {
-      options = value
-      return 'x'
+      options.push(value.timeout)
+      return options.length === 1 ? 'y' : 'x'
     },
-  }).toHaveValue('x', { timeout: 40 })
-  assert.ok(options.timeout > 0 && options.timeout <= 40)
+  }).toHaveValue('x', { timeout: 1500 })
+  const [one, ...later] = options
+  assert.ok(one > 100 && one <= 1000, `the one-shot gets the floor: ${one}`)
+  assert.ok(
+    later.length > 0 && later.every((timeout) => timeout > 0 && timeout <= 100),
+    `${later}`,
+  )
+})
+
+test('tests that a later read stops at the deadline, without a floor of its own', async () => {
+  let reads = 0
+  const started = performance.now()
+  await assert.rejects(
+    expectLoop({
+      title: () => (++reads === 1 ? 'y' : new Promise(() => {})),
+    }).toHaveTitle('x', { timeout: 300 }),
+    /expectLoop: toHaveTitle/,
+  )
+  const took = performance.now() - started
+  assert.equal(reads, 2)
+  assert.ok(
+    took >= 250 && took < 800,
+    `the second read ends at the deadline: ${took}ms`,
+  )
+})
+
+// Upstream's expect-boolean "with impossible timeout" tests (EX-047, EX-083, EX-084): one check
+// always runs, so a read slower than the timeout still passes.
+test('tests that a read slower than an impossible timeout still passes', async () => {
+  await expectLoop({
+    isVisible: () => new Promise((done) => setTimeout(() => done(true), 30)),
+  }).toBeVisible({ timeout: 1 })
+  await expectLoop({
+    count: () => new Promise((done) => setTimeout(() => done(0), 30)),
+  }).not.toBeAttached({ timeout: 1 })
+  // A read that enforces its own timeout, as Neo's do, and needs longer than a polling step.
+  await expectLoop({
+    inputValue: ({ timeout }) =>
+      new Promise((done, fail) => {
+        if (timeout < 150) fail(new Error(`timed out after ${timeout}ms`))
+        else setTimeout(() => done('x'), 150)
+      }),
+  }).toHaveValue('x', { timeout: 1 })
 })
 
 test('tests that the default timeout is five seconds and zero permits waiting', async () => {
