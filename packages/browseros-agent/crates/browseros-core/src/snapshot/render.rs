@@ -1,8 +1,5 @@
 use crate::{
     FrameId,
-    sensitive_fields::{
-        FIELD_MASK, FieldAttributes, FieldRules, FieldValues, mask_value, passes_luhn,
-    },
     snapshot::{
         ax_types::{AxNode, AxValue},
         refs::{DocumentId, MintRef, RefMap},
@@ -11,7 +8,6 @@ use crate::{
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use zeroize::Zeroizing;
 
 const IFRAME_ROLES: &[&str] = &["Iframe", "iframe"];
 
@@ -50,51 +46,6 @@ pub struct RenderOptions<'a> {
 }
 
 pub fn render_snapshot<'a>(nodes: &'a [AxNode], opts: &mut RenderOptions<'a>) -> RenderResult {
-    render(nodes, opts, None).0
-}
-
-/// One frame's form controls, read from its DOM snapshot, for [`render_snapshot_masked`].
-#[derive(Debug, Default)]
-pub struct FrameFields {
-    /// Form controls by backend node id.
-    pub fields: HashMap<i64, FieldAttributes>,
-    /// The frame's DOM snapshot could not be read: fields are classified from their
-    /// accessibility node alone ([`FieldRules::classify_ax`]) instead of shown raw.
-    pub degraded: bool,
-}
-
-/// A frame rendered with its sensitive fields masked, plus those fields' raw values so the
-/// caller can mask them wherever else the assembled snapshot repeats them.
-#[derive(Debug)]
-pub struct MaskedRender {
-    /// The rendered lines, as [`render_snapshot`] returns them.
-    pub result: RenderResult,
-    /// The raw values of the fields that were masked (never Chromium's password bullets).
-    pub values: FieldValues,
-}
-
-/// [`render_snapshot`] for [`SensitiveValues::Mask`](crate::sensitive_fields::SensitiveValues):
-/// each value field the shared rule table calls sensitive shows a fixed mask (a card number
-/// keeps its last four), as does any value Chromium already masked with bullets, so a
-/// password's length does not leak either. Unclassified fields keep [`render_snapshot`]'s
-/// heuristic as a second net.
-pub fn render_snapshot_masked<'a>(
-    nodes: &'a [AxNode],
-    opts: &mut RenderOptions<'a>,
-    fields: &FrameFields,
-) -> MaskedRender {
-    let (result, values) = render(nodes, opts, Some(fields));
-    MaskedRender {
-        result,
-        values: FieldValues::new(values),
-    }
-}
-
-fn render<'a>(
-    nodes: &'a [AxNode],
-    opts: &mut RenderOptions<'a>,
-    fields: Option<&FrameFields>,
-) -> (RenderResult, Vec<Zeroizing<String>>) {
     let by_id = nodes
         .iter()
         .map(|node| (node.node_id.clone(), node))
@@ -105,8 +56,6 @@ fn render<'a>(
         control_labels: labels_of_rendered_controls(nodes),
         lines: Vec::new(),
         iframes: Vec::new(),
-        fields,
-        masked_values: Vec::new(),
         opts,
     };
 
@@ -114,11 +63,10 @@ fn render<'a>(
         ctx.visit(&root_id, 0, false);
     }
 
-    let result = RenderResult {
+    RenderResult {
         text: ctx.lines.join("\n"),
         iframes: ctx.iframes,
-    };
-    (result, ctx.masked_values)
+    }
 }
 
 #[must_use]
@@ -142,10 +90,6 @@ struct RenderContext<'a, 'b> {
     control_labels: HashSet<i64>,
     lines: Vec<String>,
     iframes: Vec<IframeStitch>,
-    /// Set only by [`render_snapshot_masked`].
-    fields: Option<&'b FrameFields>,
-    /// Raw values of the fields masked so far, for echo masking.
-    masked_values: Vec<Zeroizing<String>>,
     opts: &'b mut RenderOptions<'a>,
 }
 
@@ -223,8 +167,7 @@ impl RenderContext<'_, '_> {
         }
     }
 
-    /// The value a value-role node shows, or `None` when it shows none. Without `fields` this
-    /// is claw-server's heuristic ([`visible_value`]); with them, the rule table decides first.
+    /// The value a value-role node shows, using the desktop heuristic ([`visible_value`]).
     fn shown_value(
         &mut self,
         node: &AxNode,
@@ -239,30 +182,7 @@ impl RenderContext<'_, '_> {
             .and_then(|value| value.value.as_ref())
             .map(value_display)
             .filter(|value| is_value_role(role) && !value.is_empty())?;
-        let Some(fields) = self.fields else {
-            return Some(visible_value(name, &value, in_card_form).into_owned());
-        };
-        let bullets = value.chars().all(|c| c == '•');
-        let rules = FieldRules::get();
-        let kind = if fields.degraded {
-            rules.classify_ax(name, &value)
-        } else {
-            node.backend_dom_node_id
-                .and_then(|id| fields.fields.get(&id))
-                .and_then(|field| rules.classify(field, name))
-        };
-        match kind {
-            Some(kind) => {
-                let shown = mask_value(kind, &value).into_owned();
-                if !bullets {
-                    self.masked_values.push(Zeroizing::new(value));
-                }
-                Some(shown)
-            }
-            // Chromium masked it, so it is a password field the table missed: hide its length.
-            None if bullets => Some(FIELD_MASK.to_string()),
-            None => Some(visible_value(name, &value, in_card_form).into_owned()),
-        }
+        Some(visible_value(name, &value, in_card_form).into_owned())
     }
 
     /// The words under `node`, as one line short enough to serve as a name.
@@ -673,13 +593,30 @@ fn json_quote(value: &str) -> String {
     }
 }
 
+/// The Luhn checksum over a card number's digits.
+fn passes_luhn(digits: &[u32]) -> bool {
+    let sum: u32 = digits
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(index, &digit)| {
+            if index % 2 == 1 {
+                let doubled = digit * 2;
+                if doubled > 9 { doubled - 9 } else { doubled }
+            } else {
+                digit
+            }
+        })
+        .sum();
+    sum.is_multiple_of(10)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        FrameFields, RenderOptions, SnapshotMode, SnapshotOptions, apply_snapshot_options,
-        ref_line, render_snapshot, render_snapshot_masked,
+        RenderOptions, SnapshotMode, SnapshotOptions, apply_snapshot_options, ref_line,
+        render_snapshot,
     };
-    use crate::sensitive_fields::{FieldAttributes, FieldTag, FieldValues};
     use crate::snapshot::{
         AxNode, AxProperty, AxRelatedNode, AxRelatedValue, AxValue, AxValueSource, refs::RefMap,
     };
@@ -741,113 +678,6 @@ mod tests {
         }
         nodes[6].name = Some(name("We sent code 482913 to your phone"));
         nodes
-    }
-
-    fn render_masked(nodes: &[AxNode], fields: &FrameFields) -> (String, FieldValues) {
-        let mut refs = RefMap::new();
-        let mut opts = RenderOptions {
-            refs: &mut refs,
-            frame_id: None,
-            document_id: None,
-            cursor_hits: None,
-            base_depth: 0,
-        };
-        let masked = render_snapshot_masked(nodes, &mut opts, fields);
-        (masked.result.text, masked.values)
-    }
-
-    fn field(configure: impl FnOnce(&mut FieldAttributes)) -> FieldAttributes {
-        let mut field = FieldAttributes::new(FieldTag::Input);
-        configure(&mut field);
-        field
-    }
-
-    #[test]
-    fn masking_hides_every_sensitive_field_and_reports_its_value_for_echoes() {
-        let fields = FrameFields {
-            fields: [
-                (201, field(|f| f.input_type = Some("password".into()))),
-                (202, field(|f| f.autocomplete = Some("cc-number".into()))),
-                (
-                    203,
-                    field(|f| f.autocomplete = Some("one-time-code".into())),
-                ),
-                (204, FieldAttributes::new(FieldTag::Textarea)),
-            ]
-            .into_iter()
-            .collect(),
-            degraded: false,
-        };
-        let (mut text, values) = render_masked(&sign_in_form(), &fields);
-        assert!(
-            text.contains(r#"textbox "Password" [ref=e1]: "••••""#),
-            "{text}"
-        );
-        assert!(
-            text.contains(r#"textbox "Card number" [ref=e2]: "•••• 1111""#),
-            "{text}"
-        );
-        assert!(
-            text.contains(r#"textbox "One-time code" [ref=e3]: "••••""#),
-            "{text}"
-        );
-        assert!(
-            text.contains(r#"textbox "Notes" [ref=e4]: "NOTES_visible_ok""#),
-            "{text}"
-        );
-        assert!(
-            text.contains("482913"),
-            "the echo is the observer's job: {text}"
-        );
-        // Chromium's bullets are never treated as a value to look for elsewhere.
-        assert_eq!(
-            values.registrable().collect::<Vec<_>>(),
-            ["4111111111111111", "482913"]
-        );
-        assert!(values.mask_str(&mut text));
-        assert!(
-            !text.contains("482913") && !text.contains("4111111111111111"),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn masking_falls_back_to_the_accessibility_node_when_the_dom_was_not_read() {
-        let degraded = FrameFields {
-            fields: HashMap::new(),
-            degraded: true,
-        };
-        let (text, _) = render_masked(&sign_in_form(), &degraded);
-        assert!(text.contains(r#""Password" [ref=e1]: "••••""#), "{text}");
-        assert!(
-            text.contains(r#""Card number" [ref=e2]: "•••• 1111""#),
-            "{text}"
-        );
-        assert!(
-            text.contains(r#""One-time code" [ref=e3]: "••••""#),
-            "{text}"
-        );
-        assert!(
-            text.contains(r#""Notes" [ref=e4]: "NOTES_visible_ok""#),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn masking_hides_bullet_lengths_and_keeps_the_heuristic_for_unclassified_fields() {
-        // Read, but none of the fields matched a rule: only the second net applies.
-        let unmatched = FrameFields::default();
-        let (text, values) = render_masked(&sign_in_form(), &unmatched);
-        assert!(text.contains(r#""Password" [ref=e1]: "••••""#), "{text}");
-        assert!(
-            text.contains(r#""Card number" [ref=e2]: "•••• 1111""#),
-            "{text}"
-        );
-        assert!(
-            text.contains(r#""One-time code" [ref=e3]: "482913""#),
-            "{text}"
-        );
-        assert!(values.is_empty());
     }
 
     #[test]
