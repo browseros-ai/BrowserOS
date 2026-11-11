@@ -7,6 +7,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::action::FocusLease;
 use crate::input::{Platform, TabInput};
+use crate::page::MediaState;
 use crate::world::FrameWorlds;
 
 /// One tab's state, shared by every op on it. Created on the first op that admits the tab,
@@ -19,6 +20,7 @@ use crate::world::FrameWorlds;
 /// | `input` | one burst at a time: a click's arm, input and verdict; a key press | tokio mutex, FIFO |
 /// | `focus` | the focus lease of input ops on tabs core did not create | tokio mutex, one CDP call |
 /// | `screenshots` | rendering preparation and restoration | tokio mutex, FIFO |
+/// | `media` | complete media updates and renderer replay | tokio mutex, across CDP writes |
 /// | `tokens` | arming requests | atomic |
 #[derive(Debug)]
 pub(crate) struct PageState {
@@ -32,6 +34,8 @@ pub(crate) struct PageState {
     screenshots: Arc<AsyncMutex<()>>,
     /// Hit-target interceptor tokens, unique on this tab.
     tokens: AtomicU32,
+    /// Page lifetime, including gaps between runs; root and iframe renderers share one setting.
+    media: Arc<AsyncMutex<MediaState>>,
 }
 
 impl PageState {
@@ -43,6 +47,7 @@ impl PageState {
             focus: Arc::default(),
             screenshots: Arc::default(),
             tokens: AtomicU32::new(1),
+            media: Arc::default(),
         }
     }
 
@@ -64,6 +69,11 @@ impl PageState {
     /// The queue for the complete screenshot lifecycle, including cancellation cleanup.
     pub(crate) fn screenshots(&self) -> &Arc<AsyncMutex<()>> {
         &self.screenshots
+    }
+
+    /// Media settings are serialized with renderer setup and cancellation restoration.
+    pub(crate) fn media(&self) -> &Arc<AsyncMutex<MediaState>> {
+        &self.media
     }
 
     /// A token no other interceptor armed on this tab has.
