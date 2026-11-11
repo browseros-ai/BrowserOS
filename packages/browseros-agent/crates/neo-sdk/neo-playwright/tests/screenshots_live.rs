@@ -340,3 +340,61 @@ async fn caller_masks_cover_matches_and_restore_on_success_and_cancellation() ->
     assert_eq!(cancelled?, json!(true));
     Ok(())
 }
+
+/// Mask boxes use viewport coordinates, while full-page PNG strips use document coordinates.
+/// Sampling a scrolled page across a real strip join guards that translation and overlay lifetime.
+#[tokio::test]
+#[ignore = "needs an owned BrowserOS on BROWSEROS_CDP_PORT"]
+async fn caller_masks_cover_scrolled_full_pages_and_png_strip_joins() -> TestResult {
+    let run = Arc::new(LiveRun::connect().await?);
+    let page = run.new_page().await?;
+    let session = run
+        .browser()
+        .pages
+        .get_session(run.core_page(&page).await?)
+        .await?
+        .session;
+    let measured = async {
+        session.send::<_, Value>("Emulation.setDeviceMetricsOverride", json!({
+            "width": 514, "height": 600, "deviceScaleFactor": 1.5, "mobile": false,
+        })).await?;
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        let value = js_runner::run_script(&host, &json!({ "page": brand(&page) }), r#"
+            await page.setContent('<style>body{margin:0;height:22000px}.secret{position:absolute;left:20px;width:40px;height:30px;background:red}</style><div class=secret style="top:1000px"></div><div class=secret style="top:6908px"></div>');
+            await page.evaluate(() => scrollTo(0,980));
+            async function pixels(bytes,points) {
+                return await page.evaluate(async ({url,points}) => {
+                    const image=new Image();
+                    await new Promise((resolve,reject) => {image.onload=resolve;image.onerror=reject;image.src=url;});
+                    const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
+                    const context=canvas.getContext('2d');
+                    return points.map(([x,y]) => {
+                        context.clearRect(0,0,1,1);context.drawImage(image,x,y,1,1,0,0,1,1);
+                        return Array.from(context.getImageData(0,0,1,1).data);
+                    });
+                },{url:'data:image/png;base64,'+Buffer.from(bytes).toString('base64'),points});
+            }
+            const options={mask:[page.locator('.secret')],maskColor:'#00ff00',timeout:60000};
+            // At this width and density the first device-pixel strip ends at row 10374.
+            // One target is below the viewport, and spans that boundary in the full image.
+            const full=await pixels(await page.screenshot({...options,fullPage:true}),[[38,1508],[38,10373],[38,10374],[38,10375]]);
+            const viewport=await pixels(await page.screenshot({...options,scale:'css'}),[[25,25]]);
+            const normal=await pixels(await page.screenshot({scale:'css',timeout:20000}),[[25,25]]);
+            const after=await page.evaluate(() => [scrollY,document.querySelectorAll('x-pw-glass').length]);
+            return {full,viewport,normal,after};
+        "#).await?;
+        Ok::<_, Box<dyn Error>>(value)
+    }.await;
+    let _reset = session
+        .send::<_, Value>("Emulation.clearDeviceMetricsOverride", json!({}))
+        .await;
+    run.close_page(&page).await;
+    assert_eq!(
+        measured?,
+        json!({
+            "full": [[0,255,0,255],[0,255,0,255],[0,255,0,255],[0,255,0,255]],
+            "viewport": [[0,255,0,255]], "normal": [[255,0,0,255]], "after": [980,0],
+        })
+    );
+    Ok(())
+}
