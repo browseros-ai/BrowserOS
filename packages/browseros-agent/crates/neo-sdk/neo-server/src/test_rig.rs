@@ -253,7 +253,8 @@ struct OnPage {
 #[serde(deny_unknown_fields)]
 struct Nothing {}
 
-/// `test.echo`: hands its input back.
+/// `test.echo`: hands its input back. A `pumped` count orders the answer after that many
+/// event-pump replies (`OpCtx::answer_after_pump`), and `"fail": true` answers an error instead.
 struct Echo;
 
 impl Method for Echo {
@@ -270,9 +271,18 @@ impl Method for Echo {
 
     fn call(
         &self,
-        _op: &OpCtx<Self>,
+        op: &OpCtx<Self>,
         input: Value,
     ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        if let Some(pumped) = input.get("pumped").and_then(Value::as_u64) {
+            op.answer_after_pump(pumped);
+        }
+        if input.get("fail") == Some(&Value::Bool(true)) {
+            return future::ready(Err(LeafError::definite(OperationError::website(
+                ErrorCode::CDP_ERROR,
+                "the echo failed",
+            ))));
+        }
         future::ready(Ok(input))
     }
 }

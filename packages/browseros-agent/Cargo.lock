@@ -342,12 +342,9 @@ dependencies = [
 name = "browseros-core"
 version = "0.1.0"
 dependencies = [
- "aho-corasick",
  "base64 0.22.1",
  "browseros-cdp",
  "futures-util",
- "percent-encoding",
- "regex",
  "serde",
  "serde_json",
  "thiserror",
@@ -355,7 +352,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
- "zeroize",
 ]
 
 [[package]]

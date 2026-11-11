@@ -10,7 +10,6 @@ use crate::{
     screenshot::{
         ScreenshotCaptureOptions, ScreenshotCaptureResult, capture_screenshot_with_annotations,
     },
-    sensitive_fields::{SensitiveValues, SensitiveValuesSetting},
     windows::WindowManager,
 };
 use browseros_cdp::{CdpError, CdpEvent};
@@ -41,9 +40,6 @@ pub struct BrowserSession {
     pub windows: Arc<WindowManager>,
     frames: Arc<FrameRegistry>,
     observers: Mutex<HashMap<PageId, Arc<Observer>>>,
-    /// How every observer of this session shows sensitive field values; see
-    /// [`Self::set_sensitive_values`].
-    sensitive: SensitiveValuesSetting,
 }
 
 impl BrowserSession {
@@ -138,7 +134,6 @@ impl BrowserSession {
             windows,
             frames,
             observers: Mutex::new(HashMap::new()),
-            sensitive: SensitiveValuesSetting::default(),
         }
     }
 
@@ -155,30 +150,15 @@ impl BrowserSession {
         &self.frames
     }
 
-    /// Chooses how snapshots of every page in this session show password, card and
-    /// one-time-code values. claw-sdk sets [`SensitiveValues::Mask`] once at startup; the
-    /// default keeps claw-server's output unchanged. Observers read the choice at each capture,
-    /// so it also covers pages observed before it was made.
-    pub fn set_sensitive_values(&self, mode: SensitiveValues) {
-        self.sensitive.set(mode);
-    }
-
-    /// The current choice of [`Self::set_sensitive_values`].
-    #[must_use]
-    pub fn sensitive_values(&self) -> SensitiveValues {
-        self.sensitive.get()
-    }
-
     pub async fn observe(&self, page_id: PageId) -> Arc<Observer> {
         let mut observers = self.observers.lock().await;
         if let Some(observer) = observers.get(&page_id) {
             return observer.clone();
         }
-        let observer = Arc::new(Observer::with_sensitive(
+        let observer = Arc::new(Observer::new(
             self.pages.clone(),
             self.frames.clone(),
             page_id.clone(),
-            self.sensitive.clone(),
         ));
         observers.insert(page_id, observer.clone());
         observer
@@ -307,6 +287,33 @@ impl BrowserSession {
 
     pub fn cdp_events(&self) -> broadcast::Receiver<CdpEvent> {
         self.connection.events()
+    }
+
+    /// See [`crate::connection::CdpConnection::events_broadcast`].
+    #[must_use]
+    pub fn cdp_events_broadcast(&self) -> u64 {
+        self.connection.events_broadcast()
+    }
+
+    /// See [`crate::connection::CdpConnection::events_counted`].
+    #[must_use]
+    pub fn cdp_events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        self.connection.events_counted()
+    }
+
+    /// See [`crate::connection::CdpConnection::events_targeted_counted`].
+    #[must_use]
+    pub fn cdp_events_targeted_counted(
+        &self,
+        method: &str,
+    ) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.connection.events_targeted_counted(method)
+    }
+
+    /// See [`crate::connection::CdpConnection::events_targeted_delivered`].
+    #[must_use]
+    pub fn cdp_events_targeted_delivered(&self, method: &str) -> u64 {
+        self.connection.events_targeted_delivered(method)
     }
 
     /// See [`crate::connection::CdpConnection::events_targeted`].
@@ -482,6 +489,22 @@ impl CdpConnection for EvictingConnection {
 
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
         self.inner.events_targeted(method)
+    }
+
+    fn events_broadcast(&self) -> u64 {
+        self.inner.events_broadcast()
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        self.inner.events_counted()
+    }
+
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.inner.events_targeted_counted(method)
+    }
+
+    fn events_targeted_delivered(&self, method: &str) -> u64 {
+        self.inner.events_targeted_delivered(method)
     }
 
     fn is_connected(&self) -> bool {
