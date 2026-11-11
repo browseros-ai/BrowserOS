@@ -188,7 +188,7 @@ it("tests that an error whose name the page boxed still leaves as the format's e
 // handle after the texts) and reads the answer as a serialized boolean.
 it('tests that a truthy try calls the function with the element and its argument', () => {
   const { call } = mainWorld()
-  const element = { id: 'target', textContent: 'yes' }
+  const element = { id: 'target', textContent: 'yes', isConnected: true }
   const judge = (expression: string, arg: unknown) =>
     call('truthy', true, expression, 2, '{"h":0}', JSON.stringify(arg), element)
   expect(judge('(el, want) => el.textContent === want', 'yes')).toBe('true')
@@ -207,14 +207,14 @@ it('tests that a truthy try takes a promise as truthy without awaiting it', () =
       2,
       '{"h":0}',
       '{"v":"undefined"}',
-      {},
+      { isConnected: true },
     ),
   ).toBe('true')
 })
 
 it('tests that a truthy try judges an expression, or the function it evaluates to', () => {
   const { call } = mainWorld()
-  const element = { value: 'ada' }
+  const element = { value: 'ada', isConnected: true }
   const args = ['{"h":0}', '{"v":"undefined"}', element] as const
   expect(call('truthy', false, '1 + 1', 2, ...args)).toBe('true')
   expect(call('truthy', false, '""', 2, ...args)).toBe('false')
@@ -224,4 +224,21 @@ it('tests that a truthy try judges an expression, or the function it evaluates t
   expect(() =>
     call('truthy', true, '() => { throw new Error("oh my") }', 2, ...args),
   ).toThrow('oh my')
+})
+
+it('tests that a truthy try on an element the page removed answers false without running', () => {
+  const { call, realm } = mainWorld()
+  const removed = { isConnected: false }
+  expect(
+    call(
+      'truthy',
+      true,
+      '() => { globalThis.ran = true; return true }',
+      2,
+      '{"h":0}',
+      '{"v":"undefined"}',
+      removed,
+    ),
+  ).toBe('false')
+  expect(runInContext('globalThis.ran', realm)).toBeUndefined()
 })

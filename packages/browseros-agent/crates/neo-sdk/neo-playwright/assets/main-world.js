@@ -661,6 +661,8 @@ function neoMainWorld(mode, isFunction, expression, argCount, ...argTextsThenHan
   }
   if (mode === "truthy") {
     const element = argCount > 0 ? parseEvaluationResultValue(args[0], handles) : undefined;
+    if (!element?.isConnected)
+      return "false";
     const arg = argCount > 1 ? parseEvaluationResultValue(args[1], handles) : undefined;
     let result = globalThis.eval(expression);
     if (isFunction === true || isFunction !== false && typeof result === "function")

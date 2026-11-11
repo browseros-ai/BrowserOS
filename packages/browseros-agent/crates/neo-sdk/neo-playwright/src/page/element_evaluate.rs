@@ -200,46 +200,59 @@ async fn truthy_tries(
         if scope.sleep(backoff.wait(attempt)).await.is_err() {
             return Err(timed_out(scope, matched));
         }
-        let found = read::query_one(pw, scope, locator, strict).await?;
-        if found.is_null() {
-            continue;
+        if truthy_try(pw, scope, locator, strict, script, matched).await? {
+            return Ok(Value::Null);
         }
-        matched.store(true, Ordering::Relaxed);
-        let element = handle_of(scope, found)?;
-        let page = element.page().clone();
-        let call = MainWorldCall::truthy(script.clone(), element);
-        let mut guard = match EvaluateGuard::open(pw, scope, &page, call).await {
-            Ok(guard) => guard,
-            // The match went away between the query and its binding, as a re-render removes
-            // it: upstream's query and call are one page call, so its next try finds the new one.
-            Err(error)
-                if matches!(
-                    error.error_code(),
-                    Some(ErrorCode::ElementDetached | ErrorCode::PageError)
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        match guard.run(scope).await? {
-            Outcome::Answered(answer) => match answer.finish(scope)?.value {
-                Value::Bool(true) => return Ok(Value::Null),
-                Value::Bool(false) => {}
-                _ => {
-                    return Err(scope.fail(
-                        ErrorCode::Internal,
-                        "a truthiness try answered something other than a boolean",
-                    ));
-                }
-            },
-            Outcome::NotRun | Outcome::Destroyed | Outcome::Navigated => {}
-            Outcome::Falsy => {
-                return Err(scope.fail(ErrorCode::Internal, "a script run once answered a poll"));
-            }
-        }
+        // Nothing of a try is used by the next, which matches the locator afresh.
+        scope.release_objects().await;
     }
     Err(timed_out(scope, matched))
+}
+
+/// One try: the locator's match now, and whether `fn(element, arg)` was truthy on it. `false`
+/// tries again: nothing matched, the match left the page before its script ran, or a document
+/// replaced it.
+async fn truthy_try(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    locator: &LocatorTarget,
+    strict: Strictness,
+    script: &Script,
+    matched: &AtomicBool,
+) -> Result<bool, PlaywrightError> {
+    let found = read::query_one(pw, scope, locator, strict).await?;
+    if found.is_null() {
+        return Ok(false);
+    }
+    matched.store(true, Ordering::Relaxed);
+    let element = handle_of(scope, found)?;
+    let page = element.page().clone();
+    let call = MainWorldCall::truthy(script.clone(), element);
+    let mut guard = match EvaluateGuard::open(pw, scope, &page, call).await {
+        Ok(guard) => guard,
+        // The match went away between the query and its binding, as a re-render removes it:
+        // upstream's query and call are one page call, so its next try finds the new one.
+        Err(error)
+            if matches!(
+                error.error_code(),
+                Some(ErrorCode::ElementDetached | ErrorCode::PageError)
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    match guard.run(scope).await? {
+        Outcome::Answered(answer) => match answer.finish(scope)?.value {
+            Value::Bool(truthy) => Ok(truthy),
+            _ => Err(scope.fail(
+                ErrorCode::Internal,
+                "a truthiness try answered something other than a boolean",
+            )),
+        },
+        Outcome::NotRun | Outcome::Destroyed | Outcome::Navigated => Ok(false),
+        Outcome::Falsy => Err(scope.fail(ErrorCode::Internal, "a script run once answered a poll")),
+    }
 }
 
 /// One run through the guard. An element's script that found its document or a node gone

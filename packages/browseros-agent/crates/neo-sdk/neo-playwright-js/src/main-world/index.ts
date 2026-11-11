@@ -22,7 +22,8 @@
  *   truthy    (isFunction, expression, argCount, ...argTexts, ...handles)
  *             → 'true' or 'false': whether the result is truthy, judged as it was returned, as
  *               upstream's `waitForFunctionExpressionOnElement` callback judges it (PW frames.ts):
- *               a promise is truthy and is not awaited
+ *               a promise is truthy and is not awaited; 'false' unrun for an element the page
+ *               removed since Rust matched it
  *   poller    (isFunction, expression, argCount, ...argTexts, ...handles)
  *             → the poll function, by reference, its first poll already run (`first`, so the
  *               agent's code runs in this call, with its user gesture); each call of it judges
@@ -94,6 +95,11 @@ export default function neoMainWorld(
     // answer as a serialized boolean.
     const element =
       argCount > 0 ? parseEvaluationResultValue(args[0], handles) : undefined
+    // Upstream matches the locator and calls the predicate in one page call, so its element is
+    // always in the page. Here an earlier call matched it: one the page removed since is a try
+    // that found nothing, and the predicate does not run on it.
+    if (!(element as { isConnected?: boolean } | undefined)?.isConnected)
+      return 'false'
     const arg =
       argCount > 1 ? parseEvaluationResultValue(args[1], handles) : undefined
     // biome-ignore lint/security/noGlobalEval: the agent's script, evaluated in the page's global scope as upstream's callback does.
