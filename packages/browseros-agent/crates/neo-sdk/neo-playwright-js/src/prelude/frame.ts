@@ -8,6 +8,7 @@
  * the script passes `{ strict: true }`. A child frame's wire id is the one Rust reported in the
  * page's frame tree; the main frame sends none.
  */
+
 import { invoke, invokeObserved, sleep } from './bridge'
 import { type CallSite, captureSite } from './call-site'
 import type { ElementHandle } from './element-handle'
@@ -57,6 +58,8 @@ import {
 } from './signal'
 import { renderSnapshot } from './snapshot'
 import { type TimeoutOption, timeoutMs } from './timeouts'
+import type { KeyList } from './upstream-check'
+import type { PickOptions } from './upstream-checks'
 import { globMatches } from './url'
 import {
   type AriaSnapshotJSON,
@@ -947,7 +950,8 @@ export class Frame extends EventEmitter {
       selector,
       options.strict,
       this._wait(api, options),
-      { ...selectOptionValues(api, values), ...pick(options, ['force']) },
+      // biome-ignore format: Bun preserves literal layout in the byte-checked prelude asset.
+      { ...selectOptionValues(api, values), ...pick(options, ['force'] satisfies KeyList<PickOptions['locator.selectOption']>) },
     )
   }
 
@@ -964,7 +968,9 @@ export class Frame extends EventEmitter {
       selector,
       options.strict,
       this._wait(api, options),
-      pick(options, ['force']),
+      pick(options, ['force'] satisfies KeyList<
+        PickOptions['locator.selectText']
+      >),
     )
   }
 
@@ -1292,7 +1298,7 @@ export class Frame extends EventEmitter {
       'mode',
       'depth',
       'boxes',
-    ])
+    ] satisfies KeyList<PickOptions['page.ariaSnapshot']>)
     const wait = this._wait(api, options)
     if (selector !== null)
       return await this._selectorOp(
@@ -1393,7 +1399,9 @@ export class Frame extends EventEmitter {
           url,
           waitUntil,
           publication,
-          ...pick(options, ['referer']),
+          ...pick(options, ['referer'] satisfies KeyList<
+            PickOptions['page.goto']
+          >),
         },
         (result, observed) => {
           // Decode-time publication precedes a later evaluate's observation. A stale
@@ -1452,8 +1460,12 @@ export class Frame extends EventEmitter {
     const site = captureSite()
     const keys =
       op === 'page.addScriptTag'
-        ? (['url', 'path', 'content', 'type'] as const)
-        : (['url', 'path', 'content'] as const)
+        ? (['url', 'path', 'content', 'type'] as const satisfies KeyList<
+            PickOptions['page.addScriptTag']
+          >)
+        : (['url', 'path', 'content'] as const satisfies KeyList<
+            PickOptions['page.addStyleTag']
+          >)
     const input = pick(options, keys)
     for (const key of keys) {
       const value = input[key]

@@ -3,10 +3,13 @@
  * the pointer's position and buttons), as Playwright's server does, so these are thin: one op
  * per call, with no Playwright timeout.
  */
+
 import { invoke } from './bridge'
 import { captureSite } from './call-site'
 import { markHandle, pick } from './options'
 import type { Page } from './page'
+import type { KeyList } from './upstream-check'
+import type { PickOptions } from './upstream-checks'
 import type { MouseButton } from './wire'
 
 export type ButtonOptions = { button?: MouseButton; clickCount?: number }
@@ -51,7 +54,9 @@ export class Keyboard {
       {
         page: await this.#page._brand(api),
         key,
-        options: pick(options, ['delay']),
+        options: pick(options, ['delay'] satisfies KeyList<
+          PickOptions['keyboard.press']
+        >),
       },
     )
   }
@@ -66,7 +71,9 @@ export class Keyboard {
       {
         page: await this.#page._brand(api),
         text,
-        options: pick(options, ['delay']),
+        options: pick(options, ['delay'] satisfies KeyList<
+          PickOptions['keyboard.type']
+        >),
       },
     )
   }
@@ -106,7 +113,9 @@ export class Mouse {
         page: await this.#page._brand(api),
         x,
         y,
-        options: pick(options, ['steps']),
+        options: pick(options, ['steps'] satisfies KeyList<
+          PickOptions['mouse.move']
+        >),
       },
     )
   }
@@ -120,7 +129,9 @@ export class Mouse {
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
-        options: pick(options, ['button', 'clickCount']),
+        options: pick(options, ['button', 'clickCount'] satisfies KeyList<
+          PickOptions['mouse.down']
+        >),
       },
     )
   }
@@ -134,7 +145,9 @@ export class Mouse {
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
-        options: pick(options, ['button', 'clickCount']),
+        options: pick(options, ['button', 'clickCount'] satisfies KeyList<
+          PickOptions['mouse.up']
+        >),
       },
     )
   }
@@ -182,7 +195,8 @@ export class Mouse {
         page: await this.#page._brand(api),
         x,
         y,
-        options: pick(options, ['button', 'clickCount', 'delay']),
+        // biome-ignore format: Bun preserves literal layout in the byte-checked prelude asset.
+        options: pick(options, ['button', 'clickCount', 'delay'] satisfies KeyList<PickOptions['mouse.click']>),
       },
     )
   }
