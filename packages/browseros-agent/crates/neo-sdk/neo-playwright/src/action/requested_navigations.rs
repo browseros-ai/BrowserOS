@@ -151,3 +151,72 @@ impl RequestedNavigations {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::time::Duration;
+
+    use browseros_cdp::CdpEvent;
+    use browseros_core::{FrameId, SessionId};
+    use serde_json::json;
+    use tokio::sync::broadcast;
+    use tokio::time;
+
+    use super::RequestedNavigations;
+
+    const SESSION: &str = "root";
+
+    fn event(method: &str, params: serde_json::Value) -> CdpEvent {
+        CdpEvent {
+            method: method.to_owned(),
+            params,
+            session_id: Some(SessionId::from(SESSION.to_owned())),
+        }
+    }
+
+    fn requested(frame: &str) -> CdpEvent {
+        event(
+            "Page.frameRequestedNavigation",
+            json!({ "frameId": frame, "disposition": "currentTab", "reason": "anchorClick", "url": "https://a.test/" }),
+        )
+    }
+
+    fn watch() -> (broadcast::Sender<CdpEvent>, RequestedNavigations) {
+        let (events, receiver) = broadcast::channel(16);
+        let watch =
+            RequestedNavigations::watch(receiver, vec![SessionId::from(SESSION.to_owned())]);
+        (events, watch)
+    }
+
+    /// The element's frame starting a navigation ends a verdict's wait (AW-007).
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_pending_navigation_of_the_frame_resolves() -> Result<(), Box<dyn Error>> {
+        let (events, mut watch) = watch();
+        events.send(requested("main"))?;
+        let frame = FrameId::from("main".to_owned());
+        time::timeout(Duration::from_secs(1), watch.pending_in(&frame)).await?;
+        Ok(())
+    }
+
+    /// Another frame's navigation does not count, as upstream's pending document is its own
+    /// frame's; nor does one that already committed.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_other_frames_and_committed_navigations_do_not_resolve()
+    -> Result<(), Box<dyn Error>> {
+        let (events, mut watch) = watch();
+        events.send(requested("child"))?;
+        events.send(requested("main"))?;
+        events.send(event(
+            "Page.frameNavigated",
+            json!({ "frame": { "id": "main" } }),
+        ))?;
+        let frame = FrameId::from("main".to_owned());
+        let waited = time::timeout(Duration::from_secs(1), watch.pending_in(&frame)).await;
+        assert!(
+            waited.is_err(),
+            "neither the child's nor a committed navigation counts"
+        );
+        Ok(())
+    }
+}
