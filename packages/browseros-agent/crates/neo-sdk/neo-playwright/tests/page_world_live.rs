@@ -1120,6 +1120,25 @@ async fn tests_that_frame_wait_for_url_follows_its_frame_out_of_process() -> Tes
                 "it waited for the navigation, {:?}",
                 started.elapsed()
             );
+            // Keep the same Frame through both directions of a renderer handoff. A route
+            // cached by the previous wait must not keep naming its retired OOPIF session.
+            for (host, path) in [("127.0.0.1", "filled.html"), ("[::1]", "moved.html")] {
+                run.eval(
+                    &page,
+                    &format!(
+                        "setTimeout(() => {{ document.querySelector('iframe[name=same]').src = \
+                         `http://{host}:${{location.port}}/{path}`; }}, 100), true"
+                    ),
+                )
+                .await?;
+                let waited = frame_wait_for_url(&run, &page, &same, &format!("**/{path}")).await?;
+                assert!(
+                    waited["url"]
+                        .as_str()
+                        .is_some_and(|url| url.starts_with(&format!("http://{host}:"))),
+                    "the same frame followed its current renderer: {waited}"
+                );
+            }
             Ok(())
         }
         .await;
