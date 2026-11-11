@@ -8,9 +8,8 @@
 #   ../../dev.sh up --server claw-sdk && ./check.sh
 #
 # Rerunnable: the lock and takeover steps use fresh task ids each time, so an
-# earlier run's lock or tab never decides this one. The takeover's tab stays
-# private until it closes, and view displays stay paused while a private tab
-# is in front, so that step closes the tab when it is done.
+# earlier run's lock or tab never decides this one. The takeover step releases its
+# lock and closes its example tab when it is done.
 
 set -uo pipefail # not -e: a failed step is reported and the rest still run
 

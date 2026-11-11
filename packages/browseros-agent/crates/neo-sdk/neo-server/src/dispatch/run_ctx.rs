@@ -66,7 +66,7 @@ pub(crate) enum StopReason {
 pub(crate) struct RunStart {
     /// Neo's id for the run.
     pub(crate) id: RunId,
-    /// The script, as given. The trace writer masks and bounds it.
+    /// The script, as given. The trace writer bounds it.
     pub(crate) code: String,
     /// The host's id for this call; a repeat of it never runs twice.
     pub(crate) request_id: Option<RequestId>,

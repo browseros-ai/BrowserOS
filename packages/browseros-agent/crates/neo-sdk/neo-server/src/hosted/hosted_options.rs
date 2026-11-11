@@ -11,7 +11,7 @@ use crate::config::{AppConfig, EnvConfig, LaunchConfig};
 pub struct HostedOptions {
     /// Required state root; the trace is stored in `claw-sdk/trace.db` underneath it.
     pub state_dir: PathBuf,
-    /// Chromium's `<user-data-dir>/.browseros`, passed through as a browser launch fact.
+    /// Legacy browser launch fact, accepted for compatibility; no upload policy uses it.
     pub execution_dir: Option<PathBuf>,
     /// The installed browser's version, as `instance.browseros_version` names it.
     pub browseros_version: Option<String>,

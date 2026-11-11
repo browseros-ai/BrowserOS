@@ -19,10 +19,9 @@ returned future always resolves to the bridge envelope. `log` and `sleep` use th
 deadline or dropped run also ends through that path. `close()` drains runs, flushes traces
 and releases the private executor, including core's background tasks and CDP socket.
 
-`state_dir` is required; the store is `<state_dir>/claw-sdk/trace.db`. Pass Chromium's
-`<user-data-dir>/.browseros` as `execution_dir` to locate the browser profile, and the installed
-app's version as `browseros_version` for native capability gates. Without an execution directory,
-the product refuses path uploads. An initial run has `init.page = null`; `init.pages` includes
+`state_dir` is required; the store is `<state_dir>/claw-sdk/trace.db`. Pass the installed
+app's version as `browseros_version` for native capability gates. `execution_dir` is
+accepted as a legacy launch fact; it imposes no upload path policy. An initial run has `init.page = null`; `init.pages` includes
 all existing tabs, including the launch tab. The lazy default page opens when the SDK needs it.
 
 The isolated N-API crate is `../neo-playwright-tests/node/claw-addon` (its own workspace and
