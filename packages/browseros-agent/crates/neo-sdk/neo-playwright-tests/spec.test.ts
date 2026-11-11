@@ -1,9 +1,10 @@
 /** The test:neo-spec wrapper: spec names, passed-through flags, and what it says when Node or the browser is missing. */
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, spyOn } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  ensureSource,
   findBrowser,
   findNode,
   finish,
@@ -289,6 +290,62 @@ describe('preparing the source', () => {
       'playwright-1.64.1.staging-22',
       'playwright-1.65.0.staging-11',
     ])
+  })
+
+  const stamp = (source: string) =>
+    fs.readFileSync(path.join(source, '.neo-source.json'), 'utf8')
+  const unused = () => {
+    throw new Error('must not prepare again')
+  }
+
+  it('uses a cache another run publishes while this run checks it', () => {
+    const env = { NEO_SPEC_CACHE_DIR: tempDir() }
+    const source = sourceDir(env)
+    const existsSync = fs.existsSync
+    let published = false
+    // Run A's rename lands right after this run's first look at the folder.
+    const spy = spyOn(fs, 'existsSync').mockImplementation((file) => {
+      const seen = existsSync(file)
+      if (!published && String(file).startsWith(source)) {
+        published = true
+        build('A')(source)
+      }
+      return seen
+    })
+    try {
+      expect(ensureSource('/n/node', env, { build: build('B') })).toBe(source)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(stamp(source)).toBe('A')
+  })
+
+  it('sweeps what dead runs left even when the cache is ready', () => {
+    const cache = tempDir()
+    const env = { NEO_SPEC_CACHE_DIR: cache }
+    build('A')(sourceDir(env))
+    fs.mkdirSync(path.join(cache, 'playwright-1.64.1.staging-11'))
+    fs.mkdirSync(path.join(cache, 'playwright-1.64.1.staging-11.checkout'))
+    ensureSource('/n/node', env, { build: unused, isAlive: () => false })
+    expect(fs.readdirSync(cache)).toEqual(['playwright-1.64.1'])
+  })
+
+  it('clears what an earlier run with the same pid left before building', () => {
+    const cache = tempDir()
+    const source = path.join(cache, 'playwright-1.64.1')
+    // A killed run left its clone; git clone refuses an existing destination.
+    fs.mkdirSync(`${source}.staging-7.checkout`)
+    fs.writeFileSync(`${source}.staging-7.log`, 'old')
+    publishSource(
+      source,
+      (staging) => {
+        expect(fs.existsSync(`${staging}.checkout`)).toBe(false)
+        expect(fs.existsSync(`${staging}.log`)).toBe(false)
+        build('B')(staging)
+      },
+      7,
+    )
+    expect(fs.readdirSync(cache)).toEqual(['playwright-1.64.1'])
   })
 
   it('resolves a relative cache folder, since git and npm run elsewhere', () => {

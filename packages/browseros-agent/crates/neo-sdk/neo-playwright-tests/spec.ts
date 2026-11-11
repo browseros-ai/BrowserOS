@@ -254,8 +254,10 @@ export function publishSource(
   pid = process.pid,
 ) {
   const staging = `${source}.staging-${pid}`
-  // Same pid, earlier run: whatever is here was left by a run that died.
-  fs.rmSync(staging, { recursive: true, force: true })
+  // Same pid, earlier run: its staging, clone and log belong to a run that died, and the sweep
+  // skips this pid. git clone refuses a destination that already exists.
+  for (const leftover of [staging, `${staging}.checkout`, `${staging}.log`])
+    fs.rmSync(leftover, { recursive: true, force: true })
   try {
     build(staging)
     try {
@@ -330,19 +332,34 @@ function buildSource(node: string, env: NodeJS.ProcessEnv, target: string) {
  * NEO_TESTS_PLAYWRIGHT_SOURCE when set; else a folder per pinned release in the cache
  * (NEO_SPEC_CACHE_DIR, default ~/.cache/browseros/neo-spec), prepared the first time.
  */
-function ensureSource(node: string, env: NodeJS.ProcessEnv): string {
+export function ensureSource(
+  node: string,
+  env: NodeJS.ProcessEnv,
+  {
+    build = (staging: string) => buildSource(node, env, staging),
+    isAlive = processAlive,
+  }: {
+    build?: (staging: string) => void
+    isAlive?: (pid: number) => boolean
+  } = {},
+): string {
   const source = sourceDir(env)
-  if (env.NEO_TESTS_PLAYWRIGHT_SOURCE || isReady(source)) return source
-  if (fs.existsSync(source))
+  if (env.NEO_TESTS_PLAYWRIGHT_SOURCE) return source
+  fs.mkdirSync(path.dirname(source), { recursive: true })
+  // Every run sweeps: a run that died after another published leaves a large staging folder.
+  sweepStaging(source, isAlive)
+  if (isReady(source)) return source
+  if (fs.existsSync(source)) {
+    // Another run's rename may have landed between the two reads; it publishes complete folders.
+    if (isReady(source)) return source
     throw new Error(
       `${source} is incomplete: an earlier version of this command stopped while preparing it. Delete it and run again.`,
     )
-  fs.mkdirSync(path.dirname(source), { recursive: true })
-  sweepStaging(source)
+  }
   console.log(
     `Preparing Playwright v${corpus.version} test sources in ${source} (first run only: clone, npm ci, build; a few minutes).`,
   )
-  publishSource(source, (staging) => buildSource(node, env, staging))
+  publishSource(source, build)
   return source
 }
 
