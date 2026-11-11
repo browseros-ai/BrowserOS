@@ -7,14 +7,17 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { corpus, sha256, source } from '../js/prepare.mjs'
-import { flattenResults } from './report/classify.mjs'
+import {
+  flattenResults,
+  isGeneratedSkip,
+  internalsSkipPrefix as skipPrefix,
+} from './report/classify.mjs'
 
 export const manifestPath = fileURLToPath(
   new URL('./curation.json', import.meta.url),
 )
 export const patchReason =
   'error diagnostics: remove wording and call logs; retain behavior and error classes'
-const skipPrefix = 'needs Playwright internals: '
 export const entryKey = (entry) =>
   JSON.stringify([entry.file, entry.id, entry.title])
 const caseEntry = (row) => ({
@@ -361,12 +364,6 @@ export function skipReason(entries, file, titles) {
       entry.title === titles.join(' › '),
   )?.reason
 }
-
-/** expectLoop's runtime skip for a check its table does not cover (`expect-loop.mjs`). */
-const uncoveredCheck = /^expectLoop: \w+ is not covered$/
-
-const isGeneratedSkip = (reason) =>
-  reason.startsWith(skipPrefix) || uncoveredCheck.test(reason)
 
 /** The skip the owner's order 2 adds for a case, or `null`: needs-internals, or an uncovered expectLoop check. */
 function generatedSkipReason(row, key) {
