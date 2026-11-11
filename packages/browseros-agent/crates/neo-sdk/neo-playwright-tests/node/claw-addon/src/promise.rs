@@ -9,8 +9,6 @@ use napi::bindgen_prelude::ToNapiValue;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Env, Error, JsError, JsObject, JsUnknown, NapiValue, Result, sys};
 
-use crate::executor;
-
 /// Claw: The threadsafe function checks environment validity before touching the raw deferred.
 /// Its closure owns the result slot, so abandoning a callback still drops native resources.
 pub(crate) fn promise<T, F>(env: Env, future: F) -> Result<JsObject>
@@ -18,7 +16,7 @@ where
     T: ToNapiValue + Send + 'static,
     F: Future<Output = std::result::Result<T, String>> + Send + 'static,
 {
-    let executor = executor()?;
+    let executor = crate::executor()?;
     let mut deferred = ptr::null_mut();
     let mut value = ptr::null_mut();
     // These pointers belong to this environment and are used only in its JS callback below.

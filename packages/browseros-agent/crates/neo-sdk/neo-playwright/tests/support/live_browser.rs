@@ -95,11 +95,6 @@ impl OpEnv for LiveEnv {
         Ok(())
     }
 
-    /// The owner holds no tab, so the rules allow every tab of a page's group too.
-    fn recheck_reach(&self, _tabs: &[TabId]) -> Result<(), Refusal> {
-        Ok(())
-    }
-
     fn mark_sent(&self) {}
 
     fn mark_sensitive_target(&self) {

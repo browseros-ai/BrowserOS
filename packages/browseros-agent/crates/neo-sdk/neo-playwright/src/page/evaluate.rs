@@ -1,8 +1,7 @@
 //! `page.evaluate` and `page.waitForFunction`, with their `frame.*` forms: the agent's scripts in
 //! the main world of the page's main frame or of the child frame a `Frame` names, through the
-//! evaluate guard, which sweeps the script frame's site before and after every send. Both answer in
-//! Playwright's serialized format, masked, which the prelude's `wire.ts` reads back with the
-//! vendored `parseEvaluationResultValue`.
+//! main-world gateway (`evaluate_guard`). Both answer in Playwright's serialized format, which the
+//! prelude's `wire.ts` reads back with the vendored `parseEvaluationResultValue`.
 
 use std::time::Duration;
 
@@ -112,10 +111,8 @@ pub(crate) async fn evaluate(
     // A document that was gone before the script started ran nothing, so the script is tried
     // once more in the new one, as upstream waits for the new main context.
     for _attempt in 0..2 {
-        let (swept, outcome) = guard.run(scope).await?.sweep(scope).await?;
-        guard = swept;
-        match outcome {
-            Outcome::Answered(answer) => return Ok(guard.finish(scope, answer)?.value),
+        match guard.run(scope).await? {
+            Outcome::Answered(answer) => return Ok(answer.finish(scope)?.value),
             Outcome::NotRun => {}
             Outcome::Destroyed => break,
             Outcome::Navigated => return Err(scope.fail(ErrorCode::PageError, NAVIGATED)),
@@ -127,11 +124,11 @@ pub(crate) async fn evaluate(
     Err(scope.fail(ErrorCode::PageError, DOCUMENT_REPLACED))
 }
 
-/// Runs `page.waitForFunction`: polls from Rust until the predicate is truthy or throws. Every
-/// poll is a send of its own, bracketed by sweeps, because the guard's `run` takes a swept
-/// guard; a navigation mid-wait builds the predicate again in the new document, as upstream
-/// retries its wait. The answer is the value in Playwright's format and upstream's preview of
-/// it, which the prelude's wait handle holds.
+/// Runs `page.waitForFunction`: polls from Rust until the predicate is truthy or throws, because
+/// an agent's tab is a background tab, where the page's animation frames never fire. Every poll
+/// is a send of its own, rechecked by the host; a navigation mid-wait builds the predicate again
+/// in the new document, as upstream retries its wait. The answer is the value in Playwright's
+/// format and upstream's preview of it, which the prelude's wait handle holds.
 pub(crate) async fn wait_for_function(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -139,25 +136,24 @@ pub(crate) async fn wait_for_function(
 ) -> Result<Value, PlaywrightError> {
     let interval = poll_interval(scope, input.polling)?;
     let call = MainWorldCall::poll(input.script.into(), input.frame);
-    // Upstream's timeout covers the whole call. The guard finds the frame and installs its
-    // world within it, and each poll's send runs within it here; every sweep runs outside it,
-    // to the deadline at the latest, so a timeout never drops one with the values it found.
+    // Upstream's timeout covers the whole call: the guard finds the frame and installs its
+    // world within it, and each poll runs within it here.
     let mut guard = EvaluateGuard::open(pw, scope, &input.page, call).await?;
-    let (guard, answer) = loop {
-        let pending = match scope.within(guard.run(scope)).await {
-            Ok(pending) => pending?,
+    let answer = loop {
+        // Boxed: a run's state holds a world's install and the main-world calls, and every
+        // poll would hold it inside `Playwright::invoke`'s future.
+        let outcome = match Box::pin(scope.within(guard.run(scope))).await {
+            Ok(outcome) => outcome?,
             Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
         };
-        let (swept, outcome) = pending.sweep(scope).await?;
-        guard = swept;
         if let Outcome::Answered(answer) = outcome {
-            break (guard, answer);
+            break answer;
         }
         if scope.sleep(interval).await.is_err() {
             return Err(scope.timed_out(ErrorCode::WaitTimeout));
         }
     };
-    let finished = guard.finish(scope, answer)?;
+    let finished = answer.finish(scope)?;
     Ok(json!({ "value": finished.value, "preview": finished.preview }))
 }
 

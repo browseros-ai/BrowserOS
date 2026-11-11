@@ -223,6 +223,8 @@ error_codes! {
     SECRET_UPLOAD_REFUSED = "neo_secret_upload_refused";
     /// The page or frame closed, or left the run's view, while a Playwright op worked on it.
     TARGET_CLOSED = "target_closed";
+    /// The script aborted the op through Playwright's `signal` option.
+    ABORTED = "aborted";
 }
 
 impl ErrorCode {

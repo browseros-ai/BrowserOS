@@ -1,14 +1,14 @@
 use std::error::Error;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::sensitive_fields::FieldValues;
 use browseros_core::{
-    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, CoreError, SessionId, TabId,
+    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, CoreError, SessionId,
 };
-use futures_util::future::{self, BoxFuture};
+use futures_util::future::BoxFuture;
 use neo_trace::ErrorOwner;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
@@ -16,22 +16,21 @@ use tokio::time::{self, Instant};
 
 use super::{
     ArgText, Called, EvaluateGuard, FIRST_POLL, FRAME_BUDGET, MainWorldCall, NAVIGATED, Outcome,
-    RemoteObject, Reply, SETTLED, Script, Subject, Unmasked, decode, masked, not_run, returned,
+    RemoteObject, Reply, SETTLED, Script, Serialized, Subject, decode, not_run, parsed, returned,
 };
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::page::op_page::UNTIMED_RETRY;
-use crate::page::page_value::MaskedValue;
 use crate::page::site_sweep::SiteSweep;
 use crate::probe::{PROBE_PROTOCOL, ProbeFailure};
 use crate::target::{CallHeader, PageRef};
 use crate::test_env::{self, TestEnv};
 use crate::test_support::{
-    ProbeAnswer, RecordingHooks, SCRIPTED_CHILD, SCRIPTED_DOCUMENT, SCRIPTED_OOPIF, ScriptedLink,
-    ScriptedRun, ScriptedTab, TabScript,
+    ProbeAnswer, RecordingHooks, SCRIPTED_CHILD, SCRIPTED_DOCUMENT, SCRIPTED_OOPIF, ScriptedRun,
+    ScriptedTab, TabScript,
 };
 use crate::world::Place;
-use crate::{ErrorCode, Op, OpEnv, Playwright, PlaywrightError, Refusal, RunState, resolve};
+use crate::{ErrorCode, Op, Playwright, PlaywrightError, resolve};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -61,12 +60,12 @@ fn object(value: Value) -> Result<RemoteObject, CoreError> {
 #[test]
 fn tests_that_an_evaluate_answer_is_the_pages_text_or_undefined() -> TestResult {
     let text = reply(json!({ "result": { "type": "string", "value": "{\"v\":\"NaN\"}" } }))?;
-    assert!(matches!(text.result.text(), Unmasked::Text(text) if text == r#"{"v":"NaN"}"#));
+    assert!(matches!(text.result.text(), Serialized::Text(text) if text == r#"{"v":"NaN"}"#));
     let none = reply(json!({ "result": { "type": "undefined" } }))?;
-    assert!(matches!(none.result.text(), Unmasked::Undefined));
+    assert!(matches!(none.result.text(), Serialized::Undefined));
     let number = reply(json!({ "result": { "type": "number", "value": 1 } }))?;
     assert!(
-        matches!(number.result.text(), Unmasked::Unreadable),
+        matches!(number.result.text(), Serialized::Unreadable),
         "the main-world function answers text or nothing; anything else is a tampered page"
     );
     Ok(())
@@ -82,25 +81,19 @@ fn tests_that_a_throw_reads_as_upstreams_exception_message() -> TestResult {
             "description": "TypeError: boom\n    at eval (eval at evaluate (:1:1))" } },
     }))?;
     assert_eq!(
-        error.thrown().map(|thrown| thrown.0),
+        error.thrown(),
         Some("TypeError: boom\n    at eval (eval at evaluate (:1:1))".to_owned())
     );
     let string = reply(json!({
         "result": { "type": "string" },
         "exceptionDetails": { "text": "Uncaught", "exception": { "type": "string", "value": "plain" } },
     }))?;
-    assert_eq!(
-        string.thrown().map(|thrown| thrown.0),
-        Some("plain".to_owned())
-    );
+    assert_eq!(string.thrown(), Some("plain".to_owned()));
     let null = reply(json!({
         "result": { "type": "object" },
         "exceptionDetails": { "text": "Uncaught", "exception": { "type": "object", "subtype": "null", "value": null } },
     }))?;
-    assert_eq!(
-        null.thrown().map(|thrown| thrown.0),
-        Some("null".to_owned())
-    );
+    assert_eq!(null.thrown(), Some("null".to_owned()));
     let answered = reply(json!({ "result": { "type": "string", "value": "1" } }))?;
     assert!(answered.thrown().is_none());
     Ok(())
@@ -164,8 +157,8 @@ fn tests_that_a_settled_value_previews_as_upstreams_handle() -> TestResult {
     let bigint =
         object(json!({ "type": "bigint", "unserializableValue": "10n", "description": "10n" }))?;
     assert!(matches!(
-        bigint.json_value(Unmasked::Text(r#"{"bi":"10"}"#.to_owned())),
-        Unmasked::Undefined
+        bigint.json_value(Serialized::Text(r#"{"bi":"10"}"#.to_owned())),
+        Serialized::Undefined
     ));
     assert_eq!(bigint.preview(), "undefined");
     assert_eq!(
@@ -189,52 +182,52 @@ fn tests_that_a_settled_value_previews_as_upstreams_handle() -> TestResult {
     let array = object(json!({ "type": "object", "subtype": "array", "objectId": "4" }))?;
     assert!(
         matches!(
-            array.json_value(Unmasked::Text("[]".to_owned())),
-            Unmasked::Text(_)
+            array.json_value(Serialized::Text("[]".to_owned())),
+            Serialized::Text(_)
         ),
         "an object's value is the page's own serialized text"
     );
     Ok(())
 }
 
-/// A value leaves in Playwright's format, masked; one upstream could not return, or one no
-/// serializer writes, fails as the page's, with nothing of it in the message.
+/// A value leaves in Playwright's format as the page answered it, a key and a number spelled
+/// like a field's value included; one upstream could not return, or one no serializer writes,
+/// fails as the page's, with nothing of it in the message.
 #[tokio::test]
-async fn tests_that_an_answer_leaves_masked_or_fails_as_the_pages() -> TestResult {
+async fn tests_that_an_answer_leaves_as_the_page_gave_it_or_fails_as_the_pages() -> TestResult {
     let env = TestEnv::new();
     let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
     let scope = OpScope::new(&env, op, CallHeader::default());
-    let swept = FieldValues::from_sweep(&json!(["hunter2-secret"]));
-    let text = r#"{"o":[{"k":"hunter2-secret","v":"you typed hunter2-secret"}],"id":1}"#;
+    let text = r#"{"o":[{"k":"hunter2-secret","v":"you typed hunter2-secret"},{"k":"n","v":482913}],"id":1}"#;
     assert_eq!(
-        masked(&scope, &swept, Unmasked::Text(text.to_owned()))?.into_json(),
-        json!({ "o": [{ "k": "[private]", "v": "you typed [private]" }], "id": 1 })
+        parsed(&scope, Serialized::Text(text.to_owned()))?.into_json(),
+        json!({ "o": [{ "k": "hunter2-secret", "v": "you typed hunter2-secret" },
+                      { "k": "n", "v": 482_913 }], "id": 1 })
     );
     assert_eq!(
-        masked(&scope, &swept, Unmasked::Undefined)?.into_json(),
+        parsed(&scope, Serialized::Undefined)?.into_json(),
         json!({ "v": "undefined" })
     );
     let deep = format!("{}0{}", "[".repeat(298), "]".repeat(298));
-    for (unmasked, message) in [
+    for (serialized, message) in [
         (
-            Unmasked::Text(deep),
+            Serialized::Text(deep),
             "page.evaluate: Cannot serialize result: object reference chain is too long.",
         ),
         (
-            Unmasked::Text(r#"{"h":0,"secret":"hunter2-secret"}"#.to_owned()),
+            Serialized::Text(r#"{"h":0,"secret":"hunter2-secret"}"#.to_owned()),
             "page.evaluate: the page answered with a value outside Playwright's serialized \
              format, as a page that replaced the globals its serializer uses would, so Neo \
              withheld it",
         ),
         (
-            Unmasked::Unreadable,
+            Serialized::Unreadable,
             "page.evaluate: the page answered with a value outside Playwright's serialized \
              format, as a page that replaced the globals its serializer uses would, so Neo \
              withheld it",
         ),
     ] {
-        let failed = masked(&scope, &swept, unmasked)
-            .map(MaskedValue::into_json)
+        let failed = parsed(&scope, serialized)
             .err()
             .ok_or("an unreadable answer must not leave")?;
         assert_eq!(
@@ -252,7 +245,6 @@ async fn tests_that_a_binding_function_fails_as_upstreams_server_fails_it() -> T
     let env = TestEnv::new();
     let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
     let scope = OpScope::new(&env, op, CallHeader::default());
-    let none = FieldValues::default();
     let caller = "(...args) => globalThis[kBindingsControllerProperty].callBinding(name, ...args)";
     for (text, at) in [
         (r#"{"fn":"__pw_fn_demo"}"#, String::new()),
@@ -265,12 +257,9 @@ async fn tests_that_a_binding_function_fails_as_upstreams_server_fails_it() -> T
             r#" at position "[1].x[0]""#.to_owned(),
         ),
     ] {
-        let failed = returned(
-            &scope,
-            masked(&scope, &none, Unmasked::Text(text.to_owned()))?,
-        )
-        .err()
-        .ok_or("a binding function must not leave")?;
+        let failed = returned(&scope, parsed(&scope, Serialized::Text(text.to_owned()))?)
+            .err()
+            .ok_or("a binding function must not leave")?;
         assert_eq!(
             (failed.error_code(), failed.message()),
             (
@@ -282,83 +271,6 @@ async fn tests_that_a_binding_function_fails_as_upstreams_server_fails_it() -> T
         );
     }
     Ok(())
-}
-
-/// `Pending`, the state after a send, can only be swept: nothing on it lets an answer out. The
-/// compiler cannot be asked from a doc test, which sees no `pub(crate)` item and so would pass
-/// whatever `Pending` had; this reads the methods its one `impl` block defines.
-#[test]
-fn tests_that_a_pending_guard_can_only_be_swept() {
-    let source = include_str!("../evaluate_guard.rs");
-    let document = include_str!("document_write.rs");
-    let methods_in = |source: &str, opening: &str| -> Vec<String> {
-        let block = source
-            .split(opening)
-            .nth(1)
-            .and_then(|rest| rest.split("\n}\n").next())
-            .unwrap_or_default();
-        block
-            .lines()
-            .filter_map(|line| {
-                line.trim()
-                    .strip_prefix("pub(crate) async fn ")
-                    .or_else(|| line.trim().strip_prefix("pub(crate) fn "))
-            })
-            .filter_map(|signature| signature.split(['(', '<']).next())
-            .map(str::to_owned)
-            .collect()
-    };
-    assert_eq!(
-        (
-            source.matches("> Pending<'op").count(),
-            document.matches("> Pending<'op").count()
-        ),
-        (1, 0),
-        "one impl block holds Pending's methods, whatever it guards"
-    );
-    assert_eq!(
-        methods_in(source, "impl<'op, G: Guarded> Pending<'op, G> {"),
-        ["sweep"],
-        "a pending guard can only be swept"
-    );
-    assert_eq!(
-        methods_in(source, "impl<'op> EvaluateGuard<'op> {"),
-        ["open", "run", "finish"],
-        "only a swept guard sends a script or lets its answer out"
-    );
-    assert_eq!(
-        methods_in(document, "impl<'op> EvaluateGuard<'op, DocumentWrite> {"),
-        ["open_document", "write", "close"],
-        "only a swept guard writes a document or lets the write's end out"
-    );
-}
-
-/// What a send produced leaves `run` only inside the `Pending`, and the page's text in it is
-/// opaque to the rest of the crate: the types that hold it have no crate-visible variant or
-/// field, so `finish` is the one function that reads it. A leaf can branch on the outcome, but
-/// never on the text.
-#[test]
-fn tests_that_page_text_is_opaque_outside_the_guard() {
-    let source = include_str!("../evaluate_guard.rs");
-    for declaration in [
-        "pub(crate) struct Answer(Answered);",
-        "\nenum Answered {",
-        "\nenum Unmasked {",
-        "\nstruct UnmaskedText(String);",
-    ] {
-        assert!(
-            source.contains(declaration),
-            "page text is declared opaque: {declaration}"
-        );
-    }
-    assert!(
-        source.contains("-> Result<Pending<'op>, PlaywrightError> {"),
-        "a send hands back only its Pending"
-    );
-    assert!(
-        source.contains("-> Result<(EvaluateGuard<'op, G>, G::Outcome), PlaywrightError> {"),
-        "the outcome leaves with the guard its sweep made"
-    );
 }
 
 const PAGE_TARGET: &str = "page-target";
@@ -509,8 +421,8 @@ impl CdpConnection for SlowFrame {
 }
 
 /// Reaching the slow frame and sweeping it each fit in a budget of their own, 600 ms against
-/// 1 s, but the frame has one budget for both: it refuses the script at 1 s rather than
-/// passing at 1.2 s, the op's 1.5 s leaving no room for a second try.
+/// 1 s, but the frame has one budget for both: a read's sweep withholds the text at 1 s rather
+/// than passing at 1.2 s, the op's 1.5 s leaving no room for a second try.
 #[tokio::test(start_paused = true)]
 async fn tests_that_a_frame_has_one_budget_from_its_attach_to_its_sweep() -> TestResult {
     let browser = BrowserSession::new(
@@ -522,11 +434,20 @@ async fn tests_that_a_frame_has_one_budget_from_its_attach_to_its_sweep() -> Tes
     let listed = listed.first().ok_or("the tab is listed")?;
     let page: PageRef = serde_json::from_value(json!({ "$neo": "page", "tab": listed.tab_id }))?;
     let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
-    let op = Op::from_name("page.waitForFunction").ok_or("page.waitForFunction is an op")?;
+    let op = Op::from_name("locator.textContent").ok_or("locator.textContent is an op")?;
     let scope = OpScope::new(&env, op, timeout_ms(1_500));
+    let page = OpPage::admit_handle(&playwright, &scope, &page).await?;
+    let world = page
+        .world(&page.main_endpoint(), Place::Main)
+        .await
+        .map_err(|failure| failure.to_string())?;
     let started = Instant::now();
-    let call = MainWorldCall::poll(script("() => 1"), None);
-    let swept = EvaluateGuard::open(&playwright, &scope, &page, call).await;
+    let swept = SiteSweep::of(&page, world).await.values(
+        &playwright,
+        &scope,
+        page.tab(),
+        FieldValues::default(),
+    );
     let took = started.elapsed();
     let error = swept.err().ok_or(format!(
         "a frame 1.2 s from its attach to its sweep passed, after {took:?}"
@@ -544,7 +465,7 @@ async fn tests_that_a_frame_has_one_budget_from_its_attach_to_its_sweep() -> Tes
 }
 
 /// A host serves an op unheld unless its spec declares `MainWorld`, so the guard refuses any
-/// other op, here one that declares only `Capture`, before it admits or sweeps anything. A
+/// other op, here one that declares only `Capture`, before it admits anything. A
 /// script the prelude refused is raised next, with upstream's message and nothing admitted,
 /// while a script to run goes on to admit its page, which fails here for want of a browser.
 /// Paused: core waits out its own attach timeout before it gives up on the page.
@@ -665,118 +586,26 @@ impl TabScript for LateChild {
     }
 }
 
-/// What opening a guard beside a [`LateChild`] gave.
-struct Opened {
-    /// The guard's refusal, if any.
-    refused: Option<PlaywrightError>,
-    /// How long the open took.
-    took: Duration,
-    /// Every value the host heard by then.
-    heard: Vec<String>,
-}
-
-/// Opens `op`'s guard with `header` on a [`LateChild`] tab.
-async fn open_beside_late_child(
+/// A read's sweep beside a [`LateChild`] tab, with `header`: what it withheld the text with, if
+/// it did, and how long the sweep took.
+async fn read_beside_late_child(
     tab: &Arc<ScriptedTab<LateChild>>,
-    op: &str,
     header: CallHeader,
-) -> Result<Opened, Box<dyn Error>> {
+) -> Result<(Option<PlaywrightError>, Duration), Box<dyn Error>> {
     let run = ScriptedRun::over(tab).await?;
-    let op = Op::from_name(op).ok_or("an op")?;
+    let op = Op::from_name("locator.textContent").ok_or("an op")?;
     let scope = OpScope::new(&run.env, op, header);
-    let call = MainWorldCall::poll(script("() => 1"), None);
-    let started = Instant::now();
-    let refused = EvaluateGuard::open(&run.playwright, &scope, &run.page, call)
+    let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+    let world = page
+        .world(&page.main_endpoint(), Place::Main)
         .await
-        .err();
-    Ok(Opened {
-        refused,
-        took: started.elapsed(),
-        heard: run.hooks.swept(),
-    })
-}
-
-/// A same-site frame that misses its budget once is swept again on a fresh budget, inside the
-/// op's own timeout, and the script goes ahead once every frame of its site answered; the frame
-/// is not given up on the first late answer, as upstream would wait on it.
-#[tokio::test(start_paused = true)]
-async fn tests_that_a_frame_late_once_is_swept_again_and_the_script_runs() -> TestResult {
-    let tab = ScriptedTab::new(LateChild::new(first));
-    let Opened {
-        refused,
-        took,
-        heard,
-    } = open_beside_late_child(&tab, "page.waitForFunction", timeout_ms(5_000)).await?;
-    assert!(
-        refused.is_none(),
-        "the second sweep found every frame: {refused:?}"
-    );
-    assert_eq!(
-        tab.script().child_sweeps.load(Ordering::SeqCst),
-        2,
-        "the late frame was swept again"
-    );
-    assert!(
-        took >= FRAME_BUDGET && took < FRAME_BUDGET + Duration::from_millis(100),
-        "one late try, then one on time: {took:?}"
-    );
-    assert!(
-        ["main-try-1", "main-try-2"]
-            .iter()
-            .all(|value| heard.iter().any(|heard| heard == value)),
-        "both tries' values reached the host: {heard:?}"
-    );
-    Ok(())
-}
-
-/// A frame late on every try fails the op closed with the message one late sweep gave, once
-/// the op's deadline leaves no room for a try as long as the last: before it, so the op's own
-/// timeout never hides why. Every try's values reach the host as that try ends, though the
-/// script never runs.
-#[tokio::test(start_paused = true)]
-async fn tests_that_a_frame_late_to_the_deadline_fails_closed_as_before() -> TestResult {
-    let tab = ScriptedTab::new(LateChild::new(every));
-    let run = ScriptedRun::over(&tab).await?;
-    let op = Op::from_name("page.waitForFunction").ok_or("an op")?;
-    let scope = OpScope::new(&run.env, op, timeout_ms(2_500));
-    let call = MainWorldCall::poll(script("() => 1"), None);
+        .map_err(|failure| failure.to_string())?;
     let started = Instant::now();
-    let opening = async {
-        let opened = EvaluateGuard::open(&run.playwright, &scope, &run.page, call).await;
-        (opened, started.elapsed())
-    };
-    let after_one_try = async {
-        time::sleep(FRAME_BUDGET + Duration::from_millis(100)).await;
-        run.hooks.swept()
-    };
-    let ((opened, took), heard_early) = future::join(opening, after_one_try).await;
-    let error = opened.err().ok_or("a frame late on every try refuses")?;
-    assert_eq!(
-        (error.error_code(), error.owner(), error.message()),
-        (
-            Some(ErrorCode::Unsupported),
-            ErrorOwner::Neo,
-            "page.waitForFunction: a frame of the script's site did not answer Neo's privacy \
-             sweep within 1000ms, so the script was not run; try again once the frame responds"
-        ),
-    );
-    assert!(
-        took >= FRAME_BUDGET * 2 && took <= Duration::from_millis(2_500),
-        "two tries fit in the op's 2.5 s, and the op ends inside it: {took:?}"
-    );
-    assert!(
-        heard_early.iter().any(|value| value == "main-try-1"),
-        "the first try's values reached the host before the second ended: {heard_early:?}"
-    );
-    let heard = run.hooks.swept();
-    assert!(
-        ["main-try-1", "main-try-2"]
-            .iter()
-            .all(|value| heard.iter().any(|heard| heard == value)),
-        "every try's values reached the host: {heard:?}"
-    );
-    assert!(env_sent_nothing(&run.env), "nothing was sent");
-    Ok(())
+    let withheld = SiteSweep::of(&page, world)
+        .await
+        .values(&run.playwright, &scope, page.tab(), FieldValues::default())
+        .err();
+    Ok((withheld, started.elapsed()))
 }
 
 /// A tab whose same-site out-of-process frame answers every sweep only after [`LATE`], and
@@ -828,44 +657,13 @@ fn slow_second(sweep: usize) -> Duration {
 }
 
 /// A try can outlast the one before it. Here the first takes 1 s, the out-of-process frame late
-/// on its budget, and the second would take 2 s, 900 ms on the script's session and then the
+/// on its budget, and the second would take 2 s, 900 ms on the read's session and then the
 /// frame's own budget; the bet on the first try's length starts the second with 1.5 s of the
-/// op's 2.5 s left. The second is cut at the op's deadline, as late. Outside `OpScope::within`,
-/// as `waitForFunction`'s first sweep is, the op ends on time; inside it, as a read's sweep is,
+/// op's 2.5 s left. The second is cut at the op's deadline, as late, so inside `OpScope::within`
 /// the cut ends the sweep before the op's own timeout can replace Neo's refusal. Both tries'
-/// values reach the host either way.
+/// values reach the host.
 #[tokio::test(start_paused = true)]
 async fn tests_that_a_try_longer_than_the_last_is_cut_at_the_deadline_as_late() -> TestResult {
-    let deadline = Duration::from_millis(2_500);
-    let tab = ScriptedTab::new(LateOopif::new(slow_second));
-    let run = ScriptedRun::over(&tab).await?;
-    let op = Op::from_name("page.waitForFunction").ok_or("an op")?;
-    let scope = OpScope::new(&run.env, op, timeout_ms(2_500));
-    let call = MainWorldCall::poll(script("() => 1"), None);
-    let started = Instant::now();
-    let opened = EvaluateGuard::open(&run.playwright, &scope, &run.page, call).await;
-    let took = started.elapsed();
-    let refused = opened.err().ok_or("a frame late on both tries refuses")?;
-    assert_eq!(
-        (refused.error_code(), refused.message()),
-        (
-            Some(ErrorCode::Unsupported),
-            "page.waitForFunction: a frame of the script's site did not answer Neo's privacy \
-             sweep within 1000ms, so the script was not run; try again once the frame responds"
-        ),
-    );
-    assert!(
-        took > FRAME_BUDGET * 2 && took <= deadline,
-        "two tries, the second cut at the op's deadline: {took:?}"
-    );
-    let heard = run.hooks.swept();
-    assert!(
-        ["main-try-1", "main-try-2"]
-            .iter()
-            .all(|value| heard.iter().any(|heard| heard == value)),
-        "both tries' values reached the host: {heard:?}"
-    );
-
     let tab = ScriptedTab::new(LateOopif::new(slow_second));
     let run = ScriptedRun::over(&tab).await?;
     let op = Op::from_name("locator.textContent").ok_or("an op")?;
@@ -902,85 +700,22 @@ async fn tests_that_a_try_longer_than_the_last_is_cut_at_the_deadline_as_late() 
     Ok(())
 }
 
-/// Whether the host was never asked to mark anything sent.
-fn env_sent_nothing(env: &TestEnv) -> bool {
-    !env.calls().contains(&test_env::EnvCall::MarkSent)
-}
-
-/// `page.evaluate` has no Playwright timeout, so a frame late on every try is tried for
-/// [`UNTIMED_RETRY`] from the first try, and no longer.
+/// An op without a Playwright timeout tries a frame late on every try for [`UNTIMED_RETRY`]
+/// from the first try, and no longer.
 #[tokio::test(start_paused = true)]
 async fn tests_that_an_op_without_a_timeout_tries_a_late_frame_for_a_bounded_window() -> TestResult
 {
     let tab = ScriptedTab::new(LateChild::new(every));
-    let Opened { refused, took, .. } =
-        open_beside_late_child(&tab, "page.evaluate", CallHeader::default()).await?;
-    let refused = refused.ok_or("a frame late on every try refuses")?;
+    let (withheld, took) = read_beside_late_child(&tab, CallHeader::default()).await?;
+    let withheld = withheld.ok_or("a frame late on every try withholds the text")?;
     assert_eq!(
-        refused.error_code(),
+        withheld.error_code(),
         Some(ErrorCode::Unsupported),
-        "{refused}"
-    );
-    assert!(
-        refused
-            .message()
-            .starts_with("page.evaluate: a frame of the script's site did not answer"),
-        "{refused}"
+        "{withheld}"
     );
     assert!(
         took + FRAME_BUDGET > UNTIMED_RETRY && took <= UNTIMED_RETRY + Duration::from_millis(1),
         "tried for the window and no longer: {took:?}"
-    );
-    Ok(())
-}
-
-/// [`UNTIMED_RETRY`] bounds each stall of an op without a timeout, not the op: here a poll with
-/// `timeout: 0`, whose first sweep meets a stall that recovers on its second try. The sweep after
-/// its script meets a frame late for good, which gets a whole window of its own, opened when
-/// that sweep started, and fails the op when the window ends: the earlier stall neither shortens
-/// it nor keeps the op trying past it.
-#[tokio::test(start_paused = true)]
-async fn tests_that_a_stall_past_the_untimed_window_fails_after_one_that_recovered() -> TestResult {
-    fn all_but_the_second(sweep: usize) -> bool {
-        sweep != 1
-    }
-    let tab = ScriptedTab::new(LateChild::new(all_but_the_second));
-    let run = ScriptedRun::over(&tab).await?;
-    let op = Op::from_name("page.waitForFunction").ok_or("an op")?;
-    let scope = OpScope::new(&run.env, op, timeout_ms(0));
-    let call = MainWorldCall::poll(script("() => 1"), None);
-    let started = Instant::now();
-    let guard = EvaluateGuard::open(&run.playwright, &scope, &run.page, call).await?;
-    let recovered = started.elapsed();
-    assert!(
-        recovered >= FRAME_BUDGET && recovered < FRAME_BUDGET + Duration::from_millis(100),
-        "the first stall recovered on its second try: {recovered:?}"
-    );
-    let pending = guard.run(&scope).await?;
-    let stalled = Instant::now();
-    let withheld = pending
-        .sweep(&scope)
-        .await
-        .err()
-        .ok_or("a frame late for good withholds the script's result")?;
-    let took = stalled.elapsed();
-    assert_eq!(
-        (withheld.error_code(), withheld.message()),
-        (
-            Some(ErrorCode::Unsupported),
-            "page.waitForFunction: a frame of the script's site did not answer Neo's privacy \
-             sweep within 1000ms, so the result of the script, which ran, is withheld; try again \
-             once the frame responds"
-        ),
-    );
-    assert!(
-        took + FRAME_BUDGET > UNTIMED_RETRY && took <= UNTIMED_RETRY + Duration::from_millis(1),
-        "the second stall had a whole window of its own, and no more: {took:?}"
-    );
-    assert_eq!(
-        tab.script().child_sweeps.load(Ordering::SeqCst),
-        2 + 5,
-        "two tries for the first stall, five 1 s tries for the second"
     );
     Ok(())
 }
@@ -1045,65 +780,6 @@ async fn tests_that_an_install_late_at_its_scan_is_tried_again_inside_the_deadli
                 );
             }
             Err(failure) => return Err(failure.to_string().into()),
-        }
-    }
-    Ok(())
-}
-
-/// The sweep after a script is tried again as the one before it is: the script ran once, and
-/// what it produced stays inside the `Pending` until a sweep of every frame of its site
-/// completes, or is withheld once the op's deadline leaves no room for another try.
-#[tokio::test(start_paused = true)]
-async fn tests_that_the_sweep_after_a_script_is_tried_again_before_its_result_leaves() -> TestResult
-{
-    fn second(sweep: usize) -> bool {
-        sweep == 1
-    }
-    fn after_the_first(sweep: usize) -> bool {
-        sweep >= 1
-    }
-    for (late, withheld) in [
-        (second as fn(usize) -> bool, false),
-        (after_the_first, true),
-    ] {
-        let tab = ScriptedTab::new(LateChild::new(late));
-        let run = ScriptedRun::over(&tab).await?;
-        let op = Op::from_name("page.waitForFunction").ok_or("an op")?;
-        let scope = OpScope::new(&run.env, op, timeout_ms(2_500));
-        let call = MainWorldCall::poll(script("() => 1"), None);
-        let guard = EvaluateGuard::open(&run.playwright, &scope, &run.page, call).await?;
-        let pending = guard.run(&scope).await?;
-        let started = Instant::now();
-        let swept = pending.sweep(&scope).await;
-        let took = started.elapsed();
-        let sent = run
-            .env
-            .calls()
-            .iter()
-            .filter(|call| **call == test_env::EnvCall::MarkSent)
-            .count();
-        assert_eq!(
-            sent, 1,
-            "the script went out once, after the sweep before it"
-        );
-        match swept {
-            Ok(_) => assert!(
-                !withheld && took >= FRAME_BUDGET && took < FRAME_BUDGET * 2,
-                "the result left after the late try and one on time: {took:?}"
-            ),
-            Err(error) => {
-                assert!(withheld, "{error}");
-                assert_eq!(
-                    (error.error_code(), error.message()),
-                    (
-                        Some(ErrorCode::Unsupported),
-                        "page.waitForFunction: a frame of the script's site did not answer Neo's \
-                         privacy sweep within 1000ms, so the result of the script, which ran, is \
-                         withheld; try again once the frame responds"
-                    )
-                );
-                assert!(took >= FRAME_BUDGET, "withheld after a late try: {took:?}");
-            }
         }
     }
     Ok(())
@@ -1213,7 +889,7 @@ async fn tests_that_an_evaluate_a_navigation_cut_off_is_not_sent_again() -> Test
 }
 
 /// A tab whose first call into its main frame's document is cut off by that navigation, and in
-/// whose next document the predicate holds at once: every probe sweep and main-world call, in
+/// whose next document the predicate holds at once: every probe request and main-world call, in
 /// order.
 #[derive(Default)]
 struct MovesOnce {
@@ -1237,7 +913,7 @@ impl MovesOnce {
 
 impl TabScript for MovesOnce {
     fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
-        self.push("sweep");
+        self.push("probe");
         ProbeAnswer::empty_sweep()
     }
 
@@ -1267,9 +943,9 @@ impl TabScript for MovesOnce {
 
 /// A predicate a navigation cut off is side-effect free, as upstream's are meant to be, so the
 /// wait goes on in the frame's next document, as upstream's does: the poller is built again
-/// there, only after a sweep that followed the cut-off call.
+/// there, and no probe request goes out around the polls.
 #[tokio::test(start_paused = true)]
-async fn tests_that_a_wait_a_navigation_cut_off_polls_again_after_a_sweep() -> TestResult {
+async fn tests_that_a_wait_a_navigation_cut_off_polls_again_in_the_next_document() -> TestResult {
     let tab = ScriptedTab::new(MovesOnce::default());
     let run = ScriptedRun::over(&tab).await?;
     let op = Op::from_name("page.waitForFunction").ok_or("page.waitForFunction is an op")?;
@@ -1284,381 +960,8 @@ async fn tests_that_a_wait_a_navigation_cut_off_polls_again_after_a_sweep() -> T
     );
     assert_eq!(
         tab.script().log(),
-        [
-            "sweep",
-            "build",
-            "sweep",
-            "build",
-            "first poll",
-            "settled",
-            "sweep"
-        ],
-        "a sweep between the cut-off call and the poller built again"
-    );
-    Ok(())
-}
-
-/// A sweep the op's own timeout cuts is never dropped with what it found: the frame that
-/// answered reports its value to the host, though a same-site frame stalls past the timeout,
-/// and the op fails with upstream's timeout, not with Neo's refusal, which would name a budget
-/// the frame never had. setContent's sweep before its write and waitForFunction's before its
-/// first poll ran inside the op's timeout, which dropped them whole (M2R review F2).
-#[tokio::test(start_paused = true)]
-async fn tests_that_a_sweep_the_op_timeout_cuts_reports_what_it_found() -> TestResult {
-    let wait = json!({ "script": { "run": { "expression": "() => 1", "isFunction": true,
-                                            "arg": r#"{"v":"undefined"}"# } } });
-    let mut ended = Vec::new();
-    for (name, mut input) in [
-        ("page.waitForFunction", wait),
-        ("page.setContent", json!({ "html": "<p>hi</p>" })),
-    ] {
-        let tab = ScriptedTab::new(LateChild::new(every));
-        let run = ScriptedRun::over(&tab).await?;
-        let op = Op::from_name(name).ok_or("an op")?;
-        if let Some(fields) = input.as_object_mut() {
-            fields.insert("page".to_owned(), serde_json::to_value(&run.page)?);
-            fields.insert("call".to_owned(), json!({ "timeoutMs": 500 }));
-        }
-        let error = run
-            .playwright
-            .invoke(&run.env, op, input)
-            .await
-            .err()
-            .ok_or(format!("{name}: a frame stalled past the timeout"))?;
-        ended.push((
-            name,
-            error.error_code(),
-            error
-                .message()
-                .starts_with(&format!("{name}: Timeout 500ms exceeded.")),
-            run.hooks.swept().iter().any(|value| value == "main-try-1"),
-            run.env.calls().contains(&test_env::EnvCall::MarkSent),
-        ));
-    }
-    assert_eq!(
-        ended,
-        [
-            (
-                "page.waitForFunction",
-                Some(ErrorCode::WaitTimeout),
-                true,
-                true,
-                false
-            ),
-            (
-                "page.setContent",
-                Some(ErrorCode::WaitTimeout),
-                true,
-                true,
-                false
-            ),
-        ],
-        "(op, code, upstream's timeout, the answered value reached the host, anything sent)"
-    );
-    Ok(())
-}
-
-/// A tab whose page opened `link`, a popup of another site: the group's other tab, which no
-/// sweep of the page's site reads but the host's rules must check. Its main world answers the
-/// script with `1`, counted.
-struct LinkedPopup {
-    link: ScriptedLink,
-    ran: AtomicUsize,
-}
-
-impl LinkedPopup {
-    fn new(link: ScriptedLink) -> Self {
-        Self {
-            link,
-            ran: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl TabScript for LinkedPopup {
-    fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
-        ProbeAnswer::empty_sweep()
-    }
-
-    fn linked(&self) -> Option<ScriptedLink> {
-        Some(self.link)
-    }
-
-    fn main_world(&self, object: &str, _function: &str) -> Option<Result<Value, &'static str>> {
-        (object == SCRIPTED_DOCUMENT).then(|| {
-            self.ran.fetch_add(1, Ordering::SeqCst);
-            Ok(json!({ "result": { "type": "string", "value": "1" } }))
-        })
-    }
-}
-
-/// `page.evaluate(() => 1)` as the prelude sends it, on `page`, for the host `env`: the op's
-/// own outcome inside.
-async fn evaluate_on(
-    pw: &Playwright,
-    env: &dyn OpEnv,
-    page: &PageRef,
-) -> Result<Result<Value, PlaywrightError>, Box<dyn Error>> {
-    let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
-    let input = json!({ "page": serde_json::to_value(page)?,
-                        "script": { "run": { "expression": "() => 1", "isFunction": true,
-                                             "arg": r#"{"v":"undefined"}"# } } });
-    Ok(pw.invoke(env, op, input).await)
-}
-
-/// An extension's page the script's page opened is a popup like any other to that page's
-/// script, though core's tab registry leaves internal pages out: the host's rules run on its
-/// tab, by the id the browser's own tab list gives it, before the script goes out.
-#[tokio::test]
-async fn tests_that_a_linked_page_core_leaves_out_is_checked_by_its_tab() -> TestResult {
-    let tab = ScriptedTab::new(LinkedPopup::new(ScriptedLink {
-        target: "extension-popup",
-        url: "chrome-extension://abcdefghijklmnop/popup.html",
-        tab: Some(11),
-    }));
-    let run = ScriptedRun::over(&tab).await?;
-    let value = evaluate_on(&run.playwright, &run.env, &run.page).await??;
-    assert_eq!(value, json!(1), "the script ran");
-    assert_eq!(
-        run.env.calls(),
-        [
-            test_env::EnvCall::Recheck,
-            test_env::EnvCall::RecheckReach(vec![TabId(11)]),
-            test_env::EnvCall::MarkSent
-        ],
-        "the host's rules ran on the popup's tab, then the op was marked sent"
-    );
-    Ok(())
-}
-
-/// A host that implements only what `OpEnv` requires, over a [`TestEnv`], so its
-/// `recheck_reach` is the trait's default.
-struct DefaultReach(TestEnv);
-
-impl OpEnv for DefaultReach {
-    fn view(&self) -> &BrowserView {
-        self.0.view()
-    }
-
-    fn run_state(&self) -> &Arc<RunState> {
-        self.0.run_state()
-    }
-
-    fn recheck(&self) -> Result<(), Refusal> {
-        self.0.recheck()
-    }
-
-    fn mark_sent(&self) {
-        self.0.mark_sent();
-    }
-
-    fn mark_sensitive_target(&self) {
-        self.0.mark_sensitive_target();
-    }
-
-    fn note(&self, line: String) {
-        self.0.note(line);
-    }
-}
-
-/// A tab of the group the browser lists no tab for, as one that closed since the sweep read
-/// the targets, is a tab the host's rules cannot be asked about. So the script is refused with
-/// nothing sent, as a host that checks no other tab refuses it.
-#[tokio::test]
-async fn tests_that_a_linked_target_with_no_tab_refuses_the_script_as_an_unchecked_tab_does()
--> TestResult {
-    let link = |tab| ScriptedLink {
-        target: "closing-popup",
-        url: "https://b.test/",
-        tab,
-    };
-    let tab = ScriptedTab::new(LinkedPopup::new(link(None)));
-    let run = ScriptedRun::over(&tab).await?;
-    let refused = evaluate_on(&run.playwright, &run.env, &run.page)
-        .await?
-        .err()
-        .ok_or("a tab the host cannot be asked about refuses the script")?;
-    assert_eq!(
-        tab.script().ran.load(Ordering::SeqCst),
-        0,
-        "the script never reached the page"
-    );
-    assert!(
-        !run.env.calls().contains(&test_env::EnvCall::MarkSent),
-        "nothing was marked sent: {:?}",
-        run.env.calls()
-    );
-    let named = ScriptedTab::new(LinkedPopup::new(link(Some(12))));
-    let ScriptedRun {
-        playwright,
-        env,
-        page,
-        ..
-    } = ScriptedRun::over(&named).await?;
-    let unchecked = evaluate_on(&playwright, &DefaultReach(env), &page)
-        .await?
-        .err()
-        .ok_or("a host that checks no other tab refuses the script")?;
-    assert_eq!(
-        (refused.owner(), refused.error_code(), refused.message()),
-        (
-            unchecked.owner(),
-            unchecked.error_code(),
-            unchecked.message()
-        ),
-        "the refusal a host that checks no other tab gives"
-    );
-    Ok(())
-}
-
-/// A popup of the scripted tab's own site, so every sweep of the page's site covers it too.
-const SAME_SITE_POPUP: ScriptedLink = ScriptedLink {
-    target: "same-site-popup",
-    url: "https://a.test/popup",
-    tab: Some(13),
-};
-
-/// A tab whose page has opened [`SAME_SITE_POPUP`] once the test arms it, and whose browser then
-/// answers `Browser.getVersion` only after the CDP client gave up on it. A tab's first page state
-/// waits on that read when an earlier one failed, as every one does here (the scripted reply
-/// names no user agent), so the popup's first sweep stalls in its page setup, before any frame
-/// of it is asked anything. The main frame's sweeps find `swept-alone` before the popup opened
-/// and `swept-beside-the-popup` after, and its main world answers a script with `1`.
-#[derive(Default)]
-struct PopupSetupStalls {
-    armed: AtomicBool,
-}
-
-impl TabScript for PopupSetupStalls {
-    fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
-        let value = if self.armed.load(Ordering::SeqCst) {
-            "swept-beside-the-popup"
-        } else {
-            "swept-alone"
-        };
-        ProbeAnswer::reply(json!({ "kind": "sweep", "values": [value] }))
-    }
-
-    fn linked(&self) -> Option<ScriptedLink> {
-        self.armed.load(Ordering::SeqCst).then_some(SAME_SITE_POPUP)
-    }
-
-    fn outlasts_client(&self, method: &str) -> bool {
-        method == "Browser.getVersion" && self.armed.load(Ordering::SeqCst)
-    }
-
-    fn main_world(&self, object: &str, _function: &str) -> Option<Result<Value, &'static str>> {
-        (object == SCRIPTED_DOCUMENT)
-            .then(|| Ok(json!({ "result": { "type": "string", "value": "1" } })))
-    }
-}
-
-/// A run on a [`PopupSetupStalls`] tab whose page state is set up, while the browser still
-/// answers, by one `page.evaluate`; then the popup opens and the browser stops answering.
-async fn beside_a_stalling_popup() -> Result<ScriptedRun, Box<dyn Error>> {
-    let tab = ScriptedTab::new(PopupSetupStalls::default());
-    let run = ScriptedRun::over(&tab).await?;
-    evaluate_on(&run.playwright, &run.env, &run.page).await??;
-    tab.script().armed.store(true, Ordering::SeqCst);
-    Ok(run)
-}
-
-/// A linked tab's page setup belongs to its sweep's try, and ends with it. The browser-side
-/// reads a popup's first page state waits on can stall, and no timeout of the op's runs around
-/// a guard's sweep. So an op with a timeout times out as upstream's would, at its own deadline
-/// and with nothing sent, and the value the page's main frame answered with in that try still
-/// reaches the host. An op without one tries again on fresh budgets for its untimed window, and
-/// then fails closed, rather than wait out the CDP client's own 60 s (M3R review F1).
-#[tokio::test(start_paused = true)]
-async fn tests_that_a_linked_tabs_page_setup_ends_with_its_try() -> TestResult {
-    let wait = json!({ "script": { "run": { "expression": "() => 1", "isFunction": true,
-                                            "arg": r#"{"v":"undefined"}"# } } });
-    let mut ended = Vec::new();
-    for (name, mut input) in [
-        ("page.waitForFunction", wait),
-        ("page.setContent", json!({ "html": "<p>hi</p>" })),
-    ] {
-        let run = beside_a_stalling_popup().await?;
-        let before = run.env.calls().len();
-        if let Some(fields) = input.as_object_mut() {
-            fields.insert("page".to_owned(), serde_json::to_value(&run.page)?);
-            fields.insert("call".to_owned(), json!({ "timeoutMs": 500 }));
-        }
-        let op = Op::from_name(name).ok_or("an op")?;
-        let started = Instant::now();
-        let error = run
-            .playwright
-            .invoke(&run.env, op, input)
-            .await
-            .err()
-            .ok_or(format!(
-                "{name}: the popup's setup stalled past the timeout"
-            ))?;
-        let took = started.elapsed();
-        let policed = run.env.calls().into_iter().skip(before).any(|call| {
-            matches!(
-                call,
-                test_env::EnvCall::Recheck
-                    | test_env::EnvCall::RecheckReach(_)
-                    | test_env::EnvCall::MarkSent
-            )
-        });
-        ended.push((
-            name,
-            took <= Duration::from_millis(500),
-            error.error_code(),
-            error
-                .message()
-                .starts_with(&format!("{name}: Timeout 500ms exceeded.")),
-            run.hooks
-                .swept()
-                .iter()
-                .any(|value| value == "swept-beside-the-popup"),
-            policed,
-        ));
-    }
-    assert_eq!(
-        ended,
-        [
-            (
-                "page.waitForFunction",
-                true,
-                Some(ErrorCode::WaitTimeout),
-                true,
-                true,
-                false
-            ),
-            (
-                "page.setContent",
-                true,
-                Some(ErrorCode::WaitTimeout),
-                true,
-                true,
-                false
-            ),
-        ],
-        "(op, ended by its deadline, code, upstream's timeout, the main frame's value reached \
-         the host, the host's rules ran for a send)"
-    );
-
-    let run = beside_a_stalling_popup().await?;
-    let started = Instant::now();
-    let refused = evaluate_on(&run.playwright, &run.env, &run.page)
-        .await?
-        .err()
-        .ok_or("a popup whose setup stalls on every try refuses the script")?;
-    let took = started.elapsed();
-    assert_eq!(
-        (refused.error_code(), refused.message()),
-        (
-            Some(ErrorCode::Unsupported),
-            "page.evaluate: a frame of the script's site did not answer Neo's privacy sweep \
-             within 1000ms, so the script was not run; try again once the frame responds"
-        ),
-    );
-    assert!(
-        took + FRAME_BUDGET > UNTIMED_RETRY && took <= UNTIMED_RETRY + Duration::from_millis(1),
-        "tried for the untimed window and no longer: {took:?}"
+        ["build", "build", "first poll", "settled"],
+        "the poller built again after the cut-off call, with nothing else sent to the probe"
     );
     Ok(())
 }

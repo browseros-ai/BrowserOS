@@ -239,6 +239,7 @@ fn test_methods(registry: &mut RegistryBuilder, gate: &Arc<Barrier>) -> Result<(
     registry.define(Fail)?;
     registry.define(SlowAnswer)?;
     registry.define(Hang)?;
+    registry.define(Abortable)?;
     registry.define(Pull)?;
     registry.define(Touch)?;
     registry.define(NewPage)
@@ -400,6 +401,32 @@ impl Method for Hang {
         op.recheck()?;
         op.mark_sent();
         future::pending().await
+    }
+}
+
+/// `test.abortable`: waits until the script aborts it (Playwright's `signal`), then fails as a
+/// Playwright op's timeout path reports an abort: code `aborted`, the reason as its message.
+struct Abortable;
+
+impl Method for Abortable {
+    type Input = Nothing;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("test.abortable", Effect::Read)
+    }
+
+    fn target(_input: &Nothing) -> Option<&PageTarget> {
+        None
+    }
+
+    async fn call(&self, op: &OpCtx<Self>, _input: Nothing) -> Result<Value, LeafError> {
+        op.aborted().await;
+        let reason = op.abort_reason().unwrap_or_default();
+        Err(LeafError::ambiguous(OperationError::script(
+            ErrorCode::ABORTED,
+            reason,
+        )))
     }
 }
 

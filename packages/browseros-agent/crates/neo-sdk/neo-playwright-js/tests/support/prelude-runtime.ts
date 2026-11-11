@@ -13,7 +13,15 @@
 import { readFileSync } from 'node:fs'
 import { createContext, runInContext } from 'node:vm'
 
-export type Call = { name: string; input: Record<string, unknown> }
+export type Call = {
+  name: string
+  input: Record<string, unknown>
+  /**
+   * For a call the script can abort (`signal`): the realm's key for it, and the reason once the
+   * bootstrap aborted it, as bridge.rs registers the key and answers `$neo.abort`.
+   */
+  abort?: { key: string; aborted: Promise<string> }
+}
 
 /** Internal host evidence accompanying a reply's page facts and payload. */
 type Observation = {
@@ -86,6 +94,8 @@ export type Runtime = {
   evaluate(code: string): unknown
   /** The ops named `name`, in order. */
   sent(name: string): Call[]
+  /** Every `$neo.abort` the bootstrap sent, which the bridge answers and never records. */
+  aborts: { key: string; reason: string }[]
 }
 
 export function loadPrelude(
@@ -113,6 +123,9 @@ export function loadPrelude(
 ): Runtime {
   const calls: Call[] = []
   const startCalls: Call[] = []
+  const aborts: { key: string; reason: string }[] = []
+  // Each abortable call's waiter, by the realm's key, as bridge.rs keeps its abort switches.
+  const abortable = new Map<string, (reason: string) => void>()
   let refusals = 0
   let observations = options.seed?.observed?.seq ?? 0
   let newestEventSeq = options.seed?.observed?.events ?? 0
@@ -128,7 +141,25 @@ export function loadPrelude(
     btoa,
     DOMException,
     __neo_invoke: async (name: string, inputJson: string): Promise<string> => {
-      const call: Call = { name, input: JSON.parse(inputJson) }
+      const input = JSON.parse(inputJson)
+      if (name === '$neo.abort') {
+        aborts.push(input)
+        abortable.get(input.key)?.(input.reason)
+        return JSON.stringify({ ok: null, pages: [] })
+      }
+      const call: Call =
+        input?.$neo === 'abortable'
+          ? {
+              name,
+              input: input.input,
+              abort: {
+                key: input.key,
+                aborted: new Promise((resolve) =>
+                  abortable.set(input.key, resolve),
+                ),
+              },
+            }
+          : { name, input }
       calls.push(call)
       const refused = refusalReply(
         name,
@@ -233,6 +264,7 @@ export function loadPrelude(
   return {
     calls,
     startCalls,
+    aborts,
     ready,
     run: async (code) => compile(code)(...(await provided)),
     settle: async (code) => {
