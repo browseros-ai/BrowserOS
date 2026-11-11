@@ -7,6 +7,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { corpus, sha256, source } from '../js/prepare.mjs'
+import { verifyCaseIds } from './case-ids.mjs'
+import { headfulInvert } from './options.mjs'
 import {
   flattenResults,
   isGeneratedSkip,
@@ -39,7 +41,12 @@ export function summarize(entries) {
   return counts
 }
 
-/** Collection locations identify callback bodies even when titles are computed in loops. */
+/**
+ * Collection locations identify callback bodies even when titles are computed in loops.
+ * Playwright 1.64 reports a plain `it(`/`test(` call at its opening parenthesis, where V8 places
+ * the call; later releases report the start of the call. Each body is keyed under both, so the
+ * manifest matches whichever release the corpus pins.
+ */
 function testBodies(text, file) {
   const ts = createRequire(path.join(source, 'package.json'))('typescript')
   const ast = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
@@ -55,11 +62,14 @@ function testBodies(text, file) {
         (arg) => ts.isArrowFunction(arg) || ts.isFunctionExpression(arg),
       )
       if (callback) {
-        const position = ast.getLineAndCharacterOfPosition(node.getStart(ast))
-        bodies.set(`${position.line + 1}:${position.character + 1}`, {
+        const body = {
           start: callback.body.getStart(ast),
           end: callback.body.end,
-        })
+        }
+        for (const offset of [node.getStart(ast), node.expression.end]) {
+          const position = ast.getLineAndCharacterOfPosition(offset)
+          bodies.set(`${position.line + 1}:${position.character + 1}`, body)
+        }
       }
     }
     ts.forEachChild(node, visit)
@@ -228,7 +238,7 @@ export function collectCases(root, configPath, output) {
       '--list',
       '--reporter=json',
       '--grep-invert',
-      '\\bheadful\\.spec\\.ts\\b(?!.*\\bHE-012\\b)',
+      headfulInvert,
     ],
     {
       cwd: root,
@@ -258,6 +268,9 @@ export function collectCases(root, configPath, output) {
 
 export function prepareCuration(root, configPath, output, enabled = true) {
   const cases = collectCases(root, configPath, output)
+  // Every run materializes through here, curated or not: the ID map must name exactly the
+  // collected corpus before curation, scope or reports read an ID.
+  verifyCaseIds(cases, corpus.revision)
   if (!enabled)
     return {
       enabled: false,

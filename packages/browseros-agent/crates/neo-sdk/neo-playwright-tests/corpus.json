@@ -1,979 +1,979 @@
 {
-  "revision": "26137face0500cacddf90c767dc1364da7262559",
-  "version": "1.66.0-next",
+  "revision": "cfe490d941f992655948eee8fd4fd94e1c4234bf",
+  "version": "1.64.1",
   "suites": [
     {
       "file": "tests/page/elementhandle-bounding-box.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "39818703f0870a6710928af897ec5e21dd9c17167883d29ea2fc654dca0a6164",
+      "sha256": "2e2adce9a4637e58b06d7de2c7bda1ee05d108be94d058f52bdfb43f1410bfec",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-click.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "397b89a9c33d0c09c124051a3adc67a873fddfaa0d8c62d2b5e59443ad89a1cf",
+      "sha256": "e74bc0bc18b3ae38c7be925591c95df8b060607e5383953166dd34c139f7ca72",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-content-frame.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "097233095c201fd7dc27c5a2260164d71bb09106c25e000f8f81270735810848",
+      "sha256": "6f59cafcbeee545dcd951f002a65f796376440cd89e10ff355681a67399519c7",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-convenience.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "df363c7472349abb987c93dffcaf15c48e2a4310061e54109af9f463b8eb60c8",
+      "sha256": "de695b8a38bbb63f34422aa844a67354fd569895aea67e848423c06c5bdc499a",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-eval-on-selector.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "ee1051c90f6e2e89860ac3d7e4882965e0428865d42cbd472c9c9edb91669fb7",
+      "sha256": "89040624e2fe7f7012f4b7ffc0e812294da6e40d054af2532ad42318e749e7d1",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-misc.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "661b343ad803585bc2c8c8df4b448fdcf0ba932e7b14fd9b6c3f4b56b3651113",
+      "sha256": "97e6f737ebe87b46ddd160ab39e445f70a57c3ce6ed6ac91862bbaf50919676b",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-owner-frame.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "6e7d009b83d71b5401ae315968e5941d645603e4a3c6259b23a8022b482f0f1a",
+      "sha256": "7f4159250aa804f70fc01b89702f5418c05c597978b8a0ef34e6a48174fa6b59",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-press.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "3ddfb5815093d5473d8125410c67f7530f0fe0ca13252e38df672ea6973982b1",
+      "sha256": "bc8d704854754bcbf82be56d4f977d226c70fb67151414223a8c1f6b7be121f6",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-query-selector.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "406af0758e8dc24ea4bd3039349ee7cd75e9f9ab0077292fc77cfcc74b255749",
+      "sha256": "5157e9d8d18932413966d624e4938abc644ea670b2681fc0be799303b6f1a683",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-screenshot.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "9bfb9b681b46e1a7c2f9a7d4daff0730ea13ec044d8dd84d84781d8703e16472",
+      "sha256": "d1852f48a6ed2a593ce96f602ca0f78683181f6969c05fe6e91545578af891ba",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-scroll-into-view.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "0f36382fc9d7da3dd7bdf0f6c5aa28da0dcc275ca665aaa1ecb49304fc880f20",
+      "sha256": "d7fe05764345295859d64dfb9f1b3152f63c591530176eabd6acd3fba420347a",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-select-text.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "ab11e2bf17c3db69c6b1e1b5017a5f8e4cf2ba0bed0b94213eb9f006d3f7d7ee",
+      "sha256": "e7fdf05f1b1ec50c5063a82df2deaa9407e5e439504e68758a98c9ea8a6f7e7a",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-type.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "f6630b2eac63ac1d96ef49f9b2a61eb6152197efba4e16935a5d51c228e482e0",
+      "sha256": "9012bef5ff67625d636c163c5bf17c551aef7cc7270b0b9ef3d2f395e50fd820",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/elementhandle-wait-for-element-state.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "ae5eea37d3e58cbf3b8891c2da0b13ea7adc6318a84a26fa96c2f7c81f8ae7c0",
+      "sha256": "33032143989d8394aa314d43d50a0ff62f02b438c93e089b4e54304191c1d687",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/eval-on-selector-all.spec.ts",
       "include": true,
       "reason": "Full suite; measures page and selector evaluation. Missing APIs remain unsupported.",
-      "sha256": "6e1b9ad4aa77b32355ea4bb260a19715b29e8912395e52c673e208a878b768f2",
+      "sha256": "a8e52ce058ff4f0a0b48e72f1fb5c3c78c8fd4db4375ef6d1e01e9caa44ecc91",
       "feature": "evaluate"
     },
     {
       "file": "tests/page/eval-on-selector.spec.ts",
       "include": true,
       "reason": "Full suite; measures page and selector evaluation. Missing APIs remain unsupported.",
-      "sha256": "5a8cc9584c86ff8d161384249566f9d71f279f9a634dc9ab44713b01851285c5",
+      "sha256": "5d1e550c51893bdba3af4de3331b6a81d9de3bc7fe829d35a43d84c2238162c4",
       "feature": "evaluate"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "4cbf161a6a0bbb540be8c628391e5b48b7ac7b37aed7b542420ee62494335e61",
+      "sha256": "bc1d5c0e088a1fbebcfce45215427209fee36a8a678aa5d3656a02c38dac5d7d",
       "feature": "assertions"
     },
     {
       "file": "tests/page/expect-builtins.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "ccd28fb692a71a49cf258813de3345fc2a860442a4b59add8341796ac032a1b2",
+      "sha256": "150bac8fe5b50c95ffa7f0ed27db40330497544c0ed945a12322229a8139dc40",
       "feature": "assertions"
     },
     {
       "file": "tests/page/expect-matcher-result.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "d36b028b2e8e69bff25dc201e1c1626714ccb9ae754865089c842eb01642b125",
+      "sha256": "fb98baf7e91019d441a486bd1434f3f57d3d217273784197823cacd091a46e5e",
       "feature": "assertions"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "c05eee8cab5c94fd49ef8ad3f36ee1cba76029cefb9ab62034b1a1e0deb31947",
+      "sha256": "5a283fbf8e97d8d16ab4de824e7fd21b57161c9afb709c5bb87bb5f6d2182271",
       "feature": "assertions"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "7e6e622e3bc00fa44914a269304f25aa73477d2c3ee05092f730efe12d6d7197",
+      "sha256": "d32c2a6a217e612403d4bf4fd53b1b96f83a1386d2f5697a86639970809af8b4",
       "feature": "assertions"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "5ccdad5cffb207f13ce6958b880ea3c0eb07081d7a9bb93a15d6fd02c3c05dbe",
+      "sha256": "09d8f064da53ccc5ac73a1c9c29cf9e2bddd37952341113c5c949efe186d7d7e",
       "feature": "assertions"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "b1c6aafeb2145834757d2192ffd1ca7134e3193ffa25d3dd074f4cc06c76a4ab",
+      "sha256": "2aacad31f66e9443b9e136939f2b22c046e020cb9e56d1b9c29d5605558c4b86",
       "feature": "assertions"
     },
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "c59d93017526eeb6c40e33fd8f105bf8ce58dfab4afdfd214e2f31a7d6893571",
+      "sha256": "6bd30addf5488dfc3613fcd49192e0f43c0a875b9a5c23c939f8004842554576",
       "feature": "assertions"
     },
     {
       "file": "tests/page/expect-with-snapshot.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "a0b4afc7cbbe35428f9f94d1dbc6d76f36fcbbe1349f4b37996723059d934b95",
+      "sha256": "37418b5bed1efd92e293e4da63bba57d99499025f98d08a7b395e8eb6f7333a9",
       "feature": "assertions"
     },
     {
       "file": "tests/page/firefox-network-response.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "a8d34a366a2571ae3869849b9c6b5f6bbb141ec87b5de5743ae50473bfff8a98",
+      "sha256": "6643216eeaddfa7e7cad78b0c15e05213c35e4312f138f5c73b288c0dd25f9f9",
       "feature": "network"
     },
     {
       "file": "tests/page/frame-evaluate.spec.ts",
       "include": true,
       "reason": "Full suite; measures frame identity and lifecycle. Missing APIs remain unsupported.",
-      "sha256": "2002e4cea0149055bbcc52f3479d7fd47af4275f951e7324964ca73b401d6fda",
+      "sha256": "7e76e5b1209946727a17b248f71ca12d41c1b95110091a1568712e7ab48724ba",
       "feature": "frames"
     },
     {
       "file": "tests/page/frame-frame-element.spec.ts",
       "include": true,
       "reason": "Full suite; measures frame identity and lifecycle. Missing APIs remain unsupported.",
-      "sha256": "a8677c62203aaf191ac3396f3f7d1fed409f1dc803d9c967941b8c30b8ac1170",
+      "sha256": "293a4dbe8c6f5468faabe02ce6e9d4f5a1c7862377eb5208c5080277b3fa444c",
       "feature": "frames"
     },
     {
       "file": "tests/page/frame-goto.spec.ts",
       "include": true,
       "reason": "Full suite; measures navigation and history. Missing APIs remain unsupported.",
-      "sha256": "cea56e5b0965242c47ba3b7d03d48f7da3b797688583f14ef2d80bf020e588b7",
+      "sha256": "3b1fc2e0b7d456124de033bb8c646a4b6950cb3d27bbe4d6748ac4015925e91a",
       "feature": "navigation"
     },
     {
       "file": "tests/page/frame-hierarchy.spec.ts",
       "include": true,
       "reason": "Full suite; measures frame identity and lifecycle. Missing APIs remain unsupported.",
-      "sha256": "64a42da47ccf36922f1c782976c0d41980a553b0382cc8802b4e460b0eea6609",
+      "sha256": "3bd104830e4cb8f17ed674b5818141b26101d0a2b09be793de974b416f726a7f",
       "feature": "frames"
     },
     {
       "file": "tests/page/interception.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "87dcde217b7362dad536d22c91dc188bd84196fb8c4c712e13120a2cfebc39d2",
+      "sha256": "4fbe1282e3320259626a1c3e666d002f5bbf916146657d1ce6ed2585a5a429c0",
       "feature": "network"
     },
     {
       "file": "tests/page/jshandle-as-element.spec.ts",
       "include": true,
       "reason": "Full suite; measures JSHandle values and operations. Missing APIs remain unsupported.",
-      "sha256": "3c973b6a4ea7e24a28cae33914ea75ed4caffeebaa82f08e5bd79aae2409dcfe",
+      "sha256": "51bf128741fbcca63bfdf6aed632646f3afe979e9408ffbc713a7d00f3ea714a",
       "feature": "jshandle"
     },
     {
       "file": "tests/page/jshandle-evaluate.spec.ts",
       "include": true,
       "reason": "Full suite; measures JSHandle values and operations. Missing APIs remain unsupported.",
-      "sha256": "26295d7b3d49a4b2b844b8b382e27eac55653e6ed93b2b378b8a575a0366ed8e",
+      "sha256": "00cfaa1f000b8b47408511334fce8537ec9488c68f1dec8ed07ef9555c392e12",
       "feature": "jshandle"
     },
     {
       "file": "tests/page/jshandle-json-value.spec.ts",
       "include": true,
       "reason": "Full suite; measures JSHandle values and operations. Missing APIs remain unsupported.",
-      "sha256": "440a43289728ff01d4492d462b7ec6a62e4136266baf60966035a3e03c22540d",
+      "sha256": "2198a73db9b48877f23bc1bb8e60ef5c724ff4d06516394078a5658cd961eae6",
       "feature": "jshandle"
     },
     {
       "file": "tests/page/jshandle-properties.spec.ts",
       "include": true,
       "reason": "Full suite; measures JSHandle values and operations. Missing APIs remain unsupported.",
-      "sha256": "feeb1220b6467b738f9be60fe0a99973a45ce3004494e9550ba73c033375fa43",
+      "sha256": "c3cb609d87a7b6be03883bbbb0e25fc0aa023ac8c1cd62b399cb60db7ecb3662",
       "feature": "jshandle"
     },
     {
       "file": "tests/page/jshandle-to-string.spec.ts",
       "include": true,
       "reason": "Full suite; measures JSHandle values and operations. Missing APIs remain unsupported.",
-      "sha256": "d09ca3ea29c76e73701170962d34b87205618333f6a4d8c75e7245fe61149ace",
+      "sha256": "72bb3785ef5ab86143352bad94acffe726ab800a2d0a864b67088675bcd60493",
       "feature": "jshandle"
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "3dd3440b78a9563bac7110128740d1630dcd63c5830a72d3e535021f76ba6e5a",
+      "sha256": "5da1ada9714c3a2d8ca6086a4d43ab6f7390dedb698731c36d2e0c7fe45cc56d",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-click.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "917c2b33ac776412ee7f992953704302d04ccc4305bbd0ced38bae97b107122b",
+      "sha256": "05d41f4c279d1cc82b16c300e42f1114037938cb8f5598b5d4c8e4f5997f7480",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-convenience.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "7ceccb2d0c223a233daf7135333d3765b3494e833bdb61474e23337e200a156d",
+      "sha256": "9c63a184b0eb678bb5bf794ee8509802aa278545f2eb67d33f17bc8cd04f2e9f",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-element-handle.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "5812861a32aebbbc1e073c2bb94558e7b716d7e3cd0f59a04e3d77c23517bf6b",
+      "sha256": "346138c6b499a22327bc6aaf27bb3621b5a6071cd54ef1018cf4b11cf186fef6",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-evaluate.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "b234ee721b0e818b710932633deff9183facf13254d8ed2ad84aaecd73998dc8",
+      "sha256": "350fbb548abe44e4b3e1d6db37d4a8af4a246e1306416843b4b1ce29c775baeb",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-frame.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "d10cb1fe40bcc20e55335ec2ba7191e4c29449258ec003f0a9224098ec7a1eca",
+      "sha256": "36199a54e88a4e7ddfad72990880dabcea0422fc3b4b6dfd502f301195c0bb3d",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-highlight.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "2ce519bf04b0e7e03a3bd4ab40f0e8a6ed95d067db24b9e9ab15801ac504c16a",
+      "sha256": "a380b7b2159b4510055e9fcbb6d739838f47fb40eac0b1615d754a882864b6bc",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-is-visible.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "b2d3ae5a66e7ecce65731aa192f2362adb0dda6204e589682f6ccd8668bd4aa6",
+      "sha256": "4f87d8f56747ae64c73e7e5c3707c3ec2ad156d0c1212f51ae78d54d83bddff1",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-list.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "39246c2d7d62967a06bed3c37760357c41644cede9dd5a9914b9b8b3301edde8",
+      "sha256": "ce2bbfd6ff208d0278734093abec050082ff6cabd25b51ee8133d4990698aa07",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-misc-1.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "5edd49b661e963e70e46b0b6f4e5c6c1aeca4ff5622673f5a74ffb7d58372644",
+      "sha256": "c7130315548471dd1a1fa2c137f36819fda747f0f5f55a14ad995cda2a47bd1b",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-misc-2.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "df7dc6cf4821d5ae9d983d77917c03d8bc448c03419c497e3a4e1c3662c5f792",
+      "sha256": "728f08052d35612569dec38f57349342157566184a267e589978764f705f0349",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-query.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "1e77a879eb321986694109dd6beff325643c8f920b0cc44aaa508c05a3be1429",
+      "sha256": "e8bd60660806394765245999f7e2de5b707703548e54926ef09e572e6010feca",
       "feature": "locators"
     },
     {
       "file": "tests/page/locator-wait-for-function.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "937159c5204960b7a64560e8463b5391e0f7cd17bd5739a45b28cb4b0cfea095",
+      "sha256": "a9867b485d5db606ead982aa45a8332920b1aab0edd09630de9ff431b52869dc",
       "feature": "locators"
     },
     {
       "file": "tests/page/matchers.misc.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "0ba9ba1e04a753d94b8ba434b2fcb190533ffcc6ad72939587b33612baa17506",
+      "sha256": "8a10c737459db5ba72e1f23b58fe1e1c40937912249f65d5bdf2379dc52fb8dc",
       "feature": "assertions"
     },
     {
       "file": "tests/page/network-post-data.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "47e0379a9abeebfbf4865fc1f01b315477a077b895a144dec6ce48f683c20542",
+      "sha256": "d59d9947f1231cdaf2114f7032853cf777991ab18aeab840bb2115d821b46bcd",
       "feature": "network"
     },
     {
       "file": "tests/page/page-add-init-script-callback.spec.ts",
       "include": true,
       "reason": "Full suite; measures script, style and init-script injection. Missing APIs remain unsupported.",
-      "sha256": "e4f6d330ccfd197d9eec5b967053503419318cbae6deb96ec231abccd2e3e024",
+      "sha256": "ff1030d9fcd08a63b3a2ca15555aca93c8855279efd4665865572c6dc616ec57",
       "feature": "scripts"
     },
     {
       "file": "tests/page/page-add-init-script.spec.ts",
       "include": true,
       "reason": "Full suite; measures script, style and init-script injection. Missing APIs remain unsupported.",
-      "sha256": "d2f6b861a68fbe8083d21f5ccf93b411ee4b65e44616c8081571347c065ecc0d",
+      "sha256": "5c1be9c24eabcb346809c17c9e7c16439789b070a68eb8c70956dfa78a477eb9",
       "feature": "scripts"
     },
     {
       "file": "tests/page/page-add-locator-handler.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "2a7d55287ed5662e21ada2d4a6bd717bb3dbfdada373c4168936b510b9da3c52",
+      "sha256": "457eca90fe4afdcbc822789f31a1d982c5f454de11ba9a1e945eec93c50e6230",
       "feature": "locators"
     },
     {
       "file": "tests/page/page-add-script-tag.spec.ts",
       "include": true,
       "reason": "Full suite; measures script, style and init-script injection. Missing APIs remain unsupported.",
-      "sha256": "2c91d8f7d92476e600f005df7aa1b1fb720b5e3229223e77312e4e5b4507aad9",
+      "sha256": "091b4b20f1d691ae6d4d1375d1aa5a0a5e3702726fa2d2b81e5ffff7f4555478",
       "feature": "scripts"
     },
     {
       "file": "tests/page/page-add-style-tag.spec.ts",
       "include": true,
       "reason": "Full suite; measures script, style and init-script injection. Missing APIs remain unsupported.",
-      "sha256": "d8e35d32ce1d701df646fa49720c3019d1f8d996f28b7323a31662e144f29ac6",
+      "sha256": "0c1adbaa91526ddbdae473e96620489dff1046f4763b63474802aa97432d3b4c",
       "feature": "scripts"
     },
     {
       "file": "tests/page/page-aria-snapshot-ai.spec.ts",
       "include": true,
       "reason": "Full suite; measures ARIA snapshots. Missing APIs remain unsupported.",
-      "sha256": "f0125995d644ba4276f43686a8b6cd79b631d96a4c2bdf15c3cea4f1366ca2ff",
+      "sha256": "caec56ff7680528118bcaa4e57b868a2550fa9177509dd4c5794c91b2796c337",
       "feature": "snapshots"
     },
     {
       "file": "tests/page/page-aria-snapshot-json.spec.ts",
       "include": true,
       "reason": "Full suite; measures ARIA snapshots. Missing APIs remain unsupported.",
-      "sha256": "968d92bc3b00c5428bc233b0529756a091aa32a911ccdee92f06a076357f988d",
+      "sha256": "c2da26b18e5c9b29e67d7c1941ccc5cb38b73ec73882b855be564616884cbb09",
       "feature": "snapshots"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "include": true,
       "reason": "Full suite; measures ARIA snapshots. Missing APIs remain unsupported.",
-      "sha256": "cf1689bf5194e55a0077c5bf00cc34f6f43ee029a307b6998c63a8ab2b29d77b",
+      "sha256": "39e03a793a112df85fe87a29461d6fb306a36b037b8ca233abe61b5f89770cb5",
       "feature": "snapshots"
     },
     {
       "file": "tests/page/page-autowaiting-basic.spec.ts",
       "include": true,
       "reason": "Full suite; measures click actions and auto-waiting. Missing APIs remain unsupported.",
-      "sha256": "29d7850933b34a505421a5116cf4b5ffc348cde5331125fbdec774110e4e39f5",
+      "sha256": "b651112b58a0445ce58902cb50c8fc3e56a3da2cd8fb803d048a7433cefc0004",
       "feature": "click"
     },
     {
       "file": "tests/page/page-autowaiting-no-hang.spec.ts",
       "include": true,
       "reason": "Full suite; measures click actions and auto-waiting. Missing APIs remain unsupported.",
-      "sha256": "cd5fd9af5e56d3b7914db5197a8a05247def0a5f6d3a3d7cab9de504106d5f3b",
+      "sha256": "88f1bca63bb3176a9325cb3dcd7a95a45f019c6246455334cbbc65e3380c4cb4",
       "feature": "click"
     },
     {
       "file": "tests/page/page-basic.spec.ts",
       "include": true,
       "reason": "Full suite; measures page reads, tab behavior and key presses. Missing APIs remain unsupported.",
-      "sha256": "3497beb44b0bf5f5918e69313363f35b614fb2390a357700b0eaa27704cf476e",
+      "sha256": "e9773aacf91a00c79c838cd8c8c9cf3edb05355c5ba035cbeb05a2db29fd931c",
       "feature": "reads_tabs_press"
     },
     {
       "file": "tests/page/page-cache-storage.spec.ts",
       "include": true,
       "reason": "Full suite; measures page storage behavior. Missing APIs remain unsupported.",
-      "sha256": "981b5b2bc9c961187c266f93b74e39a60f4628fa3e0e53d12b1a1c616c4ec3a8",
+      "sha256": "b0845529f1f8cd3d569d1129246f7bf4196174785773a47a36fe61602166744b",
       "feature": "storage"
     },
     {
       "file": "tests/page/page-check.spec.ts",
       "include": true,
       "reason": "Full suite; measures checkbox and radio actions. Missing APIs remain unsupported.",
-      "sha256": "0a570d92a3927ffc266d17619306c8d8824bcb8691d6e088e7a1ada4b94067b3",
+      "sha256": "2a828962b0beb2587db4de12477135a5c4519a959e3b3b8e425b54210837a9cb",
       "feature": "check"
     },
     {
       "file": "tests/page/page-click-during-navigation.spec.ts",
       "include": true,
       "reason": "Full suite; measures click actions and auto-waiting. Missing APIs remain unsupported.",
-      "sha256": "c76101d23f9e5e948928e85f383f361832f9397eb63a110e59bdc436a1efeef1",
+      "sha256": "3768c12993a1ecda25ea40bf907885e422a0b0ce62358cbba3d15d042457170d",
       "feature": "click"
     },
     {
       "file": "tests/page/page-click-react.spec.ts",
       "include": true,
       "reason": "Full suite; measures click actions and auto-waiting. Missing APIs remain unsupported.",
-      "sha256": "da73621387c020c822ed384a124fa203c86f8081a73c0f2354604a314d70ef44",
+      "sha256": "cae1e437c1cb068a3f8b85c3ef1711347305888024236f1d9fe906cdf693087d",
       "feature": "click"
     },
     {
       "file": "tests/page/page-click-scroll.spec.ts",
       "include": true,
       "reason": "Full suite; measures click actions and auto-waiting. Missing APIs remain unsupported.",
-      "sha256": "f8b9600c26b51d6f0461404aa9be90d54f5e1af87d12e5cfb9dbd8f8f511c9e0",
+      "sha256": "c502cf8f33a84f11741d180cf0627a7f7c100e2b29478087add5bf984e2a148d",
       "feature": "click"
     },
     {
       "file": "tests/page/page-click-timeout-1.spec.ts",
       "include": true,
       "reason": "Full suite; measures click actions and auto-waiting. Missing APIs remain unsupported.",
-      "sha256": "a98eda5bb490d5f9a6bf563284f5e66c536e74387296b8df59aeb06d44000c6e",
+      "sha256": "1904e7211f33279fe0d7a711f014f723c902232ef441103d8426631412207c04",
       "feature": "click"
     },
     {
       "file": "tests/page/page-click-timeout-2.spec.ts",
       "include": true,
       "reason": "Full suite; measures click actions and auto-waiting. Missing APIs remain unsupported.",
-      "sha256": "bd87ca86dfc9a37805395c40c5c06c2ab436b5c73566bb2330e3083e17e34aa0",
+      "sha256": "b8e5c51191a008f45bc224c510c99f28de6b1969af37c8de521e9f63b1cbe6f9",
       "feature": "click"
     },
     {
       "file": "tests/page/page-click-timeout-3.spec.ts",
       "include": true,
       "reason": "Full suite; measures click actions and auto-waiting. Missing APIs remain unsupported.",
-      "sha256": "ff98bad1d3cba3221424371f32e8741589d3f57f78ee62d7bd06453ff9eb0c1c",
+      "sha256": "aeb71ad7176dd1f22d59e70203d91bc5f3fbe47be9df1b91ea36f5695549dfc5",
       "feature": "click"
     },
     {
       "file": "tests/page/page-click-timeout-4.spec.ts",
       "include": true,
       "reason": "Full suite; measures click actions and auto-waiting. Missing APIs remain unsupported.",
-      "sha256": "00915d99f9da6a4cb9500286f5a0b91bfb13a9cc63310cc827d360f0bb24c8e7",
+      "sha256": "382199def9caf2b751bb7e2fb3d3d408adf5c9976c049feb7d2433caff83282f",
       "feature": "click"
     },
     {
       "file": "tests/page/page-click.spec.ts",
       "include": true,
       "reason": "Full suite; measures click actions and auto-waiting. Missing APIs remain unsupported.",
-      "sha256": "ceb837481e6e5c96b6ddf2b38a78255647366e9e7f332ffa145dceee41e4c577",
+      "sha256": "08757bbaf71a7cdd154c863f24ea427bc8f9642886d11c21efd8f0372e4b7ef9",
       "feature": "click"
     },
     {
       "file": "tests/page/page-dialog.spec.ts",
       "include": true,
       "reason": "Full suite; measures page events and listeners. Missing APIs remain unsupported.",
-      "sha256": "51e2fec65bc69284bb2e5eb4de133de73b0e22055077ee25bb3fdf3705e6d2a1",
+      "sha256": "9821dc0792a526c541a8b181f78635bb030a5b9328bed27ddefd1eec7a343033",
       "feature": "events"
     },
     {
       "file": "tests/page/page-dispatchevent.spec.ts",
       "include": true,
       "reason": "Full suite; measures page events and listeners. Missing APIs remain unsupported.",
-      "sha256": "b820ac4633168235aad33310799b049cc6d2cf6267f5ca9d775b4c92045fca77",
+      "sha256": "0af6f0562a67f391939881030426b6c0c4c0b4d77ba7d88bd64160b75231e36e",
       "feature": "events"
     },
     {
       "file": "tests/page/page-drag.spec.ts",
       "include": true,
       "reason": "Full suite; measures drag and drop input. Missing APIs remain unsupported.",
-      "sha256": "6d0aefd78c0e964970d1fe0303137d190cef313361147960a15722232db79864",
+      "sha256": "88844b26c797347f52ea2dc4182e6d17d82ed8c3824206313ee0da1993318f84",
       "feature": "drag"
     },
     {
       "file": "tests/page/page-drop.spec.ts",
       "include": true,
       "reason": "Full suite; measures drag and drop input. Missing APIs remain unsupported.",
-      "sha256": "c655323347208c90b0507b100c7fa5fc0a629deff0b89c6799fc47a26d27c6fd",
+      "sha256": "4caaf0ca124274275cdf596e50867dc786117f2ee896457a76478f597ee21482",
       "feature": "drag"
     },
     {
       "file": "tests/page/page-emulate-media.spec.ts",
       "include": true,
       "reason": "Full suite; measures media emulation. Missing APIs remain unsupported.",
-      "sha256": "0e6d4c4f4beb3270d675daa1025eb3506be425b84f5294934882c3d1800966cb",
+      "sha256": "f19edd7371f2eae6a562f93ae46efad27b77dda025b318bb8e1e3ec90a79538c",
       "feature": "media"
     },
     {
       "file": "tests/page/page-evaluate-callback.spec.ts",
       "include": true,
       "reason": "Full suite; measures page and selector evaluation. Missing APIs remain unsupported.",
-      "sha256": "be17e4d207a4376c4a72511b6f6b4ebb841206a00caca227281d0ccf68546bc3",
+      "sha256": "526e8482d351afa41797b6f7bf3e978f0264bb197ef1941ef6e703e11a9244a5",
       "feature": "evaluate"
     },
     {
       "file": "tests/page/page-evaluate-handle.spec.ts",
       "include": true,
       "reason": "Full suite; measures page and selector evaluation. Missing APIs remain unsupported.",
-      "sha256": "f037987c712ece502744867361e2c08f51f6a7d487bd10bcfcc8f0057580c4f2",
+      "sha256": "a23e75ded3e5b4d743408fe57abc78f2ca3d60fa6f9d14ce987b26a196f034be",
       "feature": "evaluate"
     },
     {
       "file": "tests/page/page-evaluate-no-stall.spec.ts",
       "include": true,
       "reason": "Full suite; measures page and selector evaluation. Missing APIs remain unsupported.",
-      "sha256": "bcdaae7d3c0ce676283d6cec5825187a6810d26a61f9bafbb44682c7e32e53ca",
+      "sha256": "1ff4fad28308e9bb80806657af0abf0a5ea7394cc7144fc29ad7c1ecbc5bc47f",
       "feature": "evaluate"
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "include": true,
       "reason": "Full suite; measures page and selector evaluation. Missing APIs remain unsupported.",
-      "sha256": "0d39b5fe6fa3b2d173125927d74cc2a6d5faad2ff6bcd4b0d38eee090f1abc94",
+      "sha256": "0da89878809bbd3b40d7fb9d7e44e707c2b3a52468c1b85f9fcc052c02485814",
       "feature": "evaluate"
     },
     {
       "file": "tests/page/page-event-console.spec.ts",
       "include": true,
       "reason": "Full suite; measures page events and listeners. Missing APIs remain unsupported.",
-      "sha256": "af46689de20235b0ead3f138b3138d9fe169ff0066cce5e67ff688a0919258b3",
+      "sha256": "38bc5a42d6f89e9b06e065ee529927065813a4c20a75f80ae31ce7c78db24b7d",
       "feature": "events"
     },
     {
       "file": "tests/page/page-event-load.spec.ts",
       "include": true,
       "reason": "Full suite; measures page events and listeners. Missing APIs remain unsupported.",
-      "sha256": "86b2515353302696ade1fc183f6cc9ba77f2721933e014f46e42770590ae096a",
+      "sha256": "3e3cd76ed859eca1bccd920b38bcb954c6dcc8985a6d38a3f960d67c7d7aea86",
       "feature": "events"
     },
     {
       "file": "tests/page/page-event-network.spec.ts",
       "include": true,
       "reason": "Full suite; measures page events and listeners. Missing APIs remain unsupported.",
-      "sha256": "f48d1c9b90945050232e3d07bdf334a1c017130a357966be133b6696cb3103a8",
+      "sha256": "ec571c0479a27d1a0cc302035b25d97415b054c306b7f368cdae0ae16aa91c08",
       "feature": "events"
     },
     {
       "file": "tests/page/page-event-pageerror.spec.ts",
       "include": true,
       "reason": "Full suite; measures page events and listeners. Missing APIs remain unsupported.",
-      "sha256": "b0192d07e5760470ff30e3601446eaef9eca751b8aec1ef590df27e4145dd8f5",
+      "sha256": "4b2168208fc753c14bf515b792ab98c7d6274fec316e30ece391c99b014afa45",
       "feature": "events"
     },
     {
       "file": "tests/page/page-event-popup.spec.ts",
       "include": true,
       "reason": "Full suite; measures page events and listeners. Missing APIs remain unsupported.",
-      "sha256": "15a3c4b811b987dbf79ac25f0c09ceddaa57807fc1e370649e41009ae3a61428",
+      "sha256": "d56e660170a6a01c99729b2cb81ef9aee96a2f339c502ea4dcefbe3478088ee5",
       "feature": "events"
     },
     {
       "file": "tests/page/page-event-request.spec.ts",
       "include": true,
       "reason": "Full suite; measures page events and listeners. Missing APIs remain unsupported.",
-      "sha256": "490aeb2642e3fd7f9074280e09627bedf200c42886a7459580724bc154ab2978",
+      "sha256": "7eed7ce9f63fca0528314169045a857202a94e5cb257c46bb894a18c0309ddaa",
       "feature": "events"
     },
     {
       "file": "tests/page/page-expose-function.spec.ts",
       "include": true,
       "reason": "Full suite; measures page events and listeners. Missing APIs remain unsupported.",
-      "sha256": "019fd590b8d849648fceb02b16545e262d935b759afd597b70904753d371d9cf",
+      "sha256": "a7905ced0fd8f39e9c0b80fcdf0e78539310fc9b8bb9e0d6a5c5ca2091d2524f",
       "feature": "events"
     },
     {
       "file": "tests/page/page-filechooser.spec.ts",
       "include": true,
       "reason": "Full suite; measures file chooser and upload behavior. Missing APIs remain unsupported.",
-      "sha256": "29962bdc2b827b65d0ad7d976293cf1f4b18bea28ae54512e0601a62870b24a1",
+      "sha256": "631962849f23aaff9527dc213a5cc3458ba64358bd8444c8b56ff6dac0b23329",
       "feature": "files"
     },
     {
       "file": "tests/page/page-fill.spec.ts",
       "include": true,
       "reason": "Full suite; measures fill and clear actions. Missing APIs remain unsupported.",
-      "sha256": "26fccf811e0881248fa7c8f3bad7d0c5312befbb86d18560b8b056dac4316e5a",
+      "sha256": "85dcabd116d5570ac20119f7a259c7c3e749795652a323f1015320bfbb1f6eb0",
       "feature": "fill"
     },
     {
       "file": "tests/page/page-focus.spec.ts",
       "include": true,
       "reason": "Full suite; measures focus and blur behavior. Missing APIs remain unsupported.",
-      "sha256": "fd2c6cda7e3973806fa5eced9c1547f589c19c540db8eb518f0d70e0ae9c4807",
+      "sha256": "35643f7786c7565d73ebdbe637b8c79d2b32aedab119208d1fccffd6e5916a04",
       "feature": "focus"
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "include": true,
       "reason": "Full suite; measures navigation and history. Missing APIs remain unsupported.",
-      "sha256": "e29628f1be11e326254443b5baaecfeefd0fb300da3d00a0bda1cd62cee9ec8b",
+      "sha256": "6b1285500ad1021670da1da5efea9fec201796ec3316622afe73f7dea0609e59",
       "feature": "navigation"
     },
     {
       "file": "tests/page/page-history.spec.ts",
       "include": true,
       "reason": "Full suite; measures navigation and history. Missing APIs remain unsupported.",
-      "sha256": "fd0243d8993dee5f0e6d27b23029cee35d3034f9f53e0f7d4c974b615f29430d",
+      "sha256": "87cfccad95e233b9e3d1d371b4fb3f3a2f7a5d2d5f8d99b2c47682b8807c34b9",
       "feature": "navigation"
     },
     {
       "file": "tests/page/page-keyboard.spec.ts",
       "include": true,
       "reason": "Full suite; measures keyboard input. Missing APIs remain unsupported.",
-      "sha256": "ad04b6b34084d2169a78021d762052e4109748eba1405462397bbbad1dbd8454",
+      "sha256": "075d8db4432d00a456f51ecce6e5658a68c0ae6adc8bd8c0bd4156d47e21ad1e",
       "feature": "keyboard"
     },
     {
       "file": "tests/page/page-leaks.spec.ts",
       "include": true,
       "reason": "Full suite; measures resource lifetime and leak checks. Missing APIs remain unsupported.",
-      "sha256": "832687e320c78a2649381fccb0bfa599f8b5e968e75a9b0244b84831c8dbb99c",
+      "sha256": "527945d6e05df092d1d2741d182c8b4b115b6aa2378670820e7868b615df3ebc",
       "feature": "resources"
     },
     {
       "file": "tests/page/page-listeners.spec.ts",
       "include": true,
       "reason": "Full suite; measures page events and listeners. Missing APIs remain unsupported.",
-      "sha256": "41a99ce7165b7acc1e89c095a8ce28d9bc1802ea62849501f79aa52139c2ebcd",
+      "sha256": "b7811477ef7c06d77ffb7f110805811dee4b1b8ba9ae5631845443a3cbe52878",
       "feature": "events"
     },
     {
       "file": "tests/page/page-localstorage.spec.ts",
       "include": true,
       "reason": "Full suite; measures page storage behavior. Missing APIs remain unsupported.",
-      "sha256": "fb90df6d238832a143069f29c2b93d9b59af4e757030c4af40a83509f45a17c0",
+      "sha256": "487a0688882a93286cfcdd203b4dfe14b213e608c8661846f1fd0d6dfd774db1",
       "feature": "storage"
     },
     {
       "file": "tests/page/page-mouse.spec.ts",
       "include": true,
       "reason": "Full suite; measures mouse and wheel input. Missing APIs remain unsupported.",
-      "sha256": "c4756258edbf99982a87be52907de2db2cae1f85bcdee63eacf327dafe16efa7",
+      "sha256": "97ff850da742f739498dc3242cd39352148f27dae91b0d38dda5bb6670bc1a38",
       "feature": "mouse"
     },
     {
       "file": "tests/page/page-navigation.spec.ts",
       "include": true,
       "reason": "Full suite; measures navigation and history. Missing APIs remain unsupported.",
-      "sha256": "87d5d94cf8c56395683578f7db1fb446101d8ecbffc9113fd9f4ed1f095b8ae8",
+      "sha256": "b03851a28277a15c6a9e752643599217f8717f21f6db62142e2d7e8923e8df0d",
       "feature": "navigation"
     },
     {
       "file": "tests/page/page-network-idle.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "a0947a60dc437abe57b17be6cb2d1db0ec10923ef39cf10da882efa340318a5d",
+      "sha256": "be5cea8a33c9413dbe9347d8cf1370ffbc119128d5c7aa53478a2c9165172242",
       "feature": "network"
     },
     {
       "file": "tests/page/page-network-request.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "6b8d557a09ee56b8151a59e4747609de65a7b6792a4197d321822b109b93289f",
+      "sha256": "dc1f63c851a27c9c008a6eabdbff6da8571e202f03606b77a38d33da6e02a17a",
       "feature": "network"
     },
     {
       "file": "tests/page/page-network-response.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "6f81f766d399d2ee6beedf81cdf1c7a09c15901f27fc320c96fc5cd42b418392",
+      "sha256": "8bee3b5e4dc015ecae56eeeaf1da8fd6e8bb0afec02533c021dca8afbdb11b07",
       "feature": "network"
     },
     {
       "file": "tests/page/page-network-sizes.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "365d141869702bc3280958ec9b6e978222954fcfba4ad6a8d01cc509678e8a84",
+      "sha256": "aead1205252ee6c99137729694d9c8aebdb14f20b6295069cd6c7b7830df7234",
       "feature": "network"
     },
     {
       "file": "tests/page/page-request-continue.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "d1bb8bcb76b282ff9887a4f6ae6a739ccc533ea77a50aa65e85a21830e581ff9",
+      "sha256": "24563eddc4a4ffe62e906f17f7aebb8b054b0fb76355495744c4d7b6da9f910c",
       "feature": "network"
     },
     {
       "file": "tests/page/page-request-fallback.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "6766c40232aa7c4c8bd878098d3c3e42d4bf6431902f835f422010f8ce6dd5b1",
+      "sha256": "e8705d24e6b496f05ee2c48e8a8e21e3f0fc0477fed2003e34e7508bfdc540fc",
       "feature": "network"
     },
     {
       "file": "tests/page/page-request-fulfill.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "4a2313364277e93d05c521c89261c2dc49e68df5fe0fb5b0456cc8c05e22b84c",
+      "sha256": "912e9f5a2590fc2cef7dfd37df4ab64ce51742c82cbb036243a98ed0b72c50fa",
       "feature": "network"
     },
     {
       "file": "tests/page/page-request-gc.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "1689c70bc70632d358849e75c59d4031bdc63b05f2d9d13473ab7a1d6c6844e0",
+      "sha256": "fba2b16bde125b3284edb177077a7c3e9579c798d236e55a9554e280e22f756d",
       "feature": "network"
     },
     {
       "file": "tests/page/page-request-intercept.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "3adcbd8cdcb4995b9ca08ee0b9844f0de0366f66954ba9f897d0cdedb720ee66",
+      "sha256": "34cab7cb64829c0355f24e72ecf00126c65d65809e3007da80d3c8b9adb43eca",
       "feature": "network"
     },
     {
       "file": "tests/page/page-route.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "37d4c54f817a7eccebcd54bcdee72c0413d61fcf18a1f6938857f089dde5fb88",
+      "sha256": "1681013c48df3132ee1136e88adf0749cf9925d7115e266ccf755a1877d96bb2",
       "feature": "network"
     },
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "include": true,
       "reason": "Full suite; measures page screenshot behavior. Missing APIs remain unsupported.",
-      "sha256": "dcdfa3709e18bbc428581609d89b2a7cd488fbcd25804dee2fa4ec810466860b",
+      "sha256": "0d4cb873c7a65cfad91b2b9c8f3b9f031633a780c6a4fa9b77084aebb3441afb",
       "feature": "screenshots"
     },
     {
       "file": "tests/page/page-select-option.spec.ts",
       "include": true,
       "reason": "Full suite; measures option selection. Missing APIs remain unsupported.",
-      "sha256": "12630cd171a1e1693d1d07c72398aae2f9d736536968ad2853fdabf51b926ff2",
+      "sha256": "75a4c9cd718f195617567d095cf68dc118f293905d2fc213148f4f3d9a289d4c",
       "feature": "selectOption"
     },
     {
       "file": "tests/page/page-set-content.spec.ts",
       "include": true,
       "reason": "Full suite; measures page content replacement. Missing APIs remain unsupported.",
-      "sha256": "ca3b8168a23bd83ee01432cadd62004a5845aa8a808d53ceb82891b061d4656e",
+      "sha256": "fe204a7aab2056d366a1305a2c56c171c40091486b4d58bf7c90b267d9c5a1a2",
       "feature": "content"
     },
     {
       "file": "tests/page/page-set-extra-http-headers.spec.ts",
       "include": true,
       "reason": "Full suite; measures requests, responses and routing. Missing APIs remain unsupported.",
-      "sha256": "e636597c4e21e70015993b67bb87a4204340ccb377e7848a69c18a0464cb4c89",
+      "sha256": "a5d417a672a6f29eac282ffdc3e9d7e72f4ca1b6673101e86b70a47728417dfe",
       "feature": "network"
     },
     {
       "file": "tests/page/page-set-input-files.spec.ts",
       "include": true,
       "reason": "Full suite; measures file chooser and upload behavior. Missing APIs remain unsupported.",
-      "sha256": "f645a590c5bb7d197efa4584b44a43c1d1b854938ae7ec8c23b5fa2fe1ae0c78",
+      "sha256": "4023d8ba6187f5049500b25718ad3a37c58f458a2af88d9fdd1f184bd57cefb6",
       "feature": "files"
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "8eba7de9f6034339c34800b2a99967bbafcab8585a79bf56c418791816a7809b",
+      "sha256": "89641befba6dccc84682f667e1ac86ea6e5c92e1d34210bdb579041ffef933ae",
       "feature": "locators"
     },
     {
       "file": "tests/page/page-transition.spec.ts",
       "include": true,
       "reason": "Full suite; measures navigation and history. Missing APIs remain unsupported.",
-      "sha256": "059f14de3efa9cf540f4f5655eb93155b5417df5f6c0e8c56f076d326b23f980",
+      "sha256": "bf54fabdfbe156eece4ea6ea5af120d7ed8dfe4fbfdd6479899eb80fe239d2c7",
       "feature": "navigation"
     },
     {
       "file": "tests/page/page-wait-for-function.spec.ts",
       "include": true,
       "reason": "Full suite; measures page wait behavior. Missing APIs remain unsupported.",
-      "sha256": "dcbfeaaecab758c8523efe89ef67461d6542e76f361c0408521fc1df86280301",
+      "sha256": "6dc7c837a47c599511f22727a358d00f3b0aee5139ccdbd3d44af795bca248d5",
       "feature": "waits"
     },
     {
       "file": "tests/page/page-wait-for-load-state.spec.ts",
       "include": true,
       "reason": "Full suite; measures page wait behavior. Missing APIs remain unsupported.",
-      "sha256": "43f24d7e547dd5ac095eeb620619f22a4fca0ec15c970404f90e07bb68c1b66c",
+      "sha256": "445be93d9b9c4dc5121e6b8a1f6c3fa959a6b6e8faed590ce2fd75e94f9228c3",
       "feature": "waits"
     },
     {
       "file": "tests/page/page-wait-for-navigation.spec.ts",
       "include": true,
       "reason": "Full suite; measures page wait behavior. Missing APIs remain unsupported.",
-      "sha256": "5a9a56f0927f8a3fdfe4abaea67be4343c9cb4b3eefdce76ac849e2446f631d7",
+      "sha256": "b3798a0e8539aa4c1b033bb201cc5d1e8ff3159df2cb2e15547758db3d2ee044",
       "feature": "waits"
     },
     {
       "file": "tests/page/page-wait-for-request.spec.ts",
       "include": true,
       "reason": "Full suite; measures page wait behavior. Missing APIs remain unsupported.",
-      "sha256": "f0a26ab50528d1ab39ae9a1252ab86737b5c967b8e02ded296d506b500a05a79",
+      "sha256": "28c7e55bfbb9a3c66f9bf7170713ac74168ae69da9e85528aae53d3c197118e4",
       "feature": "waits"
     },
     {
       "file": "tests/page/page-wait-for-response.spec.ts",
       "include": true,
       "reason": "Full suite; measures page wait behavior. Missing APIs remain unsupported.",
-      "sha256": "6b48f04b0cd8516df61cb315a4717c51f520ab83a762bf22f150242b509afecf",
+      "sha256": "d5a39df993cfb6257a2e535bcd58197ccc68535e8d782e5dff82c6f04dc69ee6",
       "feature": "waits"
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "include": true,
       "reason": "Full suite; measures page wait behavior. Missing APIs remain unsupported.",
-      "sha256": "86a84f1f4ce96ec6fa95eca820c74059dc2c0053ecd986be1448673a2d2a6af0",
+      "sha256": "f449d8619753aac3224a34e800bb9122e81755f10a1be48eaecf8f9df496394e",
       "feature": "waits"
     },
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "include": true,
       "reason": "Full suite; measures page wait behavior. Missing APIs remain unsupported.",
-      "sha256": "bc157fc626618966283de3768fbe24fc637029d85fc43f7f1da21117e861b055",
+      "sha256": "47d01298a3062137452c59783bc281e070d77cc83fc05b14041044969c7ae515",
       "feature": "waits"
     },
     {
       "file": "tests/page/page-wait-for-url.spec.ts",
       "include": true,
       "reason": "Full suite; measures page wait behavior. Missing APIs remain unsupported.",
-      "sha256": "b2c4a13de497d08543a3405b634142525837d47f2cb8437cf918479e59bbc114",
+      "sha256": "3a2e5c43e0f03c23338a2af5a8f27592ee31a93d706dc6945bccfd0736ebbfdd",
       "feature": "waits"
     },
     {
       "file": "tests/page/queryselector.spec.ts",
       "include": true,
       "reason": "Full suite; measures ElementHandle operations. Missing APIs remain unsupported.",
-      "sha256": "9fea3e92fd16071a9a9e1b41da309c03796385a2f42f97407a3946fefbe7a609",
+      "sha256": "5e25bfb861ece37ba6a266c212b59c3b0667c96dd71964a222db80a5c813810c",
       "feature": "elementhandle"
     },
     {
       "file": "tests/page/retarget.spec.ts",
       "include": true,
       "reason": "Full suite; measures form control retargeting. Missing APIs remain unsupported.",
-      "sha256": "7b56eff6674168dd91dbf20ab37af02b8c2ecc56c401e583f28210cb0bb691fb",
+      "sha256": "3dce9587f62e8fdcd0e17f957c6cfaba7e72b4d0bb175f0b99147ea3a35298c8",
       "feature": "forms"
     },
     {
       "file": "tests/page/selectors-css.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "a55560aa61447a9b5dca20a1b5e0d86610b7efc3d069907ddd50ba1b202b972c",
+      "sha256": "f0a096c63febc7b2486dc15d3c26aca4f24f2beaa4f5ad1dc96b6eb5a1ba68f5",
       "feature": "locators"
     },
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "c4342953f658095cabbc0703e1ed9dffdcf52ece6f8d6e524348d719745a7c95",
+      "sha256": "b2ae38ff33707742e6c3ff4c0bc2cfbd0b400d7396c210f9c058d71362f08eac",
       "feature": "locators"
     },
     {
       "file": "tests/page/selectors-get-by.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "1d79d98f9e69d098dcdfedf6c42e8b70848b156c786af1c55dab8d7c1de15659",
+      "sha256": "4dd45770fda82dfd9ed749debb65147d817fb50efe7040a4b062973e31a70fbc",
       "feature": "locators"
     },
     {
       "file": "tests/page/selectors-misc.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "4cafcfd420edc1a2861c5445ae382f2f8a480ae9f18baa8140055c2087d0683e",
+      "sha256": "335b0ef2303c1c2a22dc8b3cdb4a2892eaa33695d686214d26b8e8c2c4777f48",
       "feature": "locators"
     },
     {
       "file": "tests/page/selectors-register.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "8502bdea667e07c6b136236d09c553f8ad25d02d4d7b8b72fa589a9ec4233b60",
+      "sha256": "0df0841e7b8eba633f614a86b4516073c9fd0166a2264414677c653ac2516c25",
       "feature": "locators"
     },
     {
       "file": "tests/page/selectors-role.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "92fbd8b9ecbed7ca6e721c12aa17bbd4fb0214906cc915ef278a68170ca2ad05",
+      "sha256": "0f70926d5138b54a205e54ee0bff0a2de1aac09010f51d0f6ddac4508826fe04",
       "feature": "locators"
     },
     {
       "file": "tests/page/selectors-text.spec.ts",
       "include": true,
       "reason": "Full suite; measures selectors and locators. Missing APIs remain unsupported.",
-      "sha256": "048065679a2b7b1478f33acb7d679411525912f7ab50ccbaa408687b49da8de9",
+      "sha256": "95b8673a75ca0f6f4172d653663a1f3cd9c62e03c8c799195359e526250e099d",
       "feature": "locators"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "include": true,
       "reason": "Full suite; measures upstream assertion behavior. Missing APIs remain unsupported.",
-      "sha256": "ba4afd68ac6e081bb7eb1105992c84b00e0e0d7f8d0d567267755330b706bcdc",
+      "sha256": "3f942bef99d75710159af91c264ed8e7b24994e40c4f483f6b9f1829c7076467",
       "feature": "assertions"
     },
     {
       "file": "tests/page/wheel.spec.ts",
       "include": true,
       "reason": "Full suite; measures mouse and wheel input. Missing APIs remain unsupported.",
-      "sha256": "572c63f70b54a423c6a186af9458b958822725fae39a3f89660308994b0896c7",
+      "sha256": "e998d21d5d4dd4ae1049904939c27a074148f9ea95bcb5179a50e7b14785ab99",
       "feature": "mouse"
     },
     {
       "file": "tests/page/workers.spec.ts",
       "include": true,
       "reason": "Full suite; measures worker behavior. Missing APIs remain unsupported.",
-      "sha256": "4d425c9d192b6ba7668d85476cf9ee065f7f1e1c09debff3bb425efbd7bf9367",
+      "sha256": "8c8631324e7581b28f01484027ac6a9a5bd556f11914641d6de9ad26fa090560",
       "feature": "workers"
     },
     {
       "file": "tests/library/browsercontext-pages.spec.ts",
       "include": true,
       "reason": "Full suite; tab lifecycle, including unsupported APIs.",
-      "sha256": "d662595c47fcbc546e79db285cfba0ada67f32b15e9cf366a226d69b9425b7dd",
+      "sha256": "63e090729451b4294e3924877a92c59fa31875d812b9c08c0338edcc2d8d6244",
       "feature": "tabs"
     },
     {
       "file": "tests/library/page-close.spec.ts",
       "include": true,
       "reason": "Full suite; tab lifecycle, including unsupported APIs.",
-      "sha256": "fde55b64d96158a4f3086c971412016c1db4afed70bad688ba6d1607daf4d226",
+      "sha256": "d629cf0ede4c35e2fdfb1d4441ce53d753b37d3ae495c1a2bd6bc4015d07adfd",
       "feature": "tabs"
     },
     {
       "file": "tests/library/headful.spec.ts",
       "include": true,
       "reason": "Only HE-012 bringToFront; owner-approved headless guard waiver.",
-      "sha256": "49e9e42e5bba4d5958852c063b3f1d22d7ff5d7de480cea567db1abf40f7d75e",
-      "title": "HE-012 Page.bringToFront should work",
+      "sha256": "c0b1ffc07aa88992dcc42a702530cdf0faf278a2cc05f58acb91a0c344e1ee89",
+      "title": "Page.bringToFront should work",
       "feature": "tabs"
     }
   ]

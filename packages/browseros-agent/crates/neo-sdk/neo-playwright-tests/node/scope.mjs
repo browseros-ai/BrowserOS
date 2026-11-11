@@ -2,21 +2,32 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { flattenResults, isGeneratedSkip, outcome } from './report/classify.mjs'
+import {
+  caseLabel,
+  flattenResults,
+  isGeneratedSkip,
+  outcome,
+} from './report/classify.mjs'
 
 const scopePath = new URL('./scope.json', import.meta.url)
-const scopeReasons = ['network', 'handles', 'drift', 'decided-deviation']
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
+/**
+ * The manifest declares its own reasons, each with the decision behind it. A run records the
+ * manifest it scored with, so an older run keeps a reason the current policy has retired
+ * (`drift` before the pin moved to the engine's own release).
+ */
+const reasonsOf = (manifest) => Object.keys(manifest.reasons)
 
 /** A selector is a corpus-relative spec file, optionally narrowed to stable corpus test IDs. */
 export function validateScope(manifest) {
   if (
     manifest?.schemaVersion !== 1 ||
     !Array.isArray(manifest.entries) ||
-    !scopeReasons.every(
-      (reason) =>
-        typeof manifest.reasons?.[reason] === 'string' &&
-        manifest.reasons[reason].trim(),
+    !manifest.reasons ||
+    typeof manifest.reasons !== 'object' ||
+    !reasonsOf(manifest).length ||
+    !Object.values(manifest.reasons).every(
+      (text) => typeof text === 'string' && text.trim(),
     )
   )
     throw new Error('Invalid scope schema or reasons')
@@ -24,7 +35,7 @@ export function validateScope(manifest) {
   for (const entry of manifest.entries) {
     if (
       !entry ||
-      !scopeReasons.includes(entry.reason) ||
+      !Object.hasOwn(manifest.reasons, entry.reason) ||
       typeof entry.file !== 'string' ||
       !/^tests\/(page|library)\/[^/]+\.spec\.ts$/.test(entry.file) ||
       (entry.ids !== undefined &&
@@ -91,7 +102,7 @@ export function scoreResults(results, manifest = loadScope()) {
   const all = { passed: 0, total: 0, skipped: 0, skippedByHarness: 0 }
   const inScope = { passed: 0, total: 0, skipped: 0, skippedByHarness: 0 }
   const byReason = Object.fromEntries(
-    scopeReasons.map((reason) => [reason, { total: 0, passed: 0 }]),
+    reasonsOf(manifest).map((reason) => [reason, { total: 0, passed: 0 }]),
   )
   const passingExcluded = []
   const count = (score, row, result) => {
@@ -150,5 +161,7 @@ export function printScores(scores) {
     )
   console.log(`Passing tests in scope file: ${scores.passingExcluded.length}`)
   for (const row of scores.passingExcluded)
-    console.log(`  ${row.reason}: ${row.file} · ${row.title}`)
+    console.log(
+      `  ${row.reason}: ${row.file} · ${caseLabel(row.id, row.title)}`,
+    )
 }

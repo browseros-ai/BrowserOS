@@ -1,5 +1,6 @@
 /** Neo: Pure interpretation of Playwright Test JSON; raw attempts never replace the runner's verdict. */
 import { stripVTControlCharacters } from 'node:util'
+import { pinnedCaseId } from '../case-ids.mjs'
 import { refusals } from './refusals.mjs'
 import { clawRefusals } from './refusals-claw.mjs'
 
@@ -42,6 +43,13 @@ function normalizeSuite(file, corpus = []) {
     : normalized
 }
 
+/** How reports name a test: its ID, then its title path, without repeating an ID the title holds. */
+export function caseLabel(id, title) {
+  return id && !title.split(' › ').at(-1).startsWith(`${id} `)
+    ? `${id} ${title}`
+    : title
+}
+
 export function caseKey(suite, titles) {
   return JSON.stringify([suite, titles])
 }
@@ -72,13 +80,20 @@ export function flattenResults(
           `Duplicate case identity; use one project and repeatEach=1: ${key}`,
         )
       seen.add(key)
+      const title = titlePath.join(' › ')
+      // The pinned corpus takes IDs from case-ids.json. Results from earlier pins, whose upstream
+      // titles began with the ID, still read it from the title.
+      const caseId =
+        pinnedCaseId(specFile, title) ??
+        spec.title.match(/\b[A-Z][A-Z0-9]*-\d+\b/)?.[0] ??
+        null
       for (const test of spec.tests?.length ? spec.tests : [{ results: [] }]) {
         cases.push({
           key,
           suite: specFile,
           titles: titlePath,
-          title: titlePath.join(' › '),
-          caseId: spec.title.match(/\b[A-Z][A-Z0-9]*-\d+\b/)?.[0] || null,
+          title,
+          caseId,
           location: { file: specFile, line: spec.line, column: spec.column },
           test,
         })

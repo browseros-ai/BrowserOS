@@ -3,7 +3,6 @@
   "reasons": {
     "network": "Owner decision: network interception, network events, request tracking and response bodies are outside Neo support.",
     "handles": "Owner decision: evaluateHandle and JSHandle are outside Neo support.",
-    "drift": "The spec expects behavior newer than the vendored Playwright 1.64.1 engine.",
     "decided-deviation": "Owner decision D20: roles that may not have a name must not expose one (AR-089)."
   },
   "entries": [
@@ -211,11 +210,6 @@
       "reason": "decided-deviation"
     },
     {
-      "file": "tests/page/page-aria-snapshot-ai.spec.ts",
-      "ids": ["AR-052", "AR-060", "AR-063"],
-      "reason": "drift"
-    },
-    {
       "file": "tests/page/page-click.spec.ts",
       "ids": ["CL-002", "CL-034", "CL-069"],
       "reason": "handles"
@@ -256,29 +250,12 @@
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
-      "ids": [
-        "EV-037",
-        "EV-056",
-        "EV-083",
-        "EV-086",
-        "EV-090",
-        "EV-093",
-        "EV-095"
-      ],
+      "ids": ["EV-056", "EV-083", "EV-086", "EV-090", "EV-093", "EV-095"],
       "reason": "handles"
     },
     {
       "file": "tests/page/page-event-network.spec.ts",
-      "ids": [
-        "NE-084",
-        "NE-085",
-        "NE-086",
-        "NE-087",
-        "NE-088",
-        "NE-089",
-        "NE-090",
-        "NE-143"
-      ],
+      "ids": ["NE-084", "NE-085", "NE-086", "NE-087", "NE-088", "NE-089"],
       "reason": "network"
     },
     {
@@ -296,7 +273,6 @@
         "NE-100",
         "NE-101",
         "NE-102",
-        "NE-103",
         "NE-104",
         "NE-105",
         "NE-106",
@@ -313,16 +289,6 @@
       "file": "tests/page/page-filechooser.spec.ts",
       "ids": ["FC-004"],
       "reason": "handles"
-    },
-    {
-      "file": "tests/page/page-filechooser.spec.ts",
-      "ids": ["FC-026", "FC-027", "FC-028"],
-      "reason": "network"
-    },
-    {
-      "file": "tests/page/page-fill.spec.ts",
-      "ids": ["FI-005", "FI-013", "FI-025", "FI-034", "FI-036"],
-      "reason": "drift"
     },
     {
       "file": "tests/page/page-goto.spec.ts",
@@ -606,6 +572,7 @@
         "RO-039",
         "RO-040",
         "RO-041",
+        "RO-042",
         "RO-043",
         "RO-044",
         "RO-045",
@@ -618,8 +585,7 @@
         "RO-053",
         "RO-054",
         "RO-055",
-        "RO-056",
-        "RO-202"
+        "RO-056"
       ],
       "reason": "network"
     },

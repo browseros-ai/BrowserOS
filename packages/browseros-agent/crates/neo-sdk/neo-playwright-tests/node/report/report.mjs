@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { scopeForRun, scoreResults, scoreText } from '../scope.mjs'
 import {
+  caseLabel,
   classifyRuns,
   compareBridge,
   countVerdicts,
@@ -60,7 +61,8 @@ function groupGaps(rows) {
       examples: [],
     }
     gap.count++
-    if (gap.examples.length < 3) gap.examples.push(`${row.suite}: ${row.title}`)
+    if (gap.examples.length < 3)
+      gap.examples.push(`${row.suite}: ${caseLabel(row.caseId, row.title)}`)
     groups.set(row.gapKey, gap)
   }
   return [...groups.values()].sort(
@@ -182,7 +184,7 @@ export function renderReport({ neo, reference, bridge, corpus = [], scope }) {
           table(
             ['Test', 'Reason'],
             scores.passingExcluded.map((row) => [
-              `${row.file}: ${row.title}`,
+              `${row.file}: ${caseLabel(row.id, row.title)}`,
               row.reason,
             ]),
           ),
@@ -269,7 +271,7 @@ export function renderReport({ neo, reference, bridge, corpus = [], scope }) {
             !['pass', 'pass via expectLoop', 'skip'].includes(row.verdict),
         )
         .map((row) => [
-          `${row.suite}: ${row.title}`,
+          `${row.suite}: ${caseLabel(row.caseId, row.title)}`,
           row.verdict,
           row.gapKey,
           row.evidence[0]?.firstLine || row.reason,

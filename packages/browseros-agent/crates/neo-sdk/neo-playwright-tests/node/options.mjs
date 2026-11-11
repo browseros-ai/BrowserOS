@@ -1,5 +1,13 @@
 /** Neo: Keeps caller selection inside the pinned corpus and the four-browser ownership limit. */
 
+/**
+ * Of headful.spec.ts only HE-012 (`Page.bringToFront should work`) runs, headless by owner
+ * policy; every other case in that file needs a headed browser. The pinned titles carry no IDs,
+ * so the exception is matched by title.
+ */
+export const headfulInvert =
+  '\\bheadful\\.spec\\.ts\\b(?!.*\\bPage\\.bringToFront should work\\b)'
+
 export function runnerOptions(argv) {
   const options = {
     engine: 'claw',
@@ -66,7 +74,7 @@ export function runnerOptions(argv) {
     } else options.args.push(arg)
   }
   // A CLI grep replaces configuration grep. Always compose this restriction at the CLI seam.
-  inversions.push('\\bheadful\\.spec\\.ts\\b(?!.*\\bHE-012\\b)')
+  inversions.push(headfulInvert)
   options.args.push(
     '--grep-invert',
     inversions.map((value) => `(?:${value})`).join('|'),
