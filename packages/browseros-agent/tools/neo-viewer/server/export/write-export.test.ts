@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -357,6 +366,34 @@ describe('an export stays one coherent, separate thing', () => {
         writeExport(await sourceOf(store, { ...INFO, dataDir }), { root }),
       ).rejects.toThrow('overlap')
     expect(await readdir(root)).toEqual([])
+  })
+
+  test('an export refuses a shared or linked /tmp/neo-viewer: only a private folder of this user', async () => {
+    const store = await storeWith(await tempDir('neo-viewer-export-state-'), [
+      { text: '1', neo: null },
+    ])
+    const base = await tempDir('neo-viewer-export-base-')
+    // Writable by others: anyone could swap the export's folder.
+    const open = join(base, 'open')
+    await mkdir(open)
+    await chmod(open, 0o777)
+    await expect(
+      writeExport(await sourceOf(store), { root: open }),
+    ).rejects.toThrow('is not a private folder of this user')
+    // A link to a folder elsewhere, as the root or as the instance's folder: refused, nothing written there.
+    const elsewhere = join(base, 'elsewhere')
+    await mkdir(elsewhere, { mode: 0o700 })
+    await symlink(elsewhere, join(base, 'linked-root'))
+    await expect(
+      writeExport(await sourceOf(store), { root: join(base, 'linked-root') }),
+    ).rejects.toThrow('is not a private folder of this user')
+    const root = join(base, 'root')
+    await mkdir(root, { mode: 0o700 })
+    await symlink(elsewhere, join(root, 'vp-test'))
+    await expect(writeExport(await sourceOf(store), { root })).rejects.toThrow(
+      'is not a private folder of this user',
+    )
+    expect(await readdir(elsewhere)).toEqual([])
   })
 
   test('a JSON-RPC error is what the model read: it gets a reply file too', async () => {

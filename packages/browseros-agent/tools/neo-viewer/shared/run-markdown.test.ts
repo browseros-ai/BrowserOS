@@ -160,6 +160,18 @@ describe('one run as Markdown', () => {
     )
   })
 
+  test('the export cuts long console output at the limit too', () => {
+    const text = `1\nconsole:\n${'c'.repeat(50_000)}`
+    const markdown = runMarkdown(detailWith(8, { text, neo: null }), {
+      ...EXPORT,
+      replyFile: '008.reply.txt',
+    })
+    expect(markdown.length).toBeLessThan(8_000)
+    expect(markdown).toContain(
+      '## Console\n\nThe first 2,000 characters; the full text is in [008.reply.txt](008.reply.txt):',
+    )
+  })
+
   test('a table cell keeps a pipe in its cell, even behind a backslash', () => {
     expect(cell('a | b')).toBe('a \\| b')
     expect(cell('return /\\|/.test(x)')).toBe('return /\\\\\\|/.test(x)')

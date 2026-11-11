@@ -1,5 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -7,6 +14,7 @@ import {
   liveViewer,
   otherInstanceStates,
   portFree,
+  writeFileAtomically,
 } from './running-viewer'
 
 const dirs: string[] = []
@@ -103,4 +111,26 @@ test("other instances' states: the folders beside this one and under the state r
     join(base, 'root'),
   )
   expect(fromRoot).toEqual([])
+})
+
+test('a state file is replaced whole: a reader sees the old text or the new, and no temporary is left', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'neo-viewer-atomic-'))
+  dirs.push(dir)
+  const file = join(dir, 'start-state.json')
+  await writeFile(file, '{"lastBuild":null}')
+  const big = JSON.stringify({
+    lastBuild: null,
+    kept: Array.from({ length: 5_000 }, (_, i) => ({
+      tag: `t${i}`,
+      id: `sha256:${i}`,
+    })),
+  })
+  const reads: string[] = []
+  const writing = writeFileAtomically(file, big)
+  for (let i = 0; i < 20; i++) reads.push(await readFile(file, 'utf8'))
+  await writing
+  reads.push(await readFile(file, 'utf8'))
+  for (const text of reads) expect(['{"lastBuild":null}', big]).toContain(text)
+  expect(reads.at(-1)).toBe(big)
+  expect(await readdir(dir)).toEqual(['start-state.json'])
 })
