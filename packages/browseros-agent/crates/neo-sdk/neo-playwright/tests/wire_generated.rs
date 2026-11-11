@@ -77,8 +77,15 @@ const IMPORTED: &[Imported] = &[
     },
 ];
 
+/// One imported TypeScript name, as a generated file prints it.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Import {
+    module: String,
+    name: String,
+}
+
 /// Every `import('<module>').<Name>` in `text`, in order.
-fn imports(text: &str) -> Vec<(String, String)> {
+fn imports(text: &str) -> Vec<Import> {
     let mut found = Vec::new();
     for piece in text.split("import(").skip(1) {
         let Some((module, after)) = piece
@@ -94,7 +101,10 @@ fn imports(text: &str) -> Vec<(String, String)> {
             .chars()
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
             .collect();
-        found.push((module.to_owned(), name));
+        found.push(Import {
+            module: module.to_owned(),
+            name,
+        });
     }
     found
 }
@@ -688,14 +698,19 @@ fn tests_that_every_imported_type_is_held_by_an_example_file() -> Result<(), Box
     let mut used = BTreeSet::new();
     let mut unlisted = Vec::new();
     for (path, text) in &files {
-        for (module, name) in imports(text) {
+        for import in imports(text) {
             if IMPORTED
                 .iter()
-                .any(|entry| entry.module == module && entry.name == name)
+                .any(|entry| entry.module == import.module && entry.name == import.name)
             {
-                used.insert((module, name));
+                used.insert(import);
             } else {
-                unlisted.push(format!("{}: import('{module}').{name}", path.display()));
+                unlisted.push(format!(
+                    "{}: import('{}').{}",
+                    path.display(),
+                    import.module,
+                    import.name
+                ));
             }
         }
     }
@@ -707,7 +722,10 @@ fn tests_that_every_imported_type_is_held_by_an_example_file() -> Result<(), Box
     );
     for entry in IMPORTED {
         assert!(
-            used.contains(&(entry.module.to_owned(), entry.name.to_owned())),
+            used.contains(&Import {
+                module: entry.module.to_owned(),
+                name: entry.name.to_owned(),
+            }),
             "IMPORTED lists import('{}').{}, which no generated type prints any more",
             entry.module,
             entry.name
@@ -729,8 +747,14 @@ fn tests_that_imports_are_read_from_either_quote() {
     assert_eq!(
         imports("a: import('../x').Y[], b: import(\"z\").W_2 | null, c: import(x)"),
         [
-            ("../x".to_owned(), "Y".to_owned()),
-            ("z".to_owned(), "W_2".to_owned())
+            Import {
+                module: "../x".to_owned(),
+                name: "Y".to_owned()
+            },
+            Import {
+                module: "z".to_owned(),
+                name: "W_2".to_owned()
+            }
         ]
     );
 }
