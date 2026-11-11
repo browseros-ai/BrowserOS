@@ -200,13 +200,11 @@ pub(crate) async fn deliver(
             let Some(popup) = popup_tab(scope, opened, tabs, windows).await? else {
                 return Ok(None);
             };
-            Payload::Popup {
-                page,
-                popup: NewTab {
-                    page: popup,
-                    url: opened.url.clone(),
-                },
-            }
+            let popup = NewTab {
+                page: popup,
+                url: opened.url.clone(),
+            };
+            Payload::Popup { page, popup }
         }
         (PageEvent::Opened(opened), None) => {
             if opened.window == WindowKind::Window {
@@ -294,7 +292,7 @@ pub(crate) async fn deliver(
 }
 
 /// A console/dialog/etc. can follow renderer-initiated navigation. Delivery synchronizes
-/// page.url() even when no SDK navigation ran, while a close carries its own terminal facts.
+/// `page.url()` even when no SDK navigation ran, while a close carries its own terminal facts.
 fn report_navigation(scope: &OpScope<'_>, page: Option<&PageHandle>, event: &PageEvent) {
     if let Some(page) = page
         && !matches!(event, PageEvent::Closed(_))
