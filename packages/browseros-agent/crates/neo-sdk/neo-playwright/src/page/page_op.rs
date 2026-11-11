@@ -161,20 +161,10 @@ impl PageOp {
             )
             .using(&[Capability::MainWorld])
             .policed(),
-            Self::Screenshot => OpSpec::read(
-                "page.screenshot",
-                PAGE,
-                "capture the page or one element once the host allows it",
-            )
-            .using(&[Capability::Capture])
-            .policed(),
-            Self::Pdf => OpSpec::read(
-                "page.pdf",
-                PAGE,
-                "print the page to PDF once the host allows it",
-            )
-            .using(&[Capability::Capture])
-            .policed(),
+            Self::Screenshot => {
+                OpSpec::read("page.screenshot", PAGE, "capture the page or one element")
+            }
+            Self::Pdf => OpSpec::read("page.pdf", PAGE, "print the page to PDF"),
             Self::AddInitScript => ADD_INIT_SCRIPT,
         }
     }

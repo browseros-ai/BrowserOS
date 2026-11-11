@@ -164,7 +164,7 @@ mod tests {
         reason = "one explicit audited capability row per operation keeps additions reviewable"
     )]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
-        use Capability::{Capture, HostFiles, MainWorld};
+        use Capability::{HostFiles, MainWorld};
         // The explicit rows are the capability contract. Exhaustive comparisons below catch
         // additions and removals without a second, independently maintained operation count.
         const AUDITED: &[(&str, &[Capability], bool)] = &[
@@ -238,8 +238,8 @@ mod tests {
             ("locator.evaluateAll", &[MainWorld], true),
             ("page.waitForFunction", &[MainWorld], true),
             ("locator.waitForFunction", &[MainWorld], true),
-            ("page.screenshot", &[Capture], true),
-            ("page.pdf", &[Capture], true),
+            ("page.screenshot", &[], true),
+            ("page.pdf", &[], true),
             ("page.setViewportSize", &[], true),
             ("page.addInitScript", &[MainWorld, HostFiles], true),
             ("context.pages", &[], true),

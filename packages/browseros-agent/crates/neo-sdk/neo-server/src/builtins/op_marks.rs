@@ -49,9 +49,6 @@ enum Policing {
 )]
 const fn policing(capability: Capability) -> Policing {
     match capability {
-        // Captures use the ordinary door rules; this capability needs no separate policy mark
-        // and does not hold an otherwise served screenshot or PDF op.
-        Capability::Capture => Policing::Ready,
         // Main-world scripts pass the door's release recheck as a read of their tab, so a
         // takeover acquired during evaluation still governs the answer.
         Capability::MainWorld => Policing::Ready,
@@ -280,7 +277,7 @@ mod tests {
     /// the snapshot is redone on purpose.
     #[test]
     fn claw_sdk_places_every_capability_op() {
-        use Capability::{Capture, HostFiles, MainWorld};
+        use Capability::{HostFiles, MainWorld};
         use Placement::{Held, Served};
         /// One capability op as claw-sdk places it.
         #[derive(Debug, PartialEq)]
@@ -312,8 +309,6 @@ mod tests {
             served("locator.evaluateAll", &[MainWorld]),
             served("page.waitForFunction", &[MainWorld]),
             served("locator.waitForFunction", &[MainWorld]),
-            served("page.screenshot", &[Capture]),
-            served("page.pdf", &[Capture]),
             served("page.addInitScript", &[MainWorld, HostFiles]),
             served("context.addInitScript", &[MainWorld, HostFiles]),
         ];
@@ -343,13 +338,12 @@ mod tests {
     /// its gateways is held whether or not the door polices what it declares.
     #[test]
     fn an_ungated_op_is_held_whatever_the_door_polices() -> Result<(), Box<dyn Error>> {
-        use Capability::{Capture, HostFiles, MainWorld, Screen};
-        let declarations: [&'static [Capability]; 5] = [
-            &[Capture],
+        use Capability::{HostFiles, MainWorld, Screen};
+        let declarations: [&'static [Capability]; 4] = [
             &[MainWorld],
             &[HostFiles],
             &[Screen],
-            &[Capture, MainWorld],
+            &[HostFiles, MainWorld],
         ];
         for capabilities in declarations {
             let ungated = new_op(capabilities, false)?;
@@ -369,8 +363,8 @@ mod tests {
                 "{capabilities:?}"
             );
         }
-        // The same capture, once the crate guards it, is served: the door polices captures.
-        let gated = OpMarks::of(&new_op(&[Capture], true)?, LINE);
+        // The same main-world op, once the crate guards it, is served: the door polices it.
+        let gated = OpMarks::of(&new_op(&[MainWorld], true)?, LINE);
         assert_eq!(gated.hold, None);
         assert_eq!(gated.spec.listing, Listing::Grouped(LINE));
         Ok(())
@@ -378,17 +372,13 @@ mod tests {
 
     /// While the door does not police a capability, every op that declares it is held, guarded
     /// by the crate or not, alone or beside a capability the door does police. On this door
-    /// captures, main-world scripts and host files are policed, and the screen is not.
+    /// main-world scripts and host files are policed, and the screen is not.
     #[test]
     fn a_capability_the_door_does_not_police_yet_holds_every_op_declaring_it()
     -> Result<(), Box<dyn Error>> {
-        use Capability::{Capture, HostFiles, MainWorld, Screen};
-        let unpoliced: [&'static [Capability]; 4] = [
-            &[Screen],
-            &[Capture, Screen],
-            &[MainWorld, Screen],
-            &[HostFiles, Screen],
-        ];
+        use Capability::{HostFiles, MainWorld, Screen};
+        let unpoliced: [&'static [Capability]; 3] =
+            [&[Screen], &[MainWorld, Screen], &[HostFiles, Screen]];
         for capabilities in unpoliced {
             let marks = OpMarks::of(&new_op(capabilities, true)?, LINE);
             assert!(
@@ -400,10 +390,8 @@ mod tests {
         // What the door polices is served once the crate guards it, and so is an op that declares
         // nothing, which the crate counts as guarded whatever its mark says.
         for (capabilities, policed) in [
-            (&[Capture][..], true),
-            (&[MainWorld], true),
+            (&[MainWorld][..], true),
             (&[HostFiles], true),
-            (&[Capture, HostFiles], true),
             (&[HostFiles, MainWorld], true),
             (&[], true),
             (&[], false),
@@ -557,8 +545,7 @@ mod tests {
         },
     ];
 
-    /// The capabilities whose every op needs a BrowserOS case. Captures use the ordinary
-    /// door rules, which the fake browser shows.
+    /// The capabilities whose every op needs a BrowserOS case.
     const ON_BROWSEROS: [Capability; 3] = [
         Capability::MainWorld,
         Capability::HostFiles,

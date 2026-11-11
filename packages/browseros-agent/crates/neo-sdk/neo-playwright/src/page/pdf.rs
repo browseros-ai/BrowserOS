@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 
 use crate::op_output::{Bytes, to_output};
 use crate::op_scope::OpScope;
-use crate::op_spec::Capability;
 use crate::page::document_watch::decode;
 use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError};
@@ -173,8 +172,6 @@ pub(crate) async fn print(
     scope: &OpScope<'_>,
     input: PdfInput,
 ) -> Result<Value, PlaywrightError> {
-    // Check the op's declared capability before admitting its page.
-    scope.require(Capability::Capture)?;
     let params = input
         .params()
         .map_err(|message| scope.fail(ErrorCode::InvalidInput, &message))?;
@@ -201,18 +198,10 @@ pub(crate) async fn print(
 #[cfg(test)]
 mod tests {
     use std::error::Error;
-    use std::sync::Arc;
 
-    use browseros_core::BrowserView;
-    use browseros_core::testing::TestConnection;
-    use neo_trace::ErrorOwner;
     use serde_json::json;
 
-    use super::{PdfInput, print};
-    use crate::op_scope::OpScope;
-    use crate::target::CallHeader;
-    use crate::test_env::{self, TestEnv};
-    use crate::{Op, Playwright, test_support};
+    use super::PdfInput;
 
     fn params(options: &serde_json::Value) -> Result<serde_json::Value, Box<dyn Error>> {
         let mut input = json!({ "page": { "$neo": "page", "tab": 1 } });
@@ -270,70 +259,6 @@ mod tests {
         assert_eq!(
             bad.as_deref(),
             Some("Failed to parse parameter value: wide")
-        );
-        Ok(())
-    }
-
-    /// The print path only serves ops that declare `Capture`; undeclared calls fail before
-    /// the page is admitted.
-    #[tokio::test]
-    async fn tests_that_only_an_op_declaring_capture_is_printed() -> Result<(), Box<dyn Error>> {
-        let connection = TestConnection::new([]);
-        let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
-        connection.always("Page.printToPDF", json!({ "data": "JVBERi0=" }))?;
-        let playwright = Playwright::new(Arc::clone(&browser));
-        let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
-        let input =
-            || serde_json::from_value::<PdfInput>(json!({ "page": { "$neo": "page", "tab": 7 } }));
-        let pdf = Op::from_name("page.pdf").ok_or("page.pdf is an op")?;
-        let declared = OpScope::new(&env, pdf, CallHeader::default());
-        print(&playwright, &declared, input()?).await?;
-        let title = Op::from_name("page.title").ok_or("page.title is an op")?;
-        let undeclared = OpScope::new(&env, title, CallHeader::default());
-        let sent_before = connection.calls()?.len();
-        let error = print(&playwright, &undeclared, input()?)
-            .await
-            .err()
-            .ok_or("an op that does not declare Capture must not be printed")?;
-        assert_eq!(
-            (error.owner(), error.code()),
-            (ErrorOwner::Neo, "internal"),
-            "{error}"
-        );
-        assert_eq!(
-            connection.calls()?.len(),
-            sent_before,
-            "the undeclared op admitted nothing"
-        );
-        let prints = connection
-            .calls()?
-            .iter()
-            .filter(|call| call.method == "Page.printToPDF")
-            .count();
-        assert_eq!(prints, 1, "only the op that declares Capture was printed");
-        Ok(())
-    }
-
-    /// The declaration is checked before anything else: an op that does not declare `Capture`
-    /// is refused as `neo / internal` even when its browser is gone, so it never reached the
-    /// page's lookup or admission.
-    #[tokio::test]
-    async fn tests_that_an_undeclared_op_is_refused_before_its_page_is_looked_up()
-    -> Result<(), Box<dyn Error>> {
-        let playwright = Playwright::new(test_env::offline_session());
-        let env = TestEnv::new();
-        let title = Op::from_name("page.title").ok_or("page.title is an op")?;
-        let undeclared = OpScope::new(&env, title, CallHeader::default());
-        let input: PdfInput =
-            serde_json::from_value(json!({ "page": { "$neo": "page", "tab": 7 } }))?;
-        let error = print(&playwright, &undeclared, input)
-            .await
-            .err()
-            .ok_or("an undeclared op is refused")?;
-        assert_eq!(
-            (error.owner(), error.code()),
-            (ErrorOwner::Neo, "internal"),
-            "{error}"
         );
         Ok(())
     }
