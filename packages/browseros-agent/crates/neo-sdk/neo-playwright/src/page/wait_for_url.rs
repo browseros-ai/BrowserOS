@@ -9,7 +9,7 @@
 //!                                                    yes ──────────────────────────┴─ waitUntil
 //! ```
 //!
-//! The pattern is matched in the frame's sealed world, because a `RegExp` must run with
+//! The pattern is matched in the frame's isolated world, because a `RegExp` must run with
 //! JavaScript's semantics. The URL matched is the one the navigation reported, not the page's
 //! `location` later, so a page that moves on at once still matches the step it passed through.
 //! A function predicate stays in the prelude. The frame-following and URL-matching helpers
@@ -185,7 +185,7 @@ impl Followed {
         scope: &OpScope<'_>,
         id: Option<&FrameId>,
     ) -> Result<Self, PlaywrightError> {
-        // Subscribe before installing any sealed world. Installation belongs to URL matching
+        // Subscribe before installing any isolated world. Installation belongs to URL matching
         // after the document read; doing it here lets a simultaneous goto destroy setup and
         // fail a wait that should simply observe the new document.
         let main = page.main_endpoint();

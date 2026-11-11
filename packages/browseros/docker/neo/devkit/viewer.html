@@ -27,9 +27,9 @@
     <a href="/trace" target="_blank">Trace</a>
   </header>
   <div id="warning" class="notice warn" hidden>
-    <b>Control mode.</b> Your first key, click or paste makes <b>every open tab private</b>:
-    no screenshots of them, and view displays are refused while one of them is in front,
-    until those tabs close. Moving the pointer is not input.
+    <b>Control mode.</b> Your keys, clicks and paste go to Neo.
+    Views and screenshots stay live while you type. Start a takeover to block the agent
+    from acting on the selected tab until you release it.
   </div>
   <div class="main">
     <div id="screen"><div id="overlay" class="overlay"></div></div>
@@ -43,7 +43,7 @@
       </div>
       <div>
         <h2>Takeover</h2>
-        <p class="muted" style="margin:0 0 6px">Makes the tab private, locks the agent out of it, and opens a control display bound to it.</p>
+        <p class="muted" style="margin:0 0 6px">Locks the agent out of the selected tab and opens its control display. Views and screenshots stay live.</p>
         <div class="row">
           <input id="takeover-tab" list="recent-tabs" placeholder="tab id" size="14">
           <button id="takeover-start">Start takeover</button>

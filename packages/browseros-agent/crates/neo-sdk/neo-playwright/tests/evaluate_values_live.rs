@@ -33,7 +33,7 @@ use js_runner::{OpHost, run_script};
 use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand};
 use serde_json::{Value, json};
 
-/// Two sensitive fields, empty until a test types into them.
+/// Two form fields, empty until a test types into them.
 const LOGIN: &str = r#"<!doctype html><html><head><title>Login</title></head><body>
 <label>Password <input id="pw" type="password"></label>
 <label>Code <input id="code" type="password"></label>

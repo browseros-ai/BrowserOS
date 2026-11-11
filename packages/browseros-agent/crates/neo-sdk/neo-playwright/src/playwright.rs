@@ -36,7 +36,7 @@ pub struct Playwright {
     /// Page events since this facade started; the watcher below is its only writer.
     events: Arc<EventHub>,
     /// Records CDP's page events into `events`. Dropping the facade stops it.
-    _watcher: TargetWatcher,
+    watcher: TargetWatcher,
     /// How far the watcher has read the connection's events.
     progress: Arc<WatcherProgress>,
     /// This instance's identity to the worlds it boots.
@@ -81,7 +81,7 @@ impl Playwright {
         Arc::new(Self {
             browser,
             events,
-            _watcher: watcher,
+            watcher,
             progress,
             epoch: Epoch::random(),
             sessions,
@@ -99,6 +99,23 @@ impl Playwright {
     /// adds, `page/init_script.rs`).
     pub(crate) fn event_hub(&self) -> &Arc<EventHub> {
         &self.events
+    }
+
+    /// Live dedicated workers owned by a native page target, for ordered host page facts.
+    #[must_use]
+    pub fn workers(&self, target: &TargetId) -> Vec<crate::WorkerInfo> {
+        self.events.workers.list(target)
+    }
+
+    /// Bring the independent event watcher up to the CDP events received so far.
+    pub async fn synchronize_events(&self) {
+        self.watcher.synchronize(None).await;
+    }
+
+    /// Retire workers after a successful explicit page close; their outstanding promises
+    /// must reject before the native renderer's eventual protocol shutdown.
+    pub(crate) async fn workers_closed(&self, target: TargetId) {
+        self.watcher.synchronize(Some(target)).await;
     }
 
     /// The newest event recorded for this browser connection.
@@ -130,7 +147,7 @@ impl Playwright {
         &self.epoch
     }
 
-    /// Per-session setup for sealed worlds.
+    /// Per-session setup for isolated worlds.
     pub(crate) fn sessions(&self) -> &SessionSetup {
         &self.sessions
     }

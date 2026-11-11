@@ -1,7 +1,7 @@
 //! A live browser for the crate's own live tests: one CDP connection with a `Playwright` over
 //! it, as claw-sdk builds them, and tabs it opens and closes. Needs BrowserOS with CDP on
 //! `BROWSEROS_CDP_PORT` (default 9005). Also the scripted browsers unit tests run an op against
-//! ([`one_tab`], and [`ScriptedTab`] for ops that install and call a sealed world); they live
+//! ([`one_tab`], and [`ScriptedTab`] for ops that install and call an isolated world); they live
 //! here because core's `page_js_guard` reads every other non-test file as production code, and
 //! the scripts answer `Runtime.evaluate`.
 
@@ -309,7 +309,7 @@ static SCRIPTED_SESSIONS: AtomicU64 = AtomicU64::new(0);
 
 /// A scripted browser with one tab, tab 7 on `https://a.test/`, and a same-site child frame in
 /// its process, or one in a process of its own, when the script asks for one. It answers what
-/// admitting the tab, attaching its out-of-process frame, installing a frame's sealed world and
+/// admitting the tab, attaching its out-of-process frame, installing a frame's isolated world and
 /// listing its frames and targets send, and hands every probe request to its [`TabScript`].
 pub(crate) struct ScriptedTab<S> {
     script: S,

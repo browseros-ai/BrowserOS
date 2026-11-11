@@ -349,6 +349,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "worker.evaluate": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "locator.evaluate": {
       effect: "write",
       target: "target",
@@ -796,6 +801,9 @@
   function onReply(listener) {
     host().onReply((envelope) => {
       const observed = readObservation(field(envelope, "observed"));
+      const result = field(envelope, "ok");
+      if (observed && (Array.isArray(field(result, "events")) || typeof field(result, "event") === "string"))
+        observed.deferWorkers = true;
       if (observed && field(envelope, "err") !== undefined)
         observed.closes = [];
       listener({
@@ -875,9 +883,24 @@
         if (typeof width === "number" && typeof height === "number")
           fact.viewportSize = { width, height };
       }
+      const workers = readWorkers(field(page, "workers"));
+      if (workers)
+        fact.workers = workers;
       facts.push(fact);
     }
     return facts;
+  }
+  function readWorkers(value) {
+    if (!Array.isArray(value))
+      return null;
+    const workers = [];
+    for (const worker of value) {
+      const id = field(worker, "id");
+      const url = field(worker, "url");
+      if (typeof id === "string" && typeof url === "string")
+        workers.push({ id, url });
+    }
+    return workers;
   }
   function clock() {
     const sleep = Reflect.get(globalThis, "__neo_sleep");
@@ -1066,6 +1089,7 @@
   function markHandle(object) {
     handles.add(object);
   }
+  var inspectCustom = Symbol.for("nodejs.util.inspect.custom");
   function isHandle(value) {
     return typeof value === "object" && value !== null && handles.has(value);
   }
@@ -6659,9 +6683,44 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/signal.ts
+  function signalOf(api, options) {
+    if (typeof options !== "object" || options === null)
+      return;
+    const signal = Reflect.get(options, "signal");
+    if (signal === undefined)
+      return;
+    if (typeof signal !== "object" || signal === null || typeof Reflect.get(signal, "aborted") !== "boolean" || typeof Reflect.get(signal, "addEventListener") !== "function" || typeof Reflect.get(signal, "removeEventListener") !== "function")
+      throw clientError(api, "signal: expected an AbortSignal");
+    if (signal.aborted)
+      throw abortedError(api, signal);
+    return signal;
+  }
+  async function untilAborted(signal, aborted, work) {
+    if (signal === undefined)
+      return await work();
+    if (signal.aborted)
+      throw aborted();
+    let detach = () => {};
+    const abort = new Promise((_, reject) => {
+      const listener = () => reject(aborted());
+      signal.addEventListener("abort", listener, { once: true });
+      detach = () => signal.removeEventListener("abort", listener);
+    });
+    try {
+      return await Promise.race([work(), abort]);
+    } finally {
+      detach();
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/locator.ts
+  var testIdAttribute = "data-testid";
   function testIdAttributeName() {
-    return "data-testid";
+    return testIdAttribute;
+  }
+  function setTestIdAttribute(attributeName) {
+    testIdAttribute = attributeName;
   }
 
   class Locator {
@@ -6677,6 +6736,9 @@ ${value.stack}`;
     }
     toString() {
       return asLocatorDescription("javascript", this._selector);
+    }
+    [inspectCustom]() {
+      return this.toString();
     }
     description() {
       return locatorCustomDescription(this._selector) ?? null;
@@ -6964,7 +7026,8 @@ ${value.stack}`;
     }
     async evaluate(pageFunction, arg, options) {
       const api = "locator.evaluate";
-      const script = pageCall(api, "locator", pageFunction, arg, options);
+      signalOf(api, options);
+      const script = await this._frame._page._evaluationScript(api, "locator", pageFunction, arg, options);
       return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
     }
     async waitForFunction(pageFunction, arg, options) {
@@ -7074,37 +7137,6 @@ ${value.stack}`;
     if (!path)
       return;
     await invoke("page.saveScreenshot", { api, timeoutMs: 0 }, { path, base64: decode(bytes, "base64") }, signal);
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/signal.ts
-  function signalOf(api, options) {
-    if (typeof options !== "object" || options === null)
-      return;
-    const signal = Reflect.get(options, "signal");
-    if (signal === undefined)
-      return;
-    if (typeof signal !== "object" || signal === null || typeof Reflect.get(signal, "aborted") !== "boolean" || typeof Reflect.get(signal, "addEventListener") !== "function" || typeof Reflect.get(signal, "removeEventListener") !== "function")
-      throw clientError(api, "signal: expected an AbortSignal");
-    if (signal.aborted)
-      throw abortedError(api, signal);
-    return signal;
-  }
-  async function untilAborted(signal, aborted, work) {
-    if (signal === undefined)
-      return await work();
-    if (signal.aborted)
-      throw aborted();
-    let detach = () => {};
-    const abort = new Promise((_, reject) => {
-      const listener = () => reject(aborted());
-      signal.addEventListener("abort", listener, { once: true });
-      detach = () => signal.removeEventListener("abort", listener);
-    });
-    try {
-      return await Promise.race([work(), abort]);
-    } finally {
-      detach();
-    }
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot.ts
@@ -7701,7 +7733,7 @@ ${value.stack}`;
       await this._page._navigated(api, this, result, observed);
     }
     async _evaluate(api, pageFunction, arg, options) {
-      const script = pageCall(api, "frame", pageFunction, arg, options);
+      const script = await this._page._evaluationScript(api, "frame", pageFunction, arg, options);
       const { value: result, observed } = await invokeObserved("page.evaluate", this._call(api, 0), {
         ...await this._frameArgs(api),
         script
@@ -7994,7 +8026,7 @@ ${value.stack}`;
     async evaluate(pageFunction, arg, options) {
       const api = "elementHandle.evaluate";
       this.#live(api);
-      const script = pageCall(api, "handle", pageFunction, arg, options);
+      const script = await this._page._evaluationScript(api, "handle", pageFunction, arg, options);
       return fromPageValue(api, await this.#op("locator.evaluate", api, 0, { script }));
     }
     async $eval(selector, pageFunction, arg) {
@@ -8032,8 +8064,115 @@ ${value.stack}`;
     }
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
+  // crates/neo-sdk/neo-playwright-js/src/prelude/init-script.ts
   var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  async function addInitScript(api, owner, script, arg, options) {
+    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+      throw plainError(api, TOO_MANY_ARGUMENTS);
+    if (options && Reflect.get(options, "exposeFunctions")) {
+      if (typeof script !== "function")
+        throw plainError(api, "Passing functions requires the init script to be a function");
+      return await withExposedFunctions(owner, script, arg);
+    }
+    return registration(await owner.register(initSource(api, script, arg)));
+  }
+  async function withExposedFunctions(owner, script, arg) {
+    const exposing = [];
+    const undo = async (error) => {
+      const settled = await Promise.allSettled(exposing);
+      await Promise.all(settled.map((outcome) => outcome.status === "fulfilled" ? outcome.value.dispose().catch(() => {}) : undefined));
+      throw error;
+    };
+    let serialized;
+    try {
+      serialized = serializeAsCallArgument(arg, (value) => {
+        if (typeof value === "function") {
+          const name = callbackName();
+          exposing.push(owner.expose(name, (_source, ...args) => Reflect.apply(value, undefined, args)));
+          return { fn: name };
+        }
+        return { fallThrough: value };
+      });
+    } catch (error) {
+      return await undo(error);
+    }
+    let bindings;
+    let init;
+    try {
+      bindings = await Promise.all(exposing);
+      const source = `(${String(script)})(globalThis['${kBindingsControllerProperty}'].parseInitScriptArg(${JSON.stringify(serialized)}))`;
+      init = registration(await owner.register({ source }));
+    } catch (error) {
+      return await undo(error);
+    }
+    let disposed = false;
+    return new Disposable(async () => {
+      if (disposed)
+        return;
+      disposed = true;
+      await Promise.all(bindings.map((binding) => binding.dispose().catch(() => {})));
+      await init.dispose();
+    });
+  }
+  function callbackName() {
+    let text = kFunctionBindingPrefix;
+    for (let index = 0;index < 16; index++)
+      text += Math.floor(Math.random() * 256).toString(16).padStart(2, "0");
+    return text;
+  }
+  function initSource(api, script, arg) {
+    if (typeof script === "function") {
+      const argText = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
+      return { source: `(${String(script)})(${argText})` };
+    }
+    if (arg !== undefined)
+      throw plainError(api, "Cannot evaluate a string with arguments");
+    if (typeof script === "string")
+      return { source: script };
+    if (typeof script === "object" && script !== null) {
+      const content = Reflect.get(script, "content");
+      if (content !== undefined)
+        return { source: String(content) };
+      const path = Reflect.get(script, "path");
+      if (path !== undefined)
+        return { path: String(path) };
+    }
+    throw plainError(api, "Either path or content property must be present");
+  }
+
+  class Disposable {
+    #dispose;
+    constructor(dispose) {
+      this.#dispose = dispose;
+    }
+    async dispose() {
+      await this.#dispose();
+    }
+  }
+  function registration(id, forget) {
+    return new Disposable(async () => {
+      try {
+        await invoke("disposable.dispose", { api: "disposable.dispose", timeoutMs: 0 }, { id });
+      } finally {
+        forget?.();
+      }
+    });
+  }
+  var asyncDispose = Reflect.get(Symbol, "asyncDispose");
+  if (typeof asyncDispose === "symbol")
+    Object.defineProperty(Disposable.prototype, asyncDispose, {
+      configurable: true,
+      writable: true,
+      value() {
+        return this.dispose();
+      }
+    });
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
+  function exposesFunctions(options) {
+    return typeof options === "object" && options !== null && !!Reflect.get(options, "exposeFunctions");
+  }
+  var TOO_MANY_ARGUMENTS2 = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
   var REFUSALS = {
     unsupported: unsupportedError,
     client: clientError,
@@ -8049,15 +8188,11 @@ ${value.stack}`;
   }
   function assertMaxArguments(api, count, max) {
     if (count > max)
-      throw plainError(api, TOO_MANY_ARGUMENTS);
+      throw plainError(api, TOO_MANY_ARGUMENTS2);
   }
   function assertEvaluateOptions(options) {
     if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS);
-  }
-  function refuseExposedFunctions(api, options) {
-    if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
-      throw unsupportedError(api, "pages cannot call back into the script in Neo; return what the page computed instead");
+      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS2);
   }
   var fallThrough = (value) => ({ fallThrough: value });
   var FORMS = {
@@ -8066,14 +8201,12 @@ ${value.stack}`;
     handle: { options: true, afterWait: false },
     query: { options: false, afterWait: false }
   };
-  function pageCall(api, form, pageFunction, arg, options) {
+  function pageCall(api, form, pageFunction, arg, options, callbacks) {
     const { options: checksOptions, afterWait } = FORMS[form];
-    if (checksOptions)
-      refuseExposedFunctions(api, options);
     try {
       if (checksOptions)
         assertEvaluateOptions(options);
-      return script(api, pageFunction, arg);
+      return script(api, pageFunction, arg, callbacks);
     } catch (error) {
       if (afterWait) {
         const message = error instanceof Error ? error.message : String(error);
@@ -8086,9 +8219,9 @@ ${value.stack}`;
       throw error;
     }
   }
-  function script(api, pageFunction, arg) {
+  function script(api, pageFunction, arg, callbacks) {
     const isFunction = typeof pageFunction === "function";
-    const { serialized, clientHandles } = serializeArgument(api, arg);
+    const { serialized, clientHandles } = serializeArgument(api, arg, callbacks);
     let expression;
     try {
       expression = normalizeEvaluationExpression(String(pageFunction), isFunction);
@@ -8112,12 +8245,17 @@ ${value.stack}`;
       }
     };
   }
-  function serializeArgument(api, arg) {
+  function serializeArgument(api, arg, callbacks) {
     let serialized;
     const clientHandles = [];
     const copies = new Map;
     try {
       serialized = serializeValue(arg, (value) => {
+        if (typeof value === "function" && callbacks) {
+          const name = callbackName();
+          callbacks.push([name, value]);
+          return { fn: name };
+        }
         if (value instanceof ElementHandle) {
           clientHandles.push(value);
           return { h: clientHandles.length - 1 };
@@ -8200,110 +8338,6 @@ ${value.stack}`;
     return expression;
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/prelude/init-script.ts
-  var TOO_MANY_ARGUMENTS2 = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
-  async function addInitScript(api, owner, script, arg, options) {
-    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw plainError(api, TOO_MANY_ARGUMENTS2);
-    if (options && Reflect.get(options, "exposeFunctions")) {
-      if (typeof script !== "function")
-        throw plainError(api, "Passing functions requires the init script to be a function");
-      return await withExposedFunctions(owner, script, arg);
-    }
-    return registration(await owner.register(initSource(api, script, arg)));
-  }
-  async function withExposedFunctions(owner, script, arg) {
-    const exposing = [];
-    const undo = async (error) => {
-      const settled = await Promise.allSettled(exposing);
-      await Promise.all(settled.map((outcome) => outcome.status === "fulfilled" ? outcome.value.dispose().catch(() => {}) : undefined));
-      throw error;
-    };
-    let serialized;
-    try {
-      serialized = serializeAsCallArgument(arg, (value) => {
-        if (typeof value === "function") {
-          const name = kFunctionBindingPrefix + guid();
-          exposing.push(owner.expose(name, (_source, ...args) => Reflect.apply(value, undefined, args)));
-          return { fn: name };
-        }
-        return { fallThrough: value };
-      });
-    } catch (error) {
-      return await undo(error);
-    }
-    let bindings;
-    let init;
-    try {
-      bindings = await Promise.all(exposing);
-      const source = `(${String(script)})(globalThis['${kBindingsControllerProperty}'].parseInitScriptArg(${JSON.stringify(serialized)}))`;
-      init = registration(await owner.register({ source }));
-    } catch (error) {
-      return await undo(error);
-    }
-    let disposed = false;
-    return new Disposable(async () => {
-      if (disposed)
-        return;
-      disposed = true;
-      await Promise.all(bindings.map((binding) => binding.dispose().catch(() => {})));
-      await init.dispose();
-    });
-  }
-  function guid() {
-    let text = "";
-    for (let index = 0;index < 16; index++)
-      text += Math.floor(Math.random() * 256).toString(16).padStart(2, "0");
-    return text;
-  }
-  function initSource(api, script, arg) {
-    if (typeof script === "function") {
-      const argText = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
-      return { source: `(${String(script)})(${argText})` };
-    }
-    if (arg !== undefined)
-      throw plainError(api, "Cannot evaluate a string with arguments");
-    if (typeof script === "string")
-      return { source: script };
-    if (typeof script === "object" && script !== null) {
-      const content = Reflect.get(script, "content");
-      if (content !== undefined)
-        return { source: String(content) };
-      const path = Reflect.get(script, "path");
-      if (path !== undefined)
-        return { path: String(path) };
-    }
-    throw plainError(api, "Either path or content property must be present");
-  }
-
-  class Disposable {
-    #dispose;
-    constructor(dispose) {
-      this.#dispose = dispose;
-    }
-    async dispose() {
-      await this.#dispose();
-    }
-  }
-  function registration(id, forget) {
-    return new Disposable(async () => {
-      try {
-        await invoke("disposable.dispose", { api: "disposable.dispose", timeoutMs: 0 }, { id });
-      } finally {
-        forget?.();
-      }
-    });
-  }
-  var asyncDispose = Reflect.get(Symbol, "asyncDispose");
-  if (typeof asyncDispose === "symbol")
-    Object.defineProperty(Disposable.prototype, asyncDispose, {
-      configurable: true,
-      writable: true,
-      value() {
-        return this.dispose();
-      }
-    });
-
   // crates/neo-sdk/neo-playwright-js/src/prelude/bindings.ts
   async function exposeOnPage(page, api, name, callback, noGlobal = false) {
     if (page._exposed.has(name))
@@ -8375,7 +8409,7 @@ ${value.stack}`;
       if (!Array.isArray(payload.serializedArgs))
         throw new Error("serializedArgs is not an array. This can happen when Array.prototype.toJSON is defined incorrectly");
       const args = payload.serializedArgs.map(fromInPageArgument);
-      const frame = await page._bindingFrame(record.frame);
+      const frame = page._knownBindingFrame(record.frame) ?? await page._bindingFrame(record.frame);
       const result = await callback({ context: page._context, page, frame }, ...args);
       answer = { name, seq, result };
     } catch (error) {
@@ -8499,8 +8533,10 @@ ${value.stack}`;
 
   class ConsoleMessage {
     #pageValue;
+    #workerValue;
     #info;
     constructor(page, info) {
+      this.#workerValue = info.worker ? page._worker(info.worker) : null;
       this.#pageValue = page;
       this.#info = info;
       markHandle(this);
@@ -8509,7 +8545,7 @@ ${value.stack}`;
       return this.#pageValue;
     }
     worker() {
-      return null;
+      return this.#workerValue;
     }
     type() {
       return this.#info.type;
@@ -8533,6 +8569,9 @@ ${value.stack}`;
     toString() {
       return this.#info.text;
     }
+    [inspectCustom]() {
+      return this.text();
+    }
   }
   function pageError(info) {
     const error = new Error(info.message);
@@ -8543,6 +8582,7 @@ ${value.stack}`;
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/events.ts
   var PAGE_EVENTS = new Set([
+    "worker",
     "popup",
     "close",
     "dialog",
@@ -8571,7 +8611,6 @@ ${value.stack}`;
     requestfailed: "Neo does not report network events; wait for what the page shows instead",
     requestfinished: "Neo does not report network events; wait for what the page shows instead",
     websocket: "Neo does not report WebSockets",
-    worker: "Neo does not report workers",
     serviceworker: "Neo does not report service workers",
     backgroundpage: "Neo does not report extension background pages",
     crash: "Neo does not report crashes; a crashed page fails its next call",
@@ -8596,6 +8635,7 @@ ${value.stack}`;
   class EventHub {
     owner;
     listening = 0;
+    workerPages = new Set;
     pumping = false;
     batch = null;
     dialogs = new Map;
@@ -8613,6 +8653,16 @@ ${value.stack}`;
     navigationDelivered = new WeakMap;
     constructor(owner) {
       this.owner = owner;
+    }
+    observeWorkers(page) {
+      if (this.workerPages.has(page))
+        return;
+      this.workerPages.add(page);
+      this.listen(page, "workerstate", true);
+    }
+    forgetWorkers(page) {
+      if (this.workerPages.delete(page))
+        this.listen(page, "workerstate", false);
     }
     listen(page, event, on) {
       const since = Date.now();
@@ -8763,12 +8813,19 @@ ${value.stack}`;
       try {
         if (on && lease)
           await lease.ready;
-        await invoke("events.listen", { api, timeoutMs: 0 }, {
+        const input = !on && event === "workerstate" && page?._tab != null ? {
+          page: null,
+          retiredTab: page._tab,
+          event,
+          on: false,
+          since
+        } : {
           page: page === null ? null : await page._openedBrand(api),
           event,
           on,
           since
-        });
+        };
+        await invoke("events.listen", { api, timeoutMs: 0 }, input);
       } catch {
         if (on && lease)
           lease.release().catch(() => {});
@@ -8848,6 +8905,7 @@ ${value.stack}`;
       return page;
     }
     settleCloses(observed) {
+      this.owner._settleWorkerFacts(observed);
       for (const close of observed?.closes ?? [])
         this.page({ $neo: "page", tab: close.tab })._settleClose(observed);
       this.settleNavigationPublications();
@@ -8861,6 +8919,18 @@ ${value.stack}`;
       if (context && typeof record.at === "number" && record.at < (this.contextSince.get(record.event) ?? Infinity))
         return;
       switch (record.event) {
+        case "workerstate": {
+          const worker = this.page(record.page)._worker(record.worker);
+          if (record.closed)
+            worker._didClose();
+          return;
+        }
+        case "worker":
+          this.page(record.page).emit("worker", this.page(record.page)._worker(record.worker));
+          return;
+        case "workerclosed":
+          this.page(record.page)._worker(record.worker)._didClose();
+          return;
         case "popup":
           this.page(record.page).emit("popup", this.page(record.popup.page, record.popup.url));
           return;
@@ -8956,6 +9026,15 @@ ${value.stack}`;
     }
     value(record, observed) {
       switch (record.event) {
+        case "workerstate":
+          return;
+        case "worker":
+          return this.page(record.page)._worker(record.worker);
+        case "workerclosed": {
+          const worker = this.page(record.page)._worker(record.worker);
+          worker._didClose();
+          return worker;
+        }
         case "popup":
           return this.page(record.popup.page, record.popup.url);
         case "page":
@@ -9153,6 +9232,105 @@ ${value.stack}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/worker.ts
+  class Worker extends EventEmitter {
+    #page;
+    #info;
+    _closed = false;
+    #consoleForward = null;
+    constructor(page, info) {
+      super();
+      this.#page = page;
+      this.#info = info;
+      markHandle(this);
+    }
+    url() {
+      return this.#info.url;
+    }
+    async evaluate(pageFunction, arg) {
+      const api = "worker.evaluate";
+      assertMaxArguments(api, arguments.length, 2);
+      const script = pageCall(api, "frame", pageFunction, arg);
+      if (this._closed)
+        throw clientError(api, "Target page, context or browser has been closed");
+      const { value } = await invoke("worker.evaluate", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), worker: this.#info.id, script });
+      return fromPageValue(api, value);
+    }
+    evaluateHandle() {
+      throw unsupportedError("worker.evaluateHandle", "JS handles are not available in Neo; use worker.evaluate instead");
+    }
+    async waitForEvent(event, optionsOrPredicate = {}) {
+      const api = "worker.waitForEvent";
+      if (event !== "close" && event !== "console")
+        throw unsupportedError(api, `Worker event "${event}" is not available in Neo`);
+      const object = typeof optionsOrPredicate === "object" && optionsOrPredicate !== null ? optionsOrPredicate : {};
+      const predicate = typeof optionsOrPredicate === "function" ? optionsOrPredicate : Reflect.get(object, "predicate");
+      const timeout = Reflect.get(object, "timeout");
+      if (predicate !== undefined && typeof predicate !== "function")
+        throw clientError(api, "predicate: expected function");
+      if (timeout !== undefined && typeof timeout !== "number")
+        throw clientError(api, "timeout: expected number");
+      const options = timeout === undefined ? {} : { timeout };
+      const deadline = new EventDeadline(api, event, Date.now(), timeoutMs(api, this.#page._timeoutSettings.timeout(options)));
+      let listener = () => {};
+      let closed = () => {};
+      const result = new Promise((resolve, reject) => {
+        listener = (value) => {
+          if (typeof predicate !== "function") {
+            resolve(value);
+            return;
+          }
+          try {
+            const accepted = predicate(value);
+            if ((typeof accepted === "object" || typeof accepted === "function") && accepted !== null && typeof Reflect.get(accepted, "then") === "function") {
+              Promise.resolve(accepted).then((result) => {
+                if (result)
+                  resolve(value);
+              }, reject);
+            } else if (accepted)
+              resolve(value);
+          } catch (error) {
+            reject(error);
+          }
+        };
+        closed = () => reject(clientError(api, "Target page, context or browser has been closed"));
+        this.on(event, listener);
+        if (event !== "close")
+          this.on("close", closed);
+        if (this._closed)
+          closed();
+      });
+      try {
+        return await deadline.race(result);
+      } finally {
+        this.off(event, listener);
+        this.off("close", closed);
+      }
+    }
+    _didClose() {
+      if (this._closed)
+        return;
+      this._closed = true;
+      if (this.#consoleForward)
+        this.#page.off("console", this.#consoleForward);
+      this.emit("close", this);
+    }
+    _listenersChanged(event, listening) {
+      if (event !== "console")
+        return;
+      if (listening && !this._closed) {
+        this.#consoleForward = (message) => {
+          if (message.worker() === this)
+            this.emit("console", message);
+        };
+        this.#page.on("console", this.#consoleForward);
+      } else if (this.#consoleForward) {
+        this.#page.off("console", this.#consoleForward);
+        this.#consoleForward = null;
+      }
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/page.ts
   var PDF_KEYS = [
     "scale",
@@ -9253,8 +9431,33 @@ ${value.stack}`;
       const size = { width: viewportSize.width, height: viewportSize.height };
       await invoke("page.setViewportSize", { api: "page.setViewportSize", timeoutMs: 0 }, { page: await this._brand("page.setViewportSize"), viewportSize: size });
     }
+    #workers = new Map;
+    #workerBatches = new Set;
+    #workerSnapshot = null;
     workers() {
-      return [];
+      return [...this.#workers.values()].filter((worker) => !worker._closed);
+    }
+    _worker(info) {
+      let worker = this.#workers.get(info.id);
+      if (!worker) {
+        worker = new Worker(this, info);
+        this.#workers.set(info.id, worker);
+      }
+      return worker;
+    }
+    _settleWorkerFacts(at) {
+      if (at)
+        this.#workerBatches.delete(at.seq);
+      if (this.#workerBatches.size === 0 && this.#workerSnapshot)
+        this.#applyWorkers(this.#workerSnapshot);
+    }
+    #applyWorkers(workers) {
+      const live = new Set(workers.map((worker) => worker.id));
+      for (const [id, worker] of this.#workers)
+        if (!live.has(id))
+          worker._didClose();
+      for (const info of workers)
+        this._worker(info);
     }
     toJSON() {
       return this._tab === null ? { $neo: "page", tab: null } : { $neo: "page", tab: this._tab };
@@ -9460,6 +9663,22 @@ ${value.stack}`;
     }
     exposeFunction(name, callback) {
       return exposeOnPage(this, "page.exposeFunction", name, (_source, ...args) => Reflect.apply(callback, undefined, args));
+    }
+    async _evaluationScript(api, form, pageFunction, arg, options) {
+      const callbacks = exposesFunctions(options) ? [] : undefined;
+      const script = pageCall(api, form, pageFunction, arg, options, callbacks);
+      if (!callbacks?.length || !("run" in script))
+        return script;
+      const settled = await Promise.allSettled(callbacks.map(([name, callback]) => exposeOnPage(this, api, name, (_source, ...args) => Reflect.apply(callback, undefined, args), true)));
+      const failed = settled.find((outcome) => outcome.status === "rejected");
+      if (failed) {
+        await Promise.all(settled.map((outcome) => outcome.status === "fulfilled" ? outcome.value.dispose().catch(() => {}) : undefined));
+        throw failed.reason;
+      }
+      return script;
+    }
+    _knownBindingFrame(id) {
+      return id === null ? this._mainFrame : this.#childFrames.get(id);
     }
     async _bindingFrame(id) {
       if (id === null)
@@ -9756,6 +9975,15 @@ ${value.stack}`;
       if (at.seq < this.#observedSeq)
         return;
       this.#observedSeq = at.seq;
+      if (fact.workers) {
+        this.#workerSnapshot = fact.workers;
+        for (const worker of fact.workers)
+          this._worker(worker);
+        if (at.deferWorkers)
+          this.#workerBatches.add(at.seq);
+        else
+          this._settleWorkerFacts(null);
+      }
       this.#observedHead = Math.max(this.#observedHead, at.events);
       this.#applyViewport(fact.viewportSize);
       if (fact.url !== undefined) {
@@ -9770,13 +9998,18 @@ ${value.stack}`;
           this.#close();
         return;
       }
-      if (fact.closed !== false)
+      if (fact.closed !== false) {
+        if (!this._closed && fact.workers)
+          this._context._events.observeWorkers(this);
         return;
+      }
       this.#approvedClose = null;
       if (this._closed && at.events < this.#closeEvent)
         return;
       this.#liveHead = at.events;
       this._closed = false;
+      if (fact.workers)
+        this._context._events.observeWorkers(this);
     }
     _closeEvent(seq, at = null) {
       if (this.#approvedClose?.seq === seq) {
@@ -9809,6 +10042,9 @@ ${value.stack}`;
       if (this._closed)
         return;
       this._closed = true;
+      this._context._events.forgetWorkers(this);
+      this.#workerSnapshot = [];
+      this._settleWorkerFacts(null);
       this.emit("close", this);
     }
     async _waitForURL(api, frame, url, options = {}) {
@@ -10029,6 +10265,10 @@ ${value.stack}`;
       await Promise.all(working.map((page) => page._refreshFrames(api).catch(() => {
         return;
       })));
+    }
+    _settleWorkerFacts(at) {
+      for (const page of this.#byTab.values())
+        page._settleWorkerFacts(at);
     }
     _applyReply({ pages, defaultPage, observed }) {
       const page = this.#unopened;
@@ -10503,6 +10743,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       receiver: "Locator",
       expectation: arg,
       expected: (isNot) => `Expected: ${isNot ? "not " : ""}${word}`,
+      value: word,
       params: { expression, ...extra },
       options
     };
@@ -10526,6 +10767,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       receiver,
       expectation: "expected",
       expected: (isNot) => `Expected${suffix}: ${isNot ? "not " : ""}${stringify(expected)}`,
+      value: expected,
       params,
       options
     };
@@ -10538,6 +10780,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       receiver: "Locator",
       expectation: "expected",
       expected: (isNot) => `Expected: ${isNot ? "not " : ""}${stringify(expected)}`,
+      value: expected,
       params,
       options
     };
@@ -10664,10 +10907,8 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
     const isLocator = actual instanceof Locator;
     if (matcher.receiver === "Page" ? !isPage : !isLocator)
       throw argumentError(name, `${name} can be only used with ${matcher.receiver} object, was called with ${receiverText(actual)}`);
-    const call = {
-      api,
-      timeoutMs: timeoutMs(api, matcher.options?.timeout ?? state.config.timeout)
-    };
+    const timeout = matcher.options?.timeout ?? state.config.timeout;
+    const call = { api, timeoutMs: timeoutMs(api, timeout) };
     const shape = {
       matcher: name,
       expectation: matcher.expectation,
@@ -10686,12 +10927,32 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
           ...shape
         });
     } catch (error) {
+      if (error instanceof Error)
+        completeMatcherResult(error, name, state, matcher, timeout);
       if (state.message && error instanceof Error)
         error.message = `${state.message}
 
 ${error.message}`;
       throw error;
     }
+  }
+  function isMatcherFacts(value) {
+    return typeof value === "object" && value !== null && Array.isArray(Reflect.get(value, "log")) && typeof Reflect.get(value, "timedOut") === "boolean";
+  }
+  function completeMatcherResult(error, name, state, matcher, timeout) {
+    const facts = Reflect.get(error, "matcherResult");
+    if (!isMatcherFacts(facts))
+      return;
+    Reflect.set(error, "matcherResult", {
+      message: error.message,
+      pass: state.isNot,
+      actual: facts.actual,
+      name,
+      expected: matcher.value,
+      log: facts.log,
+      timeout: facts.timedOut ? timeout : undefined,
+      ariaSnapshot: facts.ariaSnapshot
+    });
   }
   async function urlPredicate(page, predicate, state, options) {
     const timeout = options?.timeout ?? state.config.timeout;
@@ -10734,6 +10995,9 @@ Timeout: ${timeout}ms`);
   var TRACE = "Neo records its own trace of every run";
   var ROOTED = "element handles cannot root a selector in Neo; use locator.locator(selector) instead";
   var UNSUPPORTED2 = {
+    Selectors: {
+      register: "custom selector engines are not available in Neo; locate with CSS, text, role or test-id selectors"
+    },
     Browser: {
       bind: "Neo does not share its browser",
       browserType: {
@@ -11089,8 +11353,25 @@ Call Log:
     return expect;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/playwright.ts
+  class Selectors {
+    setTestIdAttribute(attributeName) {
+      setTestIdAttribute(attributeName);
+    }
+  }
+  function createPlaywright() {
+    const sample = localTimeout("");
+    if (sample === null)
+      throw internalError("playwright", "claw-sdk's bootstrap has no TimeoutError");
+    return {
+      selectors: new Selectors,
+      errors: { TimeoutError: sample.constructor }
+    };
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/index.ts
   installUnsupported({
+    Selectors,
     Browser,
     BrowserContext,
     Page,
@@ -11122,5 +11403,6 @@ Call Log:
   provide("context", () => context);
   provide("browser", () => browser);
   provide("expect", () => expect);
+  provide("playwright", () => createPlaywright());
   provide("Buffer", () => Buffer);
 })();

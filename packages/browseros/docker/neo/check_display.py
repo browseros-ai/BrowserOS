@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check inside a running Neo container that its display matches the server it runs.
 
-claw-sdk images keep the X clipboard from every VNC client (sdk-privacy D6.1) and
+claw-sdk images disable X clipboard export to VNC clients and
 run no unauthenticated noVNC viewer on 6080 (sdk-traces R1). claw-server images
 keep both, as before. The release workflow streams this script to the container
 with the server it expects, as it does check_zoom.py:

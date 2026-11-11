@@ -1,5 +1,5 @@
-// Neo refs retain identity across snapshots, but never bind a replacement element; a sensitive
-// field and the page text around it read as the page holds them.
+// Neo refs retain identity across snapshots, but never bind a replacement element. Field
+// values and surrounding text remain ordinary page data, including password inputs.
 await page.setContent(
   '<button>Original</button><iframe srcdoc="<button>Child</button>"></iframe>',
 )
@@ -33,7 +33,7 @@ expect(Boolean(detached)).toBe(true)
 expect(
   await page.getByRole('button', { name: 'Replacement' }).textContent(),
 ).toBe('Replacement')
-await page.goto(`${origin}/sensitive.html`)
+await page.goto(`${origin}/form-values.html`)
 expect(await page.locator('#password').inputValue()).toBe(
   String.fromCharCode(104, 117, 110, 116, 101, 114, 50, 50),
 )

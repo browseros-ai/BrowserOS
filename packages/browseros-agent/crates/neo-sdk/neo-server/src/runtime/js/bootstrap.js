@@ -25,9 +25,16 @@
   // looks the op up and reports the failure the door decided.
   const genuine = new WeakMap()
 
-  /** Every SDK failure. The fields are the trace's, so the agent and the record agree. */
+  /**
+   * Every SDK failure. The fields are the trace's, so the agent and the record agree. A script
+   * may construct one with a plain message, as Playwright's own `new TimeoutError('...')`.
+   */
   class NeoError extends Error {
-    constructor(err) {
+    constructor(errOrMessage) {
+      const err =
+        typeof errOrMessage === 'string'
+          ? { message: errOrMessage }
+          : errOrMessage
       super(String(err.message))
       this.name = 'NeoError'
       this.code = err.code // e.g. "page_closed"
@@ -35,6 +42,9 @@
       this.delivery = err.delivery // "not_sent" | "done" | "unknown"
       this.retryable = err.retryable
       this.operationId = err.operationId
+      // A failed `expect` matcher's facts (neo-playwright's expect op); the expect prelude
+      // completes them into Playwright's `matcherResult` before the script can catch the error.
+      if (err.matcher !== undefined) this.matcherResult = err.matcher
     }
   }
 

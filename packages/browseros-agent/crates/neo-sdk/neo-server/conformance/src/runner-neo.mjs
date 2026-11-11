@@ -75,8 +75,6 @@ export async function connectNeo(env, signal) {
 // The host trace exposes a bounded source preview, while the MCP call carries the whole
 // program. Reproduce neo-trace's UTF-8 byte cutoff exactly and reject any other mismatch.
 export function traceCodeEvidence(code, trace) {
-  if (trace.codeWithheld === 'sensitive_input' && trace.code == null)
-    return 'withheld'
   if (trace.code === code) return 'full'
   const bytes = Buffer.from(code)
   const limit = 64 * 1024
@@ -169,7 +167,6 @@ export async function runNeo({
       binarySha256: env.binarySha256,
       gitSha: env.gitSha,
       opCount: trace?.operationCount,
-      codeWithheld: traceCode === 'withheld',
       traceCode,
       traceVerified: traceVerified === true,
     },

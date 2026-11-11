@@ -33,6 +33,7 @@ async function instances(): Promise<Record<string, object>> {
     answer: (call) => (call.name === 'locator.elementHandle' ? ELEMENT : null),
   })
   return (await runtime.run(`return {
+    Selectors: playwright.selectors,
     Browser: browser,
     BrowserContext: context,
     Page: page,
@@ -171,6 +172,7 @@ describe('unsupported members', () => {
     })
     const outcomes = (await runtime.run(`
       const targets = {
+        Selectors: playwright.selectors,
         Browser: browser,
         BrowserContext: context,
         Page: page,

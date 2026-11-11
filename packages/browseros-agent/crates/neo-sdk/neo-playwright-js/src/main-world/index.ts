@@ -8,7 +8,7 @@
  * verbatim, and `waitForFunction`'s predicate as the server builds it (`waitForFunctionExpression`,
  * PW:25672-25722). What it adds is the transport. Values cross CDP as JSON text in Playwright's
  * serialized format, both ways, so a message stays flat however deep its value: browseros-cdp
- * drops a reply nested deeper than 128 levels. Rust parses that text strictly and masks it by its
+ * drops a reply nested deeper than 128 levels. Rust parses that text strictly and checks its
  * structure before anything leaves the op (`page/page_value.rs`). json-text.ts reads and writes
  * the text, not the page's `JSON`, and the arguments are walked by index, not with the array
  * methods: the page owns those globals and may have replaced them, and upstream, whose values

@@ -146,6 +146,10 @@ struct ErrBody<'a> {
     /// Makes the bootstrap throw a `TimeoutError`.
     timeout: bool,
     message: &'a str,
+    /// A failed `expect` matcher's facts, which the bootstrap puts on the error as
+    /// `matcherResult` for the expect prelude to complete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matcher: Option<&'a Value>,
 }
 
 /// The tab of the run's own page, once the call that needed it opened it. Plain ids rather
@@ -229,7 +233,11 @@ impl Bridge {
             if failures.len() == FAILURES_REMEMBERED {
                 failures.pop_front();
             }
-            failures.push_back(failure.clone());
+            // The run's own error needs only the failure's fields; a matcher's snapshot and log
+            // go to the script in the reply below and are not kept for the rest of the run.
+            let mut remembered = failure.clone();
+            remembered.error = remembered.error.without_matcher();
+            failures.push_back(remembered);
         }
         // Poll receiver readiness, not browser work: an earlier dispatcher may have sent
         // its reply while that producer's own callback task has not run yet. A ready shared
@@ -394,6 +402,7 @@ impl<'a> From<&'a OpFailure> for ErrBody<'a> {
             operation_id: failure.operation,
             timeout: failure.error.is_timeout(),
             message: failure.error.message(),
+            matcher: failure.error.matcher(),
         }
     }
 }

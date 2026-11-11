@@ -21,11 +21,11 @@ host / MCP run
 | Package | Responsibility |
 |---|---|
 | `neo-server` | Stateless MCP `run`, JavaScript runtime, dispatch and application wiring. Builds `browseros-claw-sdk`. |
-| `neo-playwright` | Browser operations, locators, snapshots and the sealed-world engine boundary. |
+| `neo-playwright` | Browser operations, locators, snapshots and the isolated-world engine boundary. |
 | `neo-playwright-js` | JavaScript probe and agent prelude; builds the engine's committed assets and fixtures. |
 | `neo-service` | Authenticated host API, traces, live views and takeover routes. |
 | `neo-takeover` | Tab locks, display control, viewport fitting and owner handoff. |
-| `neo-trace` | Run and operation records, storage, masking and privacy. |
+| `neo-trace` | Run and operation records, storage and bounded trace values. |
 | `neo-sdk-api` | Host API specification, generated Rust models and migration notes. |
 | `neo-captcha` | Shared CAPTCHA solver, also used by desktop. |
 | `neo-capture` | Shared capture hub, also used by desktop. |

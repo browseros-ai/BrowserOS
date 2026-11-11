@@ -86,6 +86,8 @@ export type CallHeader = { api: string; timeoutMs: number }
 
 /** The host read serial and the event-log head before that read. */
 export type Observation = {
+  /** An event reply applies worker closure after its journal records are dispatched. */
+  deferWorkers?: boolean
   seq: number
   events: number
   payloadCurrent?: boolean
@@ -96,7 +98,10 @@ export type Observation = {
  * What the host knows about a tab: the run's init, every reply's `pages`, results, events.
  * `tab` is the browser's tab id, which the page's brand carries.
  */
+export type WorkerInfo = { id: string; url: string }
+
 export type PageFact = {
+  workers?: WorkerInfo[]
   tab: number
   url?: string
   title?: string
@@ -155,11 +160,14 @@ export type Done = Record<string, never>
 
 /** A frame Rust could not read within its budget; it keeps its iframe line and gets a comment. */
 export type PartialFrame = { ref: string; frame: string; reason: string }
-/** A stitched, masked aria snapshot. The prelude renders it as YAML. */
+/** A stitched aria snapshot. The prelude renders it as YAML. */
 export type SnapshotResult = { json: AriaSnapshotJSON; partial: PartialFrame[] }
 
 /** The Playwright events Neo reports. `page` is the context's; the rest are a page's. */
 export type EventName =
+  | 'worker'
+  | 'workerclosed'
+  | 'workerstate'
   | 'popup'
   | 'close'
   | 'dialog'
@@ -183,6 +191,7 @@ export type DialogInfo = {
   defaultValue: string
 }
 export type ConsoleInfo = {
+  worker?: WorkerInfo
   type: string
   text: string
   location: { url: string; lineNumber: number; columnNumber: number }
@@ -233,6 +242,13 @@ export type EventRecord = { seq: number; at: number } & (
       page: PageBrand
       dialog: DialogInfo
       context: boolean
+    }
+  | { event: 'worker' | 'workerclosed'; page: PageBrand; worker: WorkerInfo }
+  | {
+      event: 'workerstate'
+      page: PageBrand
+      worker: WorkerInfo
+      closed: boolean
     }
   | { event: 'console'; page: PageBrand; message: ConsoleInfo }
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
@@ -520,6 +536,7 @@ export type OpInputs = {
   'page.close': PageArgs & { runBeforeUnload?: true }
   'page.opener': PageArgs
   'page.frames': PageArgs
+  'worker.evaluate': { page: PageHandle; worker: string; script: PageScript }
   'page.evaluate': FrameArgs & { script: PageScript }
   /** `noWait` is `$eval`: no waiting for the element, as `locator.evaluate` does. */
   'locator.evaluate': TargetArgs & {
@@ -560,12 +577,16 @@ export type OpInputs = {
    * event ops name no target the door resolves, so their page always has its tab: the
    * prelude opens the run's lazy page first (`Page._openedBrand`).
    */
-  'events.listen': {
-    page: PageBrand | null
-    event: EventName
-    on: boolean
-    since: number
-  }
+  'events.listen':
+    | { page: PageBrand | null; event: EventName; on: boolean; since: number }
+    /** Cleanup addresses only this run's bookkeeping key; the tab may already be gone. */
+    | {
+        page: null
+        retiredTab: number
+        event: 'workerstate'
+        on: false
+        since: number
+      }
   /**
    * The background pump. It names no cursor: Rust keeps one read position per listener in the
    * run's state, so a listener attached after the pump read past an event still gets it.
@@ -663,11 +684,12 @@ export type OpOutputs = {
   'page.close': Done
   'page.opener': { opener: PageBrand | null }
   'page.frames': Partial<FrameTree>
-  /** The script's result in Playwright's in-page format, masked. */
+  /** The script's result in Playwright's in-page format. */
+  'worker.evaluate': { value: SerializedValue }
   'page.evaluate': { value: SerializedValue; frames?: FrameInfo[] }
   'locator.evaluate': SerializedValue
   'locator.evaluateAll': SerializedValue
-  /** The predicate's truthy value, masked, and upstream's preview of it (`toString()`). */
+  /** The predicate's truthy value and upstream's preview of it (`toString()`). */
   'page.waitForFunction': { value: SerializedValue; preview: string }
   'locator.waitForFunction': null
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */

@@ -18,6 +18,12 @@ use crate::world::BackendNodeId;
 pub(crate) enum PageEvent {
     /// Internal facts for navigation waiters; never delivered as public page events.
     Navigation(NavigationEvent),
+    /// Dedicated worker lifetime, retained independently of page listeners.
+    Worker {
+        target: TargetId,
+        worker: super::worker_table::WorkerInfo,
+        closed: bool,
+    },
     /// Public frame state at the transition, retained after the frame disappears.
     FrameLifecycle(FrameLifecycle),
     /// A main document fired a load event; OOPIF loads never become page loads.
@@ -53,6 +59,23 @@ impl PageEvent {
     /// Whether this is an event of `kind` for the page whose target is `target`.
     pub(crate) fn concerns(&self, kind: PageEventKind, target: &TargetId) -> bool {
         match (kind, self) {
+            (PageEventKind::WorkerState, Self::Worker { target: page, .. })
+            | (
+                PageEventKind::Worker,
+                Self::Worker {
+                    target: page,
+                    closed: false,
+                    ..
+                },
+            )
+            | (
+                PageEventKind::WorkerClosed,
+                Self::Worker {
+                    target: page,
+                    closed: true,
+                    ..
+                },
+            ) => page == target,
             (kind, Self::FrameLifecycle(frame)) => frame.target == *target && frame.kind == kind,
             (
                 kind,
@@ -178,6 +201,7 @@ impl DialogKind {
 /// A console message, in Playwright's terms.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ConsoleMessage {
+    pub(crate) worker: Option<super::worker_table::WorkerInfo>,
     pub(crate) target: TargetId,
     /// `log`, `warning`, `error`, `info`, `debug`, ... as CDP and Playwright both name them.
     pub(crate) kind: String,
@@ -316,6 +340,7 @@ impl ConsoleMessage {
             })
             .unwrap_or_default();
         Self {
+            worker: None,
             target,
             kind: params.kind,
             text: text.join(" "),
@@ -331,10 +356,7 @@ impl PageError {
     pub(crate) fn from_params(target: TargetId, params: ExceptionParams) -> Self {
         let details = params.exception_details;
         let with_stack = if let Some(exception) = &details.exception {
-            exception
-                .description
-                .clone()
-                .unwrap_or_else(|| exception.value.as_ref().map(js_string).unwrap_or_default())
+            exception.thrown_text()
         } else {
             let frames: Vec<String> = details
                 .stack_trace
@@ -396,6 +418,21 @@ impl PageError {
 }
 
 impl RemoteObject {
+    /// Upstream's `getExceptionMessage` for a thrown value: `description || String(value)`. CDP
+    /// sends a thrown `null` as `"value": null`, which reads as no value here, and a thrown
+    /// `undefined` with no value at all, so both are told apart by their type, as `String` would
+    /// print them.
+    fn thrown_text(&self) -> String {
+        if let Some(description) = self.description.as_ref().filter(|text| !text.is_empty()) {
+            return description.clone();
+        }
+        match &self.value {
+            Some(value) => js_string(value),
+            None if self.subtype.as_deref() == Some("null") => "null".to_owned(),
+            None => "undefined".to_owned(),
+        }
+    }
+
     /// Upstream's `renderPreview`: what one console argument prints as.
     fn preview(&self) -> String {
         if self.kind == "undefined" {
@@ -544,6 +581,32 @@ mod tests {
             ),
             ("", "plain", "")
         );
+        Ok(())
+    }
+
+    /// ER-006: a thrown value that is not an error reads as `String(value)`, as upstream's
+    /// `getExceptionMessage` gives it, `null` and `undefined` included.
+    #[test]
+    fn tests_that_odd_thrown_values_read_as_upstreams_string_of_them()
+    -> Result<(), serde_json::Error> {
+        for (exception, message) in [
+            (
+                json!({ "type": "object", "subtype": "null", "value": null }),
+                "null",
+            ),
+            (json!({ "type": "undefined" }), "undefined"),
+            (
+                json!({ "type": "number", "value": 0, "description": "0" }),
+                "0",
+            ),
+            (json!({ "type": "string", "value": "" }), ""),
+        ] {
+            let thrown: ExceptionParams = serde_json::from_value(json!({ "exceptionDetails": {
+                "text": "Uncaught", "exception": exception,
+            } }))?;
+            let error = PageError::from_params(target(), thrown);
+            assert_eq!((error.name.as_str(), error.message.as_str()), ("", message));
+        }
         Ok(())
     }
 }

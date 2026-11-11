@@ -1,4 +1,4 @@
-//! Sealed-world facts no op can observe, against a real browser: where a page's seqs start,
+//! Isolated-world facts no op can observe, against a real browser: where a page's seqs start,
 //! that concurrent first uses share one install, that a navigation retires a seq, that the
 //! probe reads a field as the page has it, that a strict CSP does not stop the install, that a second
 //! `Playwright` re-keys a world, that `page.setContent` keeps the seq while an old ref fails,
@@ -30,9 +30,9 @@ use crate::probe::{
 use crate::target::{CallHeader, Strictness};
 use crate::test_support::fixture_server::{FixtureServer, Page};
 use crate::test_support::{LiveBrowser, Tab, TestResult, count_op};
-use crate::world::sealed_world::SEALED_WORLD;
+use crate::world::isolated_world::ENGINE_WORLD;
 use crate::world::{
-    ContextWatch, FrameSeq, ParentLink, Pin, Place, SealedWorld, SeqLookup, SessionKind,
+    ContextWatch, FrameSeq, IsolatedWorld, ParentLink, Pin, Place, SeqLookup, SessionKind,
 };
 
 const PASSWORD_PAGE: &str = r#"<!doctype html><title>pw</title>
@@ -60,7 +60,7 @@ fn resolve(target: ParsedSelector, want: Want) -> ProbeRequest {
 
 /// `resolve { want: element }`, as an op sends it.
 async fn resolve_element(
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     target: ParsedSelector,
 ) -> TestResult<Result<ProbeReply, ProbeFailure>> {
     Ok(probe::call(world, &resolve(target, Want::Element)).await)
@@ -219,11 +219,11 @@ async fn install_over(
     recorder: &Arc<Recorder>,
     at: (&ProtocolSession, &str, SessionKind),
     seq: u32,
-) -> TestResult<Result<SealedWorld, ProbeFailure>> {
+) -> TestResult<Result<IsolatedWorld, ProbeFailure>> {
     let (session, frame, kind) = at;
     let session = recorder.session(session)?;
     live.playwright.sessions().ensure(&session, kind).await?;
-    Ok(SealedWorld::install(
+    Ok(IsolatedWorld::install(
         session,
         FrameId(frame.to_owned()),
         FrameSeq(seq),
@@ -235,7 +235,7 @@ async fn install_over(
 }
 
 /// The URL the world's own `location` reads, through its handle.
-async fn world_url(world: &SealedWorld) -> TestResult<Value> {
+async fn world_url(world: &IsolatedWorld) -> TestResult<Value> {
     let read: Value = world
         .session()
         .send(
@@ -249,7 +249,7 @@ async fn world_url(world: &SealedWorld) -> TestResult<Value> {
 /// The frame of the same-process `<iframe>` the probe pinned in `world`.
 async fn same_process_frame(
     scope: &OpScope<'_>,
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     pin: Pin,
 ) -> TestResult<FrameId> {
     let iframe = probe::pinned_object(scope, world, pin)
@@ -273,7 +273,7 @@ async fn same_process_frame(
 }
 
 /// Boots `world`'s probe as another `Playwright` would: under `epoch`, numbering it `seq`.
-async fn boot_as(world: &SealedWorld, seq: FrameSeq, epoch: &str) -> TestResult {
+async fn boot_as(world: &IsolatedWorld, seq: FrameSeq, epoch: &str) -> TestResult {
     world
         .session()
         .send::<_, Value>(
@@ -309,7 +309,11 @@ async fn navigate_frame(tab: &Tab, search: &str) -> TestResult {
 }
 
 /// The main frame's world, as an op reaches it.
-async fn main_world(live: &LiveBrowser, scope: &OpScope<'_>, tab: &Tab) -> TestResult<SealedWorld> {
+async fn main_world(
+    live: &LiveBrowser,
+    scope: &OpScope<'_>,
+    tab: &Tab,
+) -> TestResult<IsolatedWorld> {
     let page = OpPage::admit(&live.playwright, scope, tab.id).await?;
     Ok(page.world(&page.main_endpoint(), Place::Main).await?)
 }
@@ -569,7 +573,7 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
 /// field as the page holds it on such a page too.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_a_world_an_earlier_build_sealed_is_never_the_engines() -> TestResult {
+async fn tests_that_a_legacy_sdk_world_is_never_reused_by_the_engine() -> TestResult {
     let live = LiveBrowser::connect().await?;
     let server = fixtures().await?;
     let tab = live
@@ -585,12 +589,12 @@ async fn tests_that_a_world_an_earlier_build_sealed_is_never_the_engines() -> Te
             json!({ "frameId": tab.target.as_str(), "worldName": "browseros-sdk" }),
         )
         .await?;
-    let sealed = "Object.defineProperty(HTMLInputElement.prototype, 'value', \
+    let legacy_getter = "Object.defineProperty(HTMLInputElement.prototype, 'value', \
                   { configurable: true, get() { return '••••' } }); 1";
     tab.session
         .send::<_, Value>(
             "Runtime.evaluate",
-            json!({ "expression": sealed, "contextId": created["executionContextId"] }),
+            json!({ "expression": legacy_getter, "contextId": created["executionContextId"] }),
         )
         .await?;
 
@@ -629,7 +633,7 @@ async fn tests_that_an_older_protocols_probe_is_rekeyed_then_replaced() -> TestR
         .session
         .send(
             "Page.createIsolatedWorld",
-            json!({ "frameId": tab.target.as_str(), "worldName": SEALED_WORLD }),
+            json!({ "frameId": tab.target.as_str(), "worldName": ENGINE_WORLD }),
         )
         .await?;
     let context = created["executionContextId"].clone();

@@ -1,6 +1,10 @@
 /** Audited v1 refusals: prelude hints and the production door's refusal codes. */
 const hints = [
   {
+    hint: 'custom selector engines are not available in Neo; locate with CSS, text, role or test-id selectors',
+    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
+  },
+  {
     hint: 'Neo does not share its browser',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
@@ -29,15 +33,7 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
-    hint: 'init scripts are not available in Neo; run page.evaluate() after page.goto()',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
     hint: "permissions are the owner's profile settings",
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
-    hint: 'pages cannot call back into the script; read state with page.evaluate()',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
@@ -335,10 +331,6 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/bridge.ts'],
   },
   {
-    hint: 'pages cannot call back into the script in Neo; return what the page computed instead',
-    sources: ['neo-playwright-js/src/prelude/evaluation.ts'],
-  },
-  {
     hint: 'an op cannot be aborted from the script in Neo; pass timeout instead',
     sources: ['neo-playwright-js/src/prelude/evaluation.ts'],
   },
@@ -352,10 +344,6 @@ const hints = [
   },
   {
     hint: "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()",
-    sources: ['neo-playwright-js/src/prelude/frame.ts'],
-  },
-  {
-    hint: 'Neo cannot mask elements in a screenshot; omit mask',
     sources: ['neo-playwright-js/src/prelude/frame.ts'],
   },
   {
@@ -389,7 +377,7 @@ const hints = [
 ]
 
 const escapePattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const api = String.raw`(?:browser|browserContext|page|frame|locator|elementHandle|jsHandle|download|consoleMessage|response|expect|keyboard|mouse)\.[^:\n]+`
+const api = String.raw`(?:browser|browserContext|page|frame|locator|elementHandle|jsHandle|download|consoleMessage|response|expect|keyboard|mouse|selectors)\.[^:\n]+`
 const prefix = `^(?:\\w*Error: )?${api}: `
 
 export const clawRefusals = hints.map(({ hint, sources }) => ({
@@ -450,27 +438,6 @@ const rustHints = [
   },
   {
     wording:
-      "<api>: a frame of the script's site did not answer Neo's privacy sweep within {}ms, {consequence}; try again once the frame responds",
-    sources: ['neo-playwright/src/page/evaluate_guard.rs'],
-    expression:
-      "a frame of the script's site did not answer Neo's privacy sweep within .+ms, .+; try again once the frame responds",
-  },
-  {
-    wording:
-      "<api>: Neo lost its connection to a frame of the script's site and could not reach it again for its privacy sweep, {consequence}; try again",
-    sources: ['neo-playwright/src/page/evaluate_guard.rs'],
-    expression:
-      "Neo lost its connection to a frame of the script's site and could not reach it again for its privacy sweep, .+; try again",
-  },
-  {
-    wording:
-      "<api>: Neo does not open javascript: URLs, whose script runs in the page's main world outside Neo's privacy sweep; run the script with page.evaluate",
-    sources: ['neo-playwright/src/page/navigation.rs'],
-    expression:
-      "Neo does not open javascript: URLs, whose script runs in the page's main world outside Neo's privacy sweep; run the script with page\\.evaluate",
-  },
-  {
-    wording:
       "<api>: Neo navigates only a page's main frame; navigate the page, or set the iframe's src with page.evaluate",
     sources: ['neo-playwright/src/page/navigation.rs'],
     expression:
@@ -482,20 +449,6 @@ const rustHints = [
     sources: ['neo-playwright/src/resolve/frame_start.rs'],
     expression:
       'this frame belongs to .+; Neo enters the frames of <iframe> and <frame> elements only',
-  },
-  {
-    wording:
-      "<api>: a sensitive field of the frame's site changed while Neo read the page, and again when it read once more, so the result is withheld; try again once the field stops changing",
-    sources: ['neo-playwright/src/resolve/resolver.rs'],
-    expression:
-      "a sensitive field of the frame's site changed while Neo read the page, and again when it read once more, so the result is withheld; try again once the field stops changing",
-  },
-  {
-    wording:
-      "<api>: a frame did not answer Neo's privacy scan within {}ms, so Neo cannot see every shadow root of its page and refuses the op; try again once the frame responds",
-    sources: ['neo-playwright/src/resolve/resolver.rs'],
-    expression:
-      "a frame did not answer Neo's privacy scan within .+ms, so Neo cannot see every shadow root of its page and refuses the op; try again once the frame responds",
   },
   {
     wording:
@@ -534,24 +487,10 @@ const rustHints = [
   },
   {
     wording:
-      "<api>: toHaveJSProperty is not supported: Neo matches in a sealed world that does not see the page's own JavaScript objects; use expect.poll(() => locator.evaluate((element) => element.name)).toEqual(value) instead",
+      "<api>: toHaveJSProperty is not supported: Neo matches in an isolated world that does not see the page's own JavaScript objects; use expect.poll(() => locator.evaluate((element) => element.name)).toEqual(value) instead",
     sources: ['neo-playwright/src/expect/expectation.rs'],
     expression:
-      "toHaveJSProperty is not supported: Neo matches in a sealed world that does not see the page's own JavaScript objects; use expect\\.poll\\(\\(\\) => locator\\.evaluate\\(\\(element\\) => element\\.name\\)\\)\\.toEqual\\(value\\) instead",
-  },
-  {
-    wording:
-      '<api>: Neo refused this call: linked tabs are not checked by the host',
-    sources: ['neo-playwright/src/op_env.rs'],
-    expression:
-      'Neo refused this call: the page is linked to \\d+ other tab\\(s\\) through window\\.opener .+',
-  },
-  {
-    wording:
-      '<api>: a script in this page can act on an unlisted tab through window.opener',
-    sources: ['neo-server/src/dispatch/op_ctx.rs'],
-    expression:
-      'a script in this page can act on tab \\d+ through window\\.opener .+So Neo cannot check its rules there',
+      "toHaveJSProperty is not supported: Neo matches in an isolated world that does not see the page's own JavaScript objects; use expect\\.poll\\(\\(\\) => locator\\.evaluate\\(\\(element\\) => element\\.name\\)\\)\\.toEqual\\(value\\) instead",
   },
 ]
 

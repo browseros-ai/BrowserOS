@@ -30,6 +30,8 @@ pub struct ConnectOptions {
     pub state_dir: String,
     pub execution_dir: Option<String>,
     pub browseros_version: Option<String>,
+    /// Whether the browser was launched with `BROWSERCLAW_HOSTED_MODE=1`; off when absent.
+    pub hosted_mode: Option<bool>,
 }
 
 #[napi]
@@ -46,6 +48,7 @@ pub fn connect(env: Env, cdp_port: u16, options: ConnectOptions) -> Result<JsObj
                 state_dir: PathBuf::from(options.state_dir),
                 execution_dir: options.execution_dir.map(PathBuf::from),
                 browseros_version: options.browseros_version,
+                hosted_mode: options.hosted_mode.unwrap_or(false),
             },
         )
         .await

@@ -7,7 +7,7 @@ The binary is `browseros-claw-sdk`. Code style and review rules are in [STYLE.md
 ## Hosting the real SDK in Node
 
 The default-off Cargo feature `hosted-run` exports `hosted::{HostedRuntime, HostedOptions,
-HostedRun}`. It builds the real trace store, secrets, privacy hooks, browser link, Playwright
+HostedRun}`. It builds the real trace store, browser link, Playwright
 facade, built-ins, dispatcher and tab janitor. It binds no listeners and disables the trace
 screenshot queue. Feature-off builds retain the product path.
 
@@ -19,10 +19,11 @@ returned future always resolves to the bridge envelope. `log` and `sleep` use th
 deadline or dropped run also ends through that path. `close()` drains runs, flushes traces
 and releases the private executor, including core's background tasks and CDP socket.
 
-`state_dir` is required; the store is `<state_dir>/claw-sdk/trace.db`. Pass Chromium's
-`<user-data-dir>/.browseros` as `execution_dir` to locate the secret profile, and the installed
-app's version as `browseros_version` for native capability gates. Without an execution directory,
-the product refuses path uploads. An initial run has `init.page = null`; `init.pages` includes
+`state_dir` is required; the store is `<state_dir>/claw-sdk/trace.db`. Pass the installed
+app's version as `browseros_version` for native capability gates. `execution_dir` is accepted
+as a legacy launch fact; it imposes no upload path policy. Set `hosted_mode` when the browser
+was launched with `BROWSERCLAW_HOSTED_MODE=1`; it is off by default, as the spec runner launches
+BrowserOS unless given `--hosted-mode`. An initial run has `init.page = null`; `init.pages` includes
 all existing tabs, including the launch tab. The lazy default page opens when the SDK needs it.
 
 The isolated N-API crate is `../neo-playwright-tests/node/claw-addon` (its own workspace and
@@ -74,7 +75,7 @@ Chromium starts the binary with its launch JSON and reads the exit code.
 | The agent port is taken | Exits 2, and Chromium relaunches Neo on the next port. Nothing else exits 2. |
 | Any other failure | Exits 1, bad arguments included. |
 
-From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (default 49337), `directories.resources`, `directories.execution` (Chromium's `<user-data-dir>/.browseros`, which places the browser profile among Neo's secret files), and `instance.browseros_version`. It ignores every other key. claw-sdk has no config file of its own, so it logs and ignores `BROWSERCLAW_CONFIG_FILE`.
+From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (default 49337), `directories.resources`, `directories.execution` (Chromium's `<user-data-dir>/.browseros`), and `instance.browseros_version`. It ignores every other key. claw-sdk has no config file of its own, so it logs and ignores `BROWSERCLAW_CONFIG_FILE`.
 
 `src/config/env_config.rs` reads the environment once, at start. A blank value counts as unset. A malformed address or screen size fails the start with exit 1.
 
@@ -94,7 +95,7 @@ From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (defaul
 Neo binds two listeners:
 
 - The agent listener is `127.0.0.1:<ports.server>`, with no auth. Chromium's proxy forwards to it. It serves `/mcp`, plus `GET /system/health` and `GET /system/ready` for Chromium's supervisor. `/mcp` refuses any request that carries `Origin` or `Sec-Fetch-Site`, so a web page in the driven browser cannot call `run`.
-- The host listener is a Unix socket with mode 0660, plus TCP when `CLAW_HOST_TCP` is set. It serves neo-service's `/v1` routes (runs, operations, screenshots, events, locks, tab privacy, and fits) behind the service's bearer and peer-uid checks. The service starts when the browser link first connects.
+- The host listener is a Unix socket with mode 0660, plus TCP when `CLAW_HOST_TCP` is set. It serves neo-service's `/v1` routes (runs, operations, screenshots, events, locks, tabs, and fits) behind the service's bearer and peer-uid checks. The service starts when the browser link first connects.
 
 State lives under `$BROWSERCLAW_DIR`:
 
@@ -108,7 +109,7 @@ State lives under `$BROWSERCLAW_DIR`:
 
 The realm provides `URL`, `URLSearchParams`, `atob`, `btoa` and `DOMException`. Known URL differences: `url` 2.5.8 retains the older opaque-path trailing-space rules; `URL.createObjectURL` and `URL.revokeObjectURL` are absent.
 
-The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: Playwright's `page`, `context`, `browser` and `expect`, and Node's `Buffer` (neo-playwright's prelude), `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
+The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: Playwright's `page`, `context`, `browser`, `expect` and `playwright` (its `selectors` and `errors`), and Node's `Buffer` (neo-playwright's prelude), `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
 
 The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `taskId` makes the task's last tab the run's `page`. Without it, `page` opens a background tab on the first call that needs one. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
 
@@ -128,12 +129,13 @@ The script's `page`, `context`, `browser` and `expect` behave as Playwright 1.64
 - Neo adds a script to the tab's page session, which covers the main frame and its same-process frames. A cross-site iframe has a session of its own and runs without it.
 - `exposeFunctions` passes the script's functions to the page as bindings, below.
 
-`page.exposeBinding`, `page.exposeFunction`, their `context` forms and `addInitScript`'s `exposeFunctions` let the page call a function of the script and get its result back, as Playwright's do. The page's call goes to CDP's `__playwright__binding__` (in the main world only), Neo records it, the prelude's event pump runs the function in the run's realm, and Neo answers in the execution context that called. They differ in these ways:
+`page.exposeBinding`, `page.exposeFunction`, their `context` forms and the `exposeFunctions` option of `addInitScript` and of `evaluate` (page, frame, locator and element handle) let the page call a function of the script and get its result back, as Playwright's do. The page's call goes to CDP's `__playwright__binding__` (in the main world only), Neo records it, the prelude's event pump runs the function in the run's realm, and Neo answers in the execution context that called. They differ in these ways:
 
 - A binding lasts as long as the run that exposed it, since the realm that answers it ends with the run. When the run ends Neo removes it from the tab's later documents and from the ones loaded then, so the page can no longer call into a run that is gone. `dispose()` does the same sooner.
 - A context's binding reaches each tab as a context's init script does, at the run's first write to it. A cross-site iframe has no bindings.
 - A call reaches the script through the event pump, which is not ordered against op replies. A call the page awaits (`await page.evaluate(() => window.add(1, 2))`) answers before the op returns; one the page fires and does not await, such as from an event handler, can run after the op that caused it returned.
-- A binding answers with values; a handle in its result fails the page's call. `evaluate`'s `exposeFunctions` is refused as `script / method_unavailable`.
+- A binding answers with values; a handle in its result fails the page's call. `evaluateHandle` has no `exposeFunctions`, since Neo returns no JS handles.
+- A function `evaluate` passes stays exposed, off `window`, until the run ends. Playwright erases these when the main frame loads a new document; Neo's prelude does not see every new document, and a page there cannot reach them anyway.
 
 A `requestId` never runs twice. A repeat while its run is going joins it and gets the same reply. A repeat within 10 minutes of the end gets the stored reply, from memory or from the trace store, so this holds across a restart. Later repeats are refused as `host / duplicate_request`, naming the first run. If the store cannot be read, Neo refuses the call as `neo / trace_unavailable` rather than risk a second run. Neo notices a gone client at the next SSE keep-alive, within 5 seconds. A run with a `requestId` then keeps going for 15 seconds, so a retry can join it. A run without one stops at once.
 
@@ -142,7 +144,7 @@ A `requestId` never runs twice. A repeat while its run is going joins it and get
 | Module | Owns |
 |---|---|
 | `main.rs` | The process contract: flags and exit codes. |
-| `app` | Startup in dependency order, shutdown on SIGTERM, and housekeeping (idle tabs, secret expiry, trace retention). |
+| `app` | Startup in dependency order, shutdown on SIGTERM, and housekeeping (idle tabs and trace retention). |
 | `config` | The launch JSON, the environment, and `Defaults`, which holds every fixed value. Nothing else reads an env var. |
 | `logging` | The daily log file, stderr, and the panic log. |
 | `http` | The two listeners, the request hygiene in front of `/mcp`, and `/system/*`. |
@@ -150,7 +152,7 @@ A `requestId` never runs twice. A repeat while its run is going joins it and get
 | `run` | One `run` call from admission to reply: replay, joins, the orphan grace, and the deadline. |
 | `runtime` | The per-run QuickJS realm, the JS bootstrap and the `neo` prelude in `runtime/js/` plus neo-playwright's prelude, and the strings-only bridge to the dispatcher. The only module that names rquickjs. |
 | `dispatch` | The door: `Dispatcher`, the `Method` trait, the `Registry`, the policy rules, and the error model. |
-| `builtins` | The methods Neo serves: every neo-playwright op but those it holds, and a `goto` to any URL but `http`, `https`, `data` and `about`, or a `reload` of a page on one (a local file would show Neo's own secrets), on the process's one `Playwright` (`playwright_ops.rs`, with the hooks that name Neo's secret files to the crate's upload deny list, and `event_release.rs`, which puts every event an event pull returns through the rules on its own tab) and `neo.solveCaptcha`; and the idle-tab janitor. `op_marks.rs` reads each op's declared capabilities: Neo holds an op the crate does not guard at its gateways, and one that declares a capability the door does not police yet (Neo's screen), so a held op answers `method_unavailable` with nothing sent. The crate has no such op today. It marks each main-world script, whose answer the door releases only as a read of its tab. |
+| `builtins` | Registers neo-playwright's ops on the process's one `Playwright`, `neo.solveCaptcha`, and the idle-tab janitor. `op_marks.rs` maps capability declarations to dispatch metadata; main-world answers and pulled events pass the takeover rules on their targeted tab. File uploads use Playwright's path handling, and navigation delegates URL handling to Chromium. |
 | `browser` | The CDP link to Chromium, its reconnects, and what Neo knows about each tab. |
 | `host` | The host API's lifecycle and the takeover lock the door checks. |
 | `test_rig` | The unit tests' rig: a fake browser, a real trace store, and test methods. |

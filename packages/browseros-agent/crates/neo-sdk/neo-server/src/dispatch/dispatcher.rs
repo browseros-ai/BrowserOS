@@ -147,6 +147,9 @@ pub(crate) struct PageFact {
     /// Script configuration, carried to each fresh realm; owner fits never replace it.
     #[serde(rename = "viewportSize", skip_serializing_if = "Option::is_none")]
     pub(crate) viewport_size: Option<Size>,
+    /// Captured under the same observation serial as the page cache read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) workers: Option<Vec<super::observation::WorkerFact>>,
 }
 
 /// The answer to a submitted call. It always arrives: once the call has an op id, its guard
@@ -625,6 +628,10 @@ impl Dispatcher {
 
     /// The reported pages' bookkeeping, one refresh per navigated page, then facts from core's
     /// cache for the target and every reported page: no CDP call per op otherwise.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one ordered fact batch reconciles reports, cache observations, and release decisions"
+    )]
     async fn page_facts(
         &self,
         run: &RunCtx,
@@ -702,6 +709,7 @@ impl Dispatcher {
             .observe(&self.browser, &self.tabs, &reads, &claims, acted.as_ref())
             .await;
         let mut infos = observation.infos.into_iter();
+        let mut workers = observation.workers.into_iter();
         let mut facts = Vec::with_capacity(pages.len());
         for page in pages {
             let info = if closed.contains(&page.tab) {
@@ -709,7 +717,13 @@ impl Dispatcher {
             } else {
                 infos.next().flatten()
             };
-            facts.push(PageFact::in_view(&page, info, run.view()));
+            let mut fact = PageFact::in_view(&page, info, run.view());
+            fact.workers = if closed.contains(&page.tab) {
+                Some(Vec::new())
+            } else {
+                workers.next().flatten()
+            };
+            facts.push(fact);
         }
         let mut released = self.release_facts(
             PageFacts {
@@ -858,6 +872,7 @@ impl PageFact {
                 title: Some(info.title),
                 closed: false,
                 viewport_size: None,
+                workers: None,
             },
             None => Self {
                 tab,
@@ -865,6 +880,7 @@ impl PageFact {
                 title: None,
                 closed: true,
                 viewport_size: None,
+                workers: None,
             },
         }
     }

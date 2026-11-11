@@ -335,8 +335,7 @@ impl<'env> OpScope<'env> {
 
     /// The op's answer, unless the script aborted it while it ran. Upstream's progress race
     /// rejects an aborted call even when its work would have finished, and a leaf's last steps
-    /// do not all wait through this scope (a snapshot's frame stitching, a script's final
-    /// sweep), so an op that answered after the abort reports the abort instead. A failure
+    /// do not all wait through this scope (for example, a snapshot's frame stitching), so an op that answered after the abort reports the abort instead. A failure
     /// stands: it is what the op met first.
     pub(crate) fn settle(
         &self,
@@ -369,6 +368,11 @@ impl<'env> OpScope<'env> {
     pub(crate) fn fail_matcher(&self, code: ErrorCode, head: &str) -> PlaywrightError {
         let log = self.lock_log().render();
         PlaywrightError::new(code, format!("{head}{log}"))
+    }
+
+    /// The call log's lines as recorded, for a failed matcher's `matcherResult.log`.
+    pub(crate) fn log_lines(&self) -> Vec<String> {
+        self.lock_log().raw_lines()
     }
 
     /// A core or CDP failure the leaf could not recover from, as one of the crate's codes.

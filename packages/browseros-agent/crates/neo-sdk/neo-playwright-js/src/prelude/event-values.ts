@@ -5,7 +5,7 @@
  */
 import { invoke } from './bridge'
 import type { ElementHandle } from './element-handle'
-import { markHandle } from './options'
+import { inspectCustom, markHandle } from './options'
 import type { Page } from './page'
 import type {
   ConsoleInfo,
@@ -14,6 +14,7 @@ import type {
   FileChooserInfo,
   PageErrorInfo,
 } from './wire'
+import type { Worker } from './worker'
 
 /** One intercepted input. All upload forms share ElementHandle.setInputFiles' validation. */
 export class FileChooser {
@@ -165,9 +166,11 @@ export class Download {
 
 export class ConsoleMessage {
   readonly #pageValue: Page
+  readonly #workerValue: Worker | null
   readonly #info: ConsoleInfo
 
   constructor(page: Page, info: ConsoleInfo) {
+    this.#workerValue = info.worker ? page._worker(info.worker) : null
     this.#pageValue = page
     this.#info = info
     markHandle(this)
@@ -177,8 +180,8 @@ export class ConsoleMessage {
     return this.#pageValue
   }
 
-  worker(): null {
-    return null
+  worker(): Worker | null {
+    return this.#workerValue
   }
 
   type(): string {
@@ -212,6 +215,10 @@ export class ConsoleMessage {
 
   toString(): string {
     return this.#info.text
+  }
+
+  [inspectCustom](): string {
+    return this.text()
   }
 }
 

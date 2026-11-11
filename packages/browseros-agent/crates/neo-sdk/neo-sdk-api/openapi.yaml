@@ -1063,7 +1063,9 @@ components:
             `running`. Older runs may also have no stored code.
         codeWithheld:
           type: string
-          description: Neo stopped before the run ended, so its code was never stored.
+          description: >-
+            Restart marker: Neo stopped before the run ended, so its code was never stored.
+            The field name is retained for compatibility; new runs do not withhold code for field contents.
           x-extensible-enum: [unavailable]
         result:
           description: >-

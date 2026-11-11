@@ -118,7 +118,8 @@ mod tests {
 
     #[test]
     fn tests_that_names_are_playwright_receivers_and_methods() {
-        const RECEIVERS: [&str; 10] = [
+        const RECEIVERS: [&str; 11] = [
+            "worker",
             "locator",
             "page",
             "keyboard",
@@ -142,20 +143,19 @@ mod tests {
         }
     }
 
-    /// The audit of record: every op, with exactly what it reaches beyond its page's sealed
+    /// The audit of record: every op, with exactly what it reaches beyond its page's isolated
     /// world, and whether its gateway polices all of it before its first effect (`gated`). A
     /// host holds and polices ops by these declarations, so a new op without a row, or a
     /// declaration changed without its row, fails here until the audit is redone on purpose.
     /// `page.setContent` is gated: its HTML goes out only through the main-world gateway's
     /// document write (`evaluate_guard/document_write.rs`). `locator.setInputFiles` is
-    /// gated: its gateway refuses Neo's own secret files and any path into `/dev` or `/proc`
-    /// before it sends a path (`input_files/secrets.rs`). `page.addInitScript` and
+    /// gated: its gateway uploads paths and payloads using Playwright's file handling. `page.addInitScript` and
     /// `context.addInitScript` are gated: their source goes to the page, and a `{ path }` is read
     /// from Neo's disk, only through `page/init_script.rs`, which requires both capabilities;
     /// so are `page.exposeBinding` and `context.exposeBinding`, whose stubs go through it too, and
     /// `bindingCall.resolve`, whose answer goes through the evaluate guard's `resolve_binding`.
     ///
-    /// The ops with an empty row send selectors, values or trusted input, or read in the sealed
+    /// The ops with an empty row send selectors, values or trusted input, or read in the isolated
     /// world. `page.goto` delegates URLs to Chromium, including `javascript:` scripts in the
     /// current document; it has no separate script gateway. Aliases share their op's row:
     /// `locator.screenshot` and `elementHandle.screenshot` send `page.screenshot`; `$eval`,
@@ -237,6 +237,7 @@ mod tests {
             ("page.close", &[], true),
             ("page.opener", &[], true),
             ("page.frames", &[], true),
+            ("worker.evaluate", &[MainWorld], true),
             ("page.evaluate", &[MainWorld], true),
             ("locator.evaluate", &[MainWorld], true),
             ("locator.evaluateAll", &[MainWorld], true),
@@ -354,9 +355,13 @@ mod tests {
                 // The screenshot client's filesystem step has no browser target.
                 ("page.saveScreenshot", _) => OpTarget::None,
                 ("expect.locator", _) | (_, Some("locator")) => OpTarget::Field("target"),
-                (_, Some("page" | "keyboard" | "mouse" | "dialog" | "expect" | "bindingCall")) => {
-                    OpTarget::Field("page")
-                }
+                (
+                    _,
+                    Some(
+                        "page" | "keyboard" | "mouse" | "dialog" | "expect" | "bindingCall"
+                        | "worker",
+                    ),
+                ) => OpTarget::Field("page"),
                 _ => OpTarget::None,
             };
             assert_eq!(spec.target, expected, "{} target field", spec.name);

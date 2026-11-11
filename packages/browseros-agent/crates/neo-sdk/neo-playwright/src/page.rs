@@ -6,7 +6,7 @@
 //! session for the admitted session id (decisions.md: admission per op, not per send). Tab
 //! lifecycle (listing, opening, closing) and captures go through core's view, so core's tab
 //! registry stays the one owner of native tab admission. Every tab an op acts on also gets one
-//! [`PageState`] in the instance's [`PageRegistry`]: its sealed worlds and seqs, input and focus.
+//! [`PageState`] in the instance's [`PageRegistry`]: its isolated worlds and seqs, input and focus.
 //!
 //! ```text
 //!  page.goto ─ navigation ─ DocumentWatch (commits, lifecycle per loader) ─ timing entry
@@ -16,19 +16,19 @@
 //!                                    answer read in Playwright's format (page_value)
 //!  locator.evaluate / evaluateAll ─ element_evaluate: the elements found, then the same guard,
 //!                                   in the frame they are in
-//!  page.title / page.content ─ document_op: the sealed world's read, through the seal
-//!  page.setContent ─ document_op: the same gateway for a write from the sealed world, the
+//!  page.title / page.content ─ document_op: the isolated world's document read
+//!  page.setContent ─ document_op: the same gateway for a write from the isolated world, the
 //!                    frame's seq kept, then the load state; the HTML's scripts run in the main
 //!                    world
 //!  page.waitForNavigation ─ journal cursor ─ URL match ─ DocumentWatch lifecycle ─ timing entry
-//!  page.waitForURL ─ wait_for_url: each navigation matched in the sealed world, the load state
+//!  page.waitForURL ─ wait_for_url: each navigation matched in the isolated world, the load state
 //!  page.addInitScript, context.addInitScript ─ init_script: main-world scripts every new
 //!                    document of a tab runs, registered for the run and removed when it ends
 //! ```
 
 mod add_tag;
 pub(crate) mod context_op;
-mod document_op;
+pub(crate) mod document_op;
 mod document_watch;
 mod element_evaluate;
 mod evaluate;
@@ -59,6 +59,7 @@ mod subtree_load;
 mod viewport_size;
 mod wait_for_navigation;
 mod wait_for_url;
+pub(crate) mod worker_evaluate;
 pub(crate) mod world_call;
 
 pub(crate) use context_op::ContextOp;

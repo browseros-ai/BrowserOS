@@ -41,20 +41,20 @@ pub(crate) enum ScriptInput {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct RunInput {
     /// `normalizeEvaluationExpression(String(pageFunction), isFunction)`.
-    expression: String,
+    pub(crate) expression: String,
     /// `typeof pageFunction === 'function'`.
-    is_function: bool,
+    pub(crate) is_function: bool,
     /// Playwright's in-page serialized argument, as JSON text.
-    arg: String,
+    pub(crate) arg: String,
     /// The element handles the argument's `{h: i}` names, in order; left out when none.
     #[serde(default)]
-    handles: Vec<HandleArg>,
+    pub(crate) handles: Vec<HandleArg>,
 }
 
 /// A handle argument: an element brand, with its `$neo` tag.
 #[derive(Deserialize)]
 #[serde(tag = "$neo", rename_all = "lowercase")]
-enum HandleArg {
+pub(crate) enum HandleArg {
     Element(ElementTarget),
 }
 

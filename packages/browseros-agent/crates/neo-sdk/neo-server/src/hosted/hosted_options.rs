@@ -11,10 +11,16 @@ use crate::config::{AppConfig, EnvConfig, LaunchConfig};
 pub struct HostedOptions {
     /// Required state root; the trace is stored in `claw-sdk/trace.db` underneath it.
     pub state_dir: PathBuf,
-    /// Chromium's `<user-data-dir>/.browseros`, passed through as a browser launch fact.
+    /// Legacy browser launch fact, accepted for compatibility; no upload policy uses it.
     pub execution_dir: Option<PathBuf>,
     /// The installed browser's version, as `instance.browseros_version` names it.
     pub browseros_version: Option<String>,
+    /// Whether the browser was launched in hosted mode (`BROWSERCLAW_HOSTED_MODE=1` in
+    /// Chromium's environment). The sidecar reads that variable from its own environment, which
+    /// the image shares with the browser; a host in Node launched the browser itself, so it says
+    /// which mode it chose. Off by default: then Neo waits for console and page errors, which
+    /// hosted BrowserOS never sends (`events.wait` refuses those in hosted mode).
+    pub hosted_mode: bool,
 }
 
 impl HostedOptions {
@@ -25,10 +31,11 @@ impl HostedOptions {
             ));
         }
         // Read the product settings without mutating Node's process environment. The host
-        // owns its state root and asserts hosted operation.
+        // owns its state root and states the browser's mode.
+        let hosted_mode = self.hosted_mode;
         let lookup = |name: &str| match name {
             "BROWSERCLAW_DIR" => Some("/".to_owned()),
-            "BROWSERCLAW_HOSTED_MODE" => Some("1".to_owned()),
+            "BROWSERCLAW_HOSTED_MODE" => hosted_mode.then(|| "1".to_owned()),
             _ => env::var(name).ok(),
         };
         let mut env =

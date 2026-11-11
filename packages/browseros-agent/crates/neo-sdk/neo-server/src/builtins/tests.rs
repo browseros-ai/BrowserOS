@@ -94,7 +94,7 @@ impl Harness {
         })
         .await?;
         // `page.opener` is the page read these tests use: neo-playwright's other reads run
-        // in a sealed world the fake browser does not have, and this one is a single CDP call.
+        // in an isolated world the fake browser does not have, and this one is a single CDP call.
         fake.answer("Target.getTargetInfo", json!({ "targetInfo": {} }));
         let dir = tempfile::tempdir()?;
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
@@ -760,12 +760,12 @@ async fn the_owners_lock_keeps_the_agent_off_their_tab() -> Result<(), Box<dyn E
 }
 
 /// What the page shows once the owner took it, which a script that ran before the lock still
-/// read: what the owner typed into a field no seal masks.
+/// read from the page while the owner was acting on it.
 const OWNERS_TEXT: &str = "the owner typed 4 Elm St";
 
 /// `test.write`: a write on a page that marks itself sent, then answers only once the test says
 /// so, so that the owner can take a tab while it runs. `page_script` says what it stands for:
-/// a main-world script, as `OpMarks` marks `page.evaluate`, or a sealed write such as a click.
+/// a main-world script, as `OpMarks` marks `page.evaluate`, or an isolated write such as a click.
 /// Either way it answers as its input's [`Answers`] says.
 struct PausedWrite {
     page_script: PageScript,
@@ -978,17 +978,17 @@ async fn a_takeover_that_allows_reads_still_releases_a_main_world_result()
     Ok(())
 }
 
-/// A sealed write's end goes out as it ended, a reads-blocking lock or not: the door's release
+/// An isolated write's end goes out as it ended, a reads-blocking lock or not: the door's release
 /// check is for what a script read, and a click's own result is not that.
 #[tokio::test]
-async fn a_sealed_write_is_released_as_it_ended_under_a_reads_blocking_takeover()
+async fn a_isolated_write_is_released_as_it_ended_under_a_reads_blocking_takeover()
 -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let owners = harness.owner_tab("https://bank.example/").await?;
     let (_, reply) = answer_after_a_takeover(
         &harness,
         Takeover::of(&owners, Reads::Block),
-        PageScript::Sealed,
+        PageScript::Isolated,
         Answers::Read,
     )
     .await?;
@@ -996,7 +996,7 @@ async fn a_sealed_write_is_released_as_it_ended_under_a_reads_blocking_takeover(
     let (_, thrown) = answer_after_a_takeover(
         &harness,
         Takeover::of(&owners, Reads::Block),
-        PageScript::Sealed,
+        PageScript::Isolated,
         Answers::Throws,
     )
     .await?;
@@ -1941,7 +1941,7 @@ async fn an_action_runs_in_the_crate_on_the_tab_its_locator_names() -> Result<()
         "options": {},
     });
     let (operation, reply) = harness.submit_op(&run, "locator.click", input).await;
-    // The fake browser has no sealed world to click in, so the crate's click stops before it
+    // The fake browser has no isolated world to click in, so the crate's click stops before it
     // sends anything; `tests/playwright_browseros.rs` clicks on a real one. What is pinned here is
     // that the door let the action through to the crate, on the locator's tab.
     let failure = failure(reply)?;
@@ -3173,5 +3173,61 @@ async fn a_nonhosted_console_wait_still_receives_native_messages() -> Result<(),
         "page":handle(&page),"event":"console","since":0});
     let message = value(within(harness.submit(&run, "events.wait", wait)).await?)?;
     assert!(message.to_string().contains("native console"), "{message}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn worker_bookkeeping_can_unsubscribe_after_its_page_closed() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.owner_tab("https://example.com/worker").await?;
+    let (run, _guard) = harness.run()?;
+    value(
+        harness
+            .submit(
+                &run,
+                "events.listen",
+                json!({
+                    "call":{"api":"page.on","timeoutMs":0},
+                    "page":handle(&page),"event":"workerstate","on":true,"since":0
+                }),
+            )
+            .await,
+    )?;
+    value(
+        harness
+            .submit(
+                &run,
+                "page.close",
+                json!({
+                    "call":{"api":"page.close","timeoutMs":0},"page":handle(&page)
+                }),
+            )
+            .await,
+    )?;
+    let reply = harness
+        .submit(
+            &run,
+            "events.listen",
+            json!({
+                "call":{"api":"page.off","timeoutMs":0},
+                "page":null,"retiredTab":page.tab,"event":"workerstate","on":false,"since":0
+            }),
+        )
+        .await;
+    assert!(reply.default_page.is_none(), "cleanup must not open a tab");
+    assert_eq!(value(reply)?, json!({}));
+    let refused = failure(
+        harness
+            .submit(
+                &run,
+                "events.listen",
+                json!({
+                    "call":{"api":"page.on","timeoutMs":0},
+                    "page":null,"retiredTab":page.tab,"event":"workerstate","on":true,"since":0
+                }),
+            )
+            .await,
+    )?;
+    assert!(refused.error.message().contains("retiredTab"));
     Ok(())
 }

@@ -20,6 +20,7 @@ const record = (side, extra = {}) => ({
       binarySha256: 'hash',
       gitSha: 'sha',
       opCount: 1,
+      traceCode: 'full',
       traceVerified: true,
     },
   },

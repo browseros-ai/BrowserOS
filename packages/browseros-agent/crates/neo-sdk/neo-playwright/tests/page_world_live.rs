@@ -1,6 +1,6 @@
-//! The page ops that need a sealed world or the main world, on a real browser, through
+//! The page ops that need an isolated world or the main world, on a real browser, through
 //! `Playwright::invoke`: `evaluate` and `waitForFunction` in the main world, `title` and
-//! `content` read in the sealed world, `setContent` with its load states, and `waitForURL`. That `setContent`
+//! `content` read in the isolated world, `setContent` with its load states, and `waitForURL`. That `setContent`
 //! retires the document's seq is checked in `src/world/live_tests.rs`, where seqs are visible.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example

@@ -753,15 +753,11 @@ async fn current_loader(
         .map(|known| known.loader_id))
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the navigation timing entry holds a status code and the document URL, never a form-control value"
-)]
 async fn timing_entry(
     session: &ProtocolSession,
     frame: Option<&FrameId>,
 ) -> Result<Option<Timing>, CoreError> {
-    // Core's DOM-only world: the sealed world is for element work, and this read needs none.
+    // Core's DOM-only world: the isolated world is for element work, and this read needs none.
     let reader = PageJs::isolated_only(session).timeout(TIMING_READ);
     let reader = match frame {
         Some(frame) => reader.in_frame(frame),

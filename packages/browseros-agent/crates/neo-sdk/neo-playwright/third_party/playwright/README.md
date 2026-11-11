@@ -4,7 +4,7 @@ Playwright's page-side selector engine, copied unmodified from
 [microsoft/playwright](https://github.com/microsoft/playwright) under Apache-2.0. `VERSION`
 holds the release tag and its full commit. `LICENSE` and `NOTICE` are upstream's own files.
 
-`neo-playwright` runs this engine in a sealed isolated world so that locators in
+`neo-playwright` runs this engine in a isolated world so that locators in
 Neo's `run` tool resolve exactly as Playwright resolves them: role and accessible names, text
 and label matching, CSS, chaining, strict mode and its error messages.
 
@@ -79,7 +79,7 @@ load both files plain.
 3. If upstream added a runtime import, the engine build fails on the unresolved path. Add the
    file to `FILES` in `sync.sh` and to this README, then sync again.
 4. Rebuild the assets with `bun run build` in `crates/neo-sdk/neo-playwright-js` (Bun 1.4.2,
-   the repo's pinned version). If it fails on a masked generator function, or the crate's
+   the repo's pinned version). If it fails on a wrapped generator function, or the crate's
    engine guard fails, review every place the new preview and hint code cuts or quotes page
    text before moving the mask. Its test fails while `crates/neo-sdk/neo-playwright/assets/`
    or `crates/neo-sdk/neo-playwright/tests/data/probe-protocol.json` is stale. Then run

@@ -19,10 +19,10 @@ import type {
   SnapshotOptions,
   TextMatch,
 } from './frame'
-import { markHandle } from './options'
+import { inspectCustom, markHandle } from './options'
 import type { Page } from './page'
 import { type LocatorOptions, withLocatorOptions } from './selectors'
-import type { SignalOption } from './signal'
+import { type SignalOption, signalOf } from './signal'
 import type { TimeoutOption } from './timeouts'
 import {
   type AriaSnapshotJSON,
@@ -40,9 +40,21 @@ import {
 } from './vendored'
 import type { DragOptions, FillOptions, KeyOptions, WaitForState } from './wire'
 
-/** The attribute `getByTestId` matches; upstream's default, which Neo never changes. */
+/**
+ * The attribute `getByTestId` matches: upstream's default until the script's
+ * `playwright.selectors.setTestIdAttribute` changes it for the rest of the run, as upstream's
+ * client keeps it in module state (client/locator.ts at v1.64.1). Each run's realm starts again
+ * at the default.
+ */
+let testIdAttribute = 'data-testid'
+
 export function testIdAttributeName(): string {
-  return 'data-testid'
+  return testIdAttribute
+}
+
+/** Upstream's `setTestIdAttribute`: the attribute every later `getByTestId` builds with. */
+export function setTestIdAttribute(attributeName: string): void {
+  testIdAttribute = attributeName
 }
 
 export class Locator {
@@ -65,6 +77,10 @@ export class Locator {
 
   toString(): string {
     return asLocatorDescription('javascript', this._selector)
+  }
+
+  [inspectCustom](): string {
+    return this.toString()
   }
 
   description(): string | null {
@@ -618,7 +634,16 @@ export class Locator {
     options?: TimeoutOption & EvaluateOptions & SignalOption,
   ): Promise<unknown> {
     const api = 'locator.evaluate'
-    const script = pageCall(api, 'locator', pageFunction, arg, options)
+    // Read before the first await (`signalOf`): an aborted call sends nothing and exposes no
+    // callback, as upstream's wait rejects before its handle's evaluate exposes any.
+    signalOf(api, options)
+    const script = await this._frame._page._evaluationScript(
+      api,
+      'locator',
+      pageFunction,
+      arg,
+      options,
+    )
     return await this._frame._evaluateOn(
       api,
       this._selector,

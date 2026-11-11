@@ -24,7 +24,10 @@ import {
 } from './errors'
 import {
   assertMaxArguments,
+  type Callbacks,
+  type CallForm,
   type EvaluateOptions,
+  exposesFunctions,
   pageCall,
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
@@ -81,7 +84,10 @@ import type {
   PageBrand,
   PageFact,
   PageHandle,
+  PageScript,
+  WorkerInfo,
 } from './wire'
+import { Worker } from './worker'
 
 /** Page-scoped preferences; omitted values are retained and null clears just that override. */
 export type MediaOptions = {
@@ -250,8 +256,37 @@ export class Page extends EventEmitter {
     )
   }
 
-  workers(): never[] {
-    return []
+  readonly #workers = new Map<string, Worker>()
+  readonly #workerBatches = new Set<number>()
+  #workerSnapshot: WorkerInfo[] | null = null
+
+  workers(): Worker[] {
+    return [...this.#workers.values()].filter((worker) => !worker._closed)
+  }
+
+  /** Facts, waits and listeners must return the same Worker, including after its close. */
+  _worker(info: WorkerInfo): Worker {
+    let worker = this.#workers.get(info.id)
+    if (!worker) {
+      worker = new Worker(this, info)
+      this.#workers.set(info.id, worker)
+    }
+    return worker
+  }
+
+  /** A batch may carry console before close. Retire from facts only after all such replies
+   * have delivered their records; newer foreground facts replace the pending snapshot. */
+  _settleWorkerFacts(at: Observation | null): void {
+    if (at) this.#workerBatches.delete(at.seq)
+    if (this.#workerBatches.size === 0 && this.#workerSnapshot)
+      this.#applyWorkers(this.#workerSnapshot)
+  }
+
+  #applyWorkers(workers: WorkerInfo[]): void {
+    const live = new Set(workers.map((worker) => worker.id))
+    for (const [id, worker] of this.#workers)
+      if (!live.has(id)) worker._didClose()
+    for (const info of workers) this._worker(info)
   }
 
   /**
@@ -777,6 +812,62 @@ export class Page extends EventEmitter {
   }
 
   /**
+   * `pageCall` for an evaluate on this page. With `exposeFunctions`, each function in the
+   * argument is exposed as this page's binding off `window` before the op that names it goes
+   * out, as upstream's `serializeArgumentWithCallbacks` awaits `_exposeEvaluateCallback`. A
+   * refused script fails in its op (after the wait, for a locator) and exposes nothing. The
+   * callbacks last until the run ends, as every binding does; upstream also erases them when
+   * the main frame loads a new document, which no script there can reach them from anyway.
+   */
+  async _evaluationScript(
+    api: string,
+    form: CallForm,
+    pageFunction: unknown,
+    arg: unknown,
+    options: unknown,
+  ): Promise<PageScript> {
+    const callbacks: Callbacks | undefined = exposesFunctions(options)
+      ? []
+      : undefined
+    const script = pageCall(api, form, pageFunction, arg, options, callbacks)
+    if (!callbacks?.length || !('run' in script)) return script
+    const settled = await Promise.allSettled(
+      callbacks.map(([name, callback]) =>
+        exposeOnPage(
+          this,
+          api,
+          name,
+          (_source, ...args) => Reflect.apply(callback, undefined, args),
+          true,
+        ),
+      ),
+    )
+    const failed = settled.find((outcome) => outcome.status === 'rejected')
+    if (failed) {
+      // A failure part way (a refused tab) leaves nothing behind, as `addInitScript`'s
+      // `exposeFunctions` does: the evaluate never goes out, so no page can call these.
+      await Promise.all(
+        settled.map((outcome) =>
+          outcome.status === 'fulfilled'
+            ? outcome.value.dispose().catch(() => {})
+            : undefined,
+        ),
+      )
+      throw failed.reason
+    }
+    return script
+  }
+
+  /**
+   * The frame a binding call came from, when the cache has it: the main frame for `null`, else
+   * the child frame of that id. Synchronous, so the call's callback can run as the pump
+   * dispatches it (`answerBindingCall`).
+   */
+  _knownBindingFrame(id: string | null): Frame | undefined {
+    return id === null ? this._mainFrame : this.#childFrames.get(id)
+  }
+
+  /**
    * The frame a binding call came from: the main frame for `null`, else the child frame of that
    * id, the frame tree read again when the call names one the cache does not have yet. A frame
    * gone by then is answered as the main frame's.
@@ -1247,6 +1338,12 @@ export class Page extends EventEmitter {
     }
     if (at.seq < this.#observedSeq) return
     this.#observedSeq = at.seq
+    if (fact.workers) {
+      this.#workerSnapshot = fact.workers
+      for (const worker of fact.workers) this._worker(worker)
+      if (at.deferWorkers) this.#workerBatches.add(at.seq)
+      else this._settleWorkerFacts(null)
+    }
     this.#observedHead = Math.max(this.#observedHead, at.events)
     this.#applyViewport(fact.viewportSize)
     if (fact.url !== undefined) {
@@ -1261,11 +1358,16 @@ export class Page extends EventEmitter {
       return
     }
     // A bound init page or result brand can carry identity without a liveness fact.
-    if (fact.closed !== false) return
+    if (fact.closed !== false) {
+      if (!this._closed && fact.workers)
+        this._context._events.observeWorkers(this)
+      return
+    }
     this.#approvedClose = null
     if (this._closed && at.events < this.#closeEvent) return
     this.#liveHead = at.events
     this._closed = false
+    if (fact.workers) this._context._events.observeWorkers(this)
   }
 
   _closeEvent(seq: number, at: Observation | null = null): void {
@@ -1300,6 +1402,9 @@ export class Page extends EventEmitter {
   #close(): void {
     if (this._closed) return
     this._closed = true
+    this._context._events.forgetWorkers(this)
+    this.#workerSnapshot = []
+    this._settleWorkerFacts(null)
     this.emit('close', this)
   }
 

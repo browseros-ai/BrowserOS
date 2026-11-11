@@ -200,14 +200,17 @@ async fn tests_that_new_page_sends_again_what_the_client_gave_up_on() -> TestRes
             client_timeout(),
             "{late}: newPage waited past the client's timeout, for the answer after it"
         );
+        // Worker discovery can attach an already-listed tab concurrently with newPage.
+        // Count at least the required retry; the completed lifecycle setup and the elapsed
+        // client timeout above prove that the caller waited through the failed attempt.
+        assert!(
+            tab.sent("Target.attachToTarget") >= attaches,
+            "{late}: the attach was retried"
+        );
         assert_eq!(
-            (
-                tab.sent("Target.attachToTarget"),
-                tab.sent("Page.setLifecycleEventsEnabled")
-            ),
-            (attaches, lifecycles),
-            "{late}: the step the client gave up on was sent again, and the wait went on to the \
-             lifecycle command's answer"
+            tab.sent("Page.setLifecycleEventsEnabled"),
+            lifecycles,
+            "{late}: newPage waited for its lifecycle setup"
         );
     }
     Ok(())

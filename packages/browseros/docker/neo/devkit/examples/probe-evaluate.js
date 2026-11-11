@@ -1,4 +1,3 @@
-// Script in the page's main world. Held for privacy (script / method_unavailable):
-// read through locators, page.content() or page.title() instead.
+// Run a script in the page's main world and return its result.
 await page.goto('data:text/html,' + encodeURIComponent('<title>Evaluate</title>'));
 return await page.evaluate(() => document.title);

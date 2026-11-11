@@ -475,7 +475,7 @@ impl InitScripts {
     /// The bindings' plumbing on `admitted`'s tab session, once a run, in the order a binding
     /// call needs it: the run listens for the tab's binding calls before any can be made, the CDP
     /// binding goes into the session's main worlds (only those: `executionContextName: ""`, so
-    /// Neo's sealed world never holds it), then the controller, in every document from now on and
+    /// Neo's isolated world never holds it), then the controller, in every document from now on and
     /// at once in the loaded ones. Concurrent first uses share one plumbing.
     async fn plumb(
         &self,

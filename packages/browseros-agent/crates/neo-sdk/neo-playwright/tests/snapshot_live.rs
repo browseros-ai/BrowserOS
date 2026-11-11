@@ -1,6 +1,6 @@
 //! Aria snapshots through `Playwright::invoke` against a real browser: the required
 //! nested-frame tests F1, F2, F4, F5, F6 and F7 of design D22 on the 4-level fixture, a
-//! locator-level snapshot inside a frame, typed values echoed unchanged in page text, and
+//! locator-level snapshot inside a frame, field values echoed unchanged in page text, and
 //! partial results for children that answer too late, on either the same or another site.
 //!
 //! The live tests need BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
