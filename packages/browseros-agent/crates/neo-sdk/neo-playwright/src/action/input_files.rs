@@ -6,21 +6,14 @@
 //! ```text
 //!  require(HostFiles)   an op that does not declare it: neo / internal, nothing admitted
 //!  prelude   files.ts: paths mixed with payloads, 50 MiB, payload fields, MIME, base64 text
-//!  secrets   asked once (PlaywrightHooks::secret_paths); none named and paths given:
-//!            neo / unsupported before any stat
-//!  classify  each path in order: resolved as Node's `path.resolve` resolves it, and refused
-//!            if that enters `/dev` or `/proc`, before any stat of it; then stat'ed as
-//!            upstream's client stats it: Node's error text, no prefix, nothing admitted; then
-//!            checked against Neo's secrets (secrets.rs). Refused is `<api>: Neo does not
-//!            upload its own secret files`
+//!  classify  each path in order: resolve it as Node's `path.resolve` does and stat the
+//!            path as given. Stat errors use Node's text with no API prefix.
 //!            ─▶ Paths(absolute) │ Directory(absolute) │ Payloads
 //!  admit the page, lease its focus
 //!  outer loop (locator: re-resolve │ handle: once)
 //!    ① read { fileInput }   upstream's four checks, `<api>: Error: …`, never retried
-//!    paths    in /dev or /proc  ─ refused at once, before its access
-//!             access(F_OK) each ─ `<api>: ENOENT: … access '<abs>'`  ┐ a locator retries,
-//!             a secret now     ─ refused at once, never retried      │
-//!             not type=file    ─ Chromium's Protocol error            ┘ a handle fails
+//!    paths    access(F_OK) each ─ `<api>: ENOENT: … access '<abs>'`  ┐ a locator retries,
+//!             not type=file    ─ Chromium's Protocol error          ┘ a handle fails
 //!             the input's remote object, in the op's object group
 //!    directory: armInput on the element named, a sealed-world listener the page cannot see
 //!    send_effect()                                                            Sent
@@ -35,8 +28,6 @@
 //! and stat'ed here first. Core's `FileTransfers::upload_node` is not used: its rules for those
 //! cases, and for `[]`, are MCP's, not Playwright's.
 
-mod secrets;
-
 use std::fmt::Write as _;
 use std::time::Duration;
 use std::{env, io, slice};
@@ -47,11 +38,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::fs;
 
-use self::secrets::{Secrets, Verdict};
 use crate::action::focus_lease;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
-use crate::op_scope::{Expired, OpScope, Sent};
+use crate::op_scope::{OpScope, Sent};
 use crate::op_spec::Capability;
 use crate::page::OpPage;
 use crate::probe::{self, Edit, FilePayload, ProbeFailure, ProbeReply, ProbeRequest, Read};
@@ -155,8 +145,7 @@ pub(crate) async fn set_input_files(
         strict,
         files,
     } = input;
-    let secrets = Secrets::named_by(pw.hooks().secret_paths());
-    let files = InputFiles::classify(scope, &secrets, files).await?;
+    let files = InputFiles::classify(files).await?;
     let page = OpPage::admit_handle(pw, scope, target.page()).await?;
     let _lease = focus_lease::lease(scope, &page).await?;
     let subject = Subject::new(&page, scope, &target, strict);
@@ -183,7 +172,7 @@ pub(crate) async fn set_input_files(
             continue;
         };
         matched = true;
-        let ready = files.ready(scope, &secrets, &subject, &located, &input);
+        let ready = files.ready(scope, &subject, &located, &input);
         let Ok(ready) = scope.within(ready).await else {
             break;
         };
@@ -207,23 +196,15 @@ pub(crate) async fn set_input_files(
 }
 
 impl InputFiles {
-    /// upstream's client `resolvePathsAndDirectoryForInputFiles` on Neo's disk: each path
+    /// Upstream's client `resolvePathsAndDirectoryForInputFiles` on Neo's disk: each path
     /// stat'ed as given, in order (relative to Neo's working directory, as the OS resolves
     /// it); a second directory fails at once; files and a directory fail after the loop. Its
     /// errors are the client's, thrown before any channel call: unprefixed, nothing admitted.
-    /// Before any of it, a host that named no secret files refuses every path, and before
-    /// each stat, a path that enters `/dev` or `/proc` is refused, so a stat that fails there
-    /// cannot answer for it.
-    async fn classify(
-        scope: &OpScope<'_>,
-        secrets: &Secrets,
-        files: FilesInput,
-    ) -> Result<Self, PlaywrightError> {
+    async fn classify(files: FilesInput) -> Result<Self, PlaywrightError> {
         let paths = match files {
             FilesInput::Payloads(payloads) => return Ok(Self::Payloads(payloads)),
             FilesInput::Paths(paths) => paths,
         };
-        let on_disk = secrets.on_disk(scope).await?;
         let mut cwd = None;
         let mut found = Vec::new();
         let mut directory = None;
@@ -238,18 +219,7 @@ impl InputFiles {
                 };
                 resolve_like_node(cwd, &path)
             };
-            match scope.within(on_disk.enters_device_tree(&resolved)).await {
-                Ok(false) => {}
-                Ok(true) | Err(Expired) => return Err(secrets::refused(scope)),
-            }
             let is_dir = client_stat(&path).await?;
-            // The path Chromium would open, which can differ from the stat'ed one: Node folds
-            // `..` without following symlinks. Nothing there now is nothing to read, and
-            // `ready` checks again before the send.
-            match scope.within(on_disk.check(&resolved)).await {
-                Ok(Verdict::Clear | Verdict::Missing(_)) => {}
-                Ok(Verdict::Refused) | Err(Expired) => return Err(secrets::refused(scope)),
-            }
             if !is_dir {
                 found.push(HostPath(resolved));
             } else if directory.is_some() {
@@ -283,20 +253,17 @@ impl InputFiles {
         }
     }
 
-    /// upstream's server checks after the element's own, in its order, and what the effect
+    /// Upstream's server checks after the element's own, in its order, and what the effect
     /// needs, for one pass. `None` sends nothing this pass: a locator goes round again.
     ///
-    /// For paths: `access` each one again, and check it again against Neo's secrets, since a
-    /// path can name another file by now (a symlink swapped while the locator waited); then
-    /// Chromium's own `type=file` check, which Neo makes before it sends anything. Upstream's
-    /// locator loop retries the first and the last, as it retries every error that is not the
-    /// page's script's (frames.ts `isNonRetriableError`); a handle action runs once and fails
-    /// with them. A secret is refused at once. A directory's `input` listener is armed here: it
-    /// lives in the sealed world, so arming it changes nothing the page can see.
+    /// Recheck each path Chromium will open: Node's resolution folds `..` without following
+    /// symlinks, and a file can disappear while the locator waits. Then check `type=file`
+    /// before sending to Chromium. A locator retries either error, while a handle fails
+    /// immediately. A directory's `input` listener is armed in the sealed world, where the page
+    /// cannot see it.
     async fn ready(
         &self,
         scope: &OpScope<'_>,
-        secrets: &Secrets,
         subject: &Subject<'_>,
         located: &Resolved,
         input: &FileInput,
@@ -306,7 +273,7 @@ impl InputFiles {
             Self::Paths(paths) => (paths.as_slice(), false),
             Self::Directory(directory) => (slice::from_ref(directory), true),
         };
-        if let Some(gone) = recheck(scope, secrets, paths).await? {
+        if let Some(gone) = recheck(paths).await {
             subject.retry_unless_handle(|| scope.fail(ErrorCode::InvalidInput, &gone))?;
             return Ok(None);
         }
@@ -338,32 +305,14 @@ impl InputFiles {
     }
 }
 
-/// `ready`'s first check of a pass: upstream's `access(F_OK)` of each path again, in order,
-/// and Neo's secret check of it again, rule ⓪ before the access as in classify. `Some` holds
-/// upstream's access error for the first path that is gone now; a secret is the refusal.
-async fn recheck(
-    scope: &OpScope<'_>,
-    secrets: &Secrets,
-    paths: &[HostPath],
-) -> Result<Option<String>, PlaywrightError> {
-    let on_disk = secrets.on_disk(scope).await?;
+/// Mirrors upstream's `access(F_OK)` check in path order. Returns the first access error.
+async fn recheck(paths: &[HostPath]) -> Option<String> {
     for path in paths {
-        if on_disk.enters_device_tree(&path.0).await {
-            return Err(secrets::refused(scope));
-        }
-        let gone = match fs::metadata(&path.0).await {
-            Err(error) => Some(error),
-            Ok(_) => match on_disk.check(&path.0).await {
-                Verdict::Clear => None,
-                Verdict::Missing(error) => Some(error),
-                Verdict::Refused => return Err(secrets::refused(scope)),
-            },
-        };
-        if let Some(error) = gone {
-            return Ok(Some(node_error(&error, "access", &path.0)));
+        if let Err(error) = fs::metadata(&path.0).await {
+            return Some(node_error(&error, "access", &path.0));
         }
     }
-    Ok(None)
+    None
 }
 
 impl Ready<'_> {
