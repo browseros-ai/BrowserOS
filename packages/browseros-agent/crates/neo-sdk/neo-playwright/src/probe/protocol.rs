@@ -120,11 +120,16 @@ mod tests {
     struct Second;
 
     #[test]
-    fn two_rust_types_cannot_silently_share_a_declaration() {
+    fn two_rust_types_cannot_silently_share_a_declaration() -> Result<(), Box<dyn Error>> {
         let mut declarations = Declarations::new();
         declarations.visit::<First>();
         declarations.visit::<Second>();
-        assert!(declarations.finish().is_err());
+        let collision = declarations
+            .finish()
+            .err()
+            .ok_or("two Rust types under one TypeScript name must be refused")?;
+        assert!(collision.to_string().contains("Collision"));
+        Ok(())
     }
 
     #[derive(Deserialize, TS)]
