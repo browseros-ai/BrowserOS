@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::input::Platform;
 use crate::op_scope::AdmittedPage;
 use crate::page::PageState;
-use crate::world::FrameSeq;
+use crate::world::{FrameAttachLog, FrameSeq, FrameWorlds};
 
 /// The lowest seq a page that was already open may start at.
 const REOPENED_BASE_MIN: u32 = 100_000;
@@ -42,6 +42,9 @@ pub(crate) struct PageRegistry {
     reopened_base: FrameSeq,
     /// The browser's platform, read once: it decides what `ControlOrMeta` presses.
     platform: OnceCell<Platform>,
+    /// The target watcher's record of every tab's frame lifecycle, which each tab's
+    /// `FrameWorlds` replays to number frames in Playwright's order.
+    attach_log: Arc<FrameAttachLog>,
 }
 
 /// The tabs that were open when this `Playwright` started.
@@ -76,8 +79,8 @@ struct Version {
 }
 
 impl PageRegistry {
-    /// An empty registry with a fresh random base.
-    pub(crate) fn new() -> Self {
+    /// An empty registry with a fresh random base, numbering frames by `attach_log`.
+    pub(crate) fn new(attach_log: Arc<FrameAttachLog>) -> Self {
         let pick = u32::try_from(Uuid::new_v4().as_u128() % u128::from(REOPENED_BASES))
             .unwrap_or_default();
         Self {
@@ -85,6 +88,7 @@ impl PageRegistry {
             open_at_start: OnceCell::new(),
             reopened_base: FrameSeq(REOPENED_BASE_MIN + pick),
             platform: OnceCell::new(),
+            attach_log,
         }
     }
 
@@ -114,10 +118,16 @@ impl PageRegistry {
             FrameSeq(0)
         };
         let platform = self.platform(browser).await;
+        let frames = || {
+            FrameWorlds::new(first).with_attach_log(
+                Arc::clone(&self.attach_log),
+                admitted.session.target_id.clone(),
+            )
+        };
         Arc::clone(
             self.lock()
                 .entry(admitted.tab)
-                .or_insert_with(|| Arc::new(PageState::new(first, platform))),
+                .or_insert_with(|| Arc::new(PageState::new(frames(), platform))),
         )
     }
 

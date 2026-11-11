@@ -45,12 +45,14 @@
 //!   re-installs and retries once, a ref jump fails `element_detached`.
 
 mod engine_source;
+mod frame_attach_log;
 mod frame_seq;
 mod frame_worlds;
 mod hidden_roots;
 mod sealed_world;
 mod session_setup;
 
+pub(crate) use frame_attach_log::{FrameAttachLog, FrameEvent};
 pub(crate) use frame_seq::{BackendNodeId, ContextId, Epoch, FrameSeq, Pin};
 pub(crate) use frame_worlds::{
     Endpoint, FrameWorlds, Installer, LinkedParent, ParentLink, Place, SeqLookup,

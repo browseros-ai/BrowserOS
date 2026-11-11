@@ -16,7 +16,7 @@ use crate::op_scope::OpScope;
 use crate::page::{PageRegistry, context_op, page_op};
 use crate::read::read_op;
 use crate::snapshot::snapshot_op;
-use crate::world::{Epoch, SessionSetup};
+use crate::world::{Epoch, FrameAttachLog, SessionSetup};
 use crate::{OpEnv, PlaywrightError, PlaywrightHooks};
 
 /// One per browser connection; runs every Playwright operation. The host builds it once at
@@ -55,9 +55,10 @@ impl Playwright {
     #[must_use]
     pub fn new(browser: Arc<BrowserSession>, hooks: Arc<dyn PlaywrightHooks>) -> Arc<Self> {
         let (events, writer) = EventHub::new();
-        let watcher = TargetWatcher::spawn(Arc::clone(&browser), writer);
+        let attach_log = Arc::new(FrameAttachLog::default());
+        let watcher = TargetWatcher::spawn(Arc::clone(&browser), writer, Arc::clone(&attach_log));
         let sessions = Arc::new(SessionSetup::new(browser.connection()));
-        let pages = Arc::new(PageRegistry::new());
+        let pages = Arc::new(PageRegistry::new(attach_log));
         let (registry, reader) = (Arc::clone(&pages), Arc::clone(&browser));
         drop(tokio::spawn(async move {
             registry.note_open_tabs(&reader).await;
