@@ -1,5 +1,5 @@
 //! One admitted operation, keyed by run and sequence. Inputs and results reach disk
-//! only at the end, already bounded; a later rewrite cannot erase a raw WAL page.
+//! only at the end, already bounded, so running rows expose identity and state only.
 
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::SimpleExpr;
