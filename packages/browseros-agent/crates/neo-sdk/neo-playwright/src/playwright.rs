@@ -89,6 +89,12 @@ impl Playwright {
         self.events.closed_at(target)
     }
 
+    /// The newest retained main-frame navigation of a native target, for the host's URL facts.
+    #[must_use]
+    pub fn navigated_target(&self, target: &browseros_core::TargetId) -> Option<u64> {
+        self.events.navigated_at(target)
+    }
+
     /// The browser connection, for what an op does after it admitted its page: raw sessions,
     /// frame sessions, core's frame registry and events.
     pub(crate) fn browser(&self) -> &BrowserSession {

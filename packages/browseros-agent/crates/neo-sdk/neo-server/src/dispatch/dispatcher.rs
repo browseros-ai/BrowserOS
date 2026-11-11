@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::{Mutex, PoisonError};
 
@@ -26,6 +27,12 @@ use super::{
     Visibility, operation_error,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
+
+/// The event seq through which the door last refreshed a tab's entry in core's page cache, so
+/// a navigation the page made itself is refreshed once (`Dispatcher::navigated_since_refresh`).
+/// A per-tab slot, dropped with the tab.
+#[derive(Debug, Default)]
+struct RefreshedThrough(AtomicU64);
 
 /// The method the door calls, as Neo, to open a run's lazy default page: with `{}`, returning
 /// Playwright's page entry `{ page, url }` (`OpenedPage`) after reporting the page
@@ -668,6 +675,7 @@ impl Dispatcher {
                 }
                 PageChange::Navigated if !refreshed.contains(&page.tab) => {
                     refreshed.push(page.tab);
+                    self.mark_refreshed(page);
                     refresh(run, &self.browser, page.tab).await;
                 }
                 PageChange::Navigated | PageChange::Linked => {}
@@ -709,6 +717,8 @@ impl Dispatcher {
                 observed: None,
             };
         }
+        self.refresh_self_navigated(run, &pages, &closed, &refreshed)
+            .await;
         let reads: Vec<TabId> = pages
             .iter()
             .filter(|page| !closed.contains(&page.tab))
@@ -744,6 +754,55 @@ impl Dispatcher {
             observed.payload_current = None;
         }
         released
+    }
+
+    /// A navigation the page made itself (a link, `pushState`, a fragment, the Navigation API)
+    /// reaches core's cache only through a refresh, so each open tab of the reply whose main
+    /// frame the event log saw navigate since the door last refreshed it is refreshed once, as
+    /// a navigating op's tab is. Otherwise the reply would hand the prelude the URL from before,
+    /// over a fresher one it already has. `refreshed` are the tabs refreshed for this op already.
+    async fn refresh_self_navigated(
+        &self,
+        run: &RunCtx,
+        pages: &[PageRef],
+        closed: &[TabId],
+        refreshed: &[TabId],
+    ) {
+        for page in pages {
+            if closed.contains(&page.tab) || refreshed.contains(&page.tab) {
+                continue;
+            }
+            if self.navigated_since_refresh(page).await {
+                refresh(run, &self.browser, page.tab).await;
+            }
+        }
+    }
+
+    /// Whether `page`'s main frame navigated past the event seq the door last refreshed its
+    /// cache entry through; if so, that seq moves to the log's head, as the refresh that follows
+    /// reads core after it. A tab the registry does not track has nothing to compare.
+    async fn navigated_since_refresh(&self, page: &PageRef) -> bool {
+        let Some(through) = self.tabs.slot::<RefreshedThrough>(page) else {
+            return false;
+        };
+        let Some(info) = self.browser.page(page.tab).await else {
+            return false;
+        };
+        let Some(navigated) = self.observer.navigated(&info.target_id) else {
+            return false;
+        };
+        if navigated <= through.0.load(Ordering::Relaxed) {
+            return false;
+        }
+        through.0.fetch_max(self.observer.head(), Ordering::Relaxed);
+        true
+    }
+
+    /// Records that `page`'s cache entry is about to be refreshed past every event so far.
+    fn mark_refreshed(&self, page: &PageRef) {
+        if let Some(through) = self.tabs.slot::<RefreshedThrough>(page) {
+            through.0.fetch_max(self.observer.head(), Ordering::Relaxed);
+        }
     }
 
     /// Facts and their reported close records cross policy together, after the async cache

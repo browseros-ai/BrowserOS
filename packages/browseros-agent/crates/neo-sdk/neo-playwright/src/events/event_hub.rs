@@ -170,6 +170,25 @@ impl EventHub {
             })
     }
 
+    /// The newest retained navigation of `target`'s main frame (a new document or a
+    /// same-document change: a link, `pushState`, a fragment, the Navigation API), for the
+    /// host's URL facts. Core's page cache does not follow a navigation the page makes itself,
+    /// so the host refreshes it when this moves past the seq it last refreshed through.
+    pub(crate) fn navigated_at(&self, target: &TargetId) -> Option<u64> {
+        self.lock_log()
+            .records
+            .iter()
+            .rev()
+            .find_map(|record| match &record.event {
+                PageEvent::Navigation(navigation)
+                    if navigation.frame.as_str() == target.as_str() =>
+                {
+                    Some(record.seq)
+                }
+                _ => None,
+            })
+    }
+
     /// The type of a dialog recorded on `target` after seq `after` that is still open, if
     /// any. An action whose input such a dialog blocks names it when it times out: Chromium
     /// acknowledges no input and answers no page call until the dialog closes (measured).

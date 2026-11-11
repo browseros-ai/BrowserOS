@@ -63,4 +63,10 @@ impl EventLog for PlaywrightFacade {
             .get()
             .and_then(|pw| pw.closed_target(target))
     }
+
+    fn navigated(&self, target: &TargetId) -> Option<u64> {
+        self.playwright
+            .get()
+            .and_then(|pw| pw.navigated_target(target))
+    }
 }
