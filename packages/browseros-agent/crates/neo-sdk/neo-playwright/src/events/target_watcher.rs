@@ -441,19 +441,7 @@ impl Watcher {
                     self.download(download);
                 }
             }
-            "Browser.downloadProgress" => {
-                if let Some(ProgressParams {
-                    guid,
-                    state,
-                    file_path,
-                }) = parse(params)
-                {
-                    self.writer
-                        .hub()
-                        .downloads()
-                        .progress(&guid, &state, file_path);
-                }
-            }
+            "Browser.downloadProgress" => self.download_progress(params),
             _ => {}
         }
     }
@@ -667,6 +655,21 @@ impl Watcher {
                 )
                 .await;
         });
+    }
+
+    /// How a download is going; the table keeps only how it ended.
+    fn download_progress(&self, params: Value) {
+        if let Some(ProgressParams {
+            guid,
+            state,
+            file_path,
+        }) = parse(params)
+        {
+            self.writer
+                .hub()
+                .downloads()
+                .progress(&guid, &state, file_path);
+        }
     }
 
     fn download(&mut self, download: DownloadParams) {
