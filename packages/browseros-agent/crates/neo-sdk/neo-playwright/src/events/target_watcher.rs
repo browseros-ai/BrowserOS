@@ -1057,6 +1057,11 @@ impl Watcher {
             session.clone(),
             wait_for_script,
         ) {
+            // Another page/observer session can auto-attach the same worker. Its startup
+            // pause is independent of our canonical endpoint and must never be left held.
+            let _ = session
+                .send_value("Runtime.runIfWaitingForDebugger", json!({}))
+                .await;
             return;
         }
         self.worker_sessions.insert(session_id, info.id.clone());
@@ -1237,10 +1242,13 @@ impl Watcher {
             .at_connection_epoch();
         // No Runtime.enable: console reporting on an unrelated page can execute preview
         // getters used to detect inspection. Target auto-attach needs no renderer domains.
+        // Include OOPIFs for their workers, but exclude page/prerender and service targets:
+        // this observer has no initializer that could safely release their startup pause.
         let _ = session
             .send_value(
                 "Target.setAutoAttach",
-                json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}),
+                json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+                    "filter": [{"type":"worker"}, {"type":"iframe"}, {"exclude":true}]}),
             )
             .await;
     }
@@ -1586,10 +1594,11 @@ mod worker_observation_tests {
     use std::sync::Arc;
 
     use browseros_core::testing::TestConnection;
-    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetId};
+    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TargetId};
     use serde_json::json;
 
     use super::Watcher;
+    use crate::events::worker_table::WorkerInfo;
     use crate::events::{EventHub, WatcherProgress};
     use crate::world::FrameAttachLog;
 
@@ -1618,10 +1627,67 @@ mod worker_observation_tests {
         );
         assert_eq!(calls[0].method, "Target.attachToTarget");
         assert_eq!(calls[1].method, "Target.setAutoAttach");
+        assert_eq!(
+            calls[1].params["filter"],
+            json!([
+                {"type":"worker"}, {"type":"iframe"}, {"exclude":true}
+            ])
+        );
         assert!(
             !calls.iter().any(|call| call.method == "Runtime.enable"),
             "page console reporting must stay off on an untouched tab"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_worker_attachment_releases_its_startup_pause() -> Result<(), Box<dyn Error>>
+    {
+        let connection = TestConnection::new([
+            ("Browser.getVersion", json!({"product":"Chrome/143.0"})),
+            ("Runtime.enable", json!({})),
+            ("Target.setAutoAttach", json!({})),
+            ("Runtime.runIfWaitingForDebugger", json!({})),
+        ]);
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (hub, writer) = EventHub::new();
+        let (mut watcher, _found) = Watcher::new(
+            browser,
+            writer,
+            Arc::new(FrameAttachLog::default()),
+            Arc::new(WatcherProgress::default()),
+        );
+        let page = TargetId("page".to_owned());
+        let info = WorkerInfo {
+            id: "worker".to_owned(),
+            url: "worker.js".to_owned(),
+        };
+        let first = SessionId::from("canonical");
+        watcher
+            .start_worker(page.clone(), info.clone(), first.clone(), true)
+            .await;
+        watcher
+            .start_worker(page.clone(), info, SessionId::from("duplicate"), true)
+            .await;
+        let endpoint = hub.workers.get(&page, "worker").ok_or("worker exists")?;
+        assert_eq!(endpoint.session().session_id(), Some(&first));
+        let calls = connection.calls()?;
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.method == "Runtime.enable")
+                .count(),
+            1
+        );
+        let resumes: Vec<_> = calls
+            .iter()
+            .filter(|call| call.method == "Runtime.runIfWaitingForDebugger")
+            .map(|call| call.session.clone())
+            .collect();
+        assert_eq!(resumes, [Some(first), Some(SessionId::from("duplicate"))]);
         Ok(())
     }
 }

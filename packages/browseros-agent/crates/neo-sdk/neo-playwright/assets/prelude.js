@@ -8675,12 +8675,19 @@ ${value.stack}`;
       try {
         if (on && lease)
           await lease.ready;
-        await invoke("events.listen", { api, timeoutMs: 0 }, {
+        const input = !on && event === "workerstate" && page?._tab != null ? {
+          page: null,
+          retiredTab: page._tab,
+          event,
+          on: false,
+          since
+        } : {
           page: page === null ? null : await page._openedBrand(api),
           event,
           on,
           since
-        });
+        };
+        await invoke("events.listen", { api, timeoutMs: 0 }, input);
       } catch {
         if (on && lease)
           lease.release().catch(() => {});

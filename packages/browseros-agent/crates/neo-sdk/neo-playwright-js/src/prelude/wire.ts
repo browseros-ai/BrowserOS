@@ -559,12 +559,16 @@ export type OpInputs = {
    * event ops name no target the door resolves, so their page always has its tab: the
    * prelude opens the run's lazy page first (`Page._openedBrand`).
    */
-  'events.listen': {
-    page: PageBrand | null
-    event: EventName
-    on: boolean
-    since: number
-  }
+  'events.listen':
+    | { page: PageBrand | null; event: EventName; on: boolean; since: number }
+    /** Cleanup addresses only this run's bookkeeping key; the tab may already be gone. */
+    | {
+        page: null
+        retiredTab: number
+        event: 'workerstate'
+        on: false
+        since: number
+      }
   /**
    * The background pump. It names no cursor: Rust keeps one read position per listener in the
    * run's state, so a listener attached after the pump read past an event still gets it.

@@ -359,16 +359,24 @@ export class EventHub {
     const api = `${page === null ? 'browserContext' : 'page'}.${on ? 'on' : 'off'}`
     try {
       if (on && lease) await lease.ready
-      await invoke(
-        'events.listen',
-        { api, timeoutMs: 0 },
-        {
-          page: page === null ? null : await page._openedBrand(api),
-          event,
-          on,
-          since,
-        },
-      )
+      // A closed tab cannot pass the host's page admission. Internal cleanup names only
+      // its run-local subscription key, so the host can release it without touching a tab.
+      const input =
+        !on && event === 'workerstate' && page?._tab != null
+          ? {
+              page: null,
+              retiredTab: page._tab,
+              event,
+              on: false as const,
+              since,
+            }
+          : {
+              page: page === null ? null : await page._openedBrand(api),
+              event,
+              on,
+              since,
+            }
+      await invoke('events.listen', { api, timeoutMs: 0 }, input)
     } catch {
       // `page.on` already returned, so there is no caller to tell; a listener on a page that
       // is gone never fires, as in Playwright.

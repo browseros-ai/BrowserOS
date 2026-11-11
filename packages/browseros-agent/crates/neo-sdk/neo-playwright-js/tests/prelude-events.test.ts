@@ -1155,4 +1155,9 @@ it('releases internal worker bookkeeping once when a page closes', async () => {
       )
       .map((call) => call.input.on),
   ).toEqual([true, false])
+  const cleanup = runtime
+    .sent('events.listen')
+    .find((call) => call.input.on === false)
+  expect(cleanup?.input.page).toBeNull()
+  expect(cleanup?.input.retiredTab).toBe(1007)
 })
