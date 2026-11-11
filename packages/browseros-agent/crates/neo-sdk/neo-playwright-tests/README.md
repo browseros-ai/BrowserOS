@@ -100,8 +100,11 @@ SDK gaps; add-on loading and fixture setup failures are harness errors.
 
 The runner prints **All tests** and **In-scope tests** after execution and writes
 `scores.json`. Both count Playwright expected/flaky outcomes (including expectLoop
-passes); totals include skips and incomplete cases. An empty denominator prints
-`n/a`. The offline report prints the same scores alongside its unchanged verdicts.
+passes). A skipped test ran nothing, so it stays out of the rate: each score reports
+`skipped` beside it, and `skippedByHarness` for the skips this harness made (curation's
+internals list, expectLoop's uncovered checks) rather than the spec itself. Incomplete
+cases stay in the denominator. An empty denominator prints `n/a`. The offline report
+prints the same scores alongside its unchanged verdicts.
 
 `node/scope.json` is reviewed reporting policy, separate from curation. Entries name
 a corpus-relative spec `file`, optionally narrowed with `ids`; omitting `ids` covers

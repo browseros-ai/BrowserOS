@@ -121,8 +121,9 @@ test('report shows both scores, reason counts and passing excluded tests without
   const report = renderReport({ ...input, scope })
   assert.deepEqual(report.counts, original.counts)
   assert.deepEqual(report.rows, original.rows)
-  assert.deepEqual(report.scores.all, { passed: 1, total: 5 })
-  assert.deepEqual(report.scores.inScope, { passed: 0, total: 0 })
+  const none = { skipped: 0, skippedByHarness: 0 }
+  assert.deepEqual(report.scores.all, { passed: 1, total: 5, ...none })
+  assert.deepEqual(report.scores.inScope, { passed: 0, total: 0, ...none })
   assert.match(report.markdown, /All tests: \*\*1\/5 \(20.0%\)\*\*/)
   assert.match(report.markdown, /In-scope tests: \*\*0\/0 \(n\/a\)\*\*/)
   assert.match(report.markdown, /\| network \| 5 \| 1 \|/)
