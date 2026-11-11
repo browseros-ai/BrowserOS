@@ -80,7 +80,8 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, init scripts \
     (`page.addInitScript`, `context.addInitScript`) that every new document runs in its main \
     world, bindings the page calls back into the script with (`exposeBinding`, \
-    `exposeFunction`, on a page or the context, and `addInitScript`'s `exposeFunctions`), \
+    `exposeFunction`, on a page or the context, and `addInitScript`'s `exposeFunctions`; the \
+    prelude answers each call with `bindingCall.resolve`), \
     `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), downloads \
     (`download.path()` waits for the file and returns where the browser saved it, which a later \
     run can upload with `setInputFiles`; `saveAs(path)` copies it; `failure()`), and `expect`: \
