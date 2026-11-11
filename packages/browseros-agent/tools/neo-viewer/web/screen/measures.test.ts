@@ -10,6 +10,24 @@ describe('the run bars', () => {
     expect(neoMs(runSummary(3, { roundTripMs: 5, proxyMs: 9 }))).toBe(0)
   })
 
+  it("uses Neo's own record of the run once it is joined", () => {
+    const joined = {
+      ...runSummary(1, { roundTripMs: 431, proxyMs: 19 }),
+      neoDurationMs: 398,
+    }
+    expect(neoMs(joined)).toBe(398)
+  })
+
+  it('totals the calls Neo recorded over the runs whose record is joined', () => {
+    const runs = [
+      { ...runSummary(1), operationCount: 6 },
+      { ...runSummary(2), operationCount: 10 },
+      runSummary(3),
+    ]
+    expect(runTotals(runs).calls).toBe(16)
+    expect(runTotals([runSummary(1)]).calls).toBeNull()
+  })
+
   it('draws each bar as a share of the largest value in its column', () => {
     const runs = [
       runSummary(1, { roundTripMs: 412 }),
@@ -68,6 +86,7 @@ describe('the run bars', () => {
       codeTokens: 22 + 30 + 41,
       replyTokens: 4 + 222,
       gapMs: 6_400 + 12_100,
+      calls: null,
     })
   })
 })

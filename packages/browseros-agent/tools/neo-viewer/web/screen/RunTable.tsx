@@ -109,7 +109,7 @@ function Header({
         'neo',
         'Neo time',
         'w-[170px] text-left',
-        "Measured at the viewer: the round trip less the time the viewer held the call. Neo's own record joins with the next PR.",
+        "Neo's own record of the run (ended − started); without a record, the round trip less the time the viewer held the call.",
       )}
       {column('roundTrip', 'Round trip', 'w-[70px] text-right')}
       {column('code', 'Code tok', 'w-[62px] text-right')}
@@ -206,7 +206,11 @@ function TotalsRow({
           </>
         )}
       </span>
-      <span className="w-10 shrink-0 text-right font-code text-ink-4">–</span>
+      <span
+        className={`w-10 shrink-0 text-right font-code ${totals.calls === null ? 'text-ink-4' : ''}`}
+      >
+        {totals.calls === null ? '–' : count(totals.calls)}
+      </span>
       <span className="w-[22px] shrink-0" />
       <span className="w-[170px] shrink-0 pl-[118px] font-code font-semibold">
         {seconds(totals.neoMs)}

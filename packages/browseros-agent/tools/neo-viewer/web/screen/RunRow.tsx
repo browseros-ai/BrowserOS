@@ -62,10 +62,10 @@ export function RunRow({
         )}
       </span>
       <span
-        className="w-10 shrink-0 text-right text-ink-4"
-        title="Method calls per run arrive with Neo's operations (next PR)"
+        className={`w-10 shrink-0 text-right ${run.operationCount === null ? 'text-ink-4' : ''}`}
+        title="Calls Neo recorded for the run: the script's own and Neo's (events, frames)"
       >
-        –
+        {run.operationCount === null ? '–' : count(run.operationCount)}
       </span>
       <span className="flex w-[22px] shrink-0 justify-center">
         <StatusDot status={run.status} />
@@ -191,6 +191,8 @@ function OpenSummary({
       <span className="font-semibold">run()</span>{' '}
       <span className="text-ink-2">
         {plural(lineCount(run.code), 'line')} of code
+        {run.operationCount !== null &&
+          `, ${plural(run.operationCount, 'method call')}`}
         {run.status === 'running'
           ? ', running'
           : returned
