@@ -23,7 +23,7 @@ use std::collections::HashSet;
 use std::future;
 
 use browseros_cdp::CdpEvent;
-use browseros_core::SessionId;
+use browseros_core::{FrameId, SessionId};
 use serde::Deserialize;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
@@ -72,17 +72,17 @@ impl RequestedNavigations {
         }
     }
 
-    /// Resolves while one of its frames has a navigation requested and not yet committed or
-    /// cancelled: upstream's pending document (`Frame._pendingDocument`), which makes it give up
-    /// on reading the page (`raceAgainstEvaluationStallingEvents`). Chromium answers no call
-    /// bound for a renderer that is starting such a navigation until it commits or fails
-    /// (measured: a link's own click blocks `Runtime.evaluate` that long), so a read raced with
-    /// this ends instead of waiting on a page that may never answer. Never resolves once the
-    /// events are lost.
-    pub(crate) async fn pending(&mut self) {
+    /// Resolves while `frame` has a navigation requested and not yet committed or cancelled:
+    /// upstream's pending document (`Frame._pendingDocument`), which makes it give up on reading
+    /// that frame (`raceAgainstEvaluationStallingEvents`). Chromium answers no call bound for a
+    /// renderer that is starting such a navigation until it commits or fails (measured: a link's
+    /// own click blocks `Runtime.evaluate` that long), so a read of `frame` raced with this ends
+    /// instead of waiting on a page that may never answer. Another frame's navigation does not
+    /// count, as upstream's does not. Never resolves once the events are lost.
+    pub(crate) async fn pending_in(&mut self, frame: &FrameId) {
         loop {
             self.drain();
-            if !self.pending.is_empty() {
+            if self.pending.contains(frame.as_str()) {
                 return;
             }
             match self.events.recv().await {

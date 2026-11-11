@@ -639,12 +639,13 @@ impl<'a> PointerRunner<'a> {
                     drag.trial_press = Some(guard);
                 } else {
                     // Upstream reads the verdict racing its frame's pending navigation and takes
-                    // a navigation for a landed input: the page would not answer until it ends,
-                    // which may be never. The guard, still armed then, disarms on drop.
+                    // a navigation for a landed input: the frame would not answer until it ends,
+                    // which may be never. The guard is then abandoned, not awaited.
+                    let frame = located.world().frame().clone();
                     let read = self.scope.within(guard.verdict(self.page, self.scope));
                     let navigating = async {
                         match navigations.as_mut() {
-                            Some(watch) => watch.pending().await,
+                            Some(watch) => watch.pending_in(&frame).await,
                             None => future::pending().await,
                         }
                     };
@@ -653,7 +654,7 @@ impl<'a> PointerRunner<'a> {
                         read = read => Some(read),
                         () = navigating => None,
                     };
-                    // `None`: a navigation is pending, so the input landed.
+                    // `None`: the element's frame is navigating, so the input landed.
                     if let Some(read) = read {
                         let Ok(verdict) = read else {
                             return Err(self.input_timed_out(dialogs_from));
@@ -683,6 +684,8 @@ impl<'a> PointerRunner<'a> {
                                 return Err(resolve::failed(self.scope, failure).after_input());
                             }
                         }
+                    } else {
+                        guard.abandon();
                     }
                 }
             }

@@ -89,6 +89,32 @@ impl ArmGuard {
     }
 }
 
+impl ArmGuard {
+    /// Gives up on the verdict without waiting for the page, once the input started a
+    /// navigation in the element's frame, which answers nothing until it ends (upstream does not
+    /// await its `stop()` there either). Unlike `Drop`'s disarm, nothing is held across the
+    /// page's reply: the owed releases go out under the tab's input lock, which is then free for
+    /// the next op, and the interceptor is stopped by its own token (`verdict`), which cannot
+    /// stop an interceptor a later op armed in the same world.
+    pub(crate) fn abandon(mut self) {
+        let Some(world) = self.world.take() else {
+            return;
+        };
+        let Ok(runtime) = Handle::try_current() else {
+            return;
+        };
+        let request = ProbeRequest::Verdict { token: self.token };
+        let input = Arc::clone(&self.input);
+        let session = self.session.clone();
+        let pointer_scale = self.pointer_scale;
+        drop(runtime.spawn(async move {
+            flush_when_idle(&input, &session, pointer_scale).await;
+            // Best effort: a world that is gone took its interceptor with it.
+            let _stopped = probe::call(&world, &request).await;
+        }));
+    }
+}
+
 impl Drop for ArmGuard {
     fn drop(&mut self) {
         let Some(world) = self.world.take() else {
@@ -104,6 +130,15 @@ impl Drop for ArmGuard {
             self.pointer_scale,
         )));
     }
+}
+
+/// The owed releases alone, under the tab's input lock, which is free again once they are out.
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the releases run while no op holds the tab's input; see ArmGuard"
+)]
+async fn flush_when_idle(input: &Mutex<TabInput>, session: &ProtocolSession, pointer_scale: f64) {
+    input.lock().await.flush_owed(session, pointer_scale).await;
 }
 
 #[expect(
