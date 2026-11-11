@@ -1634,6 +1634,41 @@
         return false;
       return this.every((byte, index) => byte === other[index]);
     }
+    readUInt8(offset = 0) {
+      return this.#readUnsigned(offset, 1, "be");
+    }
+    readUInt16BE(offset = 0) {
+      return this.#readUnsigned(offset, 2, "be");
+    }
+    readUInt16LE(offset = 0) {
+      return this.#readUnsigned(offset, 2, "le");
+    }
+    readUInt32BE(offset = 0) {
+      return this.#readUnsigned(offset, 4, "be");
+    }
+    readUInt32LE(offset = 0) {
+      return this.#readUnsigned(offset, 4, "le");
+    }
+    readInt32BE(offset = 0) {
+      return this.readUInt32BE(offset) | 0;
+    }
+    #readUnsigned(offset, width, order) {
+      if (typeof offset !== "number")
+        throw nodeError(TypeError, "ERR_INVALID_ARG_TYPE", `The "offset" argument must be of type number. ${received(offset)}`);
+      if (Math.floor(offset) !== offset)
+        throw outOfRange("offset", "an integer", offset);
+      const last = this.length - width;
+      if (last < 0)
+        throw nodeError(RangeError, "ERR_BUFFER_OUT_OF_BOUNDS", "Attempt to access memory outside buffer bounds");
+      if (offset < 0 || offset > last)
+        throw outOfRange("offset", `>= 0 and <= ${last}`, offset);
+      let value = 0;
+      for (let index = 0;index < width; index++) {
+        const at = order === "be" ? offset + index : offset + width - index - 1;
+        value = value * 256 + (this[at] ?? 0);
+      }
+      return value;
+    }
     slice(start, end) {
       return this.subarray(start, end);
     }
@@ -1969,7 +2004,7 @@
     crash: "Neo does not report crashes; a crashed page fails its next call",
     pageload: "Neo does not report load events; use page.waitForLoadState()",
     pageclose: 'listen for close on the page itself: page.on("close")',
-    weberror: 'listen for pageerror on the page itself: page.on("pageerror")',
+    weberror: "the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS",
     dialogclosed: "Neo does not report closed dialogs"
   };
   function checkReported(api, event, reported) {
@@ -9576,14 +9611,14 @@ Timeout: ${timeout}ms`);
       addLocatorHandler: "locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting",
       bringToFront: "Neo keeps agent tabs in the background; act on the page directly",
       cancelPickLocator: NO_INSPECTOR,
-      clearConsoleMessages: 'Neo keeps no console history; listen with page.on("console")',
-      clearPageErrors: 'Neo keeps no error history; listen with page.on("pageerror")',
-      consoleMessages: 'Neo keeps no console history; listen with page.on("console") before the page logs',
+      clearConsoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
+      clearPageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
+      consoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
       evaluateHandle: NO_HANDLES,
       exposeBinding: "pages cannot call back into the script; read state with page.evaluate()",
       exposeFunction: "pages cannot call back into the script; read state with page.evaluate()",
       hideHighlight: NO_INSPECTOR,
-      pageErrors: 'Neo keeps no error history; listen with page.on("pageerror") before the page fails',
+      pageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
       pause: NO_INSPECTOR,
       pickLocator: NO_INSPECTOR,
       removeLocatorHandler: "locator handlers are not available in Neo",
