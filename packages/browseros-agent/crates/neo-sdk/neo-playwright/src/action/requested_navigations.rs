@@ -27,6 +27,7 @@ use browseros_core::{FrameId, SessionId, TargetId};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+use ts_rs::TS;
 
 use crate::events::{EventHub, PageEvent, PageEventKind};
 use crate::op_scope::{Expired, OpScope};
@@ -77,7 +78,7 @@ struct WithinDocument {
 }
 
 /// The public event cut caused by this input, so JS can publish its waiting consumers first.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, TS)]
 pub(crate) struct NavigationCut {
     pub(crate) seq: u64,
     pub(crate) at: u64,
