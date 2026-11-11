@@ -1,6 +1,7 @@
 /** One dedicated worker target. Page facts and event records share this object; a close is
  * terminal even when an older worker-created record arrives after a newer host observation. */
 import { invoke } from './bridge'
+import { captureSite } from './call-site'
 import { EventEmitter } from './emitter'
 import { clientError, unsupportedError } from './errors'
 import { assertMaxArguments, fromPageValue, pageCall } from './evaluation'
@@ -29,6 +30,7 @@ export class Worker extends EventEmitter {
   }
 
   async evaluate(pageFunction: unknown, arg?: unknown): Promise<unknown> {
+    const site = captureSite()
     const api = 'worker.evaluate'
     assertMaxArguments(api, arguments.length, 2)
     const script = pageCall(api, 'frame', pageFunction, arg)
@@ -36,6 +38,7 @@ export class Worker extends EventEmitter {
       throw clientError(api, 'Target page, context or browser has been closed')
     const { value } = await invoke(
       'worker.evaluate',
+      site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), worker: this.#info.id, script },
     )

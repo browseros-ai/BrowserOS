@@ -12,6 +12,7 @@
  */
 import type { Rect } from '../probe/protocol'
 import { invoke } from './bridge'
+import { type CallSite, captureSite } from './call-site'
 import { EventEmitter } from './emitter'
 import { clientError } from './errors'
 import { type EvaluateOptions, fromPageValue, pageCall } from './evaluation'
@@ -108,6 +109,7 @@ export class ElementHandle extends EventEmitter {
 
   async #op<Op extends ElementOp>(
     op: Op,
+    site: CallSite,
     api: string,
     timeout: number,
     args: Omit<OpInputs[Op], 'target' | 'strict'>,
@@ -118,7 +120,12 @@ export class ElementHandle extends EventEmitter {
       strict: 'strict',
       ...args,
     } as OpInputs[Op]
-    return await invoke(op, { api, timeoutMs: timeoutMs(api, timeout) }, input)
+    return await invoke(
+      op,
+      site,
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      input,
+    )
   }
 
   #timeout(options: TimeoutOption | undefined): number {
@@ -141,9 +148,11 @@ export class ElementHandle extends EventEmitter {
 
   /** The first match under this handle's node now, or null; never waits, never strict. */
   async $(selector: string): Promise<ElementHandle | null> {
+    const site = captureSite()
     const api = 'elementHandle.$'
     const handle = await invoke(
       'locator.elementHandle',
+      site,
       { api, timeoutMs: timeoutMs(api, 0) },
       {
         target: this.#rooted(api, selector),
@@ -156,9 +165,11 @@ export class ElementHandle extends EventEmitter {
 
   /** Every match under this handle's node now, each a handle; never waits. */
   async $$(selector: string): Promise<ElementHandle[]> {
+    const site = captureSite()
     const api = 'elementHandle.$$'
     const handles = await invoke(
       'locator.elementHandles',
+      site,
       { api, timeoutMs: timeoutMs(api, 0) },
       { target: this.#rooted(api, selector) },
     )
@@ -169,8 +180,10 @@ export class ElementHandle extends EventEmitter {
   }
 
   async click(options: ClickOptions = {}): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.click',
+      site,
       'elementHandle.click',
       this.#timeout(options),
       {
@@ -180,8 +193,10 @@ export class ElementHandle extends EventEmitter {
   }
 
   async dblclick(options: ClickOptions = {}): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.dblclick',
+      site,
       'elementHandle.dblclick',
       this.#timeout(options),
       {
@@ -191,8 +206,10 @@ export class ElementHandle extends EventEmitter {
   }
 
   async hover(options: ClickOptions = {}): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.hover',
+      site,
       'elementHandle.hover',
       this.#timeout(options),
       {
@@ -202,8 +219,10 @@ export class ElementHandle extends EventEmitter {
   }
 
   async check(options: ClickOptions = {}): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.check',
+      site,
       'elementHandle.check',
       this.#timeout(options),
       {
@@ -213,8 +232,10 @@ export class ElementHandle extends EventEmitter {
   }
 
   async uncheck(options: ClickOptions = {}): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.uncheck',
+      site,
       'elementHandle.uncheck',
       this.#timeout(options),
       {
@@ -227,8 +248,10 @@ export class ElementHandle extends EventEmitter {
     checked: boolean,
     options: ClickOptions = {},
   ): Promise<void> {
+    const site = captureSite()
     await this.#op(
       checked ? 'locator.check' : 'locator.uncheck',
+      site,
       'elementHandle.setChecked',
       this.#timeout(options),
       { options: pick(options, CHECK_KEYS) },
@@ -239,8 +262,10 @@ export class ElementHandle extends EventEmitter {
     value: string,
     options: FillOptions & TimeoutOption = {},
   ): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.fill',
+      site,
       'elementHandle.fill',
       this.#timeout(options),
       {
@@ -254,8 +279,10 @@ export class ElementHandle extends EventEmitter {
     key: string,
     options: KeyOptions & TimeoutOption = {},
   ): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.press',
+      site,
       'elementHandle.press',
       this.#timeout(options),
       {
@@ -269,8 +296,10 @@ export class ElementHandle extends EventEmitter {
     text: string,
     options: KeyOptions & TimeoutOption = {},
   ): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.pressSequentially',
+      site,
       'elementHandle.type',
       this.#timeout(options),
       {
@@ -284,18 +313,27 @@ export class ElementHandle extends EventEmitter {
     values: unknown,
     options: TimeoutOption & { force?: boolean } = {},
   ): Promise<string[]> {
+    const site = captureSite()
     const api = 'elementHandle.selectOption'
-    return await this.#op('locator.selectOption', api, this.#timeout(options), {
-      ...selectOptionValues(api, values),
-      ...pick(options, ['force']),
-    })
+    return await this.#op(
+      'locator.selectOption',
+      site,
+      api,
+      this.#timeout(options),
+      {
+        ...selectOptionValues(api, values),
+        ...pick(options, ['force']),
+      },
+    )
   }
 
   async selectText(
     options: TimeoutOption & { force?: boolean } = {},
   ): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.selectText',
+      site,
       'elementHandle.selectText',
       this.#timeout(options),
       pick(options, ['force']),
@@ -306,29 +344,40 @@ export class ElementHandle extends EventEmitter {
     files: unknown,
     options: TimeoutOption = {},
   ): Promise<void> {
+    const site = captureSite()
     const api = 'elementHandle.setInputFiles'
     const input = inputFiles(api, files)
     await withClientErrors(api, () =>
-      this.#op('locator.setInputFiles', api, this.#timeout(options), {
+      this.#op('locator.setInputFiles', site, api, this.#timeout(options), {
         files: input,
       }),
     )
   }
 
   async focus(): Promise<void> {
-    await this.#op('locator.focus', 'elementHandle.focus', 0, {})
+    const site = captureSite()
+    await this.#op('locator.focus', site, 'elementHandle.focus', 0, {})
   }
 
   async dispatchEvent(type: string, eventInit: unknown = {}): Promise<void> {
-    await this.#op('locator.dispatchEvent', 'elementHandle.dispatchEvent', 0, {
-      type,
-      eventInit,
-    })
+    const site = captureSite()
+    await this.#op(
+      'locator.dispatchEvent',
+      site,
+      'elementHandle.dispatchEvent',
+      0,
+      {
+        type,
+        eventInit,
+      },
+    )
   }
 
   async scrollIntoViewIfNeeded(options: TimeoutOption = {}): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.scrollIntoViewIfNeeded',
+      site,
       'elementHandle.scrollIntoViewIfNeeded',
       this.#timeout(options),
       {},
@@ -339,8 +388,10 @@ export class ElementHandle extends EventEmitter {
     state: ElementStateName,
     options: TimeoutOption = {},
   ): Promise<void> {
+    const site = captureSite()
     await this.#op(
       'locator.waitFor',
+      site,
       'elementHandle.waitForElementState',
       this.#timeout(options),
       {
@@ -351,53 +402,101 @@ export class ElementHandle extends EventEmitter {
   }
 
   textContent(): Promise<string | null> {
-    return this.#op('locator.textContent', 'elementHandle.textContent', 0, {})
+    const site = captureSite()
+    return this.#op(
+      'locator.textContent',
+      site,
+      'elementHandle.textContent',
+      0,
+      {},
+    )
   }
 
   innerText(): Promise<string> {
-    return this.#op('locator.innerText', 'elementHandle.innerText', 0, {})
+    const site = captureSite()
+    return this.#op('locator.innerText', site, 'elementHandle.innerText', 0, {})
   }
 
   innerHTML(): Promise<string> {
-    return this.#op('locator.innerHTML', 'elementHandle.innerHTML', 0, {})
+    const site = captureSite()
+    return this.#op('locator.innerHTML', site, 'elementHandle.innerHTML', 0, {})
   }
 
   inputValue(): Promise<string> {
-    return this.#op('locator.inputValue', 'elementHandle.inputValue', 0, {})
+    const site = captureSite()
+    return this.#op(
+      'locator.inputValue',
+      site,
+      'elementHandle.inputValue',
+      0,
+      {},
+    )
   }
 
   getAttribute(name: string): Promise<string | null> {
-    return this.#op('locator.getAttribute', 'elementHandle.getAttribute', 0, {
-      name,
-    })
+    const site = captureSite()
+    return this.#op(
+      'locator.getAttribute',
+      site,
+      'elementHandle.getAttribute',
+      0,
+      {
+        name,
+      },
+    )
   }
 
   isChecked(): Promise<boolean> {
-    return this.#op('locator.isChecked', 'elementHandle.isChecked', 0, {})
+    const site = captureSite()
+    return this.#op('locator.isChecked', site, 'elementHandle.isChecked', 0, {})
   }
 
   isDisabled(): Promise<boolean> {
-    return this.#op('locator.isDisabled', 'elementHandle.isDisabled', 0, {})
+    const site = captureSite()
+    return this.#op(
+      'locator.isDisabled',
+      site,
+      'elementHandle.isDisabled',
+      0,
+      {},
+    )
   }
 
   isEditable(): Promise<boolean> {
-    return this.#op('locator.isEditable', 'elementHandle.isEditable', 0, {})
+    const site = captureSite()
+    return this.#op(
+      'locator.isEditable',
+      site,
+      'elementHandle.isEditable',
+      0,
+      {},
+    )
   }
 
   isEnabled(): Promise<boolean> {
-    return this.#op('locator.isEnabled', 'elementHandle.isEnabled', 0, {})
+    const site = captureSite()
+    return this.#op('locator.isEnabled', site, 'elementHandle.isEnabled', 0, {})
   }
 
   isHidden(): Promise<boolean> {
-    return this.#op('locator.isHidden', 'elementHandle.isHidden', 0, {})
+    const site = captureSite()
+    return this.#op('locator.isHidden', site, 'elementHandle.isHidden', 0, {})
   }
 
   isVisible(): Promise<boolean> {
-    return this.#op('locator.isVisible', 'elementHandle.isVisible', 0, {})
+    const site = captureSite()
+    return this.#op('locator.isVisible', site, 'elementHandle.isVisible', 0, {})
   }
 
   boundingBox(): Promise<Rect | null> {
-    return this.#op('locator.boundingBox', 'elementHandle.boundingBox', 0, {})
+    const site = captureSite()
+    return this.#op(
+      'locator.boundingBox',
+      site,
+      'elementHandle.boundingBox',
+      0,
+      {},
+    )
   }
 
   /** upstream's `JSHandle.evaluate`: its checks first, then the script on this node. */
@@ -406,10 +505,12 @@ export class ElementHandle extends EventEmitter {
     arg?: unknown,
     options?: EvaluateOptions,
   ): Promise<unknown> {
+    const site = captureSite()
     const api = 'elementHandle.evaluate'
     this.#live(api)
     const script = await this._page._evaluationScript(
       api,
+      site,
       'handle',
       pageFunction,
       arg,
@@ -417,7 +518,7 @@ export class ElementHandle extends EventEmitter {
     )
     return fromPageValue(
       api,
-      await this.#op('locator.evaluate', api, 0, { script }),
+      await this.#op('locator.evaluate', site, api, 0, { script }),
     )
   }
 
@@ -427,10 +528,12 @@ export class ElementHandle extends EventEmitter {
     pageFunction: unknown,
     arg?: unknown,
   ): Promise<unknown> {
+    const site = captureSite()
     const api = 'elementHandle.$eval'
     const script = pageCall(api, 'query', pageFunction, arg)
     const value = await invoke(
       'locator.evaluate',
+      site,
       { api, timeoutMs: timeoutMs(api, 0) },
       {
         target: this.#rooted(api, selector),
@@ -449,10 +552,12 @@ export class ElementHandle extends EventEmitter {
     pageFunction: unknown,
     arg?: unknown,
   ): Promise<unknown> {
+    const site = captureSite()
     const api = 'elementHandle.$$eval'
     const script = pageCall(api, 'query', pageFunction, arg)
     const value = await invoke(
       'locator.evaluateAll',
+      site,
       { api, timeoutMs: timeoutMs(api, 0) },
       { target: this.#rooted(api, selector), script },
     )
@@ -460,6 +565,7 @@ export class ElementHandle extends EventEmitter {
   }
 
   async screenshot(options: ScreenshotOptionsInput = {}): Promise<unknown> {
+    const site = captureSite()
     const api = 'elementHandle.screenshot'
     const wire = await screenshotOptions(api, options)
     if (!wire.type && options.path)
@@ -467,6 +573,7 @@ export class ElementHandle extends EventEmitter {
     const signal = signalOf(api, options)
     const image = await invoke(
       'page.screenshot',
+      site,
       { api, timeoutMs: timeoutMs(api, this.#timeout(options)) },
       {
         page: await this._page._brand(api),
@@ -476,7 +583,13 @@ export class ElementHandle extends EventEmitter {
       },
       signal,
     )
-    await saveScreenshot({ api, bytes: image, path: options.path, signal })
+    await saveScreenshot({
+      api,
+      site,
+      bytes: image,
+      path: options.path,
+      signal,
+    })
     return image
   }
 }

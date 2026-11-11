@@ -1,3 +1,4 @@
+import { type CallSite, captureSite, INTERNAL_SITE } from './call-site'
 /**
  * Playwright's Page over one tab.
  *
@@ -243,6 +244,7 @@ export class Page extends EventEmitter {
     width: number
     height: number
   }): Promise<void> {
+    const site = captureSite()
     // Playwright caches the caller's object before sending, without cloning it. Host facts
     // initialize a fresh realm; they must not overwrite a local call's synchronous cache.
     this.#viewportSize = viewportSize
@@ -257,6 +259,7 @@ export class Page extends EventEmitter {
     const size = { width: viewportSize.width, height: viewportSize.height }
     await invoke(
       'page.setViewportSize',
+      site,
       { api: 'page.setViewportSize', timeoutMs: 0 },
       { page: await this._brand('page.setViewportSize'), viewportSize: size },
     )
@@ -609,11 +612,13 @@ export class Page extends EventEmitter {
     pageFunction: unknown,
     arg?: unknown,
   ): Promise<unknown> {
+    const site = captureSite()
     // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
     assertMaxArguments('page.$eval', arguments.length, 3)
     const api = 'page.$eval'
     return await this._mainFrame._evaluateOn(
       api,
+      site,
       selector,
       false,
       pageCall(api, 'query', pageFunction, arg),
@@ -691,8 +696,10 @@ export class Page extends EventEmitter {
   }
 
   waitForLoadState(state?: LoadState, options?: TimeoutOption): Promise<void> {
+    const site = captureSite()
     return this._mainFrame._waitForLoadState(
       'page.waitForLoadState',
+      site,
       state,
       options,
     )
@@ -712,23 +719,34 @@ export class Page extends EventEmitter {
     url: UrlMatcher,
     options?: TimeoutOption & { waitUntil?: LoadState },
   ): Promise<void> {
-    return this._waitForURL('page.waitForURL', this._mainFrame, url, options)
+    const site = captureSite()
+    return this._waitForURL(
+      'page.waitForURL',
+      site,
+      this._mainFrame,
+      url,
+      options,
+    )
   }
 
   /** The host admits/rechecks this page and collects in its root renderer. */
   async requestGC(): Promise<void> {
+    const site = captureSite()
     const api = 'page.requestGC'
     await invoke(
       'page.requestGC',
+      site,
       { api, timeoutMs: 0 },
       { page: await this._brand(api) },
     )
   }
 
   async title(): Promise<string> {
+    const site = captureSite()
     const api = 'page.title'
     const title = await invoke(
       'page.title',
+      site,
       { api, timeoutMs: 0 },
       { page: await this._brand(api) },
     )
@@ -741,6 +759,7 @@ export class Page extends EventEmitter {
   }
 
   async emulateMedia(options: MediaOptions = {}): Promise<void> {
+    const site = captureSite()
     const api = 'page.emulateMedia'
     const allowed = {
       media: ['screen', 'print', 'no-override'],
@@ -760,7 +779,7 @@ export class Page extends EventEmitter {
         )
       input[key] = value
     }
-    await invoke('page.emulateMedia', this._mainFrame._call(api, 0), {
+    await invoke('page.emulateMedia', site, this._mainFrame._call(api, 0), {
       page: await this._brand(api),
       ...input,
     })
@@ -811,6 +830,7 @@ export class Page extends EventEmitter {
     arg?: unknown,
     options?: unknown,
   ): Promise<Disposable> {
+    const site = captureSite()
     const api = 'page.addInitScript'
     return addInitScript(
       api,
@@ -819,12 +839,13 @@ export class Page extends EventEmitter {
           (
             await invoke(
               'page.addInitScript',
+              site,
               { api, timeoutMs: 0 },
               { page: await this._brand(api), script: source },
             )
           ).id,
         expose: (name, callback) =>
-          exposeOnPage(this, api, name, callback, true),
+          exposeOnPage(this, site, api, name, callback, true),
       },
       script,
       arg,
@@ -838,7 +859,8 @@ export class Page extends EventEmitter {
    * its result, until the run ends or the returned disposable is disposed.
    */
   exposeBinding(name: string, callback: BindingCallback): Promise<Disposable> {
-    return exposeOnPage(this, 'page.exposeBinding', name, callback)
+    const site = captureSite()
+    return exposeOnPage(this, site, 'page.exposeBinding', name, callback)
   }
 
   /** upstream's `page.exposeFunction`: [`exposeBinding`] without the source argument. */
@@ -846,8 +868,13 @@ export class Page extends EventEmitter {
     name: string,
     callback: (...args: unknown[]) => unknown,
   ): Promise<Disposable> {
-    return exposeOnPage(this, 'page.exposeFunction', name, (_source, ...args) =>
-      Reflect.apply(callback, undefined, args),
+    const site = captureSite()
+    return exposeOnPage(
+      this,
+      site,
+      'page.exposeFunction',
+      name,
+      (_source, ...args) => Reflect.apply(callback, undefined, args),
     )
   }
 
@@ -861,6 +888,7 @@ export class Page extends EventEmitter {
    */
   async _evaluationScript(
     api: string,
+    site: CallSite,
     form: CallForm,
     pageFunction: unknown,
     arg: unknown,
@@ -875,6 +903,7 @@ export class Page extends EventEmitter {
       callbacks.map(([name, callback]) =>
         exposeOnPage(
           this,
+          site,
           api,
           name,
           (_source, ...args) => Reflect.apply(callback, undefined, args),
@@ -962,6 +991,7 @@ export class Page extends EventEmitter {
   async pdf(
     options: Record<string, unknown> & { path?: string } = {},
   ): Promise<unknown> {
+    const site = captureSite()
     const api = 'page.pdf'
     if (options.path !== undefined)
       throw unsupportedError(
@@ -979,16 +1009,19 @@ export class Page extends EventEmitter {
     }
     return await invoke(
       'page.pdf',
+      site,
       { api, timeoutMs: 0 },
       { page: await this._brand(api), ...wire },
     )
   }
 
   async opener(): Promise<Page | null> {
+    const site = captureSite()
     const api = 'page.opener'
     const target = await this._brand(api)
     const { opener } = await invoke(
       'page.opener',
+      site,
       { api, timeoutMs: 0 },
       { page: target },
     )
@@ -997,6 +1030,7 @@ export class Page extends EventEmitter {
   }
 
   async close(options: CloseOptions = {}): Promise<void> {
+    const site = captureSite()
     const api = 'page.close'
     if (this._closed || this._tab === null) {
       this.#close()
@@ -1008,6 +1042,7 @@ export class Page extends EventEmitter {
     try {
       await invoke(
         'page.close',
+        site,
         { api, timeoutMs: 0 },
         {
           page,
@@ -1032,9 +1067,11 @@ export class Page extends EventEmitter {
     event: string,
     optionsOrPredicate: unknown = {},
   ): Promise<unknown> {
+    const site = captureSite()
     const since = Date.now()
     return this._context._events.wait(
       'page.waitForEvent',
+      site,
       this,
       event,
       optionsOrPredicate,
@@ -1177,8 +1214,10 @@ export class Page extends EventEmitter {
   }
 
   async _refreshFrames(api: string, timeoutMs = 0): Promise<void> {
+    const site = INTERNAL_SITE
     const { value: tree, observed } = await invokeObserved(
       'page.frames',
+      site,
       { api, timeoutMs },
       { page: await this._brand(api) },
     )
@@ -1455,6 +1494,7 @@ export class Page extends EventEmitter {
    */
   async _waitForURL(
     api: string,
+    site: CallSite,
     frame: Frame,
     url: UrlMatcher,
     options: TimeoutOption & SignalOption & { waitUntil?: LoadState } = {},
@@ -1470,13 +1510,14 @@ export class Page extends EventEmitter {
     await untilAborted(
       signal,
       () => abortedError(api, signal as SignalLike),
-      () => this.#waitForURL(api, frame, url, waitUntil, timeout, signal),
+      () => this.#waitForURL(api, site, frame, url, waitUntil, timeout, signal),
     )
   }
 
   /** `_waitForURL`'s waits, once its options are checked. */
   async #waitForURL(
     api: string,
+    site: CallSite,
     frame: Frame,
     url: UrlMatcher,
     waitUntil: LoadState,
@@ -1496,6 +1537,7 @@ export class Page extends EventEmitter {
       nativeWait(() =>
         invokeObserved(
           'page.waitForURL',
+          site,
           frame._call(api, budget),
           { ...args, url: pattern, waitUntil: until },
           undefined,
@@ -1533,7 +1575,7 @@ export class Page extends EventEmitter {
       const remaining = timeout === 0 ? 0 : Math.max(1, timeout - elapsed)
       if (matched) {
         await nativeWait(() =>
-          frame._waitForLoadState(api, waitUntil, {
+          frame._waitForLoadState(api, site, waitUntil, {
             timeout: remaining,
             signal,
           }),
@@ -1574,6 +1616,7 @@ export class Page extends EventEmitter {
     options: WaitForNavigationOptions,
     signal: SignalLike | undefined,
   ): Promise<Response | null> {
+    const site = captureSite()
     const since = Date.now()
     let after = this.#liveHead
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
@@ -1598,6 +1641,7 @@ export class Page extends EventEmitter {
         .race(
           invokeObserved(
             'page.waitForNavigation',
+            site,
             frame._call(api, deadline.left()),
             {
               ...args,
@@ -1630,7 +1674,7 @@ export class Page extends EventEmitter {
       if (matched) {
         await deadline.race(
           frame
-            ._waitForLoadState(api, waitUntil, {
+            ._waitForLoadState(api, site, waitUntil, {
               timeout: deadline.left(),
               signal,
             })
@@ -1646,12 +1690,14 @@ export class Page extends EventEmitter {
     api: 'page.reload' | 'page.goBack' | 'page.goForward',
     options: NavigateOptions = {},
   ): Promise<Response | null> {
+    const site = captureSite()
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
     return await this._navigating(async (ready, publication) => {
       let completion: Promise<Response | null> | undefined
       const { value: result, observed } = await invokeObserved(
         api,
+        site,
         this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),
         { page: await this._brand(api), waitUntil, publication },
         (result, observed) => {

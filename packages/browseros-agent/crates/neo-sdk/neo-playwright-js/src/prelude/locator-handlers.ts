@@ -19,6 +19,7 @@
  * functions they call live in its realm.
  */
 import { invoke, logError } from './bridge'
+import { captureSite, INTERNAL_SITE } from './call-site'
 import { plainError } from './errors'
 import { Locator } from './locator'
 import type { Page } from './page'
@@ -46,6 +47,7 @@ export class LocatorHandlers {
     handler: (locator: Locator) => unknown,
     options: LocatorHandlerOptions = {},
   ): Promise<void> {
+    const site = captureSite()
     if (!(locator instanceof Locator) || locator._frame !== page._mainFrame)
       throw plainError(
         api,
@@ -55,6 +57,7 @@ export class LocatorHandlers {
     const target = await locator._frame._locatorBrand(api, locator._selector)
     const { uid } = await invoke(
       'page.addLocatorHandler',
+      site,
       { api, timeoutMs: 0 },
       options.noWaitAfter ? { target, noWaitAfter: true } : { target },
     )
@@ -67,6 +70,7 @@ export class LocatorHandlers {
 
   /** Every registration of `locator` on `page`, as upstream compares locators: frame and selector. */
   async remove(api: string, page: Page, locator: Locator): Promise<void> {
+    const site = captureSite()
     for (const [uid, registration] of this.#byUid) {
       if (
         registration.page !== page ||
@@ -78,6 +82,7 @@ export class LocatorHandlers {
       this.#byUid.delete(uid)
       await invoke(
         'page.removeLocatorHandler',
+        site,
         { api, timeoutMs: 0 },
         { uid },
       ).catch(() => {})
@@ -85,10 +90,12 @@ export class LocatorHandlers {
   }
 
   private async pull(): Promise<void> {
+    const site = INTERNAL_SITE
     try {
       while (this.#byUid.size > 0) {
         const { uid } = await invoke(
           'page.locatorHandlerTriggered',
+          site,
           { api: 'page.locatorHandlerTriggered', timeoutMs: 0 },
           {},
         )
@@ -106,6 +113,7 @@ export class LocatorHandlers {
 
   /** Upstream's `_onLocatorHandlerTriggered`: always resolves, so the paused action goes on. */
   async #run(uid: number): Promise<void> {
+    const site = INTERNAL_SITE
     let remove = false
     const registration = this.#byUid.get(uid)
     try {
@@ -129,6 +137,7 @@ export class LocatorHandlers {
       if (remove) this.#byUid.delete(uid)
       await invoke(
         'page.resolveLocatorHandler',
+        site,
         { api: 'page.resolveLocatorHandler', timeoutMs: 0 },
         remove ? { uid, remove: true } : { uid },
       ).catch(() => {})

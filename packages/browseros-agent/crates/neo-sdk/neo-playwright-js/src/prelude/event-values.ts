@@ -4,6 +4,7 @@
  * (wire.ts `EventRecord`); dialogs and downloads keep the id Rust answers them by.
  */
 import { invoke } from './bridge'
+import { captureSite } from './call-site'
 import type { ElementHandle } from './element-handle'
 import { inspectCustom, markHandle } from './options'
 import type { Page } from './page'
@@ -78,9 +79,11 @@ export class Dialog {
   }
 
   async accept(promptText?: string): Promise<void> {
+    const site = captureSite()
     const api = 'dialog.accept'
     await invoke(
       'dialog.accept',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await this.#pageValue._brand(api),
@@ -92,12 +95,14 @@ export class Dialog {
 
   /** As upstream, a dialog whose page already closed counts as dismissed. */
   async dismiss(): Promise<void> {
+    const site = captureSite()
     const api = 'dialog.dismiss'
     // Outside the try, as page.close's: the catch reads the op's code from the door.
     const page = await this.#pageValue._brand(api)
     try {
       await invoke(
         'dialog.dismiss',
+        site,
         { api, timeoutMs: 0 },
         { page, dialog: this.#info.id },
       )
@@ -132,9 +137,11 @@ export class Download {
 
   /** Waits for the download to finish; its host path, or its failure as an error. */
   async path(): Promise<string> {
+    const site = captureSite()
     const api = 'download.path'
     const done = await invoke(
       'download.path',
+      site,
       { api, timeoutMs: 0 },
       { download: this.#info.id },
     )
@@ -145,9 +152,11 @@ export class Download {
 
   /** Waits for the download to finish; null, or why it failed. */
   async failure(): Promise<string | null> {
+    const site = captureSite()
     const api = 'download.failure'
     const done = await invoke(
       'download.path',
+      site,
       { api, timeoutMs: 0 },
       { download: this.#info.id },
     )
@@ -155,9 +164,11 @@ export class Download {
   }
 
   async saveAs(path: string): Promise<void> {
+    const site = captureSite()
     const api = 'download.saveAs'
     await invoke(
       'download.saveAs',
+      site,
       { api, timeoutMs: 0 },
       { download: this.#info.id, path },
     )

@@ -1,3 +1,4 @@
+import { captureSite } from './call-site'
 /**
  * Playwright's Locator and FrameLocator, following playwright-core 1.64.1's client/locator.ts.
  *
@@ -633,12 +634,14 @@ export class Locator {
     arg?: unknown,
     options?: TimeoutOption & EvaluateOptions & SignalOption,
   ): Promise<unknown> {
+    const site = captureSite()
     const api = 'locator.evaluate'
     // Read before the first await (`signalOf`): an aborted call sends nothing and exposes no
     // callback, as upstream's wait rejects before its handle's evaluate exposes any.
     signalOf(api, options)
     const script = await this._frame._page._evaluationScript(
       api,
+      site,
       'locator',
       pageFunction,
       arg,
@@ -646,6 +649,7 @@ export class Locator {
     )
     return await this._frame._evaluateOn(
       api,
+      site,
       this._selector,
       true,
       script,
@@ -665,10 +669,12 @@ export class Locator {
     arg?: unknown,
     options?: TimeoutOption & SignalOption,
   ): Promise<void> {
+    const site = captureSite()
     const api = 'locator.waitForFunction'
     const script = pageCall(api, 'query', pageFunction, arg)
     await this._frame._selectorOp(
       'locator.waitForFunction',
+      site,
       api,
       this._selector,
       true,

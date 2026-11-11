@@ -750,13 +750,13 @@
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/bridge.ts
-  async function invoke(op, call, args, signal) {
+  async function invoke(op, site, call, args, signal) {
     try {
       const ready = readyChoosers(op);
       if (ready)
         await ready;
       countPumps();
-      const value = await host().invoke(op, { call, ...args }, signal === undefined ? undefined : { signal });
+      const value = await host().invoke(op, { call, ...args }, { signal, site: site.value });
       const held = pumpsCaughtUp(op);
       if (held)
         await held;
@@ -768,13 +768,14 @@
       throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal);
     }
   }
-  async function invokeObserved(op, call, args, onResult, signal) {
+  async function invokeObserved(op, site, call, args, onResult, signal) {
     try {
       const ready = readyChoosers(op);
       if (ready)
         await ready;
       countPumps();
       const reply = await host().invoke(op, { call, ...args }, {
+        site: site.value,
         observed: true,
         signal,
         onResult: onResult && ((value, observed) => onResult(value, readObservation(observed)))
@@ -1923,6 +1924,29 @@
       return buffer;
     }
   }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/call-site.ts
+  class CallSite {
+    value;
+    constructor(value) {
+      this.value = value;
+    }
+    static internal = new CallSite("");
+    static capture() {
+      const neo = Reflect.get(globalThis, "__neo");
+      if (typeof neo !== "object" || neo === null)
+        return CallSite.internal;
+      const capture = Reflect.get(neo, "callSite");
+      if (typeof capture !== "function")
+        return CallSite.internal;
+      const value = Reflect.apply(capture, neo, []);
+      return typeof value === "string" ? new CallSite(value) : CallSite.internal;
+    }
+  }
+  function captureSite() {
+    return CallSite.capture();
+  }
+  var INTERNAL_SITE = CallSite.internal;
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers.ts
   var kFunctionBindingPrefix = "__pw_fn_";
@@ -7067,15 +7091,17 @@ ${value.stack}`;
       return this._frame._elementHandles("locator.elementHandles", this._selector);
     }
     async evaluate(pageFunction, arg, options) {
+      const site = captureSite();
       const api = "locator.evaluate";
       signalOf(api, options);
-      const script = await this._frame._page._evaluationScript(api, "locator", pageFunction, arg, options);
-      return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
+      const script = await this._frame._page._evaluationScript(api, site, "locator", pageFunction, arg, options);
+      return await this._frame._evaluateOn(api, site, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
     }
     async waitForFunction(pageFunction, arg, options) {
+      const site = captureSite();
       const api = "locator.waitForFunction";
       const script = pageCall(api, "query", pageFunction, arg);
-      await this._frame._selectorOp("locator.waitForFunction", api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
+      await this._frame._selectorOp("locator.waitForFunction", site, api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
     }
     async evaluateAll(pageFunction, arg) {
       const api = "locator.evaluateAll";
@@ -7172,13 +7198,14 @@ ${value.stack}`;
   }
   async function saveScreenshot({
     api,
+    site,
     bytes,
     path,
     signal
   }) {
     if (!path)
       return;
-    await invoke("page.saveScreenshot", { api, timeoutMs: 0 }, { path, base64: decode(bytes, "base64") }, signal);
+    await invoke("page.saveScreenshot", site, { api, timeoutMs: 0 }, { path, base64: decode(bytes, "base64") }, signal);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot.ts
@@ -7442,9 +7469,10 @@ ${value.stack}`;
       return this._elementHandles("frame.$$", selector);
     }
     async $eval(selector, pageFunction, arg) {
+      const site = captureSite();
       assertMaxArguments("frame.$eval", arguments.length, 3);
       const api = "frame.$eval";
-      return await this._evaluateOn(api, selector, false, pageCall(api, "query", pageFunction, arg), true);
+      return await this._evaluateOn(api, site, selector, false, pageCall(api, "query", pageFunction, arg), true);
     }
     async $$eval(selector, pageFunction, arg) {
       assertMaxArguments("frame.$$eval", arguments.length, 3);
@@ -7458,17 +7486,20 @@ ${value.stack}`;
       return this._goto("frame.goto", url, options);
     }
     waitForLoadState(state, options) {
-      return this._waitForLoadState("frame.waitForLoadState", state, options);
+      const site = captureSite();
+      return this._waitForLoadState("frame.waitForLoadState", site, state, options);
     }
     waitForNavigation(options) {
       return this._page._waitForNavigation("frame.waitForNavigation", this, options);
     }
     waitForURL(url, options) {
-      return this._page._waitForURL("frame.waitForURL", this, url, options);
+      const site = captureSite();
+      return this._page._waitForURL("frame.waitForURL", site, this, url, options);
     }
     async title() {
+      const site = captureSite();
       const api = "frame.title";
-      return await invoke("page.title", this._call(api, 0), await this._frameArgs(api));
+      return await invoke("page.title", site, this._call(api, 0), await this._frameArgs(api));
     }
     content() {
       return this._content("frame.content");
@@ -7514,19 +7545,20 @@ ${value.stack}`;
         throw clientError(api, `selector: expected string, got ${typeof selector}`);
       return locatorBrand(api, await this._page._brand(api), this._id, selector);
     }
-    async _selectorOp(op, api, selector, strict, wait, args) {
+    async _selectorOp(op, site, api, selector, strict, wait, args) {
       const target = await this._locatorBrand(api, selector);
       const input = {
         target,
         strict: strict === true ? "strict" : "firstMatch",
         ...args
       };
-      return await invoke(op, this._call(api, wait.timeout), input, wait.signal);
+      return await invoke(op, site, this._call(api, wait.timeout), input, wait.signal);
     }
     async _click(api, selector, options = {}) {
+      const site = captureSite();
       const wait = this._wait(api, options);
       const deadline = new EventDeadline(api, null, Date.now(), wait.timeout);
-      const result = await this._selectorOp("locator.click", api, selector, options.strict, wait, { options: pick(options, POINTER_KEYS) });
+      const result = await this._selectorOp("locator.click", site, api, selector, options.strict, wait, { options: pick(options, POINTER_KEYS) });
       if (result?.navigation) {
         try {
           await this._page._context._events.publishNavigation(this._page, result.navigation, api, deadline, wait.signal);
@@ -7544,62 +7576,74 @@ ${value.stack}`;
       }
     }
     async _dblclick(api, selector, options = {}) {
-      await this._selectorOp("locator.dblclick", api, selector, options.strict, this._wait(api, options), {
+      const site = captureSite();
+      await this._selectorOp("locator.dblclick", site, api, selector, options.strict, this._wait(api, options), {
         options: pick(options, DBLCLICK_KEYS)
       });
     }
     async _hover(api, selector, options = {}) {
-      await this._selectorOp("locator.hover", api, selector, options.strict, this._wait(api, options), {
+      const site = captureSite();
+      await this._selectorOp("locator.hover", site, api, selector, options.strict, this._wait(api, options), {
         options: pick(options, HOVER_KEYS)
       });
     }
     async _check(api, selector, checked, options = {}) {
+      const site = captureSite();
       const op = checked ? "locator.check" : "locator.uncheck";
-      await this._selectorOp(op, api, selector, options.strict, this._wait(api, options), {
+      await this._selectorOp(op, site, api, selector, options.strict, this._wait(api, options), {
         options: pick(options, CHECK_KEYS)
       });
     }
     async _dragAndDrop(api, source, target, options = {}) {
+      const site = captureSite();
       const wait = this._wait(api, options);
       const to = await this._locatorBrand(api, target);
-      await this._selectorOp("locator.dragTo", api, source, options.strict, wait, {
+      await this._selectorOp("locator.dragTo", site, api, source, options.strict, wait, {
         to,
         options: pick(options, DRAG_KEYS)
       });
     }
     async _fill(api, selector, value, options = {}) {
+      const site = captureSite();
       if (typeof value !== "string")
         throw clientError(api, `value: expected string, got ${typeof value}`);
-      await this._selectorOp("locator.fill", api, selector, options.strict, this._wait(api, options), {
+      await this._selectorOp("locator.fill", site, api, selector, options.strict, this._wait(api, options), {
         value,
         options: pick(options, FILL_KEYS)
       });
     }
     async _press(api, selector, key, options = {}) {
-      await this._selectorOp("locator.press", api, selector, options.strict, this._wait(api, options), {
+      const site = captureSite();
+      await this._selectorOp("locator.press", site, api, selector, options.strict, this._wait(api, options), {
         key,
         options: pick(options, KEY_KEYS)
       });
     }
     async _type(api, selector, text, options = {}) {
-      await this._selectorOp("locator.pressSequentially", api, selector, options.strict, this._wait(api, options), { text, options: pick(options, KEY_KEYS) });
+      const site = captureSite();
+      await this._selectorOp("locator.pressSequentially", site, api, selector, options.strict, this._wait(api, options), { text, options: pick(options, KEY_KEYS) });
     }
     async _focus(api, selector, options = {}) {
-      await this._selectorOp("locator.focus", api, selector, options.strict, this._wait(api, options), {});
+      const site = captureSite();
+      await this._selectorOp("locator.focus", site, api, selector, options.strict, this._wait(api, options), {});
     }
     async _blur(api, selector, options = {}) {
-      await this._selectorOp("locator.blur", api, selector, options.strict, this._wait(api, options), {});
+      const site = captureSite();
+      await this._selectorOp("locator.blur", site, api, selector, options.strict, this._wait(api, options), {});
     }
     async _selectOption(api, selector, values, options = {}) {
-      return await this._selectorOp("locator.selectOption", api, selector, options.strict, this._wait(api, options), { ...selectOptionValues(api, values), ...pick(options, ["force"]) });
+      const site = captureSite();
+      return await this._selectorOp("locator.selectOption", site, api, selector, options.strict, this._wait(api, options), { ...selectOptionValues(api, values), ...pick(options, ["force"]) });
     }
     async _selectText(api, selector, options = {}) {
-      await this._selectorOp("locator.selectText", api, selector, options.strict, this._wait(api, options), pick(options, ["force"]));
+      const site = captureSite();
+      await this._selectorOp("locator.selectText", site, api, selector, options.strict, this._wait(api, options), pick(options, ["force"]));
     }
     async _drop(selector, payload, options) {
+      const site = captureSite();
       const api = "locator.drop";
       const files = payload.files === undefined ? undefined : dropFiles(api, payload.files);
-      await withClientErrors(api, () => this._selectorOp("locator.drop", api, selector, true, this._wait(api, options), {
+      await withClientErrors(api, () => this._selectorOp("locator.drop", site, api, selector, true, this._wait(api, options), {
         files,
         data: Object.entries(payload.data ?? {}).map(([mimeType, value]) => ({
           mimeType,
@@ -7609,54 +7653,66 @@ ${value.stack}`;
       }));
     }
     async _setInputFiles(api, selector, files, options = {}) {
+      const site = captureSite();
       const input = inputFiles(api, files);
-      await withClientErrors(api, () => this._selectorOp("locator.setInputFiles", api, selector, options.strict, this._wait(api, options), { files: input }));
+      await withClientErrors(api, () => this._selectorOp("locator.setInputFiles", site, api, selector, options.strict, this._wait(api, options), { files: input }));
     }
     async _dispatchEvent(api, selector, type, eventInit, options = {}) {
-      await this._selectorOp("locator.dispatchEvent", api, selector, options.strict, this._wait(api, options), { type, eventInit: eventInit ?? {} });
+      const site = captureSite();
+      await this._selectorOp("locator.dispatchEvent", site, api, selector, options.strict, this._wait(api, options), { type, eventInit: eventInit ?? {} });
     }
     async _scrollIntoViewIfNeeded(api, selector, options = {}) {
-      await this._selectorOp("locator.scrollIntoViewIfNeeded", api, selector, options.strict, this._wait(api, options), {});
+      const site = captureSite();
+      await this._selectorOp("locator.scrollIntoViewIfNeeded", site, api, selector, options.strict, this._wait(api, options), {});
     }
     async _read(op, api, selector, options = {}) {
+      const site = captureSite();
       const args = {};
-      return await this._selectorOp(op, api, selector, options.strict, this._wait(api, options), args);
+      return await this._selectorOp(op, site, api, selector, options.strict, this._wait(api, options), args);
     }
     async _getAttribute(api, selector, name, options = {}) {
-      return await this._selectorOp("locator.getAttribute", api, selector, options.strict, this._wait(api, options), { name });
+      const site = captureSite();
+      return await this._selectorOp("locator.getAttribute", site, api, selector, options.strict, this._wait(api, options), { name });
     }
     async _isVisible(op, api, selector, options = {}) {
-      return await this._selectorOp(op, api, selector, options.strict, { timeout: 0 }, {});
+      const site = captureSite();
+      return await this._selectorOp(op, site, api, selector, options.strict, { timeout: 0 }, {});
     }
     async _everyMatch(op, api, selector) {
+      const site = captureSite();
       const target = await this._locatorBrand(api, selector);
       const input = { target };
-      return await invoke(op, this._call(api, 0), input);
+      return await invoke(op, site, this._call(api, 0), input);
     }
     async _normalize(api, selector) {
+      const site = captureSite();
       const target = await this._locatorBrand(api, selector);
       const input = { target, selector };
-      const resolved = await invoke("locator.normalize", this._call(api, 0), input);
+      const resolved = await invoke("locator.normalize", site, this._call(api, 0), input);
       return resolved.selector;
     }
     async _boundingBox(api, selector, options = {}) {
-      return await this._selectorOp("locator.boundingBox", api, selector, true, this._wait(api, options), {});
+      const site = captureSite();
+      return await this._selectorOp("locator.boundingBox", site, api, selector, true, this._wait(api, options), {});
     }
     async _waitForSelector(api, selector, options = {}, omitReturnValue) {
+      const site = captureSite();
       const raw = options;
       if (typeof raw === "object" && raw !== null && "visibility" in raw)
         throw clientError(api, "options.visibility is not supported, did you mean options.state?");
       const state = options.state ?? "visible";
-      const handle = await this._selectorOp("locator.waitFor", api, selector, options.strict, this._wait(api, options), { state, omitReturnValue });
+      const handle = await this._selectorOp("locator.waitFor", site, api, selector, options.strict, this._wait(api, options), { state, omitReturnValue });
       return this._page._handle(handle);
     }
     async _elementHandle(api, selector, strict, noWait, options = {}) {
-      const handle = await this._selectorOp("locator.elementHandle", api, selector, strict, noWait ? { timeout: 0 } : this._wait(api, options), noWait ? { noWait: true } : {});
+      const site = captureSite();
+      const handle = await this._selectorOp("locator.elementHandle", site, api, selector, strict, noWait ? { timeout: 0 } : this._wait(api, options), noWait ? { noWait: true } : {});
       return this._page._handle(handle);
     }
     async _elementHandles(api, selector) {
+      const site = captureSite();
       const target = await this._locatorBrand(api, selector);
-      const handles = await invoke("locator.elementHandles", this._call(api, 0), {
+      const handles = await invoke("locator.elementHandles", site, this._call(api, 0), {
         target
       });
       return handles.flatMap((handle) => {
@@ -7664,19 +7720,21 @@ ${value.stack}`;
         return element ? [element] : [];
       });
     }
-    async _evaluateOn(api, selector, strict, script, noWait, options = {}) {
-      const value = await this._selectorOp("locator.evaluate", api, selector, strict, noWait ? { timeout: 0 } : this._wait(api, options), noWait ? { script, noWait: true, selector } : { script });
+    async _evaluateOn(api, site, selector, strict, script, noWait, options = {}) {
+      const value = await this._selectorOp("locator.evaluate", site, api, selector, strict, noWait ? { timeout: 0 } : this._wait(api, options), noWait ? { script, noWait: true, selector } : { script });
       return fromPageValue(api, value);
     }
     async _evaluateAll(api, selector, script) {
+      const site = captureSite();
       const target = await this._locatorBrand(api, selector);
-      const value = await invoke("locator.evaluateAll", this._call(api, 0), {
+      const value = await invoke("locator.evaluateAll", site, this._call(api, 0), {
         target,
         script
       });
       return fromPageValue(api, value);
     }
     async _snapshot(api, selector, options = {}) {
+      const site = captureSite();
       const mode = options.mode ?? "default";
       const shape = pick({ mode, depth: options.depth, boxes: options.boxes }, [
         "mode",
@@ -7685,10 +7743,10 @@ ${value.stack}`;
       ]);
       const wait = this._wait(api, options);
       if (selector !== null)
-        return await this._selectorOp("locator.ariaSnapshot", api, selector, true, wait, shape);
+        return await this._selectorOp("locator.ariaSnapshot", site, api, selector, true, wait, shape);
       if (this._id !== null)
         throw unsupportedError(api, "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()");
-      return await invoke("page.ariaSnapshot", this._call(api, wait.timeout), { page: await this._page._brand(api), ...shape }, wait.signal);
+      return await invoke("page.ariaSnapshot", site, this._call(api, wait.timeout), { page: await this._page._brand(api), ...shape }, wait.signal);
     }
     async _ariaSnapshot(api, selector, options) {
       return renderSnapshot(await this._snapshot(api, selector, options));
@@ -7697,6 +7755,7 @@ ${value.stack}`;
       return (await this._snapshot(api, selector, options)).json;
     }
     async _screenshot(api, selector, options = {}) {
+      const site = captureSite();
       const wire = await screenshotOptions(api, options);
       if (!wire.type && options.path)
         wire.type = screenshotType({ api, path: options.path });
@@ -7708,11 +7767,18 @@ ${value.stack}`;
         strict: "strict",
         ...wire
       };
-      const image = await invoke("page.screenshot", this._call(api, timeout), input, signal);
-      await saveScreenshot({ api, bytes: image, path: options.path, signal });
+      const image = await invoke("page.screenshot", site, this._call(api, timeout), input, signal);
+      await saveScreenshot({
+        api,
+        site,
+        bytes: image,
+        path: options.path,
+        signal
+      });
       return image;
     }
     async _goto(api, url, options = {}) {
+      const site = captureSite();
       if (typeof url !== "string")
         throw clientError(api, `url: expected string, got ${typeof url}`);
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
@@ -7720,7 +7786,7 @@ ${value.stack}`;
       return await this._page._navigating(async (ready, publication) => {
         const args = await this._frameArgs(api);
         let completion;
-        const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
+        const { value: result, observed } = await invokeObserved("page.goto", site, this._call(api, this._navigationTimeout(options)), {
           ...args,
           url,
           waitUntil,
@@ -7732,18 +7798,20 @@ ${value.stack}`;
         return await (completion ?? this._page._navigated(api, this, result, observed, ready));
       });
     }
-    async _waitForLoadState(api, state, options = {}) {
+    async _waitForLoadState(api, site, state, options = {}) {
       const verified = loadState(api, "state", state ?? "load");
       const signal = signalOf(api, options);
       await untilAborted(signal, () => abortedError(api, signal), async () => {
-        const { value: result, observed } = await invokeObserved("page.waitForLoadState", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified }, undefined, signal);
+        const { value: result, observed } = await invokeObserved("page.waitForLoadState", site, this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified }, undefined, signal);
         await this._page._navigated(api, this, result, observed);
       });
     }
     async _content(api) {
-      return await invoke("page.content", this._call(api, 0), await this._frameArgs(api));
+      const site = captureSite();
+      return await invoke("page.content", site, this._call(api, 0), await this._frameArgs(api));
     }
     async _addTag(api, op, options) {
+      const site = captureSite();
       const keys = op === "page.addScriptTag" ? ["url", "path", "content", "type"] : ["url", "path", "content"];
       const input = pick(options, keys);
       for (const key of keys) {
@@ -7753,7 +7821,7 @@ ${value.stack}`;
       }
       let handle;
       try {
-        const { value: result, observed } = await invokeObserved(op, this._call(api, 0), {
+        const { value: result, observed } = await invokeObserved(op, site, this._call(api, 0), {
           ...await this._frameArgs(api),
           ...input
         });
@@ -7769,14 +7837,16 @@ ${value.stack}`;
       return handle;
     }
     async _setContent(api, html, options = {}) {
+      const site = captureSite();
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      const { value: result, observed } = await invokeObserved("page.setContent", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil }, undefined, signal);
+      const { value: result, observed } = await invokeObserved("page.setContent", site, this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil }, undefined, signal);
       await this._page._navigated(api, this, result, observed);
     }
     async _evaluate(api, pageFunction, arg, options) {
-      const script = await this._page._evaluationScript(api, "frame", pageFunction, arg, options);
-      const { value: result, observed } = await invokeObserved("page.evaluate", this._call(api, 0), {
+      const site = captureSite();
+      const script = await this._page._evaluationScript(api, site, "frame", pageFunction, arg, options);
+      const { value: result, observed } = await invokeObserved("page.evaluate", site, this._call(api, 0), {
         ...await this._frameArgs(api),
         script
       });
@@ -7785,11 +7855,12 @@ ${value.stack}`;
       return fromPageValue(api, result.value);
     }
     async _waitForFunction(api, pageFunction, arg, options = {}) {
+      const site = captureSite();
       if (typeof options.polling === "string" && options.polling !== "raf")
         throw plainError(api, `Unknown polling option: ${options.polling}`);
       const script = pageCall(api, "frame", pageFunction, arg);
       const wait = this._wait(api, options);
-      const { value, preview } = await invoke("page.waitForFunction", this._call(api, wait.timeout), {
+      const { value, preview } = await invoke("page.waitForFunction", site, this._call(api, wait.timeout), {
         ...await this._frameArgs(api),
         script,
         ...typeof options.polling === "number" ? { polling: options.polling } : {}
@@ -7908,14 +7979,14 @@ ${value.stack}`;
     toJSON() {
       return this._brand;
     }
-    async#op(op, api, timeout, args) {
+    async#op(op, site, api, timeout, args) {
       this.#live(api);
       const input = {
         target: this._brand,
         strict: "strict",
         ...args
       };
-      return await invoke(op, { api, timeoutMs: timeoutMs(api, timeout) }, input);
+      return await invoke(op, site, { api, timeoutMs: timeoutMs(api, timeout) }, input);
     }
     #timeout(options) {
       return this._page._timeoutSettings.timeout(options);
@@ -7930,8 +8001,9 @@ ${value.stack}`;
       };
     }
     async $(selector) {
+      const site = captureSite();
       const api = "elementHandle.$";
-      const handle = await invoke("locator.elementHandle", { api, timeoutMs: timeoutMs(api, 0) }, {
+      const handle = await invoke("locator.elementHandle", site, { api, timeoutMs: timeoutMs(api, 0) }, {
         target: this.#rooted(api, selector),
         strict: "firstMatch",
         noWait: true
@@ -7939,142 +8011,173 @@ ${value.stack}`;
       return this._page._handle(handle);
     }
     async $$(selector) {
+      const site = captureSite();
       const api = "elementHandle.$$";
-      const handles = await invoke("locator.elementHandles", { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector) });
+      const handles = await invoke("locator.elementHandles", site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector) });
       return handles.flatMap((handle) => {
         const element = this._page._handle(handle);
         return element ? [element] : [];
       });
     }
     async click(options = {}) {
-      await this.#op("locator.click", "elementHandle.click", this.#timeout(options), {
+      const site = captureSite();
+      await this.#op("locator.click", site, "elementHandle.click", this.#timeout(options), {
         options: pick(options, POINTER_KEYS)
       });
     }
     async dblclick(options = {}) {
-      await this.#op("locator.dblclick", "elementHandle.dblclick", this.#timeout(options), {
+      const site = captureSite();
+      await this.#op("locator.dblclick", site, "elementHandle.dblclick", this.#timeout(options), {
         options: pick(options, DBLCLICK_KEYS)
       });
     }
     async hover(options = {}) {
-      await this.#op("locator.hover", "elementHandle.hover", this.#timeout(options), {
+      const site = captureSite();
+      await this.#op("locator.hover", site, "elementHandle.hover", this.#timeout(options), {
         options: pick(options, HOVER_KEYS)
       });
     }
     async check(options = {}) {
-      await this.#op("locator.check", "elementHandle.check", this.#timeout(options), {
+      const site = captureSite();
+      await this.#op("locator.check", site, "elementHandle.check", this.#timeout(options), {
         options: pick(options, CHECK_KEYS)
       });
     }
     async uncheck(options = {}) {
-      await this.#op("locator.uncheck", "elementHandle.uncheck", this.#timeout(options), {
+      const site = captureSite();
+      await this.#op("locator.uncheck", site, "elementHandle.uncheck", this.#timeout(options), {
         options: pick(options, CHECK_KEYS)
       });
     }
     async setChecked(checked, options = {}) {
-      await this.#op(checked ? "locator.check" : "locator.uncheck", "elementHandle.setChecked", this.#timeout(options), { options: pick(options, CHECK_KEYS) });
+      const site = captureSite();
+      await this.#op(checked ? "locator.check" : "locator.uncheck", site, "elementHandle.setChecked", this.#timeout(options), { options: pick(options, CHECK_KEYS) });
     }
     async fill(value, options = {}) {
-      await this.#op("locator.fill", "elementHandle.fill", this.#timeout(options), {
+      const site = captureSite();
+      await this.#op("locator.fill", site, "elementHandle.fill", this.#timeout(options), {
         value,
         options: pick(options, FILL_KEYS)
       });
     }
     async press(key, options = {}) {
-      await this.#op("locator.press", "elementHandle.press", this.#timeout(options), {
+      const site = captureSite();
+      await this.#op("locator.press", site, "elementHandle.press", this.#timeout(options), {
         key,
         options: pick(options, KEY_KEYS)
       });
     }
     async type(text, options = {}) {
-      await this.#op("locator.pressSequentially", "elementHandle.type", this.#timeout(options), {
+      const site = captureSite();
+      await this.#op("locator.pressSequentially", site, "elementHandle.type", this.#timeout(options), {
         text,
         options: pick(options, KEY_KEYS)
       });
     }
     async selectOption(values, options = {}) {
+      const site = captureSite();
       const api = "elementHandle.selectOption";
-      return await this.#op("locator.selectOption", api, this.#timeout(options), {
+      return await this.#op("locator.selectOption", site, api, this.#timeout(options), {
         ...selectOptionValues(api, values),
         ...pick(options, ["force"])
       });
     }
     async selectText(options = {}) {
-      await this.#op("locator.selectText", "elementHandle.selectText", this.#timeout(options), pick(options, ["force"]));
+      const site = captureSite();
+      await this.#op("locator.selectText", site, "elementHandle.selectText", this.#timeout(options), pick(options, ["force"]));
     }
     async setInputFiles(files, options = {}) {
+      const site = captureSite();
       const api = "elementHandle.setInputFiles";
       const input = inputFiles(api, files);
-      await withClientErrors(api, () => this.#op("locator.setInputFiles", api, this.#timeout(options), {
+      await withClientErrors(api, () => this.#op("locator.setInputFiles", site, api, this.#timeout(options), {
         files: input
       }));
     }
     async focus() {
-      await this.#op("locator.focus", "elementHandle.focus", 0, {});
+      const site = captureSite();
+      await this.#op("locator.focus", site, "elementHandle.focus", 0, {});
     }
     async dispatchEvent(type, eventInit = {}) {
-      await this.#op("locator.dispatchEvent", "elementHandle.dispatchEvent", 0, {
+      const site = captureSite();
+      await this.#op("locator.dispatchEvent", site, "elementHandle.dispatchEvent", 0, {
         type,
         eventInit
       });
     }
     async scrollIntoViewIfNeeded(options = {}) {
-      await this.#op("locator.scrollIntoViewIfNeeded", "elementHandle.scrollIntoViewIfNeeded", this.#timeout(options), {});
+      const site = captureSite();
+      await this.#op("locator.scrollIntoViewIfNeeded", site, "elementHandle.scrollIntoViewIfNeeded", this.#timeout(options), {});
     }
     async waitForElementState(state, options = {}) {
-      await this.#op("locator.waitFor", "elementHandle.waitForElementState", this.#timeout(options), {
+      const site = captureSite();
+      await this.#op("locator.waitFor", site, "elementHandle.waitForElementState", this.#timeout(options), {
         state,
         omitReturnValue: true
       });
     }
     textContent() {
-      return this.#op("locator.textContent", "elementHandle.textContent", 0, {});
+      const site = captureSite();
+      return this.#op("locator.textContent", site, "elementHandle.textContent", 0, {});
     }
     innerText() {
-      return this.#op("locator.innerText", "elementHandle.innerText", 0, {});
+      const site = captureSite();
+      return this.#op("locator.innerText", site, "elementHandle.innerText", 0, {});
     }
     innerHTML() {
-      return this.#op("locator.innerHTML", "elementHandle.innerHTML", 0, {});
+      const site = captureSite();
+      return this.#op("locator.innerHTML", site, "elementHandle.innerHTML", 0, {});
     }
     inputValue() {
-      return this.#op("locator.inputValue", "elementHandle.inputValue", 0, {});
+      const site = captureSite();
+      return this.#op("locator.inputValue", site, "elementHandle.inputValue", 0, {});
     }
     getAttribute(name) {
-      return this.#op("locator.getAttribute", "elementHandle.getAttribute", 0, {
+      const site = captureSite();
+      return this.#op("locator.getAttribute", site, "elementHandle.getAttribute", 0, {
         name
       });
     }
     isChecked() {
-      return this.#op("locator.isChecked", "elementHandle.isChecked", 0, {});
+      const site = captureSite();
+      return this.#op("locator.isChecked", site, "elementHandle.isChecked", 0, {});
     }
     isDisabled() {
-      return this.#op("locator.isDisabled", "elementHandle.isDisabled", 0, {});
+      const site = captureSite();
+      return this.#op("locator.isDisabled", site, "elementHandle.isDisabled", 0, {});
     }
     isEditable() {
-      return this.#op("locator.isEditable", "elementHandle.isEditable", 0, {});
+      const site = captureSite();
+      return this.#op("locator.isEditable", site, "elementHandle.isEditable", 0, {});
     }
     isEnabled() {
-      return this.#op("locator.isEnabled", "elementHandle.isEnabled", 0, {});
+      const site = captureSite();
+      return this.#op("locator.isEnabled", site, "elementHandle.isEnabled", 0, {});
     }
     isHidden() {
-      return this.#op("locator.isHidden", "elementHandle.isHidden", 0, {});
+      const site = captureSite();
+      return this.#op("locator.isHidden", site, "elementHandle.isHidden", 0, {});
     }
     isVisible() {
-      return this.#op("locator.isVisible", "elementHandle.isVisible", 0, {});
+      const site = captureSite();
+      return this.#op("locator.isVisible", site, "elementHandle.isVisible", 0, {});
     }
     boundingBox() {
-      return this.#op("locator.boundingBox", "elementHandle.boundingBox", 0, {});
+      const site = captureSite();
+      return this.#op("locator.boundingBox", site, "elementHandle.boundingBox", 0, {});
     }
     async evaluate(pageFunction, arg, options) {
+      const site = captureSite();
       const api = "elementHandle.evaluate";
       this.#live(api);
-      const script = await this._page._evaluationScript(api, "handle", pageFunction, arg, options);
-      return fromPageValue(api, await this.#op("locator.evaluate", api, 0, { script }));
+      const script = await this._page._evaluationScript(api, site, "handle", pageFunction, arg, options);
+      return fromPageValue(api, await this.#op("locator.evaluate", site, api, 0, { script }));
     }
     async $eval(selector, pageFunction, arg) {
+      const site = captureSite();
       const api = "elementHandle.$eval";
       const script = pageCall(api, "query", pageFunction, arg);
-      const value = await invoke("locator.evaluate", { api, timeoutMs: timeoutMs(api, 0) }, {
+      const value = await invoke("locator.evaluate", site, { api, timeoutMs: timeoutMs(api, 0) }, {
         target: this.#rooted(api, selector),
         strict: "firstMatch",
         noWait: true,
@@ -8084,24 +8187,32 @@ ${value.stack}`;
       return fromPageValue(api, value);
     }
     async $$eval(selector, pageFunction, arg) {
+      const site = captureSite();
       const api = "elementHandle.$$eval";
       const script = pageCall(api, "query", pageFunction, arg);
-      const value = await invoke("locator.evaluateAll", { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector), script });
+      const value = await invoke("locator.evaluateAll", site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector), script });
       return fromPageValue(api, value);
     }
     async screenshot(options = {}) {
+      const site = captureSite();
       const api = "elementHandle.screenshot";
       const wire = await screenshotOptions(api, options);
       if (!wire.type && options.path)
         wire.type = screenshotType({ api, path: options.path });
       const signal = signalOf(api, options);
-      const image = await invoke("page.screenshot", { api, timeoutMs: timeoutMs(api, this.#timeout(options)) }, {
+      const image = await invoke("page.screenshot", site, { api, timeoutMs: timeoutMs(api, this.#timeout(options)) }, {
         page: await this._page._brand(api),
         target: this._brand,
         strict: "strict",
         ...wire
       }, signal);
-      await saveScreenshot({ api, bytes: image, path: options.path, signal });
+      await saveScreenshot({
+        api,
+        site,
+        bytes: image,
+        path: options.path,
+        signal
+      });
       return image;
     }
   }
@@ -8148,12 +8259,12 @@ ${value.stack}`;
       return await undo(error);
     }
     let disposed = false;
-    return new Disposable(async () => {
+    return new Disposable(async (site) => {
       if (disposed)
         return;
       disposed = true;
-      await Promise.all(bindings.map((binding) => binding.dispose().catch(() => {})));
-      await init.dispose();
+      await Promise.all(bindings.map((binding) => binding._dispose(site).catch(() => {})));
+      await init._dispose(site);
     });
   }
   function callbackName() {
@@ -8188,13 +8299,17 @@ ${value.stack}`;
       this.#dispose = dispose;
     }
     async dispose() {
-      await this.#dispose();
+      const site = captureSite();
+      await this.#dispose(site);
+    }
+    async _dispose(site) {
+      await this.#dispose(site);
     }
   }
   function registration(id, forget) {
-    return new Disposable(async () => {
+    return new Disposable(async (site) => {
       try {
-        await invoke("disposable.dispose", { api: "disposable.dispose", timeoutMs: 0 }, { id });
+        await invoke("disposable.dispose", site, { api: "disposable.dispose", timeoutMs: 0 }, { id });
       } finally {
         forget?.();
       }
@@ -8381,7 +8496,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/bindings.ts
-  async function exposeOnPage(page, api, name, callback, noGlobal = false) {
+  async function exposeOnPage(page, site, api, name, callback, noGlobal = false) {
     if (page._exposed.has(name))
       throw clientError(api, `Function "${name}" has been already registered`);
     if (page._context._exposed.has(name))
@@ -8394,7 +8509,7 @@ ${value.stack}`;
       events.bindingRemoved();
     });
     try {
-      const { id } = await invoke("page.exposeBinding", { api, timeoutMs: 0 }, {
+      const { id } = await invoke("page.exposeBinding", site, { api, timeoutMs: 0 }, {
         page: await page._brand(api),
         name,
         ...noGlobal ? { noGlobal: true } : {}
@@ -8405,7 +8520,7 @@ ${value.stack}`;
       throw error;
     }
   }
-  async function exposeOnContext(context, api, name, callback, noGlobal = false) {
+  async function exposeOnContext(context, site, api, name, callback, noGlobal = false) {
     if (context._exposed.has(name))
       throw clientError(api, `Function "${name}" has been already registered`);
     if (context.pages().some((page) => page._exposed.has(name)))
@@ -8417,7 +8532,7 @@ ${value.stack}`;
       context._events.bindingRemoved();
     });
     try {
-      const { id } = await invoke("context.exposeBinding", { api, timeoutMs: 0 }, { name, ...noGlobal ? { noGlobal: true } : {} });
+      const { id } = await invoke("context.exposeBinding", site, { api, timeoutMs: 0 }, { name, ...noGlobal ? { noGlobal: true } : {} });
       return registration(id, forget);
     } catch (error) {
       forget();
@@ -8434,6 +8549,7 @@ ${value.stack}`;
     };
   }
   async function answerBindingCall(page, record) {
+    const site = INTERNAL_SITE;
     let payload;
     try {
       payload = JSON.parse(record.payload);
@@ -8466,7 +8582,7 @@ ${value.stack}`;
       arg = inPageArgument({ name, seq, error });
     }
     const api = "bindingCall.resolve";
-    await invoke("bindingCall.resolve", { api, timeoutMs: 0 }, { page: await page._brand(api), context: record.executionContext, arg }).catch(() => {});
+    await invoke("bindingCall.resolve", site, { api, timeoutMs: 0 }, { page: await page._brand(api), context: record.executionContext, arg }).catch(() => {});
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/event-values.ts
@@ -8518,18 +8634,20 @@ ${value.stack}`;
       return this.#info.defaultValue;
     }
     async accept(promptText) {
+      const site = captureSite();
       const api = "dialog.accept";
-      await invoke("dialog.accept", { api, timeoutMs: 0 }, {
+      await invoke("dialog.accept", site, { api, timeoutMs: 0 }, {
         page: await this.#pageValue._brand(api),
         dialog: this.#info.id,
         ...promptText === undefined ? {} : { promptText }
       });
     }
     async dismiss() {
+      const site = captureSite();
       const api = "dialog.dismiss";
       const page = await this.#pageValue._brand(api);
       try {
-        await invoke("dialog.dismiss", { api, timeoutMs: 0 }, { page, dialog: this.#info.id });
+        await invoke("dialog.dismiss", site, { api, timeoutMs: 0 }, { page, dialog: this.#info.id });
       } catch (error) {
         if (Reflect.get(Object(error), "code") === "target_closed")
           return;
@@ -8556,20 +8674,23 @@ ${value.stack}`;
       return this.#info.suggestedFilename;
     }
     async path() {
+      const site = captureSite();
       const api = "download.path";
-      const done = await invoke("download.path", { api, timeoutMs: 0 }, { download: this.#info.id });
+      const done = await invoke("download.path", site, { api, timeoutMs: 0 }, { download: this.#info.id });
       if (done.path === null)
         throw new Error(`${api}: ${done.failure ?? "download failed"}`);
       return done.path;
     }
     async failure() {
+      const site = captureSite();
       const api = "download.failure";
-      const done = await invoke("download.path", { api, timeoutMs: 0 }, { download: this.#info.id });
+      const done = await invoke("download.path", site, { api, timeoutMs: 0 }, { download: this.#info.id });
       return done.failure;
     }
     async saveAs(path) {
+      const site = captureSite();
       const api = "download.saveAs";
-      await invoke("download.saveAs", { api, timeoutMs: 0 }, { download: this.#info.id, path });
+      await invoke("download.saveAs", site, { api, timeoutMs: 0 }, { download: this.#info.id, path });
     }
   }
 
@@ -8752,7 +8873,7 @@ ${value.stack}`;
     bindingRemoved() {
       this.listening--;
     }
-    async wait(api, page, event, optionsOrPredicate, since, settings) {
+    async wait(api, site, page, event, optionsOrPredicate, since, settings) {
       const seen = this.newestSeen;
       const kind = page === null ? "context" : "page";
       checkReported(api, event, kind);
@@ -8777,7 +8898,7 @@ ${value.stack}`;
         return await untilAborted(signal, () => abortedError(api, signal), async () => {
           if (lease)
             await deadline.race(lease.ready);
-          return this.waitFor(api, page, event, options, { since, after: seen }, deadline, signal);
+          return this.waitFor(api, site, page, event, options, { since, after: seen }, deadline, signal);
         });
       } finally {
         if (lease)
@@ -8819,7 +8940,7 @@ ${value.stack}`;
         }
       }
     }
-    async waitFor(api, page, event, options, from, deadline, signal) {
+    async waitFor(api, site, page, event, options, from, deadline, signal) {
       const { since } = from;
       const target = page === null ? null : await page._openedBrand(api);
       let after = from.after;
@@ -8828,7 +8949,7 @@ ${value.stack}`;
         let record;
         let observed = null;
         try {
-          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }, (received) => this.saw(received.seq), signal));
+          ({ value: record, observed } = await invokeObserved("events.wait", site, { api, timeoutMs: left }, { page: target, event, since, after }, (received) => this.saw(received.seq), signal));
         } catch (error) {
           throw deadline.named(error);
         }
@@ -8855,6 +8976,7 @@ ${value.stack}`;
       }
     }
     async sendListen(page, event, on, since, lease) {
+      const site = INTERNAL_SITE;
       const api = `${page === null ? "browserContext" : "page"}.${on ? "on" : "off"}`;
       try {
         if (on && lease)
@@ -8871,7 +8993,7 @@ ${value.stack}`;
           on,
           since
         };
-        await invoke("events.listen", { api, timeoutMs: 0 }, input);
+        await invoke("events.listen", site, { api, timeoutMs: 0 }, input);
       } catch {
         if (on && lease)
           lease.release().catch(() => {});
@@ -8881,11 +9003,12 @@ ${value.stack}`;
       }
     }
     intercept(page) {
+      const site = INTERNAL_SITE;
       const id = ++this.nextChooserLease;
       const api = "page.filechooser";
       const target = page._openedBrand(api);
       const ready = target.then(async (page) => {
-        await invoke("events.interceptFileChooser", { api, timeoutMs: 0 }, { page, lease: id, on: true });
+        await invoke("events.interceptFileChooser", site, { api, timeoutMs: 0 }, { page, lease: id, on: true });
       });
       trackChooserSetup(ready);
       let released = null;
@@ -8894,7 +9017,7 @@ ${value.stack}`;
         release: () => {
           if (!released) {
             released = ready.then(async () => {
-              await invoke("events.interceptFileChooser", { api, timeoutMs: 0 }, { page: await target, lease: id, on: false });
+              await invoke("events.interceptFileChooser", site, { api, timeoutMs: 0 }, { page: await target, lease: id, on: false });
             });
             trackChooserSetup(released);
           }
@@ -8903,10 +9026,11 @@ ${value.stack}`;
       };
     }
     async pump() {
+      const site = INTERNAL_SITE;
       try {
         while (this.listening > 0) {
           try {
-            await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events, lost }, observed) => this.deliverBatch(events, lost, observed));
+            await invokeObserved("events.next", site, { api: "events.next", timeoutMs: 0 }, {}, ({ events, lost }, observed) => this.deliverBatch(events, lost, observed));
           } catch (error) {
             pumpDispatched();
             throw error;
@@ -9153,12 +9277,13 @@ ${value.stack}`;
     #byUid = new Map;
     #pulling = false;
     async add(api, page, locator, handler, options = {}) {
+      const site = captureSite();
       if (!(locator instanceof Locator) || locator._frame !== page._mainFrame)
         throw plainError(api, "Locator must belong to the main frame of this page");
       if (options.times === 0)
         return;
       const target = await locator._frame._locatorBrand(api, locator._selector);
-      const { uid } = await invoke("page.addLocatorHandler", { api, timeoutMs: 0 }, options.noWaitAfter ? { target, noWaitAfter: true } : { target });
+      const { uid } = await invoke("page.addLocatorHandler", site, { api, timeoutMs: 0 }, options.noWaitAfter ? { target, noWaitAfter: true } : { target });
       this.#byUid.set(uid, { page, locator, handler, times: options.times });
       if (!this.#pulling) {
         this.#pulling = true;
@@ -9166,17 +9291,19 @@ ${value.stack}`;
       }
     }
     async remove(api, page, locator) {
+      const site = captureSite();
       for (const [uid, registration] of this.#byUid) {
         if (registration.page !== page || !(locator instanceof Locator) || registration.locator._frame !== locator._frame || registration.locator._selector !== locator._selector)
           continue;
         this.#byUid.delete(uid);
-        await invoke("page.removeLocatorHandler", { api, timeoutMs: 0 }, { uid }).catch(() => {});
+        await invoke("page.removeLocatorHandler", site, { api, timeoutMs: 0 }, { uid }).catch(() => {});
       }
     }
     async pull() {
+      const site = INTERNAL_SITE;
       try {
         while (this.#byUid.size > 0) {
-          const { uid } = await invoke("page.locatorHandlerTriggered", { api: "page.locatorHandlerTriggered", timeoutMs: 0 }, {});
+          const { uid } = await invoke("page.locatorHandlerTriggered", site, { api: "page.locatorHandlerTriggered", timeoutMs: 0 }, {});
           if (uid !== null)
             this.#run(uid);
         }
@@ -9185,6 +9312,7 @@ ${value.stack}`;
       }
     }
     async#run(uid) {
+      const site = INTERNAL_SITE;
       let remove = false;
       const registration = this.#byUid.get(uid);
       try {
@@ -9200,7 +9328,7 @@ ${value.stack}`;
       } finally {
         if (remove)
           this.#byUid.delete(uid);
-        await invoke("page.resolveLocatorHandler", { api: "page.resolveLocatorHandler", timeoutMs: 0 }, remove ? { uid, remove: true } : { uid }).catch(() => {});
+        await invoke("page.resolveLocatorHandler", site, { api: "page.resolveLocatorHandler", timeoutMs: 0 }, remove ? { uid, remove: true } : { uid }).catch(() => {});
       }
     }
   }
@@ -9213,32 +9341,37 @@ ${value.stack}`;
       markHandle(this);
     }
     async down(key) {
+      const site = captureSite();
       const api = "keyboard.down";
-      await invoke("keyboard.down", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), key });
+      await invoke("keyboard.down", site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), key });
     }
     async up(key) {
+      const site = captureSite();
       const api = "keyboard.up";
-      await invoke("keyboard.up", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), key });
+      await invoke("keyboard.up", site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), key });
     }
     async press(key, options = {}) {
+      const site = captureSite();
       const api = "keyboard.press";
-      await invoke("keyboard.press", { api, timeoutMs: 0 }, {
+      await invoke("keyboard.press", site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         key,
         options: pick(options, ["delay"])
       });
     }
     async type(text, options = {}) {
+      const site = captureSite();
       const api = "keyboard.type";
-      await invoke("keyboard.type", { api, timeoutMs: 0 }, {
+      await invoke("keyboard.type", site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         text,
         options: pick(options, ["delay"])
       });
     }
     async insertText(text) {
+      const site = captureSite();
       const api = "keyboard.insertText";
-      await invoke("keyboard.insertText", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), text });
+      await invoke("keyboard.insertText", site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), text });
     }
   }
 
@@ -9249,8 +9382,9 @@ ${value.stack}`;
       markHandle(this);
     }
     async move(x, y, options = {}) {
+      const site = captureSite();
       const api = "mouse.move";
-      await invoke("mouse.move", { api, timeoutMs: 0 }, {
+      await invoke("mouse.move", site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         x,
         y,
@@ -9258,15 +9392,17 @@ ${value.stack}`;
       });
     }
     async down(options = {}) {
+      const site = captureSite();
       const api = "mouse.down";
-      await invoke("mouse.down", { api, timeoutMs: 0 }, {
+      await invoke("mouse.down", site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         options: pick(options, ["button", "clickCount"])
       });
     }
     async up(options = {}) {
+      const site = captureSite();
       const api = "mouse.up";
-      await invoke("mouse.up", { api, timeoutMs: 0 }, {
+      await invoke("mouse.up", site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         options: pick(options, ["button", "clickCount"])
       });
@@ -9278,11 +9414,13 @@ ${value.stack}`;
       return this.#clickAt("mouse.dblclick", x, y, { ...options, clickCount: 2 });
     }
     async wheel(deltaX, deltaY) {
+      const site = captureSite();
       const api = "mouse.wheel";
-      await invoke("mouse.wheel", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), deltaX, deltaY });
+      await invoke("mouse.wheel", site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), deltaX, deltaY });
     }
     async#clickAt(api, x, y, options) {
-      await invoke("mouse.click", { api, timeoutMs: 0 }, {
+      const site = captureSite();
+      await invoke("mouse.click", site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         x,
         y,
@@ -9350,13 +9488,15 @@ ${value.stack}`;
       this.#kind = kind;
     }
     async items() {
+      const site = captureSite();
       const api = "webStorage.items";
-      const items = await invoke("webStorage.read", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "items" });
+      const items = await invoke("webStorage.read", site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "items" });
       return Array.isArray(items) ? items : [];
     }
     async getItem(name) {
+      const site = captureSite();
       const api = "webStorage.getItem";
-      const value = await invoke("webStorage.read", { api, timeoutMs: 0 }, {
+      const value = await invoke("webStorage.read", site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         kind: this.#kind,
         action: "getItem",
@@ -9365,8 +9505,9 @@ ${value.stack}`;
       return typeof value === "string" ? value : null;
     }
     async setItem(name, value) {
+      const site = captureSite();
       const api = "webStorage.setItem";
-      await invoke("webStorage.write", { api, timeoutMs: 0 }, {
+      await invoke("webStorage.write", site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         kind: this.#kind,
         action: "setItem",
@@ -9375,8 +9516,9 @@ ${value.stack}`;
       });
     }
     async removeItem(name) {
+      const site = captureSite();
       const api = "webStorage.removeItem";
-      await invoke("webStorage.write", { api, timeoutMs: 0 }, {
+      await invoke("webStorage.write", site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         kind: this.#kind,
         action: "removeItem",
@@ -9384,8 +9526,9 @@ ${value.stack}`;
       });
     }
     async clear() {
+      const site = captureSite();
       const api = "webStorage.clear";
-      await invoke("webStorage.write", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "clear" });
+      await invoke("webStorage.write", site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "clear" });
     }
   }
   function text(api, field, value) {
@@ -9410,12 +9553,13 @@ ${value.stack}`;
       return this.#info.url;
     }
     async evaluate(pageFunction, arg) {
+      const site = captureSite();
       const api = "worker.evaluate";
       assertMaxArguments(api, arguments.length, 2);
       const script = pageCall(api, "frame", pageFunction, arg);
       if (this._closed)
         throw clientError(api, "Target page, context or browser has been closed");
-      const { value } = await invoke("worker.evaluate", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), worker: this.#info.id, script });
+      const { value } = await invoke("worker.evaluate", site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), worker: this.#info.id, script });
       return fromPageValue(api, value);
     }
     evaluateHandle() {
@@ -9588,6 +9732,7 @@ ${value.stack}`;
       return this.#viewportSize || null;
     }
     async setViewportSize(viewportSize) {
+      const site = captureSite();
       this.#viewportSize = viewportSize;
       this.#viewportSet = true;
       for (const side of ["width", "height"]) {
@@ -9595,7 +9740,7 @@ ${value.stack}`;
           throw clientError("page.setViewportSize", `viewportSize.${side}: expected integer`);
       }
       const size = { width: viewportSize.width, height: viewportSize.height };
-      await invoke("page.setViewportSize", { api: "page.setViewportSize", timeoutMs: 0 }, { page: await this._brand("page.setViewportSize"), viewportSize: size });
+      await invoke("page.setViewportSize", site, { api: "page.setViewportSize", timeoutMs: 0 }, { page: await this._brand("page.setViewportSize"), viewportSize: size });
     }
     #workers = new Map;
     #workerBatches = new Set;
@@ -9740,9 +9885,10 @@ ${value.stack}`;
       return this._mainFrame._elementHandles("page.$$", selector);
     }
     async $eval(selector, pageFunction, arg) {
+      const site = captureSite();
       assertMaxArguments("page.$eval", arguments.length, 3);
       const api = "page.$eval";
-      return await this._mainFrame._evaluateOn(api, selector, false, pageCall(api, "query", pageFunction, arg), true);
+      return await this._mainFrame._evaluateOn(api, site, selector, false, pageCall(api, "query", pageFunction, arg), true);
     }
     async $$eval(selector, pageFunction, arg) {
       assertMaxArguments("page.$$eval", arguments.length, 3);
@@ -9771,27 +9917,32 @@ ${value.stack}`;
       return this.#history("page.goForward", options);
     }
     waitForLoadState(state, options) {
-      return this._mainFrame._waitForLoadState("page.waitForLoadState", state, options);
+      const site = captureSite();
+      return this._mainFrame._waitForLoadState("page.waitForLoadState", site, state, options);
     }
     waitForNavigation(options) {
       return this._waitForNavigation("page.waitForNavigation", this._mainFrame, options);
     }
     waitForURL(url, options) {
-      return this._waitForURL("page.waitForURL", this._mainFrame, url, options);
+      const site = captureSite();
+      return this._waitForURL("page.waitForURL", site, this._mainFrame, url, options);
     }
     async requestGC() {
+      const site = captureSite();
       const api = "page.requestGC";
-      await invoke("page.requestGC", { api, timeoutMs: 0 }, { page: await this._brand(api) });
+      await invoke("page.requestGC", site, { api, timeoutMs: 0 }, { page: await this._brand(api) });
     }
     async title() {
+      const site = captureSite();
       const api = "page.title";
-      const title = await invoke("page.title", { api, timeoutMs: 0 }, { page: await this._brand(api) });
+      const title = await invoke("page.title", site, { api, timeoutMs: 0 }, { page: await this._brand(api) });
       return title;
     }
     content() {
       return this._mainFrame._content("page.content");
     }
     async emulateMedia(options = {}) {
+      const site = captureSite();
       const api = "page.emulateMedia";
       const allowed = {
         media: ["screen", "print", "no-override"],
@@ -9809,7 +9960,7 @@ ${value.stack}`;
           throw clientError(api, `${key}: expected one of (${allowed[key].join("|")})`);
         input[key] = value;
       }
-      await invoke("page.emulateMedia", this._mainFrame._call(api, 0), {
+      await invoke("page.emulateMedia", site, this._mainFrame._call(api, 0), {
         page: await this._brand(api),
         ...input
       });
@@ -9828,24 +9979,27 @@ ${value.stack}`;
       return await this._mainFrame._evaluate("page.evaluate", pageFunction, arg, options);
     }
     addInitScript(script, arg, options) {
+      const site = captureSite();
       const api = "page.addInitScript";
       return addInitScript(api, {
-        register: async (source) => (await invoke("page.addInitScript", { api, timeoutMs: 0 }, { page: await this._brand(api), script: source })).id,
-        expose: (name, callback) => exposeOnPage(this, api, name, callback, true)
+        register: async (source) => (await invoke("page.addInitScript", site, { api, timeoutMs: 0 }, { page: await this._brand(api), script: source })).id,
+        expose: (name, callback) => exposeOnPage(this, site, api, name, callback, true)
       }, script, arg, options);
     }
     exposeBinding(name, callback) {
-      return exposeOnPage(this, "page.exposeBinding", name, callback);
+      const site = captureSite();
+      return exposeOnPage(this, site, "page.exposeBinding", name, callback);
     }
     exposeFunction(name, callback) {
-      return exposeOnPage(this, "page.exposeFunction", name, (_source, ...args) => Reflect.apply(callback, undefined, args));
+      const site = captureSite();
+      return exposeOnPage(this, site, "page.exposeFunction", name, (_source, ...args) => Reflect.apply(callback, undefined, args));
     }
-    async _evaluationScript(api, form, pageFunction, arg, options) {
+    async _evaluationScript(api, site, form, pageFunction, arg, options) {
       const callbacks = exposesFunctions(options) ? [] : undefined;
       const script = pageCall(api, form, pageFunction, arg, options, callbacks);
       if (!callbacks?.length || !("run" in script))
         return script;
-      const settled = await Promise.allSettled(callbacks.map(([name, callback]) => exposeOnPage(this, api, name, (_source, ...args) => Reflect.apply(callback, undefined, args), true)));
+      const settled = await Promise.allSettled(callbacks.map(([name, callback]) => exposeOnPage(this, site, api, name, (_source, ...args) => Reflect.apply(callback, undefined, args), true)));
       const failed = settled.find((outcome) => outcome.status === "rejected");
       if (failed) {
         await Promise.all(settled.map((outcome) => outcome.status === "fulfilled" ? outcome.value.dispose().catch(() => {}) : undefined));
@@ -9882,6 +10036,7 @@ ${value.stack}`;
       return this._mainFrame._screenshot("page.screenshot", null, options);
     }
     async pdf(options = {}) {
+      const site = captureSite();
       const api = "page.pdf";
       if (options.path !== undefined)
         throw unsupportedError(api, "Neo returns the PDF instead of writing a file; omit path");
@@ -9896,16 +10051,18 @@ ${value.stack}`;
             margin[side] = `${margin[side]}px`;
         wire.margin = margin;
       }
-      return await invoke("page.pdf", { api, timeoutMs: 0 }, { page: await this._brand(api), ...wire });
+      return await invoke("page.pdf", site, { api, timeoutMs: 0 }, { page: await this._brand(api), ...wire });
     }
     async opener() {
+      const site = captureSite();
       const api = "page.opener";
       const target = await this._brand(api);
-      const { opener } = await invoke("page.opener", { api, timeoutMs: 0 }, { page: target });
+      const { opener } = await invoke("page.opener", site, { api, timeoutMs: 0 }, { page: target });
       const page = this._context._pageFromResult(opener);
       return page && !page.isClosed() ? page : null;
     }
     async close(options = {}) {
+      const site = captureSite();
       const api = "page.close";
       if (this._closed || this._tab === null) {
         this.#close();
@@ -9913,7 +10070,7 @@ ${value.stack}`;
       }
       const page = await this._brand(api);
       try {
-        await invoke("page.close", { api, timeoutMs: 0 }, {
+        await invoke("page.close", site, { api, timeoutMs: 0 }, {
           page,
           ...options.runBeforeUnload ? { runBeforeUnload: true } : {}
         });
@@ -9923,8 +10080,9 @@ ${value.stack}`;
       }
     }
     waitForEvent(event, optionsOrPredicate = {}) {
+      const site = captureSite();
       const since = Date.now();
-      return this._context._events.wait("page.waitForEvent", this, event, optionsOrPredicate, since, this._timeoutSettings);
+      return this._context._events.wait("page.waitForEvent", site, this, event, optionsOrPredicate, since, this._timeoutSettings);
     }
     _checkEvent(event) {
       checkReported("page.on", event, "page");
@@ -10005,7 +10163,8 @@ ${value.stack}`;
       });
     }
     async _refreshFrames(api, timeoutMs = 0) {
-      const { value: tree, observed } = await invokeObserved("page.frames", { api, timeoutMs }, { page: await this._brand(api) });
+      const site = INTERNAL_SITE;
+      const { value: tree, observed } = await invokeObserved("page.frames", site, { api, timeoutMs }, { page: await this._brand(api) });
       if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
         this._applyFrames(tree.frames, observed);
     }
@@ -10223,15 +10382,15 @@ ${value.stack}`;
       this._settleWorkerFacts(null);
       this.emit("close", this);
     }
-    async _waitForURL(api, frame, url, options = {}) {
+    async _waitForURL(api, site, frame, url, options = {}) {
       const waitUntil = knownLoadState(options.waitUntil ?? "load");
       if (waitUntil === null)
         throw clientError(api, loadStateError("waitUntil"));
       const timeout = frame._navigationTimeout(options);
       const signal = signalOf(api, options);
-      await untilAborted(signal, () => abortedError(api, signal), () => this.#waitForURL(api, frame, url, waitUntil, timeout, signal));
+      await untilAborted(signal, () => abortedError(api, signal), () => this.#waitForURL(api, site, frame, url, waitUntil, timeout, signal));
     }
-    async#waitForURL(api, frame, url, waitUntil, timeout, signal) {
+    async#waitForURL(api, site, frame, url, waitUntil, timeout, signal) {
       const args = await frame._frameArgs(api);
       const nativeWait = async (work) => {
         try {
@@ -10241,7 +10400,7 @@ ${value.stack}`;
           throw error;
         }
       };
-      const wait = (pattern, until, budget) => nativeWait(() => invokeObserved("page.waitForURL", frame._call(api, budget), { ...args, url: pattern, waitUntil: until }, undefined, signal));
+      const wait = (pattern, until, budget) => nativeWait(() => invokeObserved("page.waitForURL", site, frame._call(api, budget), { ...args, url: pattern, waitUntil: until }, undefined, signal));
       if (typeof url !== "function") {
         const pattern = typeof url === "string" ? { glob: url } : url instanceof RegExp ? { regexSource: url.source, regexFlags: url.flags } : undefined;
         if (!pattern)
@@ -10262,7 +10421,7 @@ ${value.stack}`;
         const elapsed = Date.now() - started;
         const remaining = timeout === 0 ? 0 : Math.max(1, timeout - elapsed);
         if (matched) {
-          await nativeWait(() => frame._waitForLoadState(api, waitUntil, {
+          await nativeWait(() => frame._waitForLoadState(api, site, waitUntil, {
             timeout: remaining,
             signal
           }));
@@ -10277,6 +10436,7 @@ ${value.stack}`;
       return await untilAborted(signal, () => abortedError(api, signal), () => this.#waitForNavigation(api, frame, options, signal));
     }
     async#waitForNavigation(api, frame, options, signal) {
+      const site = captureSite();
       const since = Date.now();
       let after = this.#liveHead;
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
@@ -10292,7 +10452,7 @@ ${value.stack}`;
         throw deadline.named(error);
       };
       for (;; ) {
-        const { value: result, observed } = await deadline.race(invokeObserved("page.waitForNavigation", frame._call(api, deadline.left()), {
+        const { value: result, observed } = await deadline.race(invokeObserved("page.waitForNavigation", site, frame._call(api, deadline.left()), {
           ...args,
           since,
           after,
@@ -10312,7 +10472,7 @@ ${value.stack}`;
           throw prefixed(api, error);
         }
         if (matched) {
-          await deadline.race(frame._waitForLoadState(api, waitUntil, {
+          await deadline.race(frame._waitForLoadState(api, site, waitUntil, {
             timeout: deadline.left(),
             signal
           }).catch(rethrow));
@@ -10322,11 +10482,12 @@ ${value.stack}`;
       }
     }
     async#history(api, options = {}) {
+      const site = captureSite();
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
       return await this._navigating(async (ready, publication) => {
         let completion;
-        const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil, publication }, (result, observed) => {
+        const { value: result, observed } = await invokeObserved(api, site, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil, publication }, (result, observed) => {
           completion = this._navigated(api, this._mainFrame, result, observed, ready);
         }, signal);
         return await (completion ?? this._navigated(api, this._mainFrame, result, observed, ready));
@@ -10380,24 +10541,28 @@ ${value.stack}`;
       return [];
     }
     addInitScript(script, arg, options) {
+      const site = captureSite();
       const api = "browserContext.addInitScript";
       return addInitScript(api, {
-        register: async (source) => (await invoke("context.addInitScript", { api, timeoutMs: 0 }, { script: source })).id,
-        expose: (name, callback) => exposeOnContext(this, api, name, callback, true)
+        register: async (source) => (await invoke("context.addInitScript", site, { api, timeoutMs: 0 }, { script: source })).id,
+        expose: (name, callback) => exposeOnContext(this, site, api, name, callback, true)
       }, script, arg, options);
     }
     exposeBinding(name, callback) {
-      return exposeOnContext(this, "browserContext.exposeBinding", name, callback);
+      const site = captureSite();
+      return exposeOnContext(this, site, "browserContext.exposeBinding", name, callback);
     }
     exposeFunction(name, callback) {
-      return exposeOnContext(this, "browserContext.exposeFunction", name, (_source, ...args) => Reflect.apply(callback, undefined, args));
+      const site = captureSite();
+      return exposeOnContext(this, site, "browserContext.exposeFunction", name, (_source, ...args) => Reflect.apply(callback, undefined, args));
     }
     async newPage() {
       return await this.#openPage("browserContext.newPage");
     }
     waitForEvent(event, optionsOrPredicate = {}) {
+      const site = captureSite();
       const since = Date.now();
-      return this._events.wait("browserContext.waitForEvent", null, event, optionsOrPredicate, since, this._timeoutSettings);
+      return this._events.wait("browserContext.waitForEvent", site, null, event, optionsOrPredicate, since, this._timeoutSettings);
     }
     toJSON() {
       return { pages: this.pages().length };
@@ -10461,7 +10626,8 @@ ${value.stack}`;
         this._pageFor(fact, observed, approved.get(fact.tab) ?? null);
     }
     async#openPage(api) {
-      const opened = await invoke("context.newPage", { api, timeoutMs: 0 }, {});
+      const site = captureSite();
+      const opened = await invoke("context.newPage", site, { api, timeoutMs: 0 }, {});
       const page = this._pageFromResult(opened.page, opened.url);
       if (!page)
         throw internalError(api, "context.newPage returned no page");
@@ -17597,7 +17763,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       return text2("toHaveURL", "Page", "to.have.url", value, textValues([value], { ignoreCase: options?.ignoreCase }), options);
     }
   };
-  async function retry(name, actual, state, matcher) {
+  async function retry(name, site, actual, state, matcher) {
     const api = `expect.${name}`;
     const isPage = actual instanceof Page;
     const isLocator = actual instanceof Locator;
@@ -17615,12 +17781,12 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
     };
     try {
       if (actual instanceof Page)
-        await invoke("expect.page", call, {
+        await invoke("expect.page", site, call, {
           page: await actual._brand(api),
           ...shape
         });
       else if (actual instanceof Locator)
-        await invoke("expect.locator", call, {
+        await invoke("expect.locator", site, call, {
           target: await actual._frame._locatorBrand(api, actual._selector),
           ...shape
         });
@@ -17652,7 +17818,7 @@ ${error.message}`;
       ariaSnapshot: facts.ariaSnapshot
     });
   }
-  async function urlPredicate(page, predicate, state, options) {
+  async function urlPredicate(page, site, predicate, state, options) {
     const timeout = options?.timeout ?? state.config.timeout;
     const deadline = Date.now() + timeout;
     for (;; ) {
@@ -17672,7 +17838,7 @@ Expected: predicate to ${state.isNot ? "fail" : "succeed"}
 Received: ${stringify(page.url())}
 Timeout: ${timeout}ms`);
       try {
-        await page._waitForURL("expect.toHaveURL", page._mainFrame, (url) => {
+        await page._waitForURL("expect.toHaveURL", site, page._mainFrame, (url) => {
           const href = typeof url === "object" && url !== null ? Reflect.get(url, "href") : url;
           return href !== page.url();
         }, { timeout: timeout === 0 ? 0 : remaining, waitUntil: "commit" });
@@ -17889,14 +18055,14 @@ Timeout: ${timeout}ms`);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/expect.ts
-  function retrying(name, actual, state, args) {
+  function retrying(name, site, actual, state, args) {
     if (name === "toHaveURL" && typeof args[0] === "function") {
       if (!(actual instanceof Page))
         throw plainError("expect.toHaveURL", `toHaveURL can be only used with Page object, was called with ${receiverText(actual)}`);
-      return urlPredicate(actual, args[0], state, args[1]);
+      return urlPredicate(actual, site, args[0], state, args[1]);
     }
     const build = RETRYING[name];
-    return retry(name, actual, state, Reflect.apply(build, undefined, args));
+    return retry(name, site, actual, state, Reflect.apply(build, undefined, args));
   }
   function matchers(actual, state) {
     const built = {};
@@ -17906,7 +18072,10 @@ Timeout: ${timeout}ms`);
         return state.promise ? settle(actual, state, run, name) : run(actual);
       };
     for (const name of Object.keys(RETRYING))
-      built[name] = (...args) => state.promise ? settle(actual, state, (value) => retrying(name, value, state, args), name) : retrying(name, actual, state, args);
+      built[name] = (...args) => {
+        const site = captureSite();
+        return state.promise ? settle(actual, state, (value) => retrying(name, site, value, state, args), name) : retrying(name, site, actual, state, args);
+      };
     built.toPass = (options) => toPass(actual, state, options);
     installUnsupportedExpect(built, "matchers");
     Object.defineProperty(built, "not", {

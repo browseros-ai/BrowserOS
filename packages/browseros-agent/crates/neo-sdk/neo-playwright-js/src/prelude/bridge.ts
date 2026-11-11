@@ -4,6 +4,8 @@
  * fresh QuickJS realm after its bootstrap, so the prelude's state lives exactly as long as one
  * run. What it uses, one function each:
  *
+ * - `__neo.callSite()`: captures the synchronous script frame at public API entry. The
+ *   required `site` argument carries it through prelude awaits without shared mutable state.
  * - `__neo.invoke(name, input, options)`: resolves with an op's `ok` value, its brands revived;
  *   rejects with the bootstrap's NeoError, a TimeoutError when the op timed out. `options.signal`
  *   makes the op abortable (signal.ts).
@@ -28,6 +30,7 @@
  * claw-sdk's runtime/tests.rs pins that a run's realm gains only `__neo` and its natives.
  */
 
+import type { CallSite } from './call-site'
 import { readyChoosers } from './chooser-setup'
 import { shapeBridgeError, unsupportedError, withAbortCause } from './errors'
 import { host, refuser } from './host'
@@ -67,14 +70,16 @@ export type Reply = {
 }
 
 /**
- * Runs one op. Inputs are plain JSON built by the classes (never class instances, which the
- * bootstrap's codec refuses), and the result is trusted as `OpOutputs` declares: Rust decoded
+ * Runs one op using the site captured before the public method's first await. The site is
+ * transport metadata, never part of the probe's wire input. Inputs are plain JSON built by
+ * the classes (never class instances, which the bootstrap's codec refuses), and the result is trusted as `OpOutputs` declares: Rust decoded
  * the input and owns the result's shape. Every failure is shaped once, here. A `signal` aborts
  * the op (signal.ts). The method checked it when the script called it; one that fired since is
  * the call in flight, which the bootstrap aborts as soon as it is sent.
  */
 export async function invoke<Op extends OpName>(
   op: Op,
+  site: CallSite,
   call: CallHeader,
   args: OpInputs[Op],
   signal?: SignalLike,
@@ -86,7 +91,7 @@ export async function invoke<Op extends OpName>(
     const value = (await host().invoke(
       op,
       { call, ...args },
-      signal === undefined ? undefined : { signal },
+      { signal, site: site.value },
     )) as OpOutputs[Op]
     const held = pumpsCaughtUp(op)
     if (held) await held
@@ -104,6 +109,7 @@ export async function invoke<Op extends OpName>(
  */
 export async function invokeObserved<Op extends OpName>(
   op: Op,
+  site: CallSite,
   call: CallHeader,
   args: OpInputs[Op],
   onResult?: (value: OpOutputs[Op], observed: Observation | null) => void,
@@ -117,6 +123,7 @@ export async function invokeObserved<Op extends OpName>(
       op,
       { call, ...args },
       {
+        site: site.value,
         observed: true,
         signal,
         onResult:

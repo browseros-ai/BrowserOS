@@ -342,8 +342,9 @@
 
   const replyListeners = []
   async function invoke(name, input, options) {
-    // Before the first await, while the agent's frame is still on the stack.
-    const site = callSite()
+    // The prelude captured at public entry, before preparing arguments with its own awaits.
+    // Direct bridge calls still capture here; an explicit empty site marks prelude work.
+    const site = options?.site ?? callSite()
     const signal = options?.signal
     const key = signal === undefined ? undefined : String(nextAbortKey++)
     const encoded = encode(input)
@@ -578,6 +579,7 @@
 
   globalThis.__neo = Object.freeze({
     invoke,
+    callSite,
     refuse,
     // Local wait deadlines share the script's TimeoutError constructor. They have no
     // operation identity: only errors received from the dispatcher enter `genuine`.

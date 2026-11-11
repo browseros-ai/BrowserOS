@@ -22,6 +22,7 @@
  */
 import { answerBindingCall } from './bindings'
 import { invoke, invokeObserved, pumpDispatched } from './bridge'
+import { type CallSite, INTERNAL_SITE } from './call-site'
 import { trackChooserSetup } from './chooser-setup'
 import type { EventEmitter } from './emitter'
 import {
@@ -293,6 +294,7 @@ export class EventHub {
    */
   async wait(
     api: string,
+    site: CallSite,
     page: Page | null,
     event: string,
     optionsOrPredicate: unknown,
@@ -345,6 +347,7 @@ export class EventHub {
           if (lease) await deadline.race(lease.ready)
           return this.waitFor(
             api,
+            site,
             page,
             event,
             options,
@@ -435,6 +438,7 @@ export class EventHub {
    */
   private async waitFor(
     api: string,
+    site: CallSite,
     page: Page | null,
     event: EventName,
     options: WaitOptions,
@@ -452,6 +456,7 @@ export class EventHub {
       try {
         ;({ value: record, observed } = await invokeObserved(
           'events.wait',
+          site,
           { api, timeoutMs: left },
           { page: target, event, since, after },
           // As the reply is decoded, before any other reply's callbacks: a listener the pump
@@ -496,6 +501,7 @@ export class EventHub {
     since: number,
     lease?: ChooserLease,
   ): Promise<void> {
+    const site = INTERNAL_SITE
     const api = `${page === null ? 'browserContext' : 'page'}.${on ? 'on' : 'off'}`
     try {
       if (on && lease) await lease.ready
@@ -516,7 +522,7 @@ export class EventHub {
               on,
               since,
             }
-      await invoke('events.listen', { api, timeoutMs: 0 }, input)
+      await invoke('events.listen', site, { api, timeoutMs: 0 }, input)
     } catch {
       // `page.on` already returned, so there is no caller to tell; a listener on a page that
       // is gone never fires, as in Playwright.
@@ -527,12 +533,14 @@ export class EventHub {
   }
 
   private intercept(page: Page): ChooserLease {
+    const site = INTERNAL_SITE
     const id = ++this.nextChooserLease
     const api = 'page.filechooser'
     const target = page._openedBrand(api)
     const ready = target.then(async (page) => {
       await invoke(
         'events.interceptFileChooser',
+        site,
         { api, timeoutMs: 0 },
         { page, lease: id, on: true },
       )
@@ -546,6 +554,7 @@ export class EventHub {
           released = ready.then(async () => {
             await invoke(
               'events.interceptFileChooser',
+              site,
               { api, timeoutMs: 0 },
               { page: await target, lease: id, on: false },
             )
@@ -558,6 +567,7 @@ export class EventHub {
   }
 
   private async pump(): Promise<void> {
+    const site = INTERNAL_SITE
     try {
       while (this.listening > 0) {
         // Delivered as the reply is decoded. Rust holds an op that ends until its events are in
@@ -567,6 +577,7 @@ export class EventHub {
         try {
           await invokeObserved(
             'events.next',
+            site,
             { api: 'events.next', timeoutMs: 0 },
             {},
             ({ events, lost }, observed) =>
