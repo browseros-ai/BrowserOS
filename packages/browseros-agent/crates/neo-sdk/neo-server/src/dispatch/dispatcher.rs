@@ -22,8 +22,8 @@ use super::refusal_brand::RefusalBrand;
 use super::registry::DecodedCall;
 use super::{
     ActedTarget, Answer, Claim, ErrorCode, LeafError, MethodSpec, Observation, Observer, OpFailure,
-    OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry, ResultHold, RunCtx,
-    Visibility, operation_error,
+    OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry, RunCtx, Visibility,
+    operation_error,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 
@@ -44,8 +44,8 @@ const UNKNOWN_METHOD: MethodSpec = MethodSpec::new("unknown", Effect::Write);
 /// ```text
 ///  submit ─ admit (sync): seq, name → method, decode, op_started ─┐ refused: answered now
 ///          └▶ task on the run's JoinSet ─ run_op:                 ▼
-///               gates ─ target (cached, tab checked) ─ rules, their holds taken ─
-///               Method::call raced with the stop ─ reads checked again, holds asked ─
+///               gates ─ target (cached, tab checked) ─ rules ─
+///               Method::call raced with the stop ─ reads checked again ─
 ///               page facts ─ OperationGuard::finish
 ///  OpCtx::invoke ─ the same admit and run_op, inline in the parent's task
 /// ```
@@ -489,11 +489,6 @@ impl Dispatcher {
         if let Err(refusal) = self.check(&check) {
             return guard.finish(Ending::Refused(refusal), Vec::new(), default_page, None);
         }
-        let holds: Vec<ResultHold> = self
-            .policies
-            .iter()
-            .filter_map(|policy| policy.hold(&check))
-            .collect();
         let op = OpCore {
             run: Arc::clone(&run),
             dispatcher: Arc::clone(&self),
@@ -512,10 +507,9 @@ impl Dispatcher {
             () = run.cancel_token().cancelled() => run.stop_reason().map_or(Ending::Lost, Ending::Stopped),
             result = decoded.run(op) => ending_of(&run, &state, result),
         };
-        // A takeover that blocks reads may have begun while the op ran (sdk-traces D13, reads:
-        // block), or a capture's tab may have gone private (D6), so what the page answered is
-        // released only past the rules again, then past every hold taken at admission. The rules
-        // see it as a read of the op's tab: a main-world script is a write, and any lock refuses
+        // A takeover that blocks reads may have begun while the op ran, so what the page
+        // answered is released only past the rules again. The rules see it as a read of the
+        // op's tab: a main-world script is a write, and any lock refuses
         // a write, which would withhold a script that read the page before the owner took it.
         //
         // A main-world script reads the other tabs of its page's opener-linked group as easily as
@@ -535,18 +529,14 @@ impl Dispatcher {
                 ..check
             };
             let reached = state.reached();
-            match self
-                .check(&release)
-                .and_then(|()| {
-                    reached.iter().try_for_each(|&tab| {
-                        self.check(&PolicyCheck {
-                            tab: Some(tab),
-                            ..release
-                        })
+            match self.check(&release).and_then(|()| {
+                reached.iter().try_for_each(|&tab| {
+                    self.check(&PolicyCheck {
+                        tab: Some(tab),
+                        ..release
                     })
                 })
-                .and_then(|()| holds.into_iter().try_for_each(|hold| hold()))
-            {
+            }) {
                 Ok(()) => ending,
                 Err(refusal) => Ending::Refused(refusal),
             }

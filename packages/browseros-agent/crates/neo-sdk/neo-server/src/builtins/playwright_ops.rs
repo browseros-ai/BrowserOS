@@ -652,9 +652,9 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
 }
 
 /// The code of one of Neo's own refusals, coming back through the crate as a string, or `None`
-/// when claw-sdk does not know it. Three paths refuse: the door's rules through `OpEnv::recheck`
+/// when claw-sdk does not know it. Two paths refuse: the door's rules through `OpEnv::recheck`
 /// and `OpEnv::recheck_reach`, whose refusal the door keeps standing as the op's error whatever
-/// this returns; the capture hook, as `page_private`; and the crate itself, as `unsupported`, when
+/// this returns; and the crate itself, as `unsupported`, when
 /// a tab the page's script reaches has no tab id to name to the door, so the script meets the
 /// same code as when the door refuses a tab it does not track. Each keeps its code, so the agent
 /// reads who must act. The door's own [`TAB_UNLISTED`] is no code of Neo's: it reads
@@ -987,12 +987,6 @@ mod tests {
                 ErrorOwner::Script,
                 "method_unavailable",
                 "this method is not available here",
-            ),
-            // The capture hook.
-            (
-                ErrorOwner::Host,
-                "page_private",
-                "this tab is private (takeover)",
             ),
         ];
         let read: Vec<_> = cases

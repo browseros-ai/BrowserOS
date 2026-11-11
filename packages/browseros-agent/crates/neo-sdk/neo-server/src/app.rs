@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 #[cfg(feature = "test-support")]
 use std::future;
 use std::future::{Future, IntoFuture};
@@ -28,7 +29,7 @@ use crate::builtins::{
 };
 use crate::config::{AppConfig, Defaults, HostedMode, SecretFiles};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
-use crate::host::{FlagRecovery, HostApi, HostInputs, TakeoverLock};
+use crate::host::{HostApi, HostInputs, TakeoverLock};
 use crate::http::agent_router;
 use crate::mcp::McpServer;
 use crate::run::{RunService, RunServiceParts};
@@ -141,7 +142,7 @@ impl App {
             .map_err(|error| bind_error(address, error))?;
         log_startup(&config, address);
 
-        let OpenedTrace { store, recovery } = open_trace(&config.env.trace_dir()).await?;
+        let store = open_trace(&config.env.trace_dir()).await?;
         // neo-trace's writer still takes a secret set to mask records with. Neo hands it one that
         // nothing registers into, so the trace keeps what each op produced, as the script got it.
         let unmasked = Arc::new(SecretSet::new(SecretSetConfig::default()));
@@ -157,22 +158,22 @@ impl App {
         // The host API's secret set, which it reads from `Privacy` (`/v1/secrets`, the takeover
         // journal). Neither the door nor the trace masks with it; housekeeping expires it.
         let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        // Private flags committed by an earlier Neo still hold until their tabs are gone.
+        // neo-service still requires Privacy while its own private-tab API is being removed.
+        // Supply an empty compatibility value: the server never restores persisted flags.
         let privacy = Privacy::new(
             Arc::clone(&secrets),
             Arc::new(trace.clone()),
-            store.private_tabs().await?,
+            HashMap::new(),
         );
         let host = HostApi::bind(
             &config.env.host_api,
             HostInputs {
                 store: store.clone(),
                 sink: trace.clone(),
-                privacy: Arc::clone(&privacy),
+                privacy,
                 screenshots,
                 xvnc: config.env.xvnc,
                 cdp_port: config.launch.cdp_port,
-                recovery: Arc::clone(&recovery),
             },
         )
         .await
@@ -181,15 +182,8 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
-        // neo-playwright's privacy callbacks: which tabs may be captured, and Neo's own secret
-        // files for its upload deny list. The crate holds them from `PlaywrightFacade::start` on,
-        // so the list is config's, located before the start.
-        let hooks = Arc::new(PrivacyHooks::new(
-            privacy,
-            Arc::clone(&tabs),
-            recovery,
-            config.secret_files,
-        ));
+        // The facade keeps the startup config's upload deny list for its whole lifetime.
+        let hooks = Arc::new(PrivacyHooks::new(config.secret_files));
         let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::clone(&hooks) as _);
 
         // One solver for the process: its paid-task budget and page reservations are its own.
@@ -207,7 +201,7 @@ impl App {
         let takeover = Arc::new(TakeoverLock::default());
         let dispatcher = Arc::new(Dispatcher::new(
             methods,
-            builtins::door_rules(&takeover, &hooks, &claims),
+            builtins::door_rules(&takeover, &claims),
             trace.clone(),
             Arc::clone(&browser),
             Arc::clone(&tabs),
@@ -337,50 +331,31 @@ async fn housekeeping(
     }
 }
 
-/// The trace store Neo starts on, and whether it owes private flags that a replaced store lost.
-/// A plain data bag.
-struct OpenedTrace {
-    store: TraceStore,
-    /// Pending after this start's replacement, or an earlier one's that never finished.
-    recovery: Arc<FlagRecovery>,
-}
-
 /// Opens the trace store in `trace_dir` (`EnvConfig::trace_dir`, which Neo's secret files deny to
 /// uploads too), or, when the file does not open (a schema this build does not know, a corrupt
 /// file), moves it aside and opens a fresh one: Neo must not crash-loop on its own records. The
 /// old file is kept beside the new one for a human to look at.
 ///
-/// A fresh store lost two things that keep Neo safe, and neo-trace cannot read either from
-/// a file it refused to open. The private flags: every tab open at the browser link's first
-/// connect is made private instead ([`FlagRecovery`]), and a marker written before the old file
-/// moves keeps that owed at every start until it is done. The request ids: a host that retries a
-/// `requestId` from before the replacement runs it again, which nothing here can prevent, so it
-/// is logged as an error for the operator.
-async fn open_trace(trace_dir: &Path) -> Result<OpenedTrace, StartError> {
+/// A fresh store loses request history: a host retrying a `requestId` from before the
+/// replacement runs it again. Log that boundary for the operator before moving the old store.
+async fn open_trace(trace_dir: &Path) -> Result<TraceStore, StartError> {
     let path = trace_dir.join("trace.db");
     match TraceStore::open(&path).await {
-        Ok(store) => Ok(OpenedTrace {
-            store,
-            recovery: FlagRecovery::after_opening(&path).await,
-        }),
+        Ok(store) => Ok(store),
         Err(error) => {
             let aside = PathBuf::from(format!(
                 "{}.broken-{}",
                 path.display(),
                 EpochMillis::now().millis()
             ));
-            error!(%error, path = %path.display(), aside = %aside.display(), "the trace store does not open; starting a fresh one. Its private flags are lost, so every tab open now is made private; its request ids are lost, so a requestId retried from before this start runs again");
-            let recovery = FlagRecovery::before_replacing(&path).await?;
+            error!(%error, path = %path.display(), aside = %aside.display(), "the trace store does not open; starting a fresh one. Its request ids are lost, so a requestId retried from before this start runs again");
             fs::rename(&path, &aside).await?;
             for suffix in ["-wal", "-shm"] {
                 let sidecar = PathBuf::from(format!("{}{suffix}", path.display()));
                 // Absent when SQLite never wrote one.
                 let _ = fs::remove_file(sidecar).await;
             }
-            Ok(OpenedTrace {
-                store: TraceStore::open(&path).await?,
-                recovery,
-            })
+            Ok(TraceStore::open(&path).await?)
         }
     }
 }
@@ -483,7 +458,6 @@ mod storage_tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 
     use super::open_trace;
-    use crate::host::FlagRecovery;
 
     /// Compare logical contents: the setup connection's WAL checkpoint can change file bytes
     /// even when an unknown schema is refused without changing a row.
@@ -526,7 +500,7 @@ mod storage_tests {
     }
 
     #[tokio::test]
-    async fn a_newer_migration_replaces_the_store_with_flag_recovery_pending()
+    async fn a_newer_migration_preserves_the_old_store_and_starts_fresh()
     -> Result<(), Box<dyn Error>> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("trace.db");
@@ -540,18 +514,9 @@ mod storage_tests {
         conn.close().await?;
         let before = logical_snapshot(&path).await?;
 
-        // Exercise the real startup boundary: classify/refuse, await close, mark flags lost,
-        // preserve the refused file, then start successfully on a fresh store.
-        let opened = open_trace(directory.path()).await?;
-        assert!(
-            opened.recovery.is_pending(),
-            "capture remains blocked until every open tab is private"
-        );
-        assert!(directory.path().join("trace.db.flags-lost").is_file());
-        assert!(
-            FlagRecovery::after_opening(&path).await.is_pending(),
-            "a stop before recovery keeps the debt"
-        );
+        // Exercise the startup boundary: refuse the unknown schema, await close, preserve
+        // the refused file, then start successfully on a fresh store.
+        let store = open_trace(directory.path()).await?;
         let aside = fs::read_dir(directory.path())?
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
@@ -568,18 +533,9 @@ mod storage_tests {
             before,
             "startup keeps the refused schema and all rows for a human"
         );
+        assert!(store.runs(RunQuery::default()).await?.items.is_empty());
         assert!(
-            opened
-                .store
-                .runs(RunQuery::default())
-                .await?
-                .items
-                .is_empty()
-        );
-        assert!(opened.store.private_tabs().await?.is_empty());
-        assert!(
-            opened
-                .store
+            store
                 .run_by_request(&RequestId::parse("before-rollback")?, None)
                 .await?
                 .is_none(),

@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
 use neo_trace::{
-    Effect, EpochMillis, OperationId, Privacy, PrivateReason, RedactionLimits, Redactor, RunId,
-    SecretSet, SecretSetConfig, TraceStore, WriterConfig,
+    Effect, OperationId, Privacy, RedactionLimits, Redactor, RunId, SecretSet, SecretSetConfig,
+    TraceStore, WriterConfig,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 use tokio::{fs, time};
 use tokio_util::sync::CancellationToken;
 
-use super::{FlagRecovery, HostApi, HostInputs, TakeoverLock};
+use super::{HostApi, HostInputs, TakeoverLock};
 use crate::browser::{BrowserLink, TabRegistry};
 use crate::config::HostApiConfig;
 use crate::dispatch::{Caller, ErrorCode, MethodSpec, OperationError, Policy, PolicyCheck};
@@ -46,7 +46,6 @@ struct Host {
     serving: JoinHandle<()>,
     takeover: Arc<TakeoverLock>,
     fake: Arc<FakeCdp>,
-    store: TraceStore,
     socket: PathBuf,
     _dir: TempDir,
 }
@@ -76,7 +75,7 @@ impl Host {
         let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
         let (shots, screenshots) = neo_trace::screenshot_queue();
         let sink = neo_trace::spawn_writer(&store, redactor, WriterConfig::default(), Some(shots));
-        let privacy = Privacy::new(secrets, Arc::new(sink.clone()), store.private_tabs().await?);
+        let privacy = Privacy::new(secrets, Arc::new(sink.clone()), HashMap::new());
         let token_file = match token {
             Some(token) => {
                 let path = dir.path().join("token");
@@ -98,7 +97,6 @@ impl Host {
             xvnc: CLOSED_XVNC,
             // The fake browser has no CDP port, and no test here opens a live view to dial it.
             cdp_port: 0,
-            recovery: FlagRecovery::none(),
         };
         let host = HostApi::bind(&config, inputs).await?;
         let takeover = Arc::new(TakeoverLock::default());
@@ -109,7 +107,6 @@ impl Host {
             serving,
             takeover,
             fake,
-            store,
             socket: config.socket,
             _dir: dir,
         })
@@ -196,21 +193,6 @@ async fn within<T>(work: impl Future<Output = T>) -> Result<T, Box<dyn Error>> {
     time::timeout(limit, work)
         .await
         .map_err(|error| format!("not within {limit:?}: {error}").into())
-}
-
-/// Commits `tab`'s private flag into the trace store in `dir`, as an earlier Neo did before it
-/// stopped.
-async fn seed_private(dir: &TempDir, tab: TabId) -> TestResult {
-    let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-    let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
-    let sink = neo_trace::spawn_writer(&store, redactor, WriterConfig::default(), None);
-    let privacy = Privacy::new(secrets, Arc::new(sink.clone()), HashMap::new());
-    privacy
-        .make_private(tab, PrivateReason::Host, EpochMillis::now())
-        .await?;
-    sink.flush().await?;
-    Ok(())
 }
 
 #[tokio::test]
@@ -302,10 +284,8 @@ async fn without_a_usable_token_there_is_no_host_socket() -> TestResult {
 }
 
 #[tokio::test]
-async fn the_host_api_serves_only_once_closed_tabs_lost_their_state() -> TestResult {
+async fn the_host_api_waits_for_the_watched_listing_before_serving() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let gone = TabId(999);
-    seed_private(&dir, gone).await?;
     let fake = FakeCdp::new();
     fake.open_tab("https://example.com/", "Owner");
     // No listing until target discovery answers, so the tabs cannot be reconciled yet.
@@ -326,8 +306,8 @@ async fn the_host_api_serves_only_once_closed_tabs_lost_their_state() -> TestRes
     host.fake.release_held();
     host.until_serving().await?;
     assert!(
-        !host.store.private_tabs().await?.contains_key(&gone),
-        "a private flag an earlier Neo left on a tab that is gone ended before the first request"
+        host.fake.count("Browser.getTabs") > 0,
+        "the host serves only after the watcher provides the first current listing"
     );
     host.shutdown.cancel();
     within(host.serving).await??;
