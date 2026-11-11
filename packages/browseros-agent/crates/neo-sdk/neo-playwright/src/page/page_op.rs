@@ -166,32 +166,16 @@ impl PageOp {
             )
             .using(&[Capability::MainWorld])
             .policed(),
-            Self::Screenshot => SCREENSHOT,
-            Self::Pdf => PDF,
+            Self::Screenshot => {
+                OpSpec::read("page.screenshot", PAGE, "capture the page or one element")
+            }
+            Self::Pdf => OpSpec::read("page.pdf", PAGE, "print the page to PDF"),
             Self::AddInitScript => ADD_INIT_SCRIPT,
             Self::ExposeBinding => EXPOSE_BINDING,
             Self::ResolveBinding => RESOLVE_BINDING,
         }
     }
 }
-
-/// `page.screenshot`'s registration, its element forms included.
-const SCREENSHOT: OpSpec = OpSpec::read(
-    "page.screenshot",
-    PAGE,
-    "capture the page or one element once the host allows it",
-)
-.using(&[Capability::Capture])
-.policed();
-
-/// `page.pdf`'s registration.
-const PDF: OpSpec = OpSpec::read(
-    "page.pdf",
-    PAGE,
-    "print the page to PDF once the host allows it",
-)
-.using(&[Capability::Capture])
-.policed();
 
 /// `page.addInitScript`'s registration: it reaches the main world of every later document, and
 /// its `{ path }` form reads a file from Neo's disk (`page/init_script.rs`).

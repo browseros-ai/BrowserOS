@@ -560,7 +560,6 @@ async fn popup_tab(
 #[cfg(test)]
 mod tests {
     use std::error::Error;
-    use std::sync::Arc;
 
     use browseros_core::{TabId, TargetId};
     use serde_json::json;
@@ -575,7 +574,6 @@ mod tests {
     use crate::page::PageHandle;
     use crate::target::CallHeader;
     use crate::test_env::{self, EnvCall, TestEnv};
-    use crate::test_support::RecordingHooks;
 
     /// Page `id` on tab `id * 100`.
     fn handle(id: u32) -> PageHandle {
@@ -656,7 +654,7 @@ mod tests {
             event: PageEvent::Closed(target.clone()),
         };
         let delivered = super::deliver(
-            &Playwright::new(test_env::offline_session(), Arc::new(RecordingHooks)),
+            &Playwright::new(test_env::offline_session()),
             &scope,
             &subscription,
             &record,

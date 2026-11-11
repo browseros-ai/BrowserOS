@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use browseros_core::TabId;
 use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand, test_page};
-use neo_playwright::{Answer, ErrorCode, PlaywrightError, Refusal, TimedOut};
+use neo_playwright::{Answer, ErrorCode, PlaywrightError, TimedOut};
 use neo_trace::ErrorOwner;
 use page_server::{PageServer, SLOW};
 use serde_json::{Value, json};
@@ -434,16 +434,10 @@ async fn tests_that_goto_loads_a_local_file() -> TestResult {
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_captures_return_bytes_without_consulting_the_host() -> TestResult {
+async fn tests_that_captures_return_their_bytes() -> TestResult {
     with_page(|run, server, page| async move {
         let result = async {
             goto(&run, &page, &server.url("/child.html"), "load").await?;
-            run.refuse_captures(Refusal {
-                owner: ErrorOwner::Host,
-                code: "unused_capture_hook".to_owned(),
-                message: "captures must not consult the retained host hook".to_owned(),
-                host_code: None,
-            });
             let png = run
                 .invoke("page.screenshot", json!({ "page": brand(&page) }))
                 .await?;
