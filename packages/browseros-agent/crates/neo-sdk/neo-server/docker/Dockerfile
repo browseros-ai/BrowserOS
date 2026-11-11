@@ -47,9 +47,6 @@ RUN --mount=type=cache,id=neo-sdk-cargo-registry,target=/usr/local/cargo/registr
 
 FROM ${UBUNTU_IMAGE} AS neo-sdk-runtime
 ARG TARGETARCH
-ARG NEO_SDK_REVISION=unknown
-ARG NEO_SDK_DIRTY=true
-ARG NEO_SDK_VERSION=unknown
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -95,7 +92,12 @@ COPY --from=neo-docker --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 COPY crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md crates/neo-sdk/neo-playwright/third_party/playwright/LICENSE crates/neo-sdk/neo-playwright/third_party/playwright/NOTICE /usr/share/doc/neo-sdk/playwright/
 
 # What this image is made of, for hosts and for accept.sh: the source commit, the browser, and
-# the server binary as installed (its sha256 and the version compiled into it).
+# the server binary as installed (its sha256 and the version compiled into it). The commit's ARGs
+# are declared here, not at the top: every RUN after an ARG misses the cache when its value
+# changes, which would reinstall the packages and download the browser for every commit.
+ARG NEO_SDK_REVISION=unknown
+ARG NEO_SDK_DIRTY=true
+ARG NEO_SDK_VERSION=unknown
 RUN set -eu; . /usr/share/neo-sdk/browser.lock; server=$(neo-server-info path); \
     jq -n --arg version "$NEO_SDK_VERSION" --arg revision "$NEO_SDK_REVISION" --argjson dirty "$NEO_SDK_DIRTY" --arg arch "$TARGETARCH" \
       --arg browser "$NEO_BROWSER_VERSION" --arg deb "$(dpkg-query -W -f '${Version}' browserclaw)" \
