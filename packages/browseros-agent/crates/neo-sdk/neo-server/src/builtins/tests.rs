@@ -3531,6 +3531,47 @@ async fn neo_tabs_reaches_user_tabs_with_null_task_facts() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
+async fn neo_tabs_never_lists_a_tab_this_run_closed() -> Result<(), Box<dyn Error>> {
+    // Chromium acknowledges a close before the tab leaves `Browser.getTabs`, so a listing can
+    // still name a tab whose close already resolved (customer check, 2026-11-11: run 4's
+    // `neo.tabs()` right after `task.close()` listed the six closed tabs). The fake holds that
+    // moment still: closed tabs stay in its listing.
+    let harness = Harness::new().await?;
+    let owner = harness.owner_tab("https://owner.example/").await?;
+    let (creator, _creator_guard) = harness.run()?;
+    let task = value(harness.submit(&creator, "neo.createTask", json!({})).await)?;
+    let tab = page_of(&value(
+        harness
+            .submit(&creator, "task.newPage", json!({ "task": task["id"] }))
+            .await,
+    )?)?;
+    let (run, _guard) = harness.run()?;
+    value(
+        harness
+            .submit(&run, "neo.task", json!({ "id": task["id"] }))
+            .await,
+    )?;
+    harness.fake.linger_closed_tabs();
+    let closed = value(
+        harness
+            .submit(&run, "task.close", json!({ "task": task["id"] }))
+            .await,
+    )?;
+    assert_eq!(closed["closed"], json!([tab.tab]));
+    let listed = harness.submit(&run, "neo.tabs", json!({})).await;
+    assert!(
+        listed.pages.iter().all(|fact| fact.tab != tab.tab),
+        "no fact revives the closed tab as an open page"
+    );
+    assert_eq!(
+        value(listed)?["pages"],
+        json!([owner]),
+        "the user's tab stays listed; the tab this run closed does not"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn missing_tasks_fail_before_any_browser_write() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let (run, _guard) = harness.run()?;

@@ -438,8 +438,9 @@ impl RunCtx {
         self.lock_ledger().closed_by_run.insert(page);
     }
 
-    /// Whether this run closed `page`, which decides who owns `page_closed`.
-    pub(super) fn closed_it(&self, page: TabId) -> bool {
+    /// Whether this run closed `page`, which decides who owns `page_closed`, and keeps the tab
+    /// out of the run's later tab listings.
+    pub(crate) fn closed_it(&self, page: TabId) -> bool {
         self.lock_ledger().closed_by_run.contains(&page)
     }
 

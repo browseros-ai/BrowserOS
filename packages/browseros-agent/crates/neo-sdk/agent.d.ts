@@ -11,6 +11,7 @@
  * Using the built-in `page` without a task creates a new task for it; the reply
  * tells you that task's id. In a script that fetched a task, the built-in `page` is
  * refused: take a tab from the task instead (`const page = task.page(104)` is allowed).
+ * Tab ids here are short for reading; real ones are large numbers, e.g. 1157427185.
  *
  * Every reply, a failed one too, ends with one line per task the script touched:
  *   [task hn-top-5-3f9a · tabs: 101 https://news.ycombinator.com/, 102 https://…]

@@ -133,6 +133,7 @@ impl Method for FetchTask {
             .tabs
             .iter()
             .filter(|tab| listing.pages.iter().any(|page| page.tab_id == **tab))
+            .filter(|tab| !op.run().closed_it(**tab))
             .map(|tab| PageRef { tab: *tab })
             .collect();
         for page in &pages {
@@ -164,7 +165,15 @@ impl Method for Tabs {
 
     async fn call(&self, op: &OpCtx<Self>, _input: Empty) -> Result<Value, LeafError> {
         let listing = op.race(op.run().view().list_pages()).await?;
-        let pages: Vec<PageRef> = listing.pages.iter().map(PageRef::from).collect();
+        // Chromium acknowledges a close before the tab leaves its listing, so a listing taken
+        // right after this run's `task.close()` or `page.close()` can still name the tab.
+        // Playwright drops a page once its close resolves, and so does this list.
+        let pages: Vec<PageRef> = listing
+            .pages
+            .iter()
+            .map(PageRef::from)
+            .filter(|page| !op.run().closed_it(page.tab))
+            .collect();
         for page in &pages {
             op.report_page(page, PageChange::Linked);
         }
