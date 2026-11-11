@@ -2,7 +2,7 @@
 //! (`locator.evaluate`, `evaluateAll`, `elementHandle.evaluate`, `$eval`, `$$eval`), their
 //! `frame.*` forms, `page.setContent`'s document write, whose HTML's scripts run in the main
 //! world (`document_write`), and the answer to a binding call (`bindingCall.resolve`). They run as Playwright's do, and their results come back as the page
-//! answered them. One of the three files in core's `tests/page_js_guard.rs` ALLOWED list: the only
+//! answered them. One of the files in core's `tests/page_js_guard.rs` ALLOWED list: the only
 //! code that sends script to a page's main world, and so the gateway of `Capability::MainWorld`.
 //!
 //! ```text
