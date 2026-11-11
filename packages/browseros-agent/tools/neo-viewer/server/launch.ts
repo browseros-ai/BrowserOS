@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { type LaunchOptions, launchOptionsFrom } from './config'
 import { describeError } from './errors'
 import type { HostApiConfig } from './hostApi'
+import { LOG_FILE } from './log/run-log'
 import {
   buildScript,
   checkoutAt,
@@ -118,7 +119,12 @@ async function startNeo(
     console.log(`Removed the last start's ${removed.join(', ')}`)
   currentImage = await chooseImage(launch)
   if (!launch.keepData)
-    await rm(join(launch.dataDir, 'tasks'), { recursive: true, force: true })
+    await Promise.all(
+      // The run log starts empty, as the browser profile does; `tasks/` is an older viewer's log.
+      [LOG_FILE, 'tasks'].map((name) =>
+        rm(join(launch.dataDir, name), { recursive: true, force: true }),
+      ),
+    )
   const tokenFile = join(launch.dataDir, 'host-token')
   await writeFile(tokenFile, randomBytes(32).toString('hex'), { mode: 0o600 })
   console.log(`Starting ${currentImage} as ${names.container}…`)

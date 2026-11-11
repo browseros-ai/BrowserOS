@@ -40,8 +40,8 @@ export function RunTable(props: RunTableProps) {
       </div>
       {runs.length === 0 ? (
         <p className="border-line-2 border-b px-4 py-6 text-ink-2 text-xs leading-4">
-          No runs in this task yet. Each run() call the agent makes appears here
-          as it starts, and fills in when Neo answers.
+          No runs yet. Each run() call an agent makes appears here as it starts,
+          and fills in when Neo answers.
         </p>
       ) : (
         sortRuns(runs, sort).map((run) => (
@@ -202,7 +202,7 @@ function TotalsRow({
             <span className="font-code text-ink">
               ≈{count(toolsList.tokens)}
             </span>{' '}
-            tok of tool description, read once per task
+            tok of tool description, read once per agent
           </>
         )}
       </span>

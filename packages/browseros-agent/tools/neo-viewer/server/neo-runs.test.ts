@@ -3,9 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { NeoRunRecord, RunSummary } from '../shared/api'
-import { TaskStore } from './log/task-store'
+import { RunStore } from './log/run-store'
 import { joinNeoRuns, toNeoRunRecord } from './neo-runs'
-import { TaskRule } from './tasks/task-rule'
 
 /** A `GET /v1/runs/{id}` body as Neo returns it (openapi.yaml `Run`), with one nested call. */
 const RUN = {
@@ -189,29 +188,22 @@ afterEach(async () => {
 test('a joined record is in the run detail and the list, and survives a restart', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'neo-viewer-join-'))
   dirs.push(dataDir)
-  const rule = new TaskRule(() => 'task-1')
-  const store = await TaskStore.open(dataDir, rule)
-  const assignment = rule.assign({
-    agentTaskId: null,
-    client: { name: 'claude-code' },
-    process: { found: false, reason: 'test' },
-    at: 0,
-  })
-  store.createTask(assignment, { name: 'claude-code' }, 0)
-  const runId = store.startRun('task-1', {
+  const store = await RunStore.open(dataDir)
+  const runId = store.startRun({
     arrival: store.nextArrival(),
     tool: 'run',
     code: 'await page.goto(url)',
     timeoutMs: null,
-    taskIdStamped: true,
+    client: { name: 'claude-code' },
+    agentTaskId: null,
     sentAt: new Date(1_000).toISOString(),
     proxyMs: 0,
-    request: { raw: '{}', forwarded: null, jsonRpcId: 1 },
+    request: { raw: '{}', jsonRpcId: 1 },
   })
   store.attachNeoRun(runId, toNeoRunRecord(RUN))
   await store.flush()
-  const reopened = await TaskStore.open(dataDir, new TaskRule(() => 'task-1'))
-  expect(reopened.task('task-1')?.runs[0]).toMatchObject({
+  const reopened = await RunStore.open(dataDir)
+  expect(reopened.list()[0]).toMatchObject({
     neoDurationMs: 900,
     operationCount: 3,
   })

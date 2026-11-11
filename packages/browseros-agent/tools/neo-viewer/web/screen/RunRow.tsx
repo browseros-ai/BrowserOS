@@ -55,6 +55,7 @@ export function RunRow({
         {clock(run.sentAt, true)}
       </span>
       <span className="flex min-w-0 flex-1 items-baseline gap-[1ch] whitespace-pre pr-3">
+        <ClientLabel run={run} />
         {open ? (
           <OpenSummary run={run} detail={detail} />
         ) : (
@@ -197,6 +198,21 @@ function OpenSummary({
             ? `, ${returned}`
             : ''}
       </span>
+    </span>
+  )
+}
+
+/**
+ * Which agent sent the run, quietly: several may share the list. Its client's name, and the
+ * task id it sent itself, when it sent one.
+ */
+function ClientLabel({ run }: { run: RunSummary }) {
+  const name = run.client?.name
+  if (!name && !run.agentTaskId) return null
+  return (
+    <span className="shrink-0 font-plex text-[11px] text-ink-4">
+      {name}
+      {run.agentTaskId ? ` · ${run.agentTaskId}` : ''}
     </span>
   )
 }

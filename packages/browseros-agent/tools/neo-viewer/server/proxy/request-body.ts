@@ -1,20 +1,10 @@
 /**
- * What the proxy reads from an agent's POST body, and the one edit it may make to it.
- *
- * A body is one JSON-RPC message or (protocol 2025-03-26) a batch of them. The proxy reads each
- * message's method, id and params to log the call; for a `run` call without a task id it adds
- * `_meta["com.browseros.neo/run"].taskId` by splicing text into the body as sent, so every other
- * byte reaches Neo unchanged.
+ * What the proxy reads from an agent's POST body, for the log only: each JSON-RPC message's method,
+ * id and params (a body is one message or, in protocol 2025-03-26, a batch). The body itself is
+ * forwarded as sent; nothing here changes it.
  */
 
 import type { ClientInfo } from '../../shared/api'
-import {
-  arrayItems,
-  findMember,
-  objectMembers,
-  type Span,
-  skipWhitespace,
-} from './json-spans'
 
 /** The `_meta` key Neo reads a host's ids from and answers a run's id under. */
 export const RUN_META_KEY = 'com.browseros.neo/run'
@@ -26,8 +16,6 @@ const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo'
 const TASK_ID_MAX_BYTES = 128
 
 export interface RequestMessage {
-  /** The message's span in the body text. */
-  span: Span
   method: string | null
   /** Absent for a notification. */
   id: string | number | null
@@ -45,23 +33,17 @@ const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
 export function readRequestBody(bytes: Uint8Array): RequestBody {
   let text: string
+  let parsed: unknown
   try {
     text = utf8.decode(bytes)
-    JSON.parse(text)
+    parsed = JSON.parse(text)
   } catch {
     return { text: null, messages: [] }
   }
-  const start = skipWhitespace(text, 0)
-  const spans =
-    text[start] === '['
-      ? arrayItems(text, start)
-      : [{ start, end: text.length }]
   const messages: RequestMessage[] = []
-  for (const span of spans ?? []) {
-    const value = JSON.parse(text.slice(span.start, span.end)) as unknown
+  for (const value of Array.isArray(parsed) ? parsed : [parsed]) {
     if (!isObject(value)) continue
     messages.push({
-      span,
       method: typeof value.method === 'string' ? value.method : null,
       id:
         typeof value.id === 'string' || typeof value.id === 'number'
@@ -74,7 +56,7 @@ export function readRequestBody(bytes: Uint8Array): RequestBody {
   return { text, messages }
 }
 
-/** A `tools/call` of the tool named `run`: the only call the proxy may stamp. */
+/** A `tools/call` of the tool named `run`. */
 export function isRunCall(message: RequestMessage): boolean {
   return message.method === 'tools/call' && message.params?.name === 'run'
 }
@@ -110,77 +92,6 @@ function runMetaOf(message: RequestMessage): Record<string, unknown> | null {
   if (!isObject(meta)) return null
   const runMeta = meta[RUN_META_KEY]
   return isObject(runMeta) ? runMeta : null
-}
-
-/**
- * The text edit that gives `message` the task id, or null when the call must go unchanged:
- * it already names a task (or carries a `taskId` Neo will refuse), or its `_meta` is not an
- * object Neo would accept an added key in. `taskId: null` counts as none and is replaced.
- */
-export function taskIdEdit(
-  text: string,
-  message: RequestMessage,
-  taskId: string,
-): Edit | null {
-  const encoded = JSON.stringify(taskId)
-  const top = objectMembers(text, message.span.start)
-  const params = top && findMember(top, 'params')
-  if (!params || text[params.value.start] !== '{') return null
-  const paramMembers = objectMembers(text, params.value.start)
-  if (!paramMembers) return null
-  const meta = findMember(paramMembers, '_meta')
-  if (!meta) {
-    return insertFirst(
-      text,
-      params.value.start,
-      `"_meta":{"${RUN_META_KEY}":{"taskId":${encoded}}}`,
-    )
-  }
-  const metaMembers = objectMembers(text, meta.value.start)
-  if (!metaMembers) return null
-  const runMeta = findMember(metaMembers, RUN_META_KEY)
-  if (!runMeta) {
-    return insertFirst(
-      text,
-      meta.value.start,
-      `"${RUN_META_KEY}":{"taskId":${encoded}}`,
-    )
-  }
-  const runMembers = objectMembers(text, runMeta.value.start)
-  if (!runMembers) return null
-  const existing = findMember(runMembers, 'taskId')
-  if (!existing)
-    return insertFirst(text, runMeta.value.start, `"taskId":${encoded}`)
-  if (text.slice(existing.value.start, existing.value.end) === 'null') {
-    return { at: existing.value.start, remove: 4, insert: encoded }
-  }
-  return null
-}
-
-/** Replace `remove` characters at `at` with `insert`. */
-export interface Edit {
-  at: number
-  remove: number
-  insert: string
-}
-
-/** Put `member` first in the object opening at `objectStart`, before any existing member. */
-function insertFirst(text: string, objectStart: number, member: string): Edit {
-  const empty = text[skipWhitespace(text, objectStart + 1)] === '}'
-  return {
-    at: objectStart + 1,
-    remove: 0,
-    insert: empty ? member : `${member},`,
-  }
-}
-
-/** Apply edits (at most one per message, so they never overlap), last first. */
-export function applyEdits(text: string, edits: Edit[]): string {
-  let out = text
-  for (const edit of [...edits].sort((a, b) => b.at - a.at)) {
-    out = out.slice(0, edit.at) + edit.insert + out.slice(edit.at + edit.remove)
-  }
-  return out
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

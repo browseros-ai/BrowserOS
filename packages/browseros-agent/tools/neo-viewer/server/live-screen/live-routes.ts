@@ -32,7 +32,7 @@ import { DisplayRelay } from './display-relay'
 import { type LiveHost, NO_HOST } from './live-host'
 import type { SocketSession } from './socket-session'
 
-/** Operations read back from the task's trace to find the tab it is on. */
+/** Operations read back from Neo's trace to find the tab the agent is on. */
 const TRACE_TAIL = 200
 /**
  * Operations that only subscribe, so they make no tab the task's: Neo's own list
@@ -92,17 +92,18 @@ export function liveScreen(host: LiveHost) {
           .catch(() => null)) as Partial<TakeoverRequest> | null
         if (
           !body ||
-          typeof body.task !== 'string' ||
-          body.task === '' ||
+          (body.task !== undefined &&
+            body.task !== null &&
+            (typeof body.task !== 'string' || body.task === '')) ||
           (body.viewer !== undefined && !isScreenSize(body.viewer))
         )
           return failure(
             400,
             'invalid_request',
-            'expected {"task": "<neoTaskId>", "viewer"?: {"width", "height"}}',
+            'expected {"task"?: "<agent taskId>", "viewer"?: {"width", "height"}}',
           )
         if (stopping) return failure(503, 'stopping', 'The viewer is stopping.')
-        const start = takeOver(body.task, body.viewer)
+        const start = takeOver(body.task ?? null, body.viewer)
         starting.add(start)
         try {
           return await start
@@ -133,7 +134,7 @@ export function liveScreen(host: LiveHost) {
   }
 
   async function takeOver(
-    task: string,
+    task: string | null,
     viewer: ScreenSize | undefined,
   ): Promise<Response> {
     const tabs = await readTabs(host)
@@ -143,7 +144,7 @@ export function liveScreen(host: LiveHost) {
       return failure(
         409,
         'no_tab',
-        'This task has no open tab yet: nothing to take over.',
+        'The agent has no open tab yet: nothing to take over.',
       )
     const started = await neoJson<LiveTakeover>(host, '/v1/takeovers', {
       method: 'POST',
@@ -189,7 +190,7 @@ async function status(
 ): Promise<LiveStatus> {
   const tabs = await readTabs(host)
   if ('error' in tabs) return { host: tabs.state, tab: null, takeover: null }
-  const tab = task ? await currentTab(host, task, tabs.items) : null
+  const tab = await currentTab(host, task, tabs.items)
   // The takeover on the task's tab first; otherwise any the viewer still holds, so a reloaded
   // page can give back one whose agent has since worked in another tab.
   const candidates = [...held.values()].sort(
@@ -217,17 +218,19 @@ async function status(
 }
 
 /**
- * The tab the task is on, the one Neo's `followTask` keeps in front. Null when that tab has
- * closed or the task has used none.
+ * The tab the agent is on: the one its latest operation used, by Neo's own rule for a task's
+ * tab. The viewer adds no task id, so it reads Neo's whole trace; an agent that sends its own
+ * `taskId` can be narrowed to it. Null when that tab has closed or no operation used one.
  */
 async function currentTab(
   host: LiveHost,
-  task: string,
+  task: string | null,
   open: LiveTab[],
 ): Promise<LiveTab | null> {
+  const scope = task ? `taskId=${encodeURIComponent(task)}&` : ''
   const trace = await neoJson<{ operations: TraceOperation[] }>(
     host,
-    `/v1/trace?taskId=${encodeURIComponent(task)}&tail=${TRACE_TAIL}`,
+    `/v1/trace?${scope}tail=${TRACE_TAIL}`,
   )
   if ('error' in trace) return null
   const tabId = taskLastTab(trace.value.operations)

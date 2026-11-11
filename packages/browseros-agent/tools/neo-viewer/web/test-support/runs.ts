@@ -34,13 +34,13 @@ export function runSummary(
       : options.reply
   return {
     id: `run-${seq}`,
-    taskId: 'task-1',
+    client: { name: 'claude-code' },
+    agentTaskId: null,
     seq,
     tool: 'run',
     status,
     code,
     timeoutMs: null,
-    taskIdStamped: true,
     sentAt: new Date(T0 + at).toISOString(),
     answeredAt:
       roundTripMs === null
@@ -68,7 +68,7 @@ export function runDetail(
   return {
     ...run,
     neo: null,
-    request: { raw: '{}', forwarded: null, jsonRpcId: run.seq },
+    request: { raw: '{}', jsonRpcId: run.seq },
     reply: {
       httpStatus: text === null ? null : 200,
       contentType: 'application/json',

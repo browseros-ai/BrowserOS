@@ -11,31 +11,25 @@ import { configureHostApi } from './hostApi'
 import { type LiveHost, viewerHost } from './live-screen/live-host'
 import { liveScreen } from './live-screen/live-routes'
 import { socketSessions } from './live-screen/socket-session'
-import { TaskStore } from './log/task-store'
+import { RunStore } from './log/run-store'
 import { containerUp, runCommand } from './neo-container'
 import { joinNeoRuns } from './neo-runs'
 import { buildPage, type PageFile } from './page'
 import { handleMcp, type McpProxyDeps } from './proxy/mcp-proxy'
-import { ClientNames } from './tasks/client-names'
-import { PeerProcessFinder, type ProcessFinder } from './tasks/peer-process'
-import { type CallOrigin, DEFAULT_IDLE_MS, TaskRule } from './tasks/task-rule'
 
 /** The longest `stop` waits for open connections to close. */
 const STOP_WAIT_MS = 2_000
 
-/** Seams tests replace: the clock, the process lookup, the task id generator and Neo's host API. */
+/** Seams tests replace: the clock and Neo's host API. */
 export interface ViewerSeams {
   now?: () => number
-  processes?: (listenPort: number) => ProcessFinder
-  newTaskId?: (origin: CallOrigin) => string
-  idleMs?: number
   liveHost?: LiveHost
 }
 
 export interface RunningViewer {
   url: string
   mcpUrl: string
-  store: TaskStore
+  store: RunStore
   stop(): Promise<void>
 }
 
@@ -44,18 +38,18 @@ export async function startViewer(
   seams: ViewerSeams = {},
 ): Promise<RunningViewer> {
   const now = seams.now ?? Date.now
-  const rule = new TaskRule(
-    seams.newTaskId ?? newTaskId,
-    seams.idleMs ?? DEFAULT_IDLE_MS,
-  )
   const [store, page] = await Promise.all([
-    TaskStore.open(config.dataDir, rule),
+    RunStore.open(config.dataDir),
     config.page ?? buildPage(),
     configureHostApi(config.hostApi ?? null),
   ])
   const live = liveScreen(seams.liveHost ?? viewerHost)
-  // The proxy needs the bound port (for the process lookup) before the first request.
-  let proxy: McpProxyDeps | null = null
+  const proxy: McpProxyDeps = {
+    upstream: config.upstream,
+    store,
+    clients: new Map(),
+    now,
+  }
   // Neo's record of each run, read through the host API once its reply is in.
   const joiner = joinNeoRuns(store)
   const info: Omit<ViewerInfo, 'container'> = {
@@ -88,16 +82,10 @@ export async function startViewer(
     },
     // Each upgraded socket carries its own session (the live screen's display relay).
     websocket: socketSessions,
-    fetch(req, server) {
+    fetch(req) {
       const { pathname } = new URL(req.url)
-      if ((pathname === '/mcp' || pathname.startsWith('/mcp/')) && proxy) {
-        const ip = server.requestIP(req)
-        return handleMcp(
-          req,
-          ip ? { address: ip.address, port: ip.port } : null,
-          proxy,
-        )
-      }
+      if (pathname === '/mcp' || pathname.startsWith('/mcp/'))
+        return handleMcp(req, proxy)
       return new Response('not found\n', { status: 404 })
     },
   })
@@ -105,15 +93,6 @@ export async function startViewer(
   const port = server.port ?? config.port
   const url = `http://127.0.0.1:${port}`
   info.mcpUrl = `${url}/mcp`
-  proxy = {
-    upstream: config.upstream,
-    store,
-    rule,
-    processes:
-      seams.processes?.(port) ?? new PeerProcessFinder({ listenPort: port }),
-    clients: new ClientNames(now),
-    now,
-  }
   return {
     url,
     mcpUrl: info.mcpUrl,
@@ -144,23 +123,4 @@ function pageRoutes(
     if (name === 'index.html') routes['/'] = serve
   }
   return routes
-}
-
-/** `claude-code-20261111-101403-3f9a`: the client, the time, and enough randomness to be unique. */
-function newTaskId(origin: CallOrigin): string {
-  const slug =
-    origin.client.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 40) || 'client'
-  const stamp = new Date(origin.at)
-    .toISOString()
-    .replace(/[-:]/g, '')
-    .replace('T', '-')
-    .slice(0, 15)
-  const suffix = crypto
-    .getRandomValues(new Uint8Array(2))
-    .reduce((text, byte) => text + byte.toString(16).padStart(2, '0'), '')
-  return `${slug}-${stamp}-${suffix}`
 }

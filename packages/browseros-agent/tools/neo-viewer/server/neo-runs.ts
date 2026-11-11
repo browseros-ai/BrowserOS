@@ -23,7 +23,7 @@ const WAIT_SECONDS = 10
 /** Reads of a record still incomplete after `WAIT_SECONDS` (an operation the script left running). */
 const MAX_READS = 3
 
-type Raw = Record<string, unknown>
+export type Raw = Record<string, unknown>
 
 /** Neo's `Run` JSON (openapi.yaml) as the viewer's `NeoRunRecord`. */
 export function toNeoRunRecord(raw: Raw): NeoRunRecord {
@@ -110,7 +110,7 @@ function numberOr<T extends number | null>(
 }
 
 /** Reads Neo's record of a run; null when the host API cannot give it. */
-export async function readNeoRun(
+async function readNeoRun(
   neoRunId: string,
   waitSeconds = WAIT_SECONDS,
 ): Promise<NeoRunRecord | null> {

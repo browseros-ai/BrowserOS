@@ -1,6 +1,6 @@
 /**
  * "Open full": one run's reply in a large pop-up, with line numbers, find, copy, and previous /
- * next output across the task's finished runs. It is a native modal `<dialog>`: the page behind
+ * next output across the finished runs. It is a native modal `<dialog>`: the page behind
  * it is inert, focus stays inside, Escape closes it, and focus returns to what opened it.
  */
 

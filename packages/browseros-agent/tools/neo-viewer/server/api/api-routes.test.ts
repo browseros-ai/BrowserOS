@@ -5,8 +5,7 @@ import { join } from 'node:path'
 import {
   apiRoutes,
   type RunResponse,
-  type TaskRunsResponse,
-  type TasksResponse,
+  type RunsResponse,
   type ViewerEvent,
   type ViewerInfo,
 } from '../../shared/api'
@@ -81,32 +80,52 @@ test('the API lists tasks, a task with its runs, one run in full, and streams ea
   ) {
     await Bun.sleep(10)
   }
-  const { tasks, version } = await get<TasksResponse>(apiRoutes.tasks)
-  expect(tasks).toHaveLength(1)
+  const { runs, log, version } = await get<RunsResponse>(apiRoutes.runs)
   // The snapshot includes every change announced so far.
   expect(version).toBeGreaterThanOrEqual(
     Math.max(...events.map((event) => event.version)),
   )
-  const taskId = tasks[0]?.id ?? ''
-  const { task, runs } = await get<TaskRunsResponse>(apiRoutes.taskRuns(taskId))
-  expect(task.totals).toMatchObject({ runs: 1, running: 0, failed: 0 })
+  expect(log.totals).toMatchObject({ runs: 1, running: 0, failed: 0 })
   expect(runs.map((run) => run.status)).toEqual(['ok'])
   const { run } = await get<RunResponse>(apiRoutes.run(runs[0]?.id ?? ''))
   expect(run.reply.text).toBe('"done"')
-  expect(
-    events.map((event) =>
-      event.type === 'run' ? `run:${event.run.status}` : 'task',
-    ),
-  ).toContain('run:running')
-  expect(
-    events.map((event) =>
-      event.type === 'run' ? `run:${event.run.status}` : 'task',
-    ),
-  ).toContain('run:ok')
+  const kinds = events.map((event) =>
+    event.type === 'run' ? `run:${event.run.status}` : event.type,
+  )
+  expect(kinds).toContain('run:running')
+  expect(kinds).toContain('run:ok')
+  expect((await fetch(`${viewer.url}${apiRoutes.run('nope')}`)).status).toBe(
+    404,
+  )
 
-  expect(
-    (await fetch(`${viewer.url}${apiRoutes.taskRuns('nope')}`)).status,
-  ).toBe(404)
+  // Clear: only from the viewer's own page; it empties the list and tells every open page.
+  const foreignClear = await fetch(`${viewer.url}${apiRoutes.clear}`, {
+    method: 'POST',
+    headers: { origin: 'https://attacker.example' },
+  })
+  expect(foreignClear.status).toBe(403)
+  const cleared = await fetch(`${viewer.url}${apiRoutes.clear}`, {
+    method: 'POST',
+    headers: { origin: viewer.url },
+  })
+  expect(((await cleared.json()) as RunsResponse).runs).toEqual([])
+  for (
+    let i = 0;
+    i < 100 && !events.some((event) => event.type === 'clear');
+    i++
+  ) {
+    await Bun.sleep(10)
+  }
+  expect(events.at(-1)).toMatchObject({
+    type: 'clear',
+    log: { totals: { runs: 0 } },
+  })
+  expect((await get<RunsResponse>(apiRoutes.runs)).runs).toEqual([])
+  // The log before the clear is kept, once, for a mis-click.
+  expect(await Bun.file(join(dataDir, 'log.prev.jsonl')).text()).toContain(
+    'return \\"done\\"',
+  )
+
   // The page: built at start, its stylesheet compiled by Tailwind from the classes web/ uses.
   const html = await (await fetch(viewer.url)).text()
   const css = /href="\.\/([^"]+\.css)"/.exec(html)?.[1]
@@ -115,7 +134,7 @@ test('the API lists tasks, a task with its runs, one run in full, and streams ea
     '.max-w-6xl',
   )
   // A page that rebinds its own domain to 127.0.0.1 cannot read the log.
-  const foreign = await fetch(`${viewer.url}${apiRoutes.tasks}`, {
+  const foreign = await fetch(`${viewer.url}${apiRoutes.runs}`, {
     headers: { host: 'attacker.example' },
   })
   expect(foreign.status).toBe(403)

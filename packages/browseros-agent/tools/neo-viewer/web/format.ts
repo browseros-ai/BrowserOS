@@ -1,6 +1,6 @@
 /** Display formats shared by the page's components. Tokens always carry "≈" (they are estimates). */
 
-import type { TaskIdentification, TextSize } from '../shared/api'
+import type { TextSize } from '../shared/api'
 
 const numbers = new Intl.NumberFormat('en-US')
 
@@ -22,18 +22,6 @@ export function clockTime(iso: string): string {
     minute: '2-digit',
     second: '2-digit',
   })
-}
-
-/** How the viewer grouped this task, in words. */
-export function identification(by: TaskIdentification): string {
-  switch (by.kind) {
-    case 'agent-task-id':
-      return `the agent's task id ${by.taskId}`
-    case 'process':
-      return `process ${by.pid}${by.command ? ` (${by.command})` : ''}`
-    case 'client-idle':
-      return `client name, new task after ${by.idleMinutes} min idle (${by.reason})`
-  }
 }
 
 /** Pretty JSON when the text is JSON, the text otherwise. */

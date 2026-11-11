@@ -1,18 +1,14 @@
 /**
  * The JSON API the web UI reads (`shared/api.ts` names the routes and shapes), served from the
- * in-memory `TaskStore`. Requests must name this machine in `Host`: the viewer listens on
+ * in-memory `RunStore`. Requests must name this machine in `Host`: the viewer listens on
  * 127.0.0.1 only, and refusing other host names keeps a web page that rebinds its own domain to
- * 127.0.0.1 from reading the log.
+ * 127.0.0.1 from reading the log. Clear must also come from the viewer's own page (`Origin`), so a
+ * page elsewhere cannot empty the log with a form post.
  */
 
-import type {
-  RunResponse,
-  TaskRunsResponse,
-  TasksResponse,
-  ViewerInfo,
-} from '../../shared/api'
+import type { RunResponse, RunsResponse, ViewerInfo } from '../../shared/api'
 import { apiRoutes } from '../../shared/api'
-import type { TaskStore } from '../log/task-store'
+import type { RunStore } from '../log/run-store'
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 const EVENT_KEEP_ALIVE_MS = 15_000
@@ -20,34 +16,34 @@ const EVENT_KEEP_ALIVE_MS = 15_000
 type RouteRequest<P extends string> = Request & { params: Record<P, string> }
 
 export function apiRouteTable(
-  store: TaskStore,
+  store: RunStore,
   info: () => Promise<ViewerInfo>,
 ) {
+  const snapshot = (): RunsResponse => ({
+    log: store.summary(),
+    runs: store.list(),
+    version: store.version,
+  })
   return {
     [apiRoutes.info]: local(async () =>
       Response.json((await info()) satisfies ViewerInfo),
     ),
-    [apiRoutes.tasks]: local(() =>
-      Response.json({
-        tasks: store.listTasks(),
-        version: store.version,
-      } satisfies TasksResponse),
-    ),
-    '/api/tasks/:taskId/runs': local((req: RouteRequest<'taskId'>) => {
-      const found = store.task(req.params.taskId)
-      return found
-        ? Response.json({
-            ...found,
-            version: store.version,
-          } satisfies TaskRunsResponse)
-        : notFound('task')
-    }),
+    [apiRoutes.runs]: local(() => Response.json(snapshot())),
     '/api/runs/:runId': local((req: RouteRequest<'runId'>) => {
       const run = store.run(req.params.runId)
       return run
         ? Response.json({ run } satisfies RunResponse)
         : notFound('run')
     }),
+    [apiRoutes.clear]: {
+      POST: local(async (req) => {
+        if (req.headers.get('origin') !== `http://${req.headers.get('host')}`) {
+          return new Response('forbidden origin\n', { status: 403 })
+        }
+        await store.clear()
+        return Response.json(snapshot())
+      }),
+    },
     [apiRoutes.events]: local(() => eventStream(store)),
   }
 }
@@ -75,7 +71,7 @@ function notFound(what: string): Response {
 }
 
 /** Every store change as one SSE `data:` line; comments keep idle connections open. */
-function eventStream(store: TaskStore): Response {
+function eventStream(store: RunStore): Response {
   const encoder = new TextEncoder()
   let stop = () => {}
   const stream = new ReadableStream<Uint8Array>({

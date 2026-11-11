@@ -3,23 +3,23 @@
  *
  * The server owns these types; the UI imports them and never redefines one. Everything here
  * comes from the viewer's own proxy log (what the agent sent and what Neo answered, as they
- * crossed the proxy). Fields marked "joined later" are left for the PRs that add Neo's host
- * API (operations, tabs, display): they extend these shapes rather than replace them.
+ * crossed the proxy), one list of every run in arrival order since the last Clear, joined to
+ * Neo's own record of each run (`RunDetail.neo`).
  *
- * Routes (all GET, JSON unless noted):
- *   /api/info                    ViewerInfo
- *   /api/tasks                   TasksResponse       newest task first
- *   /api/tasks/:taskId/runs      TaskRunsResponse    the task and its runs, in the order sent
- *   /api/runs/:runId             RunResponse         one run in full
- *   /api/events                  text/event-stream of ViewerEvent, one JSON object per `data:`
+ * Routes (JSON unless noted):
+ *   GET  /api/info              ViewerInfo
+ *   GET  /api/runs              RunsResponse        every run since the last Clear, in order
+ *   GET  /api/runs/:runId       RunResponse         one run in full
+ *   POST /api/clear             RunsResponse        starts an empty log (the previous is kept once)
+ *   GET  /api/events            text/event-stream of ViewerEvent, one JSON object per `data:`
  */
 
 /** Paths of the routes above, so neither side spells one by hand. */
 export const apiRoutes = {
   info: '/api/info',
-  tasks: '/api/tasks',
-  taskRuns: (taskId: string) => `/api/tasks/${encodeURIComponent(taskId)}/runs`,
+  runs: '/api/runs',
   run: (runId: string) => `/api/runs/${encodeURIComponent(runId)}`,
+  clear: '/api/clear',
   events: '/api/events',
 } as const
 
@@ -41,57 +41,8 @@ export interface ClientInfo {
   title?: string
 }
 
-/**
- * How the viewer decided which task a call belongs to. Neo's `/mcp` is stateless and current
- * clients keep no MCP session, so the viewer applies three rules in order
- * (`server/tasks/task-rule.ts`):
- * - `agent-task-id`: the call carried `_meta["com.browseros.neo/run"].taskId`; the agent named
- *   its task (zuzu does this).
- * - `process`: the calling process, found from the TCP connection; one task per process and
- *   client name, so two agents at once are two tasks.
- * - `client-idle`: the process could not be found; one task per client name, and a new one after
- *   `idleMinutes` without a call from that client.
- */
-export type TaskIdentification =
-  | { kind: 'agent-task-id'; taskId: string }
-  | {
-      kind: 'process'
-      pid: number
-      /** The process's start time as `ps` prints it, so a reused pid is a new task. */
-      processStartedAt: string | null
-      /** The executable as `ps` names it. */
-      command: string | null
-    }
-  | {
-      kind: 'client-idle'
-      idleMinutes: number
-      /** Why the calling process was not found. */
-      reason: string
-    }
-
-/** One agent task: a group of `run` calls, named `<client>, HH:MM`. */
-export interface TaskSummary {
-  /** The viewer's id for the task; the URL and log-file key. */
-  id: string
-  /** `<client>, HH:MM`, from the client name and the task's first call (local time). */
-  name: string
-  /**
-   * The `taskId` Neo saw on this task's runs: the agent's own for `agent-task-id`, otherwise the
-   * viewer stamped `id` into `_meta["com.browseros.neo/run"].taskId`, so each task has its own
-   * tab in Neo and `GET /v1/runs?taskId=` finds its runs.
-   */
-  neoTaskId: string
-  client: ClientInfo
-  identifiedBy: TaskIdentification
-  /** ISO 8601. */
-  createdAt: string
-  lastCallAt: string
-  /** The `tools/list` reply's text as the client read it, once per task (the first one seen). */
-  toolsList: TextSize | null
-  totals: TaskTotals
-}
-
-export interface TaskTotals {
+/** Every run since the last Clear, summed. */
+export interface LogTotals {
   runs: number
   running: number
   /** Runs whose status is not `ok` or `running`. */
@@ -106,6 +57,15 @@ export interface TaskTotals {
   code: TextSize
   /** What the model read: the reply text of every run. */
   reply: TextSize
+}
+
+/** The log as a whole: its totals, and when it began. */
+export interface LogSummary {
+  /** ISO 8601: when the log began (the viewer's first start, or the last Clear). */
+  clearedAt: string
+  totals: LogTotals
+  /** The latest `tools/list` reply's text as a client read it: the run tool's description and schema. */
+  toolsList: TextSize | null
 }
 
 /**
@@ -129,17 +89,21 @@ export type RunStatus =
 /** One `tools/call` through the proxy, as listed. */
 export interface RunSummary {
   id: string
-  taskId: string
-  /** 1-based position in the task, in the order the calls arrived. */
+  /** 1-based position in the log, in the order the calls arrived. */
   seq: number
+  /** The agent that sent it (its `clientInfo`, or its User-Agent's product); several may share the log. */
+  client: ClientInfo | null
+  /**
+   * The agent's own `_meta["com.browseros.neo/run"].taskId`, when it sent one. The viewer never
+   * adds one: Neo sees each call exactly as the agent sent it.
+   */
+  agentTaskId: string | null
   /** The tool called; Neo serves one, `run`. */
   tool: string
   status: RunStatus
   /** The script as the agent sent it (`arguments.code`). */
   code: string
   timeoutMs: number | null
-  /** True when the viewer added `taskId` to the call's `_meta` on its way to Neo. */
-  taskIdStamped: boolean
   /** ISO 8601: when the call reached the viewer. */
   sentAt: string
   /** ISO 8601: when the reply passed back through; null while running. */
@@ -148,7 +112,7 @@ export interface RunSummary {
   roundTripMs: number | null
   /** Time the viewer held the call before forwarding it (finding the calling process). */
   proxyMs: number
-  /** Since the previous run's reply in this task; null for the first run or an overlapping one. */
+  /** Since the previous run's reply; null for the first run or an overlapping one. */
   gapMs: number | null
   codeSize: TextSize
   replySize: TextSize | null
@@ -247,8 +211,6 @@ export interface RunDetail extends RunSummary {
   request: {
     /** The HTTP body the agent sent, byte for byte (UTF-8). */
     raw: string
-    /** The body forwarded to Neo when the viewer stamped a `taskId`; null when forwarded unchanged. */
-    forwarded: string | null
     /** The JSON-RPC id of this call. */
     jsonRpcId: string | number | null
   }
@@ -278,7 +240,7 @@ export interface ViewerInfo {
   mcpUrl: string
   /** Where the viewer forwards MCP: the Neo SDK image's `/mcp`. */
   upstreamUrl: string
-  /** Where each task's JSONL log lives. */
+  /** The viewer's state folder, which holds the run log (`log.jsonl`). */
   dataDir: string
   startedAt: string
   /**
@@ -301,13 +263,13 @@ export interface ContainerInfo {
  * own. A reader that fetches a snapshot while the event stream runs applies the snapshot, then
  * only the events numbered above it.
  */
-export interface TasksResponse {
-  tasks: TaskSummary[]
-  version: number
-}
-
-export interface TaskRunsResponse {
-  task: TaskSummary
+/**
+ * `version` is the number of the last change the snapshot includes; each event carries its own.
+ * A reader that fetches a snapshot while the event stream runs applies the snapshot, then only the
+ * events numbered above it.
+ */
+export interface RunsResponse {
+  log: LogSummary
   runs: RunSummary[]
   version: number
 }
@@ -317,10 +279,13 @@ export interface RunResponse {
 }
 
 /**
- * One message on `/api/events`: a task or run was created or changed; it carries the new state
- * and the change's number (see `TasksResponse`).
+ * One message on `/api/events`, with the change's number (see `RunsResponse`):
+ * - `run`: a run was added or changed; it carries the run's new state.
+ * - `log`: the log's totals changed.
+ * - `clear`: the log was cleared; drop every run shown and start from `log`.
  */
 export type ViewerEvent = { version: number } & (
-  | { type: 'task'; task: TaskSummary }
   | { type: 'run'; run: RunSummary }
+  | { type: 'log'; log: LogSummary }
+  | { type: 'clear'; log: LogSummary }
 )

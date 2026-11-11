@@ -1,18 +1,18 @@
 /**
  * Viewer C v2, the designed main screen (Paper file "neo · trace viewer", artboards "Viewer C v2:
- * …"). It reads the same API as the plain page through `useViewer`, which keeps the task list
- * and the chosen task's runs current from `/api/events`: a run appears when its call reaches the
- * proxy and fills in when Neo's reply passes back.
+ * …"). It reads the same API as the plain page through `useViewer`, which keeps every run since
+ * the last Clear current from `/api/events`: a run appears when its call reaches the proxy and
+ * fills in when Neo's reply passes back. Every agent's runs share one list (owner, 2026-11-11).
  *
- *   ┌ TopBar: name · container line · MCP URL + Copy · Task menu ──────────────────┐
- *   ├ TimeStrip: where the task's wall clock went ─────────────────────────────────┤
+ *   ┌ TopBar: name · container line · MCP URL + Copy · Clear ──────────────────────┐
+ *   ├ TimeStrip: where the wall clock went, since the last Clear ──────────────────┤
  *   │ RunTable: one row per run(); open rows show RunBlock    ┃ Sidebar: live      │
  *   │ (code + "Model read"); totals row                       ┃ screen, then the   │
  *   │                                                Splitter ┃ selected reply     │
  *   └────────────────────────────────────────────────────────────────────────────────┘
  *   FullOutput: the pop-up "Open full" opens over all of it.
  *
- * Selection: until a row is clicked, the sidebar follows the task's latest run, so a new run
+ * Selection: until a row is clicked, the sidebar follows the latest run, so a new run
  * shows up there as it arrives; clicking a row opens it and pins the sidebar to it.
  */
 
@@ -43,8 +43,7 @@ function useNow(ticking: boolean): number {
 }
 
 export function ViewerScreen() {
-  const { info, tasks, taskId, selectTask, runs, error } = useViewer()
-  const task = tasks.find((candidate) => candidate.id === taskId) ?? null
+  const { info, runs, log, clear, error } = useViewer()
   const [chosenId, setChosenId] = useState<string | null>(null)
   const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set())
   const [sort, setSort] = useState<RunSort>(DEFAULT_SORT)
@@ -58,12 +57,11 @@ export function ViewerScreen() {
   const fullRun = runs.find((run) => run.id === fullId) ?? null
   const totals = runTotals(runs)
 
-  const switchTask = (next: string) => {
-    if (next === taskId) return
+  const onClear = () => {
     setChosenId(null)
     setOpenIds(new Set())
     setFullId(null)
-    selectTask(next)
+    void clear()
   }
 
   const onRow = (run: RunSummary) => {
@@ -85,7 +83,7 @@ export function ViewerScreen() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-plex text-ink text-xs leading-4 antialiased">
-      <TopBar info={info} tasks={tasks} task={task} onTask={switchTask} />
+      <TopBar info={info} onClear={onClear} />
       {error && (
         <p
           role="alert"
@@ -102,22 +100,18 @@ export function ViewerScreen() {
       />
       <div className="flex min-h-0 flex-1">
         <main className="min-w-0 flex-1 overflow-auto">
-          {task ? (
-            <RunTable
-              runs={runs}
-              totals={totals}
-              toolsList={task.toolsList}
-              sort={sort}
-              onSort={setSort}
-              openIds={openIds}
-              selectedId={selected?.id ?? null}
-              onRow={onRow}
-              onOpenFull={openFull}
-              nowMs={nowMs}
-            />
-          ) : (
-            <NoTasks mcpUrl={info?.mcpUrl ?? null} />
-          )}
+          <RunTable
+            runs={runs}
+            totals={totals}
+            toolsList={log?.toolsList ?? null}
+            sort={sort}
+            onSort={setSort}
+            openIds={openIds}
+            selectedId={selected?.id ?? null}
+            onRow={onRow}
+            onOpenFull={openFull}
+            nowMs={nowMs}
+          />
         </main>
         <Splitter width={sidebarWidth} onWidth={setSidebarWidth} />
         <Sidebar width={sidebarWidth} run={selected} onOpenFull={openFull} />
@@ -130,27 +124,6 @@ export function ViewerScreen() {
           onClose={() => setFullId(null)}
         />
       )}
-    </div>
-  )
-}
-
-function NoTasks({ mcpUrl }: { mcpUrl: string | null }) {
-  return (
-    <div className="flex max-w-xl flex-col gap-2 px-5 py-8">
-      <h2 className="font-semibold text-[15px] text-ink leading-5">
-        No tasks yet
-      </h2>
-      <p className="text-[13px] text-ink-2 leading-5">
-        Give an agent the MCP URL above
-        {mcpUrl && (
-          <>
-            {' '}
-            (<code className="font-code text-ink">{mcpUrl}</code>)
-          </>
-        )}
-        . Each agent connection becomes a task, named from its client and the
-        time of its first call, and its run() calls appear here as they happen.
-      </p>
     </div>
   )
 }

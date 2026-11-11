@@ -12,11 +12,12 @@
  *
  * Routes:
  *   GET  /api/live/display?<DisplayRequest>      WebSocket: RFB 3.8 both ways, relayed to Neo
- *   GET  /api/live/status?task=<neoTaskId>       LiveStatus
- *   POST /api/live/takeovers {task, viewer?}     TakeoverResponse | LiveError
+ *   GET  /api/live/status[?task=<taskId>]        LiveStatus
+ *   POST /api/live/takeovers {task?, viewer?}    TakeoverResponse | LiveError
  *   POST /api/live/takeovers/:id/release         TakeoverResponse | LiveError
  *
- * `task` is always Neo's task id (`TaskSummary.neoTaskId`), the one Neo's runs carry.
+ * `task`, when given, is an agent's own task id (`RunSummary.agentTaskId`), the one Neo's runs
+ * carry; without one, the agent's tab is the one Neo's latest operation used, across all runs.
  */
 
 export const liveRoutes = {
@@ -133,8 +134,8 @@ export type HostState =
 export interface LiveStatus {
   host: HostState
   /**
-   * The tab the task's latest operation targeted, while it is open: the tab "Follow agent"
-   * keeps in front and Take over takes. Null without a task, or before its first tab operation.
+   * The tab the latest operation targeted (the task's, when a task is named), while it is open:
+   * the tab Take over takes. Null before any operation used a tab.
    */
   tab: LiveTab | null
   /** The takeover this viewer started on that tab, while active. */
@@ -148,7 +149,8 @@ export interface ScreenSize {
 }
 
 export interface TakeoverRequest {
-  task: string
+  /** An agent's own task id; without one, the tab the latest operation used. */
+  task?: string | null
   /**
    * Neo's own screen size, as the panel shows it. Sent on as the takeover's `viewer`, so Neo
    * fits the tab, and a fit brings the tab to the front: without one, a takeover locks the tab

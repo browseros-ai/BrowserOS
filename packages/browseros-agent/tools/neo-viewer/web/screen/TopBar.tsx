@@ -1,24 +1,19 @@
 /**
- * The top bar: the viewer's name, the container line, the one MCP URL to give an agent, and the
- * Task menu. The container line is read-only (owner, 2026-11-11: the command that starts the
+ * The top bar: the viewer's name, the container line, the one MCP URL to give an agent, and
+ * Clear, which empties the list (the server keeps the previous log once, as `log.prev.jsonl`). The container line is read-only (owner, 2026-11-11: the command that starts the
  * viewer is the control); until the API reports the image and its state, it says the image is
  * managed outside the viewer and names where MCP is forwarded.
  */
 
 import { useEffect, useState } from 'react'
-import type { TaskSummary, ViewerInfo } from '../../shared/api'
-import { TaskMenu } from './TaskMenu'
+import type { ViewerInfo } from '../../shared/api'
 
 export function TopBar({
   info,
-  tasks,
-  task,
-  onTask,
+  onClear,
 }: {
   info: ViewerInfo | null
-  tasks: TaskSummary[]
-  task: TaskSummary | null
-  onTask: (taskId: string) => void
+  onClear: () => void
 }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-line border-b bg-white px-5">
@@ -63,7 +58,14 @@ export function TopBar({
       <div className="flex-1" />
       <McpUrl url={info?.mcpUrl ?? null} />
       <div className="flex h-7 shrink-0 items-center gap-2 border-line border-l pl-3">
-        <TaskMenu tasks={tasks} task={task} onTask={onTask} />
+        <button
+          type="button"
+          onClick={onClear}
+          title="Empty the list. The previous log is kept once, as log.prev.jsonl."
+          className="flex h-[30px] items-center rounded-md border border-control px-3 font-semibold text-ink text-xs leading-4 hover:bg-[#F4F6FA]"
+        >
+          Clear
+        </button>
       </div>
     </header>
   )
