@@ -8003,6 +8003,17 @@ ${value.stack}`;
       every: (elements, params) => Reflect.apply(every, injected, [elements, params])
     };
   }
+  function expectFailureSnapshot(injected, element, params, frameVisible) {
+    const snapshot = Reflect.get(injected, "_ariaSnapshotForExpect");
+    if (typeof snapshot !== "function")
+      throw new ProbeError("internal", "the vendored InjectedScript has no _ariaSnapshotForExpect");
+    const text = Reflect.apply(snapshot, injected, [
+      element,
+      params,
+      frameVisible
+    ]);
+    return typeof text === "string" ? text : undefined;
+  }
   function frameSource(element) {
     if (element.nodeName !== "IFRAME" && element.nodeName !== "FRAME")
       return;
@@ -8353,11 +8364,12 @@ ${value.stack}`;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/document.ts
   function documentText(world, request) {
-    const { document } = world.injected;
-    return {
-      kind: "documentText",
-      text: request.part === "title" ? document.title : content(document)
-    };
+    const { injected } = world;
+    const { document } = injected;
+    const text = request.part === "title" ? document.title : request.part === "expectSnapshot" ? document.body ? injected.ariaSnapshotForExpectFailure(document.body, {
+      mode: "default"
+    }) : "" : content(document);
+    return { kind: "documentText", text };
   }
   function content(document) {
     const doctype = document.doctype ? doctypeMarkup(document.doctype) : "";
@@ -8509,7 +8521,13 @@ ${value.stack}`;
     const { element } = found;
     const resolved = world.injected.previewNode(element);
     const check = await checks.single(element, params, request.frameVisible);
-    return poll(check, resolved);
+    const reply = poll(check, resolved);
+    if (check.matches === params.isNot) {
+      const ariaSnapshot = expectFailureSnapshot(world.injected, element, params, request.frameVisible);
+      if (ariaSnapshot !== undefined)
+        reply.ariaSnapshot = ariaSnapshot;
+    }
+    return reply;
   }
   function poll(check, resolved) {
     return {
@@ -8521,7 +8539,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 20;
+  var PROTOCOL = 21;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";

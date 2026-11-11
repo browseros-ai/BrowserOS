@@ -6,7 +6,12 @@
 import type { FrameExpectParams } from '../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript'
 import type { ExpectPoll, ExpectRequest, ReplyTo } from './protocol'
 import { queryAll, resolveTarget } from './resolve'
-import { type ExpectCheck, expectChecks, type World } from './world'
+import {
+  type ExpectCheck,
+  expectChecks,
+  expectFailureSnapshot,
+  type World,
+} from './world'
 
 export async function expect(
   world: World,
@@ -30,7 +35,19 @@ export async function expect(
   const { element } = found
   const resolved = world.injected.previewNode(element)
   const check = await checks.single(element, params, request.frameVisible)
-  return poll(check, resolved)
+  const reply = poll(check, resolved)
+  // Upstream's InjectedScript.expect snapshots only a poll that fails the matcher, so a passing
+  // poll costs no aria tree.
+  if (check.matches === params.isNot) {
+    const ariaSnapshot = expectFailureSnapshot(
+      world.injected,
+      element,
+      params,
+      request.frameVisible,
+    )
+    if (ariaSnapshot !== undefined) reply.ariaSnapshot = ariaSnapshot
+  }
+  return reply
 }
 
 function poll(check: ExpectCheck, resolved: string): ExpectPoll {
