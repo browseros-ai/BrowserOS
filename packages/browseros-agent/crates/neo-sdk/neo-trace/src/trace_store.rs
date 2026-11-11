@@ -23,6 +23,7 @@
 //! is gone (it reads as expired, and the next sweep converges), but a file never outlives its
 //! run's rows.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -466,6 +467,40 @@ impl TraceStore {
     /// When the file cannot be read or the row is corrupt.
     pub async fn task_last_tab(&self, task: &TaskId) -> Result<Option<TabId>, TraceError> {
         Ok(self.task_last_act(task).await?.map(|act| act.tab))
+    }
+
+    /// The distinct tasks whose retained, committed runs touched each requested tab, sorted
+    /// by task id. Untasked runs add no association; retention removes links with their runs.
+    /// This is historical trace data, not an exclusive ownership claim over a live tab id.
+    ///
+    /// # Errors
+    /// When the file cannot be read or a stored task id is corrupt.
+    pub async fn tasks_for_tabs(
+        &self,
+        tabs: &[TabId],
+    ) -> Result<HashMap<TabId, Vec<TaskId>>, TraceError> {
+        if tabs.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = run_tabs::Entity::find()
+            .select_only()
+            .column(run_tabs::Column::TabId)
+            .column(runs::Column::TaskId)
+            .inner_join(runs::Entity)
+            .filter(run_tabs::Column::TabId.is_in(tabs.iter().map(|tab| tab.0)))
+            .filter(runs::Column::TaskId.is_not_null())
+            .distinct()
+            .order_by_asc(runs::Column::TaskId)
+            .into_tuple::<(i64, String)>()
+            .all(&self.db)
+            .await?;
+        let mut tasks: HashMap<TabId, Vec<TaskId>> = HashMap::new();
+        for (tab, task) in rows {
+            let task = TaskId::parse(&task)
+                .map_err(|error| TraceError::Corrupt(format!("invalid stored task id: {error}")))?;
+            tasks.entry(TabId(tab)).or_default().push(task);
+        }
+        Ok(tasks)
     }
 
     /// The summaries of `ids`, oldest first.

@@ -13,5 +13,6 @@ mod records;
 mod screenshots;
 mod socket;
 mod support;
+mod tabs;
 mod takeovers;
 mod waiting;

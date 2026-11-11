@@ -16,7 +16,7 @@ use crate::tab_stamps::{TabFence, TabStamps};
 use crate::{router, wire};
 use axum::Router;
 use browseros_core::viewport::Viewports;
-use browseros_core::{BrowserSession, TabId};
+use browseros_core::{BrowserSession, ProtocolSession, TabId};
 use neo_capture::{CaptureHub, CaptureTransport, CdpPortTransport};
 use neo_takeover::{BrowserTabs, Displays, Fits, Front, Locks, Takeovers, Xvnc};
 use neo_trace::{EpochMillis, ShotJobs, TraceSink, TraceStore};
@@ -59,6 +59,9 @@ pub(crate) struct ServiceState {
     pub(crate) sink: TraceSink,
     pub(crate) events: Arc<EventLog>,
     pub(crate) browser: BrowserTabs,
+    /// Read-only native inventory over the app's existing connection. Unlike the page cache,
+    /// this includes internal/extension tabs too, so the host sees every open native tab.
+    pub(crate) tab_inventory: ProtocolSession,
     pub(crate) locks: Arc<Locks>,
     pub(crate) fits: Arc<Fits>,
     /// Neo's screen over RFB for `GET /v1/display`, in view or control mode.
@@ -119,6 +122,7 @@ impl Service {
             viewports: Arc::clone(&viewports),
         }
         .spawn(screenshots);
+        let tab_inventory = ProtocolSession::root(browser.connection());
         let browser = BrowserTabs::new(browser, viewports);
         let fits = Fits::new(browser.clone(), xvnc);
         let stamps = Arc::new(TabStamps::default());
@@ -152,6 +156,7 @@ impl Service {
                 sink,
                 events,
                 browser,
+                tab_inventory,
                 locks,
                 fits,
                 displays,
