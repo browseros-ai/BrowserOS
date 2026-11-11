@@ -19,7 +19,7 @@ import type {
   SnapshotOptions,
   TextMatch,
 } from './frame'
-import { markHandle } from './options'
+import { inspectCustom, markHandle } from './options'
 import type { Page } from './page'
 import { type LocatorOptions, withLocatorOptions } from './selectors'
 import type { SignalOption } from './signal'
@@ -65,6 +65,10 @@ export class Locator {
 
   toString(): string {
     return asLocatorDescription('javascript', this._selector)
+  }
+
+  [inspectCustom](): string {
+    return this.toString()
   }
 
   description(): string | null {
