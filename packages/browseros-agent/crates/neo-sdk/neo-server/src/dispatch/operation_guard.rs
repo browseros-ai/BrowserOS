@@ -5,8 +5,8 @@ use std::thread;
 
 use browseros_core::TabId;
 use neo_trace::{
-    Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, PageState, TraceSink,
+    Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationSite,
+    OperationStarted, Outcome, PageState, TraceSink,
 };
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -66,6 +66,8 @@ struct Unsent {
     id: OperationId,
     parent: Option<OperationId>,
     name: String,
+    // A lazy default page delays the start event; retain the original script location here.
+    site: Option<CallSite>,
     effect: Effect,
     /// The raw input. The trace writer bounds it at the operation's end.
     args: Value,
@@ -202,6 +204,12 @@ impl OperationGuard {
         let opened = Unsent {
             id: state.id(),
             parent: state.parent_id(),
+            // A prelude poll can start synchronously under listener registration. That
+            // stack frame belongs to the registration, not to the background operation.
+            site: match spec.lifetime {
+                Lifetime::Operation => site,
+                Lifetime::Background => None,
+            },
             name,
             effect: spec.effect,
             args,
@@ -364,11 +372,16 @@ impl Unsent {
             id,
             parent,
             name,
+            site,
             effect,
             args,
             at,
         } = self;
         OperationStarted {
+            site: site.map(|site| OperationSite {
+                line: site.line,
+                column: site.column,
+            }),
             id,
             parent,
             name,

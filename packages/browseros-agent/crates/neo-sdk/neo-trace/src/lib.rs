@@ -59,8 +59,8 @@ pub use epoch_millis::EpochMillis;
 pub use error_record::{ErrorOwner, ErrorRecord};
 pub use ids::{IdError, OperationId, RequestId, RunId, TaskId};
 pub use operation_record::{
-    Delivery, Effect, OperationEnded, OperationKind, OperationReached, OperationStarted, Outcome,
-    PageState,
+    Delivery, Effect, OperationEnded, OperationKind, OperationReached, OperationSite,
+    OperationStarted, Outcome, PageState,
 };
 pub use read_model::{
     OperationRow, Page, RunDetail, RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct,

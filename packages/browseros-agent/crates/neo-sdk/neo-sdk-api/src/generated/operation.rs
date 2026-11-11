@@ -23,6 +23,9 @@ pub struct Operation {
     /// e.g. `page.goto`, `locator.click`, `zuzu.auth.fill`, `host.call`, `host.protectedFill`.
     #[serde(rename = "name")]
     pub name: String,
+    /// Absent for operations without a script call site and historical records.
+    #[serde(rename = "site", skip_serializing_if = "Option::is_none")]
+    pub site: Option<Box<models::OperationSite>>,
     #[serde(rename = "kind")]
     pub kind: String,
     /// For `next`, which call of `next()` this was, from 1.
@@ -95,6 +98,7 @@ impl Operation {
             run_id,
             parent_id: None,
             name,
+            site: None,
             kind,
             attempt: None,
             effect,

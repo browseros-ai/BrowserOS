@@ -67,6 +67,7 @@ fn write_in_flight(sink: &TraceSink, tab: i64) -> OperationId {
     });
     let op = OperationId::new(run, 1);
     sink.op_started(OperationStarted {
+        site: None,
         id: op,
         parent: None,
         name: "locator.click".into(),

@@ -464,6 +464,7 @@ impl SurfaceCalls {
 
     fn operation_started(&self, id: OperationId, name: &str, effect: Effect, tab: TabId) {
         self.sink.op_started(OperationStarted {
+            site: None,
             id,
             parent: None,
             name: name.into(),
@@ -617,6 +618,7 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             at: EpochMillis::now(),
         });
         sink.op_started(OperationStarted {
+            site: None,
             id: op,
             parent: None,
             name: "locator.click".into(),
@@ -690,6 +692,7 @@ async fn record_fake_runs(sink: TraceSink) {
         ] {
             let id = OperationId::new(run, seq);
             sink.op_started(OperationStarted {
+                site: None,
                 id,
                 parent: None,
                 name: name.into(),

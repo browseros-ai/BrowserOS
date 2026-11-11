@@ -352,6 +352,7 @@ impl Op<'_> {
 
 pub(crate) fn op_started(sink: &TraceSink, id: OperationId, op: Op<'_>) {
     sink.op_started(OperationStarted {
+        site: None,
         id,
         parent: None,
         name: op.name.to_string(),

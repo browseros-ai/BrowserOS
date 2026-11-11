@@ -539,6 +539,7 @@ fn first_operation(
     at: EpochMillis,
 ) -> OperationStarted {
     OperationStarted {
+        site: None,
         id: OperationId::new(run, 1),
         parent: None,
         name: name.into(),

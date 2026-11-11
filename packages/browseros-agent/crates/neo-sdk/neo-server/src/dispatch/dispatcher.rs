@@ -101,8 +101,8 @@ pub(crate) struct Call {
     pub(crate) abort: Option<OpAbort>,
 }
 
-/// Where in the script a call was made (`run:LINE:COL`), for the run's reply lines. A plain
-/// data bag.
+/// Where in the script a call was made (`run:LINE:COL`), for reply lines and persisted
+/// operation records. A plain data bag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CallSite {
     /// The line in the script, from 1.

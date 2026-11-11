@@ -78,6 +78,7 @@ fn operation(
     owner: Option<ErrorOwner>,
 ) {
     sink.op_started(OperationStarted {
+        site: None,
         id,
         parent: None,
         name: "locator.click".into(),
