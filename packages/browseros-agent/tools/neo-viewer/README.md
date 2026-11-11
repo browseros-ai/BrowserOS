@@ -62,17 +62,21 @@ viewer listens on 127.0.0.1 only, and publishes the image's ports on 127.0.0.1 o
 
 Before any Docker work it checks this tool's packages against its `package.json` and `bun.lock`
 (missing, or not the lockfile's version after a pull) and builds the page, so a bad install fails
-in a second. Run with the repo's pinned Bun (`packageManager` in `packages/browseros-agent`,
-1.4.2), it installs them itself. With another Bun it stops, because an older Bun's install links
-nothing in this workspace, and prints the command to run:
+in a second. When something is missing it installs it with the Bun that is running (`bun install
+--frozen-lockfile`, so `bun.lock` is never rewritten), says so in one line, looks again and
+carries on:
 
 ```text
-neo-viewer: its packages are not installed or older than bun.lock (react missing, …), and this is
-Bun 1.3.6, whose install does not link them; the repo pins Bun 1.4.2. Run: cd …/packages/browseros-agent && npx -y bun@1.4.2 install --frozen-lockfile
+Installing the viewer's packages with Bun 1.4.4 (acorn missing): bun install --frozen-lockfile in …/packages/browseros-agent
 ```
 
-Run that, then `bun run neo:viewer` again. With a Bun other than the pinned one and the packages
-in place, it starts and prints one note saying so.
+Any Bun from 1.2.19 does this (`MIN_INSTALL_BUN` in `server/dependencies.ts` says what was
+proved). An older Bun, or an install that still left something missing, stops with one line naming
+the Bun needed and the command to run:
+
+```text
+neo-viewer: its packages are missing or older than bun.lock (acorn missing), and Bun 1.2.18 cannot install them: it needs Bun 1.2.19 or newer. Run: cd …/packages/browseros-agent && npx -y bun@1.4.2 install --frozen-lockfile
+```
 
 ### Instances
 
