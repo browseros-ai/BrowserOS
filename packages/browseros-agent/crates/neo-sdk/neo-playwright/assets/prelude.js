@@ -8976,6 +8976,7 @@ ${value.stack}`;
     #viewportSize = null;
     #viewportSet = false;
     #observedSeq = 0;
+    #observedHead = 0;
     #liveHead = 0;
     #closeEvent = 0;
     #approvedClose = null;
@@ -9392,8 +9393,8 @@ ${value.stack}`;
         return;
       });
     }
-    async _refreshFrames(api) {
-      const { value: tree, observed } = await invokeObserved("page.frames", { api, timeoutMs: 0 }, { page: await this._brand(api) });
+    async _refreshFrames(api, timeoutMs = 0) {
+      const { value: tree, observed } = await invokeObserved("page.frames", { api, timeoutMs }, { page: await this._brand(api) });
       if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
         this._applyFrames(tree.frames, observed);
     }
@@ -9492,6 +9493,33 @@ ${value.stack}`;
         }
       }
     }
+    #detachFrame(frame) {
+      const pending = [frame];
+      for (const removed of pending) {
+        pending.push(...removed.childFrames());
+        if (removed._id === null)
+          continue;
+        removed._detached = true;
+        this.#childFrames.delete(removed._id);
+        this.#frameSequences.set(removed._id, Math.max(this.#observedHead, this.#frameSequences.get(removed._id) ?? 0));
+      }
+      this.#pruneFrames();
+    }
+    async#frameWaitFailed(api, frame, error) {
+      if (frame._id === null || !(error instanceof Error) || Reflect.get(error, "code") !== "target_closed")
+        return;
+      if (this._closed || error.message.startsWith(`${api}: Navigating frame was detached!`)) {
+        this.#detachFrame(frame);
+        return;
+      }
+      if (!error.message.startsWith(`${api}: Frame was detached`))
+        return;
+      await this._refreshFrames(api, 1000).catch(() => {
+        return;
+      });
+      if (this._closed)
+        this.#detachFrame(frame);
+    }
     #applyViewport(size) {
       if (this.#viewportSet || size === undefined)
         return;
@@ -9512,6 +9540,7 @@ ${value.stack}`;
       if (at.seq < this.#observedSeq)
         return;
       this.#observedSeq = at.seq;
+      this.#observedHead = Math.max(this.#observedHead, at.events);
       this.#applyViewport(fact.viewportSize);
       if (fact.url !== undefined) {
         this._url = fact.url;
@@ -9576,15 +9605,20 @@ ${value.stack}`;
     }
     async#waitForURL(api, frame, url, waitUntil, timeout, signal) {
       const args = await frame._frameArgs(api);
+      const nativeWait = async (work) => {
+        try {
+          return await work();
+        } catch (error) {
+          await this.#frameWaitFailed(api, frame, error);
+          throw error;
+        }
+      };
+      const wait = (pattern, until, budget) => nativeWait(() => invokeObserved("page.waitForURL", frame._call(api, budget), { ...args, url: pattern, waitUntil: until }, undefined, signal));
       if (typeof url !== "function") {
         const pattern = typeof url === "string" ? { glob: url } : url instanceof RegExp ? { regexSource: url.source, regexFlags: url.flags } : undefined;
         if (!pattern)
           throw clientError(api, "url: expected a string, a RegExp or a function");
-        const { value: result, observed } = await invokeObserved("page.waitForURL", frame._call(api, timeout), {
-          ...args,
-          url: pattern,
-          waitUntil
-        }, undefined, signal);
+        const { value: result, observed } = await wait(pattern, waitUntil, timeout);
         await this._navigated(api, frame, result, observed);
         return;
       }
@@ -9600,20 +9634,13 @@ ${value.stack}`;
         const elapsed = Date.now() - started;
         const remaining = timeout === 0 ? 0 : Math.max(1, timeout - elapsed);
         if (matched) {
-          await frame._waitForLoadState(api, waitUntil, {
+          await nativeWait(() => frame._waitForLoadState(api, waitUntil, {
             timeout: remaining,
             signal
-          });
+          }));
           return;
         }
-        const { value: result, observed } = await invokeObserved("page.waitForURL", frame._call(api, remaining), {
-          ...args,
-          url: {
-            regexSource: `^(?!${escapeRegExp(current)}$)`,
-            regexFlags: ""
-          },
-          waitUntil: "commit"
-        }, undefined, signal);
+        const { value: result, observed } = await wait({ regexSource: `^(?!${escapeRegExp(current)}$)`, regexFlags: "" }, "commit", remaining);
         await this._navigated(api, frame, result, observed);
       }
     }
