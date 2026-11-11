@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../neo-playwright/third_party/playwri
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 17
+export const PROTOCOL = 18
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -283,8 +283,12 @@ export type MatchUrlRequest = {
 }
 /** Answers with the pinned element itself, by handle (`returnByValue: false`). */
 export type PinnedRequest = { op: 'pinned'; pin: Pin }
-/** Which text of the document `page.title()` and `page.content()` read. */
-export type DocumentPart = 'title' | 'content'
+/**
+ * Which text of the document `page.title()` and `page.content()` read, or `expectSnapshot`: the
+ * body's aria snapshot upstream's `Frame._expectInternal` attaches when a matcher found nothing
+ * (`''` without a body, which upstream leaves out).
+ */
+export type DocumentPart = 'title' | 'content' | 'expectSnapshot'
 /** The title, or the doctype and the root's outerHTML, read through the seal. */
 export type DocumentRequest = { op: 'document'; part: DocumentPart }
 /**
@@ -442,6 +446,12 @@ export type ExpectPoll = {
   resolved: string
   received?: unknown
   sensitive: SensitiveKind | null
+  /**
+   * On a poll that fails the matcher (its result equals `.not`), the aria snapshot upstream's
+   * `InjectedScript.expect` puts in `received.ariaSnapshot` for `error.matcherResult`; absent
+   * for count and the array forms, as upstream's.
+   */
+  ariaSnapshot?: string
 }
 /**
  * The focused element: a sensitive field? An iframe (pinned, so Rust can hop into it)? Or an

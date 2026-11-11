@@ -34,6 +34,22 @@ impl CallLog {
         changed
     }
 
+    /// The recorded lines as they were logged, uncompressed: Playwright's `matcherResult.log`,
+    /// which upstream fills from the server's raw log. The same bound as [`CallLog::render`]
+    /// applies, to the raw lines (the first one and the latest `MAX_LINES - 1`), so a
+    /// minutes-long wait cannot make the script's error as large as its log.
+    pub(crate) fn kept_lines(&self) -> Vec<String> {
+        if self.lines.len() <= MAX_LINES {
+            return self.lines.clone();
+        }
+        self.lines
+            .iter()
+            .take(1)
+            .chain(self.lines.iter().skip(self.lines.len() - (MAX_LINES - 1)))
+            .cloned()
+            .collect()
+    }
+
     /// What follows an error's first line, as upstream's client appends it:
     /// `"\nCall log:\n  - waiting for ...\n"`, or nothing when no line was recorded.
     pub(crate) fn render(&self) -> String {

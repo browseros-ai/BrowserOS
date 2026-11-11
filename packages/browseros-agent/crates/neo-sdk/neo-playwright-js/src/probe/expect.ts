@@ -18,7 +18,13 @@ import type {
   SensitiveKind,
 } from './protocol'
 import { queryAll, resolveTarget } from './resolve'
-import { type ExpectCheck, expectChecks, ProbeError, type World } from './world'
+import {
+  type ExpectCheck,
+  expectChecks,
+  expectFailureSnapshot,
+  ProbeError,
+  type World,
+} from './world'
 
 const REGEX_REFUSED =
   'a RegExp is not matched against a password, card or one-time-code field, because each match would reveal part of the secret; compare with the exact string'
@@ -47,9 +53,22 @@ export async function expect(
   const { element } = found
   const resolved = world.injected.previewNode(element)
   const sealed = sealedCheck(world, element, params)
-  if (sealed) return poll(sealed.check, resolved, sealed.kind)
-  const check = await checks.single(element, params, request.frameVisible)
-  return poll(check, resolved, null)
+  const [check, sensitive] = sealed
+    ? [sealed.check, sealed.kind]
+    : [await checks.single(element, params, request.frameVisible), null]
+  const reply = poll(check, resolved, sensitive)
+  // Upstream's InjectedScript.expect snapshots only a poll that fails the matcher, so a passing
+  // poll costs no aria tree.
+  if (check.matches === params.isNot) {
+    const ariaSnapshot = expectFailureSnapshot(
+      world.injected,
+      element,
+      params,
+      request.frameVisible,
+    )
+    if (ariaSnapshot !== undefined) reply.ariaSnapshot = ariaSnapshot
+  }
+  return reply
 }
 
 function poll(

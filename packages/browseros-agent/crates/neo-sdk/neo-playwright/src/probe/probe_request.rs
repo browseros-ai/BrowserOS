@@ -183,6 +183,9 @@ pub(crate) enum DocumentPart {
     Title,
     /// `page.content()`: the doctype and the root element's `outerHTML`.
     Content,
+    /// The body's aria snapshot a failed `expect` that found nothing reports in
+    /// `error.matcherResult` (upstream's `Frame._expectInternal`); `""` without a body.
+    ExpectSnapshot,
 }
 
 /// What a `resolve` must find.

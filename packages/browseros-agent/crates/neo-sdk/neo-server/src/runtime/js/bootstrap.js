@@ -35,6 +35,9 @@
       this.delivery = err.delivery // "not_sent" | "done" | "unknown"
       this.retryable = err.retryable
       this.operationId = err.operationId
+      // A failed `expect` matcher's facts (neo-playwright's expect op); the expect prelude
+      // completes them into Playwright's `matcherResult` before the script can catch the error.
+      if (err.matcher !== undefined) this.matcherResult = err.matcher
     }
   }
 

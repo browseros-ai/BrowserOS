@@ -2,7 +2,8 @@
  * The document as a whole. `page.title()` and `page.content()` read it here rather than in
  * the main world, so that every field value the serialization reads comes through the seal
  * (`value="••••"`). `page.setContent` replaces it here too, as upstream does from its utility
- * world.
+ * world. A failed `expect` that found nothing reads the body's aria snapshot here, as upstream
+ * reads it from its utility world.
  */
 import type {
   DocumentRequest,
@@ -16,11 +17,19 @@ export function documentText(
   world: World,
   request: DocumentRequest,
 ): DocumentText {
-  const { document } = world.injected
-  return {
-    kind: 'documentText',
-    text: request.part === 'title' ? document.title : content(document),
-  }
+  const { injected } = world
+  const { document } = injected
+  const text =
+    request.part === 'title'
+      ? document.title
+      : request.part === 'expectSnapshot'
+        ? document.body
+          ? injected.ariaSnapshotForExpectFailure(document.body, {
+              mode: 'default',
+            })
+          : ''
+        : content(document)
+  return { kind: 'documentText', text }
 }
 
 /** Upstream's `frame.content()`: the doctype, then the root element's markup. */

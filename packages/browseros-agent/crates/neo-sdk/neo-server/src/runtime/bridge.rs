@@ -96,6 +96,10 @@ struct ErrBody<'a> {
     /// Makes the bootstrap throw a `TimeoutError`.
     timeout: bool,
     message: &'a str,
+    /// A failed `expect` matcher's facts, which the bootstrap puts on the error as
+    /// `matcherResult` for the expect prelude to complete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matcher: Option<&'a Value>,
 }
 
 /// The tab of the run's own page, once the call that needed it opened it. Plain ids rather
@@ -285,6 +289,7 @@ impl<'a> From<&'a OpFailure> for ErrBody<'a> {
             operation_id: failure.operation,
             timeout: failure.error.is_timeout(),
             message: failure.error.message(),
+            matcher: failure.error.matcher(),
         }
     }
 }

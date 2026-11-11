@@ -651,6 +651,10 @@ pub(super) fn leaf_error(error: &PlaywrightError) -> LeafError {
         TimedOut::Yes => failure.timed_out(),
         TimedOut::No => failure,
     };
+    let failure = match error.matcher_details() {
+        Some(facts) => failure.with_matcher(facts.clone()),
+        None => failure,
+    };
     match error.answer() {
         Answer::Definite => LeafError::definite(failure),
         Answer::Ambiguous => LeafError::ambiguous(failure),

@@ -298,6 +298,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   document: [
     { op: 'document', part: 'title' },
     { op: 'document', part: 'content' },
+    { op: 'document', part: 'expectSnapshot' },
   ],
   armInput: [{ op: 'armInput', pin: 4 }],
   inputArrived: [{ op: 'inputArrived', pin: 4 }],
@@ -498,6 +499,14 @@ const REPLY_EXAMPLES: {
       matches: false,
       resolved: '<div id="x">…</div>',
       sensitive: null,
+    },
+    {
+      kind: 'expect',
+      matches: false,
+      resolved: '<h1 id="greeting">Hello</h1>',
+      received: 'Hello',
+      sensitive: null,
+      ariaSnapshot: '- heading "Hello" [level=1]',
     },
   ],
   focused: [

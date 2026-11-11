@@ -26,7 +26,7 @@
 
 mod add_tag;
 pub(crate) mod context_op;
-mod document_op;
+pub(crate) mod document_op;
 mod document_watch;
 mod element_evaluate;
 mod evaluate;
