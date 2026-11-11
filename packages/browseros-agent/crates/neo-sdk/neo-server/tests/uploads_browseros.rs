@@ -1,11 +1,10 @@
-//! Uploads end to end on a real BrowserOS: `setInputFiles` over MCP `run` refuses Neo's own
-//! secret files and hands the page every other file, a payload, and `[]`.
+//! Uploads end to end on a real BrowserOS: `setInputFiles` over MCP `run` hands the page
+//! host-owned paths, an ordinary file, a payload, and `[]`.
 //!
 //! ```text
 //!  MCP run ─▶ browseros-claw-sdk ─ setInputFiles ─▶ the door ─▶ neo-playwright's upload
-//!    ─ PrivacyHooks::secret_paths: the rig's token, CAPTCHA key, trace dir and browser profile
-//!    ─ a secret, or a link to one: script / neo_secret_upload_refused, not_sent, no path named
-//!    ─ any other file: Chromium hands the page its bytes, which the page lists back
+//!    ─ host-owned files and a symlink: the page reports the uploaded file's name and size
+//!    ─ an ordinary file and payload: the page reports their bytes; [] clears the input
 //! ```
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
@@ -32,31 +31,38 @@ const PAYLOAD_TEXT: &str = "id,total\n7,12.50\n";
 
 /// An agent uploading into a page whose file input reports what it holds: on each `change` the
 /// page's own script lists every file's name, type and text, so the agent reads the upload back
-/// through a locator. `SECRETS` (a name for each of Neo's secret files, and its path),
+/// through a locator. Host-owned files use a separate input that reports only names and sizes,
+/// so the test's result stays independent of changing trace/profile bytes. `HOST_FILES`,
 /// `ORDINARY` (a file of the agent's own) and `PAYLOAD_TEXT` are defined ahead of it.
 const UPLOADS: &str = r#"
-const html = '<title>Uploads</title><input type="file" id="files" multiple><ol id="seen"></ol>'
+const html = '<title>Uploads</title>'
+  + '<input type="file" id="host-files" multiple><ol id="host-seen"></ol>'
+  + '<input type="file" id="files" multiple><ol id="seen"></ol>'
   + '<script>'
-  + 'const input = document.getElementById("files");'
+  + 'for (const [inputId, listId] of [["host-files", "host-seen"], ["files", "seen"]]) {'
+  + 'const input = document.getElementById(inputId);'
   + 'input.addEventListener("change", async () => {'
   + '  const files = await Promise.all(Array.from(input.files, async (file) =>'
-  + '    ({ name: file.name, type: file.type, text: await file.text() })));'
+  + '    inputId === "host-files" ? { name: file.name, size: file.size }'
+  + '      : { name: file.name, type: file.type, text: await file.text() }));'
   + '  const entry = document.createElement("li");'
   + '  entry.textContent = JSON.stringify(files);'
-  + '  document.getElementById("seen").append(entry);'
+  + '  document.getElementById(listId).append(entry);'
   + '});'
+  + '}'
   + '</script>';
 await page.goto('data:text/html,' + encodeURIComponent(html));
+const hostInput = page.locator('#host-files');
+const hostSeen = page.locator('#host-seen li');
+const hostUploads = {};
+let hostCount = 0;
+for (const [name, path] of Object.entries(HOST_FILES)) {
+  await hostInput.setInputFiles(path);
+  await expect(hostSeen).toHaveCount(++hostCount);
+  hostUploads[name] = JSON.parse(await hostSeen.nth(hostCount - 1).textContent());
+}
 const input = page.locator('#files');
 const seen = page.locator('#seen li');
-const refused = {};
-for (const [name, path] of Object.entries(SECRETS)) {
-  refused[name] = await input.setInputFiles(path).then(
-    () => 'uploaded',
-    ({ owner, code, delivery, message }) => ({ owner, code, delivery, message }),
-  );
-}
-const changedByRefusals = await seen.count();
 const uploads = [];
 const payload = { name: 'payload.csv', mimeType: 'text/csv', buffer: Buffer.from(PAYLOAD_TEXT) };
 for (const files of [ORDINARY, payload, []]) {
@@ -64,11 +70,11 @@ for (const files of [ORDINARY, payload, []]) {
   await expect(seen).toHaveCount(uploads.length + 1);
   uploads.push(JSON.parse(await seen.nth(uploads.length).textContent()));
 }
-return { refused, changedByRefusals, uploads };
+return { hostUploads, uploads };
 "#;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_upload_of_neos_host_token_is_refused_and_an_ordinary_file_uploads() -> TestResult {
+async fn host_owned_paths_and_payloads_upload_and_an_empty_list_clears_the_input() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
     };
@@ -92,7 +98,7 @@ async fn uploads(rig: &Rig) -> TestResult {
     symlink(rig.token_path(), &link)?;
     let local_state = rig.profile_dir().join("Local State");
     until_written(&local_state).await?;
-    let secrets = json!({
+    let host_files = json!({
         "token": rig.token_path(),
         "captchaKey": rig.captcha_key_path(),
         "traceStore": rig.trace_path(),
@@ -100,7 +106,7 @@ async fn uploads(rig: &Rig) -> TestResult {
         "linkToToken": link,
     });
     let code = format!(
-        "const SECRETS = {secrets};\nconst ORDINARY = {};\nconst PAYLOAD_TEXT = {};\n{UPLOADS}",
+        "const HOST_FILES = {host_files};\nconst ORDINARY = {};\nconst PAYLOAD_TEXT = {};\n{UPLOADS}",
         json!(ordinary),
         json!(PAYLOAD_TEXT),
     );
@@ -118,37 +124,33 @@ async fn uploads(rig: &Rig) -> TestResult {
         .and_then(|content| content.get("value"))
         .ok_or_else(|| format!("the script returns what it saw: {result:?}"))?;
 
-    let named = secrets.as_object().ok_or("the secrets are named")?;
+    let named = host_files.as_object().ok_or("the host files are named")?;
     for (name, path) in named {
-        let refused = value
-            .pointer(&format!("/refused/{name}"))
-            .ok_or_else(|| format!("the script tried {name}: {value}"))?;
-        let field = |key: &str| refused.get(key).and_then(Value::as_str);
-        assert_eq!(
-            (field("owner"), field("code"), field("delivery")),
-            (
-                Some("script"),
-                Some("neo_secret_upload_refused"),
-                Some("not_sent")
-            ),
-            "{name} is one of Neo's own secret files: {value}"
-        );
-        let message = field("message").ok_or("a refusal has a message")?;
+        let uploaded = value
+            .pointer(&format!("/hostUploads/{name}"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("the script uploaded {name}: {value}"))?;
+        assert_eq!(uploaded.len(), 1, "{name} uploads one file: {value}");
+        let uploaded = uploaded.first().ok_or("the input holds its file")?;
         let path = path.as_str().ok_or("a path is text")?;
         let file = Path::new(path)
             .file_name()
             .and_then(|file| file.to_str())
             .ok_or("a path names a file")?;
+        assert_eq!(
+            uploaded.get("name"),
+            Some(&json!(file)),
+            "{name} reaches the page under its supplied name: {value}"
+        );
+        let size = uploaded
+            .get("size")
+            .and_then(Value::as_u64)
+            .ok_or("the uploaded file has a size")?;
         assert!(
-            !message.contains(path) && !message.contains(file),
-            "{name}: the refusal names no path, so a script learns nothing of Neo's disk: {message}"
+            size > 0,
+            "{name} reaches the page with its contents: {value}"
         );
     }
-    assert_eq!(
-        value.get("changedByRefusals"),
-        Some(&json!(0)),
-        "no refused file reached the page: {value}"
-    );
     assert_eq!(
         value.get("uploads"),
         Some(&json!([

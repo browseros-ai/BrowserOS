@@ -8,7 +8,7 @@ use neo_trace::ErrorOwner;
 use serde_json::{Value, json};
 
 use super::{
-    FilesInput, HostPath, InputFiles, Secrets, SetInputFilesInput, client_stat, inspect, recheck,
+    FilesInput, HostPath, InputFiles, SetInputFilesInput, client_stat, inspect, recheck,
     resolve_like_node, set_input_files,
 };
 use crate::op_scope::OpScope;
@@ -41,23 +41,10 @@ impl Drop for Scratch {
     }
 }
 
-/// `files` classified in a `locator.setInputFiles` op whose host named `secrets`: what the
-/// input gets, or the error the script does.
-async fn classified_naming(
-    secrets: &[PathBuf],
-    files: FilesInput,
-) -> Result<Result<InputFiles, PlaywrightError>, Box<dyn Error>> {
-    let env = TestEnv::new();
-    let upload = Op::from_name("locator.setInputFiles").ok_or("setInputFiles is an op")?;
-    let scope = OpScope::new(&env, upload, CallHeader::default());
-    let secrets = Secrets::named_by(Some(secrets.to_vec()));
-    Ok(InputFiles::classify(&scope, &secrets, files).await)
-}
-
-/// `paths` classified by a host with no secrets to deny.
-async fn classified(paths: &[&str]) -> Result<Result<InputFiles, PlaywrightError>, Box<dyn Error>> {
+/// Classifies paths as the upload action does before admitting a page.
+async fn classified(paths: &[&str]) -> Result<InputFiles, PlaywrightError> {
     let paths = paths.iter().map(|path| (*path).to_owned()).collect();
-    classified_naming(&[], FilesInput::Paths(paths)).await
+    InputFiles::classify(FilesInput::Paths(paths)).await
 }
 
 /// The client's error a classification fails with, as the script sees it.
@@ -65,7 +52,7 @@ async fn refusal(
     paths: &[&str],
 ) -> Result<(ErrorOwner, Option<ErrorCode>, String), Box<dyn Error>> {
     let error = classified(paths)
-        .await?
+        .await
         .err()
         .ok_or(format!("{paths:?} is refused"))?;
     Ok((
@@ -73,21 +60,6 @@ async fn refusal(
         error.error_code(),
         error.message().to_owned(),
     ))
-}
-
-/// `paths` checked again before the send, as `ready` checks them, by a host with no secrets
-/// to deny: the access error of the first path gone now, or the script's error.
-async fn rechecked(
-    paths: &[&str],
-) -> Result<Result<Option<String>, PlaywrightError>, Box<dyn Error>> {
-    let env = TestEnv::new();
-    let upload = Op::from_name("locator.setInputFiles").ok_or("setInputFiles is an op")?;
-    let scope = OpScope::new(&env, upload, CallHeader::default());
-    let paths: Vec<HostPath> = paths
-        .iter()
-        .map(|path| HostPath((*path).to_owned()))
-        .collect();
-    Ok(recheck(&scope, &Secrets::named_by(Some(Vec::new())), &paths).await)
 }
 
 fn cwd() -> Result<String, Box<dyn Error>> {
@@ -216,8 +188,7 @@ async fn tests_that_a_symlink_loop_and_a_locked_directory_read_as_nodes_errors()
 #[tokio::test]
 async fn tests_that_paths_classify_as_upstreams_client_resolves_them() -> TestResult {
     let cwd = cwd()?;
-    let InputFiles::Paths(paths) = classified(&["Cargo.toml", "./src/../Cargo.toml"]).await??
-    else {
+    let InputFiles::Paths(paths) = classified(&["Cargo.toml", "./src/../Cargo.toml"]).await? else {
         return Err("two files are paths".into());
     };
     let resolved: Vec<&str> = paths.iter().map(|path| path.0.as_str()).collect();
@@ -227,12 +198,12 @@ async fn tests_that_paths_classify_as_upstreams_client_resolves_them() -> TestRe
         [manifest.as_str(), manifest.as_str()],
         "relative paths resolve against the working directory"
     );
-    let InputFiles::Directory(directory) = classified(&["src/"]).await?? else {
+    let InputFiles::Directory(directory) = classified(&["src/"]).await? else {
         return Err("a directory is a directory".into());
     };
     assert_eq!(directory.0, format!("{cwd}/src"));
     let absolute = format!("{cwd}/Cargo.toml");
-    let InputFiles::Paths(paths) = classified(&[&absolute]).await?? else {
+    let InputFiles::Paths(paths) = classified(&[&absolute]).await? else {
         return Err("an absolute file is a path".into());
     };
     assert_eq!(
@@ -273,13 +244,10 @@ async fn tests_that_the_clients_refusals_are_unprefixed_and_in_its_order() -> Te
         client("Multiple directories are not supported"),
         "a second directory fails at once, before the paths after it"
     );
-    let payloads = classified_naming(
-        &[],
-        FilesInput::Payloads(serde_json::from_value(json!([
-            { "name": "a.txt", "mimeType": "text/plain", "buffer": "YQ==" }
-        ]))?),
-    )
-    .await??;
+    let payloads = InputFiles::classify(FilesInput::Payloads(serde_json::from_value(json!([
+        { "name": "a.txt", "mimeType": "text/plain", "buffer": "YQ==" }
+    ]))?))
+    .await?;
     assert!(
         matches!(&payloads, InputFiles::Payloads(payloads) if payloads.len() == 1),
         "payloads touch no disk"
@@ -350,8 +318,7 @@ fn upload_of(files: &Value) -> Result<SetInputFilesInput, serde_json::Error> {
 /// page asked for.
 #[tokio::test]
 async fn tests_that_a_missing_path_is_refused_before_any_page_work() -> TestResult {
-    let hooks = RecordingHooks::naming_secrets(Vec::new());
-    let playwright = Playwright::new(offline_session(), Arc::new(hooks));
+    let playwright = Playwright::new(offline_session(), Arc::new(RecordingHooks::default()));
     let env = TestEnv::new();
     let upload = Op::from_name("locator.setInputFiles").ok_or("setInputFiles is an op")?;
     let scope = OpScope::new(&env, upload, CallHeader::default());
@@ -369,164 +336,6 @@ async fn tests_that_a_missing_path_is_refused_before_any_page_work() -> TestResu
     Ok(())
 }
 
-/// A host that has not named Neo's secret files has not said what on its disk must stay
-/// there, so no path uploads: each is refused as `neo / unsupported` before it is stat'ed, a
-/// missing one too, while payloads, which read no file, go on to admit their page (which fails
-/// here for want of a browser). Paused, as above.
-#[tokio::test(start_paused = true)]
-async fn tests_that_with_no_secrets_named_no_path_uploads_but_payloads_do() -> TestResult {
-    let playwright = Playwright::new(offline_session(), Arc::new(RecordingHooks::default()));
-    let env = TestEnv::new();
-    let upload = Op::from_name("locator.setInputFiles").ok_or("setInputFiles is an op")?;
-    for paths in [
-        json!(["Cargo.toml"]),
-        json!(["missing.txt"]),
-        json!(["src"]),
-        json!(["/dev/fd/2147483647"]),
-    ] {
-        let scope = OpScope::new(&env, upload, CallHeader::default());
-        let input = upload_of(&json!({ "paths": paths }))?;
-        let refused = set_input_files(&playwright, &scope, input)
-            .await
-            .err()
-            .ok_or(format!("{paths} is refused"))?;
-        assert_eq!(
-            (refused.owner(), refused.error_code(), refused.message()),
-            (
-                ErrorOwner::Neo,
-                Some(ErrorCode::Unsupported),
-                "locator.setInputFiles: Neo uploads no file from its disk until its host names \
-                 Neo's own secret files; pass { name, mimeType, buffer } instead"
-            ),
-            "{paths}"
-        );
-    }
-    let scope = OpScope::new(&env, upload, CallHeader::default());
-    let payload = upload_of(&json!({ "payloads": [
-        { "name": "a.txt", "mimeType": "text/plain", "buffer": "YQ==" }
-    ] }))?;
-    let admitting = set_input_files(&playwright, &scope, payload)
-        .await
-        .err()
-        .ok_or("no browser, no page")?;
-    assert_eq!(
-        admitting.error_code(),
-        Some(ErrorCode::BrowserDisconnected),
-        "a payload goes on to admit its page: {admitting}"
-    );
-    assert!(env.calls().is_empty(), "nothing was noted or sent");
-    Ok(())
-}
-
-/// A path into `/dev`, a file or the directory itself, names a device or Chromium's own
-/// descriptor once Chromium opens it, so a host with no secrets to deny refuses it as one. So
-/// does a directory upload of `/`, whose tree holds `/dev`.
-#[cfg(unix)]
-#[tokio::test]
-async fn tests_that_a_path_into_dev_is_refused_as_a_secret_with_none_to_deny() -> TestResult {
-    for path in ["/dev/null", "/dev", "/"] {
-        assert_eq!(
-            refusal(&[path]).await?,
-            (
-                ErrorOwner::Script,
-                Some(ErrorCode::SecretUploadRefused),
-                "locator.setInputFiles: Neo does not upload its own secret files".to_owned()
-            ),
-            "{path}"
-        );
-    }
-    Ok(())
-}
-
-/// A descriptor Neo's process does not hold fails Neo's own stat (`EBADF` on macOS, measured),
-/// yet names whatever Chromium's process holds there, so it is refused as a secret before
-/// either check stats it: classify's, by its absolute path and by a relative one Node folds
-/// into `/dev`, and the re-check's, before its access. No path is in the message.
-#[cfg(unix)]
-#[tokio::test]
-async fn tests_that_a_device_path_neo_cannot_stat_is_refused_before_the_stat() -> TestResult {
-    let unheld = "/dev/fd/2147483647";
-    let relative = format!("{}dev/fd/2147483647", "../".repeat(64));
-    let secret = (
-        ErrorOwner::Script,
-        Some(ErrorCode::SecretUploadRefused),
-        "locator.setInputFiles: Neo does not upload its own secret files".to_owned(),
-    );
-    for path in [unheld, relative.as_str()] {
-        assert_eq!(refusal(&[path]).await?, secret, "classify, {path}");
-    }
-    let refused = rechecked(&[unheld])
-        .await?
-        .err()
-        .ok_or("the re-check refuses it")?;
-    assert_eq!(
-        (
-            refused.owner(),
-            refused.error_code(),
-            refused.message().to_owned()
-        ),
-        secret,
-        "the re-check"
-    );
-    Ok(())
-}
-
-/// The script sees `script / neo_secret_upload_refused` with the method's prefix, and nothing
-/// that says which secret or where it is. Each path is checked right after its own stat, in
-/// the script's order, so a missing path before a secret still fails as Node's stat, and a
-/// secret before a missing path is refused.
-#[tokio::test]
-async fn tests_that_a_secret_is_refused_after_its_stat_and_never_named() -> TestResult {
-    let scratch = Scratch::new("secret")?;
-    let token = scratch.path("neo-host-token");
-    let notes = scratch.path("notes.txt");
-    let missing = scratch.path("missing.txt");
-    fs::write(&token, "token")?;
-    fs::write(&notes, "notes")?;
-    let named = [PathBuf::from(&token)];
-    let classify = |paths: &[&str]| {
-        let paths = paths.iter().map(|path| (*path).to_owned()).collect();
-        classified_naming(&named, FilesInput::Paths(paths))
-    };
-    for paths in [
-        vec![token.as_str()],
-        vec![notes.as_str(), token.as_str()],
-        vec![token.as_str(), missing.as_str()],
-    ] {
-        let refused = classify(&paths)
-            .await?
-            .err()
-            .ok_or(format!("{paths:?} is refused"))?;
-        assert_eq!(
-            (refused.owner(), refused.error_code(), refused.message()),
-            (
-                ErrorOwner::Script,
-                Some(ErrorCode::SecretUploadRefused),
-                "locator.setInputFiles: Neo does not upload its own secret files"
-            ),
-            "{paths:?}"
-        );
-        assert!(
-            !refused
-                .message()
-                .contains(scratch.0.to_string_lossy().as_ref())
-        );
-    }
-    let stat_first = classify(&[missing.as_str(), token.as_str()])
-        .await?
-        .err()
-        .ok_or("a missing path is refused")?;
-    assert_eq!(
-        stat_first.message(),
-        format!("ENOENT: no such file or directory, stat '{missing}'")
-    );
-    let InputFiles::Paths(paths) = classify(&[notes.as_str()]).await?? else {
-        return Err("an ordinary file is a path".into());
-    };
-    assert_eq!(paths.len(), 1, "an ordinary file beside a secret uploads");
-    Ok(())
-}
-
 /// Right before the send, each path is `access`ed again, in order: one still there passes, and
 /// the first one gone by now is upstream's access error with its absolute path, which a
 /// locator retries on.
@@ -536,9 +345,10 @@ async fn tests_that_the_recheck_reads_a_path_gone_by_now_as_upstreams_access_err
     let present = scratch.path("present.txt");
     fs::write(&present, "here")?;
     let missing = scratch.path("missing.txt");
-    assert_eq!(rechecked(&[&present]).await??, None);
+    let paths = [HostPath(present), HostPath(missing.clone())];
+    assert_eq!(recheck(&paths[..1]).await, None);
     assert_eq!(
-        rechecked(&[&present, &missing]).await??,
+        recheck(&paths).await,
         Some(format!(
             "ENOENT: no such file or directory, access '{missing}'"
         ))
