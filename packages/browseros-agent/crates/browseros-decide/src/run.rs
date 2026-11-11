@@ -201,6 +201,8 @@ pub struct Run {
     /// several of these, and a run that pays for eight batches to answer one
     /// question should say so.
     pub batches_asked: u32,
+    /// Requests made to the writer for text nobody supplied.
+    pub writes: u32,
 }
 
 /// How many steps in a row may leave the page unchanged before the run stops.
@@ -265,6 +267,7 @@ impl Run {
             url_before: None,
             known: Known::default(),
             batches_asked: 0,
+            writes: 0,
         }
     }
 
