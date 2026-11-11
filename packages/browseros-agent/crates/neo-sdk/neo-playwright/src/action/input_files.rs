@@ -489,14 +489,14 @@ async fn client_stat(path: &str) -> Result<bool, PlaywrightError> {
 }
 
 /// `addInitScript({ path })`'s source, as upstream's client builds it (`evaluationScript`):
-/// `fs.promises.readFile(path, 'utf8')`, relative to Neo's working directory as to Node's, and
-/// then `addSourceUrlToScript`'s `//# sourceURL=` line naming the path as the script wrote it.
-/// A file that is not UTF-8 reads with replacement characters, as Node's decoder does. A
-/// failure is Node's error, unprefixed, with nothing sent.
+/// `fs.promises.readFile(path, 'utf8')` on the path as the script wrote it, which the system
+/// resolves against Neo's working directory as it does Node's (no lexical normalization, so
+/// `a.txt/../b.js` fails `ENOTDIR` as it does there), and then `addSourceUrlToScript`'s
+/// `//# sourceURL=` line naming that path. A file that is not UTF-8 reads with replacement
+/// characters, as Node's decoder does. A failure is Node's error, unprefixed, with nothing sent.
 pub(crate) async fn read_script_file(path: &str) -> Result<String, PlaywrightError> {
     refuse_nul(path)?;
-    let absolute = resolve_like_node(&working_directory()?, path);
-    match fs::read(&absolute).await {
+    match fs::read(path).await {
         Ok(bytes) => Ok(format!(
             "{}\n//# sourceURL={}",
             String::from_utf8_lossy(&bytes),

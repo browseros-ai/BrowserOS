@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use browseros_core::{BrowserSession, ProtocolSession, SessionId, TabId};
+use browseros_core::{BrowserSession, CoreError, ProtocolSession, SessionId, TabId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
@@ -107,10 +107,13 @@ struct Registration {
 
 impl Registration {
     /// Removes the script now. A session that is gone (the tab closed) has nothing to remove.
+    /// The session is let go only once the removal answered, so a removal cut short by the op's
+    /// drop is sent again by `Drop`; a second removal of one identifier changes nothing.
     async fn remove(mut self) {
-        if let Some(session) = self.session.take() {
-            remove(&session, &self.identifier).await;
+        if let Some(session) = &self.session {
+            remove(session, &self.identifier).await;
         }
+        self.session = None;
     }
 }
 
@@ -220,25 +223,38 @@ pub(crate) async fn add_to_context(
 }
 
 /// `disposable.dispose`: removes every registration of `id`, page or context, and awaits each
-/// removal, as upstream's `removeInitScripts` does. An id already disposed, or one the run never
-/// handed out, disposes nothing, as a second upstream `dispose()` does.
+/// removal, as upstream's `removeInitScripts` does, so no document loaded after it resolves runs
+/// the script. That includes a context script a concurrent write is adding right now: dispose
+/// waits for that add, which finds its script gone and removes it again before it finishes. An id
+/// already disposed, or one the run never handed out, disposes nothing, as a second upstream
+/// `dispose()` does.
 pub(crate) async fn dispose(
     scope: &OpScope<'_>,
     input: DisposeInput,
 ) -> Result<Value, PlaywrightError> {
     let _sent = scope.send_effect()?;
-    let removed = {
+    let (removed, in_flight) = {
         let mut registry = scope.run_state().init_scripts.lock();
         registry.context.retain(|script| script.id != input.id);
+        let in_flight: Vec<Arc<OnceCell<()>>> = registry
+            .adding
+            .iter()
+            .filter(|(adding, _)| adding.id == input.id)
+            .map(|(_, cell)| Arc::clone(cell))
+            .collect();
         registry.adding.retain(|adding, _| adding.id != input.id);
-        let (removed, kept) = mem::take(&mut registry.added)
+        let (removed, kept): (Vec<Added>, Vec<Added>) = mem::take(&mut registry.added)
             .into_iter()
             .partition(|added| added.id == input.id);
         registry.added = kept;
-        removed
+        (removed, in_flight)
     };
     for added in removed {
         added.registration.remove().await;
+    }
+    for cell in in_flight {
+        // Waits out an add in progress; with none, this closure runs and initializes nothing.
+        let _settled = cell.get_or_try_init(|| async { Err(()) }).await;
     }
     Ok(json!({}))
 }
@@ -249,9 +265,11 @@ impl InitScripts {
     }
 
     /// Adds every context script `admitted`'s session lacks, for a write op admitted on that tab.
-    /// The op's own tab rules run first ([`OpScope::recheck`]), so a tab the door refuses gets
-    /// nothing, and the op fails with the refusal it would meet at its own send. A disposal that
-    /// lands while a script is being added removes it again.
+    /// The op's own tab rules run right before each add ([`OpScope::recheck`]), so a tab the door
+    /// refuses, even one the owner takes between two adds, gets nothing more, and the op fails
+    /// with the refusal it would meet at its own send. The op is not marked sent: the add is
+    /// `context.addInitScript`'s effect, which that op marked, and it happens once per tab
+    /// session, so the admitting op stays safe to retry when its own effect never went out.
     pub(crate) async fn add_context_scripts(
         &self,
         scope: &OpScope<'_>,
@@ -262,24 +280,32 @@ impl InitScripts {
         if missing.is_empty() {
             return Ok(());
         }
-        scope.recheck()?;
         let session = browser.protocol_session(admitted.session.session_id.clone());
         for (adding, source) in missing {
             let cell = Arc::clone(self.lock().adding.entry(adding.clone()).or_default());
             cell.get_or_try_init(|| async {
+                scope.recheck()?;
                 let registration = add_unsent(&session, &source)
                     .await
                     .map_err(|error| scope.core_error(&error))?;
-                let mut registry = self.lock();
-                if registry.context.iter().any(|kept| kept.id == adding.id) {
-                    registry.added.push(Added {
-                        id: adding.id,
-                        registration,
-                    });
-                } else {
-                    // Disposed while it was being added: its guard removes it again.
-                    drop(registry);
-                    drop(registration);
+                // Kept or handed back under one lock, so a dispose sees either the registration
+                // or this add still in flight, never neither.
+                let disposed = {
+                    let mut registry = self.lock();
+                    if registry.context.iter().any(|script| script.id == adding.id) {
+                        registry.added.push(Added {
+                            id: adding.id,
+                            registration,
+                        });
+                        None
+                    } else {
+                        Some(registration)
+                    }
+                };
+                if let Some(registration) = disposed {
+                    // Disposed while it was being added. Removed before the cell settles, which
+                    // is what `dispose` waits for, so dispose resolves only once it is gone.
+                    registration.remove().await;
                 }
                 Ok::<(), PlaywrightError>(())
             })
@@ -339,29 +365,38 @@ async fn add(
     session: &ProtocolSession,
     source: &str,
     _sent: &Sent<'_>,
-) -> Result<Registration, browseros_core::CoreError> {
+) -> Result<Registration, CoreError> {
     add_unsent(session, source).await
 }
 
 /// [`add`] for a context script, which the admitting op's own recheck covers and which does not
 /// mark that op sent: it changes only documents a later effect loads.
-async fn add_unsent(
-    session: &ProtocolSession,
-    source: &str,
-) -> Result<Registration, browseros_core::CoreError> {
+///
+/// The command goes out from a task of its own, which the op awaits. The host drops an op's
+/// future at the run's stop or deadline, and that can land after the command was sent and before
+/// Chromium answered: awaited inline, the answer would be lost with the future and the script
+/// would stay registered past the run. The task always gets the answer, and when the op is gone
+/// its output, the [`Registration`], is dropped as the task ends, which removes the script.
+async fn add_unsent(session: &ProtocolSession, source: &str) -> Result<Registration, CoreError> {
     #[derive(Deserialize)]
     struct AddedScript {
         identifier: String,
     }
-    let AddedScript { identifier } = session
-        .send(
-            "Page.addScriptToEvaluateOnNewDocument",
-            json!({ "source": source }),
-        )
-        .await?;
-    Ok(Registration {
-        session: Some(session.cancellation_endpoint()),
-        identifier,
+    let session = session.cancellation_endpoint();
+    let params = json!({ "source": source });
+    let added = tokio::spawn(async move {
+        let AddedScript { identifier } = session
+            .send("Page.addScriptToEvaluateOnNewDocument", params)
+            .await?;
+        Ok::<_, CoreError>(Registration {
+            session: Some(session),
+            identifier,
+        })
+    });
+    added.await.unwrap_or_else(|join| {
+        Err(CoreError::Message(format!(
+            "the task that registered an init script ended without an answer: {join}"
+        )))
     })
 }
 
