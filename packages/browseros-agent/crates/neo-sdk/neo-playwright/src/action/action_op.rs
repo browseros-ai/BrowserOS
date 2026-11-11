@@ -912,3 +912,7 @@ fn drag_phases(options: &DragOptions) -> DragPhases {
         ),
     }
 }
+
+#[cfg(test)]
+#[path = "pointer_wire_tests.rs"]
+mod tests;
