@@ -45,7 +45,9 @@ pub(crate) struct ScreenshotInput {
     scale: Scale,
     #[serde(default, rename = "type")]
     image: ImageType,
-    /// JPEG only, 0 to 100.
+    #[serde(default)]
+    omit_background: bool,
+    /// JPEG and WebP, 0 to 100.
     #[serde(default)]
     quality: Option<u8>,
 }
@@ -59,10 +61,12 @@ impl ScreenshotInput {
                 "options.quality is unsupported for the png screenshots",
             ));
         }
-        if self.quality.is_some_and(|quality| quality > 100) {
+        if let Some(quality) = self.quality.filter(|quality| *quality > 100) {
             return Err(scope.fail(
                 ErrorCode::InvalidInput,
-                "options.quality is out of the range 0..100",
+                &format!(
+                    "Expected options.quality to be between 0 and 100 (inclusive), got {quality}"
+                ),
             ));
         }
         if let Some(clip) = self.clip {
@@ -80,6 +84,15 @@ impl ScreenshotInput {
             }
         }
         Ok(())
+    }
+
+    /// Chromium encodes WebP losslessly at quality 100, matching upstream's default.
+    fn encoding_quality(&self) -> Option<i64> {
+        match self.image {
+            ImageType::Png => None,
+            ImageType::Jpeg => Some(i64::from(self.quality.unwrap_or(80))),
+            ImageType::Webp => Some(i64::from(self.quality.unwrap_or(100))),
+        }
     }
 }
 
@@ -101,13 +114,14 @@ enum Caret {
     Initial,
 }
 
-/// Playwright's two screenshot formats.
+/// Playwright's screenshot formats; PNG and WebP support transparency.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum ImageType {
     #[default]
     Png,
     Jpeg,
+    Webp,
 }
 
 /// Captures the page as `input` asks.
@@ -122,6 +136,7 @@ pub(crate) async fn capture(
     let format = match input.image {
         ImageType::Png => ScreenshotFormat::Png,
         ImageType::Jpeg => ScreenshotFormat::Jpeg,
+        ImageType::Webp => ScreenshotFormat::Webp,
     };
     let capture = async {
         let backoff = Backoff::outer(scope.timeout());
@@ -151,6 +166,12 @@ pub(crate) async fn capture(
                 preparation
                     .wait_for_fonts(&page, scope, target.as_deref())
                     .await?;
+                if input.omit_background && input.image != ImageType::Jpeg {
+                    preparation
+                        .omit_background(page.root_session())
+                        .await
+                        .map_err(|error| scope.core_error(&error))?;
+                }
                 capture_pixels(pw, &page, scope, &input, target.as_deref(), format).await
             }
             .await;
@@ -201,7 +222,7 @@ async fn capture_pixels(
                 page.core_page().clone(),
                 ScreenshotCaptureOptions {
                     format: Some(format),
-                    quality: input.quality.map(i64::from),
+                    quality: input.encoding_quality(),
                     full_page: Some(false),
                     annotate: None,
                     clip: None,
@@ -229,11 +250,7 @@ async fn capture_pixels(
         "clip": { "x": clip.x, "y": clip.y, "width": clip.width, "height": clip.height, "scale": clip.scale },
         "captureBeyondViewport": geometry.beyond_viewport,
     });
-    let quality = match input.image {
-        ImageType::Png => None,
-        ImageType::Jpeg => Some(input.quality.unwrap_or(80)),
-    };
-    if let Some(quality) = quality
+    if let Some(quality) = input.encoding_quality()
         && let Value::Object(fields) = &mut params
     {
         fields.insert("quality".to_owned(), json!(quality));
