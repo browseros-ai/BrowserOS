@@ -12,6 +12,7 @@
 
 use std::time::Duration;
 
+use crate::action::attempt_log::AttemptLog;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::op_scope::{OpScope, Sent};
@@ -71,11 +72,13 @@ impl<'a> ElementRunner<'a> {
             };
             let pin = match self.call(&located, &resolve).await? {
                 Some(ProbeReply::Element { pin, .. }) => pin,
-                Some(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
+                // The locator matches nothing yet: polled again with nothing logged, as
+                // upstream's `continuePolling`.
+                Some(ProbeReply::None { stale_ref: None }) | None => continue,
+                Some(ProbeReply::Detached) => {
                     self.subject.detached()?;
                     continue;
                 }
-                None => continue,
                 Some(other) => return Err(self.subject.refused(other)),
             };
             // The edit can move the focus (a focus, a blur, a page handler of the event), so it
@@ -141,32 +144,40 @@ impl<'a> ElementRunner<'a> {
             };
             let inner = Backoff::inner();
             let mut target = self.subject.first_target();
+            // The attempt's lines wait until the element is seen (`attempt_log.rs`).
+            let mut attempt = AttemptLog::new(self.scope, false);
             for retry in 0.. {
                 let wait = inner.wait(retry);
-                self.scope.log(if retry == 0 {
+                attempt.log(if retry == 0 {
                     "attempting scroll into view action".to_owned()
                 } else {
                     "retrying scroll into view action".to_owned()
                 });
                 if retry > 0 && !wait.is_zero() {
-                    self.scope.log(format!("  waiting {}ms", wait.as_millis()));
+                    attempt.log(format!("  waiting {}ms", wait.as_millis()));
                 }
                 if self.scope.sleep(wait).await.is_err() {
                     return Err(timed_out(matched));
                 }
-                self.scope
-                    .log("  waiting for element to be stable".to_owned());
-                let (pin, rect) = match self
+                attempt.log("  waiting for element to be stable".to_owned());
+                let measured = self
                     .measure(&located, target.clone(), true, required_states)
-                    .await?
-                {
+                    .await?;
+                match measured {
+                    Measured::Rect(..) | Measured::Hidden => attempt.found(),
+                    // Nothing matched, or its world went: the next outer pass, with nothing
+                    // logged until the element was seen.
+                    Measured::Unmatched | Measured::Gone if !attempt.is_found() => break,
+                    Measured::Unmatched | Measured::Gone => {}
+                }
+                let (pin, rect) = match measured {
                     Measured::Rect(pin, rect) => (pin, rect),
                     Measured::Hidden => {
                         matched = true;
                         self.scope.log("  element is not visible".to_owned());
                         continue;
                     }
-                    Measured::Gone => {
+                    Measured::Gone | Measured::Unmatched => {
                         self.subject.detached()?;
                         break;
                     }
@@ -185,7 +196,7 @@ impl<'a> ElementRunner<'a> {
                         self.scope.log("  element is not stable".to_owned());
                     }
                     Measured::Hidden => self.scope.log("  element is not visible".to_owned()),
-                    Measured::Gone => {
+                    Measured::Gone | Measured::Unmatched => {
                         self.subject.detached()?;
                         break;
                     }
@@ -221,9 +232,8 @@ impl<'a> ElementRunner<'a> {
         Ok(match self.call(located, &request).await? {
             Some(ProbeReply::Measured { pin, rect, .. }) => Measured::Rect(pin, rect),
             Some(ProbeReply::State { .. }) => Measured::Hidden,
-            Some(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) | None => {
-                Measured::Gone
-            }
+            Some(ProbeReply::None { stale_ref: None }) => Measured::Unmatched,
+            Some(ProbeReply::Detached) | None => Measured::Gone,
             Some(other) => return Err(self.subject.refused(other)),
         })
     }
@@ -262,4 +272,6 @@ enum Measured {
     Hidden,
     /// It left the page, or its frame did: resolve again.
     Gone,
+    /// The locator matches nothing: resolve again; a detach once the element was seen.
+    Unmatched,
 }

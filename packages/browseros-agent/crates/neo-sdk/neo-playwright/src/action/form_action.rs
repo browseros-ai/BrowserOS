@@ -25,6 +25,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::action::actionability::state_name;
+use crate::action::attempt_log::AttemptLog;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::input::{self, Keyboard};
@@ -124,6 +125,8 @@ enum Ready {
     Missing(ElementState),
     /// The element or its world went away: the next outer pass.
     Gone,
+    /// The locator matches nothing yet: the next outer pass, with nothing logged.
+    Unmatched,
 }
 
 /// Where ② left the attempt.
@@ -210,24 +213,31 @@ impl<'a> FormRunner<'a> {
         let inner = Backoff::inner();
         let mut pin = None;
         let mut announced = false;
+        // The attempt's lines wait until the element is seen (`attempt_log.rs`).
+        let mut attempt = AttemptLog::new(self.scope, false);
         for retry in 0.. {
             let wait = inner.wait(retry);
             if retry == 0 {
-                self.scope.log(format!("attempting {} action", row.name));
+                attempt.log(format!("attempting {} action", row.name));
             } else {
-                self.scope.log(format!("retrying {} action", row.name));
+                attempt.log(format!("retrying {} action", row.name));
                 if !wait.is_zero() {
-                    self.scope.log(format!("  waiting {}ms", wait.as_millis()));
+                    attempt.log(format!("  waiting {}ms", wait.as_millis()));
                 }
             }
             if self.scope.sleep(wait).await.is_err() {
                 return Err(self.timed_out());
             }
             if !self.force {
-                self.scope
-                    .log(format!("  waiting for element to be {}", row.waits_for));
+                attempt.log(format!("  waiting for element to be {}", row.waits_for));
             }
-            let pinned = match self.ready(located, pin, row).await? {
+            let ready = self.ready(located, pin, row, attempt.is_found()).await?;
+            match &ready {
+                Ready::At { .. } | Ready::Missing(_) => attempt.found(),
+                Ready::Unmatched => return Ok(None),
+                Ready::Gone => {}
+            }
+            let pinned = match ready {
                 Ready::At { pin, sensitive } => {
                     self.matched = true;
                     if !announced {
@@ -242,7 +252,7 @@ impl<'a> FormRunner<'a> {
                         .log(format!("  element is not {}", state_name(state)));
                     continue;
                 }
-                Ready::Gone => return Ok(None),
+                Ready::Gone | Ready::Unmatched => return Ok(None),
             };
             pin = Some(pinned);
             match self.apply(located, pinned, edit).await? {
@@ -260,6 +270,7 @@ impl<'a> FormRunner<'a> {
         located: &Resolved,
         pin: Option<Pin>,
         row: &Row,
+        found: bool,
     ) -> Result<Ready, PlaywrightError> {
         let target = pin.map_or_else(|| self.subject.first_target(), ProbeTarget::Pin);
         let request = if self.force {
@@ -289,6 +300,7 @@ impl<'a> FormRunner<'a> {
                 sensitive: sensitive.is_some(),
             },
             Called::Reply(ProbeReply::State { missing }) => Ready::Missing(missing),
+            Called::Reply(ProbeReply::None { stale_ref: None }) if !found => Ready::Unmatched,
             Called::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
                 self.subject.detached()?;
                 Ready::Gone
