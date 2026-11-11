@@ -2423,7 +2423,11 @@
           "$neo": "page",
           "tab": 1007
         },
-        "waitUntil": "load"
+        "waitUntil": "load",
+        "publication": {
+          "id": 3,
+          "acknowledged": []
+        }
       }
     ],
     "page.goForward": [
@@ -2436,7 +2440,11 @@
           "$neo": "page",
           "tab": 1007
         },
-        "waitUntil": "load"
+        "waitUntil": "load",
+        "publication": {
+          "id": 4,
+          "acknowledged": []
+        }
       }
     ],
     "page.goto": [
@@ -2450,7 +2458,11 @@
           "tab": 1007
         },
         "url": "https://a.example/",
-        "waitUntil": "load"
+        "waitUntil": "load",
+        "publication": {
+          "id": 1,
+          "acknowledged": []
+        }
       },
       {
         "call": {
@@ -2463,7 +2475,11 @@
         },
         "frame": "F1",
         "url": "https://pay.example/",
-        "waitUntil": "load"
+        "waitUntil": "load",
+        "publication": {
+          "id": 5,
+          "acknowledged": []
+        }
       }
     ],
     "page.opener": [
@@ -2500,7 +2516,11 @@
           "$neo": "page",
           "tab": 1007
         },
-        "waitUntil": "load"
+        "waitUntil": "load",
+        "publication": {
+          "id": 2,
+          "acknowledged": []
+        }
       }
     ],
     "page.saveScreenshot": [

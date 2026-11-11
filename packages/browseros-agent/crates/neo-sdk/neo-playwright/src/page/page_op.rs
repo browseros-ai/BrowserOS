@@ -230,9 +230,10 @@ pub(crate) async fn invoke(
     match op {
         PageOp::SetViewportSize => viewport_size::set(pw, scope, args.decode(scope)?).await,
         PageOp::Goto => {
-            let (page, navigation, wait_until) = args.decode::<GotoInput>(scope)?.into_parts();
+            let (page, navigation, wait_until, publication) =
+                args.decode::<GotoInput>(scope)?.into_parts();
             let page = page.tab();
-            navigation::navigate(pw, scope, page, navigation, wait_until).await
+            navigation::navigate(pw, scope, page, navigation, wait_until, publication).await
         }
         PageOp::Reload => renavigate(pw, scope, args, Navigation::Reload).await,
         PageOp::GoBack => renavigate(pw, scope, args, Navigation::History(-1)).await,
@@ -338,9 +339,9 @@ async fn renavigate(
     args: OpArgs,
     navigation: Navigation,
 ) -> Result<Value, PlaywrightError> {
-    let (page, wait_until) = args.decode::<NavigateInput>(scope)?.into_parts();
+    let (page, wait_until, publication) = args.decode::<NavigateInput>(scope)?.into_parts();
     let page = page.tab();
-    navigation::navigate(pw, scope, page, navigation, wait_until).await
+    navigation::navigate(pw, scope, page, navigation, wait_until, publication).await
 }
 
 /// `page.close({ runBeforeUnload })`.

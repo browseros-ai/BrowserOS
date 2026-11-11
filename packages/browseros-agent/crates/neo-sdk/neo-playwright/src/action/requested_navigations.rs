@@ -23,12 +23,14 @@ use std::collections::HashSet;
 use std::future;
 
 use browseros_cdp::CdpEvent;
-use browseros_core::{FrameId, SessionId};
-use serde::Deserialize;
+use browseros_core::{FrameId, SessionId, TargetId};
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
+use crate::events::{EventHub, PageEvent, PageEventKind};
 use crate::op_scope::{Expired, OpScope};
+use crate::{ErrorCode, PlaywrightError};
 
 /// The CDP events of one click's tab, from just before its input.
 pub(crate) struct RequestedNavigations {
@@ -37,6 +39,8 @@ pub(crate) struct RequestedNavigations {
     sessions: Vec<SessionId>,
     /// Frames with a navigation requested and not yet committed or cancelled.
     pending: HashSet<String>,
+    /// Actual requested commits retained until the public journal catches up.
+    commits: Vec<Committed>,
 }
 
 #[derive(Deserialize)]
@@ -58,8 +62,51 @@ struct Navigated {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct NavigatedFrame {
     id: String,
+    #[serde(default)]
+    loader_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WithinDocument {
+    frame_id: String,
+    url: String,
+}
+
+/// The public event cut caused by this input, so JS can publish its waiting consumers first.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(crate) struct NavigationCut {
+    pub(crate) seq: u64,
+    pub(crate) at: u64,
+}
+
+/// Correlates each actual commit rather than borrowing an older event from the same frame.
+enum Committed {
+    Document {
+        frame: String,
+        loader: Option<String>,
+    },
+    SameDocument {
+        frame: String,
+        url: String,
+    },
+}
+
+impl Committed {
+    fn matches(&self, id: &FrameId, loader_id: Option<&str>, url: &str) -> bool {
+        match self {
+            Self::Document { frame, loader } => {
+                id.as_str() == frame && loader_id == loader.as_deref()
+            }
+            Self::SameDocument {
+                frame,
+                url: expected,
+            } => id.as_str() == frame && url == expected,
+        }
+    }
 }
 
 impl RequestedNavigations {
@@ -69,6 +116,7 @@ impl RequestedNavigations {
             events,
             sessions,
             pending: HashSet::new(),
+            commits: Vec::new(),
         }
     }
 
@@ -107,17 +155,86 @@ impl RequestedNavigations {
     /// Waits until every navigation requested so far committed or was cancelled, within the
     /// op's timeout. A request that reaches CDP after this starts is not waited for, as with
     /// upstream's barrier, which also closes when the action returns.
-    pub(crate) async fn settle(mut self, scope: &OpScope<'_>) -> Result<(), Expired> {
+    pub(crate) async fn settle(mut self, scope: &OpScope<'_>) -> Result<Self, Expired> {
         self.drain();
         while !self.pending.is_empty() {
             match scope.within(self.events.recv()).await? {
                 Ok(event) => self.apply(&event),
                 // Events were dropped, the ends perhaps among them: nothing left to wait on
                 // that could be told apart from a hang.
-                Err(RecvError::Lagged(_) | RecvError::Closed) => return Ok(()),
+                Err(RecvError::Lagged(_) | RecvError::Closed) => return Ok(self),
             }
         }
-        Ok(())
+        Ok(self)
+    }
+
+    /// Raw CDP and the public journal have different consumers. Wait for the same committed
+    /// documents to reach the journal before returning a cut; no timer guesses at readiness.
+    /// Loss or closure with unmatched commits is an observation failure after input, never
+    /// an absent/partial cut that could incorrectly report successful publication.
+    pub(crate) async fn publication(
+        &self,
+        scope: &OpScope<'_>,
+        hub: &EventHub,
+        target: &TargetId,
+        after: u64,
+    ) -> Result<Option<NavigationCut>, PlaywrightError> {
+        let mut pending: Vec<_> = self.commits.iter().collect();
+        let mut cut = None;
+        while !pending.is_empty() {
+            let changed = hub.changed();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let read = hub.read_after(after);
+            for record in read.records {
+                if !pending.is_empty()
+                    && matches!(&record.event, PageEvent::Closed(closed) if closed == target)
+                {
+                    return Err(scope
+                        .fail(
+                            ErrorCode::TargetClosed,
+                            "Page closed before navigation publication",
+                        )
+                        .after_input());
+                }
+                if let PageEvent::FrameLifecycle(event) = &record.event
+                    && event.target == *target
+                    && event.kind == PageEventKind::FrameNavigated
+                {
+                    let before = pending.len();
+                    pending.retain(|commit| {
+                        !commit.matches(
+                            &event.frame.id,
+                            event.frame.loader_id.as_deref(),
+                            &event.frame.url,
+                        )
+                    });
+                    if pending.len() != before {
+                        cut = Some(NavigationCut {
+                            seq: record.seq,
+                            at: record.at_ms,
+                        });
+                    }
+                }
+            }
+            if pending.is_empty() {
+                return Ok(cut);
+            }
+            if read.lost > 0 {
+                return Err(scope
+                    .fail(
+                        ErrorCode::Internal,
+                        "Navigation events were lost before click completion",
+                    )
+                    .after_input());
+            }
+            scope.within(changed).await.map_err(|_expired| {
+                scope
+                    .timed_out(ErrorCode::NavigationObservationTimeout)
+                    .after_input()
+            })?;
+        }
+        Ok(cut)
     }
 
     fn apply(&mut self, event: &CdpEvent) {
@@ -138,11 +255,26 @@ impl RequestedNavigations {
                 }
             }
             "Page.frameNavigated" => {
-                if let Ok(navigated) = serde_json::from_value::<Navigated>(params) {
-                    self.pending.remove(&navigated.frame.id);
+                if let Ok(navigated) = serde_json::from_value::<Navigated>(params)
+                    && self.pending.remove(&navigated.frame.id)
+                {
+                    self.commits.push(Committed::Document {
+                        frame: navigated.frame.id,
+                        loader: navigated.frame.loader_id,
+                    });
                 }
             }
-            "Page.navigatedWithinDocument" | "Page.frameStoppedLoading" | "Page.frameDetached" => {
+            "Page.navigatedWithinDocument" => {
+                if let Ok(frame) = serde_json::from_value::<WithinDocument>(params)
+                    && self.pending.remove(&frame.frame_id)
+                {
+                    self.commits.push(Committed::SameDocument {
+                        frame: frame.frame_id,
+                        url: frame.url,
+                    });
+                }
+            }
+            "Page.frameStoppedLoading" | "Page.frameDetached" => {
                 if let Ok(frame) = serde_json::from_value::<OfFrame>(params) {
                     self.pending.remove(&frame.frame_id);
                 }
@@ -158,12 +290,18 @@ mod tests {
     use std::time::Duration;
 
     use browseros_cdp::CdpEvent;
-    use browseros_core::{FrameId, SessionId};
+    use browseros_core::{FrameId, SessionId, TargetId};
     use serde_json::json;
     use tokio::sync::broadcast;
     use tokio::time;
 
-    use super::RequestedNavigations;
+    use super::{Committed, RequestedNavigations};
+    use crate::events::event_hub::LOG_CAPACITY;
+    use crate::events::{EventHub, PageEvent};
+    use crate::op_scope::OpScope;
+    use crate::target::CallHeader;
+    use crate::test_env::TestEnv;
+    use crate::{Answer, ErrorCode, Op};
 
     const SESSION: &str = "root";
 
@@ -217,6 +355,84 @@ mod tests {
             waited.is_err(),
             "neither the child's nor a committed navigation counts"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_publication_matches_the_committed_document_not_an_older_frame_event() {
+        let document = Committed::Document {
+            frame: "main".to_owned(),
+            loader: Some("new-loader".to_owned()),
+        };
+        let main = FrameId::from("main".to_owned());
+        let child = FrameId::from("child".to_owned());
+        assert!(!document.matches(&main, Some("old-loader"), "https://a.test/"));
+        assert!(!document.matches(&child, Some("new-loader"), "https://a.test/"));
+        assert!(document.matches(&main, Some("new-loader"), "https://a.test/"));
+        let same_document = Committed::SameDocument {
+            frame: "main".to_owned(),
+            url: "https://a.test/#next".to_owned(),
+        };
+        assert!(!same_document.matches(&main, None, "https://a.test/"));
+        assert!(same_document.matches(&main, None, "https://a.test/#next"));
+    }
+
+    #[test]
+    fn tests_that_only_requested_commits_need_publication() {
+        let (_events, mut watch) = watch();
+        watch.apply(&event(
+            "Page.frameNavigated",
+            json!({ "frame": { "id": "unrelated", "loaderId": "other" } }),
+        ));
+        watch.apply(&requested("cancelled"));
+        watch.apply(&event(
+            "Page.frameStoppedLoading",
+            json!({ "frameId": "cancelled" }),
+        ));
+        watch.apply(&requested("removed"));
+        watch.apply(&event(
+            "Page.frameDetached",
+            json!({ "frameId": "removed" }),
+        ));
+        assert!(watch.commits.is_empty());
+        assert!(watch.pending.is_empty());
+        watch.apply(&requested("main"));
+        watch.apply(&event(
+            "Page.frameNavigated",
+            json!({ "frame": { "id": "main", "loaderId": "new" } }),
+        ));
+        assert_eq!(watch.commits.len(), 1);
+        assert!(watch.commits[0].matches(
+            &FrameId::from("main".to_owned()),
+            Some("new"),
+            "https://a.test/"
+        ));
+    }
+
+    #[tokio::test]
+    async fn tests_that_journal_loss_cannot_silently_discard_an_unpublished_commit()
+    -> Result<(), Box<dyn Error>> {
+        let (hub, mut writer) = EventHub::new();
+        for _ in 0..=LOG_CAPACITY {
+            writer.record(PageEvent::Closed(TargetId("other".to_owned())));
+        }
+        let (_events, mut watch) = watch();
+        watch.apply(&requested("main"));
+        watch.apply(&event(
+            "Page.frameNavigated",
+            json!({ "frame": { "id": "main", "loaderId": "new" } }),
+        ));
+        let env = TestEnv::new();
+        let op = Op::from_name("locator.click").ok_or("click is registered")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        let failure = watch
+            .publication(&scope, &hub, &TargetId("main".to_owned()), 0)
+            .await;
+        let Err(error) = failure else {
+            panic!("a lost commit cannot publish successfully")
+        };
+        assert_eq!(error.code(), ErrorCode::Internal.as_str());
+        assert_eq!(error.answer(), Answer::Ambiguous);
         Ok(())
     }
 }

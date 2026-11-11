@@ -344,6 +344,7 @@ fn settle(
         observed,
         default_page,
         pumped,
+        completed_publications: state.take_publications(),
     });
 }
 
