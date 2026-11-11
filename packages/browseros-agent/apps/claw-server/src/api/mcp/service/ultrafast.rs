@@ -16,6 +16,7 @@ use crate::{
             self, FlowExec, FlowStatus,
             brief::{self, CallTrace, RunTrace},
             compose::{self, Mode},
+            consent::{self, Decision},
             journal as run_journal,
             lifecycle::{self, Cause, Event},
             outcome::{self, Outcome},
@@ -37,7 +38,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 pub(in crate::api::mcp) const RUN_SKILL_TOOL_NAME: &str = "run_skill";
-const RUN_SKILL_DESCRIPTION: &str = "Run a saved BrowserOS neo skill's verified ultrafast flow with new inputs. Use it first whenever a skill's SKILL.md says \"Run it fast\". Returns one of three statuses. done: the task is finished; report the output. needs_agent: the flow stopped at a step; you now own the page it left open, and the reply has a compact view of it, whether the write already happened (effects.committed: never redo a write that is true, check the page when it is \"unknown\"), and the steps still to do. Continue from there with your normal tools, and follow its repair note if it has one. refused: nothing ran; call mark_skill_run and follow the skill's steps.";
+const RUN_SKILL_DESCRIPTION: &str = "Run a saved BrowserOS neo skill's verified ultrafast flow with new inputs. Use it first whenever a skill's SKILL.md says \"Run it fast\". Returns one of three statuses. done: the task is finished; report the output. needs_agent: the flow stopped at a step; you now own the page it left open, and the reply has a compact view of it, whether the write already happened (effects.committed: never redo a write that is true, check the page when it is \"unknown\"), and the steps still to do. Continue from there with your normal tools, and follow its repair note if it has one. refused: nothing ran; follow its next note. With reason needs_consent, ask the user the question it gives you before anything else.";
 
 pub(super) fn run_skill_tool() -> Tool {
     let Value::Object(input_schema) = json!({
@@ -65,7 +66,10 @@ enum Refusal {
     NoFlow,
     FlowBroken,
     InputsInvalid,
-    WriteNeedsConfirm,
+    /// The user chose to run this write skill with their agent.
+    WithAgent,
+    /// The click pays, orders, sends or deletes, so it never runs without the agent.
+    AlwaysWithAgent,
 }
 
 impl Refusal {
@@ -74,15 +78,16 @@ impl Refusal {
             Self::NoFlow => "no_flow",
             Self::FlowBroken => "flow_broken",
             Self::InputsInvalid => "inputs_invalid",
-            Self::WriteNeedsConfirm => "write_needs_confirm",
+            Self::WithAgent => "with_agent",
+            Self::AlwaysWithAgent => "always_with_agent",
         }
     }
 }
 
 fn refused(reason: Refusal, name: &str, detail: &str) -> ToolResult {
     let next = match reason {
-        Refusal::WriteNeedsConfirm => format!(
-            "This skill performs a write, and its first ultrafast run needs a one-time approval from the user. Tell the user to open BrowserOS, Skills, {name}, and choose Allow writes. For now, call mark_skill_run with name {name} and follow the skill's steps."
+        Refusal::WithAgent | Refusal::AlwaysWithAgent => format!(
+            "It runs with you. Call mark_skill_run with name {name} and follow the skill's steps, reading each page as you go."
         ),
         Refusal::InputsInvalid => format!(
             "Fix the inputs ({detail}) and call run_skill again, or call mark_skill_run with name {name} and follow the skill's steps."
@@ -368,14 +373,44 @@ impl ClawMcpService {
             Ok(inputs) => inputs,
             Err(message) => return refused(Refusal::InputsInvalid, &name, &message),
         };
-        if doc.meta.effects == Effects::Write && !row.as_ref().is_some_and(flow::writes_allowed) {
-            return refused(
-                Refusal::WriteNeedsConfirm,
-                &name,
-                "write flows need a one-time approval",
-            );
-        }
         let labels = prose::prose_steps(&detail.body);
+        match consent::decision(row.as_ref(), &doc, &labels) {
+            Decision::WithoutAgent => {}
+            Decision::WithAgent => {
+                return refused(
+                    Refusal::WithAgent,
+                    &name,
+                    "the user chose to run this skill with you",
+                );
+            }
+            Decision::AlwaysWith(kind) => {
+                return refused(Refusal::AlwaysWithAgent, &name, kind.reason());
+            }
+            Decision::Undecided => {
+                let question = self.ask_consent(
+                    started,
+                    &name,
+                    &doc,
+                    &labels,
+                    row.as_ref(),
+                    detail.view.model.site.as_deref(),
+                );
+                let text = format!(
+                    "refused (needs_consent): nothing ran. This skill changes something, and the user hasn't chosen yet whether it runs with you or without you.\n{}",
+                    question.guidance
+                );
+                return ToolResult::text(
+                    text,
+                    Some(json!({
+                        "status": "refused",
+                        "reason": "needs_consent",
+                        "detail": "the user hasn't chosen whether this skill runs with or without you",
+                        "next": question.guidance,
+                        "consent": question.structured,
+                    })),
+                );
+            }
+        }
         let exec = SessionFlowExec {
             service: self,
             started,
@@ -645,6 +680,19 @@ fn flow_hosts(steps: &[store::FlowStep]) -> Vec<String> {
     hosts
 }
 
+/// What publishing a flow needs to ask the user about running it without the agent.
+struct Asking<'a> {
+    started: &'a StartedSession,
+    labels: &'a [String],
+    site: Option<&'a str>,
+}
+
+/// The question for the agent to put to the user, as guidance text and as structured content.
+struct ConsentQuestion {
+    guidance: String,
+    structured: Value,
+}
+
 fn run_it_fast(doc: &FlowDoc, status: FlowStatus) -> RunItFast {
     RunItFast {
         status: status.as_str(),
@@ -658,6 +706,175 @@ fn run_it_fast(doc: &FlowDoc, status: FlowStatus) -> RunItFast {
 }
 
 impl ClawMcpService {
+    /// Mints a single-use token for this click and phrases the question around it.
+    fn ask_consent(
+        &self,
+        started: &StartedSession,
+        name: &str,
+        doc: &FlowDoc,
+        labels: &[String],
+        row: Option<&crate::db::entities::skill_flows::Model>,
+        skill_site: Option<&str>,
+    ) -> ConsentQuestion {
+        let now = now_epoch_ms();
+        let click =
+            consent::commit_label(doc, labels).unwrap_or_else(|| "its last step".to_string());
+        let site = consent::site_label(doc, skill_site);
+        let fast_seconds = consent::fast_seconds(row.and_then(|row| row.p50_ms));
+        let token = self.state.consent_tokens.mint(
+            consent::Pending {
+                session: started.session.id().as_str().to_string(),
+                skill: name.to_string(),
+                flow_version: doc.meta.flow_version,
+                commit: consent::commit_fingerprint(doc, labels).unwrap_or_default(),
+                expires_at: now + consent::TOKEN_TTL_MS,
+            },
+            now,
+        );
+        let question = consent::Question {
+            name,
+            click: &click,
+            site: &site,
+            fast_seconds,
+            token: &token,
+            reask: consent::is_reask(row, doc, labels),
+        };
+        ConsentQuestion {
+            guidance: question.guidance(),
+            structured: json!({
+                "token": token,
+                "expiresInSec": consent::TOKEN_TTL_MS / 1000,
+                "click": click,
+                "site": site,
+                "fastSeconds": fast_seconds,
+                "reask": question.reask,
+                "facts": question.facts(),
+            }),
+        }
+    }
+
+    /// The user's answer, relayed by the agent: run without the agent (`allow: true`), or with
+    /// it. `{ allow: false }` with no token takes an earlier "without" back.
+    async fn record_consent(&self, started: &StartedSession, raw_args: &Value) -> ToolResult {
+        let Some(name) = raw_args
+            .get("name")
+            .and_then(Value::as_str)
+            .map(neo_prefixed)
+        else {
+            return ToolResult::error("name must be a skill name");
+        };
+        let consent_args = &raw_args["consent"];
+        let Some(allow) = consent_args.get("allow").and_then(Value::as_bool) else {
+            return ToolResult::error(
+                "consent.allow must be true (run without you) or false (run with you)",
+            );
+        };
+        let token = consent_args.get("token").and_then(Value::as_str);
+        let answer = consent_args
+            .get("answer")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|answer| !answer.is_empty())
+            .map(|answer| answer.chars().take(MAX_ANSWER_CHARS).collect::<String>());
+        let Ok(detail) = self.state.skills.get(&name).await else {
+            return ToolResult::error("no skill has that name");
+        };
+        let mut row = match self.state.skills.flow_row(&name).await {
+            Ok(Some(row)) => row,
+            Ok(None) => return ToolResult::error("this skill has no fast version to choose for"),
+            Err(error) => return ToolResult::error(error.to_string()),
+        };
+        let doc = match store::read(&self.state.skills.skill_dir(&name)) {
+            Ok(Some(doc)) => doc,
+            Ok(None) => return ToolResult::error("this skill has no fast version to choose for"),
+            Err(error) => {
+                return ToolResult::error(format!("the flow file is unreadable: {error}"));
+            }
+        };
+        let labels = prose::prose_steps(&detail.body);
+        let Some(fingerprint) = consent::commit_fingerprint(&doc, &labels) else {
+            return ToolResult::error(
+                "this skill doesn't change anything, so there is nothing to choose",
+            );
+        };
+        if let Some(kind) = consent::always_with_agent(&doc, &labels) {
+            return ToolResult::text(
+                format!(
+                    "{} Skills like this always run with you, so there is nothing to choose.",
+                    kind.reason()
+                ),
+                Some(json!({ "runs": "with_agent", "alwaysWithAgent": kind.as_str() })),
+            );
+        }
+        let now = now_epoch_ms();
+        match token {
+            None if allow => {
+                return ToolResult::error(format!(
+                    "running without you needs the user's answer to the question: call run_skill with name {name} to get it, ask them, then send their answer with that token"
+                ));
+            }
+            None => {}
+            Some(token) => {
+                let Some(pending) = self.state.consent_tokens.take(token, now) else {
+                    return ToolResult::error(format!(
+                        "that token is used up or has expired. Call run_skill with name {name} to get a new question, and ask the user again."
+                    ));
+                };
+                let session_id = started.session.id().as_str();
+                if pending.session != session_id
+                    || pending.skill != name
+                    || pending.flow_version != doc.meta.flow_version
+                    || pending.commit != fingerprint
+                {
+                    return ToolResult::error(format!(
+                        "that token was for a different question. Call run_skill with name {name} to get the current one, and ask the user again."
+                    ));
+                }
+                if allow && answer.is_none() {
+                    return ToolResult::error(
+                        "send the user's exact words in consent.answer along with allow: true",
+                    );
+                }
+            }
+        }
+        let click =
+            consent::commit_label(&doc, &labels).unwrap_or_else(|| "its last step".to_string());
+        let site = consent::site_label(&doc, detail.view.model.site.as_deref());
+        row.write_approved = allow;
+        row.approved_commit = allow.then(|| fingerprint.clone());
+        row.with_agent_commit = (!allow).then(|| fingerprint.clone());
+        row.approved_via = Some("chat".to_string());
+        row.approved_at = Some(now);
+        row.approved_answer = answer;
+        row.approved_client = Some(started.agent_label.clone());
+        row.updated_at = now;
+        if let Err(error) = self.state.skills.put_flow_row(row).await {
+            return ToolResult::error(error.to_string());
+        }
+        let fast = run_it_fast(&doc, FlowStatus::Verified);
+        let mode = if allow {
+            SkillMd::Fast(&fast)
+        } else {
+            SkillMd::Plain
+        };
+        if let Err(error) = self.state.skills.rerender(&name, mode).await {
+            warn!(error = %error, "re-rendering SKILL.md failed");
+        }
+        if allow {
+            ToolResult::text(
+                format!(
+                    "without_agent: neo will run /{name} by itself, including this click: {click} (on {site})."
+                ),
+                Some(json!({ "runs": "without_agent" })),
+            )
+        } else {
+            ToolResult::text(
+                format!("with_agent: /{name} runs with you."),
+                Some(json!({ "runs": "with_agent" })),
+            )
+        }
+    }
+
     /// `save_skill` while ultrafast skills are on. The first call saves the prose exactly as
     /// before and returns a trace brief; a second call with `flow` compiles and verifies it.
     pub(super) async fn save_skill_ultrafast(
@@ -666,6 +883,12 @@ impl ClawMcpService {
         raw_args: &Value,
         client_cancel: CancellationToken,
     ) -> ToolResult {
+        if raw_args.get("consent").is_some()
+            && raw_args.get("flow").is_none()
+            && raw_args.get("patch").is_none()
+        {
+            return self.record_consent(started, raw_args).await;
+        }
         if raw_args.get("ultrafast").and_then(Value::as_str) == Some("skip") {
             return self.skip_ultrafast(raw_args).await;
         }
@@ -844,7 +1067,12 @@ impl ClawMcpService {
             cancel: client_cancel,
         };
         let verdict = verify::verify(&exec, &doc, &labels).await;
-        self.settle(&name, doc, verdict, &session_id, is_patch)
+        let asked = Asking {
+            started,
+            labels: &labels,
+            site: detail.view.model.site.as_deref(),
+        };
+        self.settle(&name, doc, verdict, &session_id, is_patch, &asked)
             .await
     }
 
@@ -856,6 +1084,7 @@ impl ClawMcpService {
         verdict: Result<verify::Pass, verify::Failure>,
         session_id: &str,
         is_patch: bool,
+        asked: &Asking<'_>,
     ) -> ToolResult {
         let mut row = match self.state.skills.flow_row(name).await {
             Ok(row) => row.unwrap_or_else(|| flow::new_row(name, FlowStatus::Pending)),
@@ -872,8 +1101,6 @@ impl ClawMcpService {
             Ok(pass) => {
                 let next = lifecycle::next(state, Event::FlowPassed);
                 doc.meta.flow_version = row.flow_version + 1;
-                let same_effects = row.effects.as_deref() == Some(doc.meta.effects.as_str());
-                row.write_approved = row.write_approved && same_effects;
                 row.status = next.status.as_str().to_string();
                 row.status_reason = None;
                 row.flow_version = doc.meta.flow_version;
@@ -903,15 +1130,14 @@ impl ClawMcpService {
                         return ToolResult::error(format!("saving the flow failed: {error}"));
                     }
                 }
-                if let Err(error) = self
-                    .state
-                    .skills
-                    .rerender(
-                        name,
-                        SkillMd::Fast(&run_it_fast(&doc, FlowStatus::Verified)),
-                    )
-                    .await
-                {
+                let decision = consent::decision(Some(&row), &doc, asked.labels);
+                let fast = run_it_fast(&doc, FlowStatus::Verified);
+                let mode = if consent::offers_run_skill(decision) {
+                    SkillMd::Fast(&fast)
+                } else {
+                    SkillMd::Plain
+                };
+                if let Err(error) = self.state.skills.rerender(name, mode).await {
                     warn!(error = %error, "re-rendering SKILL.md failed");
                 }
                 run_journal::remove(&self.state.config.browserclaw_dir, session_id);
@@ -923,7 +1149,7 @@ impl ClawMcpService {
                     .collect();
                 let repaired = matches!(before, FlowStatus::Degraded | FlowStatus::Broken);
                 let mut text = format!(
-                    "ultrafast: {} on {} inputs ({}), p50 {} ms. /{name} runs through run_skill. Writes were not performed while verifying.",
+                    "ultrafast: {} on {} inputs ({}), p50 {} ms. Writes were not performed while verifying.",
                     if repaired {
                         "repaired and verified"
                     } else {
@@ -933,21 +1159,50 @@ impl ClawMcpService {
                     tried.join(", "),
                     pass.p50_ms
                 );
-                if doc.meta.effects == Effects::Write && !flow::writes_allowed(&row) {
-                    text.push_str(&format!(
-                        " Its first live run needs a one-time approval: BrowserOS, Skills, {name}, Allow writes."
-                    ));
+                let mut structured = json!({
+                    "ultrafast": "verified",
+                    "flowVersion": doc.meta.flow_version,
+                    "p50Ms": pass.p50_ms,
+                    "examples": doc.meta.examples.len(),
+                    "repaired": repaired,
+                });
+                match decision {
+                    Decision::WithoutAgent => {
+                        text.push_str(&format!(" /{name} runs through run_skill."));
+                        if doc.meta.effects == Effects::Write {
+                            structured["runs"] = json!("without_agent");
+                        }
+                    }
+                    Decision::WithAgent => {
+                        text.push_str(&format!(
+                            " The user chose to run /{name} with you, so nothing to ask: it keeps running the regular way."
+                        ));
+                        structured["runs"] = json!("with_agent");
+                    }
+                    Decision::AlwaysWith(kind) => {
+                        text.push_str(&format!(
+                            " {} Skills like this always run with you, so there is nothing to ask.",
+                            kind.reason()
+                        ));
+                        structured["runs"] = json!("with_agent");
+                        structured["alwaysWithAgent"] = json!(kind.as_str());
+                    }
+                    Decision::Undecided => {
+                        let question = self.ask_consent(
+                            asked.started,
+                            name,
+                            &doc,
+                            asked.labels,
+                            Some(&row),
+                            asked.site,
+                        );
+                        text.push('\n');
+                        text.push_str(&question.guidance);
+                        structured["ultrafast"] = json!("needs_consent");
+                        structured["consent"] = question.structured;
+                    }
                 }
-                ToolResult::text(
-                    text,
-                    Some(json!({
-                        "ultrafast": "verified",
-                        "flowVersion": doc.meta.flow_version,
-                        "p50Ms": pass.p50_ms,
-                        "examples": doc.meta.examples.len(),
-                        "repaired": repaired,
-                    })),
-                )
+                ToolResult::text(text, Some(structured))
             }
             Err(failure) => {
                 let next = lifecycle::next(state, Event::FlowFailed);
@@ -1035,13 +1290,20 @@ impl ClawMcpService {
             ));
         }
         row.updated_at = now_epoch_ms();
-        if let Err(error) = self.state.skills.put_flow_row(row).await {
+        if let Err(error) = self.state.skills.put_flow_row(row.clone()).await {
             warn!(error = %error, "recording the flow status failed");
             return;
         }
         if next.status != before.status {
+            let labels = match self.state.skills.get(name).await {
+                Ok(detail) => prose::prose_steps(&detail.body),
+                Err(_) => Vec::new(),
+            };
             let fast = doc
                 .filter(|_| next.status.runs())
+                .filter(|doc| {
+                    consent::offers_run_skill(consent::decision(Some(&row), doc, &labels))
+                })
                 .map(|doc| run_it_fast(doc, next.status));
             let mode = match (&fast, next.status) {
                 (Some(fast), _) => SkillMd::Fast(fast),
@@ -1115,7 +1377,10 @@ impl ClawMcpService {
     }
 }
 
-const SAVE_SKILL_ULTRAFAST_NOTE: &str = " With ultrafast skills on, saving takes two calls. The first (name, description, steps) saves the skill exactly as before and returns a trace brief of this session's run scripts. Answer it with a second call carrying the same name and a flow: one step function per numbered step, inputs, output, effects, and at least 3 example inputs, the first being this run's. The server verifies the flow on every example without performing writes, and the skill then runs in about a second through run_skill. Send the same call again to repair a flow. Send ultrafast: \"skip\" with a reason when the task needs judgement on every run.";
+/// Keeps a pasted essay from filling the stored answer.
+const MAX_ANSWER_CHARS: usize = 500;
+
+const SAVE_SKILL_ULTRAFAST_NOTE: &str = " With ultrafast skills on, saving takes two calls. The first (name, description, steps) saves the skill exactly as before and returns a trace brief of this session's run scripts. Answer it with a second call carrying the same name and a flow: one step function per numbered step, inputs, output, effects, and at least 3 example inputs, the first being this run's. The server verifies the flow on every example without performing writes, and the skill then runs in about a second through run_skill. Send the same call again to repair a flow. Send ultrafast: \"skip\" with a reason when the task needs judgement on every run. When a skill changes something, a reply may ask you to put a question to the user; send their answer back with consent, exactly as that reply says.";
 
 /// `save_skill` as listed while ultrafast skills are on: the same tool, with the second call's
 /// fields, and `description` required only by the first call (checked by the server).
@@ -1161,6 +1426,19 @@ pub(super) fn ultrafast_save_skill_tool(base: &Tool) -> Tool {
         );
         properties.insert("reason".to_string(), json!({ "type": "string" }));
         properties.insert(
+            "consent".to_string(),
+            json!({
+                "type": "object",
+                "description": "Only after you asked the user the question a save_skill or run_skill reply gave you. token from that reply; allow: true means run without you, false means with you; answer is their exact words. { allow: false } alone switches an earlier choice back to running with you.",
+                "properties": {
+                    "token": { "type": "string" },
+                    "allow": { "type": "boolean" },
+                    "answer": { "type": "string" }
+                },
+                "required": ["allow"]
+            }),
+        );
+        properties.insert(
             "patch".to_string(),
             json!({
                 "type": "array",
@@ -1188,6 +1466,336 @@ impl ClawMcpService {
         } else {
             self.save_skill_tool.clone()
         }
+    }
+}
+
+#[cfg(test)]
+mod consent_tests {
+    use super::*;
+    use crate::services::{
+        flow::{new_row, store::FlowStep},
+        skills::{CreateSkill, SkillOrigin},
+    };
+
+    const SKILL: &str = "neo-shop-add";
+
+    struct Setup {
+        service: ClawMcpService,
+        started: StartedSession,
+        state: crate::AppState,
+    }
+
+    async fn setup(last_step: &str, commit_src: &str) -> anyhow::Result<Setup> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let session = call
+            .identity
+            .as_ref()
+            .map(|identity| identity.session.clone())
+            .ok_or_else(|| anyhow::anyhow!("session missing"))?;
+        let state = call.state.clone();
+        state.ultrafast.set(true);
+        state
+            .skills
+            .create(CreateSkill {
+                name: SKILL.to_string(),
+                description: "Add a product to the Amazon cart".to_string(),
+                site: Some("amazon.in".to_string()),
+                steps: vec!["Open Amazon.".to_string(), last_step.to_string()],
+                learned_notes: vec![],
+                origin: SkillOrigin::Agent,
+                source_session_id: None,
+            })
+            .await?;
+        let doc = FlowDoc {
+            meta: store::FlowMeta {
+                name: SKILL.to_string(),
+                flow_version: 1,
+                effects: Effects::Write,
+                hosts: vec!["www.amazon.in".to_string()],
+                inputs: Default::default(),
+                output: Default::default(),
+                examples: vec![],
+                source_session: None,
+                prose_hash: None,
+            },
+            steps: vec![
+                FlowStep {
+                    n: 1,
+                    commit: false,
+                    src: "async (s) => { await s.page.goto('https://www.amazon.in') }".to_string(),
+                },
+                FlowStep {
+                    n: 2,
+                    commit: true,
+                    src: commit_src.to_string(),
+                },
+            ],
+        };
+        store::write(&state.skills.skill_dir(SKILL), &doc)?;
+        let mut row = new_row(SKILL, FlowStatus::Verified);
+        row.effects = Some("write".to_string());
+        row.flow_version = 1;
+        row.p50_ms = Some(2_100);
+        state.skills.put_flow_row(row).await?;
+        Ok(Setup {
+            service: ClawMcpService::new(state.clone()),
+            started: StartedSession {
+                session,
+                agent_label: "Claude Code".to_string(),
+            },
+            state,
+        })
+    }
+
+    const ADD_TO_CART: &str = "async (s) => { await s.page.click({ name: 'Add to cart' }) }";
+
+    fn structured(result: &CallToolResult) -> Value {
+        result.structured_content.clone().unwrap_or(Value::Null)
+    }
+
+    fn text(result: &CallToolResult) -> String {
+        result
+            .content
+            .first()
+            .and_then(|block| block.as_text())
+            .map(|text| text.text.clone())
+            .unwrap_or_default()
+    }
+
+    impl Setup {
+        async fn run_skill(&self) -> CallToolResult {
+            self.service
+                .call_run_skill(
+                    &self.started,
+                    &json!({ "name": SKILL }),
+                    CancellationToken::new(),
+                )
+                .await
+        }
+
+        async fn answer(&self, consent: Value) -> CallToolResult {
+            self.service
+                .call_save_skill(
+                    &self.started,
+                    &json!({ "name": SKILL, "consent": consent }),
+                    CancellationToken::new(),
+                )
+                .await
+        }
+
+        async fn token(&self) -> String {
+            let asked = self.run_skill().await;
+            structured(&asked)["consent"]["token"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_undecided_write_skill_asks_before_anything_runs() -> anyhow::Result<()> {
+        let setup = setup("Add it to the cart.", ADD_TO_CART).await?;
+        let asked = setup.run_skill().await;
+        let body = structured(&asked);
+        assert_eq!(body["status"], "refused", "{body}");
+        assert_eq!(body["reason"], "needs_consent");
+        assert_eq!(body["consent"]["click"], "Add it to the cart.");
+        assert_eq!(body["consent"]["site"], "amazon.in");
+        assert_eq!(body["consent"]["fastSeconds"], 3);
+        assert_eq!(body["consent"]["reask"], false);
+        let guidance = text(&asked);
+        assert!(guidance.contains("with me or without me?"), "{guidance}");
+        assert!(guidance.contains("Never answer for the user"), "{guidance}");
+        assert!(
+            !guidance.contains("BrowserOS, Skills"),
+            "no pointer to the app: {guidance}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn without_the_agent_is_recorded_with_the_users_words_and_the_token_works_once()
+    -> anyhow::Result<()> {
+        let setup = setup("Add it to the cart.", ADD_TO_CART).await?;
+        let token = setup.token().await;
+
+        let missing_words = setup.answer(json!({ "token": token, "allow": true })).await;
+        assert_eq!(missing_words.is_error, Some(true));
+        let fresh = setup.token().await;
+        let answered = setup
+            .answer(json!({ "token": fresh, "allow": true, "answer": "without you is fine" }))
+            .await;
+        assert_ne!(answered.is_error, Some(true), "{answered:?}");
+        assert_eq!(structured(&answered)["runs"], "without_agent");
+        assert!(text(&answered).contains("including this click: Add it to the cart."));
+
+        let row = setup
+            .state
+            .skills
+            .flow_row(SKILL)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("row"))?;
+        assert!(row.write_approved);
+        assert_eq!(row.approved_via.as_deref(), Some("chat"));
+        assert_eq!(row.approved_answer.as_deref(), Some("without you is fine"));
+        assert_eq!(row.approved_client.as_deref(), Some("Claude Code"));
+        let body = setup.state.skills.get(SKILL).await?.body;
+        assert!(body.contains("## Run it fast"), "{body}");
+
+        let replayed = setup
+            .answer(json!({ "token": fresh, "allow": true, "answer": "yes" }))
+            .await;
+        assert_eq!(replayed.is_error, Some(true), "a token works once");
+        assert!(text(&replayed).contains("used up or has expired"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn forged_and_borrowed_tokens_change_nothing() -> anyhow::Result<()> {
+        let setup = setup("Add it to the cart.", ADD_TO_CART).await?;
+        let forged = setup
+            .answer(json!({ "token": "c_000000000000", "allow": true, "answer": "yes" }))
+            .await;
+        assert_eq!(forged.is_error, Some(true));
+
+        let without_token = setup
+            .answer(json!({ "allow": true, "answer": "yes" }))
+            .await;
+        assert_eq!(without_token.is_error, Some(true));
+        assert!(text(&without_token).contains("needs the user's answer"));
+
+        // A token minted for another session's question.
+        let now = now_epoch_ms();
+        let borrowed = setup.state.consent_tokens.mint(
+            consent::Pending {
+                session: "another-session".to_string(),
+                skill: SKILL.to_string(),
+                flow_version: 1,
+                commit: "whatever".to_string(),
+                expires_at: now + consent::TOKEN_TTL_MS,
+            },
+            now,
+        );
+        let refused = setup
+            .answer(json!({ "token": borrowed, "allow": true, "answer": "yes" }))
+            .await;
+        assert_eq!(refused.is_error, Some(true));
+        assert!(text(&refused).contains("different question"));
+
+        let row = setup
+            .state
+            .skills
+            .flow_row(SKILL)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("row"))?;
+        assert!(!row.write_approved);
+        assert_eq!(row.approved_via, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn with_the_agent_is_kept_and_not_asked_again() -> anyhow::Result<()> {
+        let setup = setup("Add it to the cart.", ADD_TO_CART).await?;
+        let token = setup.token().await;
+        let answered = setup
+            .answer(json!({ "token": token, "allow": false, "answer": "with you please" }))
+            .await;
+        assert_eq!(structured(&answered)["runs"], "with_agent", "{answered:?}");
+
+        let refused = setup.run_skill().await;
+        let body = structured(&refused);
+        assert_eq!(body["reason"], "with_agent", "{body}");
+        assert!(body.get("consent").is_none(), "no second question: {body}");
+        let skill_md = setup.state.skills.get(SKILL).await?.body;
+        assert!(!skill_md.contains("run_skill"), "{skill_md}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_agent_can_switch_back_to_running_with_it() -> anyhow::Result<()> {
+        let setup = setup("Add it to the cart.", ADD_TO_CART).await?;
+        let token = setup.token().await;
+        setup
+            .answer(json!({ "token": token, "allow": true, "answer": "go ahead" }))
+            .await;
+        let back = setup.answer(json!({ "allow": false })).await;
+        assert_eq!(structured(&back)["runs"], "with_agent", "{back:?}");
+        let row = setup
+            .state
+            .skills
+            .flow_row(SKILL)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("row"))?;
+        assert!(!row.write_approved);
+        assert_eq!(structured(&setup.run_skill().await)["reason"], "with_agent");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_order_always_runs_with_the_agent_whatever_the_answer() -> anyhow::Result<()> {
+        let setup = setup(
+            "Place the order.",
+            "async (s) => { await s.page.click({ name: 'Place your order' }) }",
+        )
+        .await?;
+        let refused = setup.run_skill().await;
+        let body = structured(&refused);
+        assert_eq!(body["reason"], "always_with_agent", "{body}");
+        assert!(
+            body["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("places an order"))
+        );
+
+        let now = now_epoch_ms();
+        let token = setup.state.consent_tokens.mint(
+            consent::Pending {
+                session: setup.started.session.id().as_str().to_string(),
+                skill: SKILL.to_string(),
+                flow_version: 1,
+                commit: "anything".to_string(),
+                expires_at: now + consent::TOKEN_TTL_MS,
+            },
+            now,
+        );
+        let answered = setup
+            .answer(json!({ "token": token, "allow": true, "answer": "yes" }))
+            .await;
+        assert_eq!(
+            structured(&answered)["alwaysWithAgent"],
+            "order",
+            "{answered:?}"
+        );
+        let row = setup
+            .state
+            .skills
+            .flow_row(SKILL)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("row"))?;
+        assert!(!row.write_approved);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_changed_click_asks_again() -> anyhow::Result<()> {
+        let setup = setup("Add it to the cart.", ADD_TO_CART).await?;
+        let token = setup.token().await;
+        setup
+            .answer(json!({ "token": token, "allow": true, "answer": "fine" }))
+            .await;
+        let mut doc = store::read(&setup.state.skills.skill_dir(SKILL))?
+            .ok_or_else(|| anyhow::anyhow!("flow"))?;
+        doc.steps[1].src =
+            "async (s) => { await s.page.click({ name: 'Add to basket' }) }".to_string();
+        store::write(&setup.state.skills.skill_dir(SKILL), &doc)?;
+
+        let asked = setup.run_skill().await;
+        let body = structured(&asked);
+        assert_eq!(body["reason"], "needs_consent", "{body}");
+        assert_eq!(body["consent"]["reask"], true);
+        assert!(text(&asked).starts_with("refused (needs_consent)"));
+        assert!(text(&asked).contains("Their earlier choice covered a different click"));
+        Ok(())
     }
 }
 

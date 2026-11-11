@@ -278,6 +278,14 @@ components:
       $ref: ./schemas/skills.yaml#/SkillUltrafastStatus
     SkillUltrafast:
       $ref: ./schemas/skills.yaml#/SkillUltrafast
+    SkillUltrafastRunsMode:
+      $ref: ./schemas/skills.yaml#/SkillUltrafastRunsMode
+    SkillUltrafastAlwaysWith:
+      $ref: ./schemas/skills.yaml#/SkillUltrafastAlwaysWith
+    SkillUltrafastChoiceVia:
+      $ref: ./schemas/skills.yaml#/SkillUltrafastChoiceVia
+    SkillUltrafastRuns:
+      $ref: ./schemas/skills.yaml#/SkillUltrafastRuns
     SkillFlowSource:
       $ref: ./schemas/skills.yaml#/SkillFlowSource
     SkillRunMode:

@@ -29,6 +29,8 @@ type Structured = Record<string, unknown> & {
   effects?: { committed?: unknown }
   page?: { owned?: boolean }
   brief?: { runs?: Array<{ tag?: string }>; hints?: string[] }
+  consent?: { token?: string }
+  runs?: string
 }
 
 async function api(
@@ -59,7 +61,7 @@ async function closeMyPages(session: McpSession): Promise<void> {
     .catch(() => {})
 }
 
-/** Saves the shop add-to-cart skill as an ultrafast skill and approves its writes. */
+/** Saves the shop add-to-cart skill as an ultrafast skill and answers "without you" for its click. */
 async function savedShopSkill(
   ctx: CaseContext,
   session: McpSession,
@@ -79,16 +81,21 @@ async function savedShopSkill(
     examples: SHOP_EXAMPLES,
     ...SHOP_TYPES,
   })
-  if (verified.ultrafast !== 'verified') {
-    throw new Error(`expected a verified flow, got ${JSON.stringify(verified)}`)
+  if (verified.ultrafast !== 'needs_consent' || !verified.consent?.token) {
+    throw new Error(
+      `a verified write flow should ask the user: ${JSON.stringify(verified)}`,
+    )
   }
-  const approved = await api(
-    ctx,
-    'POST',
-    `/api/v1/skills/neo-${name}/ultrafast/approve-write`,
-  )
-  if (approved.status !== 200) {
-    throw new Error(`approve-write failed: ${approved.status}`)
+  const answered = await structured(session, 'save_skill', {
+    name,
+    consent: {
+      token: verified.consent.token,
+      allow: true,
+      answer: 'without you is fine',
+    },
+  })
+  if (answered.runs !== 'without_agent') {
+    throw new Error(`the answer was not recorded: ${JSON.stringify(answered)}`)
   }
 }
 
@@ -182,8 +189,10 @@ export const ultrafastCases: ContractCase[] = [
           examples: SHOP_EXAMPLES,
           ...SHOP_TYPES,
         })
-        if (second.ultrafast !== 'verified') {
-          throw new Error(`call 2 should verify: ${JSON.stringify(second)}`)
+        if (second.ultrafast !== 'needs_consent' || !second.consent?.token) {
+          throw new Error(
+            `call 2 should verify and ask the user: ${JSON.stringify(second)}`,
+          )
         }
         if (shop.state.cart.length !== before) {
           throw new Error('verification wrote to the cart')

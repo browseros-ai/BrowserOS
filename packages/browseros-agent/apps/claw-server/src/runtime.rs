@@ -10,6 +10,8 @@ use tracing::{error, info, warn};
 const TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const AUDIT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the ultrafast switch re-reads the plan. Buying or ending a plan shows up within this.
+const ULTRAFAST_GATE_EVERY: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Default)]
 pub struct ShutdownHandle {
@@ -192,13 +194,29 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
-                name: "skill file sync",
+                name: "ultrafast plan gate",
                 handle: tokio::spawn({
-                    let skills = state.skills.clone();
-                    let enabled = state.ultrafast_enabled();
+                    let state = state.clone();
+                    let cancel = shutdown.child_token();
                     async move {
-                        if let Err(error) = skills.sync_skill_md(enabled).await {
+                        // The first pass always brings SKILL.md in line, even when the plan
+                        // leaves the switch where it started.
+                        if !state.sync_ultrafast_with_plan().await
+                            && let Err(error) =
+                                state.skills.sync_skill_md(state.ultrafast_enabled()).await
+                        {
                             warn!(error = %error, "skill file sync failed");
+                        }
+                        // Polled rather than pushed: a plan also ends by the clock alone.
+                        let mut ticker = tokio::time::interval(ULTRAFAST_GATE_EVERY);
+                        ticker.tick().await;
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                _ = ticker.tick() => {
+                                    state.sync_ultrafast_with_plan().await;
+                                }
+                            }
                         }
                     }
                 }),

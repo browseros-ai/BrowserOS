@@ -92,7 +92,7 @@ mod tests {
         observe_run(&call).await?;
         assert!(run_journal::read(&dir, &session).is_empty());
 
-        call.state.ultrafast.store(true, Ordering::Relaxed);
+        call.state.ultrafast.set(true);
         observe_run(&call).await?;
         assert_eq!(run_journal::read(&dir, &session).len(), 1);
         Ok(())

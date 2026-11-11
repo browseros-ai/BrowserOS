@@ -17,10 +17,7 @@ use claw_server::{
     },
 };
 use serde_json::{Value, json};
-use std::{
-    sync::{Arc, atomic::Ordering},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -53,7 +50,7 @@ async fn test_app_with(ultrafast: bool) -> anyhow::Result<TestApp> {
         behavior_ignored: Vec::new(),
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
-    state.ultrafast.store(ultrafast, Ordering::Relaxed);
+    state.ultrafast.set(ultrafast);
     Ok(TestApp {
         router: build_router(state.clone()),
         _dir: dir,

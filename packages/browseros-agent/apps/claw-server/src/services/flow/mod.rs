@@ -2,22 +2,18 @@
 
 pub mod brief;
 pub mod compose;
+pub mod consent;
 pub mod journal;
 pub mod lifecycle;
 pub mod outcome;
 pub mod prose;
 pub mod store;
+pub mod switch;
 pub mod triage;
 pub mod verify;
 
-/// Write flows ask once before they run on their own.
+/// Write flows run with the agent until the user says otherwise for that click (see `consent`).
 pub const WRITES_ALLOWED_BY_DEFAULT: bool = false;
-
-/// Whether a write flow may run live without asking the user first.
-#[must_use]
-pub fn writes_allowed(row: &skill_flows::Model) -> bool {
-    WRITES_ALLOWED_BY_DEFAULT || row.write_approved
-}
 
 use crate::{clock::now_epoch_ms, db::entities::skill_flows};
 use compose::Mode;
@@ -122,6 +118,12 @@ pub fn new_row(skill_name: &str, status: FlowStatus) -> skill_flows::Model {
         site_failures: 0,
         effects: None,
         write_approved: false,
+        approved_commit: None,
+        approved_via: None,
+        approved_at: None,
+        approved_answer: None,
+        approved_client: None,
+        with_agent_commit: None,
         p50_ms: None,
         source_session_id: None,
         verified_at: None,
