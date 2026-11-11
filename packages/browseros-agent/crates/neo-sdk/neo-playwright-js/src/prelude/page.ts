@@ -12,18 +12,13 @@ import { invoke, invokeObserved, sleep } from './bridge'
 import type { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
 import { EventEmitter } from './emitter'
-import {
-  clientError,
-  plainError,
-  prefixed,
-  unsupportedError,
-  waitTimeoutError,
-} from './errors'
+import { clientError, plainError, prefixed, unsupportedError } from './errors'
 import {
   assertMaxArguments,
   type EvaluateOptions,
   pageCall,
 } from './evaluation'
+import { EventDeadline } from './event-deadline'
 import { checkReported, isReported } from './events'
 import {
   type ClickOptions,
@@ -1049,32 +1044,14 @@ export class Page extends EventEmitter {
     if (matcher !== undefined && !url && !predicate)
       throw clientError(api, 'url: expected a string, a RegExp or a function')
     const args = await frame._frameArgs(api)
-    const remaining = () => {
-      if (timeout === 0) return 0
-      const left = timeout - (Date.now() - since)
-      if (left <= 0)
-        throw waitTimeoutError(api, `Timeout ${timeout}ms exceeded.`)
-      return left
-    }
-    // Native calls share one deadline, but Playwright reports the originally requested
-    // timeout rather than the smaller budget of the final bridge call. Preserve the same
-    // error object so the dispatcher's ownership and delivery fields survive.
+    const deadline = new EventDeadline(api, null, since, timeout)
     const rethrow = (error: unknown): never => {
-      if (
-        error instanceof Error &&
-        error.name === 'TimeoutError' &&
-        timeout !== 0
-      )
-        error.message = error.message.replace(
-          /Timeout \d+ms exceeded\./,
-          `Timeout ${timeout}ms exceeded.`,
-        )
-      throw error
+      throw deadline.named(error)
     }
     for (;;) {
       const { value: result, observed } = await invokeObserved(
         'page.waitForNavigation',
-        frame._call(api, remaining()),
+        frame._call(api, deadline.left()),
         {
           ...args,
           since,
@@ -1088,13 +1065,15 @@ export class Page extends EventEmitter {
       after = result.navigationSeq
       let matched: unknown
       try {
-        matched = await predicate(URL.parse(result.url ?? '') ?? result.url)
+        matched = await deadline.race(
+          predicate(URL.parse(result.url ?? '') ?? result.url),
+        )
       } catch (error) {
         throw prefixed(api, error)
       }
       if (matched) {
         await frame
-          ._waitForLoadState(api, waitUntil, { timeout: remaining() })
+          ._waitForLoadState(api, waitUntil, { timeout: deadline.left() })
           .catch(rethrow)
         return response
       }

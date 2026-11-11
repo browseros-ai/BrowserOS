@@ -1,5 +1,5 @@
 /**
- * One `waitForEvent`'s deadline: the call's `since` stamp plus its timeout, or none for 0.
+ * One event or navigation wait's deadline: the call's `since` stamp plus its timeout, or none for 0.
  *
  * Rust times each `events.wait` from the op's own start, so the prelude keeps the deadline that
  * spans a wait and its re-waits: each op gets the time left, and a pending predicate races the
@@ -11,12 +11,18 @@ import { waitTimeoutError } from './errors'
 
 export class EventDeadline {
   private readonly api: string
-  private readonly event: string
+  private readonly event: string | null
   private readonly timeout: number
   /** The `Date.now()` the wait times out at; null for a timeout of 0, which means none. */
   private readonly endsAt: number | null
 
-  constructor(api: string, event: string, since: number, timeout: number) {
+  /** A null event uses waitForNavigation's plain timeout line. */
+  constructor(
+    api: string,
+    event: string | null,
+    since: number,
+    timeout: number,
+  ) {
     this.api = api
     this.event = event
     this.timeout = timeout
@@ -67,7 +73,9 @@ export class EventDeadline {
   }
 
   private message(): string {
-    return `Timeout ${this.timeout}ms exceeded while waiting for event "${this.event}"`
+    return this.event === null
+      ? `Timeout ${this.timeout}ms exceeded.`
+      : `Timeout ${this.timeout}ms exceeded while waiting for event "${this.event}"`
   }
 }
 

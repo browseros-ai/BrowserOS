@@ -39,6 +39,7 @@ mod target_watcher;
 
 pub(crate) use event_hub::EventHub;
 pub(crate) use event_op::EventOp;
+pub(crate) use navigation_event::NavigationEvent;
 pub(crate) use page_event::PageEvent;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};

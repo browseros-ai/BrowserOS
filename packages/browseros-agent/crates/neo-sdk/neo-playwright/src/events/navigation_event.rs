@@ -75,3 +75,59 @@ pub(crate) fn parse(method: &str, params: Value) -> Option<PageEvent> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use browseros_core::FrameId;
+    use serde_json::json;
+    use std::error::Error;
+
+    use super::parse;
+    use crate::events::PageEvent;
+
+    #[test]
+    fn tests_that_renderer_swaps_preserve_a_wait_but_removal_ends_it() {
+        assert_eq!(
+            parse(
+                "Page.frameDetached",
+                json!({"frameId":"child", "reason":"swap"})
+            ),
+            None
+        );
+        assert_eq!(
+            parse(
+                "Page.frameDetached",
+                json!({"frameId":"child", "reason":"remove"})
+            ),
+            Some(PageEvent::FrameDetached(FrameId("child".to_owned())))
+        );
+    }
+
+    #[test]
+    fn tests_that_commit_fragments_and_history_moves_keep_their_response_kind()
+    -> Result<(), Box<dyn Error>> {
+        let Some(PageEvent::Navigation(committed)) = parse(
+            "Page.frameNavigated",
+            json!({
+                "frame": {"id":"main", "url":"https://a.test/", "urlFragment":"#part"}
+            }),
+        ) else {
+            return Err("a commit must be journaled".into());
+        };
+        let Some(PageEvent::Navigation(history)) = parse(
+            "Page.navigatedWithinDocument",
+            json!({
+                "frameId":"main", "url":"https://a.test/#other"
+            }),
+        ) else {
+            return Err("a history move must be journaled".into());
+        };
+        assert_eq!(committed.url, "https://a.test/#part");
+        assert!(
+            committed.new_document,
+            "a committed document can have a response"
+        );
+        assert!(!history.new_document, "a history move must return null");
+        Ok(())
+    }
+}

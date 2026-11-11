@@ -7,7 +7,7 @@ use browseros_core::FrameId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::events::PageEvent;
+use crate::events::{NavigationEvent, PageEvent};
 use crate::op_output::to_output;
 use crate::op_scope::OpScope;
 use crate::page::document_watch::WatchError;
@@ -111,61 +111,14 @@ pub(crate) async fn wait_for_navigation(
                         );
                     }
                     PageEvent::Navigation(navigation) if navigation.frame == *frame => {
-                        if let Some(unreachable) = navigation.unreachable {
-                            return Err(scope.fail(
-                                ErrorCode::NavigationFailed,
-                                &format!("the browser could not load {unreachable}"),
-                            ));
-                        }
-                        scope.log(format!("  navigated to \"{}\"", navigation.url));
-                        // Resolve again after a commit: a child may have moved to a new CDP
-                        // session. Its stable frame id is the journal's correlation key.
-                        let mut followed =
-                            wait_for_url::follow(pw, &page, scope, input.frame.as_ref()).await?;
-                        if let Some(pattern) = &input.url
-                            && !wait_for_url::matches(
-                                &page,
-                                &followed.frame,
-                                pattern,
-                                navigation.url.clone(),
-                            )
-                            .await
-                            .map_err(|failure| resolve::failed(scope, failure))?
+                        if let Some(navigation) =
+                            complete_navigation(pw, scope, &page, &input, frame, navigation).await?
                         {
-                            continue;
+                            return Ok(NavigationReply {
+                                navigation,
+                                navigation_seq: record.seq,
+                            });
                         }
-                        loop {
-                            match followed.watch.reached(input.wait_until).await {
-                                Ok(()) => break,
-                                Err(WatchError::Left) => {
-                                    followed = wait_for_url::follow(
-                                        pw,
-                                        &page,
-                                        scope,
-                                        input.frame.as_ref(),
-                                    )
-                                    .await?;
-                                }
-                                Err(error) => return Err(navigation::watch_error(scope, &error)),
-                            }
-                        }
-                        let response = if navigation.new_document {
-                            navigation::read_response(
-                                &followed.frame.endpoint.session,
-                                &navigation.url,
-                                Some(frame),
-                            )
-                            .await
-                        } else {
-                            None
-                        };
-                        return Ok(NavigationReply {
-                            navigation: NavigationResult {
-                                response,
-                                url: Some(navigation.url),
-                            },
-                            navigation_seq: record.seq,
-                        });
                     }
                     _ => {}
                 }
@@ -178,4 +131,52 @@ pub(crate) async fn wait_for_navigation(
         Ok(result) => to_output(scope, &result?),
         Err(_expired) => Err(scope.timed_out(ErrorCode::WaitTimeout)),
     }
+}
+
+/// Resolve a committed frame on its current renderer, check its event URL, then await the
+/// lifecycle state. Matching the event URL preserves transient navigation steps even if the
+/// document has already moved on by the time the isolated world answers.
+async fn complete_navigation(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    input: &WaitForNavigationInput,
+    frame: &FrameId,
+    event: NavigationEvent,
+) -> Result<Option<NavigationResult>, PlaywrightError> {
+    if let Some(unreachable) = event.unreachable {
+        return Err(scope.fail(
+            ErrorCode::NavigationFailed,
+            &format!("the browser could not load {unreachable}"),
+        ));
+    }
+    scope.log(format!("  navigated to \"{}\"", event.url));
+    // A child may have moved to another CDP session. Its stable frame id is the journal's
+    // correlation key; worlds and lifecycle observations must use its new session.
+    let mut followed = wait_for_url::follow(pw, page, scope, input.frame.as_ref()).await?;
+    if let Some(pattern) = &input.url
+        && !wait_for_url::matches(page, &followed.frame, pattern, event.url.clone())
+            .await
+            .map_err(|failure| resolve::failed(scope, failure))?
+    {
+        return Ok(None);
+    }
+    loop {
+        match followed.watch.reached(input.wait_until).await {
+            Ok(()) => break,
+            Err(WatchError::Left) => {
+                followed = wait_for_url::follow(pw, page, scope, input.frame.as_ref()).await?;
+            }
+            Err(error) => return Err(navigation::watch_error(scope, &error)),
+        }
+    }
+    let response = if event.new_document {
+        navigation::read_response(&followed.frame.endpoint.session, &event.url, Some(frame)).await
+    } else {
+        None
+    };
+    Ok(Some(NavigationResult {
+        response,
+        url: Some(event.url),
+    }))
 }

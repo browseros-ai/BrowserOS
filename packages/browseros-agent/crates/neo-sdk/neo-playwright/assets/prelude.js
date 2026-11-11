@@ -1207,7 +1207,7 @@
       return waitTimeoutError(this.api, this.message());
     }
     message() {
-      return `Timeout ${this.timeout}ms exceeded while waiting for event "${this.event}"`;
+      return this.event === null ? `Timeout ${this.timeout}ms exceeded.` : `Timeout ${this.timeout}ms exceeded while waiting for event "${this.event}"`;
     }
   }
   function isThenable(value) {
@@ -7925,21 +7925,12 @@ ${value.stack}`;
       if (matcher !== undefined && !url && !predicate)
         throw clientError(api, "url: expected a string, a RegExp or a function");
       const args = await frame._frameArgs(api);
-      const remaining = () => {
-        if (timeout === 0)
-          return 0;
-        const left = timeout - (Date.now() - since);
-        if (left <= 0)
-          throw waitTimeoutError(api, `Timeout ${timeout}ms exceeded.`);
-        return left;
-      };
+      const deadline = new EventDeadline(api, null, since, timeout);
       const rethrow = (error) => {
-        if (error instanceof Error && error.name === "TimeoutError" && timeout !== 0)
-          error.message = error.message.replace(/Timeout \d+ms exceeded\./, `Timeout ${timeout}ms exceeded.`);
-        throw error;
+        throw deadline.named(error);
       };
       for (;; ) {
-        const { value: result, observed } = await invokeObserved("page.waitForNavigation", frame._call(api, remaining()), {
+        const { value: result, observed } = await invokeObserved("page.waitForNavigation", frame._call(api, deadline.left()), {
           ...args,
           since,
           after,
@@ -7952,12 +7943,12 @@ ${value.stack}`;
         after = result.navigationSeq;
         let matched;
         try {
-          matched = await predicate(URL.parse(result.url ?? "") ?? result.url);
+          matched = await deadline.race(predicate(URL.parse(result.url ?? "") ?? result.url));
         } catch (error) {
           throw prefixed(api, error);
         }
         if (matched) {
-          await frame._waitForLoadState(api, waitUntil, { timeout: remaining() }).catch(rethrow);
+          await frame._waitForLoadState(api, waitUntil, { timeout: deadline.left() }).catch(rethrow);
           return response;
         }
       }
