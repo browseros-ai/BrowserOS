@@ -1,6 +1,6 @@
 // setInputFiles in the prelude: upstream's client and channel checks, with the messages and
-// error names playwright-core 1.64.1 gave for the same calls (tests/conformance/cases/
-// set-input-files.js under Runner P), and what reaches Rust when they pass.
+// error names measured against playwright-core 1.64.1 before the old differential tiers
+// were retired, and what reaches Rust when the checks pass.
 import { expect, it } from 'bun:test'
 import { type Answer, loadPrelude, SEED } from './support/prelude-runtime'
 
