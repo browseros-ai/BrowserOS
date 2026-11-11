@@ -815,7 +815,7 @@ fn bytes_cross_the_bridge_both_ways() -> Result<(), TestError> {
 fn image_bytes_have_buffer_identity_and_header_reads_in_quickjs() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let code = r#"
+        let code = r"
             const { image } = await __neo.invoke('test.echo', {
               image: Buffer.from([9, 0x89, 0x50, 0x4e, 0x47, 8])
             });
@@ -824,7 +824,7 @@ fn image_bytes_have_buffer_identity_and_header_reads_in_quickjs() -> Result<(), 
               header instanceof Buffer, header.readUInt32BE(), header.readUInt32LE(),
               header.readInt32BE(),
               header.readUInt16BE(), header.readUInt16LE(), header.readUInt8(),
-              header.equals(Buffer.from('89504e47', 'hex')), header.toString('base64')];"#;
+              header.equals(Buffer.from('89504e47', 'hex')), header.toString('base64')];";
         assert_eq!(
             returned(script(&rig, code).await?)?,
             json!([
