@@ -74,6 +74,18 @@ test('navigation waits retain events, document identity and their deadline', {
     assert.equal(response.url(), url)
     assert.equal(response.status(), 200)
     record('same URL reload returns its response')
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const first = page.waitForNavigation({ url: /\/one$/, timeout: 5000 })
+      const second = page.waitForNavigation({ url: /\/two$/, timeout: 5000 })
+      const third = page.waitForNavigation({ url: /\/three$/, timeout: 5000 })
+      await page.goto(`${url}/one`)
+      await first
+      await page.goto(`${url}/two`)
+      await second
+      await page.goto(`${url}/three`)
+      await third
+    }
+    record('concurrent URL matches survive repeated document replacement')
     const [history] = await Promise.all([
       page.waitForNavigation({
         url: (u) => u.pathname === '/target',

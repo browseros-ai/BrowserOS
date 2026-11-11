@@ -159,6 +159,14 @@ test('navigation effects preserve deadlines, facts, responses and close semantic
       200,
     )
     record('networkidle includes a child with a stalled resource')
+    await page.setContent(`<iframe src="${url}/hang"></iframe>`, {
+      waitUntil: 'domcontentloaded',
+    })
+    assert.equal(page.frames().length, 2)
+    const childWait = page
+      .frames()[1]
+      .evaluate(() => new Promise(() => {}))
+      .catch((error) => error)
     const waiter = page.waitForEvent('download').catch((error) => error)
     await Promise.all([page.close(), page.close()])
     await page.close()
@@ -166,6 +174,7 @@ test('navigation effects preserve deadlines, facts, responses and close semantic
       (await waiter).message,
       /Target page, context or browser has been closed/,
     )
+    assert((await childWait) instanceof Error)
     assert.equal(page.isClosed(), true)
     record('close is idempotent and rejects other event waiters')
   } finally {

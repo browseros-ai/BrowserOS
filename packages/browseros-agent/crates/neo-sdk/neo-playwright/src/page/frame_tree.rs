@@ -12,10 +12,12 @@
 //! ```
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use browseros_core::{BrowserSession, CoreError, FrameId, PageId, ProtocolSession, TabId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::time;
 
 use crate::op_output::to_output;
 use crate::op_scope::OpScope;
@@ -23,6 +25,11 @@ use crate::page::document_watch::{DocumentWatch, FrameTreeNode, FrameTreeReply, 
 use crate::page::frame_routes::{FrameRoute, RootAttachment};
 use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError};
+
+/// Loading can mean an uncommitted navigation that blocks renderer reads, or just a child
+/// resource in an otherwise responsive document. Give optional facts a small budget in that
+/// case: dropping every loading tree would hide newly attached children after `setContent`.
+const LOADING_SNAPSHOT: Duration = Duration::from_millis(100);
 
 /// `page.frames()`: `{ page }`.
 #[derive(Debug, Deserialize)]
@@ -229,9 +236,9 @@ pub(crate) async fn frames(
     to_output(scope, &Snapshot { frames })
 }
 
-/// Cache metadata must not become a navigation barrier. Browser-owned loading state catches
-/// an existing pending navigation; a watcher subscribed before that read catches one that
-/// starts in between. The caller retains its previous tree when the renderer is busy.
+/// Cache metadata must not become a navigation barrier. Browser-owned loading state bounds
+/// reads during an existing navigation; a watcher subscribed before that read catches one
+/// that starts in between. The caller retains its previous tree when the renderer is busy.
 pub(crate) async fn snapshot(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -248,15 +255,21 @@ pub(crate) async fn snapshot(
             .page(admitted.core_page.clone())
             .await
             .map_err(|error| scope.core_error(&error))?;
+        let tree = async {
+            let since = pw.events().head();
+            let tree = read(pw.browser(), &admitted.core_page, &root)
+                .await
+                .map_err(|error| scope.core_error(&error))?;
+            tree.remember(pw, scope, page, &root, since);
+            Ok(Some(tree))
+        };
         if shown.is_loading {
-            return Ok(None);
+            time::timeout(LOADING_SNAPSHOT, tree)
+                .await
+                .unwrap_or(Ok(None))
+        } else {
+            tree.await
         }
-        let since = pw.events().head();
-        let tree = read(pw.browser(), &admitted.core_page, &root)
-            .await
-            .map_err(|error| scope.core_error(&error))?;
-        tree.remember(pw, scope, page, &root, since);
-        Ok(Some(tree))
     };
     tokio::select! {
         result = read => result,
