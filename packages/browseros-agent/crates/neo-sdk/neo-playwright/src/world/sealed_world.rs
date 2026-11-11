@@ -14,7 +14,7 @@ use crate::world::engine_source::install_function;
 use crate::world::{ContextId, Epoch, FrameSeq};
 
 /// The name of the isolated world the engine runs in, one per frame document. Distinct from
-/// core's `PageJs` world, so the engine's globals never meet core's helpers. Not `browseros-engine`:
+/// core's `PageJs` world, so the engine's globals never meet core's helpers. Not `browseros-sdk`:
 /// a world of that name may hold core's seal, installed by an earlier claw-sdk in a document that
 /// is still open, and a document keeps its isolated worlds, their replaced DOM getters included,
 /// for its whole life; the engine reading through them would read `••••` and select a masked
