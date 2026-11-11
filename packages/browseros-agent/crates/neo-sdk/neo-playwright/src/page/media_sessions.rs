@@ -179,6 +179,12 @@ impl MediaSessions {
 }
 
 impl FrameInitializer for MediaInitializer {
+    fn detached(&self, session: &SessionId) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.current().sessions.remove(session);
+        }
+    }
+
     fn initialize<'a>(
         &'a self,
         session: &'a ProtocolSession,
@@ -271,5 +277,52 @@ impl FrameInitializer for MediaInitializer {
             }
             failure.map_or(Ok(()), Err)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MediaSessions;
+    use crate::page::media_emulation::MediaState;
+    use browseros_core::testing::TestConnection;
+    use browseros_core::{
+        BrowserSession, BrowserSessionHooks, CdpConnection, ProtocolSession, SessionId,
+    };
+    use serde_json::json;
+    use std::error::Error;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+    use tokio::{task, time};
+
+    #[tokio::test]
+    async fn core_detach_releases_child_binding_without_another_media_update()
+    -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        let transport = Arc::clone(&connection) as Arc<dyn CdpConnection>;
+        let browser = BrowserSession::new(Arc::clone(&transport), BrowserSessionHooks::default());
+        let media = MediaSessions::new(&browser);
+        let state = Arc::new(Mutex::new(MediaState::default()));
+        let root = ProtocolSession::for_session(Arc::clone(&transport), SessionId::from("root"));
+        let child = ProtocolSession::for_session(transport, SessionId::from("child"));
+        media.remember(&root, Arc::clone(&state));
+        media.remember(&child, Arc::clone(&state));
+        connection.emit(
+            "Target.detachedFromTarget",
+            json!({"sessionId":"child","targetId":"child-frame"}),
+            root.session_id().cloned(),
+        );
+        time::timeout(Duration::from_secs(1), async {
+            while media.sessions(&state).len() != 1 {
+                task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(media.sessions(&state)[0].session_id(), root.session_id());
+        assert!(
+            connection.calls()?.is_empty(),
+            "detachment must release the binding without probing its dead endpoint"
+        );
+        Ok(())
     }
 }

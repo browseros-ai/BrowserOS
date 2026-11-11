@@ -29,6 +29,18 @@ pub trait FrameInitializer: Send + Sync {
     fn recover(&self) -> BoxFuture<'_, Result<(), CoreError>> {
         Box::pin(async { Ok(()) })
     }
+    /// Release endpoint-owned state after a detach, refused command, or lag reconciliation.
+    fn detached(&self, _session: &SessionId) {}
+}
+
+fn frame_auto_attach(wait_for_debugger: bool) -> Value {
+    // Keep worker attach events: Chromium can pause even workers excluded by a target filter,
+    // hiding the event needed to release them. `on_attached` resumes non-frame targets directly.
+    json!({
+        "autoAttach": true,
+        "waitForDebuggerOnStart": wait_for_debugger,
+        "flatten": true,
+    })
 }
 
 /// One frame's CDP endpoint, as [`FrameRegistry::resolve_frame_target`] found it.
@@ -110,12 +122,7 @@ impl FrameRegistry {
     /// Arm recursive attachment before a page with persistent settings can create a renderer.
     pub async fn enable_initialization(&self, session: &ProtocolSession) -> Result<(), CoreError> {
         session
-            .send_value(
-                "Target.setAutoAttach",
-                json!({
-                    "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
-                }),
-            )
+            .send_value("Target.setAutoAttach", frame_auto_attach(true))
             .await?;
         Ok(())
     }
@@ -147,11 +154,7 @@ impl FrameRegistry {
         let setup = page_session
             .send::<_, Value>(
                 "Target.setAutoAttach",
-                json!({
-                    "autoAttach": true,
-                    "waitForDebuggerOnStart": !self.initializers().is_empty(),
-                    "flatten": true
-                }),
+                frame_auto_attach(!self.initializers().is_empty()),
             )
             .await;
         if let Err(error @ CoreError::Target(_)) = setup {
@@ -403,10 +406,22 @@ impl FrameRegistry {
     }
 
     async fn on_attached(&self, params: target::AttachedToTargetEvent, parent: Option<SessionId>) {
+        self.clear_sessions_from_prior_connection().await;
         if params.target_info.r#type != "iframe" {
+            // Media belongs to frame renderers. Auto-attach also pauses workers, which must
+            // start immediately rather than waiting for an initializer that never owns them.
+            if params.waiting_for_debugger {
+                let session = ProtocolSession::for_session(
+                    self.cdp.clone(),
+                    SessionId::from(params.session_id),
+                )
+                .at_connection_epoch();
+                let _resumed = session
+                    .send_value("Runtime.runIfWaitingForDebugger", json!({}))
+                    .await;
+            }
             return;
         }
-        self.clear_sessions_from_prior_connection().await;
         self.register_oopif_session(
             FrameId(params.target_info.target_id),
             SessionId::from(params.session_id),
@@ -480,11 +495,7 @@ impl FrameRegistry {
         let _ = session
             .send::<_, Value>(
                 "Target.setAutoAttach",
-                json!({
-                    "autoAttach": true,
-                    "waitForDebuggerOnStart": !initializers.is_empty(),
-                    "flatten": true
-                }),
+                frame_auto_attach(!initializers.is_empty()),
             )
             .await;
         if !initializers.is_empty() {
@@ -573,6 +584,11 @@ impl FrameRegistry {
             .lock()
             .await
             .retain(|_, link| link.parent != *session_id && link.endpoint != *session_id);
+        // Higher layers own their endpoint caches. Notify after releasing registry locks so
+        // the same lifecycle event releases both core routing and inherited page settings.
+        for initializer in self.initializers() {
+            initializer.detached(session_id);
+        }
     }
 
     /// A lagged event stream may have dropped a `detachedFromTarget`, leaving an OOPIF session that
@@ -599,10 +615,34 @@ impl FrameRegistry {
                     .collect()
             })
             .unwrap_or_default();
-        self.oopif_sessions
+        let dead: Vec<_> = self
+            .oopif_sessions
             .lock()
             .await
-            .retain(|frame_id, _| live.contains(&frame_id.0));
+            .iter()
+            .filter(|(frame_id, _)| !live.contains(&frame_id.0))
+            .map(|(_, session)| session.clone())
+            .collect();
+        for session in dead {
+            self.on_detached(&session).await;
+        }
+        // A dropped worker attach event must not leave startup suspended forever. These
+        // short-lived recovery sessions only release the debugger wait; frame initialization
+        // and its inherited page settings still run through the separate path below.
+        for info in result
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if matches!(
+                info.get("type").and_then(Value::as_str),
+                Some("worker" | "shared_worker" | "service_worker")
+            ) && let Some(id) = info.get("targetId").and_then(Value::as_str)
+            {
+                self.resume_worker_after_lag(id).await;
+            }
+        }
         let initializers = self.initializers();
         for initializer in &initializers {
             let _recovered = initializer.recover().await;
@@ -626,6 +666,28 @@ impl FrameRegistry {
                 }
             }
         }
+    }
+
+    async fn resume_worker_after_lag(&self, target_id: &str) {
+        let root = ProtocolSession::root(self.cdp.clone()).at_connection_epoch();
+        let Ok(attached) = root
+            .send::<_, target::AttachToTargetResult>(
+                "Target.attachToTarget",
+                json!({"targetId":target_id,"flatten":true}),
+            )
+            .await
+        else {
+            return;
+        };
+        let id = SessionId::from(attached.session_id);
+        let session = ProtocolSession::for_session(self.cdp.clone(), id.clone())
+            .with_epoch_guard(root.epoch_guard().cloned());
+        let _resumed = session
+            .send_value("Runtime.runIfWaitingForDebugger", json!({}))
+            .await;
+        let _detached = root
+            .send_value("Target.detachFromTarget", json!({"sessionId":id}))
+            .await;
     }
 }
 
@@ -1024,6 +1086,37 @@ mod tests {
         assert!(sessions.contains_key(&FrameId("live-oopif".to_string())));
         assert!(!sessions.contains_key(&FrameId("dead-oopif".to_string())));
     }
+
+    #[tokio::test]
+    async fn lag_recovery_releases_workers_and_detaches_its_temporary_session()
+    -> Result<(), Box<dyn Error>> {
+        let connection = crate::testing::TestConnection::new([
+            (
+                "Target.getTargets",
+                json!({"targetInfos":[{"targetId":"missed-worker","type":"worker"}]}),
+            ),
+            ("Runtime.runIfWaitingForDebugger", json!({})),
+            ("Target.detachFromTarget", json!({})),
+        ]);
+        let registry = FrameRegistry::new(connection.clone());
+        registry.reconcile_oopifs_after_lag().await;
+        let calls = connection.calls()?;
+        let resumed = calls
+            .iter()
+            .find(|call| call.method == "Runtime.runIfWaitingForDebugger")
+            .ok_or("a missed worker attachment must still release startup")?;
+        let detached = calls
+            .iter()
+            .find(|call| call.method == "Target.detachFromTarget")
+            .ok_or("recovery must release its temporary attachment")?;
+        assert!(resumed.session.is_some());
+        assert_eq!(
+            detached.params.get("sessionId"),
+            resumed.session.as_ref().map(|id| json!(id)).as_ref()
+        );
+        Ok(())
+    }
+
     /// Records the configuration write and can replace the socket at the async handoff.
     struct TestInitializer {
         connection: Arc<NoopConnection>,

@@ -20,6 +20,43 @@ use serde_json::{Value, json};
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn renderer_initialization_leaves_page_workers_running() -> TestResult {
+    let server = FixtureServer::start(nest_pages()).await?;
+    let run = LiveRun::connect().await?;
+    let page = run.new_page().await?;
+    let expression = r"
+      new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(new Blob(['onmessage = () => postMessage(42)'], {type:'text/javascript'}));
+        const worker = new Worker(url);
+        const finish = () => {worker.terminate(); URL.revokeObjectURL(url); clearTimeout(timer);};
+        const timer = setTimeout(() => {finish(); reject(new Error('worker did not start'));}, 5000);
+        worker.onmessage = event => {finish(); resolve(event.data);};
+        worker.onerror = event => {finish(); reject(new Error(event.message));};
+        worker.postMessage('ready');
+      })
+    ";
+    let result = async {
+        run.invoke(
+            "page.goto",
+            json!({"page":brand(&page),"url":server.url("127.0.0.1", "/nest/top.html")}),
+        )
+        .await?;
+        assert_eq!(run.eval(&page, expression).await?, json!(42));
+        run.invoke(
+            "page.emulateMedia",
+            json!({"page":brand(&page),"media":"print"}),
+        )
+        .await?;
+        assert_eq!(run.eval(&page, expression).await?, json!(42));
+        Ok(())
+    }
+    .await;
+    run.close_page(&page).await;
+    result
+}
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn media_reaches_existing_and_replacement_frame_renderers() -> TestResult {
     let mut pages = nest_pages();
     let startup = "<script>window.mediaStartup = [matchMedia('print').matches, matchMedia('(prefers-color-scheme: dark)').matches, matchMedia('(prefers-reduced-motion: reduce)').matches, matchMedia('(forced-colors: active)').matches, matchMedia('(prefers-contrast: more)').matches]</script>";
