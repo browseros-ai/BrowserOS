@@ -52,15 +52,7 @@
     },
     {
       "file": "tests/page/frame-evaluate.spec.ts",
-      "ids": [
-        "FR-001",
-        "FR-006",
-        "FR-007",
-        "FR-008",
-        "FR-009",
-        "FR-010",
-        "FR-013"
-      ],
+      "ids": ["FR-001", "FR-006", "FR-008", "FR-009", "FR-010", "FR-013"],
       "reason": "handles"
     },
     {
