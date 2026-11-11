@@ -240,14 +240,20 @@ pub(crate) struct ArmPlan {
     pub(crate) expect_rect: Option<Rect>,
 }
 
-/// One `selectOptions` option, as upstream's client sends it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// One `selectOptions` option, as upstream's client sends it: an option matches when every
+/// attribute named here does (injected `selectOptions`), so `{ value, label }` picks the option
+/// with both, and one that names none matches any option, as upstream's does.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum SelectOption {
-    ValueOrLabel(String),
-    Value(String),
-    Label(String),
-    Index(u32),
+pub(crate) struct SelectOption {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) value_or_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) index: Option<u32>,
 }
 
 /// An edit of a pinned element.

@@ -903,18 +903,16 @@
         continue;
       }
       const option = item;
-      const given = ["valueOrLabel", "value", "label", "index"].filter((key) => option[key] !== undefined);
-      if (given.length !== 1)
-        throw clientError(api, `options[${index}]: Neo matches an option by one of value, label or index; got ${JSON.stringify(item)}`);
-      const [key] = given;
-      if (key === "index")
-        options.push({ index: Number(option.index) });
-      else if (key === "value")
-        options.push({ value: String(option.value) });
-      else if (key === "label")
-        options.push({ label: String(option.label) });
-      else
-        options.push({ valueOrLabel: String(option.valueOrLabel) });
+      const picked = {};
+      if (option.valueOrLabel !== undefined)
+        picked.valueOrLabel = String(option.valueOrLabel);
+      if (option.value !== undefined)
+        picked.value = String(option.value);
+      if (option.label !== undefined)
+        picked.label = String(option.label);
+      if (option.index !== undefined)
+        picked.index = Number(option.index);
+      options.push(picked);
     }
     return { options, elements };
   }

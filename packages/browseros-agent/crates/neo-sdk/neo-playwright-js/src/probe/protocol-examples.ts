@@ -108,6 +108,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
           { value: 'r' },
           { label: 'Green' },
           { index: 2 },
+          { value: 'g', label: 'Green' },
         ],
       },
     },

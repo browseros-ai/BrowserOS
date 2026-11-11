@@ -82,11 +82,16 @@ export type ArmPlan = {
   expiryMs: number
   expectRect?: Rect
 }
-export type SelectOption =
-  | { valueOrLabel: string }
-  | { value: string }
-  | { label: string }
-  | { index: number }
+/**
+ * One option to select, as upstream's client sends it: an option matches when every attribute
+ * named here does (injected `selectOptions`), and one that names none matches any option.
+ */
+export type SelectOption = {
+  valueOrLabel?: string
+  value?: string
+  label?: string
+  index?: number
+}
 /**
  * An edit of a pinned element; each answers `value` or `detached`. A `fill` answers
  * `Filled`, a `selectOptions` answers `Selected`, a `setFiles` answers `FilesSet`, the others

@@ -307,6 +307,10 @@
           },
           {
             "index": 2
+          },
+          {
+            "value": "g",
+            "label": "Green"
           }
         ]
       }

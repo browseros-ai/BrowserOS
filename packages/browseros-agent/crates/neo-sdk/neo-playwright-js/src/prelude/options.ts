@@ -7,6 +7,7 @@
  * argument is refused here with what to call instead, before the bootstrap's codec would refuse
  * it as an unbranded object.
  */
+import type { SelectOption } from '../probe/protocol'
 import { clientError } from './errors'
 import type { ElementBrand } from './wire'
 
@@ -94,19 +95,14 @@ type SelectOptionValue = {
 }
 
 /**
- * upstream's convertSelectOptionValues, onto the probe's options, which match on one of value,
- * label or index each. Element handles select those `<option>` elements.
+ * upstream's convertSelectOptionValues, onto the probe's options, each matching on every
+ * attribute it names. Element handles select those `<option>` elements.
  */
 export function selectOptionValues(
   api: string,
   values: unknown,
 ): {
-  options: (
-    | { valueOrLabel: string }
-    | { value: string }
-    | { label: string }
-    | { index: number }
-  )[]
+  options: SelectOption[]
   elements: ElementBrand[]
 } {
   if (values === null || values === undefined)
@@ -131,20 +127,16 @@ export function selectOptionValues(
       elements.push(brand as ElementBrand)
       continue
     }
+    // Every attribute the script named goes through, as upstream's client sends the object:
+    // the page selects the option that matches all of them.
     const option = item as SelectOptionValue
-    const given = (['valueOrLabel', 'value', 'label', 'index'] as const).filter(
-      (key) => option[key] !== undefined,
-    )
-    if (given.length !== 1)
-      throw clientError(
-        api,
-        `options[${index}]: Neo matches an option by one of value, label or index; got ${JSON.stringify(item)}`,
-      )
-    const [key] = given
-    if (key === 'index') options.push({ index: Number(option.index) })
-    else if (key === 'value') options.push({ value: String(option.value) })
-    else if (key === 'label') options.push({ label: String(option.label) })
-    else options.push({ valueOrLabel: String(option.valueOrLabel) })
+    const picked: SelectOption = {}
+    if (option.valueOrLabel !== undefined)
+      picked.valueOrLabel = String(option.valueOrLabel)
+    if (option.value !== undefined) picked.value = String(option.value)
+    if (option.label !== undefined) picked.label = String(option.label)
+    if (option.index !== undefined) picked.index = Number(option.index)
+    options.push(picked)
   }
   return { options, elements }
 }
