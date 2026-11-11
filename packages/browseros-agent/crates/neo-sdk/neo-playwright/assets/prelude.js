@@ -1089,33 +1089,26 @@
     "steps",
     "trial"
   ];
-  var DBLCLICK_KEYS = POINTER_KEYS.filter((key) => key !== "clickCount");
+  var DBLCLICK_KEYS = POINTER_KEYS.filter((key) => key !== "clickCount" && key !== "noWaitAfter");
   var HOVER_KEYS = [
     "force",
     "modifiers",
-    "noWaitAfter",
     "position",
     "scroll",
     "trial"
   ];
-  var CHECK_KEYS = [
-    "force",
-    "noWaitAfter",
-    "position",
-    "scroll",
-    "trial"
-  ];
+  var CHECK_KEYS = ["force", "position", "scroll", "trial"];
   var DRAG_KEYS = [
     "force",
-    "noWaitAfter",
     "scroll",
     "sourcePosition",
     "targetPosition",
     "steps",
     "trial"
   ];
-  var FILL_KEYS = ["force", "noWaitAfter"];
-  var KEY_KEYS = ["delay", "noWaitAfter"];
+  var FILL_KEYS = ["force"];
+  var PRESS_KEYS = ["delay", "noWaitAfter"];
+  var TYPE_KEYS = ["delay"];
   var SCREENSHOT_KEYS = [
     "type",
     "quality",
@@ -7616,12 +7609,12 @@ ${value.stack}`;
       const site = captureSite();
       await this._selectorOp("locator.press", site, api, selector, options.strict, this._wait(api, options), {
         key,
-        options: pick(options, KEY_KEYS)
+        options: pick(options, PRESS_KEYS)
       });
     }
     async _type(api, selector, text, options = {}) {
       const site = captureSite();
-      await this._selectorOp("locator.pressSequentially", site, api, selector, options.strict, this._wait(api, options), { text, options: pick(options, KEY_KEYS) });
+      await this._selectorOp("locator.pressSequentially", site, api, selector, options.strict, this._wait(api, options), { text, options: pick(options, TYPE_KEYS) });
     }
     async _focus(api, selector, options = {}) {
       const site = captureSite();
@@ -8064,14 +8057,14 @@ ${value.stack}`;
       const site = captureSite();
       await this.#op("locator.press", site, "elementHandle.press", this.#timeout(options), {
         key,
-        options: pick(options, KEY_KEYS)
+        options: pick(options, PRESS_KEYS)
       });
     }
     async type(text, options = {}) {
       const site = captureSite();
       await this.#op("locator.pressSequentially", site, "elementHandle.type", this.#timeout(options), {
         text,
-        options: pick(options, KEY_KEYS)
+        options: pick(options, TYPE_KEYS)
       });
     }
     async selectOption(values, options = {}) {
@@ -17777,7 +17770,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       expectation: matcher.expectation,
       expected: matcher.expected(state.isNot),
       params: { ...matcher.params, isNot: state.isNot },
-      ...matcher.templateError === undefined ? {} : { templateError: matcher.templateError }
+      templateError: matcher.templateError
     };
     try {
       if (actual instanceof Page)

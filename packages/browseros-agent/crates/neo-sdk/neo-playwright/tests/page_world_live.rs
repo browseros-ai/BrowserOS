@@ -725,7 +725,7 @@ async fn tests_that_set_content_writes_the_document_and_waits_for_its_load_state
             ] {
                 run.clear_calls();
                 let started = Instant::now();
-                assert_eq!(set_content(wait_until).await?, json!({}));
+                assert_eq!(set_content(wait_until).await?, Value::Null);
                 let took = started.elapsed();
                 assert!(
                     took >= at_least && took < under,
@@ -1199,7 +1199,7 @@ async fn tests_that_frame_set_content_writes_the_child_frames_document() -> Test
                         json!({ "html": html }),
                     )
                     .await?;
-                    assert_eq!(written, json!({}), "{opened:?} {name}");
+                    assert_eq!(written, Value::Null, "{opened:?} {name}");
                     assert!(
                         started.elapsed() < Duration::from_secs(5),
                         "{opened:?} {name}: the write's load state was seen, after {:?}",

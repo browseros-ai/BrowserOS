@@ -1,7 +1,7 @@
 /**
  * Every wire op is checked against Playwright 1.64.1 or classified below as client/Neo work.
- * The reasons are the migration inventory for Rust-owned generated checks. Temporary reasons
- * describe today's loose declarations; removing them is the following PR's separate change.
+ * The reasons are the migration inventory for Rust-owned generated checks; every remaining
+ * deviation describes an intentional difference from upstream rather than a loose declaration.
  */
 import type * as pw from '../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
 import type { OpName } from './ops.generated'
@@ -11,9 +11,10 @@ import type {
   DRAG_KEYS,
   FILL_KEYS,
   HOVER_KEYS,
-  KEY_KEYS,
   POINTER_KEYS,
+  PRESS_KEYS,
   SCREENSHOT_KEYS,
+  TYPE_KEYS,
 } from './options'
 import type { Assert, KeysCheck, UpstreamCheck } from './upstream-check'
 import type { OpInputs } from './wire'
@@ -40,68 +41,63 @@ export type UpstreamChecks = {
       never
     >
   >
-  // Temporary: PointerOptions declares clickCount and the ignored noWaitAfter; pick drops clickCount. PR 3 narrows this.
   'locator.dblclick': Assert<
     UpstreamCheck<
       'locator.dblclick',
       OpInputs['locator.dblclick'],
       pw.ElementHandleDblclickParams,
-      'clickCount' | 'noWaitAfter',
+      never,
       never,
       never
     >
   >
-  // Temporary: the shared PointerOptions declares fields hover never sends, plus ignored noWaitAfter; PR 3 narrows it.
   'locator.hover': Assert<
     UpstreamCheck<
       'locator.hover',
       OpInputs['locator.hover'],
       pw.ElementHandleHoverParams,
-      'button' | 'clickCount' | 'delay' | 'noWaitAfter' | 'steps',
+      never,
       never,
       never
     >
   >
-  // Temporary: the shared PointerOptions declares fields check never sends, plus ignored noWaitAfter; PR 3 narrows it.
   'locator.check': Assert<
     UpstreamCheck<
       'locator.check',
       OpInputs['locator.check'],
       pw.ElementHandleCheckParams,
-      'button' | 'clickCount' | 'delay' | 'modifiers' | 'noWaitAfter' | 'steps',
+      never,
       never,
       never
     >
   >
-  // Temporary: the shared PointerOptions declares fields uncheck never sends, plus ignored noWaitAfter; PR 3 narrows it.
   'locator.uncheck': Assert<
     UpstreamCheck<
       'locator.uncheck',
       OpInputs['locator.uncheck'],
       pw.ElementHandleUncheckParams,
-      'button' | 'clickCount' | 'delay' | 'modifiers' | 'noWaitAfter' | 'steps',
+      never,
       never,
       never
     >
   >
-  // Neo addresses both endpoints with brands (target/to), replacing upstream source/target selectors. Temporary noWaitAfter leaves in PR 3.
+  // Neo addresses both endpoints with brands (target/to), replacing upstream source/target selectors.
   'locator.dragTo': Assert<
     UpstreamCheck<
       'locator.dragTo',
       OpInputs['locator.dragTo'],
       pw.FrameDragAndDropParams,
-      'to' | 'noWaitAfter',
+      'to',
       'source' | 'target',
       never
     >
   >
-  // Temporary: noWaitAfter is ignored by both implementations and leaves the wire type in PR 3.
   'locator.fill': Assert<
     UpstreamCheck<
       'locator.fill',
       OpInputs['locator.fill'],
       pw.ElementHandleFillParams,
-      'noWaitAfter',
+      never,
       never,
       never
     >
@@ -116,13 +112,12 @@ export type UpstreamChecks = {
       never
     >
   >
-  // Temporary: the shared key list forwards press-only noWaitAfter; PR 3 splits the lists.
   'locator.pressSequentially': Assert<
     UpstreamCheck<
       'locator.pressSequentially',
       OpInputs['locator.pressSequentially'],
       pw.ElementHandleTypeParams,
-      'noWaitAfter',
+      never,
       never,
       never
     >
@@ -414,7 +409,7 @@ export type UpstreamChecks = {
       'expect.locator',
       OpInputs['expect.locator'],
       pw.FrameExpectParams,
-      'expectation' | 'expected' | 'matcher' | 'params',
+      'expectation' | 'expected' | 'matcher' | 'params' | 'templateError',
       | 'expectedNumber'
       | 'expectedText'
       | 'expectedValue'
@@ -432,7 +427,7 @@ export type UpstreamChecks = {
       'expect.page',
       OpInputs['expect.page'],
       pw.FrameExpectParams,
-      'expectation' | 'expected' | 'matcher' | 'params',
+      'expectation' | 'expected' | 'matcher' | 'params' | 'templateError',
       | 'expectedNumber'
       | 'expectedText'
       | 'expectedValue'
@@ -619,7 +614,6 @@ export type UpstreamChecks = {
       never
     >
   >
-  // Temporary: wire.ts declares strings where upstream has literal enums; PR 3 narrows them to Rust-accepted values.
   'page.emulateMedia': Assert<
     UpstreamCheck<
       'page.emulateMedia',
@@ -627,7 +621,7 @@ export type UpstreamChecks = {
       pw.PageEmulateMediaParams,
       never,
       never,
-      'media' | 'colorScheme' | 'reducedMotion' | 'forcedColors' | 'contrast'
+      never
     >
   >
   // path is read on the Neo host rather than by an upstream client before sending content.
@@ -739,28 +733,15 @@ export type UpstreamChecks = {
       'mask'
     >
   >
-  // Temporary: PdfOptions is an open record, so no named fields are visible; PR 3 declares every Rust PDF option.
+  // Rust also accepts numeric pixel lengths; upstream's protocol only accepts the client's normalized strings.
   'page.pdf': Assert<
     UpstreamCheck<
       'page.pdf',
       OpInputs['page.pdf'],
       pw.PagePdfParams,
       never,
-      | 'displayHeaderFooter'
-      | 'footerTemplate'
-      | 'format'
-      | 'headerTemplate'
-      | 'height'
-      | 'landscape'
-      | 'margin'
-      | 'outline'
-      | 'pageRanges'
-      | 'preferCSSPageSize'
-      | 'printBackground'
-      | 'scale'
-      | 'tagged'
-      | 'width',
-      never
+      never,
+      'width' | 'height' | 'margin'
     >
   >
   'page.setViewportSize': Assert<
@@ -975,74 +956,60 @@ export type OptionChecks = {
       pw.ElementHandleClickOptions
     >
   >
-  // Temporary: this list forwards the ignored noWaitAfter; PR 3 removes it for this command.
   'locator.dblclick': Assert<
     KeysCheck<
       'locator.dblclick',
       (typeof DBLCLICK_KEYS)[number],
-      pw.ElementHandleDblclickOptions,
-      'noWaitAfter'
+      pw.ElementHandleDblclickOptions
     >
   >
-  // Temporary: this list forwards the ignored noWaitAfter; PR 3 removes it for this command.
   'locator.hover': Assert<
     KeysCheck<
       'locator.hover',
       (typeof HOVER_KEYS)[number],
-      pw.ElementHandleHoverOptions,
-      'noWaitAfter'
+      pw.ElementHandleHoverOptions
     >
   >
-  // Temporary: this list forwards the ignored noWaitAfter; PR 3 removes it for this command.
   'locator.check': Assert<
     KeysCheck<
       'locator.check',
       (typeof CHECK_KEYS)[number],
-      pw.ElementHandleCheckOptions,
-      'noWaitAfter'
+      pw.ElementHandleCheckOptions
     >
   >
-  // Temporary: this list forwards the ignored noWaitAfter; PR 3 removes it for this command.
   'locator.uncheck': Assert<
     KeysCheck<
       'locator.uncheck',
       (typeof CHECK_KEYS)[number],
-      pw.ElementHandleUncheckOptions,
-      'noWaitAfter'
+      pw.ElementHandleUncheckOptions
     >
   >
-  // Temporary: this list forwards the ignored noWaitAfter; PR 3 removes it for this command.
   'locator.dragTo': Assert<
     KeysCheck<
       'locator.dragTo',
       (typeof DRAG_KEYS)[number],
-      pw.FrameDragAndDropOptions,
-      'noWaitAfter'
+      pw.FrameDragAndDropOptions
     >
   >
-  // Temporary: this list forwards the ignored noWaitAfter; PR 3 removes it for this command.
   'locator.fill': Assert<
     KeysCheck<
       'locator.fill',
       (typeof FILL_KEYS)[number],
-      pw.ElementHandleFillOptions,
-      'noWaitAfter'
+      pw.ElementHandleFillOptions
     >
   >
   'locator.press': Assert<
     KeysCheck<
       'locator.press',
-      (typeof KEY_KEYS)[number],
+      (typeof PRESS_KEYS)[number],
       pw.ElementHandlePressOptions
     >
   >
-  // Temporary: this list forwards the ignored noWaitAfter; PR 3 removes it for this command.
   'locator.pressSequentially': Assert<
     KeysCheck<
       'locator.pressSequentially',
-      (typeof KEY_KEYS)[number],
-      pw.ElementHandleTypeOptions,
-      'noWaitAfter'
+      (typeof TYPE_KEYS)[number],
+      pw.ElementHandleTypeOptions
     >
   >
   'page.screenshot': Assert<
