@@ -119,7 +119,6 @@ export const UNSUPPORTED = {
     routeFromHAR: NETWORK,
     routeWebSocket: NETWORK,
     setExtraHTTPHeaders: 'network settings are not available in Neo',
-    setViewportSize: 'the hosted viewport is fixed',
     tap: NO_TOUCH,
     unroute: NETWORK,
     unrouteAll: NETWORK,

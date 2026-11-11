@@ -1579,6 +1579,7 @@ fn init_observation_orders_the_seed_before_later_replies() -> Result<(), TestErr
             code: "await __neo.invoke('test.title', { page }); return page.url();".into(),
             page: Some(page.clone()),
             pages: vec![PageFact {
+                viewport_size: None,
                 tab: page.tab,
                 url: Some("https://seed.example/".into()),
                 title: Some("Seed".into()),

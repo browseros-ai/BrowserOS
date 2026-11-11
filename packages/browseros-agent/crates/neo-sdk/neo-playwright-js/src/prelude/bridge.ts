@@ -231,9 +231,17 @@ function readPageFacts(pages: unknown): PageFact[] {
     const url: unknown = Reflect.get(page, 'url')
     const title: unknown = Reflect.get(page, 'title')
     const closed: unknown = Reflect.get(page, 'closed')
+    const viewport: unknown = Reflect.get(page, 'viewportSize')
     if (typeof url === 'string') fact.url = url
     if (typeof title === 'string') fact.title = title
     if (typeof closed === 'boolean') fact.closed = closed
+    if (viewport === null) fact.viewportSize = null
+    else if (typeof viewport === 'object' && viewport !== null) {
+      const width: unknown = Reflect.get(viewport, 'width')
+      const height: unknown = Reflect.get(viewport, 'height')
+      if (typeof width === 'number' && typeof height === 'number')
+        fact.viewportSize = { width, height }
+    }
     facts.push(fact)
   }
   return facts

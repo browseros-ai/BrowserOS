@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use browseros_core::BrowserSession;
+use browseros_core::{BrowserSession, TargetId};
 use serde_json::Value;
 
 use crate::action::action_op;
@@ -89,8 +89,14 @@ impl Playwright {
 
     /// The newest retained close of a native target, for the host's cache-liveness check.
     #[must_use]
-    pub fn closed_target(&self, target: &browseros_core::TargetId) -> Option<u64> {
+    pub fn closed_target(&self, target: &TargetId) -> Option<u64> {
         self.events.closed_at(target)
+    }
+
+    /// The newest retained main-frame navigation of a native target, for the host's URL facts.
+    #[must_use]
+    pub fn navigated_target(&self, target: &TargetId) -> Option<u64> {
+        self.events.navigated_at(target)
     }
 
     /// The browser connection, for what an op does after it admitted its page: raw sessions,

@@ -100,20 +100,19 @@ it('tests that page and locator snapshots send their mode and depth, and JSON sk
   ])
 })
 
-it('tests that boxes, which Neo snapshots do not carry, are refused before anything reaches the page', async () => {
+it("tests that boxes go to Rust as the script passed them, upstream's option", async () => {
   const runtime = snapshotting(fixture.result)
-  const error = json(
-    await runtime.run(
-      'try { await page.ariaSnapshot({ boxes: true }) } catch (e) { return { code: e.code, message: e.message } }',
-    ),
-  )
-  const message =
-    'page.ariaSnapshot: Neo snapshots carry no boxes; use locator.boundingBox()'
-  expect(error).toEqual({ code: 'method_unavailable', message })
-  expect(runtime.calls).toEqual([
-    {
-      name: 'page.ariaSnapshot',
-      input: { $neo: 'refused', code: 'method_unavailable', reason: message },
-    },
+  await runtime.run(`
+    await page.ariaSnapshotJSON({ boxes: true })
+    await page.getByRole('main').ariaSnapshot({ boxes: false })
+  `)
+  expect(
+    runtime.calls.map((call) => ({
+      name: call.name,
+      boxes: call.input.boxes,
+    })),
+  ).toEqual([
+    { name: 'page.ariaSnapshot', boxes: true },
+    { name: 'locator.ariaSnapshot', boxes: false },
   ])
 })

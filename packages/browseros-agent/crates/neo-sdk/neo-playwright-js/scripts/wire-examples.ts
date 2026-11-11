@@ -90,7 +90,7 @@ const EVERY_OP = `
   await l.count(); await l.normalize(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor()
   const handle = await l.elementHandle(); await handle.click(); await l.elementHandles()
   await handle.$('b'); await handle.$$('b')
-  await page.ariaSnapshot(); await l.ariaSnapshot()
+  await page.ariaSnapshot(); await l.ariaSnapshot(); await page.ariaSnapshotJSON({ boxes: true })
   await expect(l).toBeVisible(); await expect(page).toHaveTitle('x')
   await page.keyboard.down('a'); await page.keyboard.up('a'); await page.keyboard.press('a')
   await page.keyboard.type('ab'); await page.keyboard.insertText('ab')
@@ -108,6 +108,7 @@ const EVERY_OP = `
   await handle.evaluate((e) => e.id); await handle.$eval('b', (e) => e.id); await handle.$$eval('b', (es) => es.length)
   await page.$eval('b', (e) => e.id); await page.$$eval('b', (es) => es.length); await page.evaluate((e, h) => h.id, handle)
   await page.screenshot(); await l.screenshot(); await page.pdf()
+  await page.setViewportSize({ width: 640, height: 480 })
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})
   const chooserListener = () => {}
