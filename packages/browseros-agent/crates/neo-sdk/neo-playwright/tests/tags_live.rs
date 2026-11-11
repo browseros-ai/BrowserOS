@@ -1,5 +1,5 @@
 //! Tag insertion through QuickJS, including same-process and out-of-process frame handles and
-//! CSP rejection. Run ignored tests against a throwaway browser on BROWSEROS_CDP_PORT.
+//! CSP rejection. Run ignored tests against a throwaway browser on `BROWSEROS_CDP_PORT`.
 
 #[path = "support/fixture_server.rs"]
 mod fixture_server;
@@ -33,7 +33,7 @@ async fn tags_belong_to_their_frame_and_csp_errors_keep_browser_wording() -> Tes
     let server = FixtureServer::start(pages).await?;
     let host: Arc<dyn OpHost> = Arc::new(LiveRun::connect().await?);
     let script = format!(
-        r#"
+        r"
       try {{
         await page.goto({top});
         const values = [];
@@ -57,7 +57,7 @@ async fn tags_belong_to_their_frame_and_csp_errors_keep_browser_wording() -> Tes
         }}
         return {{values, untouched, failures}};
       }} finally {{ await page.close(); }}
-    "#,
+    ",
         top = json!(server.url("127.0.0.1", "/nest/top.html")),
         csp = json!(server.url("127.0.0.1", "/csp.html"))
     );

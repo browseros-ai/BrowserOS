@@ -279,6 +279,10 @@ mod tests {
     /// change on either side, the crate's declarations or the door's policing, fails here until
     /// the snapshot is redone on purpose.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one explicit row per capability operation keeps the host contract auditable"
+    )]
     fn claw_sdk_places_every_capability_op() {
         use Capability::{Capture, HostFiles, MainWorld};
         use Placement::{Held, Served};

@@ -760,7 +760,7 @@ async fn tags_behave_as_playwright_on_browseros() -> TestResult {
             let answer = observed(
                 rig,
                 "tags",
-                r#"
+                r"
             const parent = await page.addScriptTag({ content: 'window.injected = 42' });
             const child = page.frames()[1];
             const tag = await child.addScriptTag({ content: 'window.injected = 37' });
@@ -772,7 +772,7 @@ async fn tags_behave_as_playwright_on_browseros() -> TestResult {
                 await style.evaluate(e => [e.tagName, getComputedStyle(document.body).color]),
                 (await failed(() => page.addScriptTag({}))).delivery,
             ];
-        "#,
+        ",
             )
             .await?;
             assert_eq!(
