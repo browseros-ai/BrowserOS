@@ -1,5 +1,6 @@
 /** Verify the real profile and the native tab creation path before any SDK attaches. */
 import { Cdp } from '../js/browser.mjs'
+import { cleanupCdp } from './cdp-cleanup.mjs'
 
 export async function verifyViewport(port) {
   const response = await fetch(`http://127.0.0.1:${port}/json/version`)
@@ -31,7 +32,7 @@ export async function verifyViewport(port) {
         )
       return result.value
     } finally {
-      await cdp.send('Target.detachFromTarget', { sessionId })
+      await cleanupCdp(cdp, 'Target.detachFromTarget', { sessionId })
     }
   }
   try {
@@ -49,7 +50,7 @@ export async function verifyViewport(port) {
   } finally {
     try {
       if (nativeTarget)
-        await cdp.send('Target.closeTarget', { targetId: nativeTarget })
+        await cleanupCdp(cdp, 'Target.closeTarget', { targetId: nativeTarget })
     } finally {
       await cdp.close()
     }

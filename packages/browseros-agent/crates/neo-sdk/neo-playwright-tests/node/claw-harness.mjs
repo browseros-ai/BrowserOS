@@ -1,6 +1,7 @@
 /** Private CDP for test environment setup and reset; never passed to upstream tests. */
 import { Cdp } from '../js/browser.mjs'
 import { installTestBuiltins } from '../js/test-builtins.mjs'
+import { cleanupCdp, isTargetGone } from './cdp-cleanup.mjs'
 
 const activeTests = new WeakMap()
 
@@ -49,12 +50,11 @@ export async function installFixtureBuiltins(cdp, before) {
     await cdp.send('Page.enable', {}, sessionId)
     await installTestBuiltins(cdp, sessionId)
     // Chromium removes this session's new-document scripts when it detaches.
-    return async () => {
-      if ((await pageTargets(cdp)).includes(added[0]))
-        await cdp.send('Target.detachFromTarget', { sessionId })
-    }
+    let uninstall
+    return () =>
+      (uninstall ??= cleanupCdp(cdp, 'Target.detachFromTarget', { sessionId }))
   } catch (error) {
-    await cdp.send('Target.detachFromTarget', { sessionId })
+    await cleanupCdp(cdp, 'Target.detachFromTarget', { sessionId })
     throw error
   }
 }
@@ -98,7 +98,17 @@ export async function resetClawTest({ context, initialPages, cdp, origins }) {
 }
 
 async function clearProfileData(cdp, origins) {
-  let [targetId] = await pageTargets(cdp)
+  const [targetId] = await pageTargets(cdp)
+  try {
+    await clearTargetData(cdp, origins, targetId)
+  } catch (error) {
+    if (!targetId || !isTargetGone(error)) throw error
+    // A test may close the retained tab while reset runs. Still clear its profile storage.
+    await clearTargetData(cdp, origins)
+  }
+}
+
+async function clearTargetData(cdp, origins, targetId) {
   const temporary = !targetId
   if (temporary) {
     const { tab } = await cdp.send('Browser.createTab', {
@@ -135,9 +145,10 @@ async function clearProfileData(cdp, origins) {
       )
   } finally {
     try {
-      if (sessionId) await cdp.send('Target.detachFromTarget', { sessionId })
+      if (sessionId)
+        await cleanupCdp(cdp, 'Target.detachFromTarget', { sessionId })
     } finally {
-      if (temporary) await cdp.send('Target.closeTarget', { targetId })
+      if (temporary) await cleanupCdp(cdp, 'Target.closeTarget', { targetId })
     }
   }
 }
