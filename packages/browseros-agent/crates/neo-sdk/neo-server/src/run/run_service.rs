@@ -369,8 +369,9 @@ impl RunService {
 }
 
 /// Writes the blobs `end`'s value names beside the trace (`outputs/<run>/blobs/<id>`), where the
-/// host reads them once it has the reply. One that cannot be written fails the run as Neo's: a
-/// reply must never name bytes the host cannot read.
+/// host reads them once it has the reply. One that cannot be written fails the run as Neo's, and
+/// the blobs already written go with it: a reply must never name bytes the host cannot read, and
+/// a failed one names none.
 async fn keep_blobs(run: RunId, mut end: ScriptEnd, outputs: &RunOutputs) -> ScriptEnd {
     let blobs = mem::take(&mut end.blobs);
     for blob in &blobs {
@@ -380,6 +381,9 @@ async fn keep_blobs(run: RunId, mut end: ScriptEnd, outputs: &RunOutputs) -> Scr
                 ErrorCode::INTERNAL_ERROR,
                 format_args!("Neo could not keep the result's bytes for the host: {error}"),
             ));
+            if let Err(error) = outputs.forget_blobs(run).await {
+                tracing::warn!(%error, %run, "the failed reply's blobs stay on disk until the sweep");
+            }
             break;
         }
     }

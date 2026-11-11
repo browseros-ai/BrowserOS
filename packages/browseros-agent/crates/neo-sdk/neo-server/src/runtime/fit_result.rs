@@ -3,7 +3,8 @@
 //!
 //! ```text
 //!  settled JSON over MAX_RESULT_BYTES ─ parse ─ every {"$neo":"bytes","base64"} in the value
-//!    ─ largest first, until the value fits: replaced by {"$neo":"blob","id":"b0","size":N}
+//!    ─ largest first, until the value fits: replaced by {"$neo":"blob","id":"b0","size":N},
+//!      numbered in that order
 //!    ─ the run service writes each blob to outputs/<run>/blobs/<id> before it answers
 //!    ─ the host reads it at GET /v1/runs/{runId}/blobs/{id}
 //! ```
@@ -15,7 +16,7 @@
 //! heap (`Defaults::JS_MEMORY_BYTES`), which bounds what this parses.
 
 use std::cmp::Reverse;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::io;
 
 use base64::Engine as _;
@@ -46,9 +47,8 @@ pub(crate) fn fit_result(value: &mut Value, limit: usize) -> Result<Vec<ResultBl
         return Ok(Vec::new());
     }
     // Each bytes value, largest first, with what moving it saves: its JSON less its marker's.
-    // The marker is counted with the widest id any blob of this value can get, so the running
-    // size never undercounts and the loop never stops before the value fits; a value whose
-    // marker would be no smaller stays inline.
+    // Blobs are numbered in the order they move, so each marker is counted exactly, with the id
+    // it gets; a value whose marker would be no smaller stays inline.
     let mut found = Vec::new();
     walk(value, |place, item| {
         if let Some(base64) = bytes_brand(item) {
@@ -59,30 +59,29 @@ pub(crate) fn fit_result(value: &mut Value, limit: usize) -> Result<Vec<ResultBl
             });
         }
     });
-    let widest_id = BlobId::new(u32::try_from(found.len()).unwrap_or(u32::MAX));
     found.sort_by_key(|candidate| (Reverse(candidate.json_len), candidate.place));
-    let mut moving = BTreeSet::new();
+    let mut moving = BTreeMap::new();
     for candidate in found {
         if size <= limit {
             break;
         }
+        let id = BlobId::new(u32::try_from(moving.len()).unwrap_or(u32::MAX));
         let saved = candidate
             .json_len
-            .saturating_sub(json_len(&marker(widest_id, candidate.decoded_len)));
+            .saturating_sub(json_len(&marker(id, candidate.decoded_len)));
         if saved > 0 {
-            moving.insert(candidate.place);
+            moving.insert(candidate.place, id);
             size -= saved;
         }
     }
     let mut blobs = Vec::new();
     walk_mut(value, |place, item| {
-        if !moving.contains(&place) {
+        let Some(&id) = moving.get(&place) else {
             return false;
-        }
+        };
         let Some(bytes) = bytes_brand(item).and_then(|base64| STANDARD.decode(base64).ok()) else {
             return false;
         };
-        let id = BlobId::new(u32::try_from(blobs.len()).unwrap_or(u32::MAX));
         *item = marker(id, bytes.len());
         blobs.push(ResultBlob { id, bytes });
         true
@@ -219,7 +218,7 @@ mod tests {
         ]);
         let blobs = fit_result(&mut value, 6000).map_err(|size| format!("did not fit: {size}"))?;
         assert!(json_len(&value) <= 6000, "{value}");
-        // The two largest moved, numbered in document order; the PDF and the icon stay inline.
+        // The two largest moved, numbered largest first; the PDF and the icon stay inline.
         let moved: Vec<(BlobId, usize, u8)> = blobs
             .iter()
             .map(|blob| {
@@ -232,7 +231,8 @@ mod tests {
             .collect();
         assert_eq!(
             moved,
-            vec![(BlobId::new(0), 9000, 3), (BlobId::new(1), 5000, 5)]
+            vec![(BlobId::new(0), 9000, 3), (BlobId::new(1), 5000, 5)],
+            "listed in document order, numbered by size"
         );
         assert_eq!(
             value[1],
@@ -261,6 +261,28 @@ mod tests {
         assert_eq!(json_len(&value), limit);
         assert_eq!(blobs.len(), 1, "only the large value moved");
         assert_eq!(value["small"], bytes(1, 1));
+        Ok(())
+    }
+
+    /// Greptile's boundary: a hundred tiny values, of which ten must move. Each marker is counted
+    /// with the id it gets, so the one-digit ids' savings are not hidden behind `b100`.
+    #[test]
+    fn tiny_values_move_when_their_markers_are_smaller() -> Result<(), Box<dyn Error>> {
+        let limit = 256 * 1024;
+        let mut items: Vec<Value> = (0..100).map(|_| bytes(4, 1)).collect();
+        items.push(json!(""));
+        let mut value = Value::Array(items);
+        let saved_by_ten = (0..10)
+            .map(|id| {
+                json_len(&bytes(4, 1))
+                    - json_len(&json!({ "$neo": "blob", "id": format!("b{id}"), "size": 4 }))
+            })
+            .sum::<usize>();
+        let text = limit + saved_by_ten - json_len(&value);
+        value[100] = json!("x".repeat(text));
+        let blobs = fit_result(&mut value, limit).map_err(|size| format!("did not fit: {size}"))?;
+        assert_eq!(blobs.len(), 10);
+        assert_eq!(json_len(&value), limit);
         Ok(())
     }
 

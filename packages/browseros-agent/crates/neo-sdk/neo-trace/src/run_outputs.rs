@@ -65,6 +65,18 @@ impl RunOutputs {
         tokio::fs::write(path, bytes).await
     }
 
+    /// Removes every blob `run` kept, and leaves its downloads: what a run whose reply named its
+    /// blobs but could not keep them all does, so no reply-less bytes stay until the sweep.
+    ///
+    /// # Errors
+    /// When the blobs exist but cannot be removed.
+    pub async fn forget_blobs(&self, run: RunId) -> io::Result<()> {
+        match tokio::fs::remove_dir_all(self.run_dir(run).join("blobs")).await {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        }
+    }
+
     /// Blob `id` of `run`, open for reading, with its length; `None` when the run has none such.
     ///
     /// # Errors
@@ -196,6 +208,22 @@ mod tests {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).await?;
         assert_eq!((bytes.as_slice(), size), (&b"\x89PNG"[..], 4));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn forgetting_blobs_keeps_the_runs_downloads() -> Result<(), Box<dyn Error>> {
+        let dir = tempfile::tempdir()?;
+        let outputs = RunOutputs::beside(&dir.path().join("trace.db"));
+        let run = RunId::new();
+        outputs.forget_blobs(run).await?;
+        let source = dir.path().join("statement.txt");
+        tokio::fs::write(&source, b"balance").await?;
+        outputs.keep_download(run, 0, &source).await?;
+        outputs.keep_blob(run, BlobId::new(0), b"png").await?;
+        outputs.forget_blobs(run).await?;
+        assert!(outputs.open_blob(run, BlobId::new(0)).await?.is_none());
+        assert!(outputs.open_download(run, 0).await?.is_some());
         Ok(())
     }
 
