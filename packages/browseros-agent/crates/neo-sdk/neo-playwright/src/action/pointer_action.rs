@@ -23,6 +23,7 @@
 //! [`Subject::call`] (and the verdict and parents' hit tests through `resolve::ask`), and a
 //! reply that would hold cut text answers `needsMask` and is asked again with the site's values.
 
+use std::future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -593,7 +594,9 @@ impl<'a> PointerRunner<'a> {
             };
             let sent = self.scope.send_effect()?;
             let dialogs_from = self.pw.events().head();
-            let navigations = (action.wait_after == WaitAfter::Navigations).then(|| {
+            // Every action that reads its verdict watches the navigations its input requests:
+            // a pending one ends the verdict's wait, and a click then waits for them to finish.
+            let mut navigations = (action.wait_after != WaitAfter::Nothing).then(|| {
                 let sessions = root_id
                     .iter()
                     .chain(located.world().session_id())
@@ -635,29 +638,50 @@ impl<'a> PointerRunner<'a> {
                     // presses nothing the page sees.
                     drag.trial_press = Some(guard);
                 } else {
-                    let verdict = guard.verdict(self.page, self.scope);
-                    let Ok(verdict) = self.scope.within(verdict).await else {
-                        return Err(self.input_timed_out(dialogs_from));
+                    // Upstream reads the verdict racing its frame's pending navigation and takes
+                    // a navigation for a landed input: the page would not answer until it ends,
+                    // which may be never. The guard, still armed then, disarms on drop.
+                    let read = self.scope.within(guard.verdict(self.page, self.scope));
+                    let navigating = async {
+                        match navigations.as_mut() {
+                            Some(watch) => watch.pending().await,
+                            None => future::pending().await,
+                        }
                     };
-                    let verdict = verdict.map_err(PlaywrightError::after_input)?;
-                    // A world gone under the verdict means the input navigated or closed the
-                    // frame: it landed, as upstream reads a failed `stop()`.
-                    match verdict {
-                        Ok(ProbeReply::Verdict { hit: Hit::Done(_) })
-                        | Err(ProbeFailure::Gone(_)) => {}
-                        Ok(ProbeReply::Verdict {
-                            hit: Hit::Missed { by },
-                        }) => {
-                            self.log_covered(located.world(), by)
-                                .await
-                                .map_err(PlaywrightError::after_input)?;
-                            continue;
-                        }
-                        Ok(other) => {
-                            return Err(self.subject.refused(located, other).await.after_input());
-                        }
-                        Err(failure) => {
-                            return Err(resolve::failed(self.scope, failure).after_input());
+                    let read = tokio::select! {
+                        biased;
+                        read = read => Some(read),
+                        () = navigating => None,
+                    };
+                    // `None`: a navigation is pending, so the input landed.
+                    if let Some(read) = read {
+                        let Ok(verdict) = read else {
+                            return Err(self.input_timed_out(dialogs_from));
+                        };
+                        let verdict = verdict.map_err(PlaywrightError::after_input)?;
+                        // A world gone under the verdict means the input navigated or closed
+                        // the frame: it landed, as upstream reads a failed `stop()`.
+                        match verdict {
+                            Ok(ProbeReply::Verdict { hit: Hit::Done(_) })
+                            | Err(ProbeFailure::Gone(_)) => {}
+                            Ok(ProbeReply::Verdict {
+                                hit: Hit::Missed { by },
+                            }) => {
+                                self.log_covered(located.world(), by)
+                                    .await
+                                    .map_err(PlaywrightError::after_input)?;
+                                continue;
+                            }
+                            Ok(other) => {
+                                return Err(self
+                                    .subject
+                                    .refused(located, other)
+                                    .await
+                                    .after_input());
+                            }
+                            Err(failure) => {
+                                return Err(resolve::failed(self.scope, failure).after_input());
+                            }
                         }
                     }
                 }
@@ -667,7 +691,8 @@ impl<'a> PointerRunner<'a> {
             self.scope.log(format!("  {done}{} action done", req.name));
             self.scope
                 .log("  waiting for scheduled navigations to finish".to_owned());
-            if let Some(navigations) = navigations
+            if let Some(navigations) =
+                navigations.filter(|_| action.wait_after == WaitAfter::Navigations)
                 && navigations.settle(self.scope).await.is_err()
             {
                 return Err(self.scope.timed_out(ErrorCode::WaitTimeout));
