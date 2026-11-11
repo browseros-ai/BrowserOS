@@ -78,6 +78,7 @@ url = "2"
 base64 = "0.22"
 bytes = "1"
 imagesize = "0.15"
+png = "0.18.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 regex = "1"
 rand = "0.9"

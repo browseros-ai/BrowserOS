@@ -44,6 +44,7 @@ mod page_value;
 mod pdf;
 mod screenshot;
 mod screenshot_geometry;
+mod screenshot_png;
 mod screenshot_preparation;
 mod subtree_load;
 mod viewport_size;
