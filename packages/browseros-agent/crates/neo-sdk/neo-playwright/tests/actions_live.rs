@@ -1169,5 +1169,6 @@ async fn tests_that_a_locator_matching_nothing_logs_only_its_wait() -> TestResul
             "{op} logs only the wait"
         );
     }
+    run.close_page(&page).await;
     Ok(())
 }

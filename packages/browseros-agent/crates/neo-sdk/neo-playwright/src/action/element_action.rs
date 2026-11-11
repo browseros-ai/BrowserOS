@@ -12,6 +12,7 @@
 
 use std::time::Duration;
 
+use crate::action::attempt_log::AttemptLog;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::op_scope::{OpScope, Sent};
@@ -143,32 +144,32 @@ impl<'a> ElementRunner<'a> {
             };
             let inner = Backoff::inner();
             let mut target = self.subject.first_target();
-            // Whether this element was seen. An attempt's lines wait until it is: a locator
-            // that matches nothing logs `waiting for <locator>` alone, as upstream's.
-            let mut found = false;
+            // The attempt's lines wait until the element is seen (`attempt_log.rs`).
+            let mut attempt = AttemptLog::new(self.scope, false);
             for retry in 0.. {
                 let wait = inner.wait(retry);
-                let mut lines = vec![if retry == 0 {
+                attempt.log(if retry == 0 {
                     "attempting scroll into view action".to_owned()
                 } else {
                     "retrying scroll into view action".to_owned()
-                }];
+                });
                 if retry > 0 && !wait.is_zero() {
-                    lines.push(format!("  waiting {}ms", wait.as_millis()));
+                    attempt.log(format!("  waiting {}ms", wait.as_millis()));
                 }
                 if self.scope.sleep(wait).await.is_err() {
-                    self.log_found(found, lines);
                     return Err(timed_out(matched));
                 }
-                lines.push("  waiting for element to be stable".to_owned());
+                attempt.log("  waiting for element to be stable".to_owned());
                 let measured = self
                     .measure(&located, target.clone(), true, required_states)
                     .await?;
-                if !found && matches!(measured, Measured::Unmatched) {
-                    break;
+                match measured {
+                    Measured::Rect(..) | Measured::Hidden => attempt.found(),
+                    // Nothing matched, or its world went: the next outer pass, with nothing
+                    // logged until the element was seen.
+                    Measured::Unmatched | Measured::Gone if !attempt.is_found() => break,
+                    Measured::Unmatched | Measured::Gone => {}
                 }
-                found = true;
-                self.log_found(true, lines);
                 let (pin, rect) = match measured {
                     Measured::Rect(pin, rect) => (pin, rect),
                     Measured::Hidden => {
@@ -203,15 +204,6 @@ impl<'a> ElementRunner<'a> {
             }
         }
         Err(timed_out(matched))
-    }
-
-    /// An attempt's held lines, logged once its element was found.
-    fn log_found(&self, found: bool, lines: Vec<String>) {
-        if found {
-            for line in lines {
-                self.scope.log(line);
-            }
-        }
     }
 
     /// One measurement after optional scrolling. Screenshot callers additionally require

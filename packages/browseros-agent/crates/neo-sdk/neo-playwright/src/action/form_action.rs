@@ -25,6 +25,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::action::actionability::state_name;
+use crate::action::attempt_log::AttemptLog;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::input::{self, Keyboard};
@@ -212,34 +213,30 @@ impl<'a> FormRunner<'a> {
         let inner = Backoff::inner();
         let mut pin = None;
         let mut announced = false;
-        // Whether a reply described this element yet.
-        let mut found = false;
+        // The attempt's lines wait until the element is seen (`attempt_log.rs`).
+        let mut attempt = AttemptLog::new(self.scope, false);
         for retry in 0.. {
             let wait = inner.wait(retry);
-            // An attempt's lines wait until the element is found, as in pointer_action.rs: a
-            // locator that matches nothing logs `waiting for <locator>` alone, as upstream's.
-            let mut lines = Vec::new();
             if retry == 0 {
-                lines.push(format!("attempting {} action", row.name));
+                attempt.log(format!("attempting {} action", row.name));
             } else {
-                lines.push(format!("retrying {} action", row.name));
+                attempt.log(format!("retrying {} action", row.name));
                 if !wait.is_zero() {
-                    lines.push(format!("  waiting {}ms", wait.as_millis()));
+                    attempt.log(format!("  waiting {}ms", wait.as_millis()));
                 }
             }
             if self.scope.sleep(wait).await.is_err() {
-                self.log_found(found, lines);
                 return Err(self.timed_out());
             }
             if !self.force {
-                lines.push(format!("  waiting for element to be {}", row.waits_for));
+                attempt.log(format!("  waiting for element to be {}", row.waits_for));
             }
-            let ready = self.ready(located, pin, row, found).await?;
-            if matches!(ready, Ready::Unmatched) {
-                return Ok(None);
+            let ready = self.ready(located, pin, row, attempt.is_found()).await?;
+            match &ready {
+                Ready::At { .. } | Ready::Missing(_) => attempt.found(),
+                Ready::Unmatched => return Ok(None),
+                Ready::Gone => {}
             }
-            found = true;
-            self.log_found(true, lines);
             let pinned = match ready {
                 Ready::At { pin, sensitive } => {
                     self.matched = true;
@@ -265,15 +262,6 @@ impl<'a> FormRunner<'a> {
             }
         }
         Err(self.timed_out())
-    }
-
-    /// An attempt's held lines, logged once its element was found.
-    fn log_found(&self, found: bool, lines: Vec<String>) {
-        if found {
-            for line in lines {
-                self.scope.log(line);
-            }
-        }
     }
 
     /// ①: the element pinned once its states hold, and whether it is a sensitive field.
