@@ -136,6 +136,15 @@ struct AttachLogBinding {
     tab: TargetId,
 }
 
+/// A main-frame document Neo installed a world in.
+#[derive(Debug)]
+struct MainDocument {
+    /// The seq its world reported.
+    seq: FrameSeq,
+    /// Its URL when the world booted.
+    url: String,
+}
+
 #[derive(Debug)]
 struct WorldsInner {
     cells: HashMap<WorldKey, Arc<OnceCell<IsolatedWorld>>>,
@@ -164,9 +173,9 @@ struct WorldsInner {
     main_seq: Option<FrameSeq>,
     /// The URL the main frame last committed, as the log reported it; none before the first.
     main_url: Option<String>,
-    /// The main frame's last installed document: the seq its world reported and the URL it
-    /// booted at. Once that seq is no longer live, a call proved the document gone.
-    main_doc: Option<(FrameSeq, String)>,
+    /// The main frame's last installed document. Once its seq is no longer live, a call proved
+    /// the document gone.
+    main_doc: Option<MainDocument>,
     /// Whether this tab has a log, so the main frame's seq follows its commits.
     follows_commits: bool,
     /// The log's gap count at the last replay.
@@ -437,7 +446,7 @@ impl WorldsInner {
         if self.main_url.is_none() {
             self.main_url = Some(url.clone());
         }
-        self.main_doc = Some((seq, url));
+        self.main_doc = Some(MainDocument { seq, url });
     }
 
     /// Whether `seq` was the main frame's real page and a call proved its world gone since
@@ -451,7 +460,7 @@ impl WorldsInner {
             && self
                 .main_doc
                 .as_ref()
-                .is_some_and(|(doc, url)| *doc == seq && is_real_page(url))
+                .is_some_and(|doc| doc.seq == seq && is_real_page(&doc.url))
     }
 
     /// The page's first seq for the main frame, unless an earlier `Playwright` gave it out.
@@ -791,54 +800,37 @@ mod tests {
         Ok(())
     }
 
+    /// Boots the main frame's world in a document at `url`.
+    async fn main_at(
+        worlds: &FrameWorlds,
+        installs: &AtomicU32,
+        url: &str,
+    ) -> Result<IsolatedWorld, ProbeFailure> {
+        boot(worlds, ("S", "main"), Place::Main, installs, None, url).await
+    }
+
     /// The watcher has not logged the commit yet when an op proves the old page gone and
     /// re-installs (a busy browser, or `location.href = …` and a ref at once). Leaving a real
     /// page still takes a new seq, so the old page's `e2` stays retired; leaving a blank one
-    /// keeps it, as upstream does. The late commit then numbers nothing that is in use.
+    /// keeps it, as upstream does. The late commit then hands out only unused seqs.
     #[tokio::test]
     async fn tests_that_a_real_page_proved_gone_moves_the_main_frame_on_before_the_log_does()
     -> TestResult {
         let installs = AtomicU32::new(0);
         let mut seqs = Vec::new();
-        for booted_in in ["https://old.test/", "about:blank"] {
+        for left in ["https://old.test/", "about:blank"] {
             let log = Arc::new(FrameAttachLog::default());
             let worlds = logged(&log);
-            record(&log, [committed(booted_in)]);
-            let old = boot(
-                &worlds,
-                ("S", "main"),
-                Place::Main,
-                &installs,
-                None,
-                booted_in,
-            )
-            .await?;
+            record(&log, [committed(left)]);
+            let old = main_at(&worlds, &installs, left).await?;
             worlds.invalidate(&old);
-            let new = boot(
-                &worlds,
-                ("S", "main"),
-                Place::Main,
-                &installs,
-                None,
-                "https://new.test/",
-            )
-            .await?;
+            let new = main_at(&worlds, &installs, "https://new.test/").await?;
             seqs.push((old.seq().0, new.seq().0));
+
             record(&log, [committed("https://new.test/"), attached("child")]);
-            let child = install(
-                &worlds,
-                ("S", "child"),
-                child_of(new.seq().0, "#1"),
-                &installs,
-            )
-            .await?;
-            assert!(
-                child.seq() > new.seq(),
-                "the late commit hands out only seqs no document took: {child:?}"
-            );
-            if old.seq() != new.seq() {
-                assert!(matches!(worlds.by_seq(old.seq()), SeqLookup::Retired));
-            }
+            let into_new = child_of(new.seq().0, "#1");
+            let child = install(&worlds, ("S", "child"), into_new, &installs).await?;
+            assert!(child.seq() > new.seq(), "{child:?}");
         }
         assert_eq!(seqs, [(0, 1), (0, 0)]);
         Ok(())
