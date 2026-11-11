@@ -159,7 +159,10 @@ pub(crate) async fn set_input_files(
         if scope.sleep(backoff.wait(pass)).await.is_err() {
             break;
         }
-        let Ok(located) = scope.within(subject.locate(pass, Prechecks::Run)).await else {
+        let Ok(located) = scope
+            .within(subject.locate(pass, Prechecks::LocatorPasses))
+            .await
+        else {
             break;
         };
         let Some(located) = located? else {

@@ -71,7 +71,12 @@ impl<'a> Subject<'a> {
         pass: usize,
         prechecks: Prechecks,
     ) -> Result<Option<Resolved>, PlaywrightError> {
-        if prechecks == Prechecks::Run {
+        let runs = match prechecks {
+            Prechecks::Run => true,
+            Prechecks::LocatorPasses => matches!(self.of, Of::Locator { .. }),
+            Prechecks::Skip => false,
+        };
+        if runs {
             self.run_handlers().await?;
         }
         match &self.of {

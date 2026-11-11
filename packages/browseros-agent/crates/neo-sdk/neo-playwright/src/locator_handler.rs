@@ -25,11 +25,13 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use browseros_core::TabId;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, watch};
+use tokio::time;
 
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
@@ -37,10 +39,12 @@ use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, OpTarget, TARGET};
 use crate::page::OpPage;
 use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read};
-use crate::read::wait_hidden;
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{LocatorTarget, Strictness, Target};
-use crate::{ErrorCode, PlaywrightError};
+use crate::{ErrorCode, PlaywrightError, read};
+
+/// How often a checkpoint waiting on a handler looks whether its page closed.
+const CLOSE_POLL: Duration = Duration::from_millis(250);
 
 listed_enum! {
     /// The ops behind `page.addLocatorHandler` and `removeLocatorHandler`, and the pull the
@@ -151,11 +155,17 @@ pub(crate) async fn invoke(
     }
 }
 
-/// Whether an action runs the checkpoint before its attempts. Upstream skips it under `force`,
-/// and for `dragTo`'s drop half, which must not move the mouse between press and release.
+/// Whether an action runs the checkpoint before its attempts, as upstream decides per action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Prechecks {
+    /// Before every pass and retry, on a locator or a handle: the actions upstream runs through
+    /// `_retryAction` (pointer actions, fill, selectOption, selectText, scrollIntoViewIfNeeded).
     Run,
+    /// Before a locator's passes only (`_retryWithProgressIfNotConnected`): the handle forms of
+    /// focus, blur, press, type and setInputFiles have no retry loop, and run no handler.
+    LocatorPasses,
+    /// Never: under `force`, for `dispatchEvent`, and for `dragTo`'s drop half, which must not
+    /// move the mouse between press and release.
     Skip,
 }
 
@@ -194,15 +204,17 @@ pub(crate) async fn checkpoint(
             "  found {display}, intercepting action to run the handler"
         ));
         // Ends when the sender goes: the script resolved or removed the handler, or the run
-        // ended. Nothing is ever sent on it.
-        let _gone = resolved.changed().await;
-        // A handler may close its own page. Upstream's page scope then fails the action; here
-        // the action would go on looking for its element in a tab that is gone.
+        // ended. Nothing is ever sent on it. Upstream races it with the page's scope, so a
+        // page closed meanwhile fails the action at once.
+        tokio::select! {
+            biased;
+            _gone = resolved.changed() => {}
+            closed = closed(scope, page) => return Err(closed),
+        }
+        // A handler that closed its own page resolves right after: the action would otherwise
+        // go on looking for its element in a tab that is gone.
         if !still_open(scope, page).await? {
-            return Err(scope.fail(
-                ErrorCode::TargetClosed,
-                "Target page, context or browser has been closed",
-            ));
+            return Err(closed_error(scope));
         }
         if handler.no_wait_after {
             scope.log("  locator handler has finished".to_owned());
@@ -212,11 +224,31 @@ pub(crate) async fn checkpoint(
             ));
             // Boxed: the wait's polls are the ones `locator.waitFor` runs, which themselves
             // run this checkpoint first.
-            Box::pin(wait_hidden(scope, page, &handler.target)).await?;
+            Box::pin(read::wait_hidden(scope, page, &handler.target)).await?;
         }
         scope.log("  interception handler has finished, continuing".to_owned());
     }
     Ok(())
+}
+
+/// The error once `page`'s tab closed under the action, while a handler of it runs. Polled:
+/// core's tab registry offers no close signal an op can wait on, and a lookup is a map read.
+async fn closed(scope: &OpScope<'_>, page: &OpPage<'_>) -> PlaywrightError {
+    loop {
+        match still_open(scope, page).await {
+            Ok(true) => time::sleep(CLOSE_POLL).await,
+            Ok(false) => return closed_error(scope),
+            Err(error) => return error,
+        }
+    }
+}
+
+/// Upstream's error for a call on a page that closed.
+fn closed_error(scope: &OpScope<'_>) -> PlaywrightError {
+    scope.fail(
+        ErrorCode::TargetClosed,
+        "Target page, context or browser has been closed",
+    )
 }
 
 /// Whether `page`'s tab is still open, by core's tab registry, which `page.close` updates before
@@ -309,6 +341,9 @@ pub(crate) struct Ready {
 }
 
 /// One checkpoint waiting on a handler of `tab`, until dropped (its op's timeout included).
+/// While it lives, the tab's other checkpoints pass at once: dropped early, a handler's own
+/// actions could run the handler again.
+#[must_use = "the tab's checkpoints pass only while this guard lives"]
 pub(crate) struct Waiting<'a> {
     handlers: &'a LocatorHandlers,
     tab: TabId,

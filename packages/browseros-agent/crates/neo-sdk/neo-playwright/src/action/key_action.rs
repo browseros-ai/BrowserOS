@@ -112,7 +112,7 @@ impl<'a> KeyRunner<'a> {
             if self.scope.sleep(backoff.wait(pass)).await.is_err() {
                 return Err(self.timed_out());
             }
-            let locating = self.subject.locate(pass, Prechecks::Run);
+            let locating = self.subject.locate(pass, Prechecks::LocatorPasses);
             let Ok(located) = self.scope.within(locating).await else {
                 return Err(self.timed_out());
             };

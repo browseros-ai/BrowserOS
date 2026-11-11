@@ -98,8 +98,16 @@ pub(crate) struct PointerAction {
 impl PointerAction {
     /// Upstream runs the locator handlers before each attempt unless `force` is set, and never
     /// for `dragTo`'s drop half, so a handler cannot move the mouse while the button is held.
-    fn prechecks(&self) -> Prechecks {
-        Prechecks::unless(self.force || self.kind == PointerKind::DragTarget)
+    /// For the source half, `drag` gives the tab's input back first, or skips them once the
+    /// press went out ([`Drag::free_unless_pressed`]).
+    fn prechecks(&self, drag: Option<&mut Drag>) -> Prechecks {
+        if self.force || self.kind == PointerKind::DragTarget {
+            return Prechecks::Skip;
+        }
+        if drag.is_some_and(|drag| !drag.free_unless_pressed()) {
+            return Prechecks::Skip;
+        }
+        Prechecks::Run
     }
 }
 
@@ -171,14 +179,17 @@ enum Called {
     Expired,
 }
 
-/// `dragTo` from before its press to after its release: the tab's input, held across both
-/// halves so no other op's input comes between them, and the left button let go on every exit
-/// that did not release it (a drop target never found, a timeout, a refused recheck, the host
-/// dropping the op), so the tab's next input does not start from a button the page still holds.
-/// Upstream leaves it down. `Drop` cannot await: the release is owed, and goes out before any
-/// later input (`PageInput`).
+/// `dragTo` from its press to after its release: the tab's input, held across both halves so no
+/// other op's input comes between them, and the left button let go on every exit that did not
+/// release it (a drop target never found, a timeout, a refused recheck, the host dropping the
+/// op), so the tab's next input does not start from a button the page still holds. Upstream
+/// leaves it down. `Drop` cannot await: the release is owed, and goes out before any later
+/// input (`PageInput`).
 struct Drag {
-    input: PageInput,
+    /// Taken by the source half's first attempt that reaches its input, and given back by
+    /// [`Drag::free_unless_pressed`] until the press goes out: a locator handler the source's
+    /// checkpoint runs sends input of its own, which would otherwise wait on this drag.
+    input: Option<PageInput>,
     /// A `trial` drag's press interceptor, which blocks every event in the dragged element's
     /// frame. Kept unread until the drag ends, and dropped after `input`, so a release owed at
     /// the press reaches the page blocked: the trial clicks nothing. Its disarm takes the lock
@@ -186,9 +197,28 @@ struct Drag {
     trial_press: Option<ArmGuard>,
 }
 
+impl Drag {
+    /// Before a checkpoint of the source half: gives the tab's input back unless the left
+    /// button is down. `false` while it is: the checkpoint must not run then, as upstream skips
+    /// it for the drop half, since a handler's input would wait on this drag's release.
+    fn free_unless_pressed(&mut self) -> bool {
+        if self
+            .input
+            .as_ref()
+            .is_some_and(|input| input.holds(MouseButton::Left))
+        {
+            return false;
+        }
+        self.input = None;
+        true
+    }
+}
+
 impl Drop for Drag {
     fn drop(&mut self) {
-        self.input.let_go(MouseButton::Left);
+        if let Some(input) = &mut self.input {
+            input.let_go(MouseButton::Left);
+        }
     }
 }
 
@@ -235,7 +265,7 @@ impl<'a> PointerRunner<'a> {
         phases: &DragPhases,
     ) -> Result<(), PlaywrightError> {
         let mut drag = Drag {
-            input: self.hold().await?,
+            input: None,
             trial_press: None,
         };
         self.run_holding(&phases.down, Some(&mut drag)).await?;
@@ -244,8 +274,8 @@ impl<'a> PointerRunner<'a> {
             .await
     }
 
-    /// [`PointerRunner::run`], every attempt under `drag`'s hold of the tab's input when there
-    /// is one, and under a lock of its own otherwise.
+    /// [`PointerRunner::run`], every attempt under `drag`'s hold of the tab's input once it took
+    /// it, and under a lock of its own otherwise.
     async fn run_holding(
         &mut self,
         action: &PointerAction,
@@ -254,7 +284,11 @@ impl<'a> PointerRunner<'a> {
         self.subject.log_waiting();
         let backoff = Backoff::outer(self.scope.timeout());
         for attempt in 0.. {
-            let Some(located) = self.next_location(backoff, attempt, action).await? else {
+            let prechecks = action.prechecks(drag.as_deref_mut());
+            let Some(located) = self
+                .next_location(backoff, attempt, action, prechecks)
+                .await?
+            else {
                 continue;
             };
             match self
@@ -279,7 +313,11 @@ impl<'a> PointerRunner<'a> {
         self.subject.log_waiting();
         let backoff = Backoff::outer(self.scope.timeout());
         for attempt in 0.. {
-            let Some(located) = self.next_location(backoff, attempt, action).await? else {
+            let prechecks = action.prechecks(None);
+            let Some(located) = self
+                .next_location(backoff, attempt, action, prechecks)
+                .await?
+            else {
                 continue;
             };
             let Some(pin) = self.pin(&located).await? else {
@@ -328,11 +366,12 @@ impl<'a> PointerRunner<'a> {
         backoff: Backoff,
         attempt: usize,
         action: &PointerAction,
+        prechecks: Prechecks,
     ) -> Result<Option<Resolved>, PlaywrightError> {
         if self.scope.sleep(backoff.wait(attempt)).await.is_err() {
             return Err(self.timed_out());
         }
-        let locating = self.subject.locate(attempt, action.prechecks());
+        let locating = self.subject.locate(attempt, prechecks);
         let Ok(located) = self.scope.within(locating).await else {
             return Err(self.timed_out());
         };
@@ -431,7 +470,7 @@ impl<'a> PointerRunner<'a> {
             }
             // A retry runs the locator handlers, as upstream's `_retryAction` does before each
             // attempt; the outer pass ran the first attempt's just before it.
-            if retry > 0 && action.prechecks() == Prechecks::Run {
+            if retry > 0 && action.prechecks(drag.as_deref_mut()) == Prechecks::Run {
                 match self.scope.within(self.subject.run_handlers()).await {
                     Ok(checked) => checked?,
                     Err(_expired) => return Err(self.timed_out()),
@@ -518,7 +557,10 @@ impl<'a> PointerRunner<'a> {
             let scale = self.scope.view().pointer_scale(self.page.core_page());
             let mut own = None;
             let input = match drag.as_deref_mut() {
-                Some(drag) => &mut drag.input,
+                Some(drag) => match drag.input {
+                    Some(ref mut input) => input,
+                    None => drag.input.insert(self.hold().await?),
+                },
                 None => own.insert(self.hold().await?),
             };
             let page_point = match self.place(located, measured.point, !action.force).await? {

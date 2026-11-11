@@ -55,11 +55,16 @@ impl<'a> ElementRunner<'a> {
     }
 
     /// Resolves the element, then applies `edit` to it: upstream's `focus`, `blur` and
-    /// `dispatchEvent`, retried while the element is missing or detaches in between. Only
-    /// `dispatchEvent` skips the locator handlers: upstream runs it as a selector wait.
+    /// `dispatchEvent`, retried while the element is missing or detaches in between. A
+    /// locator's focus and blur run the locator handlers first; `dispatchEvent` never does, as
+    /// upstream runs it as a selector wait.
     pub(crate) async fn edit(&self, edit: Edit) -> Result<(), PlaywrightError> {
         self.subject.log_waiting();
-        let prechecks = Prechecks::unless(matches!(edit, Edit::DispatchEvent { .. }));
+        let prechecks = if matches!(edit, Edit::DispatchEvent { .. }) {
+            Prechecks::Skip
+        } else {
+            Prechecks::LocatorPasses
+        };
         let backoff = Backoff::outer(self.scope.timeout());
         for attempt in 0.. {
             if self.scope.sleep(backoff.wait(attempt)).await.is_err() {
