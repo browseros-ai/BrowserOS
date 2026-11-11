@@ -5,4 +5,13 @@
 
 // The named types two or more families reach, exported once here so `index.ts` exports
 // each name from one module.
-export {}
+export type { BackendNodeId } from './types/BackendNodeId'
+export type { ElementBrand } from './types/ElementBrand'
+export type { ElementTarget } from './types/ElementTarget'
+export type { FrameId } from './types/FrameId'
+export type { FrameSeq } from './types/FrameSeq'
+export type { LocatorTarget } from './types/LocatorTarget'
+export type { PageBrand } from './types/PageBrand'
+export type { PageHandle } from './types/PageHandle'
+export type { TabId } from './types/TabId'
+export type { Target } from './types/Target'

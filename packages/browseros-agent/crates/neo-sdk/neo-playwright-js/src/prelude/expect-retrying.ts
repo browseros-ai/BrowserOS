@@ -5,16 +5,15 @@
  */
 import type { ExpectParams } from '../probe/protocol'
 import { parseTemplate, unshift } from './aria-template'
-import { invoke } from './bridge'
 import type { CallSite } from './call-site'
 import { plainError, prefixed } from './errors'
 import { receiverText, stringify } from './expect-equality'
 import { fail, header, type State } from './expect-values'
+import { send } from './generated'
 import { Locator } from './locator'
 import { Page } from './page'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import { normalizeUrl } from './url'
-import type { ExpectArgs } from './wire'
 
 export type Retrying = {
   /** What upstream's `expectTypes` accepts; toMatchAriaSnapshot takes either. */
@@ -525,23 +524,30 @@ export async function retry(
     )
   const timeout = matcher.options?.timeout ?? state.config.timeout
   const call = { api, timeoutMs: timeoutMs(api, timeout) }
-  const shape: ExpectArgs = {
-    matcher: name,
-    expectation: matcher.expectation,
-    expected: matcher.expected(state.isNot),
-    params: { ...matcher.params, isNot: state.isNot },
-    templateError: matcher.templateError,
-  }
+  // Freeze the payload before resolving a page brand can await: .not and diagnostics belong
+  // to this matcher call even when another script turn changes its configuration.
+  const expectation = matcher.expectation
+  const expected = matcher.expected(state.isNot)
+  const params = { ...matcher.params, isNot: state.isNot }
+  const templateError = matcher.templateError
   try {
     if (actual instanceof Page)
-      await invoke('expect.page', site, call, {
+      await send['expect.page'](site, call, {
         page: await actual._brand(api),
-        ...shape,
+        matcher: name,
+        expectation,
+        expected,
+        params,
+        templateError,
       })
     else if (actual instanceof Locator)
-      await invoke('expect.locator', site, call, {
+      await send['expect.locator'](site, call, {
         target: await actual._frame._locatorBrand(api, actual._selector),
-        ...shape,
+        matcher: name,
+        expectation,
+        expected,
+        params,
+        templateError,
       })
   } catch (error) {
     if (error instanceof Error)

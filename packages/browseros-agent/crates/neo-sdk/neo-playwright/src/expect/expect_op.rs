@@ -2,6 +2,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::expect::expectation::{Expectation, MatcherArgs, Poll, Subject};
 use crate::listed_enum::listed_enum;
@@ -12,6 +13,7 @@ use crate::page::{OpPage, document_op};
 use crate::probe::{ExpectParams, ProbeFailure, ProbeRequest, ProbeTarget};
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{PageRef, Target};
+use crate::wire::{self, Describe, Nothing, OpWire, Route, Run, options};
 use crate::world::Place;
 use crate::{ErrorCode, Playwright, PlaywrightError, locator_handler};
 
@@ -25,6 +27,11 @@ listed_enum! {
 }
 
 impl ExpectOp {
+    /// Describes the same matcher inputs and null result the runtime route handles.
+    pub(crate) fn wire(self) -> Option<OpWire> {
+        route(self, Describe)
+    }
+
     /// This op's registration metadata. Both are reads: a poll only looks at the page, so
     /// neither ever marks itself sent.
     pub(crate) const fn spec(self) -> OpSpec {
@@ -45,44 +52,70 @@ impl ExpectOp {
 
 /// `expect(locator).<matcher>`, after `call`. No `Debug`: `expected` and `params` may hold a
 /// password the script compares.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "LocatorExpectInput")]
 struct LocatorInput {
     target: Target,
     matcher: String,
     expectation: String,
     expected: String,
+    #[ts(type = "import('../../../probe/protocol').ExpectParams")]
     params: ExpectParams,
     /// Sent only when an aria template did not parse.
     #[serde(default, rename = "templateError")]
+    #[ts(optional)]
     template_error: Option<String>,
 }
+options!(LocatorInput);
 
 /// `expect(page).toHaveTitle`, `toHaveURL` and `toMatchAriaSnapshot`, after `call`.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "PageExpectInput")]
 struct PageInput {
     page: PageRef,
     matcher: String,
     expectation: String,
     expected: String,
+    #[ts(type = "import('../../../probe/protocol').ExpectParams")]
     params: ExpectParams,
     /// Sent only when an aria template did not parse.
     #[serde(default, rename = "templateError")]
+    #[ts(optional)]
     template_error: Option<String>,
 }
+options!(PageInput);
 
-/// Runs one expect op. Boxed, as an action is: a poll loop holds a large state machine, and the
-/// future every op shares (`Playwright::invoke`) is as large as its largest family's.
+/// Runs one expect op through the shared decode/call/encode boundary. The route boxes its
+/// poll future so the dispatcher does not inherit the matcher loop's state-machine size.
 pub(crate) async fn invoke(
     pw: &Playwright,
     scope: &OpScope<'_>,
     op: ExpectOp,
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
+    route(op, Run { pw, scope, args }).await
+}
+
+/// Both matcher ops replace Frame.expect with probe parameters and preformatted diagnostics.
+/// Run and Describe share these rows; matcher policy and polling remain handwritten.
+fn route<'a, R: Route<'a>>(op: ExpectOp, r: R) -> R::Out {
     match op {
-        ExpectOp::Locator => Box::pin(locator(pw, scope, args.decode(scope)?)).await,
-        ExpectOp::Page => Box::pin(page(pw, scope, args.decode(scope)?)).await,
+        ExpectOp::Locator => r.op(
+            wire::replaces(
+                "Frame.expect",
+                "probe matcher parameters and preformatted locator diagnostics",
+            ),
+            locator,
+        ),
+        ExpectOp::Page => r.op(
+            wire::replaces(
+                "Frame.expect",
+                "probe matcher parameters and preformatted page diagnostics",
+            ),
+            page,
+        ),
     }
 }
 
@@ -92,7 +125,7 @@ async fn locator(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: LocatorInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     let LocatorInput {
         target,
         matcher,
@@ -143,7 +176,7 @@ async fn page(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: PageInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     let PageInput {
         page,
         matcher,
