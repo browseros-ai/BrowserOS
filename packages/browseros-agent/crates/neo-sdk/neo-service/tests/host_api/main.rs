@@ -3,6 +3,7 @@
 
 mod browser;
 mod display;
+mod downloads;
 mod errors;
 mod events;
 mod fits;

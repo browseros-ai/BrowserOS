@@ -7,6 +7,8 @@
 //!              │  ─ event_release: an event pull's events through the rules, tab by tab
 //!              └▶ solve_captcha: neo.solveCaptcha ─ CaptchaClaims (also the door's busy rule)
 //!  TabJanitor::sweep ─▶ a Neo-origin run ─▶ Dispatcher::submit(page.close) per idle agent tab
+//!  keep_downloads ─▶ at a run's end, the finished files its download events handed it, copied
+//!                    beside the trace for the host (the run service calls it before it answers)
 //! ```
 //!
 //! Every built-in is a private `dispatch::Method` type, reachable only by the name it registers,
@@ -22,6 +24,7 @@
 mod builtin_set;
 mod captcha_claims;
 mod event_release;
+mod keep_downloads;
 mod op_marks;
 mod playwright_facade;
 mod playwright_ops;
@@ -32,6 +35,7 @@ mod tests;
 
 pub(crate) use builtin_set::{BuiltinDeps, builtin_set, door_rules};
 pub(crate) use captcha_claims::CaptchaClaims;
+pub(crate) use keep_downloads::keep_downloads;
 pub(crate) use playwright_facade::PlaywrightFacade;
 pub(crate) use playwright_ops::PLAYWRIGHT_PRELUDE;
 pub(crate) use tab_janitor::TabJanitor;

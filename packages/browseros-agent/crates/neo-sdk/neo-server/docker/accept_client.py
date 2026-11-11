@@ -6,6 +6,9 @@ it reuses) and runs one command per call, as whichever uid the check needs. Each
 one JSON object on stdout; accept.sh decides PASS or FAIL from it.
 
   run <mcp-url> <task-id> <request-id>   a `run` that drives a real page, with the host's _meta
+  downloads <mcp-url> <socket> <token-file>
+                                         a click that downloads, `path()` and `saveAs()`, the
+                                         bytes over the host socket, then the same path uploaded
   describe <mcp-url>                     the `run` tool's description, which lists neo.* methods
   host <socket> <token-file|-> <path>    GET a host API path over the Unix socket
   listeners                              the container's listening TCP sockets, from /proc
@@ -14,10 +17,14 @@ one JSON object on stdout; accept.sh decides PASS or FAIL from it.
 Standard library only.
 """
 
+import hashlib
+import http.server
 import json
+import os
 import socket
 import ssl
 import sys
+import threading
 import urllib.parse
 
 RUN_META = "com.browseros.neo/run"
@@ -54,21 +61,17 @@ def describe(url: str) -> dict:
     return {"description": next(t.get("description", "") for t in tools if t["name"] == "run")}
 
 
-def run(url: str, task_id: str, request_id: str) -> dict:
-    client = connect(url)
-    tools = [tool["name"] for tool in client.tools()]
-    meta = {"requestId": request_id, "taskId": task_id, "hostData": {"check": "accept"}}
+def call_run(client, code: str, meta: dict) -> dict:
     result = client.call(
         "tools/call",
         {
             "name": "run",
-            "arguments": {"code": CODE, "timeout": 60_000},
+            "arguments": {"code": code, "timeout": 60_000},
             "_meta": {RUN_META: meta},
         },
     )
     text = "\n".join(p.get("text", "") for p in result.get("content", []) if p.get("type") == "text")
     return {
-        "tools": tools,
         "isError": bool(result.get("isError")),
         "meta": result.get("_meta", {}).get(RUN_META, {}),
         "value": result.get("structuredContent"),
@@ -76,7 +79,15 @@ def run(url: str, task_id: str, request_id: str) -> dict:
     }
 
 
-def host(socket_path: str, token_file: str, path: str) -> dict:
+def run(url: str, task_id: str, request_id: str) -> dict:
+    client = connect(url)
+    tools = [tool["name"] for tool in client.tools()]
+    meta = {"requestId": request_id, "taskId": task_id, "hostData": {"check": "accept"}}
+    return {"tools": tools, **call_run(client, CODE, meta)}
+
+
+def host_raw(socket_path: str, token_file: str, path: str):
+    """GET `path` over the host socket: (status, lower-cased headers, body), or the connect error."""
     token = "" if token_file == "-" else open(token_file).read().strip()
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(20)
@@ -91,14 +102,124 @@ def host(socket_path: str, token_file: str, path: str) -> dict:
         reply += chunk
     connection.close()
     head, _, body = reply.partition(b"\r\n\r\n")
-    status = int(head.split(b" ", 2)[1])
-    if b"transfer-encoding: chunked" in head.lower():
+    lines = head.decode(errors="replace").split("\r\n")
+    status = int(lines[0].split(" ", 2)[1])
+    headers = {}
+    for line in lines[1:]:
+        name, _, value = line.partition(":")
+        headers[name.strip().lower()] = value.strip()
+    if headers.get("transfer-encoding", "").lower() == "chunked":
         body = dechunk(body)
+    return status, headers, body
+
+
+def host(socket_path: str, token_file: str, path: str) -> dict:
+    raw = host_raw(socket_path, token_file, path)
+    if isinstance(raw, dict):
+        return raw
+    status, _, body = raw
     try:
         parsed = json.loads(body)
     except ValueError:
         parsed = body.decode(errors="replace")[:400]
     return {"connect": "ok", "status": status, "body": parsed}
+
+
+# What `downloads` serves as a download: a CSV a bank site would, with a name the browser keeps.
+STATEMENT_NAME = "statement-2026-10.csv"
+STATEMENT = b"".join(b"2026-10-%02d,coffee,%d.50\r\n" % (day % 28 + 1, day) for day in range(4000))
+
+
+class FilesPage(http.server.BaseHTTPRequestHandler):
+    """A page with a download link and a file input, on 127.0.0.1: the check's network has no
+    route out. 127.0.0.1 is a secure context, so the page can hash what it was given."""
+
+    def do_GET(self):
+        if self.path == "/statement":
+            body, kind = STATEMENT, "text/csv"
+            disposition = f'attachment; filename="{STATEMENT_NAME}"'
+        else:
+            body, kind, disposition = (
+                b"<title>files</title><a id=get href=/statement>Statement</a><input type=file id=f>",
+                "text/html",
+                None,
+            )
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        if disposition:
+            self.send_header("Content-Disposition", disposition)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+
+DOWNLOAD_CODE = """\
+await page.goto('ORIGIN/');
+const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#get').click()]);
+const path = await download.path();
+await download.saveAs('/tmp/neo-accept-saved.csv');
+return { path, name: download.suggestedFilename(), failure: await download.failure() };
+"""
+
+UPLOAD_CODE = """\
+await page.goto('ORIGIN/');
+await page.locator('#f').setInputFiles(args.path);
+return await page.locator('#f').evaluate(async (input) => {
+  const file = input.files[0];
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return { name: file.name, size: file.size,
+           sha256: [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('') };
+});
+"""
+
+
+def downloads(url: str, socket_path: str, token_file: str) -> dict:
+    """zuzu's neo_download then neo_upload, and `import` reading the bytes on the host socket."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FilesPage)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    origin = f"http://127.0.0.1:{server.server_address[1]}"
+    want = hashlib.sha256(STATEMENT).hexdigest()
+    client = connect(url)
+    problems = []
+    got = call_run(client, DOWNLOAD_CODE.replace("ORIGIN", origin), {"taskId": "accept-downloads"})
+    value = (got["value"] or {}).get("value") or {}
+    run_id = got["meta"].get("id", "")
+    path = value.get("path") or ""
+    if got["meta"].get("status") != "ok" or not path.startswith("/data/downloads/"):
+        problems.append(f"download run: {got['meta'].get('status')} {got['text'][:200]}")
+    if value.get("name") != STATEMENT_NAME or value.get("failure") is not None:
+        problems.append(f"download facts: {value}")
+    record = host(socket_path, token_file, f"/v1/runs/{run_id}?wait=10")
+    listed = ((record.get("body") or {}).get("downloads") or [{}])[0]
+    if (listed.get("state"), listed.get("size"), listed.get("path")) != ("completed", len(STATEMENT), path):
+        problems.append(f"record: {listed}")
+    raw = host_raw(socket_path, token_file, f"/v1/runs/{run_id}/downloads/0")
+    status, headers, body = raw if isinstance(raw, tuple) else (raw, {}, b"")
+    if status != 200 or hashlib.sha256(body).hexdigest() != want:
+        problems.append(f"bytes: {status}, {len(body)} bytes")
+    if STATEMENT_NAME not in headers.get("content-disposition", ""):
+        problems.append(f"content-disposition: {headers.get('content-disposition')}")
+    try:
+        saved = os.stat("/tmp/neo-accept-saved.csv").st_size
+    except OSError as error:
+        saved = str(error)
+    if saved != len(STATEMENT):
+        problems.append(f"saveAs copy: {saved}")
+    upload_code = f"const args = {json.dumps({'path': path})};\n" + UPLOAD_CODE.replace("ORIGIN", origin)
+    uploaded = call_run(client, upload_code, {"taskId": "accept-downloads"})
+    sent = (uploaded["value"] or {}).get("value") or {}
+    if (sent.get("name"), sent.get("sha256")) != (os.path.basename(path), want):
+        problems.append(f"upload: {uploaded['meta'].get('status')} {sent or uploaded['text'][:200]}")
+    server.shutdown()
+    return {
+        "ok": not problems,
+        "run": run_id,
+        "problems": problems,
+        "detail": f"run {run_id}: {path}, {len(STATEMENT)} bytes read back over the socket and uploaded again",
+    }
 
 
 def dechunk(body: bytes) -> bytes:
@@ -170,6 +291,8 @@ def main() -> None:
     command, args = sys.argv[1], sys.argv[2:]
     if command == "run":
         out = run(*args)
+    elif command == "downloads":
+        out = downloads(*args)
     elif command == "host":
         out = host(args[0], args[1], urllib.parse.quote(args[2], safe="/?=&"))
     elif command == "describe":

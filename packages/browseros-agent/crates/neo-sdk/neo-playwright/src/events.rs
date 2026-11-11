@@ -5,6 +5,7 @@
 //!  CDP events ─▶ TargetWatcher (one task per Playwright) ─▶ EventWriter ─▶ EventHub log
 //!                 raw facts: target ids, never PageIds         one writer   ring of 1,024
 //!                 holds dialogs for listening runs (DialogTable)            + Notify
+//!                 tracks each download to its end (DownloadTable)              │
 //!                                                                              │
 //!  events.wait  (waitForEvent) ── reads from the script's `since` ─────────────┤ many readers,
 //!  events.next  (the pump)     ── reads from each listener's own place ────────┘ none writes
@@ -31,12 +32,14 @@
 //! that opened as a separate window fails `waitForEvent('popup')` with `neo / unsupported` (D9).
 
 mod dialog_table;
+mod download_table;
 mod event_hub;
 pub(crate) mod event_op;
 mod event_reader;
 mod file_chooser;
 mod navigation_event;
 mod page_event;
+mod run_downloads;
 mod run_events;
 mod subscription;
 mod target_watcher;
@@ -45,6 +48,7 @@ pub(crate) use event_hub::EventHub;
 pub(crate) use event_op::EventOp;
 pub(crate) use navigation_event::NavigationEvent;
 pub(crate) use page_event::PageEvent;
+pub(crate) use run_downloads::RunDownloads;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
 pub(crate) use target_watcher::TargetWatcher;
