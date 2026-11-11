@@ -121,6 +121,13 @@ The script's `page`, `context`, `browser` and `expect` behave as Playwright 1.64
 - `setContent` refuses `waitUntil: 'networkidle'` as `neo / unsupported`, with nothing sent. Chromium never fires `networkIdle` for a written document, and Neo does not count the page's requests itself, so the wait could only time out. Use `load`.
 - An owner's lock that blocks reads, taken while a script runs, withholds what the script read: the call fails `host / owner_has_control`, delivery `done`.
 
+`page.addInitScript` and `context.addInitScript` register a script that every new document runs in its main world, before the page's own scripts, as Playwright's do. They differ in these ways:
+
+- A script lasts as long as the run that registered it. Neo's tabs outlive a run, so when the run ends, however it ends, Neo removes the script and the tab's later documents no longer run it. Within the run it survives every navigation, and the returned disposable removes it sooner.
+- Neo's context is the owner's whole profile, so a context's script does not go to every tab at once. It reaches each tab at the run's first write to that tab, after the door's rules on the tab, before the write: every document the run loads runs it, and a popup's first document, which loads before the run acts on the popup, does not.
+- Neo adds a script to the tab's page session, which covers the main frame and its same-process frames. A cross-site iframe has a session of its own and runs without it.
+- `exposeFunctions` is refused as `script / method_unavailable`.
+
 A `requestId` never runs twice. A repeat while its run is going joins it and gets the same reply. A repeat within 10 minutes of the end gets the stored reply, from memory or from the trace store, so this holds across a restart. Later repeats are refused as `host / duplicate_request`, naming the first run. If the store cannot be read, Neo refuses the call as `neo / trace_unavailable` rather than risk a second run. Neo notices a gone client at the next SSE keep-alive, within 5 seconds. A run with a `requestId` then keeps going for 15 seconds, so a retry can join it. A run without one stops at once.
 
 ## Module map

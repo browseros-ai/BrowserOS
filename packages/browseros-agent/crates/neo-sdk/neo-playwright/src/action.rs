@@ -57,7 +57,7 @@ mod element_action;
 mod focus_lease;
 mod form_action;
 mod frame_projection;
-mod input_files;
+pub(crate) mod input_files;
 mod key_action;
 mod pointer_action;
 mod requested_navigations;

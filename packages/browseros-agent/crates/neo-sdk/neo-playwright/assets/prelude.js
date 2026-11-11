@@ -379,12 +379,27 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.addInitScript": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "context.pages": {
       effect: "read",
       target: null,
       lifetime: "operation"
     },
     "context.newPage": {
+      effect: "write",
+      target: null,
+      lifetime: "operation"
+    },
+    "context.addInitScript": {
+      effect: "write",
+      target: null,
+      lifetime: "operation"
+    },
+    "disposable.dispose": {
       effect: "write",
       target: null,
       lifetime: "operation"
@@ -2281,6 +2296,56 @@
       return chooser;
     }
   }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/init-script.ts
+  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  function checkInitOptions(api, script, options) {
+    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+      throw plainError(api, TOO_MANY_ARGUMENTS);
+    if (!options || !Reflect.get(options, "exposeFunctions"))
+      return;
+    if (typeof script !== "function")
+      throw plainError(api, "Passing functions requires the init script to be a function");
+    throw unsupportedError(api, "pages cannot call back into the script in Neo; pass values the page can use instead");
+  }
+  function initSource(api, script, arg) {
+    if (typeof script === "function") {
+      const argText = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
+      return { source: `(${String(script)})(${argText})` };
+    }
+    if (arg !== undefined)
+      throw plainError(api, "Cannot evaluate a string with arguments");
+    if (typeof script === "string")
+      return { source: script };
+    if (typeof script === "object" && script !== null) {
+      const content = Reflect.get(script, "content");
+      if (content !== undefined)
+        return { source: String(content) };
+      const path = Reflect.get(script, "path");
+      if (path !== undefined)
+        return { path: String(path) };
+    }
+    throw plainError(api, "Either path or content property must be present");
+  }
+
+  class Disposable {
+    #id;
+    constructor(id) {
+      this.#id = id;
+    }
+    async dispose() {
+      await invoke("disposable.dispose", { api: "disposable.dispose", timeoutMs: 0 }, { id: this.#id });
+    }
+  }
+  var asyncDispose = Reflect.get(Symbol, "asyncDispose");
+  if (typeof asyncDispose === "symbol")
+    Object.defineProperty(Disposable.prototype, asyncDispose, {
+      configurable: true,
+      writable: true,
+      value() {
+        return this.dispose();
+      }
+    });
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers.ts
   var kFunctionBindingPrefix = "__pw_fn_";
@@ -7584,7 +7649,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
-  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  var TOO_MANY_ARGUMENTS2 = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
   var REFUSALS = {
     unsupported: unsupportedError,
     client: clientError,
@@ -7600,11 +7665,11 @@ ${value.stack}`;
   }
   function assertMaxArguments(api, count, max) {
     if (count > max)
-      throw plainError(api, TOO_MANY_ARGUMENTS);
+      throw plainError(api, TOO_MANY_ARGUMENTS2);
   }
   function assertEvaluateOptions(options) {
     if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS);
+      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS2);
   }
   function refuseExposedFunctions(api, options) {
     if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
@@ -8404,6 +8469,13 @@ ${value.stack}`;
       assertMaxArguments("page.evaluate", arguments.length, 3);
       return await this._mainFrame._evaluate("page.evaluate", pageFunction, arg, options);
     }
+    async addInitScript(script, arg, options) {
+      const api = "page.addInitScript";
+      checkInitOptions(api, script, options);
+      const source = initSource(api, script, arg);
+      const { id } = await invoke("page.addInitScript", { api, timeoutMs: 0 }, { page: await this._brand(api), script: source });
+      return new Disposable(id);
+    }
     waitForFunction(pageFunction, arg, options) {
       return this._mainFrame._waitForFunction("page.waitForFunction", pageFunction, arg, options);
     }
@@ -8797,6 +8869,13 @@ ${value.stack}`;
     }
     serviceWorkers() {
       return [];
+    }
+    async addInitScript(script, arg, options) {
+      const api = "browserContext.addInitScript";
+      checkInitOptions(api, script, options);
+      const source = initSource(api, script, arg);
+      const { id } = await invoke("context.addInitScript", { api, timeoutMs: 0 }, { script: source });
+      return new Disposable(id);
     }
     async newPage() {
       return await this.#openPage("browserContext.newPage");
@@ -9569,7 +9648,6 @@ Timeout: ${timeout}ms`);
     },
     BrowserContext: {
       addCookies: PROFILE,
-      addInitScript: "init scripts are not available in Neo; run page.evaluate() after page.goto()",
       clearCookies: PROFILE,
       clearPermissions: "permissions are the owner's profile settings",
       close: OWNED,
@@ -9608,7 +9686,6 @@ Timeout: ${timeout}ms`);
       tracing: { hint: TRACE, kind: "property" }
     },
     Page: {
-      addInitScript: "init scripts are not available in Neo; run page.evaluate() after page.goto()",
       addLocatorHandler: "locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting",
       bringToFront: "Neo keeps agent tabs in the background; act on the page directly",
       cancelPickLocator: NO_INSPECTOR,

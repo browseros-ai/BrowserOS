@@ -13,6 +13,7 @@ import type { Browser } from './browser'
 import { EventEmitter } from './emitter'
 import { internalError } from './errors'
 import { checkReported, EventHub, isReported } from './events'
+import { checkInitOptions, Disposable, initSource } from './init-script'
 import { markHandle } from './options'
 import { Page } from './page'
 import { TimeoutSettings } from './timeouts'
@@ -70,6 +71,28 @@ export class BrowserContext extends EventEmitter {
 
   serviceWorkers(): never[] {
     return []
+  }
+
+  /**
+   * upstream's `browserContext.addInitScript`. Neo's context is the owner's whole profile, so
+   * the script reaches each tab the run writes to, before that write: every document the run
+   * loads, in any tab, runs it until the run ends or the disposable is disposed. A popup's
+   * first document, which loads before the run acts on the popup, does not.
+   */
+  async addInitScript(
+    script: unknown,
+    arg?: unknown,
+    options?: unknown,
+  ): Promise<Disposable> {
+    const api = 'browserContext.addInitScript'
+    checkInitOptions(api, script, options)
+    const source = initSource(api, script, arg)
+    const { id } = await invoke(
+      'context.addInitScript',
+      { api, timeoutMs: 0 },
+      { script: source },
+    )
+    return new Disposable(id)
   }
 
   async newPage(): Promise<Page> {

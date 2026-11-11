@@ -12,8 +12,8 @@ use crate::op_spec::{Capability, OpSpec, PAGE, TARGET};
 use crate::page::document_watch::decode;
 use crate::page::navigation::{GotoInput, NavigateInput, Navigation};
 use crate::page::{
-    PageHandle, add_tag, document_op, element_evaluate, evaluate, frame_tree, media_emulation,
-    navigation, pdf, screenshot, viewport_size, wait_for_navigation, wait_for_url,
+    PageHandle, add_tag, document_op, element_evaluate, evaluate, frame_tree, init_script,
+    media_emulation, navigation, pdf, screenshot, viewport_size, wait_for_navigation, wait_for_url,
 };
 use crate::probe::DocumentPart;
 use crate::target::PageRef;
@@ -47,6 +47,7 @@ listed_enum! {
         Screenshot,
         Pdf,
         SetViewportSize,
+        AddInitScript,
     }
 }
 
@@ -174,9 +175,20 @@ impl PageOp {
             )
             .using(&[Capability::Capture])
             .policed(),
+            Self::AddInitScript => ADD_INIT_SCRIPT,
         }
     }
 }
+
+/// `page.addInitScript`'s registration: it reaches the main world of every later document, and
+/// its `{ path }` form reads a file from Neo's disk (`page/init_script.rs`).
+const ADD_INIT_SCRIPT: OpSpec = OpSpec::write(
+    "page.addInitScript",
+    PAGE,
+    "run a script in the main world of every new document of the page, until the run ends",
+)
+.using(&[Capability::MainWorld, Capability::HostFiles])
+.policed();
 
 /// Runs one page op. The ops that run in the page's sealed world (title, content, setContent,
 /// waitForURL) or its main world (evaluate, waitForFunction, the element scripts) are built with
@@ -226,6 +238,7 @@ pub(crate) async fn invoke(
         PageOp::Frames => frame_tree::frames(pw, scope, args.decode(scope)?).await,
         PageOp::Screenshot => screenshot::capture(pw, scope, args.decode(scope)?).await,
         PageOp::Pdf => pdf::print(pw, scope, args.decode(scope)?).await,
+        PageOp::AddInitScript => init_script::add_to_page(pw, scope, args.decode(scope)?).await,
         // Boxed, as the other families box their leaves: a script's guard and its polls are the
         // largest state a page op holds, and every op's future is as large as its largest leaf.
         PageOp::Evaluate => Box::pin(evaluate::evaluate(pw, scope, args.decode(scope)?)).await,
