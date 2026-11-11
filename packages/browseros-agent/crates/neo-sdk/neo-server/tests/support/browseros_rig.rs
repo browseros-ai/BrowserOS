@@ -34,6 +34,54 @@ mod fork_lock;
 
 /// What every test here returns.
 pub type TestResult = Result<(), Box<dyn Error>>;
+/// Worker monitoring starts an event pump and subscriptions before script statements. These
+/// known reads may bracket the script's operations; unexpected names and deliveries remain
+/// visible to the assertions that check the script's trace.
+#[must_use]
+pub fn is_worker_event_operation(op: &Value) -> bool {
+    op.get("effect").and_then(Value::as_str) == Some("read")
+        && op.get("delivery").and_then(Value::as_str) == Some("not_sent")
+        && worker_event_target(
+            op.get("name").and_then(Value::as_str).unwrap_or_default(),
+            op.get("args"),
+            op.get("tabId").and_then(Value::as_i64),
+        )
+}
+
+/// The same narrow classification on persisted records, before the host's JSON projection.
+#[must_use]
+pub fn is_worker_event_record(op: &neo_trace::OperationRow) -> bool {
+    op.effect == neo_trace::Effect::Read
+        && op.delivery == Some(neo_trace::Delivery::NotSent)
+        && worker_event_target(&op.name, op.args.as_ref(), op.tab.map(|tab| tab.0))
+}
+
+fn worker_event_target(name: &str, args: Option<&Value>, tab: Option<i64>) -> bool {
+    match name {
+        "events.next" => tab.is_none(),
+        "events.listen" => args.is_some_and(|args| {
+            let on = args.get("on").and_then(Value::as_bool);
+            let target = args
+                .pointer("/page/tab")
+                .and_then(Value::as_i64)
+                .or_else(|| {
+                    if on == Some(false) {
+                        args.get("retiredTab").and_then(Value::as_i64)
+                    } else {
+                        None
+                    }
+                });
+            args.get("event").and_then(Value::as_str) == Some("workerstate")
+                && target.is_some()
+                && (target == tab
+                    // Unsubscribing after close has no live native tab to annotate. It
+                    // remains a known read, and cannot authorize another run trace tab.
+                    || (tab.is_none() && on == Some(false)))
+        }),
+        _ => false,
+    }
+}
+
 /// An MCP client on Neo's agent port.
 pub type Client = RunningService<RoleClient, ClientInfo>;
 
