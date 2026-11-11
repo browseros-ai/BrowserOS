@@ -19,10 +19,17 @@
  * A reply lost when the host cancels the pump at the run's end loses its events with the run.
  */
 import { invoke, invokeObserved } from './bridge'
+import { trackChooserSetup } from './chooser-setup'
 import type { EventEmitter } from './emitter'
 import { abortedError, prefixed, unsupportedError } from './errors'
 import { EventDeadline } from './event-deadline'
-import { ConsoleMessage, Dialog, Download, pageError } from './event-values'
+import {
+  ConsoleMessage,
+  Dialog,
+  Download,
+  FileChooser,
+  pageError,
+} from './event-values'
 import type { Page } from './page'
 import { type SignalLike, signalOf, untilAborted } from './signal'
 import type { TimeoutSettings } from './timeouts'
@@ -32,6 +39,7 @@ import type {
   DownloadInfo,
   EventName,
   EventRecord,
+  FileChooserInfo,
   Observation,
 } from './wire'
 
@@ -43,6 +51,7 @@ const PAGE_EVENTS: ReadonlySet<string> = new Set([
   'console',
   'pageerror',
   'download',
+  'filechooser',
 ])
 /** Events the context reports. */
 const CONTEXT_EVENTS: ReadonlySet<string> = new Set(['page'])
@@ -61,8 +70,6 @@ const UNREPORTED: Readonly<Record<string, string>> = {
   worker: 'Neo does not report workers',
   serviceworker: 'Neo does not report service workers',
   backgroundpage: 'Neo does not report extension background pages',
-  filechooser:
-    'Neo does not report file choosers; call locator.setInputFiles() on the input',
   frameattached:
     'Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits',
   framedetached:
@@ -119,6 +126,8 @@ type WaitOptions = {
   signal?: SignalLike
 }
 
+type ChooserLease = { ready: Promise<void>; release(): Promise<void> }
+
 /** What the hub needs from the context: its Page for a handle, and the context as an emitter. */
 export type EventOwner = EventEmitter & {
   _timeoutSettings: TimeoutSettings
@@ -139,6 +148,12 @@ export class EventHub {
   /** One object per dialog and download, so every listener and wait answers the same one. */
   private readonly dialogs = new Map<number, Dialog>()
   private readonly downloads = new Map<string, Download>()
+  /** A record can reach several waits and the pump; they must share the chooser object. */
+  private readonly choosers = new Map<number, FileChooser>()
+  private nextChooserLease = 0
+  private readonly chooserListeners = new Map<Page, ChooserLease>()
+  /** Preserve synchronous on/off order even when native interception setup is asynchronous. */
+  private readonly chooserChanges = new Map<Page, Promise<void>>()
 
   constructor(owner: EventOwner) {
     this.owner = owner
@@ -152,7 +167,17 @@ export class EventHub {
   listen(page: Page | null, event: EventName, on: boolean): void {
     const since = Date.now()
     this.listening += on ? 1 : -1
-    void this.sendListen(page, event, on, since)
+    if (event === 'filechooser' && page) {
+      const lease = on ? this.intercept(page) : this.chooserListeners.get(page)
+      if (on && lease) this.chooserListeners.set(page, lease)
+      else this.chooserListeners.delete(page)
+      const previous = this.chooserChanges.get(page) ?? Promise.resolve()
+      const changed = previous.then(() =>
+        this.sendListen(page, event, on, since, lease),
+      )
+      this.chooserChanges.set(page, changed)
+      trackChooserSetup(changed)
+    } else void this.sendListen(page, event, on, since)
     if (on && !this.pumping) {
       this.pumping = true
       void this.pump()
@@ -193,11 +218,29 @@ export class EventHub {
     // included, with a plain `The operation was aborted`; the `events.wait` in flight takes the
     // signal too, so Rust stops waiting as well.
     const signal = signalOf(api, options)
-    return await untilAborted(
-      signal,
-      () => abortedError(api, signal as SignalLike),
-      () => this.waitFor(api, page, event, options, since, deadline, signal),
-    )
+    const lease = event === 'filechooser' && page ? this.intercept(page) : null
+    try {
+      return await untilAborted(
+        signal,
+        () => abortedError(api, signal as SignalLike),
+        async () => {
+          if (lease) await deadline.race(lease.ready)
+          return this.waitFor(
+            api,
+            page,
+            event,
+            options,
+            since,
+            deadline,
+            signal,
+          )
+        },
+      )
+    } finally {
+      // Aborting a wait must not await native setup. The run owns unfinished leases too;
+      // this cleanup follows setup and is a barrier for the script's next browser action.
+      if (lease) void lease.release().catch(() => {})
+    }
   }
 
   /** `wait`'s loop: one `events.wait` per candidate, until the predicate accepts one. */
@@ -256,9 +299,11 @@ export class EventHub {
     event: EventName,
     on: boolean,
     since: number,
+    lease?: ChooserLease,
   ): Promise<void> {
     const api = `${page === null ? 'browserContext' : 'page'}.${on ? 'on' : 'off'}`
     try {
+      if (on && lease) await lease.ready
       await invoke(
         'events.listen',
         { api, timeoutMs: 0 },
@@ -272,6 +317,40 @@ export class EventHub {
     } catch {
       // `page.on` already returned, so there is no caller to tell; a listener on a page that
       // is gone never fires, as in Playwright.
+      if (on && lease) void lease.release().catch(() => {})
+    } finally {
+      if (!on && lease) await lease.release().catch(() => {})
+    }
+  }
+
+  private intercept(page: Page): ChooserLease {
+    const id = ++this.nextChooserLease
+    const api = 'page.filechooser'
+    const target = page._openedBrand(api)
+    const ready = target.then(async (page) => {
+      await invoke(
+        'events.interceptFileChooser',
+        { api, timeoutMs: 0 },
+        { page, lease: id, on: true },
+      )
+    })
+    trackChooserSetup(ready)
+    let released: Promise<void> | null = null
+    return {
+      ready,
+      release: () => {
+        if (!released) {
+          released = ready.then(async () => {
+            await invoke(
+              'events.interceptFileChooser',
+              { api, timeoutMs: 0 },
+              { page: await target, lease: id, on: false },
+            )
+          })
+          trackChooserSetup(released)
+        }
+        return released
+      },
     }
   }
 
@@ -378,6 +457,11 @@ export class EventHub {
         page.emit('download', this.download(page, record.download))
         return
       }
+      case 'filechooser': {
+        const page = this.page(record.page)
+        page.emit('filechooser', this.chooser(record.seq, page, record.chooser))
+        return
+      }
     }
   }
 
@@ -401,6 +485,8 @@ export class EventHub {
         return pageError(record.error)
       case 'download':
         return this.download(this.page(record.page), record.download)
+      case 'filechooser':
+        return this.chooser(record.seq, this.page(record.page), record.chooser)
     }
   }
 
@@ -418,5 +504,13 @@ export class EventHub {
     const download = new Download(page, info)
     this.downloads.set(info.id, download)
     return download
+  }
+
+  private chooser(seq: number, page: Page, info: FileChooserInfo): FileChooser {
+    const known = this.choosers.get(seq)
+    if (known) return known
+    const chooser = new FileChooser(page, info)
+    this.choosers.set(seq, chooser)
+    return chooser
   }
 }

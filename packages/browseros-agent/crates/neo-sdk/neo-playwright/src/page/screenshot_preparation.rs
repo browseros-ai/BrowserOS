@@ -14,7 +14,10 @@ use tokio::time;
 
 use crate::op_scope::OpScope;
 use crate::page::{FRAME_BUDGET, OpPage, frame_tree, world_call};
+use crate::resolve::{self, HandleSite};
+use crate::target::Target;
 use crate::world::SealedWorld;
+use crate::{ErrorCode, PlaywrightError};
 
 const PREPARE: &str = include_str!("../../assets/screenshot-prepare.js");
 const RESTORE: &str = "function() { window.__pwCleanupScreenshot?.(); }";
@@ -63,20 +66,48 @@ impl ScreenshotPreparation {
         // though its script already changed the document.
         future::join_all(self.worlds.iter().map(|world| async {
             let _prepared =
-                time::timeout(FRAME_BUDGET, world.render_for_screenshot(PREPARE, &options)).await;
+                time::timeout(FRAME_BUDGET, world.call_for_screenshot(PREPARE, &options)).await;
         }))
         .await;
-        if let Some(main) = self.worlds.iter().find(|world| *world.frame() == main) {
+    }
+
+    /// Font loading must precede element stability checks. An element capture waits in its
+    /// own frame, so unrelated pending fonts in the main frame cannot block it.
+    pub(super) async fn wait_for_fonts(
+        &self,
+        page: &OpPage<'_>,
+        scope: &OpScope<'_>,
+        target: Option<&Target>,
+    ) -> Result<(), PlaywrightError> {
+        let world = match target {
+            None => self
+                .worlds
+                .iter()
+                .find(|world| *world.frame() == page.main_endpoint().frame)
+                .cloned(),
+            Some(Target::Element(element)) => Some(
+                HandleSite::find(page, scope, element)
+                    .await?
+                    .ok_or_else(|| resolve::handle_detached(scope))?
+                    .world()
+                    .clone(),
+            ),
+            Some(Target::Locator(_)) => {
+                return Err(scope.fail(ErrorCode::Internal, "screenshot target was not bound"));
+            }
+        };
+        if let Some(world) = world {
             scope.log("waiting for fonts to load...".to_owned());
             // Upstream ignores a wait whose utility context disappears. A pending font promise
             // still waits for the screenshot's timeout, including with caret: 'initial'.
-            let _fonts = main
-                .render_for_screenshot(
+            let _fonts = world
+                .call_for_screenshot(
                     "function() { return document.fonts.ready.then(() => {}); }",
                     &json!([]),
                 )
                 .await;
         }
+        Ok(())
     }
 
     /// Restores before returning bytes, so the caller can immediately inspect animation and
@@ -112,7 +143,7 @@ async fn restore(worlds: &[SealedWorld]) {
     future::join_all(worlds.iter().map(|world| async {
         let _restored = time::timeout(
             Duration::from_secs(5),
-            world.render_for_screenshot(RESTORE, &json!([])),
+            world.call_for_screenshot(RESTORE, &json!([])),
         )
         .await;
     }))

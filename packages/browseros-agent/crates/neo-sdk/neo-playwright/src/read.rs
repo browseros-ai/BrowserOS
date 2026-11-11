@@ -21,5 +21,7 @@ mod selector_wait;
 mod viewport_box;
 
 pub(crate) use element_handle::{every_match, query_one};
+pub(crate) use element_read::read_attached;
 pub(crate) use read_op::ReadOp;
 pub(crate) use selector_wait::{Returning, SelectorState, wait_for_selector};
+pub(crate) use viewport_box::for_screenshot;

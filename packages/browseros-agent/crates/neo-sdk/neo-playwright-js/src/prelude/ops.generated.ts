@@ -368,6 +368,11 @@ export const OPS = {
     target: null,
     lifetime: 'operation',
   },
+  'events.interceptFileChooser': {
+    effect: 'read',
+    target: null,
+    lifetime: 'operation',
+  },
   'dialog.accept': {
     effect: 'write',
     target: 'page',

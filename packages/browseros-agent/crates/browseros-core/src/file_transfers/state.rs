@@ -1,13 +1,11 @@
 //! Connection-owned chooser state. Protocol events outlive individual tool calls, so a click
 //! and a later upload must share the same request without retaining a stale document handle.
-use super::FileChooser;
+use super::{FileChooser, FileChooserInterception};
 use crate::{CdpConnection, CoreError, PageId, ProtocolSession, SessionId};
 use browseros_cdp::{CdpError, CdpEvent};
 use serde_json::json;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, Mutex, MutexGuard, Weak},
-};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use tokio::sync::{Mutex as AsyncMutex, broadcast, watch};
 
 #[derive(Default)]
@@ -16,6 +14,8 @@ struct State {
     next_chooser: u64,
     choosers: HashMap<SessionId, FileChooser>,
     intercepted: HashMap<SessionId, ProtocolSession>,
+    /// Agent creation receipts own interception permanently, independently of borrowed leases.
+    permanent: HashSet<SessionId>,
     parents: HashMap<SessionId, SessionId>,
     setup_errors: HashMap<SessionId, String>,
 }
@@ -27,7 +27,14 @@ pub(crate) struct TransferState {
     changed: watch::Sender<u64>,
     pub(crate) download_contexts: AsyncMutex<HashSet<(u64, Option<String>)>>,
     interception: AsyncMutex<()>,
+    /// Held across native setup/restore, so a last-owner cleanup cannot race a new lease.
+    leases: AsyncMutex<HashMap<(u64, SessionId), BorrowedInterception>>,
     operations: Mutex<HashMap<PageId, Weak<AsyncMutex<()>>>>,
+}
+
+struct BorrowedInterception {
+    owners: usize,
+    restore: bool,
 }
 
 impl TransferState {
@@ -39,6 +46,7 @@ impl TransferState {
             changed,
             download_contexts: AsyncMutex::new(HashSet::new()),
             interception: AsyncMutex::new(()),
+            leases: AsyncMutex::new(HashMap::new()),
             operations: Mutex::new(HashMap::new()),
         });
         // Install the subscriber synchronously, before any page can be attached or clicked.
@@ -78,6 +86,61 @@ impl TransferState {
         self.connection.connection_epoch()
     }
 
+    pub(super) async fn lease_interception(
+        self: &Arc<Self>,
+        session: &ProtocolSession,
+    ) -> Result<FileChooserInterception, CoreError> {
+        let id = session
+            .session_id()
+            .ok_or_else(|| CoreError::Message("A file chooser needs a page session".into()))?;
+        let epoch = self.epoch();
+        let mut leases = self.leases.lock().await;
+        leases.retain(|(known, _), _| *known == epoch);
+        let entry = leases
+            .entry((epoch, id.clone()))
+            .or_insert_with(|| BorrowedInterception {
+                owners: 0,
+                restore: !self.intercepts(id),
+            });
+        entry.owners += 1;
+        // Arm Drop before awaiting Chrome: cancellation can follow native application but
+        // precede its acknowledgement. The retained lease also retries earlier setup errors.
+        let lease = FileChooserInterception::new(Arc::clone(self), epoch, id.clone());
+        self.intercept_tree(session, None).await?;
+        Ok(lease)
+    }
+
+    pub(super) async fn release_interception(
+        &self,
+        epoch: u64,
+        session: &SessionId,
+    ) -> Result<(), CoreError> {
+        let mut leases = self.leases.lock().await;
+        let key = (epoch, session.clone());
+        if epoch != self.epoch() {
+            leases.remove(&key);
+            return Ok(());
+        }
+        let Some(entry) = leases.get_mut(&key) else {
+            return Ok(());
+        };
+        if entry.owners > 0 {
+            entry.owners -= 1;
+        }
+        if entry.owners > 0 {
+            return Ok(());
+        }
+        if !entry.restore || self.lock().permanent.contains(session) {
+            leases.remove(&key);
+            return Ok(());
+        }
+        // A failed cleanup remains at zero owners with restore=true. The next borrower
+        // inherits that obligation rather than treating the leftover override as permanent.
+        self.restore(session).await?;
+        leases.remove(&key);
+        Ok(())
+    }
+
     /// Drops a session Chromium no longer has, whether its detach event or a refused command
     /// said so. Interception keeps per-session state like the page and frame registries do, so
     /// a session left here would be set up again, and refused, on every later attachment of
@@ -86,6 +149,7 @@ impl TransferState {
         let mut state = self.lock();
         state.choosers.remove(id);
         state.intercepted.remove(id);
+        state.permanent.remove(id);
         state.parents.remove(id);
         state.setup_errors.remove(id);
         drop(state);
@@ -154,6 +218,13 @@ impl TransferState {
     /// Returns whether this call installed interception. A borrowed user page restores only
     /// its own lease; pages created by the agent keep interception for subsequent actions.
     pub(crate) async fn intercept(&self, session: &ProtocolSession) -> Result<bool, CoreError> {
+        // Promotion to permanent ownership is ordered with last-borrower restoration.
+        let _leases = self.leases.lock().await;
+        if let Some(id) = session.session_id() {
+            // A creation receipt can arrive while another caller already borrows this tab.
+            // Its later last-lease cleanup must not undo the agent tab's permanent setup.
+            self.lock().permanent.insert(id.clone());
+        }
         self.intercept_tree(session, None).await
     }
 
@@ -438,7 +509,9 @@ mod tests {
     use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
-    use std::{error::Error, sync::Arc, time::Duration};
+    use std::error::Error;
+    use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::{broadcast, mpsc};
 
     /// Answers every command, except that Chromium refuses each one sent on `gone` as gone.

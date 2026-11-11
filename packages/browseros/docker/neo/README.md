@@ -473,8 +473,10 @@ An image can also run claw-sdk in place of claw-server. Those images are built a
 smoke-tested only for now, and none is published. Hosts that run claw-sdk, such as zuzu, use the
 Neo SDK image instead: [`crates/neo-sdk/neo-server/docker`](../../../browseros-agent/crates/neo-sdk/neo-server/docker/README.md)
 builds it from one commit with a pinned browser and this folder's supervisor. A claw-sdk image serves no noVNC viewer on
-6080, never sends the clipboard to VNC viewers, and skips the human-help setting, which
-claw-sdk does not have. The image knows which server it runs from a version marker compiled
+6080, never sends the clipboard to VNC viewers, skips the human-help setting, which
+claw-sdk does not have, and starts the browser with `--disable-back-forward-cache`, as
+Playwright does: a page restored from that cache fires no load event, so a script's `goBack()`
+would wait for one until it timed out. The image knows which server it runs from a version marker compiled
 into the server binary: `docker run --rm --entrypoint neo-server-info <image> kind`.
 
 Maintainers build and publish the image with `browseros release docker`; see

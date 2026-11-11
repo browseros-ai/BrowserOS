@@ -59,14 +59,6 @@ pub(crate) const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 /// other for the CDP client's 60 s request timeout.
 pub(crate) const ACTIVATE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long views stay refused after the agent activates a private tab, waiting for
-/// `Browser.getTabs` to read it as in front. Then they are let back, and each view's admission
-/// reads the front itself (decision 46).
-pub(crate) const FRONT_SHOWN: Duration = Duration::from_secs(1);
-
-/// How often that read repeats.
-pub(crate) const FRONT_SHOWN_POLL: Duration = Duration::from_millis(25);
-
 /// How long a fit waits for the screen watcher to report the size it just set, so the fits
 /// loop never takes an older report for the owner's resize.
 pub(crate) const WATCH_CATCH_UP: Duration = Duration::from_secs(1);
@@ -114,12 +106,6 @@ pub(crate) const MAX_PASTE: usize = 1 << 20;
 /// The most screens a viewer's SetDesktopSize may list. Neo has one; noVNC sends one.
 pub(crate) const MAX_DESKTOP_SCREENS: u8 = 16;
 
-/// The most a display holds of its viewer's bytes while the first input waits for every open tab
-/// to go private. They wait in memory, behind that input, so a viewer cannot grow them without
-/// end while a commit stalls. Room for one more paste of the longest kind, and the pointer moves
-/// and update requests around it; more closes the display.
-pub(crate) const MAX_HELD_INPUT: usize = 2 * MAX_PASTE;
-
 /// How long a display waits for Xvnc to accept its connection. Xvnc is on the same host, so a
 /// longer wait means it is not there.
 pub(crate) const XVNC_DIAL: Duration = Duration::from_secs(2);
@@ -148,8 +134,3 @@ pub(crate) const KEEP_RELEASED_TAKEOVER: Duration = Duration::from_secs(60 * 60)
 /// Takeover state changes the broadcast holds for a slow reader. The service's event log reads
 /// them at once; one that falls this far behind gets `stream.reset` instead.
 pub(crate) const TAKEOVER_CHANGES: usize = 256;
-
-/// How often the front-tab watch reads which tab is in front while any view display is open
-/// (decision 34). The browser sends no event when a tab comes to the front, so this bounds how
-/// long a view can show a private tab that something other than Neo brought forward.
-pub(crate) const FRONT_POLL: Duration = Duration::from_millis(250);

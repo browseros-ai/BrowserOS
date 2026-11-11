@@ -15,6 +15,7 @@ listed_enum! {
         Console,
         PageError,
         Download,
+        FileChooser,
     }
 }
 
@@ -28,6 +29,7 @@ impl PageEventKind {
             Self::Console => "console",
             Self::PageError => "pageerror",
             Self::Download => "download",
+            Self::FileChooser => "filechooser",
         }
     }
 
@@ -48,9 +50,7 @@ impl PageEventKind {
             "request" | "requestfailed" | "requestfinished" | "response" | "websocket" => Some(
                 format!("page.on('{name}') is not available in Neo: network events are not in v1"),
             ),
-            "crash" | "filechooser" | "worker" => {
-                Some(format!("page.on('{name}') is not available in Neo"))
-            }
+            "crash" | "worker" => Some(format!("page.on('{name}') is not available in Neo")),
             _ => None,
         };
         Err(hint.map_or(Unknown::NotAnEvent, Unknown::Unsupported))

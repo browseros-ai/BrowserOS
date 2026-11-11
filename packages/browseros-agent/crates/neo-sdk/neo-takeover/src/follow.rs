@@ -9,7 +9,7 @@
 //!                 OperationStarted { task: T, tab }  │     (pure)            (pure)
 //!  Neo's front moves, read before T's ops ───────────┤                         │ due
 //!  1 s tick: the owner holds the screen? the tab     │      the front turn ◀───┘
-//!            locked? the tab private? ───────────────┘      ─ decide again ─▶ Browser.activateTab
+//!            locked? ───────────────┘      ─ decide again ─▶ Browser.activateTab
 //! ```
 //!
 //! **It reads everything after it looks.** A follower subscribes to its task's operations and
@@ -43,9 +43,6 @@
 //! before the app's door decides, so a task follower shows work as it starts; it cannot carry a
 //! refusal for the owner's screen or lock onto the screen, because it pauses on the same facts.
 //!
-//! **It never brings a private tab to the front** (decision 34). The views watching would show
-//! its pixels until the front-tab watch closed them (front_tab.rs).
-
 use crate::browser_tabs::{FrontMove, Mover};
 use crate::limits::FOLLOW_TICK;
 use crate::{Displays, Follow};
@@ -63,19 +60,15 @@ pub(crate) struct FollowState {
     /// The owner holds the screen (a takeover, a control display or a fit), or a lock holds the
     /// target.
     pub(crate) paused: bool,
-    /// The target is private.
-    pub(crate) private: bool,
     /// The tab this follower brought to the front, and has not been paused since.
     pub(crate) shown: Option<TabId>,
 }
 
 /// The tab to bring to the front now: the target, unless the follower is paused, has no target
-/// yet, the target is private, or the follower already showed it.
+/// yet, or the follower already showed it.
 pub(crate) const fn next_activation(state: FollowState) -> Option<TabId> {
     match state {
-        FollowState { paused: true, .. }
-        | FollowState { private: true, .. }
-        | FollowState { target: None, .. } => None,
+        FollowState { paused: true, .. } | FollowState { target: None, .. } => None,
         FollowState {
             target: Some(target),
             shown: Some(shown),
@@ -176,12 +169,11 @@ impl FollowMemory {
         self.front = Some(tab);
     }
 
-    /// What the pure rule reads, with this pass's pause and privacy.
-    pub(crate) fn state(&self, paused: bool, private: bool) -> FollowState {
+    /// What the pure rule reads, with this pass's pause.
+    pub(crate) fn state(&self, paused: bool) -> FollowState {
         FollowState {
             target: self.target,
             paused,
-            private,
             shown: self.shown,
         }
     }
@@ -228,21 +220,9 @@ pub(crate) async fn admit(follow: Follow, displays: &Displays) -> Follower {
     }
 }
 
-/// Brings a follow view's target to the front as the view is admitted, before the view reads what
-/// is in front, when the follower would bring it there: the tab is known and not private, the
-/// owner does not hold the screen, it is not locked, and views are not held out (a takeover's
-/// hold, or the agent's private switch). It decides, takes the front turn, then decides again
-/// before it activates, so a holder that began while the task's tab was looked up or while
-/// it waited for the turn keeps the front where it is. Over the agent's own move it still brings
-/// its tab forward: the host's newer request wins (decision 48).
-///
-/// A private tab can be left in front with no view in sight: a control display's first input
-/// makes every open tab private, the flag outlives the display, and once the tab the owner worked
-/// in closes, the one behind it comes forward. Read first, that tab would refuse the view, its
-/// follower would never start, and the screen would stay on it.
-///
-/// Returns the tab it brought forward, which the follower then starts from as shown. Its own
-/// move is marked seen in `moves` while it holds the turn, so the follower never reads it.
+/// Brings a newly admitted view's target forward if the screen and tab are not held. It
+/// decides again under the front turn so owner control acquired while it waits wins. The move
+/// is marked seen while still holding the turn, so the follower never treats it as new work.
 async fn bring_forward(
     target: Option<TabId>,
     displays: &Displays,
@@ -254,7 +234,6 @@ async fn bring_forward(
             paused: displays.screen_held()
                 || displays.views_paused()
                 || target.is_some_and(|tab| displays.locks.is_locked(tab)),
-            private: target.is_some_and(|tab| displays.privacy.is_private(tab).is_some()),
             shown: None,
         })
     };
@@ -360,7 +339,7 @@ pub(crate) async fn run(follower: Follower, displays: &Displays) {
     }
 }
 
-/// The tab this follower would bring forward now, with this instant's pause and privacy. A pause
+/// The tab this follower would bring forward now, with this instant's pause. A pause
 /// forgets what the follower showed.
 fn due(memory: &mut FollowMemory, displays: &Displays) -> Option<TabId> {
     let target = memory.target();
@@ -368,8 +347,7 @@ fn due(memory: &mut FollowMemory, displays: &Displays) -> Option<TabId> {
     if paused {
         memory.paused();
     }
-    let private = target.is_some_and(|tab| displays.privacy.is_private(tab).is_some());
-    next_activation(memory.state(paused, private))
+    next_activation(memory.state(paused))
 }
 
 /// Reads Neo's last front move into `memory`, and marks it seen.
@@ -417,30 +395,26 @@ mod tests {
     const SIX: Option<TabId> = Some(TabId(6));
 
     #[test]
-    fn the_target_is_brought_to_the_front_once_unless_paused_or_private() {
+    fn the_target_is_brought_to_the_front_once_unless_paused() {
         let cases = [
-            (FIVE, false, false, None, FIVE, "a target not yet shown"),
-            (FIVE, false, false, FIVE, None, "already shown"),
-            (SIX, false, false, FIVE, SIX, "the task moved on"),
+            (FIVE, false, None, FIVE, "a target not yet shown"),
+            (FIVE, false, FIVE, None, "already shown"),
+            (SIX, false, FIVE, SIX, "the task moved on"),
             (
                 FIVE,
                 true,
-                false,
                 None,
                 None,
                 "the owner holds the screen, or the tab is locked",
             ),
-            (SIX, true, false, FIVE, None, "paused, even on a new tab"),
-            (None, false, false, None, None, "no operation yet"),
-            (FIVE, false, true, None, None, "a private target"),
-            (SIX, false, true, FIVE, None, "moved to a private tab"),
+            (SIX, true, FIVE, None, "paused, even on a new tab"),
+            (None, false, None, None, "no operation yet"),
         ];
-        for (target, paused, private, shown, activate, case) in cases {
+        for (target, paused, shown, activate, case) in cases {
             assert_eq!(
                 next_activation(FollowState {
                     target,
                     paused,
-                    private,
                     shown
                 }),
                 activate,
@@ -477,7 +451,7 @@ mod tests {
                 Step::Paused => memory.paused(),
             }
         }
-        (next_activation(memory.state(false, false)), memory.target())
+        (next_activation(memory.state(false)), memory.target())
     }
 
     fn agent(task: &TaskId) -> Mover {
@@ -635,12 +609,12 @@ mod tests {
             );
         }
         assert_eq!(
-            next_activation(three.state(false, false)),
+            next_activation(three.state(false)),
             None,
             "the follower of 3 lets the other follower's 4 stand"
         );
         assert_eq!(
-            next_activation(four.state(false, false)),
+            next_activation(four.state(false)),
             None,
             "and the follower of 4 lets 3 stand"
         );

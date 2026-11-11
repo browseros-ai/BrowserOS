@@ -85,7 +85,9 @@ fn a_fresh_realm_adds_only_the_bridge_bootstrap_and_web_interfaces() -> Result<(
                 "__neo_log",
                 "__neo_sleep",
                 "URL",
-                "URLSearchParams"
+                "URLSearchParams",
+                "AbortController",
+                "AbortSignal"
             ]),
             "the agent's API arrives as parameters, so no second native door into Rust appears"
         );
@@ -1136,6 +1138,76 @@ fn web_globals_have_standard_descriptors_arity_and_shadowing() -> Result<(), Tes
             returned(script(&rig, "const URL = 1; let atob = 2; return [URL, atob];").await?)?,
             json!([1, 2]),
             "web interfaces are globals, not extra agent function parameters"
+        );
+        Ok(())
+    })
+}
+
+/// Node-based corpus runs have their own abort interfaces; this pins the actual agent realm.
+#[test]
+fn abort_signals_cancel_an_event_wait_in_the_production_realm() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const controller = new AbortController();
+            const reason = { source: 'owner' };
+            const seen = [];
+            controller.signal.addEventListener('abort', () => seen.push(controller.signal.reason), { once: true });
+            const waiting = context.waitForEvent('page', { signal: controller.signal, timeout: 0 });
+            controller.abort(reason);
+            controller.abort('ignored');
+            const error = await waiting.catch(error => error);
+            let thrown;
+            try { controller.signal.throwIfAborted(); } catch (error) { thrown = error; }
+            return [error.name, error.cause === reason, controller.signal.aborted,
+                controller.signal.reason === reason, seen.length, thrown === reason];";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!(["AbortError", true, true, true, 1, true]),
+            "a standard controller cancels the real prelude with its exact reason, once"
+        );
+        Ok(())
+    })
+}
+
+/// Signal dependencies are internal abort algorithms, unaffected by user event propagation.
+#[test]
+fn combined_abort_signals_survive_stopped_public_events() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const source = new AbortController();
+            source.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+            const combined = AbortSignal.any([source.signal]);
+            const waiting = context.waitForEvent('page', { signal: combined, timeout: 0 });
+            source.abort('cancelled');
+            const error = await waiting.catch(error => error);
+            return [combined.aborted, combined.reason, error.name, error.cause];";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([true, "cancelled", "AbortError", "cancelled"]),
+            "a public event handler cannot suppress cancellation of a dependent wait"
+        );
+        Ok(())
+    })
+}
+
+/// A deadline can pass before dispatch, so it must use the same class as host timeouts.
+#[test]
+fn local_event_deadlines_use_the_public_timeout_error_class() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const clock = Date.now;
+            let now = 0;
+            Date.now = () => now++;
+            try { await context.waitForEvent('page', { timeout: 1 }); }
+            catch (error) { return [error.name, error instanceof TimeoutError, error.code]; }
+            finally { Date.now = clock; }";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!(["TimeoutError", true, "wait_timeout"]),
+            "a locally expired event wait is an instance of the script's public TimeoutError"
         );
         Ok(())
     })

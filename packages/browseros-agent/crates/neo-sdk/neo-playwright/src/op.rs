@@ -114,7 +114,7 @@ mod tests {
             None,
             "an unsupported method is no op"
         );
-        assert_eq!(names.len(), 76, "the v1 op list has 76 ops");
+        assert_eq!(names.len(), 77, "the v1 op list has 77 ops");
     }
 
     #[test]
@@ -156,7 +156,7 @@ mod tests {
     )]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
         use Capability::{Capture, HostFiles, MainWorld};
-        const AUDITED: [(&str, &[Capability], bool); 76] = [
+        const AUDITED: [(&str, &[Capability], bool); 77] = [
             ("locator.click", &[], true),
             ("locator.dblclick", &[], true),
             ("locator.hover", &[], true),
@@ -229,15 +229,15 @@ mod tests {
             ("events.listen", &[], true),
             ("events.next", &[], true),
             ("events.wait", &[], true),
+            ("events.interceptFileChooser", &[], true),
             ("dialog.accept", &[], true),
             ("dialog.dismiss", &[], true),
             ("download.path", &[], true),
             ("download.saveAs", &[], true),
         ];
-        let mut audited: BTreeMap<&str, (&[Capability], bool)> = AUDITED
-            .into_iter()
-            .map(|(name, capabilities, gated)| (name, (capabilities, gated)))
-            .collect();
+        let mut audited = BTreeMap::from(
+            AUDITED.map(|(name, capabilities, gated)| (name, (capabilities, gated))),
+        );
         let mut differ = Vec::new();
         for spec in Op::all().map(Op::spec) {
             let row = audited.remove(spec.name);

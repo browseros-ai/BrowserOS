@@ -132,6 +132,38 @@ it('tests that waitForTimeout reads the frames of each working page once, and of
   ])
 })
 
+/** A run whose `page.goto` answers only once `land()` is called, as a stalled server does. */
+function stalledGoto() {
+  let land: () => void = () => {}
+  const landed = new Promise<void>((resolve) => {
+    land = resolve
+  })
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: async (call) => {
+      if (call.name === 'page.frames') return TREE
+      if (call.name !== 'page.goto') return null
+      await landed
+      return { response: null, url: 'https://a.example/next' }
+    },
+  })
+  return { runtime, land }
+}
+
+it('tests that a wait skips a page whose navigation is in flight, which Chromium would not answer, and reads it again once it ends', async () => {
+  const { runtime, land } = stalledGoto()
+  await runtime.run(`
+    globalThis.navigation = page.goto('https://a.example/next')
+    await page.waitForTimeout(1)
+  `)
+  expect(reads(runtime.calls)).toEqual([])
+  land()
+  await runtime.run('await globalThis.navigation; await page.waitForTimeout(1)')
+  expect(reads(runtime.calls).map(([, api]) => api)).toContain(
+    'page.waitForTimeout',
+  )
+})
+
 it('tests that a wait reads nothing for a lazy page or a listed tab the script never touched', async () => {
   const runtime = loadPrelude({
     seed: {

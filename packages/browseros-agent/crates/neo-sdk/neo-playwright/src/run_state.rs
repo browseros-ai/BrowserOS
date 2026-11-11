@@ -1,6 +1,7 @@
 //! One run's Playwright state, owned by the host so it lives exactly as long as the run.
 
 use crate::events::RunEvents;
+use crate::object_group::ObjectGroup;
 
 /// One run's Playwright state: what the run listens for and how far its event pump has read.
 /// The host creates it with `Default`, keeps it in its run slot and drops it with the run;
@@ -13,4 +14,6 @@ use crate::events::RunEvents;
 #[non_exhaustive]
 pub struct RunState {
     pub(crate) events: RunEvents,
+    /// Inputs retained for chooser objects until the script and all its handles end.
+    pub(crate) objects: ObjectGroup,
 }
