@@ -4,9 +4,9 @@
  *
  *   assets/injected.js   page side: src/probe/index.ts with Playwright's InjectedScript, one
  *                        IIFE whose only global is __neoProbe, evaluated in the isolated world
- *   assets/prelude.js    agent side: src/prelude/index.ts, the vendored isomorphic helpers, one
- *                        IIFE for QuickJS that defines no global (it hands the agent's
- *                        function its parameters through claw-sdk's `__neo.provide`)
+ *   assets/prelude.js    agent side: src/prelude/index.ts, the vendored isomorphic helpers,
+ *                        mime and yaml, one IIFE for QuickJS that defines no global (it hands
+ *                        the agent's function its parameters through claw-sdk's `__neo.provide`)
  *   assets/main-world.js page side, main world: src/main-world/index.ts with Playwright's
  *                        UtilityScript, one function expression the evaluate guard sends as
  *                        the declaration of every agent script's `Runtime.callFunctionOn`
@@ -34,6 +34,8 @@ const packageRoot = resolve(import.meta.dir, '..')
 const agentRoot = resolve(packageRoot, '../../..')
 const crateRoot = resolve(agentRoot, 'crates/neo-sdk/neo-playwright')
 const vendorRoot = resolve(crateRoot, 'third_party/playwright')
+const yamlRoot = resolve(crateRoot, 'third_party/yaml')
+const yamlEntry = resolve(yamlRoot, 'browser/dist/index.js')
 
 /** One generated file, its path relative to packages/browseros-agent. */
 export type Output = { path: string; text: string }
@@ -53,6 +55,16 @@ const STUBS: Record<string, string> = {
 const vendored: BunPlugin = {
   name: 'vendored-playwright',
   setup(build) {
+    // The yaml release Playwright bundles, which the prelude parses aria templates with
+    // (src/prelude/aria-template.ts). Sources import it by package name, typed from npm's
+    // declarations; the bundle takes the vendored bytes (third_party/yaml/README.md).
+    build.onResolve({ filter: /^yaml$/ }, () => ({ path: yamlEntry }))
+    // yaml's logger names `console`, which the prelude's realm lacks (src/stubs/yaml-log.ts).
+    build.onResolve({ filter: /^\.\.?\/log\.js$/ }, (args) =>
+      args.importer.startsWith(`${yamlRoot}${sep}`)
+        ? { path: resolve(packageRoot, 'src/stubs/yaml-log.ts') }
+        : undefined,
+    )
     build.onResolve({ filter: /^\.\/(highlight|consoleApi)$/ }, (args) => {
       const stub = STUBS[args.path]
       if (!stub) throw new Error(`No stub for ${args.path}`)
@@ -133,9 +145,12 @@ async function bundle(
     throw new Error(`Expected exactly one bundle for ${entry}`)
   // Bun's module comments follow cwd even when root is set. The Rust tests read them to see
   // which modules a bundle holds, so they must not depend on where the build ran. An IIFE
-  // indents them by two spaces; an ES module leaves them at the margin.
+  // indents them by two spaces; an ES module leaves them at the margin. The vendored yaml's
+  // modules are JavaScript, the rest TypeScript.
   const marker =
-    format === 'iife' ? /^( {2})\/\/ (.+\.ts)$/gm : /^()\/\/ (.+\.ts)$/gm
+    format === 'iife'
+      ? /^( {2})\/\/ (.+\.(?:ts|js))$/gm
+      : /^()\/\/ (.+\.(?:ts|js))$/gm
   return (await output.text()).replace(
     marker,
     (_marker, indent: string, sourcePath: string) =>
@@ -174,12 +189,14 @@ export async function buildOutputs(): Promise<Output[]> {
  * serializers, for Neo's QuickJS prelude.
  * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
  * mime: Copyright (c) 2023 Robert Kieffer. Licensed under the MIT License.
- * Built from crates/neo-sdk/neo-playwright/third_party/playwright and
- * crates/neo-sdk/neo-playwright/third_party/mime, with crates/neo-sdk/neo-playwright-js/src/prelude,
- * by crates/neo-sdk/neo-playwright-js/scripts/build.ts.
+ * yaml: Copyright Eemeli Aro. Licensed under the ISC License.
+ * Built from crates/neo-sdk/neo-playwright/third_party/playwright,
+ * crates/neo-sdk/neo-playwright/third_party/mime and crates/neo-sdk/neo-playwright/third_party/yaml,
+ * with crates/neo-sdk/neo-playwright-js/src/prelude, by crates/neo-sdk/neo-playwright-js/scripts/build.ts.
  * Changed by Neo: isomorphic/utilityScriptSerializers.ts and protocol/src/serializers.ts import
- * Neo's Buffer view, which QuickJS lacks; URL, atob and btoa use the realm globals.
- * Every other upstream module, and mime, is built unmodified.
+ * Neo's Buffer view, which QuickJS lacks; URL, atob and btoa use the realm globals. yaml's
+ * log.js is replaced by a stand-in that names no console.
+ * Every other upstream module, mime and yaml are built unmodified.
  * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
  */
 ${prelude}`

@@ -1,5 +1,5 @@
 {
-  "protocol": 21,
+  "protocol": 22,
   "callFunction": "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -981,19 +981,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 21,
+      "protocol": 22,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 21,
+      "protocol": 22,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 21,
+      "protocol": 22,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0

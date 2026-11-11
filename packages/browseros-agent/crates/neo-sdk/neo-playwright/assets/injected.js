@@ -8507,6 +8507,10 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/expect.ts
+  function pageAriaRoot(world) {
+    const body = world.injected.document.body;
+    return body?.localName === "body" ? { kind: "one", element: body } : { kind: "none" };
+  }
   async function expect(world, request, root) {
     const params = request.params;
     const checks = expectChecks(world.injected);
@@ -8515,7 +8519,7 @@ ${value.stack}`;
       const count = `${elements.length} element${elements.length === 1 ? "" : "s"}`;
       return poll(checks.every(elements, params), count);
     }
-    const found = resolveTarget(world, request.target, request.strictness, root);
+    const found = params.expression === "to.match.aria" && request.target === "document" ? pageAriaRoot(world) : resolveTarget(world, request.target, request.strictness, root);
     if (found.kind !== "one")
       return found;
     const { element } = found;
@@ -8539,7 +8543,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 21;
+  var PROTOCOL = 22;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
