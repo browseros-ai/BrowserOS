@@ -90,6 +90,7 @@ function runDetails(label, run) {
     `Started: ${cell(meta.startedAt)}. Ended: ${cell(meta.endedAt)}. SDK SHA-256: ${cell(meta.sdkSha256)}.`,
     `Specs verified: ${cell(meta.specsVerified)}. Context option omissions: ${cell(JSON.stringify(meta.contextOptionOmissions || []))}.`,
     `expectLoop: ${cell(meta.expectLoop ?? false)}.`,
+    ...(meta.assertions ? [`Assertions: ${cell(meta.assertions)}.`] : []),
     ...(meta.engine
       ? [
           `Engine: ${cell(meta.engine)}. BrowserOS: ${cell(meta.browserosVersion)}. SDK sources: ${cell(JSON.stringify(meta.sdkSources || {}))}. Add-on: ${cell(JSON.stringify(meta.addon || {}))}.`,
