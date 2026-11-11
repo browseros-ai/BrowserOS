@@ -25,6 +25,12 @@ on:
 permissions:
   contents: read
 
+# Named, not left implicit: GitHub adds -o pipefail only for an explicit `shell: bash`, and the
+# steps pipe build.sh and accept.sh into tee, which would otherwise hide a failing check.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: neo-sdk-image-${{ inputs.ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

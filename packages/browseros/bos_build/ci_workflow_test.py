@@ -4448,6 +4448,14 @@ class NeoSdkImageWorkflowTest(unittest.TestCase):
         self.assertIn("neo-server/docker/build.sh --platform linux/amd64", scripts)
         self.assertIn("neo-server/docker/accept.sh", scripts)
 
+    def test_a_failing_check_fails_its_step_through_tee(self):
+        # Only an explicit `shell: bash` gets -o pipefail; the implicit default is bash -e.
+        self.assertEqual(self.workflow["defaults"], {"run": {"shell": "bash"}})
+        for name, job in self.jobs.items():
+            for step in job["steps"]:
+                with self.subTest(job=name, step=step.get("name", step.get("uses"))):
+                    self.assertIn(step.get("shell", "bash"), ["bash"])
+
     def test_never_logs_in_or_pushes(self):
         text = self.text.lower()
         for forbidden in ("docker login", "login-action", "--push", "push: true", "packages: write"):
