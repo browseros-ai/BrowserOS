@@ -358,6 +358,11 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.saveScreenshot': {
+    effect: 'write',
+    target: null,
+    lifetime: 'operation',
+  },
   'page.pdf': {
     effect: 'read',
     target: 'page',

@@ -61,6 +61,7 @@ const ANSWERS: Record<string, unknown> = {
   'page.addScriptTag': { element: ELEMENT },
   'page.addStyleTag': { element: ELEMENT },
   'page.waitForFunction': { value: true, preview: 'true' },
+  'page.screenshot': { $neo: 'bytes', base64: 'iVBORw0KGgo=' },
   'context.newPage': {
     page: { $neo: 'page', tab: 1008 },
     url: 'about:blank',
@@ -107,6 +108,7 @@ const EVERY_OP = `
   await handle.evaluate((e) => e.id); await handle.$eval('b', (e) => e.id); await handle.$$eval('b', (es) => es.length)
   await page.$eval('b', (e) => e.id); await page.$$eval('b', (es) => es.length); await page.evaluate((e, h) => h.id, handle)
   await page.screenshot(); await l.screenshot(); await page.pdf()
+  await page.screenshot({ path: '/out/screenshot.png' })
   await page.setViewportSize({ width: 640, height: 480 })
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})

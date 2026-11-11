@@ -3,6 +3,7 @@
 //! and asserts what the run service reads from it.
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -842,6 +843,22 @@ fn image_bytes_have_buffer_identity_and_header_reads_in_quickjs() -> Result<(), 
             ]),
             "the bytes reviver supplies the run's Buffer, with unsigned reads on its view"
         );
+        Ok(())
+    })
+}
+
+#[test]
+fn captured_bytes_can_be_saved_from_quickjs_without_admitting_a_tab() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let own = tempfile::tempdir()?;
+        let target = own.path().join("nested/screenshot.png");
+        let code = format!(
+            "await __neo.invoke('page.saveScreenshot', {{ path: {}, base64: 'iVBORw0KGgo=' }}); return true;",
+            json!(target)
+        );
+        assert_eq!(returned(script(&rig, &code).await?)?, json!(true));
+        assert_eq!(fs::read(target)?, b"\x89PNG\r\n\x1a\n");
         Ok(())
     })
 }

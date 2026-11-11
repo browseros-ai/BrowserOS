@@ -41,6 +41,7 @@ import {
 } from './options'
 import type { Page } from './page'
 import type { Response } from './response'
+import { saveScreenshot, screenshotType } from './screenshot'
 import {
   type LocatorOptions,
   locatorBrand,
@@ -1178,30 +1179,30 @@ export class Frame extends EventEmitter {
     selector: string | null,
     options: ScreenshotOptionsInput = {},
   ): Promise<unknown> {
-    if (options.path !== undefined)
-      throw unsupportedError(
-        api,
-        'Neo returns the image instead of writing a file; omit path',
-      )
     const refused = refusedScreenshotOption(options)
     if (refused !== undefined) throw unsupportedError(api, refused)
     const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
+    if (!wire.type && options.path)
+      wire.type = screenshotType({ api, path: options.path })
     const { timeout, signal } = this._wait(api, options)
     const page = await this._page._brand(api)
-    if (selector === null)
-      return await invoke(
-        'page.screenshot',
-        this._call(api, timeout),
-        { page, ...wire },
-        signal,
-      )
-    const target = await this._locatorBrand(api, selector)
-    return await invoke(
+    const input: OpInputs['page.screenshot'] =
+      selector === null
+        ? { page, ...wire }
+        : {
+            page,
+            target: await this._locatorBrand(api, selector),
+            strict: 'strict',
+            ...wire,
+          }
+    const image = await invoke(
       'page.screenshot',
       this._call(api, timeout),
-      { page, target, strict: 'strict', ...wire },
+      input,
       signal,
     )
+    await saveScreenshot({ api, bytes: image, path: options.path, signal })
+    return image
   }
 
   async _goto(

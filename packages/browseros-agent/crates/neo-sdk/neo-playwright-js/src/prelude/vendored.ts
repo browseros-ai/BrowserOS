@@ -27,6 +27,7 @@ export {
   getByTextSelector,
   getByTitleSelector,
 } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/locatorUtils'
+export { getMimeTypeForPath } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/mimeType'
 export {
   kAnyFrameSelector,
   type ParsedSelector,

@@ -116,7 +116,7 @@ impl OpSpec {
         }
     }
 
-    /// An op that may change the page (or, for `download.saveAs`, the host's files).
+    /// An op that may change the page or the host's files (download/screenshot saves).
     pub(crate) const fn write(name: &'static str, target: OpTarget, doc: &'static str) -> Self {
         Self {
             effect: Effect::Write,

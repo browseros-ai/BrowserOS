@@ -228,6 +228,7 @@ mod tests {
             ("page.waitForFunction", &[MainWorld], true),
             ("locator.waitForFunction", &[MainWorld], true),
             ("page.screenshot", &[Capture], true),
+            ("page.saveScreenshot", &[], true),
             ("page.pdf", &[Capture], true),
             ("page.setViewportSize", &[], true),
             ("context.pages", &[], true),

@@ -13,7 +13,7 @@ use crate::page::document_watch::decode;
 use crate::page::navigation::{GotoInput, NavigateInput, Navigation};
 use crate::page::{
     PageHandle, add_tag, document_op, element_evaluate, evaluate, frame_tree, navigation, pdf,
-    screenshot, viewport_size, wait_for_navigation, wait_for_url,
+    save_screenshot, screenshot, viewport_size, wait_for_navigation, wait_for_url,
 };
 use crate::probe::DocumentPart;
 use crate::target::PageRef;
@@ -44,6 +44,7 @@ listed_enum! {
         WaitForFunction,
         WaitForFunctionOnElement,
         Screenshot,
+        SaveScreenshot,
         Pdf,
         SetViewportSize,
     }
@@ -57,6 +58,7 @@ impl PageOp {
     )]
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
+            Self::SaveScreenshot => save_screenshot::SPEC,
             Self::SetViewportSize => viewport_size::SPEC,
             Self::Goto => OpSpec::write(
                 "page.goto",
@@ -216,6 +218,7 @@ pub(crate) async fn invoke(
         PageOp::Opener => opener(pw, scope, args.decode(scope)?).await,
         PageOp::Frames => frame_tree::frames(pw, scope, args.decode(scope)?).await,
         PageOp::Screenshot => screenshot::capture(pw, scope, args.decode(scope)?).await,
+        PageOp::SaveScreenshot => save_screenshot::save(scope, args.decode(scope)?).await,
         PageOp::Pdf => pdf::print(pw, scope, args.decode(scope)?).await,
         // Boxed, as the other families box their leaves: a script's guard and its polls are the
         // largest state a page op holds, and every op's future is as large as its largest leaf.

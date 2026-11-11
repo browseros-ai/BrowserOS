@@ -2318,6 +2318,16 @@
         "waitUntil": "load"
       }
     ],
+    "page.saveScreenshot": [
+      {
+        "call": {
+          "api": "page.screenshot",
+          "timeoutMs": 0
+        },
+        "path": "/out/screenshot.png",
+        "base64": "iVBORw0KGgo="
+      }
+    ],
     "page.screenshot": [
       {
         "call": {
@@ -2359,6 +2369,17 @@
           "display": "getByRole('button')"
         },
         "strict": "strict"
+      },
+      {
+        "call": {
+          "api": "page.screenshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "type": "png"
       }
     ],
     "page.setContent": [
