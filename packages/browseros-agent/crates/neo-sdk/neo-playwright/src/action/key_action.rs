@@ -167,7 +167,6 @@ impl<'a> KeyRunner<'a> {
             return Err(copy_refused(self.scope));
         }
         let sent = self.scope.send_effect()?;
-        let _typing = self.page.state().typing(&sent);
         let navigations = keys.waits_after().then(|| {
             let root = self.page.root_session();
             let sessions = root

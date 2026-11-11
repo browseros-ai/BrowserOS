@@ -10,11 +10,11 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use browseros_core::{FrameId, ProtocolSession, SessionId, TabId};
+use browseros_core::{FrameId, ProtocolSession, SessionId};
 use tokio::sync::OnceCell;
 
 use crate::probe::ProbeFailure;
-use crate::world::{ContextId, Epoch, FrameSeq, Installed, SealedWorld, SessionKind, SessionSetup};
+use crate::world::{Epoch, FrameSeq, Installed, SealedWorld, SessionKind, SessionSetup};
 
 /// Where a world is installed: a frame on a raw session, and how that session was set up.
 #[derive(Clone, Debug)]
@@ -27,12 +27,10 @@ pub(crate) struct Endpoint {
 /// What every install on one page shares besides its endpoint.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Installer<'a> {
-    /// The process's per-session setup (journal binding, `Runtime.enable`).
+    /// The process's per-session setup (`Runtime.enable` on OOPIFs).
     pub(crate) sessions: &'a SessionSetup,
     /// The `Playwright` instance's epoch.
     pub(crate) epoch: &'a Epoch,
-    /// The page, for the journal's attribution.
-    pub(crate) page: TabId,
 }
 
 /// Which frame of the page an install is for.
@@ -172,7 +170,7 @@ impl FrameWorlds {
         self.world_with(key, place, |candidate| async move {
             installer
                 .sessions
-                .ensure(&endpoint.session, installer.page, endpoint.kind)
+                .ensure(&endpoint.session, endpoint.kind)
                 .await?;
             // Subscribed here, before the create, so the new world's event cannot be missed.
             let watch = installer.sessions.watch_contexts();
@@ -239,23 +237,6 @@ impl FrameWorlds {
         if inner.live.get(&world.seq()) == Some(&key) {
             inner.live.remove(&world.seq());
         }
-    }
-
-    /// The installed world whose context on `session` is `context`, for a journal call, which
-    /// names its world only so. The match is only a lookup: every call into the world still goes
-    /// by its global's handle, which fails `Gone` once the context is not that world any more.
-    pub(crate) fn by_context(
-        &self,
-        session: &SessionId,
-        context: ContextId,
-    ) -> Option<SealedWorld> {
-        self.lock()
-            .cells
-            .iter()
-            .filter(|(key, _)| key.session == *session)
-            .filter_map(|(_, cell)| cell.get())
-            .find(|world| world.context() == context)
-            .cloned()
     }
 
     /// What `seq` names, for a ref jump: its world and its parents, or why there is none.

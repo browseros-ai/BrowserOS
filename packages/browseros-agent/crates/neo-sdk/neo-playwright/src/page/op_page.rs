@@ -318,7 +318,6 @@ impl<'op> OpPage<'op> {
         let installer = Installer {
             sessions: self.pw.sessions(),
             epoch: self.pw.epoch(),
-            page: self.tab(),
         };
         let retry = self.late_retry();
         let mut cut = TryCut::default();
