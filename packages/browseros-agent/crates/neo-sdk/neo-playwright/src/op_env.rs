@@ -42,18 +42,10 @@ pub trait OpEnv: Send + Sync {
         false
     }
 
-    /// Re-runs the host's attempt-stage policies (the owner's takeover lock, page privacy),
+    /// Re-runs the host's attempt-stage policies (the owner's takeover lock on the op's tab),
     /// right before the op's first write to the page, because the owner may have taken over
     /// while the op waited.
     fn recheck(&self) -> Result<(), Refusal>;
-
-    /// The host's write rules for `tabs`, other tabs a main-world script on the op's page can
-    /// reach through `window.opener` and the windows `window.open` returns. The crate never
-    /// calls it: a main-world send runs [`OpEnv::recheck`] on the op's own tab only, as
-    /// Playwright's scripts reach those tabs unchecked. The default passes.
-    fn recheck_reach(&self, _tabs: &[TabId]) -> Result<(), Refusal> {
-        Ok(())
-    }
 
     /// The op is about to change the page. Write-once on the host side; delivery is derived
     /// from it. The crate calls it only from the one place it marks an op sent, right after
