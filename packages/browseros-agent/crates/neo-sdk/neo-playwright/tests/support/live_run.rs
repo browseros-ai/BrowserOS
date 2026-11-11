@@ -31,7 +31,6 @@ pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 pub(crate) enum EnvCall {
     Recheck,
     MarkSent,
-    MarkSensitiveTarget,
     Note(String),
 }
 
@@ -220,10 +219,6 @@ impl OpEnv for LiveEnv {
 
     fn mark_sent(&self) {
         self.record(EnvCall::MarkSent);
-    }
-
-    fn mark_sensitive_target(&self) {
-        self.record(EnvCall::MarkSensitiveTarget);
     }
 
     fn note(&self, line: String) {

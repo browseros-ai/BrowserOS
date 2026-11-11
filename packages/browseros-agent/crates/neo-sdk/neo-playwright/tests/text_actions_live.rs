@@ -721,17 +721,12 @@ async fn value_of(run: &LiveRun, page: &TestPage, id: &str) -> TestResult<Value>
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_fill_types_sets_or_clears_as_upstream_and_marks_sensitive_fields() -> TestResult
-{
+async fn tests_that_fill_types_sets_or_clears_as_upstream() -> TestResult {
     let run = LiveRun::connect().await?;
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/form.html")).await?;
     run.clear_calls();
     fill(&run, &at(&page, "#field"), "plain words").await?;
-    assert!(
-        !run.calls().contains(&EnvCall::MarkSensitiveTarget),
-        "a plain field is not sensitive"
-    );
     assert!(
         run.calls()
             .contains(&EnvCall::Note("  fill(\"plain words\")".to_owned())),
@@ -741,14 +736,6 @@ async fn tests_that_fill_types_sets_or_clears_as_upstream_and_marks_sensitive_fi
     run.clear_calls();
     fill(&run, &at(&page, "#password"), "hunter2-new").await?;
     let calls = run.calls();
-    let marked = calls
-        .iter()
-        .position(|call| *call == EnvCall::MarkSensitiveTarget);
-    let sent = calls.iter().position(|call| *call == EnvCall::MarkSent);
-    assert!(
-        matches!((marked, sent), (Some(marked), Some(sent)) if marked < sent),
-        "the password field marks the target sensitive before anything is sent: {calls:?}"
-    );
     assert!(
         !calls
             .iter()
@@ -1037,10 +1024,6 @@ async fn tests_that_an_element_handle_fills_its_own_field() -> TestResult {
     fill(&run, &field, "by handle").await?;
     run.clear_calls();
     fill(&run, &password, "secret by handle").await?;
-    assert!(
-        run.calls().contains(&EnvCall::MarkSensitiveTarget),
-        "a handle on a password field marks the target sensitive"
-    );
     assert_eq!(
         (
             value_of(&run, &page, "field").await?,
@@ -1087,10 +1070,6 @@ async fn tests_that_press_and_press_sequentially_focus_type_and_wait_for_the_nav
     )
     .await?;
     let calls = run.calls();
-    assert!(
-        calls.contains(&EnvCall::MarkSensitiveTarget),
-        "typing into a password field marks the target sensitive: {calls:?}"
-    );
     assert!(
         calls.contains(&EnvCall::Note("elementHandle.type(\"••••\")".to_owned()))
             && !calls
@@ -1734,12 +1713,11 @@ async fn tests_that_set_input_files_sets_host_files_and_refuses_as_upstream() ->
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_keys_typed_into_a_focused_sensitive_field_mark_the_target_sensitive()
--> TestResult {
+async fn tests_that_keys_type_into_focused_password_and_plain_fields() -> TestResult {
     let run = LiveRun::connect().await?;
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/form.html")).await?;
-    for (field, sensitive) in [("password", true), ("field", false)] {
+    for field in ["password", "field"] {
         run.eval(
             &page,
             &format!("document.getElementById('{field}').focus()"),
@@ -1752,22 +1730,7 @@ async fn tests_that_keys_typed_into_a_focused_sensitive_field_mark_the_target_se
         ] {
             run.clear_calls();
             device(&run, op, &page, fields).await?;
-            let calls = run.calls();
-            let marked = calls
-                .iter()
-                .position(|call| *call == EnvCall::MarkSensitiveTarget);
-            let sent = calls.iter().position(|call| *call == EnvCall::MarkSent);
-            if sensitive {
-                assert!(
-                    matches!((marked, sent), (Some(marked), Some(sent)) if marked < sent),
-                    "{op} into #{field} marks the target sensitive before it sends: {calls:?}"
-                );
-            } else {
-                assert_eq!(
-                    marked, None,
-                    "{op} into #{field} is not sensitive: {calls:?}"
-                );
-            }
+            assert!(sent_anything(&run), "{op} into #{field} sends input");
         }
         assert_eq!(value_of(&run, &page, field).await?, json!("s3cret!a"));
     }
@@ -1830,15 +1793,6 @@ async fn tests_that_a_copy_is_refused_when_the_focused_field_is_in_a_closed_shad
         json!({ "text": "7", "options": {} }),
     )
     .await?;
-    let calls = run.calls();
-    let marked = calls
-        .iter()
-        .position(|call| *call == EnvCall::MarkSensitiveTarget);
-    let sent = calls.iter().position(|call| *call == EnvCall::MarkSent);
-    assert!(
-        matches!((marked, sent), (Some(marked), Some(sent)) if marked < sent),
-        "keys typed there are redacted before they are sent: {calls:?}"
-    );
     assert_eq!(
         run.eval(&page, "window.__otp.value").await?,
         json!("7"),
@@ -1942,18 +1896,9 @@ async fn script_on(run: &Arc<LiveRun>, page: &TestPage, script: &str) -> TestRes
     Ok(run_script(&host, &init, script).await?)
 }
 
-/// What one edit through a label left in the host's calls: `hidden` in no call-log line (each
-/// is also the trace's note), and the target marked sensitive before anything was sent.
-fn assert_marked_and_hidden(run: &LiveRun, script: &str, hidden: &str) {
+/// One edit through a label keeps `hidden` out of every call-log line and trace note.
+fn assert_hidden(run: &LiveRun, script: &str, hidden: &str) {
     let calls = run.calls();
-    let marked = calls
-        .iter()
-        .position(|call| *call == EnvCall::MarkSensitiveTarget);
-    let sent = calls.iter().position(|call| *call == EnvCall::MarkSent);
-    assert!(
-        matches!((marked, sent), (Some(marked), Some(sent)) if marked < sent),
-        "`{script}` marks the target sensitive before anything is sent: {calls:?}"
-    );
     assert!(
         !calls
             .iter()
@@ -2006,7 +1951,7 @@ async fn tests_that_an_edit_through_a_label_treats_the_field_it_changes_as_sensi
         script_on(&run, &page, script)
             .await
             .map_err(|error| format!("`{script}`: {error}"))?;
-        assert_marked_and_hidden(&run, script, hidden);
+        assert_hidden(&run, script, hidden);
         if index + 1 == keys.len() {
             assert_eq!(
                 value_of(&run, &page, "pin").await?,
@@ -2035,7 +1980,7 @@ async fn tests_that_an_edit_through_a_label_treats_the_field_it_changes_as_sensi
         json!(["[private]", "[private]"]),
         "a one-time-code select answers every selected value masked"
     );
-    assert_marked_and_hidden(&run, select, "code-");
+    assert_hidden(&run, select, "code-");
     run.close_page(&page).await;
     Ok(())
 }

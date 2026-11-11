@@ -2307,12 +2307,6 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
     for spec in &listed {
         let op = Op::from_name(spec.name).ok_or(spec.name)?.spec();
         assert_eq!(spec.effect, op.effect, "{}", spec.name);
-        assert_eq!(spec.sensitive_args, op.sensitive_args, "{}", spec.name);
-        assert!(
-            spec.secret_args.is_empty(),
-            "{}: no Playwright argument is always secret",
-            spec.name
-        );
         assert_eq!(spec.visibility, Visibility::Script, "{}", spec.name);
         assert_eq!(
             spec.lifetime == Lifetime::Background,
@@ -2326,15 +2320,6 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
         lines.insert(line);
     }
     assert_eq!(lines.len(), 1, "the description lists the API once");
-    let fill = listed
-        .iter()
-        .find(|spec| spec.name == "locator.fill")
-        .ok_or("locator.fill")?;
-    assert_eq!(
-        fill.sensitive_args,
-        ["/value"],
-        "a fill into a password field never stores the typed value"
-    );
     Ok(())
 }
 

@@ -997,7 +997,7 @@ components:
           $ref: '#/components/schemas/PageRef'
         args:
           description: >-
-            Safe arguments: masked, secret fields `[redacted]`, bounded. Page and locator
+            Arguments, masked and bounded. Target field kinds do not redact them. Page and locator
             handles appear as their branded JSON, e.g. `{"$neo":"locator","page":3,"selector":"…"}`.
             Present once the operation has ended: Neo masks them with what the operation's end
             knows, so an operation still running, or one whose end Neo never recorded, has none.

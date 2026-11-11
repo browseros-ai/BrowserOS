@@ -4,7 +4,6 @@
 //! element-handle forms. A locator is re-resolved on every attempt; an element handle's node
 //! is read once, because it is there or it is gone for good.
 
-use browseros_core::sensitive_fields::SensitiveKind;
 use futures_util::future;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -121,12 +120,7 @@ async fn poll_locator(
             continue;
         };
         match reply {
-            ProbeReply::Read {
-                value,
-                sensitive,
-                sweep,
-            } => {
-                mark_sensitive(scope, sensitive);
+            ProbeReply::Read { value, sweep, .. } => {
                 let value = mask.value(pw, scope, page.tab(), sweep, value)?;
                 return Ok(Reading { value, path });
             }
@@ -163,17 +157,10 @@ async fn read_handle(
     )
     .await;
     match reply? {
-        ProbeReply::Read {
-            value,
-            sensitive,
-            sweep,
-        } => {
-            mark_sensitive(scope, sensitive);
-            Ok(Some(Reading {
-                value: mask.value(pw, scope, page.tab(), sweep, value)?,
-                path: site.path().clone(),
-            }))
-        }
+        ProbeReply::Read { value, sweep, .. } => Ok(Some(Reading {
+            value: mask.value(pw, scope, page.tab(), sweep, value)?,
+            path: site.path().clone(),
+        })),
         ProbeReply::Detached => Ok(None),
         // A read of the handle's own node finds one element, so no strict violation.
         other => Err(resolve::refused(scope, other)),
@@ -220,20 +207,8 @@ pub(crate) async fn read_visibility(
     match reply {
         ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(without_element),
         // A state read carries no sweep (protocol.ts `ReadValue`).
-        ProbeReply::Read {
-            value, sensitive, ..
-        } => {
-            mark_sensitive(scope, sensitive);
-            Ok(value.textless())
-        }
+        ProbeReply::Read { value, .. } => Ok(value.textless()),
         other => Err(site_sweep::refused(pw, scope, &page, world, other, ReadMask::Textless).await),
-    }
-}
-
-/// Tells the host the op's target is a sensitive field when the seal says so.
-pub(crate) fn mark_sensitive(scope: &OpScope<'_>, sensitive: Option<SensitiveKind>) {
-    if sensitive.is_some() {
-        scope.mark_sensitive_target();
     }
 }
 

@@ -71,7 +71,7 @@ pub enum StartError {
     /// port", so only this failure may produce it.
     #[error("the agent port {0} is in use")]
     PortInUse(SocketAddr),
-    /// The built-in SDK methods did not register (a duplicate name, a bad redaction pointer):
+    /// The built-in SDK methods did not register because a name was duplicated:
     /// a programming error, which the first test that starts the app catches.
     #[error("the SDK method set: {0}")]
     Methods(String),

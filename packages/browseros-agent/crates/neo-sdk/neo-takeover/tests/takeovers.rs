@@ -180,7 +180,6 @@ impl Harness {
             effect: Effect::Write,
             tab: Some(TabId(tab)),
             args: json!({ "selector": "#next" }),
-            policy: Arc::default(),
             also_mask: None,
             at: EpochMillis::now(),
         });

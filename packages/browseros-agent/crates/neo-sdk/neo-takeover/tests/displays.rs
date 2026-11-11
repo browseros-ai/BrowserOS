@@ -25,7 +25,7 @@ use neo_takeover::{
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, RedactionLimits, Redactor, RunId, RunStarted, SecretSet, SecretSetConfig,
-    TargetSensitivity, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::net::SocketAddr;
@@ -446,7 +446,6 @@ impl Harness {
             result: None,
             error: None,
             page_after: None,
-            target: TargetSensitivity::Ordinary,
             also_mask: None,
             at,
         });
@@ -551,7 +550,6 @@ fn first_operation(
         effect,
         tab,
         args: json!({}),
-        policy: Arc::default(),
         also_mask: None,
         at,
     }
