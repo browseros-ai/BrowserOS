@@ -3,18 +3,20 @@
 //! backend node; temporary remote objects belong to the operation and are freed on cancellation.
 
 use std::io::ErrorKind;
+use std::time::Duration;
 
 use browseros_cdp::CdpEvent;
 use browseros_core::FrameId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::fs;
+use tokio::{fs, time};
 
 use crate::op_scope::OpScope;
 use crate::op_spec::Capability;
+use crate::page::frame_tree::{self, FrameTree};
 use crate::page::{OpPage, evaluate_guard, world_call};
 use crate::target::PageRef;
-use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
+use crate::{ErrorCode, Playwright, PlaywrightError, op_output, resolve};
 
 /// Which upstream insertion algorithm and sourceURL syntax to use.
 #[derive(Clone, Copy)]
@@ -141,10 +143,9 @@ pub(crate) async fn insert(
         .send("DOM.describeNode", json!({ "objectId": object }))
         .await
         .map_err(|error| scope.core_error(&error))?;
-    Ok(
-        json!({ "$neo": "element", "page": page_ref, "seq": world.seq(),
-        "node": described.node.backend_node_id, "display": format!("<{}>", params.kind) }),
-    )
+    let element = json!({ "$neo": "element", "page": page_ref, "seq": world.seq(),
+        "node": described.node.backend_node_id, "display": format!("<{}>", params.kind) });
+    tagged(pw, scope, &page_ref, element).await
 }
 
 /// The page's error console receives CSP reports through CDP's Log domain, including inline
@@ -178,10 +179,10 @@ async fn file_content(
 ) -> Result<String, PlaywrightError> {
     let bytes = fs::read(path).await.map_err(|error| {
         let (code, message) = match error.kind() {
-            ErrorKind::NotFound => ("ENOENT", "no such file or directory"),
-            ErrorKind::PermissionDenied => ("EACCES", "permission denied"),
-            ErrorKind::IsADirectory => ("EISDIR", "illegal operation on a directory"),
-            _ => ("UNKNOWN", "could not read file"),
+            ErrorKind::NotFound => ("ENOENT", "no such file or directory".to_owned()),
+            ErrorKind::PermissionDenied => ("EACCES", "permission denied".to_owned()),
+            ErrorKind::IsADirectory => ("EISDIR", "illegal operation on a directory".to_owned()),
+            _ => ("UNKNOWN", error.to_string()),
         };
         scope.fail(
             ErrorCode::InvalidInput,
@@ -194,4 +195,29 @@ async fn file_content(
         TagKind::Script => format!("{source}\n//# sourceURL={source_path}"),
         TagKind::Style => format!("{source}/*# sourceURL={source_path}*/"),
     })
+}
+
+/// Injected scripts can create frames. As for evaluate, report a bounded best-effort snapshot
+/// with the handle so the prelude's synchronous frame accessors observe that completed write.
+async fn tagged(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    page: &PageRef,
+    element: Value,
+) -> Result<Value, PlaywrightError> {
+    #[derive(Serialize)]
+    struct Tagged {
+        element: Value,
+        #[serde(flatten)]
+        frames: Option<FrameTree>,
+    }
+    let frames = time::timeout(
+        Duration::from_secs(2),
+        frame_tree::snapshot(pw, scope, page.tab()),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .flatten();
+    op_output::to_output(scope, &Tagged { element, frames })
 }

@@ -58,8 +58,8 @@ const ANSWERS: Record<string, unknown> = {
   'page.frames': FRAMES,
   'page.opener': { opener: null },
   'page.evaluate': { value: null },
-  'page.addScriptTag': ELEMENT,
-  'page.addStyleTag': ELEMENT,
+  'page.addScriptTag': { element: ELEMENT },
+  'page.addStyleTag': { element: ELEMENT },
   'page.waitForFunction': { value: true, preview: 'true' },
   'context.newPage': {
     page: { $neo: 'page', tab: 1008 },

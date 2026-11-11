@@ -556,8 +556,8 @@ export type OpOutputs = {
   'page.waitForLoadState': NavigationResult | null
   'page.title': string
   'page.content': string
-  'page.addScriptTag': ElementBrand
-  'page.addStyleTag': ElementBrand
+  'page.addScriptTag': { element: ElementBrand; frames?: FrameInfo[] }
+  'page.addStyleTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.setContent': NavigationResult | null
   'page.close': Done
   'page.opener': { opener: PageBrand | null }

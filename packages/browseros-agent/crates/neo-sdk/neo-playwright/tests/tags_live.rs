@@ -74,3 +74,30 @@ async fn tags_belong_to_their_frame_and_csp_errors_keep_browser_wording() -> Tes
     );
     Ok(())
 }
+
+/// A detached script still has an `ElementHandle` until the run ends, even after renderer GC.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn a_self_removing_tag_keeps_its_handle_after_browser_gc() -> TestResult {
+    let run = LiveRun::connect().await?;
+    let page = run.new_page().await?;
+    let result = async {
+        let inserted = run.invoke("page.addScriptTag", json!({
+            "page": live_run::brand(&page), "content": "document.currentScript.remove()",
+        })).await?;
+        let target = inserted.get("element").ok_or("insertion returns its element")?;
+        let info = run.browser().pages.get_info_by_tab(page.tab).await.ok_or("the tab is open")?;
+        let session = run.browser().pages.get_session(info.page_id).await?.session;
+        session.send_value("HeapProfiler.collectGarbage", json!({})).await?;
+        let value = run.invoke("locator.evaluate", json!({
+            "target": target, "strict": "strict",
+            "script": { "run": { "expression": "e => [e.tagName, e.isConnected]", "isFunction": true,
+                "arg": "{\"v\":\"undefined\"}" } },
+        })).await?;
+        assert_eq!(value, json!({"a":["SCRIPT",false],"id":1}),
+            "the handle must retain its exact detached node across operation cleanup and GC");
+        Ok(())
+    }.await;
+    run.close_page(&page).await;
+    result
+}

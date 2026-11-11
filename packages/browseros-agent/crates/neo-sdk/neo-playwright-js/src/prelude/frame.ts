@@ -1285,12 +1285,16 @@ export class Frame extends EventEmitter {
     }
     let handle: ElementHandle | null
     try {
-      handle = this._page._handle(
-        await invoke(op, this._call(api, 0), {
+      const { value: result, observed } = await invokeObserved(
+        op,
+        this._call(api, 0),
+        {
           ...(await this._frameArgs(api)),
           ...input,
-        }),
+        },
       )
+      this._page._evaluated(result.frames, observed)
+      handle = this._page._handle(result.element)
     } catch (error) {
       // File reads are upstream client work, whose errors carry no API prefix.
       if (

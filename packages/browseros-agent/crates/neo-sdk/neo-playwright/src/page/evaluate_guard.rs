@@ -1193,7 +1193,9 @@ pub(super) async fn insert_tag(
                 "arguments": [{ "value": params }],
                 "awaitPromise": true,
                 "userGesture": true,
-                "objectGroup": scope.object_group(session),
+                // A tag can remove itself while its script executes. Keep the returned node
+                // alive until the run ends so its ElementHandle survives browser GC.
+                "objectGroup": scope.run_state().objects.on(session),
             }),
         )
         .await

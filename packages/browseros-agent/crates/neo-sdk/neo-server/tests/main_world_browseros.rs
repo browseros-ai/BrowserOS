@@ -765,7 +765,11 @@ async fn tags_behave_as_playwright_on_browseros() -> TestResult {
             const child = page.frames()[1];
             const tag = await child.addScriptTag({ content: 'window.injected = 37' });
             const style = await child.addStyleTag({ content: 'body { color: rgb(12, 34, 56) }' });
+            await page.addScriptTag({ content: `const f = document.createElement('iframe'); f.name = 'from-tag'; document.body.appendChild(f)` });
+            const detached = await page.addScriptTag({ content: 'document.currentScript.remove()' });
             return [
+                page.frame('from-tag') !== null,
+                await detached.evaluate(e => [e.tagName, e.isConnected]),
                 parent.asElement() === parent,
                 await parent.evaluate(e => [e.tagName, window.injected]),
                 await tag.evaluate(e => [e.tagName, window.injected]),
@@ -778,6 +782,8 @@ async fn tags_behave_as_playwright_on_browseros() -> TestResult {
             assert_eq!(
                 answer,
                 json!([
+                    true,
+                    ["SCRIPT",false],
                     true,
                     ["SCRIPT", 42],
                     ["SCRIPT", 37],

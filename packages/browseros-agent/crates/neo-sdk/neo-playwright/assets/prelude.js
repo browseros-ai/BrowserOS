@@ -7404,10 +7404,12 @@ ${value.stack}`;
       }
       let handle;
       try {
-        handle = this._page._handle(await invoke(op, this._call(api, 0), {
+        const { value: result, observed } = await invokeObserved(op, this._call(api, 0), {
           ...await this._frameArgs(api),
           ...input
-        }));
+        });
+        this._page._evaluated(result.frames, observed);
+        handle = this._page._handle(result.element);
       } catch (error) {
         if (error instanceof Error && error.message.startsWith(`${api}: `) && /^(?:E[A-Z0-9]+|UNKNOWN): .*?, (?:open|read) '/.test(error.message.slice(api.length + 2)))
           error.message = error.message.slice(api.length + 2);
