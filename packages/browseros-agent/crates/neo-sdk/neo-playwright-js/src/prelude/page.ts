@@ -24,6 +24,7 @@ import {
   type EvaluateOptions,
   pageCall,
 } from './evaluation'
+import { EventDeadline } from './event-deadline'
 import { checkReported, isReported } from './events'
 import {
   type ClickOptions,
@@ -40,6 +41,7 @@ import {
   type TextMatch,
   type UrlMatcher,
   type WaitForFunctionOptions,
+  type WaitForNavigationOptions,
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
@@ -568,6 +570,16 @@ export class Page extends EventEmitter {
     )
   }
 
+  waitForNavigation(
+    options?: WaitForNavigationOptions,
+  ): Promise<Response | null> {
+    return this._waitForNavigation(
+      'page.waitForNavigation',
+      this._mainFrame,
+      options,
+    )
+  }
+
   waitForURL(
     url: UrlMatcher,
     options?: TimeoutOption & { waitUntil?: LoadState },
@@ -1042,6 +1054,99 @@ export class Page extends EventEmitter {
         signal,
       )
       await this._navigated(api, frame, result, observed)
+    }
+  }
+
+  /**
+   * Keep a single call-time fence and journal cursor across predicate checks. A predicate
+   * runs in the agent realm; Rust retains later events while it runs, including synchronous
+   * pushState bursts. Unmatched URLs wait only for commit, never for a stalled load.
+   */
+  async _waitForNavigation(
+    api: string,
+    frame: Frame,
+    options: WaitForNavigationOptions = {},
+  ): Promise<Response | null> {
+    const signal = signalOf(api, options)
+    return await untilAborted(
+      signal,
+      () => abortedError(api, signal as SignalLike),
+      () => this.#waitForNavigation(api, frame, options, signal),
+    )
+  }
+
+  /** The journal cursor and deadline survive re-waits and share the call's abort signal. */
+  async #waitForNavigation(
+    api: string,
+    frame: Frame,
+    options: WaitForNavigationOptions,
+    signal: SignalLike | undefined,
+  ): Promise<Response | null> {
+    const since = Date.now()
+    let after = this.#liveHead
+    const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
+    const timeout = frame._navigationTimeout(options)
+    const matcher = options.url
+    const predicate = typeof matcher === 'function' ? matcher : undefined
+    const url =
+      typeof matcher === 'string'
+        ? { glob: matcher }
+        : matcher instanceof RegExp
+          ? { regexSource: matcher.source, regexFlags: matcher.flags }
+          : undefined
+    if (matcher !== undefined && !url && !predicate)
+      throw clientError(api, 'url: expected a string, a RegExp or a function')
+    const args = await frame._frameArgs(api)
+    const deadline = new EventDeadline(api, null, since, timeout)
+    const rethrow = (error: unknown): never => {
+      throw deadline.named(error)
+    }
+    for (;;) {
+      const { value: result, observed } = await deadline
+        .race(
+          invokeObserved(
+            'page.waitForNavigation',
+            frame._call(api, deadline.left()),
+            {
+              ...args,
+              since,
+              after,
+              ...(url ? { url } : {}),
+              waitUntil: predicate ? 'commit' : waitUntil,
+            },
+            undefined,
+            signal,
+          ),
+        )
+        .catch(rethrow)
+      const response = await deadline.race(
+        this._navigated(api, frame, result, observed),
+      )
+      if (!predicate) {
+        deadline.left()
+        return response
+      }
+      after = result.navigationSeq
+      let matched: unknown
+      try {
+        matched = await deadline.race(
+          predicate(URL.parse(result.url ?? '') ?? result.url),
+        )
+      } catch (error) {
+        throw prefixed(api, error)
+      }
+      if (matched) {
+        await deadline.race(
+          frame
+            ._waitForLoadState(api, waitUntil, {
+              timeout: deadline.left(),
+              signal,
+            })
+            .catch(rethrow),
+        )
+        deadline.left()
+        return response
+      }
     }
   }
 
