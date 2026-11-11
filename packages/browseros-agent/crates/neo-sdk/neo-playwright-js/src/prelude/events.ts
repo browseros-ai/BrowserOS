@@ -139,7 +139,17 @@ type WaitOptions = {
   signal?: SignalLike
 }
 
-type NavigationWait = { page: Page | null; since: number; done: Promise<void> }
+/**
+ * An unfiltered `framenavigated` wait a click's navigation publication joins. `after` is the
+ * newest seq the script had received when the wait started: a navigation at or before it is
+ * one the wait will never receive, so the click must not wait on it.
+ */
+type NavigationWait = {
+  page: Page | null
+  since: number
+  after: number | null
+  done: Promise<void>
+}
 type NavigationPublication = {
   page: Page
   cut: NavigationCut
@@ -320,6 +330,7 @@ export class EventHub {
         ? {
             page,
             since,
+            after: seen,
             done: new Promise<void>((resolve) => {
               finish = resolve
             }),
@@ -367,7 +378,9 @@ export class EventHub {
     const waits = [...this.navigationWaits]
       .filter(
         (wait) =>
-          (wait.page === null || wait.page === page) && wait.since <= cut.at,
+          (wait.page === null || wait.page === page) &&
+          wait.since <= cut.at &&
+          (wait.after === null || wait.after < cut.seq),
       )
       .map((wait) => wait.done)
     let finish!: () => void

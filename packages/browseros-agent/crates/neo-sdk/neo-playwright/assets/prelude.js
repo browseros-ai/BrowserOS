@@ -8724,6 +8724,7 @@ ${value.stack}`;
       const publication = event === "framenavigated" && !options.predicate ? {
         page,
         since,
+        after: seen,
         done: new Promise((resolve) => {
           finish = resolve;
         })
@@ -8745,7 +8746,7 @@ ${value.stack}`;
       }
     }
     async publishNavigation(page, cut, api, deadline, signal) {
-      const waits = [...this.navigationWaits].filter((wait) => (wait.page === null || wait.page === page) && wait.since <= cut.at).map((wait) => wait.done);
+      const waits = [...this.navigationWaits].filter((wait) => (wait.page === null || wait.page === page) && wait.since <= cut.at && (wait.after === null || wait.after < cut.seq)).map((wait) => wait.done);
       let finish;
       let fail;
       const delivered = new Promise((resolve, reject) => {
