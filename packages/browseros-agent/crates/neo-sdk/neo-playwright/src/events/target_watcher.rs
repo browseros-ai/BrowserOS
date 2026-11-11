@@ -54,7 +54,6 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, MissedTickBehavior};
 
-use crate::events::Fence;
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
 use crate::events::frame_lifecycle::FrameLifecycleTracker;
@@ -63,7 +62,7 @@ use crate::events::page_event::{
     DownloadStarted, ExceptionParams, FileChooserOpened, LogEntryParams, OpenedPage, PageError,
     PageEvent, WindowKind,
 };
-use crate::events::{PageEventKind, WatcherProgress, navigation_event};
+use crate::events::{Fence, PageEventKind, WatcherProgress, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// upstream's `PageBinding.kBindingName`: the CDP binding every exposed binding's stub calls.
