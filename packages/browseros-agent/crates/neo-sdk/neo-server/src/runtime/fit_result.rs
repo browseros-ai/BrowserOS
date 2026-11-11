@@ -148,6 +148,8 @@ impl io::Write for Counter {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
     use neo_trace::BlobId;
@@ -169,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn the_largest_bytes_move_until_the_value_fits() -> Result<(), Box<dyn std::error::Error>> {
+    fn the_largest_bytes_move_until_the_value_fits() -> Result<(), Box<dyn Error>> {
         // An array, so the walk's order is the document's whatever the map order.
         let mut value = json!([
             bytes(3000, 2),
@@ -217,8 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn a_marker_the_script_made_itself_leaves_the_walk_in_step()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn a_marker_the_script_made_itself_leaves_the_walk_in_step() -> Result<(), Box<dyn Error>> {
         let mut value = json!([
             { "$neo": "blob", "id": "b9", "size": 1, "extra": [1, 2, 3] },
             bytes(4000, 8),
@@ -233,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn a_top_level_buffer_becomes_one_blob() -> Result<(), Box<dyn std::error::Error>> {
+    fn a_top_level_buffer_becomes_one_blob() -> Result<(), Box<dyn Error>> {
         let mut value = bytes(4000, 7);
         let blobs = fit_result(&mut value, 256).map_err(|size| format!("did not fit: {size}"))?;
         assert_eq!(value, json!({ "$neo": "blob", "id": "b0", "size": 4000 }));

@@ -928,7 +928,10 @@ fn bytes_over_the_limit_come_back_as_blobs() -> Result<(), TestError> {
         // A screenshot-sized value encodes within the realm's heap: the bootstrap uses the
         // engine's own base64.
         let end = script(&rig, "return new Uint8Array(6 * 1024 * 1024).fill(1);").await?;
-        assert_eq!(end.blobs.first().map(|blob| blob.bytes.len()), Some(6 * 1024 * 1024));
+        assert_eq!(
+            end.blobs.first().map(|blob| blob.bytes.len()),
+            Some(6 * 1024 * 1024)
+        );
         assert_eq!(
             returned(end)?,
             json!({ "$neo": "blob", "id": "b0", "size": 6 * 1024 * 1024 })

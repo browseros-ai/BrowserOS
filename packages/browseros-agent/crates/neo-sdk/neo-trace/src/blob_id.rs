@@ -59,7 +59,17 @@ mod tests {
         assert_eq!("b0".parse::<BlobId>(), Ok(BlobId::new(0)));
         assert_eq!("b17".parse::<BlobId>(), Ok(BlobId::new(17)));
         assert_eq!(BlobId::new(3).to_string(), "b3");
-        for text in ["", "b", "0", "b01", "b+1", "b-1", "B1", "b1/../x", "b99999999999"] {
+        for text in [
+            "",
+            "b",
+            "0",
+            "b01",
+            "b+1",
+            "b-1",
+            "B1",
+            "b1/../x",
+            "b99999999999",
+        ] {
             assert!(text.parse::<BlobId>().is_err(), "{text:?}");
         }
     }

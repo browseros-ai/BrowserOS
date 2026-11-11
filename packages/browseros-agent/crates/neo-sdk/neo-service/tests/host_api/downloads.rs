@@ -101,7 +101,9 @@ async fn a_runs_blob_is_served_by_its_id() -> TestResult {
         Some(&b"application/octet-stream"[..])
     );
     for missing in ["b1", "b00", "0", "../b0"] {
-        let (status, _, _) = h.get_bytes(&format!("/v1/runs/{run}/blobs/{missing}")).await?;
+        let (status, _, _) = h
+            .get_bytes(&format!("/v1/runs/{run}/blobs/{missing}"))
+            .await?;
         assert_eq!(status, StatusCode::NOT_FOUND, "blob {missing}");
     }
     Ok(())

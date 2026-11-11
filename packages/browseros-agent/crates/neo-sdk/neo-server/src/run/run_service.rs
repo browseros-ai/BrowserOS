@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::future;
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use std::{future, mem};
 
 use neo_trace::{
     EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, TaskId, TraceSink, TraceStore,
@@ -372,7 +372,7 @@ impl RunService {
 /// host reads them once it has the reply. One that cannot be written fails the run as Neo's: a
 /// reply must never name bytes the host cannot read.
 async fn keep_blobs(run: RunId, mut end: ScriptEnd, outputs: &RunOutputs) -> ScriptEnd {
-    let blobs = std::mem::take(&mut end.blobs);
+    let blobs = mem::take(&mut end.blobs);
     for blob in &blobs {
         if let Err(error) = outputs.keep_blob(run, blob.id, &blob.bytes).await {
             tracing::warn!(%error, %run, blob = %blob.id, "could not keep a result blob");
