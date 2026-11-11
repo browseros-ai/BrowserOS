@@ -8259,7 +8259,7 @@ ${value.stack}`;
       if (!Array.isArray(payload.serializedArgs))
         throw new Error("serializedArgs is not an array. This can happen when Array.prototype.toJSON is defined incorrectly");
       const args = payload.serializedArgs.map(fromInPageArgument);
-      const frame = await page._bindingFrame(record.frame);
+      const frame = page._knownBindingFrame(record.frame) ?? await page._bindingFrame(record.frame);
       const result = await callback({ context: page._context, page, frame }, ...args);
       answer = { name, seq, result };
     } catch (error) {
@@ -9336,6 +9336,9 @@ ${value.stack}`;
         throw failed.reason;
       }
       return script;
+    }
+    _knownBindingFrame(id) {
+      return id === null ? this._mainFrame : this.#childFrames.get(id);
     }
     async _bindingFrame(id) {
       if (id === null)

@@ -824,6 +824,15 @@ export class Page extends EventEmitter {
   }
 
   /**
+   * The frame a binding call came from, when the cache has it: the main frame for `null`, else
+   * the child frame of that id. Synchronous, so the call's callback can run as the pump
+   * dispatches it (`answerBindingCall`).
+   */
+  _knownBindingFrame(id: string | null): Frame | undefined {
+    return id === null ? this._mainFrame : this.#childFrames.get(id)
+  }
+
+  /**
    * The frame a binding call came from: the main frame for `null`, else the child frame of that
    * id, the frame tree read again when the call names one the cache does not have yet. A frame
    * gone by then is answered as the main frame's.
