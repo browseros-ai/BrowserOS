@@ -98,6 +98,7 @@ try {
     upstream: neo.mcpUrl,
     dataDir: options.dataDir,
     container: ownsContainer ? { names, image: currentImage } : null,
+    instance: options.instance,
   })
   console.log(`
   Viewer:         ${viewer.url}

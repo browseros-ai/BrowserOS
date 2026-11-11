@@ -4,9 +4,11 @@
  * display (`/api/live/*`) and the web page (`/`).
  */
 
+import { join } from 'node:path'
 import type { ViewerInfo } from '../shared/api'
 import { apiRouteTable, isLocalRequest } from './api/api-routes'
 import type { ViewerConfig } from './config'
+import { writeExport } from './export/write-export'
 import { configureHostApi } from './hostApi'
 import { type LiveHost, viewerHost } from './live-screen/live-host'
 import { liveScreen } from './live-screen/live-routes'
@@ -20,10 +22,11 @@ import { handleMcp, type McpProxyDeps } from './proxy/mcp-proxy'
 /** The longest `stop` waits for open connections to close. */
 const STOP_WAIT_MS = 2_000
 
-/** Seams tests replace: the clock and Neo's host API. */
+/** Seams tests replace: the clock, Neo's host API, and where exports go. */
 export interface ViewerSeams {
   now?: () => number
   liveHost?: LiveHost
+  exportRoot?: string
 }
 
 export interface RunningViewer {
@@ -70,6 +73,31 @@ export async function startViewer(
       : null,
   })
 
+  // Export: every run since the last Clear, read from the store as it is at the click.
+  const exportRuns = async () => {
+    const runs = store
+      .list()
+      .map((run) => store.run(run.id))
+      .filter((run) => run !== null)
+    const written = await writeExport(
+      {
+        instance: config.instance ?? 'default',
+        info: await currentInfo(),
+        viewerCommit: await viewerCommit(),
+        log: store.summary(),
+        runs,
+        toolsList: store.toolsListReply(),
+        copyLog: (destination) => store.copyLog(destination),
+      },
+      {
+        now: now(),
+        ...(seams.exportRoot ? { root: seams.exportRoot } : {}),
+      },
+    )
+    console.log(`Exported ${written.runs} runs to ${written.dir}`)
+    return written
+  }
+
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: config.port,
@@ -77,7 +105,7 @@ export async function startViewer(
     idleTimeout: 0,
     routes: {
       ...pageRoutes(page),
-      ...apiRouteTable(store, currentInfo),
+      ...apiRouteTable(store, currentInfo, exportRuns),
       ...live.routes,
     },
     // Each upgraded socket carries its own session (the live screen's display relay).
@@ -107,6 +135,28 @@ export async function startViewer(
       await store.flush()
     },
   }
+}
+
+/** The viewer's own commit (`abc123def`, `+dirty` when its files are edited), or null outside git. */
+async function viewerCommit(): Promise<string | null> {
+  const toolDir = join(import.meta.dir, '..')
+  const head = await runCommand('git', [
+    '-C',
+    toolDir,
+    'rev-parse',
+    '--short=9',
+    'HEAD',
+  ])
+  if (head.code !== 0) return null
+  const status = await runCommand('git', [
+    '-C',
+    toolDir,
+    'status',
+    '--porcelain',
+    '--',
+    '.',
+  ])
+  return `${head.stdout.trim()}${status.stdout.trim() === '' ? '' : '+dirty'}`
 }
 
 /** `/` and each built asset, by its name in the built `index.html`. */

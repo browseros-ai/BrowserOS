@@ -51,6 +51,7 @@ export class RunStore {
   private runs: RunState[] = []
   private byId = new Map<string, RunState>()
   private toolsList: TextSize | null = null
+  private toolsListResult: unknown = null
   private logId = newLogId()
   private clearedAt = new Date().toISOString()
   private readonly listeners = new Set<(event: ViewerEvent) => void>()
@@ -82,6 +83,11 @@ export class RunStore {
 
   flush(): Promise<void> {
     return this.log.flush()
+  }
+
+  /** The raw log since the last Clear, copied after every line written so far. */
+  copyLog(destination: string): Promise<void> {
+    return this.log.copyTo(destination)
   }
 
   /**
@@ -144,13 +150,18 @@ export class RunStore {
     return this.byId.get(runId)?.neo != null
   }
 
-  /** A `tools/list` reply went to a client: the log shows the latest one's size. */
-  toolsListSeen(size: TextSize, at: number): void {
+  /**
+   * A `tools/list` reply went to a client: the log shows the latest one's size, and keeps the
+   * reply itself for an export (what the agent's model was told about the tool).
+   */
+  toolsListSeen(size: TextSize, at: number, reply: unknown = null): void {
     this.toolsList = size
+    this.toolsListResult = reply
     void this.log.append({
       type: 'tools-list',
       at: new Date(at).toISOString(),
       size,
+      reply,
     })
     this.emitLog()
   }
@@ -163,6 +174,7 @@ export class RunStore {
     this.runs = []
     this.byId = new Map()
     this.toolsList = null
+    this.toolsListResult = null
     this.count = 0
     this.logId = newLogId()
     this.clearedAt = new Date(at).toISOString()
@@ -173,6 +185,11 @@ export class RunStore {
       clearedAt: this.clearedAt,
     })
     this.emit({ type: 'clear', log: this.summary() })
+  }
+
+  /** The latest `tools/list` result a client read since the last Clear, or null. */
+  toolsListReply(): unknown {
+    return this.toolsListResult
   }
 
   /** Every run, in arrival order. */
@@ -199,8 +216,10 @@ export class RunStore {
       if (line.type === 'log') {
         this.logId = line.id
         this.clearedAt = line.clearedAt
-      } else if (line.type === 'tools-list') this.toolsList = line.size
-      else if (line.type === 'run-start') {
+      } else if (line.type === 'tools-list') {
+        this.toolsList = line.size
+        this.toolsListResult = line.reply ?? null
+      } else if (line.type === 'run-start') {
         const run: RunState = {
           start: line.run,
           end: null,

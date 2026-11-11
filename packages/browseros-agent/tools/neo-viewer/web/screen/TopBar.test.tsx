@@ -14,7 +14,7 @@ import {
   liveScreenReducer,
 } from '../live-screen/live-screen-model'
 import type { LiveScreenController } from '../live-screen/use-live-screen'
-import { TopBar } from './TopBar'
+import { ExportNotice, TopBar } from './TopBar'
 
 const INFO: ViewerInfo = {
   mcpUrl: 'http://127.0.0.1:7310/mcp',
@@ -70,8 +70,20 @@ function text(markup: string): string {
     .trim()
 }
 
-const bar = (info: ViewerInfo, live = controller(AGENT_ON_A_TAB)) =>
-  renderToStaticMarkup(<TopBar info={info} onClear={() => {}} live={live} />)
+const bar = (
+  info: ViewerInfo,
+  live = controller(AGENT_ON_A_TAB),
+  exporting = false,
+) =>
+  renderToStaticMarkup(
+    <TopBar
+      info={info}
+      onClear={() => {}}
+      onExport={() => {}}
+      exporting={exporting}
+      live={live}
+    />,
+  )
 
 describe('the top bar', () => {
   it('shows the container it started, read-only: up or not, and its image tag', () => {
@@ -117,6 +129,31 @@ describe('the top bar', () => {
     // Before the viewer knows the agent's tab, there is nothing to take.
     expect(bar(INFO, controller())).toMatch(
       /<button[^>]*disabled=""[^>]*>Take over<\/button>/,
+    )
+  })
+
+  it('offers Export beside Clear, and waits while an export is written', () => {
+    expect(text(bar(INFO))).toMatch(/Export Clear/)
+    expect(bar(INFO, controller(AGENT_ON_A_TAB), true)).toMatch(
+      /<button[^>]*disabled=""[^>]*>Exporting…<\/button>/,
+    )
+  })
+
+  it("shows the export's folder with Copy path until it is dismissed", () => {
+    const notice = text(
+      renderToStaticMarkup(
+        <ExportNotice
+          exported={{
+            dir: '/tmp/neo-viewer/default/export-20261111-224501',
+            files: ['README.md'],
+            runs: 3,
+          }}
+          onDismiss={() => {}}
+        />,
+      ),
+    )
+    expect(notice).toBe(
+      'Exported 3 runs to /tmp/neo-viewer/default/export-20261111-224501 Copy path ×',
     )
   })
 })

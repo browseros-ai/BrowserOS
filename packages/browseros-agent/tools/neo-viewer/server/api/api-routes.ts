@@ -2,11 +2,16 @@
  * The JSON API the web UI reads (`shared/api.ts` names the routes and shapes), served from the
  * in-memory `RunStore`. Requests must name this machine in `Host`: the viewer listens on
  * 127.0.0.1 only, and refusing other host names keeps a web page that rebinds its own domain to
- * 127.0.0.1 from reading the log. Clear must also come from the viewer's own page (`Origin`), so a
- * page elsewhere cannot empty the log with a form post.
+ * 127.0.0.1 from reading the log. Clear and Export must also come from the viewer's own page
+ * (`Origin`), so a page elsewhere cannot empty the log or fill the disk with a form post.
  */
 
-import type { RunResponse, RunsResponse, ViewerInfo } from '../../shared/api'
+import type {
+  ExportResponse,
+  RunResponse,
+  RunsResponse,
+  ViewerInfo,
+} from '../../shared/api'
 import { apiRoutes } from '../../shared/api'
 import type { RunStore } from '../log/run-store'
 
@@ -18,6 +23,7 @@ type RouteRequest<P extends string> = Request & { params: Record<P, string> }
 export function apiRouteTable(
   store: RunStore,
   info: () => Promise<ViewerInfo>,
+  exportRuns: () => Promise<ExportResponse>,
 ) {
   const snapshot = (): RunsResponse => ({
     log: store.summary(),
@@ -36,13 +42,26 @@ export function apiRouteTable(
         : notFound('run')
     }),
     [apiRoutes.clear]: {
-      POST: local(async (req) => {
-        if (req.headers.get('origin') !== `http://${req.headers.get('host')}`) {
-          return new Response('forbidden origin\n', { status: 403 })
-        }
-        await store.clear()
-        return Response.json(snapshot())
-      }),
+      POST: local(
+        fromOwnPage(async () => {
+          await store.clear()
+          return Response.json(snapshot())
+        }),
+      ),
+    },
+    [apiRoutes.export]: {
+      POST: local(
+        fromOwnPage(async () => {
+          try {
+            return Response.json((await exportRuns()) satisfies ExportResponse)
+          } catch (error) {
+            return Response.json(
+              { error: `export failed: ${String(error)}` },
+              { status: 500 },
+            )
+          }
+        }),
+      ),
     },
     [apiRoutes.events]: local(() => eventStream(store)),
   }
@@ -64,6 +83,16 @@ function local<R extends Request>(
     isLocalRequest(req)
       ? handler(req)
       : new Response('forbidden host\n', { status: 403 })
+}
+
+/** Refuses a request whose `Origin` is not the viewer's own page. */
+function fromOwnPage(
+  handler: (req: Request) => Promise<Response>,
+): (req: Request) => Promise<Response> {
+  return async (req) =>
+    req.headers.get('origin') === `http://${req.headers.get('host')}`
+      ? handler(req)
+      : new Response('forbidden origin\n', { status: 403 })
 }
 
 function notFound(what: string): Response {

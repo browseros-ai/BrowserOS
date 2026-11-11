@@ -8,7 +8,14 @@
  * Appends and clears go through one queue, so lines land in the file they were made for, in order.
  */
 
-import { appendFile, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import {
+  appendFile,
+  copyFile,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   ClientInfo,
@@ -41,7 +48,8 @@ export interface StoredRunEnd {
 
 export type LogLine =
   | { type: 'log'; v: 2; id: string; clearedAt: string }
-  | { type: 'tools-list'; at: string; size: TextSize }
+  /** `reply`: the `tools/list` result the client read (absent in logs written before exports). */
+  | { type: 'tools-list'; at: string; size: TextSize; reply?: unknown }
   | { type: 'run-start'; run: StoredRunStart }
   | { type: 'run-end'; id: string; end: StoredRunEnd }
   /** Neo's record of the run, from its host API; a later line replaces an earlier one. */
@@ -98,6 +106,16 @@ export class RunLog {
       await rename(this.file, this.previous).catch(() => {})
       await writeFile(this.file, `${JSON.stringify(header)}\n`)
     })
+  }
+
+  /**
+   * Copies the file as it stands after every write queued so far (an export's `log.jsonl`).
+   * Unlike a write, a failed copy rejects, so the export can say so; later writes still run.
+   */
+  copyTo(destination: string): Promise<void> {
+    const copied = this.queue.then(() => copyFile(this.file, destination))
+    this.queue = copied.catch(() => {})
+    return copied
   }
 
   /** Waits for every queued write. */
