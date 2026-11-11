@@ -485,7 +485,11 @@ impl Dispatcher {
         };
         let page = target.as_ref().map(|target| &target.page);
         guard.started_on(page.map(|page| page.tab));
-        if let (Caller::Script, Some(target)) = (caller, &target) {
+        // A subscription (`page.on` on every tab the run knows) names a tab without acting on
+        // it, so it never makes that tab the task's default page.
+        if let (Caller::Script, Some(target)) = (caller, &target)
+            && !neo_trace::is_subscription(spec.name)
+        {
             self.tabs.touched(&target.page, target.seen, run.task_id());
         }
         // The rules see the checked tab: the handle's, once verified, or the default page's,

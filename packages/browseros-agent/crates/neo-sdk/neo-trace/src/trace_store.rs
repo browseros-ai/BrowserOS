@@ -50,6 +50,20 @@ use crate::{
     RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TraceError, TraceTail, salvage,
 };
 
+/// Operations that only subscribe to a page's events: the prelude's `page.on` and `context.on`
+/// (`events.listen`) and the file chooser lease that comes with a `filechooser` listener. They
+/// name the tab they listen on but do nothing to it, so they never make a tab a run's or a
+/// task's: a run that listens on every tab of the browser (the initial new tab page, another
+/// task's pages) owns only what it opened or acted on. Their rows still record that tab.
+pub(crate) const SUBSCRIPTIONS: [&str; 2] = ["events.listen", "events.interceptFileChooser"];
+
+/// Whether the operation `name` only subscribes (see [`SUBSCRIPTIONS`]), so it makes no tab its
+/// run's or its task's. The door asks too, for the task's default page it keeps in memory.
+#[must_use]
+pub fn is_subscription(name: &str) -> bool {
+    SUBSCRIPTIONS.contains(&name)
+}
+
 /// The most screenshot bytes kept on disk (D5): about 7,000 JPEGs of 150 KB.
 const SCREENSHOT_CAP_BYTES: u64 = 1 << 30;
 
@@ -445,6 +459,7 @@ impl TraceStore {
                 operations::Column::EndedAt,
             ])
             .filter(operations::Column::RunId.in_subquery(task_runs(task)))
+            .filter(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
             .filter(
                 Condition::any()
                     .add(operations::Column::TargetTabId.is_not_null())
@@ -508,6 +523,7 @@ impl TraceStore {
             .column(runs::Column::TaskId)
             .inner_join(runs::Entity)
             .filter(tab.is_in(tabs.iter().map(|tab| tab.0)))
+            .filter(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
             .filter(runs::Column::TaskId.is_not_null())
             .distinct()
             .order_by_asc(runs::Column::TaskId)

@@ -16,6 +16,7 @@ use super::entities::{operations, run_tabs, runs};
 use super::record_rows::{json_error, parse_id};
 use crate::run_outputs::RunOutputs;
 use crate::screenshot_files::ShotFiles;
+use crate::trace_store::is_subscription;
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, Outcome, PageState,
     RequestId, RetentionPolicy, RunEffects, RunId, RunStatus, Shot, ShotState, Swept, TaskId,
@@ -282,7 +283,8 @@ impl TraceBatch {
                 .exec(&self.txn)
                 .await?;
         }
-        if let Some(tab) = op.tab {
+        // A subscription names a tab without acting on it, so it links no tab to the run.
+        if let Some(tab) = op.tab.filter(|_| !is_subscription(op.name)) {
             run_tabs::Entity::insert(run_tabs::ActiveModel {
                 tab_id: Set(tab.0),
                 run_id: Set(op.id.run.to_string()),
