@@ -71,6 +71,9 @@ afterEach(async () => {
 })
 
 test('with no host API, hostFetch answers 503 in Neo’s error shape and hostWebSocketTarget throws', async () => {
+  await expect(hostFetch('//elsewhere.example/v1/tabs')).rejects.toThrow(
+    'starts with one "/"',
+  )
   const response = await hostFetch('/v1/tabs')
   expect(response.status).toBe(503)
   expect(await response.json()).toMatchObject({ code: 'no_host_api' })
@@ -121,6 +124,15 @@ test('a host API that does not answer is 502, and only a path on its origin is e
   await expect(hostFetch('//elsewhere.example/v1/tabs')).rejects.toThrow(
     'starts with one "/"',
   )
+  // A backslash or a tab reads as a separator, so these name another origin: refused, token unsent.
+  for (const path of [
+    '/\\127.0.0.1:2/v1/tabs',
+    '/\t/127.0.0.1:2/v1/tabs',
+    '/\\\\evil.example/x',
+  ]) {
+    await expect(hostFetch(path)).rejects.toThrow('host API')
+    expect(() => hostWebSocketTarget(path)).toThrow('host API')
+  }
 })
 
 test('a token file Neo would refuse is refused here too', async () => {
