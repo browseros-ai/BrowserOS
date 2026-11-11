@@ -1,5 +1,5 @@
 // Hosted infrastructure lists all tabs; a refusal still belongs to its trace operation even
-// when the agent catches it. Javascript navigation must fail before changing the page.
+// when the agent catches it. JavaScript navigation executes before reporting ERR_ABORTED.
 const before = context.pages().length
 const second = await context.newPage()
 expect(context.pages().includes(second)).toBe(true)
@@ -19,19 +19,26 @@ expect(error.code).toBe('method_unavailable')
 expect(error.owner).toBe('script')
 expect(typeof error.operationId).toBe('string')
 await page.setContent('<title>unchanged</title>')
-for (const url of [
-  "javascript:document.title='changed'",
-  " JavaScript:document.title='changed'",
-]) {
-  let refused = false
-  try {
-    await page.goto(url)
-  } catch {
-    refused = true
+for (const target of [page, page.mainFrame()]) {
+  for (const url of [
+    "javascript:void(document.title = 'changed')",
+    " JavaScript:void(document.title = 'changed')",
+    "java\tscript:void(document.title = 'changed')",
+  ]) {
+    await page.evaluate(() => {
+      document.title = 'unchanged'
+    })
+    let navigationError
+    try {
+      await target.goto(url)
+    } catch (caught) {
+      navigationError = caught
+    }
+    expect(navigationError.code).toBe('navigation_failed')
+    expect(navigationError.message).toContain('net::ERR_ABORTED at javascript:')
+    expect(await page.title()).toBe('changed')
   }
-  expect(refused).toBe(true)
 }
-expect(await page.title()).toBe('unchanged')
 const opened = page.waitForEvent('popup', { timeout: 5000 })
 await page.evaluate((url) => {
   window.open(url)

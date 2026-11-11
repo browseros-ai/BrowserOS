@@ -5,7 +5,7 @@ info:
   description: |
     The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records,
     screenshots, the live view, the VNC display and owner takeover. Takeover is offered as small
-    stable parts (locks, fits, the typed-value sweep, plus `/private` and `/display`) and one
+    stable parts (locks, fits and `/display`) and one
     thin flow over them (`/v1/takeovers`); a host may compose its own flow from the parts.
 
     It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by
@@ -15,7 +15,7 @@ info:
     `CLAW_HOST_TOKEN_FILE` names; on the socket the peer's uid is checked too. Tokens are never
     accepted in query strings.
 
-    Privacy and locks belong to a browser tab, and a host groups its runs with ids of its own.
+    Locks belong to a browser tab, and a host groups its runs with ids of its own.
     Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's
     `_meta["com.browseros.neo/run"].id`; an operation id is `<runId>.<seq>`, where `seq` counts
     the run's operations in start order; a tab id is the browser's own (`PageRef.tabId`),
@@ -157,17 +157,16 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '410':
-          $ref: '#/components/responses/Withheld'
+          $ref: '#/components/responses/Expired'
   /v1/trace:
     get:
       operationId: getTrace
-      summary: The latest operations of a task, a tab or all of Neo, with their runs, redacted and with privacy applied.
+      summary: The latest operations of a task, a tab or all of Neo, with their runs.
       description: |
         Keeps the last `tail` operations that match `taskId` and `tab`, oldest first, with the
         summaries of their runs. Both filters are optional; given together, an operation must
         match both. `truncated` says whether older matching operations were cut. `screenshots`
-        inlines images: `none`, `all`, or `last:N` (N from 1 to 50). An operation on a tab after
-        the tab went private never carries a screenshot, and `visuals` then says why.
+        inlines stored images: `none`, `all`, or `last:N` (N from 1 to 50).
       parameters:
         - $ref: '#/components/parameters/TaskId'
         - name: tab
@@ -213,7 +212,7 @@ paths:
         again. A client that falls more than 1024 events behind gets `stream.reset` too.
 
         `taskId` keeps the run and operation events of that task's runs. `tab` keeps the events
-        about that tab: the operations that target it, and its `tab.private`, `tab.closed`,
+        about that tab: the operations that target it, and its `tab.closed`,
         `lock.state` and `takeover.state` events. Given together, an event must match both.
         `stream.reset` passes every filter.
       parameters:
@@ -237,61 +236,6 @@ paths:
                 $ref: '#/components/schemas/Event'
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /v1/tabs/{tabId}/private:
-    post:
-      operationId: makeTabPrivate
-      summary: Make the tab private now. Durable until the tab closes, and it cannot be undone.
-      description: |
-        Returns once the flag is committed. From then on no screenshot, frame or live view of the
-        tab is captured or served, and the agent's screenshots and PDFs of it fail with `host /
-        page_private`. Screenshots taken before stay. The flag survives a Neo restart and ends
-        when the tab closes. Secrets to mask in text go to `POST /v1/secrets` instead; this
-        request carries none.
-      parameters:
-        - $ref: '#/components/parameters/TabId'
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MakePrivateRequest'
-      responses:
-        '200':
-          description: The tab's privacy.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Privacy'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '503':
-          $ref: '#/components/responses/Unavailable'
-  /v1/secrets:
-    post:
-      operationId: registerSecret
-      summary: Mask a value in everything Neo records or hands back, until its TTL.
-      description: |
-        Adds the value to Neo's known secrets list, the one mask over run and operation records,
-        the operation results the agent's script reads and the run result its model sees. From
-        now on the value reads as `[private]` there, in its plain, JSON-escaped and URL-encoded
-        forms, for `ttlSeconds` (24 hours when absent). Registering a value again keeps the
-        later of the two expiries. The value stays in memory only and is never logged, stored or
-        returned. A value shorter than 4 characters is refused (`invalid_request`), because
-        masking it would hide ordinary text.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SecretRequest'
-      responses:
-        '204':
-          description: The value is masked.
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
   /v1/tabs/{tabId}/screencast:
     get:
       operationId: getScreencast
@@ -299,8 +243,8 @@ paths:
       description: |
         `multipart/x-mixed-replace`; each part carries `Content-Type: image/jpeg`,
         `Content-Length`, `X-Tab-Id`, `X-Url` and `X-Frame-At` (Unix epoch ms, the browser's
-        capture time). The stream ends when the tab closes or becomes private, and `tab.closed`
-        or `tab.private` on `/v1/events` says which. Capture runs only while someone watches;
+        capture time). The stream ends when the tab closes, and `tab.closed` on `/v1/events`
+        reports the closure. Capture runs only while someone watches;
         viewers of one tab and quality share one capture. A capture that cannot start is
         `503 browser_unavailable`, before any byte is sent.
       parameters:
@@ -320,8 +264,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/NotLive'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/tabs/{tabId}/video:
@@ -330,8 +272,8 @@ paths:
       summary: A live AV1 video (fragmented MP4) of one tab.
       description: |
         The initialization segment first, then one keyframe-led fragment about every 2 seconds,
-        for Media Source Extensions or WebCodecs. It ends when the tab closes or becomes
-        private. A client that falls behind skips whole fragments. On a page that does not
+        for Media Source Extensions or WebCodecs. It ends when the tab closes.
+        A client that falls behind skips whole fragments. On a page that does not
         repaint, no bytes arrive, not even the initialization segment, until it repaints. A
         capture that cannot start is `503 browser_unavailable`, before any byte is sent.
       parameters:
@@ -351,8 +293,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/NotLive'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/display:
@@ -364,24 +304,23 @@ paths:
         when the client offers it.
 
         `view` drops every input message. `control` forwards input. Its first input event makes
-        every open tab private before the event is forwarded, and every tab that opens while it
-        is open is private from the start. Private-field values are collected for masking while
-        it is open and when it closes. When a control display forwards its first input, view
-        displays close (`4001`), and new ones are refused (`409 display_paused`) while that
-        control display is open or a takeover is active. View displays also close, and are
-        refused the same way, while the tab in front of the screen is private. A private tab
-        stays private until it closes, so after control ends, views come back once a tab that is
-        not private is in front. While no owner has control, `followTab` keeps that tab in front
-        of the screen, and `followTask` keeps the task's current page in front (the tab its
-        latest operation targeted). Neither brings a private tab to the front. `followTab` and
-        `followTask` are mutually exclusive, so sending both is `400 invalid_request`. A control
+        every open tab private before the event is forwarded. A tab opened during control
+        starts private. The first input closes view displays (`4001`), and new ones are refused
+        (`409 display_paused`) while that control display is open or a takeover is active.
+        View displays also close while a private tab is in front. The flag lasts until the tab
+        closes, so views can stay paused after control ends. Bringing an ordinary tab in front
+        lets views open again. The tab's screencast, video and trace screenshots keep serving.
+        While no owner has control, `followTab` keeps that tab in front, and `followTask` keeps
+        the task's current page in front (the tab its latest operation targeted). Both followers
+        skip private tabs. `followTab` and `followTask` are mutually exclusive, so sending both
+        is `400 invalid_request`. A control
         display takes neither, and a view display takes no `release`. `release` ties a control
         display to a takeover: releasing the takeover closes it. A `release` that names no
         takeover is `404 not_found`, and one whose takeover's release has begun is
         `409 takeover_released`.
 
         A display ends with a WebSocket close frame that says why:
-        - `4001` paused: the owner has control, or a private tab is in front; try again later;
+        - `4001` paused because the owner has control or a private tab is in front.
         - `4002` released: the display's takeover was released;
         - `1008`: the client sent something the display refuses: an RFB message it does not
           know, a paste over 1 MiB, or a handshake other than RFB 3.8 with no security;
@@ -601,44 +540,14 @@ paths:
           $ref: '#/components/responses/NotFound'
         '503':
           $ref: '#/components/responses/Unavailable'
-  /v1/tabs/{tabId}/sweep:
-    post:
-      operationId: sweepTab
-      summary: Read the tab's sensitive fields into the known secrets list. A takeover part.
-      description: |
-        One pass over every frame of the tab: each value in a password, card or code field is
-        added to the known secrets list, masked everywhere for the next 24 hours. The final catch
-        for what the owner typed; values are never returned. The page put these values there, so
-        when the list is full they push out only values earlier sweeps read; a list full of values
-        it never drops (the host's, the owner's, the agent's) refuses them instead.
-      parameters:
-        - $ref: '#/components/parameters/TabId'
-      responses:
-        '200':
-          description: How many values were added, and how many the list refused.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SweepResult'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '503':
-          $ref: '#/components/responses/Unavailable'
   /v1/takeovers:
     post:
       operationId: startTakeover
       summary: The v1 takeover flow, a thin composition of the parts. Start it when the owner opens the link.
       description: |
-        In order: make the tab private, durably; lock the agent out of the tab (with `reads` and
-        the TTL); hold view displays off; start collecting what the owner types into password,
-        card and code fields; and fit the tab to `viewer` when given. A private flag that cannot
-        be committed is `503 privacy_unavailable`, with nothing else done. A fit that fails
-        gives back the lock and the hold, and the tab stays private. The answer names the parts
-        it holds and `display`, the control display to open for the owner. A tab that already
+        The flow locks the agent out of the tab using `reads` and the TTL, and fits the
+        tab to `viewer` when given. A fit that fails gives back the lock. The answer names
+        the parts it holds and `display`, the control display to open for the owner. A tab that already
         has an active takeover gets that takeover back as it is. A host may compose its own flow
         from the parts instead.
       requestBody:
@@ -705,17 +614,15 @@ paths:
       operationId: releaseTakeover
       summary: Give the browser back. Idempotent; returns once the agent's lock is lifted.
       description: |
-        In order: close the takeover's display (a display that took input first reads every
-        open tab's sensitive fields), sweep the tab, stop collecting what the owner types (what
-        was collected stays masked), restore the fit, let view displays back, and release the
-        lock, last. The steps share a 10 s budget. A step that fails does not stop the rest,
+        The flow closes the takeover's display, restores the fit, and releases the lock
+        last. The steps share a 10 s budget. A step that fails does not stop the rest,
         and once the budget is spent the lock is released while a step still running finishes.
         A second release answers as the first did. Neo releases a takeover itself 10 s before
         `expiresAt` (`expired`), so the steps run while the agent is still locked out, and when
         its tab closes (`tab_closed`).
 
-        The tab stays private until it closes, so view displays are still refused while it is
-        in front of the screen.
+        View displays stay paused while the tab is private and in front of the screen. The
+        tab's screencast, video and trace screenshots keep serving.
       parameters:
         - $ref: '#/components/parameters/TakeoverId'
       requestBody:
@@ -845,14 +752,8 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-    Withheld:
-      description: The image is withheld because its tab was private (`withheld`), or it expired (`expired`).
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    NotLive:
-      description: 'Nothing to watch: the tab is private (`page_private`).'
+    Expired:
+      description: Retention deleted the image (`expired`).
       content:
         application/json:
           schema:
@@ -862,17 +763,15 @@ components:
         A part was already given back: the fit was restored (`fit_restored`), the lock released
         (`lock_released`), or the takeover released (`takeover_released`). Or a takeover is in
         the way: the lock belongs to one, so release the takeover instead (`takeover_lock`), or
-        view displays are paused while the owner has control or a private tab is in front
-        (`display_paused`).
+        view displays are paused (`display_paused`).
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     Unavailable:
       description: >-
-        Neo could not commit a privacy change (`privacy_unavailable`), so nothing was done, the
-        display is not running (`display_unavailable`), or Neo could not reach the browser
-        (`browser_unavailable`).
+        Neo could not start the takeover (`internal_error`), the display is unavailable
+        (`display_unavailable`), or Neo could not reach the browser (`browser_unavailable`).
       content:
         application/json:
           schema:
@@ -888,13 +787,12 @@ components:
             Whose behavior must change to fix it: `neo` (browser, OS or Neo itself), `script`
             (the agent's own code: a syntax error, `invalid_input`, `strict_mode_violation`,
             `no_match`, `method_unavailable`), `website` (what the page did) or `host` (the
-            host's rules, services or owner, including `owner_has_control` and `page_private`).
+            host's rules, services or owner, including `owner_has_control`).
           x-extensible-enum: [neo, script, website, host]
         code:
           type: string
           description: >-
-            Stable snake_case, e.g. `owner_has_control`, `page_private` (a screenshot or PDF of a
-            private tab), `strict_mode_violation`, `target_closed`.
+            Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`.
         hostCode:
           type: string
           description: The host's own code when `code` is `host_error`, e.g. `needs_owner`.
@@ -916,46 +814,9 @@ components:
           type: string
         title:
           type: string
-    Privacy:
-      type: object
-      required: [private]
-      properties:
-        private:
-          type: boolean
-        since:
-          type: integer
-          format: int64
-          description: Unix epoch ms; no pixel at or after this time is captured.
-        reason:
-          type: string
-          x-extensible-enum: [secret_input, takeover, display_input, host, flags_lost]
-    MakePrivateRequest:
-      type: object
-      properties:
-        reason:
-          type: string
-          x-extensible-enum: [host]
-          default: host
-    SecretRequest:
-      type: object
-      required: [value]
-      properties:
-        value:
-          type: string
-          minLength: 4
-          description: >-
-            The text to mask. Never logged, stored or returned. At least 4 characters, the
-            known-secrets list's minimum: shorter values would mask too much ordinary text.
-        ttlSeconds:
-          type: integer
-          format: int32
-          minimum: 60
-          maximum: 86400
-          default: 86400
-          description: How long the value is masked.
     TraceTail:
       type: object
-      required: [runs, operations, truncated, visuals]
+      required: [runs, operations, truncated]
       properties:
         runs:
           type: array
@@ -970,10 +831,6 @@ components:
         truncated:
           type: boolean
           description: True when `tail` cut older matching operations.
-        visuals:
-          type: string
-          description: '`withheld_private_input`: some operations carry no screenshot because their tab was private.'
-          x-extensible-enum: [available, withheld_private_input]
     RunSummary:
       type: object
       required: [id, status, startedAt, operationCount, complete, tabs]
@@ -1073,14 +930,11 @@ components:
           type: string
           description: >-
             The script, masked. Stored when the run ends, so it is absent while the run is
-            `running`, and when `codeWithheld` is set.
+            `running`. Older runs may also have no stored code.
         codeWithheld:
           type: string
-          description: >-
-            `sensitive_input`: an operation typed into a password, card or code field, so the code
-            may hold that value. `unavailable`: Neo stopped before the run ended, so its code was
-            never stored.
-          x-extensible-enum: [sensitive_input, unavailable]
+          description: Neo stopped before the run ended, so its code was never stored.
+          x-extensible-enum: [unavailable]
         result:
           description: The script's return value, masked and bounded.
         resultTruncated:
@@ -1319,20 +1173,6 @@ components:
           type: boolean
         forward:
           type: boolean
-    SweepResult:
-      type: object
-      required: [registered, refused]
-      properties:
-        registered:
-          type: integer
-          format: int32
-          description: Values added to the known secrets list; the values are never returned.
-        refused:
-          type: integer
-          format: int32
-          description: |
-            Values the known secrets list refused, being full of values it never drops. They are
-            masked nowhere, and Neo logs the sweep as an error; the values are never returned.
     TakeoverRequest:
       type: object
       required: [tabId]
@@ -1448,7 +1288,6 @@ components:
               run.ended,
               operation.started,
               operation.ended,
-              tab.private,
               tab.closed,
               lock.state,
               takeover.state,
@@ -1464,14 +1303,12 @@ components:
           type: integer
           format: int64
           description: >-
-            The tab the event is about: an operation's target tab, or the tab of `tab.private`,
-            `tab.closed`, `lock.state` and `takeover.state`.
+            The tab the event is about: an operation's target tab, or the tab of `tab.closed`,
+            `lock.state` and `takeover.state`.
         run:
           $ref: '#/components/schemas/RunSummary'
         operation:
           $ref: '#/components/schemas/Operation'
-        privacy:
-          $ref: '#/components/schemas/Privacy'
         lock:
           $ref: '#/components/schemas/Lock'
         takeover:
@@ -1488,15 +1325,12 @@ components:
               unauthorized,
               not_found,
               expired,
-              withheld,
               tab_not_found,
-              page_private,
               lock_released,
               fit_restored,
               takeover_released,
               takeover_lock,
               display_paused,
-              privacy_unavailable,
               display_unavailable,
               browser_unavailable,
               internal_error,

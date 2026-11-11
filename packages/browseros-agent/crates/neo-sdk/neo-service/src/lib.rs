@@ -11,14 +11,13 @@
 //!  HostListener (app) ─ bind ─▶ axum::serve(listener, host_service(routes, auth))
 //!                                  │ PeerInfo per connection; peer rule, then bearer token
 //!                                  ▼
-//!                                router ─ x-request-id ─▶ records, screenshots, tab privacy,
-//!                                  │                       sweep, secrets, locks, fits
-//!                                  │                       └▶ TraceStore, Privacy, Locks, Fits
+//!                                router ─ x-request-id ─▶ records, screenshots, locks, fits
+//!                                  │                       └▶ TraceStore, Locks, Fits
 //!                                  ├▶ /v1/takeovers ─▶ Takeovers ─ the flow over the parts above
 //!                                  ├▶ GET /v1/events ◀── EventLog ◀── TraceSink's events,
 //!                                  │                     lock and takeover changes, tab.closed
 //!                                  ├▶ /v1/tabs/{id}/screencast, /video ◀── CaptureHub ◀── Chromium,
-//!                                  │  each frame admitted by a CaptureGuard     on its own CDP socket
+//!                                  │                                             on its own CDP socket
 //!                                  └▶ GET /v1/display ─ WebSocket, RFB ─▶ Displays ─▶ Xvnc
 //!                                       release=<takeover> binds a control display to it
 //!
@@ -66,9 +65,7 @@ mod record_routes;
 mod response_id;
 mod router;
 mod screenshot_taker;
-mod secret_routes;
 mod service;
-mod tab_routes;
 mod tab_stamps;
 mod takeover_routes;
 mod wire;

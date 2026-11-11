@@ -1,6 +1,6 @@
 //! Screenshots end to end: the writer's jobs, the camera on a scripted browser, and the routes a
 //! host reads them through (`wait=` until `complete`, the JPEG route, `hasScreenshot`, inlined
-//! images and `visuals`).
+//! images).
 //!
 //! Real time, like `waiting`: paused Tokio time cannot drive a real store.
 
@@ -13,6 +13,7 @@ use axum::http::header::CONTENT_TYPE;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use neo_trace::{Delivery, Effect, OperationId, RetentionPolicy, RunId};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use std::time::{Duration, Instant};
 
 /// A run of one write on `tab`, start to end.
@@ -108,7 +109,7 @@ async fn a_write_on_an_open_tab_serves_its_jpeg() -> TestResult {
         tail.body["operations"][0]["screenshot"]["data"],
         STANDARD.encode(browser::jpeg(1))
     );
-    assert_eq!(tail.body["visuals"], "available");
+    assert!(tail.body.get("visuals").is_none());
     let plain = h.get("/v1/trace?tab=3").await?;
     assert!(plain.body["operations"][0].get("screenshot").is_none());
 
@@ -278,51 +279,48 @@ async fn past_four_jobs_waiting_on_a_tab_the_oldest_is_dropped() -> TestResult {
 }
 
 #[tokio::test]
-async fn a_private_tab_is_withheld_with_no_browser_call_and_no_file() -> TestResult {
-    let h = harness_with_camera().await?;
-    h.browser.open_tab(3);
-    assert_eq!(
-        h.post("/v1/tabs/3/private", "").await?.status,
-        StatusCode::OK
-    );
-    let (run, op) = write_run(&h, 3);
-    let body = complete(&h, run).await?;
-    assert_eq!(body["operations"][0]["hasScreenshot"], false);
-    h.get(&format!("/v1/operations/{op}/screenshot"))
-        .await?
-        .assert_error(StatusCode::GONE, "withheld");
-    assert_eq!(h.browser.captures(), 0);
-    assert!(
-        !h.dir.path().join("screenshots").exists(),
-        "not a byte of the private tab on disk"
-    );
-    let tail = h.get("/v1/trace?tab=3").await?;
-    assert_eq!(tail.body["visuals"], "withheld_private_input");
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_tab_that_goes_private_during_its_capture_keeps_nothing() -> TestResult {
+async fn a_trace_capture_in_flight_keeps_its_jpeg_during_a_takeover() -> TestResult {
     let h = harness_with_camera().await?;
     h.browser.open_tab(3);
     h.browser.hold_captures();
     let (run, op) = write_run(&h, 3);
     h.browser.captures_started(1).await?;
-    assert_eq!(
-        h.post("/v1/tabs/3/private", "").await?.status,
-        StatusCode::OK
-    );
+    let takeover = h.post("/v1/takeovers", r#"{"tabId":3}"#).await?;
+    assert_eq!(takeover.status, StatusCode::OK, "{}", takeover.body);
     h.browser.release_captures();
-    complete(&h, run).await?;
+
+    assert_eq!(
+        complete(&h, run).await?["operations"][0]["hasScreenshot"],
+        true
+    );
+    assert_eq!(served(&h, op).await?, Some(browser::jpeg(1)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_legacy_withheld_row_reads_as_an_operation_without_a_jpeg() -> TestResult {
+    let h = crate::support::harness().await?;
+    let (run, op) = write_run(&h, 3);
+    h.flushed().await?;
+    // Seed the old persisted spelling through SQLite so this also exercises the row decoder.
+    let db = SqlitePool::connect_with(
+        SqliteConnectOptions::new().filename(h.dir.path().join("trace.db")),
+    )
+    .await?;
+    let updated = sqlx::query("UPDATE operations SET screenshot = 'withheld' WHERE run_id = ?")
+        .bind(run.to_string())
+        .execute(&db)
+        .await?;
+    assert_eq!(updated.rows_affected(), 1);
+
     h.get(&format!("/v1/operations/{op}/screenshot"))
         .await?
-        .assert_error(StatusCode::GONE, "withheld");
-    assert!(!file_of(&h, op).exists());
-    assert!(
-        !h.dir.path().join("screenshots").exists(),
-        "nothing written, not even a directory"
-    );
-    assert_eq!(h.browser.captures(), 1, "a withheld capture is not retried");
+        .assert_error(StatusCode::NOT_FOUND, "not_found");
+    let tail = h.get("/v1/trace?tab=3&screenshots=all").await?;
+    assert_eq!(tail.status, StatusCode::OK, "{}", tail.body);
+    let operation = &tail.body["operations"][0];
+    assert_eq!(operation["hasScreenshot"], false);
+    assert!(operation.get("screenshot").is_none());
     Ok(())
 }
 
@@ -368,25 +366,6 @@ async fn a_capture_that_times_out_every_time_is_dropped_within_its_budget() -> T
         .await?
         .assert_error(StatusCode::NOT_FOUND, "not_found");
     assert_eq!(h.browser.captures(), 3, "the first try and two retries");
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_tab_that_goes_private_before_a_retry_gets_no_new_capture() -> TestResult {
-    let h = harness_with_camera().await?;
-    h.browser.open_tab(3);
-    h.browser.hang_capture(1);
-    let (run, op) = write_run(&h, 3);
-    h.browser.captures_started(1).await?;
-    assert_eq!(
-        h.post("/v1/tabs/3/private", "").await?.status,
-        StatusCode::OK
-    );
-    complete(&h, run).await?;
-    h.get(&format!("/v1/operations/{op}/screenshot"))
-        .await?
-        .assert_error(StatusCode::GONE, "withheld");
-    assert_eq!(h.browser.captures(), 1);
     Ok(())
 }
 

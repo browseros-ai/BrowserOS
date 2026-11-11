@@ -62,7 +62,7 @@ impl PlaywrightHooks for RecordingHooks {
     }
 
     fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
-        Ok(())
+        panic!("captures must not consult the retained host hook")
     }
 }
 
