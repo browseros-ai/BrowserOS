@@ -24,10 +24,13 @@ pub(crate) async fn network_idle(
         let root_id = admitted.session.session_id.clone();
         let root = pw.browser().protocol_session(root_id.clone());
         let read = || frame_tree::read(pw.browser(), &admitted.core_page, &root);
-        let documents = read()
-            .await
-            .map_err(|error| scope.core_error(&error))?
-            .documents(frame);
+        let since = pw.events().head();
+        let tree = read().await.map_err(|error| scope.core_error(&error))?;
+        // Prime every discovered endpoint before the parallel waits. Otherwise a cold
+        // route cache makes each child independently rediscover the complete page tree.
+        // The pre-read journal stamp still rejects routes changed during discovery.
+        tree.remember(pw, scope, page, &root, since);
+        let documents = tree.documents(frame);
         if documents.is_empty() {
             return Err(scope.fail(ErrorCode::TargetClosed, "Frame was detached"));
         }
