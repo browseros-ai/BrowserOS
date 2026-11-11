@@ -6,6 +6,7 @@
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
+import type { HostApiConfig } from './hostApi'
 
 /** The port the agent's MCP URL and the UI use (the build contract's `:7310`). */
 const DEFAULT_PORT = 7310
@@ -17,6 +18,8 @@ export interface ViewerConfig {
   /** Neo's `/mcp`. */
   upstream: URL
   dataDir: string
+  /** Neo's host API over `CLAW_HOST_TCP`; none when null. */
+  hostApi?: HostApiConfig | null
   /** The container `bun run neo:viewer` started, shown read-only on the page; null with `--upstream`. */
   container?: { name: string; image: string } | null
 }
@@ -33,6 +36,8 @@ export interface LaunchOptions {
   build: boolean
   /** Run this image; nothing is built. */
   image: string | null
+  /** With `--upstream`: a host API to use (the one command sets its own). */
+  hostApi: HostApiConfig | null
 }
 
 const USAGE = `usage: bun run neo:viewer [-- options]   (from packages/browseros-agent)
@@ -43,6 +48,8 @@ const USAGE = `usage: bun run neo:viewer [-- options]   (from packages/browseros
   --upstream URL    forward to this Neo MCP endpoint and start no container
   --port PORT       the viewer's port (7310)
   --data-dir DIR    the viewer's state (~/.local/state/neo-viewer)
+  --host-token-file FILE [--host-api URL]
+                    with --upstream: Neo's host API (CLAW_HOST_TCP, default http://127.0.0.1:9300)
   env: NEO_VIEWER_PORT, NEO_VIEWER_UPSTREAM, NEO_VIEWER_DATA_DIR`
 
 export function launchOptionsFrom(
@@ -58,6 +65,8 @@ export function launchOptionsFrom(
       'keep-data': { type: 'boolean' },
       'no-build': { type: 'boolean' },
       image: { type: 'string' },
+      'host-api': { type: 'string' },
+      'host-token-file': { type: 'string' },
       help: { type: 'boolean' },
     },
   })
@@ -80,7 +89,25 @@ export function launchOptionsFrom(
     keepData: values['keep-data'] ?? false,
     build: !values['no-build'],
     image: values.image ?? null,
+    hostApi: hostApiFrom(values['host-api'], values['host-token-file']),
   }
+}
+
+/** A host API named on the command line: its token file, and its URL or the usual port. */
+function hostApiFrom(
+  url: string | undefined,
+  tokenFile: string | undefined,
+): HostApiConfig | null {
+  if (url && !tokenFile)
+    throw new Error(
+      `a host API needs its token file (--host-token-file)\n${USAGE}`,
+    )
+  return tokenFile
+    ? {
+        url: new URL(url ?? 'http://127.0.0.1:9300'),
+        tokenFile: resolve(tokenFile),
+      }
+    : null
 }
 
 /** `$XDG_STATE_HOME/neo-viewer`, else `~/.local/state/neo-viewer`: outside any checkout. */

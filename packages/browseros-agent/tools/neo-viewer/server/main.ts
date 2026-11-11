@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type LaunchOptions, launchOptionsFrom } from './config'
+import type { HostApiConfig } from './hostApi'
 import {
   buildScript,
   checkoutAt,
@@ -48,10 +49,13 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 }
 
 try {
-  const upstream = options.upstream ?? (await startNeo(options))
+  const neo = options.upstream
+    ? { mcpUrl: options.upstream, hostApi: options.hostApi }
+    : await startNeo(options)
   viewer = await startViewer({
+    hostApi: neo.hostApi,
     port: options.port,
-    upstream,
+    upstream: neo.mcpUrl,
     dataDir: options.dataDir,
     container: ownsContainer
       ? { name: NAMES.container, image: currentImage }
@@ -67,8 +71,10 @@ try {
   await stop(1)
 }
 
-/** Picks or builds the image, clears the last start, starts the container; returns its MCP URL. */
-async function startNeo(launch: LaunchOptions): Promise<URL> {
+/** Picks or builds the image, clears the last start, starts the container; returns where Neo answers. */
+async function startNeo(
+  launch: LaunchOptions,
+): Promise<{ mcpUrl: URL; hostApi: HostApiConfig }> {
   await mkdir(launch.dataDir, { recursive: true })
   const run = runCommand
   const removed = await removeLeftovers(run, launch.keepData)
@@ -86,7 +92,10 @@ async function startNeo(launch: LaunchOptions): Promise<URL> {
     tokenFile,
     launch: launchId,
   })
-  return container.mcpUrl
+  return {
+    mcpUrl: container.mcpUrl,
+    hostApi: { url: container.hostApiUrl, tokenFile },
+  }
 }
 
 /** `--image`, `--no-build`'s newest image, or this checkout's image (built when missing or stale). */
