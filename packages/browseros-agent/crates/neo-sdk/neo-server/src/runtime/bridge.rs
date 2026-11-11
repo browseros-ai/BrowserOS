@@ -4,8 +4,11 @@ use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use futures_util::FutureExt;
+use futures_util::future::{BoxFuture, Shared};
+use neo_playwright::RunState;
 use neo_trace::OperationId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time::{self, Duration, Instant};
 
@@ -45,6 +48,9 @@ pub(crate) struct Bridge {
     /// The abort switch of each abortable op still in flight, by the realm's key for it. An
     /// entry leaves when its op answers, so a late abort finds nothing and changes nothing.
     aborts: Mutex<HashMap<String, OpAbort>>,
+    /// Finished navigation replies can reach JS out of order. Retain their receipts until
+    /// the client acknowledges seeing them; storage follows unacknowledged producer batches.
+    navigation_replies: Mutex<HashMap<u64, NavigationReceipt>>,
 }
 
 /// What one `__neo_invoke` started: an op the door admitted, or an abort the bridge already
@@ -57,7 +63,35 @@ enum Started {
         /// The realm's key for an abortable op, released with its answer.
         abort_key: Option<String>,
     },
+    Navigation {
+        reply: NavigationReply,
+        abort_key: Option<String>,
+    },
     Answered(String),
+}
+
+/// Sharing only the reply receiver lets another completion poll readiness without joining
+/// browser work or depending on when the producer's native callback task is scheduled.
+type NavigationReply = Shared<BoxFuture<'static, Arc<OpReply>>>;
+
+/// A receipt retains only readiness once complete; the producer's own future keeps its
+/// answer alive. Long runs do not retain every completed navigation's frame payload.
+enum NavigationReceipt {
+    Pending(NavigationReply),
+    Complete,
+}
+
+impl NavigationReceipt {
+    fn ready(&mut self) -> bool {
+        match self {
+            Self::Complete => true,
+            Self::Pending(reply) if reply.clone().now_or_never().is_some() => {
+                *self = Self::Complete;
+                true
+            }
+            Self::Pending(_) => false,
+        }
+    }
 }
 
 /// The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
@@ -78,6 +112,11 @@ enum Envelope<'a> {
         /// hands the script this one.
         #[serde(skip_serializing_if = "is_zero")]
         pumped: u64,
+        #[serde(
+            rename = "completedNavigations",
+            skip_serializing_if = "<[u64]>::is_empty"
+        )]
+        completed_navigations: &'a [u64],
     },
     Err {
         err: ErrBody<'a>,
@@ -88,6 +127,11 @@ enum Envelope<'a> {
         default_page: Option<DefaultPage>,
         #[serde(skip_serializing_if = "is_zero")]
         pumped: u64,
+        #[serde(
+            rename = "completedNavigations",
+            skip_serializing_if = "<[u64]>::is_empty"
+        )]
+        completed_navigations: &'a [u64],
     },
 }
 
@@ -123,6 +167,7 @@ impl Bridge {
             logs: Mutex::default(),
             failures: Mutex::default(),
             aborts: Mutex::default(),
+            navigation_replies: Mutex::default(),
         }
     }
 
@@ -138,28 +183,45 @@ impl Bridge {
             return Submitted(Started::Answered(ABORTED.to_owned()));
         }
         let site = CallSite::parse(site);
+        let publication;
         let (call, abort_key) = match abortable(input) {
             Ok((key, input)) => {
                 let abort = OpAbort::default();
                 lock(&self.aborts).insert(key.clone(), abort.clone());
+                publication = navigation_publication(&name, &input);
                 (Call::script(name, input, site).abortable(abort), Some(key))
             }
-            Err(input) => (Call::script(name, input, site), None),
+            Err(input) => {
+                publication = navigation_publication(&name, &input);
+                (Call::script(name, input, site), None)
+            }
         };
-        Submitted(Started::Op {
-            pending: self.dispatcher.submit(&self.run, call),
-            abort_key,
-        })
+        let pending = self.dispatcher.submit(&self.run, call);
+        match publication {
+            Some(publication) => {
+                let reply = async move { Arc::new(pending.wait().await) }
+                    .boxed()
+                    .shared();
+                let mut replies = lock(&self.navigation_replies);
+                replies.retain(|id, reply| {
+                    !publication.acknowledged.contains(id)
+                        || !matches!(reply, NavigationReceipt::Complete)
+                });
+                replies.insert(publication.id, NavigationReceipt::Pending(reply.clone()));
+                Submitted(Started::Navigation { reply, abort_key })
+            }
+            None => Submitted(Started::Op { pending, abort_key }),
+        }
     }
 
     /// The answer `__neo_invoke`'s promise resolves to. Always an envelope, never a rejection, so
     /// every failure reaches the script as a `NeoError` with its owner and delivery.
     pub(crate) async fn answer(&self, submitted: Submitted) -> String {
-        let (pending, abort_key) = match submitted.0 {
-            Started::Op { pending, abort_key } => (pending, abort_key),
+        let (reply, abort_key) = match submitted.0 {
+            Started::Op { pending, abort_key } => (Arc::new(pending.wait().await), abort_key),
+            Started::Navigation { reply, abort_key } => (reply.await, abort_key),
             Started::Answered(answer) => return answer,
         };
-        let reply = pending.wait().await;
         if let Some(key) = abort_key {
             lock(&self.aborts).remove(&key);
         }
@@ -170,7 +232,17 @@ impl Bridge {
             }
             failures.push_back(failure.clone());
         }
-        envelope(&reply)
+        // Poll receiver readiness, not browser work: an earlier dispatcher may have sent
+        // its reply while that producer's own callback task has not run yet. A ready shared
+        // receiver retains the exact answer for that task; polling cannot consume it away.
+        let mut completed: Vec<_> = lock(&self.navigation_replies)
+            .iter_mut()
+            .filter_map(|(id, reply)| reply.ready().then_some(*id))
+            .collect();
+        completed.extend(self.run.slot::<RunState>().completed_navigation_loads());
+        completed.sort_unstable();
+        completed.dedup();
+        envelope(&reply, &completed)
     }
 
     /// The bootstrap's abort of the op it keyed `key`: `{"key", "reason"}`. An op that already
@@ -260,7 +332,25 @@ fn is_zero(count: &u64) -> bool {
     *count == 0
 }
 
-fn envelope(reply: &OpReply) -> String {
+/// Internal scheduling hints. They cannot claim a native failure or change input delivery.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NavigationPublication {
+    id: u64,
+    acknowledged: Vec<u64>,
+}
+
+fn navigation_publication(name: &str, input: &Value) -> Option<NavigationPublication> {
+    if !matches!(
+        name,
+        "page.goto" | "page.reload" | "page.goBack" | "page.goForward"
+    ) {
+        return None;
+    }
+    serde_json::from_value(input.get("publication")?.clone()).ok()
+}
+
+fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String {
     let pumped = reply.pumped;
     let default_page = reply.default_page.as_ref().map(DefaultPage::from);
     let envelope = match &reply.outcome {
@@ -270,6 +360,7 @@ fn envelope(reply: &OpReply) -> String {
             observed: reply.observed.as_ref(),
             default_page,
             pumped,
+            completed_navigations,
         },
         Err(failure) => Envelope::Err {
             err: ErrBody::from(failure),
@@ -277,6 +368,7 @@ fn envelope(reply: &OpReply) -> String {
             observed: reply.observed.as_ref(),
             default_page,
             pumped,
+            completed_navigations,
         },
     };
     serde_json::to_string(&envelope).unwrap_or_else(|error| {

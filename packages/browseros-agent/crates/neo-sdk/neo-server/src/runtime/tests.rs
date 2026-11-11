@@ -1800,3 +1800,41 @@ fn bridge_serializes_observations_only_with_page_facts() -> Result<(), TestError
         Ok(())
     })
 }
+
+/// Receipt lifetime is independent of JS delivery order, and a later navigation acknowledges
+/// receipts it saw so completed producer history does not accumulate for the entire run.
+#[test]
+fn bridge_carries_completed_navigation_receipts_until_acknowledged() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let bridge = super::Bridge::new(Arc::clone(&run), Arc::clone(&rig.dispatcher));
+        // The fake registry refuses goto; failed native producers are completed too.
+        let producer = bridge.submit(
+            "page.goto".into(),
+            r#"{"publication":{"id":7,"acknowledged":[]}}"#,
+            "",
+        );
+        // The producer's answer future has never been polled. A later reply must still
+        // discover its already finished dispatcher result without waiting for that task.
+        let later = bridge
+            .answer(bridge.submit("test.echo".into(), "{}", ""))
+            .await;
+        let later: Value = serde_json::from_str(&later)?;
+        assert_eq!(later["completedNavigations"], json!([7]));
+        let first = bridge.answer(producer).await;
+        let first: Value = serde_json::from_str(&first)?;
+        assert!(first.get("err").is_some());
+        assert_eq!(first["completedNavigations"], json!([7]));
+        let next = bridge
+            .answer(bridge.submit(
+                "page.goto".into(),
+                r#"{"publication":{"id":8,"acknowledged":[7]}}"#,
+                "",
+            ))
+            .await;
+        let next: Value = serde_json::from_str(&next)?;
+        assert_eq!(next["completedNavigations"], json!([8]));
+        Ok(())
+    })
+}

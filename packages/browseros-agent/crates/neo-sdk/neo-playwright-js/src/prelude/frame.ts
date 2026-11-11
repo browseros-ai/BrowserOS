@@ -1289,7 +1289,7 @@ export class Frame extends EventEmitter {
       throw clientError(api, `url: expected string, got ${typeof url}`)
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
-    return await this._page._navigating(async (ready) => {
+    return await this._page._navigating(async (ready, publication) => {
       const args = await this._frameArgs(api)
       let completion: Promise<Response | null> | undefined
       const { value: result, observed } = await invokeObserved(
@@ -1299,6 +1299,7 @@ export class Frame extends EventEmitter {
           ...args,
           url,
           waitUntil,
+          publication,
           ...pick(options, ['referer']),
         },
         (result, observed) => {
@@ -1426,8 +1427,8 @@ export class Frame extends EventEmitter {
         script,
       },
     )
-    await this._page._publishCompleted()
     this._page._evaluated(result.frames, observed)
+    await this._page._publishCompleted()
     return fromPageValue(api, result.value)
   }
 

@@ -247,3 +247,77 @@ for (const lostBeforeClick of [false, true]) {
     })
   })
 }
+
+it('publishes a receipted navigation whose native JS reply arrives after evaluate', async () => {
+  const navigation = deferred<unknown>()
+  const entered = deferred<void>()
+  let id = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: ({ name, input }) => {
+      if (name === 'page.frames') return tree
+      if (name === 'page.goto') {
+        id = Reflect.get(Object(input.publication), 'id')
+        entered.resolve()
+        return navigation.promise
+      }
+      if (name === 'page.evaluate')
+        return entered.promise.then(() => {
+          // The producer finished in Rust already; its NAPI callback is independently queued.
+          setTimeout(
+            () =>
+              navigation.resolve({
+                ok: {
+                  url: frame.url,
+                  response: null,
+                  frames: [frame],
+                  frameSnapshotAttempted: true,
+                },
+                pages: [{ tab: 1007 }],
+                observed: { seq: 3, events: 1, payloadCurrent: true },
+              }),
+            10,
+          )
+          return {
+            ok: { value: null, frames: [frame] },
+            pages: [{ tab: 1007 }],
+            observed: { seq: 4, events: 1, payloadCurrent: true },
+            completedNavigations: [id],
+          }
+        })
+      return null
+    },
+  })
+  expect(
+    await runtime.run(`
+    let done = false
+    const goto = page.goto('https://a.example/next').then(() => done = true)
+    await page.evaluate(() => window.stop())
+    const immediate = done
+    await goto
+    return immediate
+  `),
+  ).toBe(true)
+  expect(runtime.sent('page.frames')).toHaveLength(0)
+})
+
+it('does not join a native navigation that has no completion receipt', async () => {
+  const navigation = deferred<unknown>()
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: ({ name }) => {
+      if (name === 'page.frames') return tree
+      if (name === 'page.goto') return navigation.promise
+      if (name === 'page.evaluate') return { value: null }
+      return null
+    },
+  })
+  const pending = runtime.run(`
+    let done = false
+    page.goto('https://a.example/stall').then(() => done = true)
+    await page.evaluate(() => window.stop())
+    return done
+  `)
+  expect(await pending).toBe(false)
+  navigation.resolve({ response: null, frameSnapshotAttempted: true })
+})

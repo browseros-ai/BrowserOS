@@ -1,5 +1,9 @@
 //! One run's Playwright state, owned by the host so it lives exactly as long as the run.
 
+mod navigation_publications;
+
+use navigation_publications::NavigationPublications;
+
 use crate::DownloadFacts;
 use crate::events::{RunDownloads, RunEvents};
 use crate::object_group::ObjectGroup;
@@ -16,6 +20,7 @@ use crate::page::{FrameRoutes, InitScripts};
 #[non_exhaustive]
 pub struct RunState {
     pub(crate) events: RunEvents,
+    pub(crate) navigation_publications: NavigationPublications,
     pub(crate) frames: FrameRoutes,
     /// Returned tags and chooser inputs retained until the script and all its handles end.
     pub(crate) objects: ObjectGroup,
@@ -34,6 +39,14 @@ impl RunState {
     #[must_use]
     pub fn pump_replies(&self) -> u64 {
         self.events.pump_replies()
+    }
+
+    /// Navigation publication identities whose requested document reached its load state.
+    /// The bridge combines these with fully settled native replies; a genuinely pending
+    /// document never makes a later evaluate wait for it.
+    #[must_use]
+    pub fn completed_navigation_loads(&self) -> Vec<u64> {
+        self.navigation_publications.ready()
     }
 
     /// Every download a `download` event handed this run, in the order it first saw each (the

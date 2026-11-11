@@ -651,6 +651,62 @@
     return error;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/publication.ts
+  var producers = new Map;
+  var acknowledged = new Set;
+  var nextPublication = 0;
+  function completedPublications(ids) {
+    if (!Array.isArray(ids))
+      return;
+    for (const id of ids) {
+      if (typeof id !== "number")
+        continue;
+      const entry = producers.get(id);
+      if (entry)
+        entry.ready = true;
+      acknowledged.add(id);
+    }
+  }
+
+  class Publications {
+    pending = new Set;
+    track(work) {
+      let finish;
+      const id = ++nextPublication;
+      const entry = {
+        id,
+        ready: false,
+        done: new Promise((resolve) => {
+          finish = resolve;
+        })
+      };
+      producers.set(id, entry);
+      this.pending.add(entry);
+      const published = () => {
+        this.pending.delete(entry);
+        producers.delete(id);
+        finish();
+      };
+      return Promise.resolve().then(() => {
+        const receipts = [...acknowledged];
+        acknowledged.clear();
+        return work(() => {
+          entry.ready = true;
+        }, { id, acknowledged: receipts });
+      }).then((value) => {
+        published();
+        return value;
+      }, (error) => {
+        published();
+        throw error;
+      });
+    }
+    async publishReady() {
+      const ready = [...this.pending].filter((entry) => entry.ready);
+      await Promise.all(ready.map((entry) => entry.done));
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/bridge.ts
   async function invoke(op, call, args, signal) {
     try {
@@ -705,6 +761,7 @@
       return;
     countingPumps = true;
     host().onReply((envelope) => {
+      completedPublications(field(envelope, "completedNavigations"));
       const pumped = field(envelope, "pumped");
       if (typeof pumped === "number" && pumped > pumpsNeeded)
         pumpsNeeded = pumped;
@@ -7586,13 +7643,14 @@ ${value.stack}`;
         throw clientError(api, `url: expected string, got ${typeof url}`);
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      return await this._page._navigating(async (ready) => {
+      return await this._page._navigating(async (ready, publication) => {
         const args = await this._frameArgs(api);
         let completion;
         const { value: result, observed } = await invokeObserved("page.goto", this._call(api, this._navigationTimeout(options)), {
           ...args,
           url,
           waitUntil,
+          publication,
           ...pick(options, ["referer"])
         }, (result, observed) => {
           completion = this._page._navigated(api, this, result, observed, ready);
@@ -7648,8 +7706,8 @@ ${value.stack}`;
         ...await this._frameArgs(api),
         script
       });
-      await this._page._publishCompleted();
       this._page._evaluated(result.frames, observed);
+      await this._page._publishCompleted();
       return fromPageValue(api, result.value);
     }
     async _waitForFunction(api, pageFunction, arg, options = {}) {
@@ -9045,38 +9103,6 @@ ${value.stack}`;
     }
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/prelude/publication.ts
-  class Publications {
-    pending = new Set;
-    track(work) {
-      let finish;
-      const entry = {
-        ready: false,
-        done: new Promise((resolve) => {
-          finish = resolve;
-        })
-      };
-      this.pending.add(entry);
-      const published = () => {
-        this.pending.delete(entry);
-        finish();
-      };
-      return Promise.resolve().then(() => work(() => {
-        entry.ready = true;
-      })).then((value) => {
-        published();
-        return value;
-      }, (error) => {
-        published();
-        throw error;
-      });
-    }
-    async publishReady() {
-      const ready = [...this.pending].filter((entry) => entry.ready);
-      await Promise.all(ready.map((entry) => entry.done));
-    }
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/prelude/response.ts
   class Response {
     #frameValue;
@@ -9537,9 +9563,9 @@ ${value.stack}`;
     }
     _navigating(work) {
       this._navigationsInFlight++;
-      return this.#publications.track(async (ready) => {
+      return this.#publications.track(async (ready, publication) => {
         try {
-          return await work(ready);
+          return await work(ready, publication);
         } finally {
           this._navigationsInFlight--;
         }
@@ -9565,7 +9591,7 @@ ${value.stack}`;
           this._applyFrames(result.frames, at);
         else if (!result?.frameSnapshotAttempted)
           await this._refreshFrames(api);
-      } else if (!this._closed) {
+      } else if (!this._closed && !result?.frameSnapshotAttempted) {
         await this._refreshFrames(api).catch(() => {
           return;
         });
@@ -9886,9 +9912,9 @@ ${value.stack}`;
     async#history(api, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      return await this._navigating(async (ready) => {
+      return await this._navigating(async (ready, publication) => {
         let completion;
-        const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil }, (result, observed) => {
+        const { value: result, observed } = await invokeObserved(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil, publication }, (result, observed) => {
           completion = this._navigated(api, this._mainFrame, result, observed, ready);
         }, signal);
         return await (completion ?? this._navigated(api, this._mainFrame, result, observed, ready));

@@ -75,6 +75,7 @@ import type {
   FrameInfo,
   KeyOptions,
   LoadState,
+  NavigationPublication,
   NavigationResult,
   Observation,
   PageBrand,
@@ -966,18 +967,20 @@ export class Page extends EventEmitter {
   }
 
   /** Runs a navigation op, counted in `_navigationsInFlight` from the call until it settles. */
-  _navigating<T>(work: (ready: () => void) => Promise<T>): Promise<T> {
+  _navigating<T>(
+    work: (ready: () => void, publication: NavigationPublication) => Promise<T>,
+  ): Promise<T> {
     this._navigationsInFlight++
-    return this.#publications.track(async (ready) => {
+    return this.#publications.track(async (ready, publication) => {
       try {
-        return await work(ready)
+        return await work(ready, publication)
       } finally {
         this._navigationsInFlight--
       }
     })
   }
 
-  /** Join only client completions whose last browser await has already finished. */
+  /** Publish only a navigation whose requested load or native reply already completed. */
   async _publishCompleted(): Promise<void> {
     await this.#publications.publishReady()
   }
@@ -1005,11 +1008,13 @@ export class Page extends EventEmitter {
       }
       if (Array.isArray(result?.frames)) this._applyFrames(result.frames, at)
       else if (!result?.frameSnapshotAttempted) await this._refreshFrames(api)
-    } else if (!this._closed) {
+    } else if (!this._closed && !result?.frameSnapshotAttempted) {
       // Keep the original operation's return value even if a fresh read of the replacement
       // binding fails. The stale payload never becomes the replacement's cached state.
       await this._refreshFrames(api).catch(() => undefined)
     }
+    // A modern native reply already attempted its bounded snapshot. If superseded, discard
+    // those facts instead of reading a replacement renderer on an older op's completion.
     // No browser await remains after this mark. A later evaluate may now publish this
     // navigation's public promise before returning its own observation.
     ready?.()
@@ -1498,12 +1503,12 @@ export class Page extends EventEmitter {
   ): Promise<Response | null> {
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
-    return await this._navigating(async (ready) => {
+    return await this._navigating(async (ready, publication) => {
       let completion: Promise<Response | null> | undefined
       const { value: result, observed } = await invokeObserved(
         api,
         this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),
-        { page: await this._brand(api), waitUntil },
+        { page: await this._brand(api), waitUntil, publication },
         (result, observed) => {
           completion = this._navigated(
             api,

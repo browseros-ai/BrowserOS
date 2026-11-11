@@ -139,6 +139,9 @@ export type NavigationResult = {
 }
 
 /** The frame-event journal cut reached by one pointer action's actual navigations. */
+/** Run-local completion identity; acknowledgments keep the host receipt ledger bounded by in-flight work. */
+export type NavigationPublication = { id: number; acknowledged: number[] }
+
 export type NavigationCut = { seq: number; at: number }
 
 /** `page.frames`: every frame of the tab, the main frame first, each parent before its children. */
@@ -467,13 +470,23 @@ export type OpInputs = {
   }
   'mouse.wheel': PageArgs & { deltaX: number; deltaY: number }
   'page.goto': FrameArgs & {
+    publication?: NavigationPublication
     url: string
     waitUntil: LoadState
     referer?: string
   }
-  'page.reload': PageArgs & { waitUntil: LoadState }
-  'page.goBack': PageArgs & { waitUntil: LoadState }
-  'page.goForward': PageArgs & { waitUntil: LoadState }
+  'page.reload': PageArgs & {
+    publication?: NavigationPublication
+    waitUntil: LoadState
+  }
+  'page.goBack': PageArgs & {
+    publication?: NavigationPublication
+    waitUntil: LoadState
+  }
+  'page.goForward': PageArgs & {
+    publication?: NavigationPublication
+    waitUntil: LoadState
+  }
   /** Matched in the page with vendored `urlMatches`, so globs and RegExps keep JS semantics. */
   'page.waitForNavigation': FrameArgs & {
     url?: UrlPattern

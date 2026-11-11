@@ -278,8 +278,10 @@ mod tests {
     use serde_json::json;
     use std::error::Error;
 
-    use super::FrameLifecycleTracker;
-    use crate::events::PageEventKind;
+    use super::{EventFrame, FrameLifecycleTracker};
+    use crate::RunState;
+    use crate::events::{EventHub, PageEvent, PageEventKind};
+    use crate::page::LoadState;
 
     #[test]
     fn tests_that_seeded_frames_are_removed_without_replaying_old_attachments()
@@ -400,6 +402,68 @@ mod tests {
                 .is_empty(),
             "the subsequent CDP removal cannot emit a second detach"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn navigation_publication_waits_for_its_loader_and_rejects_a_replacement()
+    -> Result<(), Box<dyn Error>> {
+        use std::sync::Arc;
+
+        let (hub, mut writer) = EventHub::new();
+        let run = RunState::default();
+        let target = TargetId("main".to_owned());
+        run.navigation_publications.watch(
+            7,
+            Arc::clone(&hub),
+            FrameId("main".to_owned()),
+            "wanted".to_owned(),
+            LoadState::Load,
+            0,
+        );
+        let mut tracker = FrameLifecycleTracker::default();
+        for transition in tracker.record(
+            &target,
+            "Page.frameNavigated",
+            &json!({"frame":{"id":"main","loaderId":"wanted","url":"https://a.test/"}}),
+        ) {
+            writer.record(PageEvent::FrameLifecycle(transition));
+        }
+        assert!(
+            run.completed_navigation_loads().is_empty(),
+            "a commit is not a load"
+        );
+        let frame = |loader: &str| -> Result<EventFrame, serde_json::Error> {
+            serde_json::from_value(json!({"id":"main","loaderId":loader,"url":"https://a.test/"}))
+        };
+        writer.record(PageEvent::Load {
+            target: target.clone(),
+            kind: PageEventKind::Load,
+            frame: frame("older")?,
+        });
+        assert!(
+            run.completed_navigation_loads().is_empty(),
+            "another loader cannot lend its load state"
+        );
+        writer.record(PageEvent::Load {
+            target: target.clone(),
+            kind: PageEventKind::Load,
+            frame: frame("wanted")?,
+        });
+        assert_eq!(run.completed_navigation_loads(), vec![7]);
+        for transition in tracker.record(
+            &target,
+            "Page.frameNavigated",
+            &json!({"frame":{"id":"main","loaderId":"replacement","url":"https://b.test/"}}),
+        ) {
+            writer.record(PageEvent::FrameLifecycle(transition));
+        }
+        assert!(
+            run.completed_navigation_loads().is_empty(),
+            "a replaced document does not prove current readiness"
+        );
+        run.navigation_publications.acknowledge(&[7]);
+        assert!(run.completed_navigation_loads().is_empty());
         Ok(())
     }
 }
