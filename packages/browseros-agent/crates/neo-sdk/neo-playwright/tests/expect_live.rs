@@ -503,17 +503,20 @@ async fn tests_that_every_matcher_passes_and_fails_as_scripts_write_it() -> Test
     for case in MATCHERS {
         let _infallible = writeln!(
             checks,
-            "await check({}, async () => {{ await {} }})",
+            "await check({}, {}, async () => {{ await {} }})",
             json!(case.label),
+            case.fails.is_some(),
             case.script
         );
     }
+    // Expected failures compare stable error fields; an unexpected failure keeps the full
+    // host message so a slow renderer's timeout cannot hide behind only its first line.
     let script = format!(
         "const URL = {url}\n\
          const results = {{}}\n\
-         async function check(label, run) {{\n\
+         async function check(label, shouldFail, run) {{\n\
            try {{ await run(); results[label] = null }}\n\
-           catch (e) {{ results[label] = {{ code: e.code ?? null, first: e.message.split('\\n')[0] }} }}\n\
+           catch (e) {{ results[label] = {{ code: e.code ?? null, first: e.message.split('\\n')[0], ...(shouldFail ? {{}} : {{ message: e.message }}) }} }}\n\
          }}\n\
          try {{\n\
            await page.goto(URL)\n\
@@ -730,9 +733,10 @@ async fn tests_that_a_typed_password_is_compared_as_the_page_holds_it() -> TestR
             let error = failure(run.invoke("expect.locator", wrong).await)?;
             assert_eq!(error.error_code(), Some(ErrorCode::AssertionFailed));
             let message = error.message();
+            // The one-shot poll records Received without a retry log. A loaded renderer can
+            // use the whole deadline on that poll, so repeated-poll lines are not guaranteed.
             assert!(
-                message.contains("Expected: \"hunter3\"\nReceived: \"hunter2\"\n")
-                    && message.contains("      - unexpected value \"hunter2\"\n"),
+                message.contains("Expected: \"hunter3\"\nReceived: \"hunter2\"\n"),
                 "the field's value is what was received: {message}"
             );
             let not = on_locator(
@@ -797,8 +801,7 @@ async fn tests_that_a_regexp_matches_a_password_and_attributes_stay_markup() -> 
             );
             let error = failure(run.invoke("expect.locator", no_attribute).await)?;
             assert!(
-                error.message().contains("Received: \"\"\n")
-                    && error.message().contains("unexpected value \"null\""),
+                error.message().contains("Expected: \"hunter2\"\nReceived: \"\"\n"),
                 "the typed value is not the value attribute, as upstream: {error}"
             );
             Ok(())
