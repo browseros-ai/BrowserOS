@@ -8,10 +8,10 @@
 //! A read runs in one frame's sealed world, and the probe's reply carries that frame's own
 //! sweep. But the page's own script reads every frame of its site through `frames[…]`, `parent`
 //! and `top`, whatever sessions hold them, and those of its opener and popups, and can copy a
-//! password typed in one into its own heading, title or attributes. So a read's page text is masked with the union of the sweeps
-//! of every frame of its site: the frames the evaluate guard sweeps before a main-world script
-//! (decisions.md, "Main-world sweep scope"), found and swept by the same code
-//! (`evaluate_guard::sweep_site`), with its rules for a frame that misses its budget.
+//! password typed in one into its own heading, title or attributes. So a read's page text is
+//! masked with the union of the sweeps of every frame of its site (decisions.md, "Main-world
+//! sweep scope"), found and swept by `evaluate_guard::sweep_site`, with its rules for a frame
+//! that misses its budget.
 //!
 //! ```text
 //!  the read's probe call ──┐ at the same time, so the sweep's round trips overlap the read's
@@ -42,8 +42,8 @@ use browseros_core::sensitive_fields::FieldValues;
 use serde_json::Value;
 
 use crate::op_scope::OpScope;
+use crate::page::OpPage;
 use crate::page::evaluate_guard::{self, FRAME_BUDGET, Found, TreeFrame, Unswept};
-use crate::page::{OpPage, page_value};
 use crate::probe::{PageText, ProbeFailure, ProbeMask, ProbeReply, Ran};
 use crate::world::SealedWorld;
 use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
@@ -64,9 +64,9 @@ impl SiteSweep {
     /// The values the read is masked with: `own`, the sweep its reply came with, and every
     /// other frame's. All of them go to the host, also when a frame was not swept, so its own
     /// mask at every exit knows them from now on. A frame of the site that missed its budget on
-    /// every try the op's window had room for fails the op closed as `neo / unsupported`, as a
-    /// main-world script is refused: the page text may hold that frame's value, and Neo cannot
-    /// tell. The read's own frame gone under the sweep fails the op too.
+    /// every try the op's window had room for fails the op closed as `neo / unsupported`: the
+    /// page text may hold that frame's value, and Neo cannot tell. The read's own frame gone
+    /// under the sweep fails the op too.
     pub(crate) fn values(
         self,
         pw: &Playwright,
@@ -116,8 +116,6 @@ impl SiteSweep {
                  again for its privacy sweep, so page text that may hold its values is withheld; \
                  try again",
             )),
-            // Only a guard's sweep is cut at the op's deadline on its first try.
-            Some(Unswept::Expired) => Err(scope.timed_out(ErrorCode::WaitTimeout)),
             Some(Unswept::Failed(failure)) => Err(resolve::failed(scope, failure)),
         }
     }
@@ -181,7 +179,12 @@ impl SiteValues {
     /// Page text outside a read's value (a document's markup or title, a strict violation's
     /// previews), masked as one string.
     pub(crate) fn mask_text(&self, text: String) -> String {
-        page_value::mask_text(&self.0, text)
+        let mut text = Value::String(text);
+        self.0.mask_json(&mut text);
+        match text {
+            Value::String(text) => text,
+            other => other.to_string(),
+        }
     }
 
     /// The values themselves, for the snapshot's stitch, which masks every frame's strings with

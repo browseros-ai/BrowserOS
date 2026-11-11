@@ -557,13 +557,6 @@ const rustHints = [
   },
   {
     wording:
-      "<api>: Neo uploads no file from its disk until its host names Neo's own secret files; pass { name, mimeType, buffer } instead",
-    sources: ['neo-playwright/src/action/input_files/secrets.rs'],
-    expression:
-      "Neo uploads no file from its disk until its host names Neo's own secret files; pass \\{ name, mimeType, buffer \\} instead",
-  },
-  {
-    wording:
       '<api>: Neo refused this call: linked tabs are not checked by the host',
     sources: ['neo-playwright/src/op_env.rs'],
     expression:

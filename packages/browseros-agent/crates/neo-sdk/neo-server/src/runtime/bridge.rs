@@ -1,6 +1,6 @@
 //! The Rust side of the script's three natives.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -12,13 +12,24 @@ use tokio::time::{self, Duration, Instant};
 use super::{LogLevel, RunLogs};
 use crate::browser::PageRef;
 use crate::dispatch::{
-    Call, CallSite, Dispatcher, Observation, OpFailure, OpReply, PageFact, PendingReply, RunCtx,
-    StopReason,
+    Call, CallSite, Dispatcher, Observation, OpAbort, OpFailure, OpReply, PageFact, PendingReply,
+    RunCtx, StopReason,
 };
 
 /// How many failed ops a run remembers for its own error. A script's uncaught `NeoError` is
 /// nearly always its latest failure; one from further back is reported as Neo's.
 const FAILURES_REMEMBERED: usize = 1024;
+
+/// The name the bootstrap aborts an op under (`bootstrap.js`, Playwright's `signal`), with input
+/// `{"key", "reason"}`. It never reaches the door: the bridge answers it itself, and `$` starts
+/// no method's name. Upstream's client sends its `__abort__` the same way, down the channel its
+/// calls take, so an abort needs no native of its own.
+const ABORT: &str = "$neo.abort";
+
+/// The brand the bootstrap wraps an abortable call's input in: `{"$neo": "abortable", "key",
+/// "input"}`. The key is the realm's own name for the call, the only one it has before the
+/// reply brings the op id; the door gets `input` alone.
+const ABORTABLE: &str = "abortable";
 
 /// What the natives do for one run. Takes and returns only strings and numbers and never
 /// touches the runtime: an op runs as its own task on the run's set and answers over a
@@ -31,6 +42,22 @@ pub(crate) struct Bridge {
     /// The run's latest failed ops. An escaped `NeoError` names its op, and the run's error is
     /// the failure recorded here, never fields the script could have edited.
     failures: Mutex<VecDeque<OpFailure>>,
+    /// The abort switch of each abortable op still in flight, by the realm's key for it. An
+    /// entry leaves when its op answers, so a late abort finds nothing and changes nothing.
+    aborts: Mutex<HashMap<String, OpAbort>>,
+}
+
+/// What one `__neo_invoke` started: an op the door admitted, or an abort the bridge already
+/// answered. [`Bridge::answer`] turns either into the string the native resolves with.
+pub(crate) struct Submitted(Started);
+
+enum Started {
+    Op {
+        pending: PendingReply,
+        /// The realm's key for an abortable op, released with its answer.
+        abort_key: Option<String>,
+    },
+    Answered(String),
 }
 
 /// The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
@@ -88,21 +115,47 @@ impl Bridge {
             dispatcher,
             logs: Mutex::default(),
             failures: Mutex::default(),
+            aborts: Mutex::default(),
         }
     }
 
     /// `__neo_invoke(name, inputJson, site)`, as the script calls it: one SDK call through the
     /// door, admitted now, so it has its op id and its start record before the realm runs on. A
     /// prelude's refusal comes this way too, as a refusal brand (`dispatch/refusal_brand.rs`).
-    pub(crate) fn submit(&self, name: String, input_json: &str, site: &str) -> PendingReply {
-        let call = Call::script(name, decode_input(input_json), CallSite::parse(site));
-        self.dispatcher.submit(&self.run, call)
+    /// An abortable call registers its abort switch here, before the realm can fire it; the
+    /// bootstrap's abort of one ([`ABORT`]) is answered here and never reaches the door.
+    pub(crate) fn submit(&self, name: String, input_json: &str, site: &str) -> Submitted {
+        let input = decode_input(input_json);
+        if name == ABORT {
+            self.abort(&input);
+            return Submitted(Started::Answered(ABORTED.to_owned()));
+        }
+        let site = CallSite::parse(site);
+        let (call, abort_key) = match abortable(input) {
+            Ok((key, input)) => {
+                let abort = OpAbort::default();
+                lock(&self.aborts).insert(key.clone(), abort.clone());
+                (Call::script(name, input, site).abortable(abort), Some(key))
+            }
+            Err(input) => (Call::script(name, input, site), None),
+        };
+        Submitted(Started::Op {
+            pending: self.dispatcher.submit(&self.run, call),
+            abort_key,
+        })
     }
 
     /// The answer `__neo_invoke`'s promise resolves to. Always an envelope, never a rejection, so
     /// every failure reaches the script as a `NeoError` with its owner and delivery.
-    pub(crate) async fn answer(&self, pending: PendingReply) -> String {
+    pub(crate) async fn answer(&self, submitted: Submitted) -> String {
+        let (pending, abort_key) = match submitted.0 {
+            Started::Op { pending, abort_key } => (pending, abort_key),
+            Started::Answered(answer) => return answer,
+        };
         let reply = pending.wait().await;
+        if let Some(key) = abort_key {
+            lock(&self.aborts).remove(&key);
+        }
         if let Err(failure) = &reply.outcome {
             let mut failures = lock(&self.failures);
             if failures.len() == FAILURES_REMEMBERED {
@@ -111,6 +164,20 @@ impl Bridge {
             failures.push_back(failure.clone());
         }
         envelope(&reply)
+    }
+
+    /// The bootstrap's abort of the op it keyed `key`: `{"key", "reason"}`. An op that already
+    /// answered has left the table, and an input the bootstrap never sends aborts nothing.
+    fn abort(&self, input: &Value) {
+        let (Some(key), Some(reason)) = (
+            input.get("key").and_then(Value::as_str),
+            input.get("reason").and_then(Value::as_str),
+        ) else {
+            return;
+        };
+        if let Some(abort) = lock(&self.aborts).get(key) {
+            abort.abort(reason.to_owned());
+        }
     }
 
     /// `__neo_log(level, text)`: one console line, kept within the run's limits.
@@ -150,6 +217,22 @@ impl Bridge {
     /// The run's console output. Called once the runtime is gone.
     pub(crate) fn take_logs(&self) -> RunLogs {
         mem::take(&mut *lock(&self.logs))
+    }
+}
+
+/// What the bridge answers an abort with: an empty success, which the bootstrap ignores.
+const ABORTED: &str = r#"{"ok":null,"pages":[]}"#;
+
+/// An abortable call's key and its own input, or the input as it came when it is not one.
+fn abortable(input: Value) -> Result<(String, Value), Value> {
+    let is_brand = input.get("$neo").and_then(Value::as_str) == Some(ABORTABLE);
+    let key = input.get("key").and_then(Value::as_str).map(str::to_owned);
+    match (is_brand, key, input) {
+        (true, Some(key), Value::Object(mut fields)) => match fields.remove("input") {
+            Some(inner) => Ok((key, inner)),
+            None => Err(Value::Object(fields)),
+        },
+        (_, _, input) => Err(input),
     }
 }
 

@@ -1,0 +1,88 @@
+name: "Test: Neo SDK image (amd64)"
+
+# Builds the Neo SDK image (packages/browseros-agent/crates/neo-sdk/neo-server/docker) natively
+# on a GitHub-hosted amd64 runner and runs its accept.sh: the one place the production
+# architecture boots, since a Mac can only emulate it. Test-only: the token is read-only, and
+# nothing logs in to a registry or pushes. Dispatched by hand, because a cold build is about
+# 7 minutes of Rust plus the browser download, too much for every pull request.
+#
+#   gh workflow run neo-sdk-image.yml --ref <branch> [-f ref=<commit>]
+#
+# It also runs on a pull request that changes this file. GitHub dispatches a workflow that is
+# not on the default branch only once it has run at least once, and that run is also the check
+# that an edit here still works.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit, branch or tag to build (default: the dispatched ref)"
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/neo-sdk-image.yml
+
+permissions:
+  contents: read
+
+# Named, not left implicit: GitHub adds -o pipefail only for an explicit `shell: bash`, and the
+# steps pipe build.sh and accept.sh into tee, which would otherwise hide a failing check.
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: neo-sdk-image-${{ inputs.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  amd64:
+    name: Neo SDK image / amd64 build + accept
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      # build.sh names the image after the checked-out commit; logs go outside the checkout so
+      # they cannot mark the build dirty.
+      - name: Build the image
+        id: build
+        run: |
+          mkdir -p "$RUNNER_TEMP/neo-sdk"
+          packages/browseros-agent/crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64 \
+            2>&1 | tee "$RUNNER_TEMP/neo-sdk/build.log"
+          tag=$(sed -n 's/^TAG=//p' "$RUNNER_TEMP/neo-sdk/build.log" | tail -1)
+          [ -n "$tag" ]
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          docker run --rm --network none --entrypoint cat "$tag" /usr/share/neo-sdk/provenance.json \
+            > "$RUNNER_TEMP/neo-sdk/provenance.json"
+
+      - name: Accept the image
+        env:
+          TAG: ${{ steps.build.outputs.tag }}
+        run: |
+          packages/browseros-agent/crates/neo-sdk/neo-server/docker/accept.sh "$TAG" \
+            --logs "$RUNNER_TEMP/neo-sdk/containers" 2>&1 | tee "$RUNNER_TEMP/neo-sdk/accept.log"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Neo SDK image, linux/amd64'
+            echo '```'
+            grep -E '^(PASS|FAIL|SKIP) ' "$RUNNER_TEMP/neo-sdk/accept.log" 2>/dev/null | head -20 || true
+            echo '```'
+            echo '```json'
+            cat "$RUNNER_TEMP/neo-sdk/provenance.json" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: neo-sdk-image-amd64
+          path: ${{ runner.temp }}/neo-sdk
+          if-no-files-found: warn

@@ -13,23 +13,15 @@
 //!
 //! A test can make an address unreachable, and can hold every navigation until it lets them go,
 //! to catch work that is still moving a tab.
-//!
-//! It also answers what the control journal and the sweep send, for the takeover flow's tests:
-//! each new-document script gets its own identifier, the seal installs, and a sweep's read of a
-//! frame's fields answers what the test put in them. A page can have child frames, for a walk
-//! that takes a while. Those reads can be held, any method can be held until the test lets it go
-//! or made to hang, and a probe the test sets is read at each call and kept with it.
 
 use browseros_cdp::{CdpError, CdpEvent, SessionId, TargetedEvents};
 use browseros_core::CdpConnection;
-use browseros_core::sensitive_fields::seal_source;
 use futures_util::future::BoxFuture;
 use neo_takeover::testing::FakeXvnc;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
 
 /// Session ids are unique across every fake in the process: core keys its capture lock by
@@ -38,9 +30,6 @@ static SESSIONS: AtomicU64 = AtomicU64::new(0);
 
 /// How tall the browser's toolbar is in a window that is not fullscreen.
 pub const CHROME_HEIGHT: u16 = 87;
-
-/// The seal's read of a frame's sensitive fields, which only a sweep sends.
-pub const SWEEP_READ: &str = "__clawSeal.sensitiveValues()";
 
 /// Read at each call; what it returns is kept with the call.
 type Probe = Box<dyn Fn() -> bool + Send + Sync>;
@@ -53,8 +42,6 @@ pub struct FakeBrowser {
     /// `false` while a test holds navigations: each `Page.navigate` then waits, subscribed, until
     /// it is `true` again.
     navigations: watch::Sender<bool>,
-    /// The same, for a sweep's reads of a frame's fields.
-    sweep_reads: watch::Sender<bool>,
     /// The same, per method a test held with [`Self::hold`].
     holds: Mutex<HashMap<String, watch::Sender<bool>>>,
     probe: Mutex<Option<Probe>>,
@@ -106,20 +93,12 @@ struct State {
     boxes: Vec<[f64; 4]>,
     /// Addresses a navigation fails to load.
     unreachable: Vec<String>,
-    /// What every frame's password, card and code fields hold, as the seal reports it to a sweep.
-    fields: Vec<String>,
     /// Methods whose calls never answer.
     hung: Vec<String>,
     /// The tab `Browser.activateTab` last brought to the front, as [`FakeBrowser::active`] reads
     /// it. `Browser.getTabs` still reports every tab inactive, so a view's admission never finds
     /// a private tab in front here: decision 34 is the display tests' own.
     active: Option<i64>,
-    /// How long a sweep's read of a frame's fields takes.
-    sweep_read_time: Duration,
-    /// How many child frames each page's frame tree has below its own.
-    child_frames: usize,
-    /// New-document scripts added so far, which numbers each one's identifier.
-    scripts: usize,
     calls: Vec<Call>,
 }
 
@@ -147,32 +126,20 @@ impl FakeBrowser {
                 emulation: HashMap::new(),
                 boxes: Vec::new(),
                 unreachable: Vec::new(),
-                fields: Vec::new(),
                 hung: Vec::new(),
                 active: None,
-                sweep_read_time: Duration::ZERO,
-                child_frames: 0,
-                scripts: 0,
                 calls: Vec::new(),
             }),
             events: broadcast::channel(16).0,
             targeted: TargetedEvents::default(),
             navigations: watch::channel(true).0,
-            sweep_reads: watch::channel(true).0,
             holds: Mutex::default(),
             probe: Mutex::default(),
         })
     }
 
-    /// Each page has `count` child frames from now on, below its own frame. The journal and the
-    /// sweep put the sealed world in every one, one after another.
-    pub fn add_child_frames(&self, count: usize) {
-        self.state().child_frames = count;
-    }
-
     /// Calls of `method` wait from now on, unanswered, until [`Self::let_go`]. A call is recorded
-    /// once answered, so one whose caller gave up first, as a frame step past its 2 s budget
-    /// does, is never recorded.
+    /// once answered, so one whose caller gave up first is never recorded.
     pub fn hold(&self, method: &str) {
         self.holds()
             .entry(method.to_owned())
@@ -196,32 +163,6 @@ impl FakeBrowser {
 
     fn holds(&self) -> MutexGuard<'_, HashMap<String, watch::Sender<bool>>> {
         self.holds.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The owner typed these into sensitive fields: every frame's sweep reads them from now on.
-    pub fn type_into_fields(&self, values: &[&str]) {
-        self.state().fields = values.iter().map(|value| (*value).to_owned()).collect();
-    }
-
-    /// Holds every sweep's read of a frame's fields from now on, until
-    /// [`Self::let_sweep_reads_go`].
-    pub fn hold_sweep_reads(&self) {
-        self.sweep_reads.send_replace(false);
-    }
-
-    pub fn let_sweep_reads_go(&self) {
-        self.sweep_reads.send_replace(true);
-    }
-
-    /// How many sweep reads are waiting to be answered.
-    pub fn held_sweep_reads(&self) -> usize {
-        self.sweep_reads.receiver_count()
-    }
-
-    /// Each sweep's read of a frame's fields takes `time` from now on, as Chromium's does, so a
-    /// sweep that was waited for can be told from one that was not.
-    pub fn slow_sweep_reads(&self, time: Duration) {
-        self.state().sweep_read_time = time;
     }
 
     /// Calls of `method` never answer from now on.
@@ -501,29 +442,16 @@ impl FakeBrowser {
                 state.emulation.entry(tab).or_default().touch = params["enabled"] == true;
                 json!({})
             }
+            // Viewport and owner-view reads still run in an ordinary isolated world.
             "Page.getFrameTree" => {
                 let tab = tab.unwrap_or_default();
-                let children = (1..=state.child_frames)
-                    .map(|child| json!({ "frame": { "id": format!("frame-{tab}-{child}") } }))
-                    .collect::<Vec<_>>();
-                json!({ "frameTree": { "frame": { "id": format!("frame-{tab}") }, "childFrames": children } })
+                json!({ "frameTree": { "frame": { "id": format!("frame-{tab}") } } })
             }
             "Page.createIsolatedWorld" => json!({ "executionContextId": 77 }),
-            "Runtime.addBinding" | "Page.removeScriptToEvaluateOnNewDocument" => json!({}),
-            "Page.addScriptToEvaluateOnNewDocument" => {
-                state.scripts += 1;
-                json!({ "identifier": format!("script-{}", state.scripts) })
-            }
-            "DOM.getDocument" => json!({ "root": { "nodeName": "#document" } }),
             "Runtime.evaluate" => {
                 let tab = tab.ok_or(CdpError::SessionGone)?;
                 let expression = params["expression"].as_str().unwrap_or_default();
-                let value = if expression == seal_source() {
-                    // The seal reports its version once it is in place.
-                    json!(1)
-                } else if expression == SWEEP_READ {
-                    json!(state.fields)
-                } else if expression.contains("screenWidth") {
+                let value = if expression.contains("screenWidth") {
                     self.metrics_value(&state, tab)
                 } else if expression.contains("visualViewport") {
                     let metrics = self.metrics_value(&state, tab);
@@ -638,7 +566,7 @@ impl FakeBrowser {
         Ok(reply)
     }
 
-    /// Answers one call; a `Page.navigate`, a sweep read or a held method waits first while the
+    /// Answers one call; a `Page.navigate` or a held method waits first while the
     /// test holds those, and a hung method never answers.
     async fn answer(
         &self,
@@ -658,14 +586,6 @@ impl FakeBrowser {
         if method == "Page.navigate" && !open {
             let mut held = self.navigations.subscribe();
             let _ = held.wait_for(|open| *open).await;
-        }
-        if method == "Runtime.evaluate" && params["expression"] == SWEEP_READ {
-            if !*self.sweep_reads.borrow() {
-                let mut held = self.sweep_reads.subscribe();
-                let _ = held.wait_for(|open| *open).await;
-            }
-            let time = self.state().sweep_read_time;
-            tokio::time::sleep(time).await;
         }
         let hung = self.state().hung.iter().any(|hung| hung == method);
         if hung {

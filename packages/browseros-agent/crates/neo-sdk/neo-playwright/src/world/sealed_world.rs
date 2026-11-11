@@ -296,10 +296,10 @@ impl SealedWorld {
     /// evaluate, N names a child frame's main world there, and the seal, the engine and the
     /// epoch would run in a world the page controls. A new world's `uniqueId` names it and
     /// nothing else, and fails `uniqueContextId not found` once it is gone. A world that
-    /// already existed (another session or connection made it, `setContent` unbooted it, an
-    /// earlier install failed after the create) gets no event, so there is no `uniqueId` to
-    /// take; its numeric evaluate counts only if the session reported nothing about N from
-    /// before the create to after the evaluate's reply. The context that N names in a new
+    /// already existed (another session or connection made it, an earlier install failed after
+    /// the create) gets no event, so there is no `uniqueId` to take; its numeric evaluate counts
+    /// only if the session reported nothing about N from before the create to after the
+    /// evaluate's reply. The context that N names in a new
     /// renderer has to be reported to the session before a command can run in it (measured:
     /// `executionContextsCleared`, then `executionContextCreated` for N, both ahead of the
     /// evaluate's reply), so a swap in the window reads as churn. That needs `Runtime` enabled
@@ -514,33 +514,6 @@ impl SealedWorld {
             .collect())
     }
 
-    /// Hands the nodes `nodes` names (handles in this world) to the seal's `watch`, in one call:
-    /// the elements a main-world script receives, which the seal then sweeps with their tree at
-    /// every sweep they are out of the document (core's `seal.js`). `Gone` when the seal or the
-    /// world is.
-    pub(crate) async fn watch_trees(&self, nodes: &[String]) -> Result<(), ProbeFailure> {
-        let arguments: Vec<Value> = nodes
-            .iter()
-            .map(|node| json!({ "objectId": node }))
-            .collect();
-        let called = self
-            .session
-            .send::<_, Value>(
-                "Runtime.callFunctionOn",
-                json!({ "objectId": self.global, "functionDeclaration": WATCH_ROOTS,
-                        "arguments": arguments, "returnByValue": true }),
-            )
-            .await
-            .map_err(ProbeFailure::from_core)?;
-        match called.pointer("/result/value") {
-            Some(Value::Bool(true)) => Ok(()),
-            Some(Value::Bool(false)) => Err(ProbeFailure::Gone(Ran::No)),
-            _ => Err(ProbeFailure::Broken(
-                "the seal did not take the elements to watch".to_owned(),
-            )),
-        }
-    }
-
     /// Resolves each of `roots` into this world and hands them all to the seal's `watch` in one
     /// call. A root whose node is gone since the scan is skipped: nothing in it can be read now.
     /// One the page only removed from the document still resolves (measured), and is watched.
@@ -624,6 +597,46 @@ impl SealedWorld {
     /// The handle every probe call names.
     pub(crate) fn global(&self) -> &str {
         &self.global
+    }
+
+    /// Runs rendering-only screenshot preparation in this held isolated world, returning no
+    /// page data. Keeping the CDP script gateway here prevents capture code from accidentally
+    /// evaluating in the page's main world or a recycled numeric execution context.
+    pub(crate) async fn render_for_screenshot(
+        &self,
+        script: &str,
+        arguments: &Value,
+    ) -> Result<(), CoreError> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Reply {
+            exception_details: Option<Value>,
+        }
+        let arguments: Vec<Value> = arguments
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|value| json!({ "value": value }))
+            .collect();
+        let reply: Reply = self
+            .session
+            .send(
+                "Runtime.callFunctionOn",
+                json!({
+                    "objectId": self.global(),
+                    "functionDeclaration": script,
+                    "arguments": arguments,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                }),
+            )
+            .await?;
+        if reply.exception_details.is_some() {
+            return Err(CoreError::PageScript(
+                "screenshot rendering failed".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     /// The context id `DOM.resolveNode` needs; see the field.

@@ -22,11 +22,11 @@ test('caught-refusal', async ({ page }) => {
   }
 })
 test('neo-differs', async ({ page }) => {
-  await page.setContent('<input type="password" aria-label="password">')
-  await page.evaluate(() => {
-    document.querySelector('input').value = String.fromCharCode(120).repeat(13)
-  })
-  expect((await page.locator('input').inputValue()).length).toBe(13)
+  await page.setContent('<p>same behavior</p>')
+  // Calibrate the judge with a deliberate assertion mismatch, independent of product behavior.
+  expect(await page.locator('p').textContent()).toBe(
+    typeof __neo === 'undefined' ? 'same behavior' : 'intentional mismatch',
+  )
 })
 test('count-differs', async ({ page }) => {
   expect(await page.url()).toBe('about:blank')

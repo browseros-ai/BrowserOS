@@ -133,7 +133,7 @@ impl Playwright {
     ) -> Result<Value, PlaywrightError> {
         let OpInput { call, args } = OpInput::decode(op, input)?;
         let scope = OpScope::new(env, op, call);
-        match op.kind() {
+        let answered = match op.kind() {
             OpKind::Action(op) => action_op::invoke(self, &scope, op, args).await,
             OpKind::Read(op) => read_op::invoke(self, &scope, op, args).await,
             OpKind::Snapshot(op) => snapshot_op::invoke(self, &scope, op, args).await,
@@ -142,7 +142,8 @@ impl Playwright {
             OpKind::Page(op) => page_op::invoke(self, &scope, op, args).await,
             OpKind::Context(op) => context_op::invoke(self, &scope, op, args).await,
             OpKind::Event(op) => event_op::invoke(self, &scope, op, args).await,
-        }
+        };
+        scope.settle(answered)
     }
 }
 

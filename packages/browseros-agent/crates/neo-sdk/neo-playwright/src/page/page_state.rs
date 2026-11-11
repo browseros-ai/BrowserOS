@@ -18,6 +18,7 @@ use crate::world::{FrameSeq, FrameWorlds};
 /// | `frames` | installs, invalidation | std mutex inside, never across an await |
 /// | `input` | one burst at a time: a click's arm, input and verdict; a key press | tokio mutex, FIFO |
 /// | `focus` | the focus lease of input ops on tabs core did not create | tokio mutex, one CDP call |
+/// | `screenshots` | rendering preparation and restoration | tokio mutex, FIFO |
 /// | `tokens` | arming requests | atomic |
 #[derive(Debug)]
 pub(crate) struct PageState {
@@ -26,6 +27,9 @@ pub(crate) struct PageState {
     /// two ops' events from interleaving and a frame's one interceptor slot to one op.
     input: Arc<AsyncMutex<TabInput>>,
     focus: Arc<FocusLease>,
+    /// Held across preparation, capture and restoration: another screenshot must never see
+    /// the first screenshot's temporary styles or overwrite its animation cleanup.
+    screenshots: Arc<AsyncMutex<()>>,
     /// Hit-target interceptor tokens, unique on this tab.
     tokens: AtomicU32,
 }
@@ -38,6 +42,7 @@ impl PageState {
             frames: FrameWorlds::new(first),
             input: Arc::new(AsyncMutex::new(TabInput::new(platform))),
             focus: Arc::default(),
+            screenshots: Arc::default(),
             tokens: AtomicU32::new(1),
         }
     }
@@ -55,6 +60,11 @@ impl PageState {
     /// The tab's focus emulation holders.
     pub(crate) fn focus(&self) -> &Arc<FocusLease> {
         &self.focus
+    }
+
+    /// The queue for the complete screenshot lifecycle, including cancellation cleanup.
+    pub(crate) fn screenshots(&self) -> &Arc<AsyncMutex<()>> {
+        &self.screenshots
     }
 
     /// A token no other interceptor armed on this tab has.

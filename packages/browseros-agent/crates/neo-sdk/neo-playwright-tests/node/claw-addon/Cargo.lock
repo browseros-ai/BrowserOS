@@ -1594,7 +1594,6 @@ dependencies = [
 name = "neo-takeover"
 version = "0.1.0"
 dependencies = [
- "browseros-cdp",
  "browseros-core",
  "bytes",
  "futures-util",
@@ -1608,7 +1607,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "zeroize",
 ]
 
 [[package]]

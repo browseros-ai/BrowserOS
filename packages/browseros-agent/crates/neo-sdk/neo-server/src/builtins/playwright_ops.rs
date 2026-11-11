@@ -21,6 +21,7 @@ use std::future::{self, Future};
 use std::sync::{Arc, LazyLock};
 
 use browseros_core::{BrowserView, TabId, TargetId};
+use futures_util::future::BoxFuture;
 use neo_playwright::{
     Answer, ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Refusal, RunState, TimedOut,
 };
@@ -578,6 +579,14 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
             },
         );
     }
+
+    fn abort_reason(&self) -> Option<String> {
+        self.op.abort_reason()
+    }
+
+    fn aborted(&self) -> BoxFuture<'_, ()> {
+        Box::pin(self.op.aborted())
+    }
 }
 
 /// The code `OpEnv::recheck_reach` hands the crate, with owner `neo`, for a reached tab that
@@ -645,6 +654,7 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::SecretUploadRefused => ErrorCode::SECRET_UPLOAD_REFUSED,
         PlaywrightCode::TargetClosed => ErrorCode::TARGET_CLOSED,
         PlaywrightCode::BrowserDisconnected => ErrorCode::BROWSER_DISCONNECTED,
+        PlaywrightCode::Aborted => ErrorCode::ABORTED,
         PlaywrightCode::Internal => ErrorCode::INTERNAL_ERROR,
     }
 }

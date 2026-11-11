@@ -1,9 +1,9 @@
 //! `page.evaluate` and `page.waitForFunction` as agents write them, run by the real prelude in
 //! QuickJS (Runner N, `tests/support/js_runner.rs`) through `Playwright::invoke` on a real
-//! browser: values come back as Playwright 1.64.1 gives them, a field's value leaves masked
-//! whatever shape a script gives it, and the main world behaves as upstream's does (user
-//! activation, a predicate that keeps state, a sweep around every poll). One test drives the
-//! op directly, to read what the crate asked of its host around each send.
+//! browser: values come back as Playwright 1.64.1 gives them, a field's value in whatever shape
+//! a script gives it, and the main world behaves as upstream's does (user activation, a
+//! predicate that keeps state). One test drives the op directly, to read what the crate asked
+//! of its host around each send.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --test evaluate_values_live -- --ignored`.
@@ -25,16 +25,13 @@ mod js_runner;
 mod live_run;
 
 use std::collections::HashMap;
-use std::error::Error;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
 
 use fixture_server::{FixtureServer, Page};
 use js_runner::{OpHost, run_script};
-use live_run::{EnvCall, Heard, LiveRun, TestPage, TestResult, brand};
+use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand};
 use serde_json::{Value, json};
-use tokio::time;
 
 /// Two sensitive fields, empty until a test types into them.
 const LOGIN: &str = r#"<!doctype html><html><head><title>Login</title></head><body>
@@ -156,9 +153,11 @@ async fn tests_that_page_values_come_back_as_playwright_gives_them() -> TestResu
     .await
 }
 
+/// A field's value comes back in the shape the script gave it, as upstream returns it: as a
+/// key, in an Error, as a number, a `BigInt`, a Date's time and inside a string.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_typed_value_leaves_masked_whatever_shape_the_script_gives_it() -> TestResult {
+async fn tests_that_a_typed_value_comes_back_in_the_shape_the_script_gives_it() -> TestResult {
     on_login(|run, page| async move {
         type_into(&run, &page, "pw", "hunter2-typed").await?;
         type_into(&run, &page, "code", "482913").await?;
@@ -175,36 +174,28 @@ async fn tests_that_a_typed_value_leaves_masked_whatever_shape_the_script_gives_
                big: describe(got.big), date: describe(got.date), text: got.text }",
         )
         .await?;
-        let private = json!(["string", "[object String]", "[private]"]);
         assert_eq!(
             got,
             json!({
-                "keys": ["[private]", "error", "number", "big", "date", "text"],
-                "error": ["object", "[object Error]", "Error: bad [private]"],
-                "number": private,
-                "big": private,
-                "date": private,
-                "text": "you typed [private]",
+                "keys": ["hunter2-typed", "error", "number", "big", "date", "text"],
+                "error": ["object", "[object Error]", "Error: bad hunter2-typed"],
+                "number": ["number", "[object Number]", "482913"],
+                "big": ["bigint", "[object BigInt]", "482913"],
+                "date": ["object", "[object Date]", "1970-01-01T00:08:02.913Z"],
+                "text": "you typed hunter2-typed",
             }),
-            "a value as a key, in an Error, as a number, a BigInt and a Date's time leaves masked"
+            "a number stays a number, a BigInt a BigInt and a Date a Date"
         );
-        let swept = run.swept();
-        for secret in ["hunter2-typed", "482913"] {
-            assert!(
-                swept.iter().any(|value| value == secret),
-                "the host learns {secret} to register it"
-            );
-        }
         Ok(())
     })
     .await
 }
 
-/// A typed array carries a code as its elements, whose bytes never spell the code's digits: each
-/// comes back as the array's masked text, for the integer, float and 64-bit kinds alike.
+/// A typed array carries a code as its elements, and comes back as the same typed array, for
+/// the integer, float and 64-bit kinds alike.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_code_in_a_typed_array_leaves_masked() -> TestResult {
+async fn tests_that_a_code_in_a_typed_array_comes_back_as_that_array() -> TestResult {
     on_login(|run, page| async move {
         type_into(&run, &page, "code", "482913").await?;
         let got = script(
@@ -221,47 +212,11 @@ async fn tests_that_a_code_in_a_typed_array_leaves_masked() -> TestResult {
         assert_eq!(
             got,
             json!([
-                ["string", "[object String]", "1,[private]"],
-                ["string", "[object String]", "[private]"],
-                ["string", "[object String]", "[private]"],
+                ["object", "[object Int32Array]", "1,482913"],
+                ["object", "[object Float64Array]", "482913"],
+                ["object", "[object BigInt64Array]", "482913"],
             ]),
             "an Int32Array, a Float64Array and a BigInt64Array element holding the code"
-        );
-        Ok(())
-    })
-    .await
-}
-
-/// An alert the script raises carries page text through the event stream while the op is still
-/// pending, so the host must know every value the first sweep found before the script goes out:
-/// it masks events with what it was told. Reported only when the op ended, the field's value
-/// reached the host after the send, when the dialog was already out.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_the_host_learns_the_swept_values_before_the_script_is_sent() -> TestResult {
-    on_login(|run, page| async move {
-        type_into(&run, &page, "pw", "hunter2-alert").await?;
-        run.clear_calls();
-        let alerted = run
-            .invoke(
-                "page.evaluate",
-                evaluate_input(
-                    &page,
-                    "() => { alert(document.getElementById('pw').value); return 1 }",
-                ),
-            )
-            .await?;
-        assert_eq!(alerted, json!(1), "the dialog was closed after its grace");
-        let heard = run.heard();
-        let reported = heard.iter().position(|heard| {
-            matches!(heard, Heard::Swept(values) if values.iter().any(|value| value == "hunter2-alert"))
-        });
-        let sent = heard
-            .iter()
-            .position(|heard| *heard == Heard::Call(EnvCall::MarkSent));
-        assert!(
-            matches!((reported, sent), (Some(reported), Some(sent)) if reported < sent),
-            "the swept value reached the host before the send: {heard:?}"
         );
         Ok(())
     })
@@ -289,53 +244,6 @@ async fn tests_that_window_open_inside_evaluate_opens_a_popup() -> TestResult {
                 .as_str()
                 .is_some_and(|url| url.ends_with("/popup.html")),
             "the script runs with user activation, as upstream's does: {opened}"
-        );
-        Ok(())
-    })
-    .await
-}
-
-/// A password field the page adds after the wait began and removes before it ends: only a sweep
-/// around the polls that saw it can learn its value, which the predicate kept and returns.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_field_seen_only_mid_wait_leaves_masked() -> TestResult {
-    on_login(|run, page| async move {
-        let waited = script(
-            &run,
-            &page,
-            "const handle = await page.waitForFunction(() => {\n\
-               const field = document.getElementById('late')\n\
-               if (field) window.seen = field.value\n\
-               return window.done ? window.seen : false\n\
-             }, undefined, { timeout: 10000 })\n\
-             return await handle.jsonValue()",
-        );
-        let driver = async {
-            time::sleep(Duration::from_millis(300)).await;
-            run.eval(
-                &page,
-                "const field = document.createElement('input'); field.type = 'password'; \
-                 field.id = 'late'; field.value = 'mid-wait-secret-42'; document.body.append(field)",
-            )
-            .await?;
-            time::sleep(Duration::from_millis(500)).await;
-            run.eval(&page, "document.getElementById('late').remove()")
-                .await?;
-            time::sleep(Duration::from_millis(300)).await;
-            run.eval(&page, "window.done = true").await?;
-            Ok::<_, Box<dyn Error>>(())
-        };
-        let (waited, driven) = tokio::join!(waited, driver);
-        driven?;
-        assert_eq!(
-            waited?,
-            json!("[private]"),
-            "the sweeps around the polls that saw the field learned its value"
-        );
-        assert!(
-            run.swept().iter().any(|value| value == "mid-wait-secret-42"),
-            "the host learns it too"
         );
         Ok(())
     })
@@ -379,7 +287,7 @@ async fn tests_that_a_value_shaped_like_a_handle_stays_a_plain_object() -> TestR
                typeof value.goto]",
         )
         .await?;
-        assert_eq!(got, json!([true, ["$neo", "id", "tab"], "undefined"]));
+        assert_eq!(got, json!([true, ["$neo", "tab"], "undefined"]));
         Ok(())
     })
     .await

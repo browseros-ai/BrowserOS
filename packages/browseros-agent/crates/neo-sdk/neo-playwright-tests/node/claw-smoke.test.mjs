@@ -11,53 +11,10 @@ import test from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
+import { isAlive, stopBrowser } from './browser.mjs'
 import { openClaw } from './claw-loader.mjs'
 
 const filename = fileURLToPath(import.meta.url)
-
-function groupAlive(pid) {
-  try {
-    process.kill(-pid, 0)
-    return true
-  } catch (error) {
-    if (error.code === 'ESRCH') return false
-    if (error.code !== 'EPERM') throw error
-    return execFileSync('ps', ['-axo', 'pgid='], { encoding: 'utf8' })
-      .split('\n')
-      .some((group) => Number(group.trim()) === pid)
-  }
-}
-
-function groupOwned(pid, profile) {
-  return execFileSync('ps', ['-axo', 'pgid=,command='], { encoding: 'utf8' })
-    .split('\n')
-    .some((line) => {
-      const match = line.trim().match(/^(\d+)\s+(.*)$/)
-      return (
-        Number(match?.[1]) === pid &&
-        match[2].includes(`--user-data-dir=${profile}`)
-      )
-    })
-}
-
-async function stopBrowser(pid, profile) {
-  if (!pid) return
-  for (const signal of ['SIGTERM', 'SIGKILL']) {
-    if (!groupAlive(pid)) return
-    assert(
-      groupOwned(pid, profile),
-      `cannot verify ownership of browser group ${pid}`,
-    )
-    try {
-      process.kill(-pid, signal)
-    } catch (error) {
-      if (error.code !== 'ESRCH') throw error
-    }
-    for (let attempt = 0; attempt < 60 && groupAlive(pid); attempt++)
-      await sleep(50)
-  }
-  assert(!groupAlive(pid), `browser group ${pid} survived cleanup`)
-}
 
 async function startBrowser(executable, directory, hosted) {
   const profile = fs.mkdtempSync(path.join(directory, 'profile-'))
@@ -104,7 +61,7 @@ async function startBrowser(executable, directory, hosted) {
   let closing
   const close = () =>
     (closing ??= (async () => {
-      await stopBrowser(child.pid, profile)
+      await stopBrowser(owner)
       await exited
       fs.rmSync(profile, { recursive: true, force: true })
       fs.writeFileSync(
@@ -112,7 +69,7 @@ async function startBrowser(executable, directory, hosted) {
         JSON.stringify({
           ...owner,
           exit,
-          groupGone: !child.pid || !groupAlive(child.pid),
+          groupGone: !child.pid || !isAlive(-child.pid),
         }),
       )
     })())

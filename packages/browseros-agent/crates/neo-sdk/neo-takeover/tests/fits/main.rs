@@ -6,7 +6,7 @@
 
 #[allow(
     dead_code,
-    reason = "the fake also answers the journal and the sweep, for the takeover flow's tests"
+    reason = "the shared fake also exposes gates and probes for the takeover flow's tests"
 )]
 mod browser;
 
