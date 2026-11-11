@@ -1,6 +1,7 @@
-//! Page media at the browser's renderer-initialization seam. Core pauses new OOPIFs, invokes
-//! this lease before resume, and asks it to rediscover ancestry after event lag. Bindings belong
-//! to one CDP epoch; the actual preferences stay on `PageState` across runs and reconnects.
+//! Page media at the browser's renderer-initialization seam. Core pauses the new OOPIFs of a page
+//! that emulates media, invokes this lease before resume, and asks it to rediscover ancestry after
+//! event lag. Bindings belong to one CDP epoch; the actual preferences stay on `PageState` across
+//! runs and reconnects.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -179,6 +180,27 @@ impl MediaSessions {
 }
 
 impl FrameInitializer for MediaInitializer {
+    /// Every admitted page has a binding; only one whose page emulates media has anything to
+    /// install, so only its new frames start paused. A page lock held elsewhere is an
+    /// emulateMedia call changing the settings, so the frame waits for them.
+    fn configures(&self, parent: &SessionId) -> bool {
+        let Some(inner) = self.inner.upgrade() else {
+            return false;
+        };
+        let Some(state) = inner
+            .current()
+            .sessions
+            .get(parent)
+            .map(|binding| Arc::clone(&binding.state))
+        else {
+            return false;
+        };
+        state
+            .try_lock()
+            .ok()
+            .is_none_or(|state| state.is_emulated())
+    }
+
     fn detached(&self, session: &SessionId) {
         if let Some(inner) = self.inner.upgrade() {
             inner.current().sessions.remove(session);

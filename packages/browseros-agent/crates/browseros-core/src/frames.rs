@@ -11,6 +11,16 @@ use tracing::warn;
 /// Page-owned renderer configuration installed before a new iframe is resumed.
 /// Registrations are weak: the SDK owns the settings and unregisters by dropping its lease.
 pub trait FrameInitializer: Send + Sync {
+    /// Whether a renderer that `parent` auto-attaches inherits configuration it must receive
+    /// before its first script runs. Core pauses new frames under `parent` only then.
+    ///
+    /// A pause is not free: Chromium recomputes a frame's auto-attached children whenever any
+    /// session, from any client, arms auto-attach on it, detaches a child that is still
+    /// navigating, and never releases that child's pause, so its page never loads. Answer
+    /// `true` only while there is something to install.
+    fn configures(&self, _parent: &SessionId) -> bool {
+        true
+    }
     /// Inherit page configuration from the session that auto-attached this renderer.
     fn initialize<'a>(
         &'a self,
@@ -119,6 +129,19 @@ impl FrameRegistry {
         live
     }
 
+    /// Whether frames `parent` auto-attaches start paused: only when some initializer has
+    /// configuration for them ([`FrameInitializer::configures`]).
+    fn pauses_children_of(
+        initializers: &[Arc<dyn FrameInitializer>],
+        parent: Option<&SessionId>,
+    ) -> bool {
+        parent.is_some_and(|parent| {
+            initializers
+                .iter()
+                .any(|initializer| initializer.configures(parent))
+        })
+    }
+
     /// Arm recursive attachment before a page with persistent settings can create a renderer.
     pub async fn enable_initialization(&self, session: &ProtocolSession) -> Result<(), CoreError> {
         session
@@ -145,17 +168,17 @@ impl FrameRegistry {
                     return Err(guard.invalidated.clone().into());
                 }
             }
-            sessions.insert(page_id.clone(), session_id);
+            sessions.insert(page_id.clone(), session_id.clone());
         }
         let initialized = page_session.at_connection_epoch();
-        for initializer in self.initializers() {
+        let initializers = self.initializers();
+        for initializer in &initializers {
             initializer.page_attached(&initialized, &page_id).await?;
         }
+        // Asked after `page_attached`, which restores a page's retained configuration.
+        let pause = Self::pauses_children_of(&initializers, Some(&session_id));
         let setup = page_session
-            .send::<_, Value>(
-                "Target.setAutoAttach",
-                frame_auto_attach(!self.initializers().is_empty()),
-            )
+            .send::<_, Value>("Target.setAutoAttach", frame_auto_attach(pause))
             .await;
         if let Err(error @ CoreError::Target(_)) = setup {
             return Err(error);
@@ -492,11 +515,10 @@ impl FrameRegistry {
         let _ = session
             .send::<_, Value>("Accessibility.enable", json!({}))
             .await;
+        // This frame inherits `parent`'s configuration, so its own children need it too.
+        let pause = Self::pauses_children_of(&initializers, parent.as_ref());
         let _ = session
-            .send::<_, Value>(
-                "Target.setAutoAttach",
-                frame_auto_attach(!initializers.is_empty()),
-            )
+            .send::<_, Value>("Target.setAutoAttach", frame_auto_attach(pause))
             .await;
         if !initializers.is_empty() {
             // Recursive auto-attach is armed before initialization and resume, so nested
@@ -1200,6 +1222,82 @@ mod tests {
             registry.initializers().is_empty(),
             "dropping the SDK removes its weak registration"
         );
+        Ok(())
+    }
+
+    /// Has configuration only for renderers attached under the session named `0`.
+    struct ConfiguresOnly(&'static str);
+
+    impl FrameInitializer for ConfiguresOnly {
+        fn configures(&self, parent: &SessionId) -> bool {
+            parent.as_str() == self.0
+        }
+
+        fn initialize<'a>(
+            &'a self,
+            _session: &'a ProtocolSession,
+            _parent: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<(), crate::CoreError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn only_frames_with_configuration_to_install_start_paused() -> Result<(), Box<dyn Error>>
+    {
+        let connection = crate::testing::TestConnection::new([]);
+        for method in [
+            "Target.setAutoAttach",
+            "DOM.enable",
+            "Accessibility.enable",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        let registry = FrameRegistry::new(connection.clone());
+        let lease: Arc<dyn FrameInitializer> = Arc::new(ConfiguresOnly("emulated"));
+        registry.register_initializer(&lease);
+        for (page, session) in [(1u32, "plain"), (2, "emulated")] {
+            registry
+                .register_page(
+                    ProtocolSession::for_session(connection.clone(), SessionId::from(session)),
+                    PageId::from(page),
+                    SessionId::from(session),
+                )
+                .await?;
+        }
+        for (parent, child) in [("plain", "plain-child"), ("emulated", "emulated-child")] {
+            registry
+                .handle_event(CdpEvent {
+                    method: "Target.attachedToTarget".to_owned(),
+                    session_id: Some(SessionId::from(parent)),
+                    params: json!({"sessionId": child, "waitingForDebugger": false, "targetInfo": {
+                        "targetId": child, "type": "iframe", "title": "", "url": "about:blank",
+                        "attached": true, "canAccessOpener": false
+                    }}),
+                })
+                .await;
+        }
+        let armed: Vec<_> = connection
+            .calls()?
+            .into_iter()
+            .filter(|call| call.method == "Target.setAutoAttach")
+            .map(|call| {
+                let session = call.session.map(|id| id.as_str().to_owned());
+                (session, call.params["waitForDebuggerOnStart"].clone())
+            })
+            .collect();
+        let expected = [
+            ("plain", false),
+            ("emulated", true),
+            ("plain-child", false),
+            ("emulated-child", true),
+        ]
+        .map(|(session, paused)| (Some(session.to_owned()), json!(paused)));
+        // A paused frame Chromium detaches mid-navigation is never resumed, so a page with
+        // nothing to install must never pause one.
+        assert_eq!(armed, expected);
+        drop(lease);
         Ok(())
     }
 
