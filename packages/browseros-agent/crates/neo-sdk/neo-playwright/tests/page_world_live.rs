@@ -1,5 +1,5 @@
 //! The page ops that need a sealed world or the main world, on a real browser, through
-//! `Playwright::invoke`: `evaluate` and `waitForFunction` behind the sweep, `title` and
+//! `Playwright::invoke`: `evaluate` and `waitForFunction` in the main world, `title` and
 //! `content` read through the seal, `setContent` with its load states, and `waitForURL`. That `setContent`
 //! retires the document's seq is checked in `src/world/live_tests.rs`, where seqs are visible.
 //!
@@ -27,7 +27,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use browseros_core::sensitive_fields::FieldValues;
 use fixture_server::{FixtureServer, Page};
 use live_run::{EnvCall, Intercept, LiveRun, TestPage, TestResult, brand};
 use neo_playwright::{Answer, ErrorCode, PlaywrightError, Refusal, TimedOut};
@@ -64,16 +63,6 @@ const DONE: &str = "<!doctype html><title>Done</title><p>done</p>";
 const XHTML: &str = r#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html><head><title>Strict</title></head><body><p>strict</p></body></html>"#;
 
-/// A page that keeps the window of its same-origin frame, as an app keeps one it talks to. The
-/// frame's password field is the one a user types into.
-const KEPT: &str = r#"<!doctype html><html><head><title>Kept</title></head><body><h1>Account</h1>
-<iframe id="field" src="/field.html"></iframe>
-<script>
-document.getElementById('field').addEventListener('load', (event) => {
-  window.kept = event.target.contentWindow;
-});
-</script></body></html>"#;
-
 const FIELD: &str =
     r#"<!doctype html><title>Field</title><label>Password <input type="password"></label>"#;
 
@@ -95,7 +84,6 @@ const FRAMED: &str = r#"<!doctype html><html><head><title>Framed</title></head><
 
 async fn fixtures() -> TestResult<FixtureServer> {
     let pages = HashMap::from([
-        ("/kept.html".to_owned(), Page::html(KEPT)),
         ("/field.html".to_owned(), Page::html(FIELD)),
         ("/filled.html".to_owned(), Page::html(FILLED)),
         ("/login.html".to_owned(), Page::html(LOGIN)),
@@ -192,7 +180,7 @@ async fn type_secrets(run: &LiveRun, page: &TestPage) -> TestResult {
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_evaluate_masks_a_typed_password_the_page_still_holds_raw() -> TestResult {
+async fn tests_that_evaluate_reads_a_typed_password_as_the_page_holds_it() -> TestResult {
     on_page("/login.html", |run, _server, page| async move {
         let result = async {
             type_secrets(&run, &page).await?;
@@ -207,9 +195,8 @@ async fn tests_that_evaluate_masks_a_typed_password_the_page_still_holds_raw() -
             .await?;
             assert_eq!(
                 echoed,
-                json!({ "a": ["[private]", "you typed [private]", "[private]", "[private]"], "id": 1 }),
-                "the main frame's and the same-process frame's values are masked, a code as a \
-                 number too"
+                json!({ "a": ["hunter2-typed", "you typed hunter2-typed", "482913", 482_913], "id": 1 }),
+                "the main frame's and the same-process frame's values, a code as a number too"
             );
             assert!(
                 run.calls().starts_with(&[EnvCall::Recheck, EnvCall::MarkSent]),
@@ -226,21 +213,9 @@ async fn tests_that_evaluate_masks_a_typed_password_the_page_still_holds_raw() -
             .await?;
             assert_eq!(
                 late,
-                json!("[private]"),
-                "a value the script itself put in a field is caught by the second sweep"
+                json!("late-secret-77"),
+                "a value the script itself put in a field"
             );
-
-            let raw = run
-                .eval(&page, "document.getElementById('pw').value")
-                .await?;
-            assert_eq!(raw, json!("hunter2-typed"), "the page keeps its own value");
-            let swept = run.swept();
-            for secret in ["hunter2-typed", "482913", "late-secret-77"] {
-                assert!(
-                    swept.iter().any(|value| value == secret),
-                    "the host is told every swept value, to register it: {secret}"
-                );
-            }
             Ok(())
         }
         .await;
@@ -307,7 +282,7 @@ async fn tests_that_a_thrown_error_reads_as_playwrights_page_evaluate_message() 
                 ),
                 (
                     "() => { throw new Error('saw ' + document.getElementById('pw').value); }",
-                    "page.evaluate: Error: saw [private]",
+                    "page.evaluate: Error: saw hunter2-typed",
                 ),
             ];
             for (function, message) in cases {
@@ -352,8 +327,8 @@ async fn tests_that_wait_for_function_polls_until_truthy_and_times_out() -> Test
                 wait_for_function(&run, &page, 5000, "() => window.ready", json!({})).await?;
             assert_eq!(
                 ready,
-                json!({ "value": "[private]", "preview": "[private]" }),
-                "the truthy result and its preview leave the page masked"
+                json!({ "value": "hunter2-typed", "preview": "hunter2-typed" }),
+                "the truthy result and its preview"
             );
             assert!(
                 started.elapsed() >= Duration::from_millis(250),
@@ -730,8 +705,8 @@ async fn tests_that_content_masks_an_echo_the_serializer_escaped() -> TestResult
             .await?;
             assert_eq!(
                 echoed,
-                json!(r#"<p id="echo" data-echo="[private]">you typed [private]</p>"#),
-                "a script's serialized markup is masked the same way"
+                raw,
+                "a script's serialized markup comes back as the page serializes it"
             );
             Ok(())
         }
@@ -795,8 +770,8 @@ async fn tests_that_set_content_writes_the_document_and_waits_for_its_load_state
                 assert_eq!(text, json!("written"), "the new document is the page's");
             }
 
-            // The image holds `load` past the timeout: the content is set, so the timeout
-            // leaves only after the sweep that follows the write, as upstream's message.
+            // The image holds `load` past the timeout: the content is set, and the op fails with
+            // upstream's timeout message.
             run.clear_calls();
             let timed_out = run
                 .invoke(
@@ -849,136 +824,6 @@ async fn until_true(run: &LiveRun, page: &TestPage, expression: &str) -> TestRes
         time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
-}
-
-/// `output` as the host hands it to the agent: claw-sdk's door masks every exit with the
-/// values the crate reported through `values_swept`, which the live hooks keep.
-fn as_the_host_returns(run: &LiveRun, mut output: Value) -> Value {
-    FieldValues::from_sweep(&json!(run.swept())).mask_json(&mut output);
-    output
-}
-
-/// Runs `page.setContent(html)`, polls `settled` in the page until the script copied `secret`
-/// and the frame that held it is gone, then runs every read of the new document (`title`,
-/// `content` and `#who`'s `textContent`). The host must be told `secret` by the time setContent
-/// returns, and every read, as the host returns it, must mask it: no read's own sweep can find
-/// the frame any more.
-async fn set_content_copy_is_masked(
-    run: &LiveRun,
-    page: &TestPage,
-    html: &str,
-    settled: &str,
-    secret: &str,
-) -> TestResult {
-    run.invoke(
-        "page.setContent",
-        json!({ "call": { "timeoutMs": 10_000 }, "page": brand(page), "html": html }),
-    )
-    .await?;
-    let swept = run.swept();
-    assert!(
-        swept.iter().any(|value| value == secret),
-        "setContent itself tells the host of {secret}: {swept:?}"
-    );
-    until_true(run, page, settled).await?;
-    let who = json!({
-        "$neo": "locator",
-        "page": brand(page),
-        "chunks": [{ "parts": [{
-            "name": "css",
-            "body": [{ "simples": [{ "selector": { "css": "#who", "functions": [] }, "combinator": "" }] }],
-            "source": "#who",
-        }] }],
-        "display": "locator('#who')",
-    });
-    let reads = [
-        ("page.title", json!({ "page": brand(page) })),
-        ("page.content", json!({ "page": brand(page) })),
-        (
-            "locator.textContent",
-            json!({ "target": who, "strict": "strict" }),
-        ),
-    ];
-    for (op, input) in reads {
-        let output = as_the_host_returns(run, run.invoke(op, input).await?);
-        assert!(
-            !output.to_string().contains(secret),
-            "{op} holds {secret} raw: {output}"
-        );
-    }
-    Ok(())
-}
-
-/// A script in setContent's HTML runs in the page's main world. Before the write, it reads a
-/// value from the same-site frame the old document held, through the window the page kept: the
-/// frame is gone from the new document, but its document lives on. Only the sweep before the
-/// write sees that field.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_set_content_masks_a_value_its_script_copies_from_the_old_documents_frame()
--> TestResult {
-    on_page("/kept.html", |run, _server, page| async move {
-        let result = async {
-            until_true(&run, &page, "window.kept !== undefined").await?;
-            run.eval(
-                &page,
-                "kept.document.querySelector('input').value = 'kept-secret-82'",
-            )
-            .await?;
-            let html = "<!doctype html><title>pending</title><h1 id=\"who\">nobody</h1><script>\
-                        const value = kept.document.querySelector('input').value;\
-                        document.title = value;\
-                        document.getElementById('who').textContent = 'Signed in with ' + value;\
-                        </script>";
-            set_content_copy_is_masked(
-                &run,
-                &page,
-                html,
-                "window.length === 0 && document.title !== 'pending'",
-                "kept-secret-82",
-            )
-            .await
-        }
-        .await;
-        (run, result)
-    })
-    .await
-}
-
-/// A script in setContent's HTML opens a same-site frame whose server filled a password field
-/// and copies the value into the new document; later the page removes the frame. Only the
-/// sweep after the load state sees that field.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_set_content_masks_a_value_its_script_copies_from_a_frame_it_opened()
--> TestResult {
-    on_page("/other.html", |run, server, page| async move {
-        let result = async {
-            let html = format!(
-                "<!doctype html><title>pending</title><h1 id=\"who\">nobody</h1>\
-                 <iframe id=\"api\" src=\"{}\"></iframe><script>\
-                 document.getElementById('api').addEventListener('load', (event) => {{\
-                   const value = event.target.contentDocument.querySelector('input').value;\
-                   document.title = value;\
-                   document.getElementById('who').textContent = 'Signed in with ' + value;\
-                 }});\
-                 window.drop = () => document.getElementById('api')?.remove();\
-                 </script>",
-                server.url("127.0.0.1", "/filled.html")
-            );
-            set_content_copy_is_masked(
-                &run,
-                &page,
-                &html,
-                "document.title !== 'pending' && (drop(), window.length === 0)",
-                "filled-secret-93",
-            )
-            .await
-        }
-        .await;
-        (run, result)
-    })
-    .await
 }
 
 /// How a test's tab came to be: the agent's own, which core sets up for its file chooser
@@ -1087,12 +932,11 @@ async fn in_frame(
 }
 
 /// A same-site child frame's script reaches its parent's document as the page's own scripts
-/// do, so `frame.evaluate` and `frame.waitForFunction` run in the child and are masked with
-/// every field of the site, the parent's included; `frame.title` and `frame.content` read the
-/// child's own document.
+/// do, so `frame.evaluate` and `frame.waitForFunction` run in the child and read the parent's
+/// field too; `frame.title` and `frame.content` read the child's own document.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field_masked() -> TestResult {
+async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field() -> TestResult {
     on_framed(Opened::ByAgent, |run, page, same, _cross| async move {
         let result = async {
             run.eval(
@@ -1115,20 +959,14 @@ async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field_mask
             .await?;
             assert_eq!(
                 read,
-                json!({ "a": ["Field", "[private]", "[private]"], "id": 1 }),
-                "the script ran in the child, and both frames' values are masked"
+                json!({ "a": ["Field", "parent-secret-41", "child-secret-42"], "id": 1 }),
+                "the script ran in the child, and read both frames' values"
             );
             assert_eq!(
                 run.calls(),
                 [EnvCall::Recheck, EnvCall::MarkSent],
                 "one send, rechecked and marked"
             );
-            for secret in ["parent-secret-41", "child-secret-42"] {
-                assert!(
-                    run.swept().iter().any(|value| value == secret),
-                    "the host is told {secret}"
-                );
-            }
             let waited = in_frame(
                 &run,
                 &page,
@@ -1140,7 +978,7 @@ async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field_mask
             .await?;
             assert_eq!(
                 waited.get("value"),
-                Some(&json!("[private]")),
+                Some(&json!("parent-secret-41")),
                 "frame.waitForFunction runs in the child too: {waited}"
             );
             let title = in_frame(&run, &page, &same, "frame.title", "page.title", json!({})).await?;
@@ -1160,11 +998,11 @@ async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field_mask
     .await
 }
 
-/// An out-of-process frame's script runs on that frame's own session, and its own field's
-/// value, filled by its server, comes back masked.
+/// An out-of-process frame's script runs on that frame's own session, and reads its own field's
+/// value, filled by its server.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_an_out_of_process_frames_script_reads_its_own_field_masked() -> TestResult {
+async fn tests_that_an_out_of_process_frames_script_reads_its_own_field() -> TestResult {
     on_framed(Opened::ByAgent, |run, page, _same, cross| async move {
         let result = async {
             run.clear_calls();
@@ -1181,12 +1019,8 @@ async fn tests_that_an_out_of_process_frames_script_reads_its_own_field_masked()
             .await?;
             assert_eq!(
                 read,
-                json!({ "a": ["localhost", "[private]"], "id": 1 }),
-                "the script ran in the out-of-process frame, its field masked"
-            );
-            assert!(
-                run.swept().iter().any(|value| value == "filled-secret-93"),
-                "the host is told the frame's value"
+                json!({ "a": ["localhost", "filled-secret-93"], "id": 1 }),
+                "the script ran in the out-of-process frame"
             );
             let title =
                 in_frame(&run, &page, &cross, "frame.title", "page.title", json!({})).await?;
@@ -1204,8 +1038,7 @@ async fn tests_that_an_out_of_process_frames_script_reads_its_own_field_masked()
 /// on polling in the new document. Neo's does too, in each way a frame can move: out of
 /// process to another site, out of process back to its parent's site, and in process out to
 /// another site. The predicate is true only in the new document, where it reads the new
-/// document's own field, which comes back masked, so the sweeps around its polls covered the
-/// new site; every poll is one send, rechecked and marked.
+/// document's own field; every poll is one send, rechecked and marked.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_frame_wait_for_function_follows_its_frame_into_another_process() -> TestResult {
@@ -1243,17 +1076,13 @@ async fn tests_that_frame_wait_for_function_follows_its_frame_into_another_proce
                 .map_err(|error| format!("{name} to {host}: {error}"))?;
                 assert_eq!(
                     waited.get("value"),
-                    Some(&json!({ "a": [host, "[private]"], "id": 1 })),
-                    "{name} to {host}: polled on in the new document, its field masked: {waited}"
+                    Some(&json!({ "a": [host, "moved-secret-57"], "id": 1 })),
+                    "{name} to {host}: polled on in the new document: {waited}"
                 );
                 assert!(
                     started.elapsed() >= Duration::from_millis(300),
                     "{name} to {host}: it waited for the navigation, {:?}",
                     started.elapsed()
-                );
-                assert!(
-                    run.swept().iter().any(|value| value == "moved-secret-57"),
-                    "{name} to {host}: the host is told the new document's value"
                 );
                 let effects: Vec<EnvCall> = run
                     .calls()
@@ -1524,10 +1353,7 @@ fn notes(run: &LiveRun) -> Vec<String> {
         .into_iter()
         .filter_map(|call| match call {
             EnvCall::Note(line) => Some(line),
-            EnvCall::Recheck
-            | EnvCall::RecheckReach(_)
-            | EnvCall::MarkSent
-            | EnvCall::MarkSensitiveTarget => None,
+            EnvCall::Recheck | EnvCall::MarkSent | EnvCall::MarkSensitiveTarget => None,
         })
         .collect()
 }

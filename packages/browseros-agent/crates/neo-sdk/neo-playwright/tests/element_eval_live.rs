@@ -1,12 +1,11 @@
 //! The element scripts on a real browser, through `Playwright::invoke`: `locator.evaluate`,
 //! `locator.evaluateAll`, `elementHandle.evaluate`, `$eval` and `$$eval` in the main world of
-//! the element's frame, behind the evaluate guard's sweeps, answering in Playwright's format. A
-//! typed password comes back masked from every form, from the element's own frame, from a
-//! same-origin parent and from inside nested out-of-process frames, and so does a short code in
-//! any shape; a handle out of its document runs with its tree swept, and a password in it stays
-//! masked after the page toggles it to text; handle arguments are adopted only from their own
-//! document; a strict violation and a `$eval` with no match fail as upstream does; and the
-//! host's recheck runs after every preparation, right before the script.
+//! the element's frame, answering in Playwright's format. A typed password comes back as the page
+//! holds it from every form, from the element's own frame, from a same-origin parent and from
+//! inside nested out-of-process frames; a handle out of its document still runs; handle
+//! arguments are adopted only from their own document; a strict violation and a `$eval` with no
+//! match fail as upstream does; and the host's recheck runs after every preparation, right
+//! before the script.
 //! The last test runs the same methods as a script, through the real prelude in QuickJS
 //! (Runner N). Ported from r10c (`68440df5d`, `b45f541b0`) onto the main-world gateway.
 //!
@@ -230,7 +229,7 @@ fn not_sent(run: &LiveRun, what: &str) {
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_an_element_script_reads_a_typed_password_masked() -> TestResult {
+async fn tests_that_an_element_script_reads_a_typed_password_as_the_page_holds_it() -> TestResult {
     on_page("/eval.html", |run, page| async move {
         let result = async {
             run.eval(
@@ -249,8 +248,8 @@ async fn tests_that_an_element_script_reads_a_typed_password_masked() -> TestRes
             .await?;
             assert_eq!(
                 value,
-                json!("[private]"),
-                "el.value of a typed password is masked"
+                json!("hunter2-typed"),
+                "el.value of a typed password"
             );
             sent_once(&run, "locator.evaluate");
 
@@ -262,7 +261,11 @@ async fn tests_that_an_element_script_reads_a_typed_password_masked() -> TestRes
                 Some("!"),
             )
             .await?;
-            assert_eq!(echoed, json!("you typed [private]!"), "fn(element, arg)");
+            assert_eq!(
+                echoed,
+                json!("you typed hunter2-typed!"),
+                "fn(element, arg)"
+            );
 
             let handle = handle_of(&run, &at(&page, "#pw")).await?;
             let by_handle = evaluate(
@@ -273,7 +276,7 @@ async fn tests_that_an_element_script_reads_a_typed_password_masked() -> TestRes
                 None,
             )
             .await?;
-            assert_eq!(by_handle, json!(["pw", "[private]", true]));
+            assert_eq!(by_handle, json!(["pw", "hunter2-typed", true]));
             let first = eval_first(
                 &run,
                 "page.$eval",
@@ -282,7 +285,7 @@ async fn tests_that_an_element_script_reads_a_typed_password_masked() -> TestRes
                 "(el) => el.value",
             )
             .await?;
-            assert_eq!(first, json!("[private]"), "page.$eval");
+            assert_eq!(first, json!("hunter2-typed"), "page.$eval");
             Ok(())
         }
         .await;
@@ -291,10 +294,10 @@ async fn tests_that_an_element_script_reads_a_typed_password_masked() -> TestRes
     .await
 }
 
-/// Each of the other element forms reads the typed password masked too.
+/// Each of the other element forms reads the typed password too.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_every_element_form_reads_a_typed_password_masked() -> TestResult {
+async fn tests_that_every_element_form_reads_a_typed_password() -> TestResult {
     on_page("/eval.html", |run, page| async move {
         let result = async {
             run.eval(
@@ -310,7 +313,7 @@ async fn tests_that_every_element_form_reads_a_typed_password_masked() -> TestRe
                 None,
             )
             .await?;
-            assert_eq!(all, json!(["[private]"]), "locator.evaluateAll");
+            assert_eq!(all, json!(["hunter2-typed"]), "locator.evaluateAll");
             let form = handle_of(&run, &at(&page, "label")).await?;
             let under = eval_first(
                 &run,
@@ -320,7 +323,7 @@ async fn tests_that_every_element_form_reads_a_typed_password_masked() -> TestRe
                 "(el) => el.value",
             )
             .await?;
-            assert_eq!(under, json!("[private]"), "elementHandle.$eval");
+            assert_eq!(under, json!("hunter2-typed"), "elementHandle.$eval");
             let every = evaluate_all(
                 &run,
                 "elementHandle.$$eval",
@@ -329,7 +332,7 @@ async fn tests_that_every_element_form_reads_a_typed_password_masked() -> TestRe
                 None,
             )
             .await?;
-            assert_eq!(every, json!(["[private]"]), "elementHandle.$$eval");
+            assert_eq!(every, json!(["hunter2-typed"]), "elementHandle.$$eval");
 
             let inner = locator(
                 &page,
@@ -347,20 +350,8 @@ async fn tests_that_every_element_form_reads_a_typed_password_masked() -> TestRe
             .await?;
             assert_eq!(
                 reached,
-                json!(["Reach", true, "[private]"]),
-                "the script runs in the element's own frame, and a same-origin parent it reaches \
-                 is swept too"
-            );
-
-            assert_eq!(
-                run.eval(&page, "document.getElementById('pw').value")
-                    .await?,
-                json!("hunter2-typed"),
-                "the page keeps its own value"
-            );
-            assert!(
-                run.swept().iter().any(|value| value == "hunter2-typed"),
-                "the host is told the swept value, to register it"
+                json!(["Reach", true, "hunter2-typed"]),
+                "the script runs in the element's own frame, and reaches its same-origin parent"
             );
             Ok(())
         }
@@ -415,7 +406,7 @@ async fn tests_that_evaluate_all_runs_on_every_match_as_one_array() -> TestResul
 
             let values = evaluate_all(&run, "page.$$eval", &at(&page, "input"), "(els) => els.map((el) => el.value)", None)
                 .await?;
-            assert_eq!(values, json!(["[private]"]), "a $$eval over fields is masked too");
+            assert_eq!(values, json!(["hunter2-typed"]), "a $$eval over fields");
 
             let list = handle_of(&run, &at(&page, "#list")).await?;
             let under = evaluate_all(
@@ -440,7 +431,7 @@ async fn tests_that_evaluate_all_runs_on_every_match_as_one_array() -> TestResul
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_an_element_inside_nested_oopifs_runs_in_its_own_frame_masked() -> TestResult {
+async fn tests_that_an_element_inside_nested_oopifs_runs_in_its_own_frame() -> TestResult {
     on_page("/nest/top.html", |run, page| async move {
         let result = async {
             let c4 = &["b1", "c2", "a3", "c4"];
@@ -466,11 +457,7 @@ async fn tests_that_an_element_inside_nested_oopifs_runs_in_its_own_frame_masked
                 None,
             )
             .await?;
-            assert_eq!(
-                typed,
-                json!("[private]"),
-                "the second sweep of c4 catches what the script typed"
-            );
+            assert_eq!(typed, json!("c4-secret-99"), "what the script typed");
             let again = evaluate(
                 &run,
                 "locator.evaluate",
@@ -479,11 +466,7 @@ async fn tests_that_an_element_inside_nested_oopifs_runs_in_its_own_frame_masked
                 None,
             )
             .await?;
-            assert_eq!(
-                again,
-                json!("[private]"),
-                "the first sweep of c4 knows it now"
-            );
+            assert_eq!(again, json!("c4-secret-99"), "the field keeps it");
 
             let handle = handle_of(&run, &down(&page, c4, "button")).await?;
             let by_handle = evaluate(
@@ -515,16 +498,9 @@ async fn tests_that_an_element_inside_nested_oopifs_runs_in_its_own_frame_masked
             .await?;
             assert_eq!(
                 parent,
-                json!(["B3 button", "[private]"]),
-                "the OOPIF's session is swept, the parent b3's script reaches included"
+                json!(["B3 button", "b2-secret-11"]),
+                "b3's script reaches its parent b2, on the same session"
             );
-            let swept = run.swept();
-            for secret in ["c4-secret-99", "b2-secret-11"] {
-                assert!(
-                    swept.iter().any(|value| value == secret),
-                    "{secret}: {swept:?}"
-                );
-            }
             Ok(())
         }
         .await;
@@ -562,13 +538,12 @@ async fn tests_that_a_strict_violation_fails_before_any_script() -> TestResult {
     .await
 }
 
-/// A handle out of its document still runs, as upstream's does (spike S-detached), and the seal
-/// sweeps its tree from then on: a removed password input, one inside a container removed after
-/// a handle to the container was taken, and one in a closed root attached to a removed host
-/// come back masked.
+/// A handle out of its document still runs, as upstream's does (spike S-detached): a removed
+/// password input, and one inside a container removed after a handle to the container was
+/// taken.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_detached_handle_runs_with_its_tree_swept() -> TestResult {
+async fn tests_that_a_detached_handle_runs() -> TestResult {
     on_page("/eval.html", |run, page| async move {
         let result = async {
             run.eval(
@@ -595,8 +570,8 @@ async fn tests_that_a_detached_handle_runs_with_its_tree_swept() -> TestResult {
             .await?;
             assert_eq!(
                 removed,
-                json!([false, "[private]", "typed [private]"]),
-                "a removed password input runs, masked"
+                json!([false, "detached-secret-1", "typed detached-secret-1"]),
+                "a removed password input runs"
             );
             sent_once(&run, "a detached handle's script");
             run.eval(
@@ -615,117 +590,8 @@ async fn tests_that_a_detached_handle_runs_with_its_tree_swept() -> TestResult {
             .await?;
             assert_eq!(
                 inside,
-                json!([false, "[private]"]),
-                "a field inside a container removed after its handle was taken is masked"
-            );
-            let later = evaluate_with(
-                &run,
-                &page,
-                "() => window.label.querySelector('input').value",
-                &[],
-            )
-            .await?;
-            assert_eq!(
-                later,
-                json!("[private]"),
-                "every later sweep masks the removed tree too, page.evaluate's included"
-            );
-            // A closed root the page attaches to a host after removing it: only Rust's pierced
-            // scan of the seal's detached trees finds it, and the page's own accessor reads it.
-            run.eval(&page, "document.body.append(Object.assign(document.createElement('div'), \
-                             { id: 'host' }))")
-                .await?;
-            let host = handle_of(&run, &at(&page, "#host")).await?;
-            run.eval(&page, "const host = document.getElementById('host'); host.remove(); \
-                             const root = host.attachShadow({ mode: 'closed' }); \
-                             root.innerHTML = '<input type=password>'; \
-                             root.querySelector('input').value = 'detached-secret-5'; \
-                             window.closedValue = (el) => el === host ? root.querySelector('input').value : null")
-                .await?;
-            let closed = evaluate(&run, "elementHandle.evaluate", &host,
-                "(el) => window.closedValue(el)", None).await?;
-            assert_eq!(closed, json!("[private]"),
-                "a closed root attached to a removed host is scanned and swept");
-            let swept = run.swept();
-            for secret in ["detached-secret-1", "detached-secret-2", "detached-secret-5"] {
-                assert!(
-                    swept.iter().any(|value| value == secret),
-                    "{secret}: {swept:?}"
-                );
-            }
-            Ok(())
-        }
-        .await;
-        (run, result)
-    })
-    .await
-}
-
-/// The page's show-password toggle on a form it removed (M1b review 1): a password the page adds
-/// once the seal is installed and fills itself, then removes, turns into text and fills again in
-/// later tasks, comes back masked from its handle's script, and so does a password the page adds
-/// to the removed form and toggles before the next script.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_removed_password_stays_masked_after_the_page_toggles_it() -> TestResult {
-    on_page("/eval.html", |run, page| async move {
-        let result = async {
-            // A Neo op first, so the seal's install-time scan never sees the form.
-            handle_of(&run, &at(&page, "#pw")).await?;
-            run.eval(
-                &page,
-                "const form = Object.assign(document.createElement('form'), { id: 'late' }); \
-                 form.innerHTML = '<input id=later type=password>'; \
-                 document.body.append(form); \
-                 form.querySelector('input').value = 'toggled-secret-1'",
-            )
-            .await?;
-            let field = handle_of(&run, &at(&page, "#later")).await?;
-            let form = handle_of(&run, &at(&page, "#late")).await?;
-            run.eval(
-                &page,
-                "window.late = document.getElementById('late'); late.remove()",
-            )
-            .await?;
-            run.eval(&page, "late.querySelector('input').type = 'text'")
-                .await?;
-            run.eval(
-                &page,
-                "late.querySelector('input').value = 'toggled-secret-2'",
-            )
-            .await?;
-            let toggled = evaluate(
-                &run,
-                "elementHandle.evaluate",
-                &field,
-                "(el) => [el.isConnected, el.type, el.value]",
-                None,
-            )
-            .await?;
-            assert_eq!(
-                toggled,
-                json!([false, "text", "[private]"]),
-                "a password removed, toggled to text and filled again by the page is still masked"
-            );
-            run.eval(
-                &page,
-                "late.append(Object.assign(document.createElement('input'), \
-                     { type: 'password', value: 'toggled-secret-3' }))",
-            )
-            .await?;
-            run.eval(&page, "late.lastChild.type = 'text'").await?;
-            let later = evaluate(
-                &run,
-                "elementHandle.evaluate",
-                &form,
-                "(el) => [...el.querySelectorAll('input')].map((input) => input.value)",
-                None,
-            )
-            .await?;
-            assert_eq!(
-                later,
-                json!(["[private]", "[private]"]),
-                "a password added to the removed form and toggled before this script is masked"
+                json!([false, "detached-secret-2"]),
+                "a container removed after its handle was taken runs"
             );
             Ok(())
         }
@@ -818,40 +684,6 @@ async fn tests_that_a_missing_match_fails_with_nothing_sent() -> TestResult {
     .await
 }
 
-/// A three-digit CVC is short, so it is masked only where it is a whole value: as an object's
-/// key, a number, a `BigInt` and a typed array's element, each form of it comes back masked.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_short_code_leaves_masked_whatever_shape_it_takes() -> TestResult {
-    on_page("/eval.html", |run, page| async move {
-        let result = async {
-            run.eval(
-                &page,
-                "const pw = document.getElementById('pw'); pw.value = '123'",
-            )
-            .await?;
-            let shapes = evaluate(
-                &run,
-                "locator.evaluate",
-                &at(&page, "#pw"),
-                "(el) => { const code = el.value; return [{ [code]: 1 }, Number(code), \
-                 String(BigInt(code)) === code && BigInt(code), Int16Array.of(Number(code))] }",
-                None,
-            )
-            .await?;
-            assert_eq!(
-                shapes,
-                json!([{ "[private]": 1 }, "[private]", "[private]", "[private]"]),
-                "a key, a number, a BigInt and a typed array's element"
-            );
-            Ok(())
-        }
-        .await;
-        (run, result)
-    })
-    .await
-}
-
 /// A handle argument is adopted into its own document only: one of the script frame's
 /// document runs; one of a same-origin child frame is refused with upstream's adoption error,
 /// where upstream adopts it through a context id (spike S-adopt, a decided deviation); one of
@@ -868,7 +700,7 @@ async fn tests_that_a_handle_argument_is_adopted_from_its_own_document_only() ->
             run.clear_calls();
             let same = evaluate_with(&run, &page, "([a, b]) => [a.id, b.id, a.value]",
                 &[&field, &list]).await?;
-            assert_eq!(same, json!(["pw", "list", "[private]"]), "handles of the page's document");
+            assert_eq!(same, json!(["pw", "list", "handle-secret-3"]), "handles of the page's document");
             sent_once(&run, "a script with handle arguments");
             let one = run
                 .invoke("locator.evaluate", json!({
@@ -1105,16 +937,16 @@ async fn tests_that_element_scripts_run_through_the_prelude() -> TestResult {
     assert_eq!(
         result,
         json!({
-            "value": "[private]",
+            "value": "runner-secret-42",
             "all": "alpha|beta|gamma",
             "first": "alpha!",
             "every": 3,
             "own": "list",
-            "byPage": "[private]",
+            "byPage": "runner-secret-42",
             "pageAll": ["alpha", "beta", "gamma"],
             "missing": "elementHandle.$eval: Failed to find element matching selector \"b\"",
         }),
-        "each answer is what Playwright gives, the password masked"
+        "each answer is what Playwright gives"
     );
     Ok(())
 }

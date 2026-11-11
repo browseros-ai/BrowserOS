@@ -1,17 +1,11 @@
 {
-  "about": "Playwright in-page values, their masks and their argument texts, written by crates/neo-sdk/neo-playwright-js/scripts/in-page-values.ts. Do not edit: run bun run build in crates/neo-sdk/neo-playwright-js.",
-  "swept": [
-    "hunter2-secret",
-    "482913",
-    "123",
-    "NaN"
-  ],
+  "about": "Playwright in-page values, what Rust writes back for each and their argument texts, written by crates/neo-sdk/neo-playwright-js/scripts/in-page-values.ts. Do not edit: run bun run build in crates/neo-sdk/neo-playwright-js.",
   "values": [
     {
       "name": "undefined",
       "source": "undefined",
       "page": "{\"v\":\"undefined\"}",
-      "masked": {
+      "result": {
         "v": "undefined"
       },
       "arg": "{\"v\":\"undefined\"}"
@@ -20,7 +14,7 @@
       "name": "null",
       "source": "null",
       "page": "{\"v\":\"null\"}",
-      "masked": {
+      "result": {
         "v": "null"
       },
       "arg": "{\"v\":\"null\"}"
@@ -29,7 +23,7 @@
       "name": "NaN",
       "source": "NaN",
       "page": "{\"v\":\"NaN\"}",
-      "masked": {
+      "result": {
         "v": "NaN"
       },
       "arg": "{\"v\":\"NaN\"}"
@@ -38,7 +32,7 @@
       "name": "Infinity",
       "source": "Infinity",
       "page": "{\"v\":\"Infinity\"}",
-      "masked": {
+      "result": {
         "v": "Infinity"
       },
       "arg": "{\"v\":\"Infinity\"}"
@@ -47,7 +41,7 @@
       "name": "-Infinity",
       "source": "-Infinity",
       "page": "{\"v\":\"-Infinity\"}",
-      "masked": {
+      "result": {
         "v": "-Infinity"
       },
       "arg": "{\"v\":\"-Infinity\"}"
@@ -56,7 +50,7 @@
       "name": "-0",
       "source": "-0",
       "page": "{\"v\":\"-0\"}",
-      "masked": {
+      "result": {
         "v": "-0"
       },
       "arg": "{\"v\":\"-0\"}"
@@ -65,35 +59,35 @@
       "name": "boolean",
       "source": "true",
       "page": "true",
-      "masked": true,
+      "result": true,
       "arg": "true"
     },
     {
       "name": "integer",
       "source": "42",
       "page": "42",
-      "masked": 42,
+      "result": 42,
       "arg": "42"
     },
     {
       "name": "fraction",
       "source": "1.5",
       "page": "1.5",
-      "masked": 1.5,
+      "result": 1.5,
       "arg": "1.5"
     },
     {
       "name": "string",
       "source": "'plain text'",
       "page": "\"plain text\"",
-      "masked": "plain text",
+      "result": "plain text",
       "arg": "\"plain text\""
     },
     {
       "name": "BigInt",
       "source": "10n",
       "page": "{\"bi\":\"10\"}",
-      "masked": {
+      "result": {
         "bi": "10"
       },
       "arg": "{\"bi\":\"10\"}"
@@ -102,7 +96,7 @@
       "name": "negative BigInt",
       "source": "-5n",
       "page": "{\"bi\":\"-5\"}",
-      "masked": {
+      "result": {
         "bi": "-5"
       },
       "arg": "{\"bi\":\"-5\"}"
@@ -111,7 +105,7 @@
       "name": "Date",
       "source": "new Date(0)",
       "page": "{\"d\":\"1970-01-01T00:00:00.000Z\"}",
-      "masked": {
+      "result": {
         "d": "1970-01-01T00:00:00.000Z"
       },
       "arg": "{\"d\":\"1970-01-01T00:00:00.000Z\"}"
@@ -120,7 +114,7 @@
       "name": "invalid Date",
       "source": "new Date('not a date')",
       "page": "{\"d\":null}",
-      "masked": {
+      "result": {
         "d": null
       },
       "argError": "page.evaluate: arg.value.d: expected string, got object"
@@ -129,7 +123,7 @@
       "name": "RegExp",
       "source": "/a+b/gi",
       "page": "{\"r\":{\"p\":\"a+b\",\"f\":\"gi\"}}",
-      "masked": {
+      "result": {
         "r": {
           "p": "a+b",
           "f": "gi"
@@ -141,7 +135,7 @@
       "name": "Error",
       "source": "Object.assign(new TypeError('no'), { stack: 'TypeError: no\\n    at page' })",
       "page": "{\"e\":{\"n\":\"TypeError\",\"m\":\"no\",\"s\":\"TypeError: no\\n    at page\"}}",
-      "masked": {
+      "result": {
         "e": {
           "n": "TypeError",
           "m": "no",
@@ -154,7 +148,7 @@
       "name": "Uint8Array",
       "source": "Uint8Array.of(1, 2, 255)",
       "page": "{\"ta\":{\"b\":\"AQL/\",\"k\":\"ui8\"}}",
-      "masked": {
+      "result": {
         "ta": {
           "b": "AQL/",
           "k": "ui8"
@@ -166,7 +160,7 @@
       "name": "Float64Array",
       "source": "Float64Array.of(1.5, -2)",
       "page": "{\"ta\":{\"b\":\"AAAAAAAA+D8AAAAAAAAAwA==\",\"k\":\"f64\"}}",
-      "masked": {
+      "result": {
         "ta": {
           "b": "AAAAAAAA+D8AAAAAAAAAwA==",
           "k": "f64"
@@ -178,7 +172,7 @@
       "name": "BigInt64Array",
       "source": "BigInt64Array.of(5n, -1n)",
       "page": "{\"ta\":{\"b\":\"BQAAAAAAAAD//////////w==\",\"k\":\"bi64\"}}",
-      "masked": {
+      "result": {
         "ta": {
           "b": "BQAAAAAAAAD//////////w==",
           "k": "bi64"
@@ -190,7 +184,7 @@
       "name": "ArrayBuffer",
       "source": "Uint8Array.of(1, 2).buffer",
       "page": "{\"ab\":{\"b\":\"AQI=\"}}",
-      "masked": {
+      "result": {
         "o": [],
         "id": 1
       },
@@ -200,7 +194,7 @@
       "name": "nested arrays",
       "source": "[1, [2, [3]], []]",
       "page": "{\"a\":[1,{\"a\":[2,{\"a\":[3],\"id\":3}],\"id\":2},{\"a\":[],\"id\":4}],\"id\":1}",
-      "masked": {
+      "result": {
         "a": [
           1,
           {
@@ -228,7 +222,7 @@
       "name": "undefined in an array",
       "source": "[undefined, 1]",
       "page": "{\"a\":[{\"v\":\"undefined\"},1],\"id\":1}",
-      "masked": {
+      "result": {
         "a": [
           {
             "v": "undefined"
@@ -243,7 +237,7 @@
       "name": "object",
       "source": "({ a: 1, b: { c: 'x' }, d: [true] })",
       "page": "{\"o\":[{\"k\":\"a\",\"v\":1},{\"k\":\"b\",\"v\":{\"o\":[{\"k\":\"c\",\"v\":\"x\"}],\"id\":2}},{\"k\":\"d\",\"v\":{\"a\":[true],\"id\":3}}],\"id\":1}",
-      "masked": {
+      "result": {
         "o": [
           {
             "k": "a",
@@ -279,7 +273,7 @@
       "name": "cycle",
       "source": "(() => { const o = { n: 1 }; o.self = o; return o })()",
       "page": "{\"o\":[{\"k\":\"n\",\"v\":1},{\"k\":\"self\",\"v\":{\"ref\":1}}],\"id\":1}",
-      "masked": {
+      "result": {
         "o": [
           {
             "k": "n",
@@ -300,7 +294,7 @@
       "name": "shared object",
       "source": "(() => { const x = { y: 1 }; return [x, x] })()",
       "page": "{\"a\":[{\"o\":[{\"k\":\"y\",\"v\":1}],\"id\":2},{\"ref\":2}],\"id\":1}",
-      "masked": {
+      "result": {
         "a": [
           {
             "o": [
@@ -323,7 +317,7 @@
       "name": "Map",
       "source": "new Map([['k', 1]])",
       "page": "{\"o\":[],\"id\":1}",
-      "masked": {
+      "result": {
         "o": [],
         "id": 1
       },
@@ -333,7 +327,7 @@
       "name": "Set",
       "source": "new Set([1])",
       "page": "{\"o\":[],\"id\":1}",
-      "masked": {
+      "result": {
         "o": [],
         "id": 1
       },
@@ -343,7 +337,7 @@
       "name": "symbol",
       "source": "Symbol('s')",
       "page": "{\"v\":\"undefined\"}",
-      "masked": {
+      "result": {
         "v": "undefined"
       },
       "arg": "{\"v\":\"undefined\"}"
@@ -352,7 +346,7 @@
       "name": "function in an array",
       "source": "[() => 1, 2]",
       "page": "{\"a\":[null,2],\"id\":1}",
-      "masked": {
+      "result": {
         "a": [
           null,
           2
@@ -365,7 +359,7 @@
       "name": "function in an object",
       "source": "({ f: () => 1, n: 2 })",
       "page": "{\"o\":[{\"k\":\"f\"},{\"k\":\"n\",\"v\":2}],\"id\":1}",
-      "masked": {
+      "result": {
         "o": [
           {
             "k": "f"
@@ -383,7 +377,7 @@
       "name": "toJSON member",
       "source": "({ toJSON() { return 1 }, n: 2 })",
       "page": "{\"o\":[{\"k\":\"toJSON\",\"v\":{\"o\":[],\"id\":0}},{\"k\":\"n\",\"v\":2}],\"id\":1}",
-      "masked": {
+      "result": {
         "o": [
           {
             "k": "toJSON",
@@ -405,14 +399,14 @@
       "name": "toJSON with no own keys",
       "source": "Object.create({ toJSON() { return 'json' } })",
       "page": "\"json\"",
-      "masked": "json",
+      "result": "json",
       "arg": "{\"o\":[],\"id\":1}"
     },
     {
       "name": "__proto__ key",
       "source": "JSON.parse('{\"__proto__\": 1, \"n\": 2}')",
       "page": "{\"o\":[{\"k\":\"__proto__\",\"v\":1},{\"k\":\"n\",\"v\":2}],\"id\":1}",
-      "masked": {
+      "result": {
         "o": [
           {
             "k": "__proto__",
@@ -431,171 +425,9 @@
       "name": "URL",
       "source": "new URL('https://a.example/p?q=1')",
       "page": "{\"u\":\"https://a.example/p?q=1\"}",
-      "masked": {
+      "result": {
         "u": "https://a.example/p?q=1"
       }
-    },
-    {
-      "name": "a long value inside a string",
-      "source": "'you typed hunter2-secret'",
-      "page": "\"you typed hunter2-secret\"",
-      "masked": "you typed [private]",
-      "arg": "\"you typed hunter2-secret\""
-    },
-    {
-      "name": "a long value as a key",
-      "source": "({ 'hunter2-secret': true })",
-      "page": "{\"o\":[{\"k\":\"hunter2-secret\",\"v\":true}],\"id\":1}",
-      "masked": {
-        "o": [
-          {
-            "k": "[private]",
-            "v": true
-          }
-        ],
-        "id": 1
-      },
-      "arg": "{\"o\":[{\"k\":\"hunter2-secret\",\"v\":true}],\"id\":1}"
-    },
-    {
-      "name": "a code as a number",
-      "source": "Number(\"482913\")",
-      "page": "482913",
-      "masked": "[private]",
-      "arg": "482913"
-    },
-    {
-      "name": "a code inside a larger number",
-      "source": "4829130",
-      "page": "4829130",
-      "masked": "[private]0",
-      "arg": "4829130"
-    },
-    {
-      "name": "a code as a BigInt",
-      "source": "BigInt(\"482913\")",
-      "page": "{\"bi\":\"482913\"}",
-      "masked": "[private]",
-      "arg": "{\"bi\":\"482913\"}"
-    },
-    {
-      "name": "a code as a Date",
-      "source": "new Date(Number(\"482913\"))",
-      "page": "{\"d\":\"1970-01-01T00:08:02.913Z\"}",
-      "masked": "[private]",
-      "arg": "{\"d\":\"1970-01-01T00:08:02.913Z\"}"
-    },
-    {
-      "name": "a long value in an Error",
-      "source": "Object.assign(new Error('bad hunter2-secret'), { stack: 'Error: bad hunter2-secret\\n    at page' })",
-      "page": "{\"e\":{\"n\":\"Error\",\"m\":\"bad hunter2-secret\",\"s\":\"Error: bad hunter2-secret\\n    at page\"}}",
-      "masked": {
-        "e": {
-          "n": "Error",
-          "m": "bad [private]",
-          "s": "Error: bad [private]\n    at page"
-        }
-      },
-      "arg": "{\"e\":{\"n\":\"Error\",\"m\":\"bad hunter2-secret\",\"s\":\"Error: bad hunter2-secret\\n    at page\"}}"
-    },
-    {
-      "name": "a long value in a URL",
-      "source": "new URL('https://a.example/?pw=hunter2-secret')",
-      "page": "{\"u\":\"https://a.example/?pw=hunter2-secret\"}",
-      "masked": "https://a.example/?pw=[private]"
-    },
-    {
-      "name": "a long value in a RegExp",
-      "source": "/hunter2-secret/g",
-      "page": "{\"r\":{\"p\":\"hunter2-secret\",\"f\":\"g\"}}",
-      "masked": "/[private]/g",
-      "arg": "{\"r\":{\"p\":\"hunter2-secret\",\"f\":\"g\"}}"
-    },
-    {
-      "name": "a long value as UTF-8 bytes",
-      "source": "Uint8Array.from('hunter2-secret', (c) => c.charCodeAt(0))",
-      "page": "{\"ta\":{\"b\":\"aHVudGVyMi1zZWNyZXQ=\",\"k\":\"ui8\"}}",
-      "masked": "[private]",
-      "arg": "{\"ta\":{\"b\":\"aHVudGVyMi1zZWNyZXQ=\",\"k\":\"ui8\"}}"
-    },
-    {
-      "name": "a code as an Int32Array element",
-      "source": "Int32Array.of(1, Number(\"482913\"))",
-      "page": "{\"ta\":{\"b\":\"AQAAAGFeBwA=\",\"k\":\"i32\"}}",
-      "masked": "1,[private]",
-      "arg": "{\"ta\":{\"b\":\"AQAAAGFeBwA=\",\"k\":\"i32\"}}"
-    },
-    {
-      "name": "a code as a Float64Array element",
-      "source": "Float64Array.of(Number(\"482913\"))",
-      "page": "{\"ta\":{\"b\":\"AAAAAIR5HUE=\",\"k\":\"f64\"}}",
-      "masked": "[private]",
-      "arg": "{\"ta\":{\"b\":\"AAAAAIR5HUE=\",\"k\":\"f64\"}}"
-    },
-    {
-      "name": "a code as a BigInt64Array element",
-      "source": "BigInt64Array.of(BigInt(\"482913\"))",
-      "page": "{\"ta\":{\"b\":\"YV4HAAAAAAA=\",\"k\":\"bi64\"}}",
-      "masked": "[private]",
-      "arg": "{\"ta\":{\"b\":\"YV4HAAAAAAA=\",\"k\":\"bi64\"}}"
-    },
-    {
-      "name": "a short value as a Uint16Array element",
-      "source": "Uint16Array.of(7, 123)",
-      "page": "{\"ta\":{\"b\":\"BwB7AA==\",\"k\":\"ui16\"}}",
-      "masked": "7,[private]",
-      "arg": "{\"ta\":{\"b\":\"BwB7AA==\",\"k\":\"ui16\"}}"
-    },
-    {
-      "name": "a short value inside a typed array element",
-      "source": "Int32Array.of(1234)",
-      "page": "{\"ta\":{\"b\":\"0gQAAA==\",\"k\":\"i32\"}}",
-      "masked": {
-        "ta": {
-          "b": "0gQAAA==",
-          "k": "i32"
-        }
-      },
-      "arg": "{\"ta\":{\"b\":\"0gQAAA==\",\"k\":\"i32\"}}"
-    },
-    {
-      "name": "a short value as a whole string",
-      "source": "['123', '1234', 123, 1234]",
-      "page": "{\"a\":[\"123\",\"1234\",123,1234],\"id\":1}",
-      "masked": {
-        "a": [
-          "[private]",
-          "1234",
-          "[private]",
-          1234
-        ],
-        "id": 1
-      },
-      "arg": "{\"a\":[\"123\",\"1234\",123,1234],\"id\":1}"
-    },
-    {
-      "name": "a short value spelled like a tag",
-      "source": "[NaN, 'NaN', { NaN: 1 }]",
-      "page": "{\"a\":[{\"v\":\"NaN\"},\"NaN\",{\"o\":[{\"k\":\"NaN\",\"v\":1}],\"id\":2}],\"id\":1}",
-      "masked": {
-        "a": [
-          {
-            "v": "NaN"
-          },
-          "[private]",
-          {
-            "o": [
-              {
-                "k": "[private]",
-                "v": 1
-              }
-            ],
-            "id": 2
-          }
-        ],
-        "id": 1
-      },
-      "arg": "{\"a\":[{\"v\":\"NaN\"},\"NaN\",{\"o\":[{\"k\":\"NaN\",\"v\":1}],\"id\":2}],\"id\":1}"
     }
   ]
 }

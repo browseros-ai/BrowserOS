@@ -1,5 +1,5 @@
 //! Pages and the browser context: navigation, page state and content, the frame tree,
-//! main-world scripts behind the sensitive-value sweep, screenshots and PDFs,
+//! main-world scripts through their one gateway, screenshots and PDFs,
 //! and the context's tab list.
 //!
 //! Every page op admits its page once through the run's view, then sends its calls on a raw
@@ -12,14 +12,13 @@
 //!  page.goto ─ navigation ─ DocumentWatch (commits, lifecycle per loader) ─ timing entry
 //!  page.frames ─ frame_tree ─ getFrameTree per session, OOPIFs via core's FrameRegistry
 //!  page.screenshot / page.pdf ─ page admission ─ the capture
-//!  page.evaluate / waitForFunction ─ EvaluateGuard: a sweep before and after every script (each
-//!                                    covers the script's site, sweep_scope); the answer read in
-//!                                    Playwright's format and masked by its structure (page_value)
+//!  page.evaluate / waitForFunction ─ EvaluateGuard: the host's recheck before every script; the
+//!                                    answer read in Playwright's format (page_value)
 //!  locator.evaluate / evaluateAll ─ element_evaluate: the elements found, then the same guard,
 //!                                   in the frame they are in
 //!  page.title / page.content ─ document_op: the sealed world's read, masked with the read
 //!                              frame's site (site_sweep, which every read and snapshot uses)
-//!  page.setContent ─ document_op: the same guard around a write from the sealed world, a new
+//!  page.setContent ─ document_op: the same gateway for a write from the sealed world, a new
 //!                    seq and the load state, because the HTML's scripts run in the main world
 //!  page.waitForURL ─ wait_for_url: each navigation matched in the sealed world, the load state
 //! ```
