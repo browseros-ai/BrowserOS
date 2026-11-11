@@ -55,9 +55,6 @@ pub(crate) const MAX_TAIL: u32 = 1000;
 /// shortest that passes; the app refuses to serve with anything shorter.
 pub(crate) const MIN_TOKEN_BYTES: usize = 32;
 
-/// `POST /v1/secrets` `ttlSeconds` bounds: a minute to a day.
-pub(crate) const SECRET_TTL_SECONDS: std::ops::RangeInclusive<u64> = 60..=86_400;
-
 /// A viewer's `width` and `height` bounds (`ViewerSize`): the sides a viewport can take.
 pub(crate) const VIEWER_SIDE: std::ops::RangeInclusive<u16> = 100..=4096;
 

@@ -1,6 +1,5 @@
 //! The live views as zuzu reads them: MJPEG parts by `Content-Length`, and MP4 bytes in order,
-//! from the scripted capture connection. A stream ends when its tab goes private or closes, and
-//! nothing the browser sends after the private flag reaches the body.
+//! from the scripted capture connection. Streams stay pinned to the tab until it closes.
 
 use crate::support::{BoxError, Harness, TestResult, harness, harness_with_capture};
 use axum::body::{Body, BodyDataStream, Bytes};
@@ -9,6 +8,7 @@ use browseros_core::CdpConnection;
 use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use neo_capture::{CaptureFailure, CaptureResult, CaptureTransport};
+use neo_trace::{Registration, SecretSource, SecretValue};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
@@ -201,57 +201,31 @@ async fn a_screencast_sends_each_frame_as_a_part_with_the_contract_headers() -> 
 }
 
 #[tokio::test]
-async fn x_url_is_masked_with_the_secrets_known_when_each_frame_is_sent() -> TestResult {
+async fn a_screencast_keeps_its_url_and_frames_during_a_takeover() -> TestResult {
     let h = harness().await?;
     h.browser
-        .set_url(TAB, "https://example.test/7?token=hunter2-swordfish");
-    let mut live = watching(&h, "/v1/tabs/7/screencast").await?;
-    h.capture.emit_frame(SESSION, b"before", 1_800_000_000.0);
-    assert_eq!(
-        live.part().await?.header("X-Url"),
-        Some("https://example.test/7?token=hunter2-swordfish"),
-        "nothing is registered yet"
-    );
-
-    let registered = h
-        .post(
-            "/v1/secrets",
-            &json!({"value": "hunter2-swordfish"}).to_string(),
-        )
-        .await?;
-    assert_eq!(registered.status, StatusCode::NO_CONTENT);
-    h.capture.emit_frame(SESSION, b"after", 1_800_000_001.0);
-    let part = live.part().await?;
-    assert_eq!(
-        part.header("X-Url"),
-        Some("https://example.test/7?token=[private]")
-    );
-    assert!(!String::from_utf8_lossy(&part.raw).contains("hunter2"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_tab_going_private_ends_its_screencast_before_any_later_frame() -> TestResult {
-    let h = harness().await?;
+        .set_url(TAB, "https://example.test/7?token=capture-test-value");
     let mut live = watching(&h, "/v1/tabs/7/screencast").await?;
     h.capture.emit_frame(SESSION, b"before", 1_800_000_000.0);
     assert_eq!(live.part().await?.jpeg, b"before");
 
-    let private = h.post("/v1/tabs/7/private", "").await?;
-    assert_eq!(private.status, StatusCode::OK, "{}", private.body);
-    // Well inside the hub's own once-a-second re-check: only the per-frame guard stops this.
-    h.capture
-        .emit_frame(SESSION, b"after-the-flag", 1_800_000_001.0);
-    let rest = live.rest().await?;
-    assert!(
-        rest.is_empty(),
-        "sent after the tab went private: {:?}",
-        String::from_utf8_lossy(&rest)
+    assert_eq!(
+        h.privacy.secrets().register_from(
+            SecretValue::new("capture-test-value".into()),
+            None,
+            SecretSource::Host,
+        ),
+        Registration::Registered
     );
-
-    h.get("/v1/tabs/7/screencast")
-        .await?
-        .assert_error(StatusCode::CONFLICT, "page_private");
+    let takeover = h.post("/v1/takeovers", r#"{"tabId":7}"#).await?;
+    assert_eq!(takeover.status, StatusCode::OK, "{}", takeover.body);
+    h.capture.emit_frame(SESSION, b"during", 1_800_000_001.0);
+    let part = live.part().await?;
+    assert_eq!(part.jpeg, b"during");
+    assert_eq!(
+        part.header("X-Url"),
+        Some("https://example.test/7?token=capture-test-value")
+    );
     Ok(())
 }
 
@@ -272,9 +246,11 @@ async fn a_closed_tab_ends_its_screencast_and_is_then_not_found() -> TestResult 
 }
 
 #[tokio::test]
-async fn a_video_sends_the_init_segment_then_each_fragment() -> TestResult {
+async fn a_video_sends_the_init_segment_then_each_fragment_during_a_takeover() -> TestResult {
     let h = harness().await?;
     h.browser.open_tab(TAB);
+    let takeover = h.post("/v1/takeovers", r#"{"tabId":7}"#).await?;
+    assert_eq!(takeover.status, StatusCode::OK, "{}", takeover.body);
     let mut live = open(&h, "/v1/tabs/7/video?quality=low").await?;
     live.assert_streaming("video/mp4");
     let start = h.capture.wait_for("Page.startScreenRecording", 1).await;
@@ -289,40 +265,6 @@ async fn a_video_sends_the_init_segment_then_each_fragment() -> TestResult {
         .push_recording(SESSION, &[init.clone(), first.clone()].concat());
     assert_eq!(live.bytes(init.len()).await?, init);
     assert_eq!(live.bytes(first.len()).await?, first);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_tab_going_private_ends_its_video_before_any_later_fragment() -> TestResult {
-    let h = harness().await?;
-    h.browser.open_tab(TAB);
-    let mut live = open(&h, "/v1/tabs/7/video").await?;
-    live.assert_streaming("video/mp4");
-    h.capture.wait_for("Page.startScreenRecording", 1).await;
-    let init = [mp4_box(b"ftyp", b"av01"), mp4_box(b"moov", b"tracks")].concat();
-    let first = [mp4_box(b"moof", b"1"), mp4_box(b"mdat", b"keyframe-1")].concat();
-    h.capture
-        .push_recording(SESSION, &[init.clone(), first.clone()].concat());
-    assert_eq!(
-        live.bytes(init.len() + first.len()).await?,
-        [init, first].concat()
-    );
-
-    let private = h.post("/v1/tabs/7/private", "").await?;
-    assert_eq!(private.status, StatusCode::OK, "{}", private.body);
-    // Read at the recording's next 250 ms drain, before the hub's own once-a-second re-check.
-    let second = [mp4_box(b"moof", b"2"), mp4_box(b"mdat", b"after-the-flag")].concat();
-    h.capture.push_recording(SESSION, &second);
-    let rest = live.rest().await?;
-    assert!(
-        rest.is_empty(),
-        "sent after the tab went private: {:?}",
-        String::from_utf8_lossy(&rest)
-    );
-
-    h.get("/v1/tabs/7/video")
-        .await?
-        .assert_error(StatusCode::CONFLICT, "page_private");
     Ok(())
 }
 
@@ -343,21 +285,6 @@ async fn a_closed_tab_ends_its_video() -> TestResult {
     h.get("/v1/tabs/7/video")
         .await?
         .assert_error(StatusCode::NOT_FOUND, "tab_not_found");
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_private_tab_is_409_and_nothing_of_it_is_captured() -> TestResult {
-    let h = harness().await?;
-    h.browser.open_tab(TAB);
-    let private = h.post("/v1/tabs/7/private", "").await?;
-    assert_eq!(private.status, StatusCode::OK, "{}", private.body);
-    for uri in ["/v1/tabs/7/screencast", "/v1/tabs/7/video?quality=low"] {
-        h.get(uri)
-            .await?
-            .assert_error(StatusCode::CONFLICT, "page_private");
-    }
-    assert!(h.capture.sent("Target.attachToTarget").is_empty());
     Ok(())
 }
 

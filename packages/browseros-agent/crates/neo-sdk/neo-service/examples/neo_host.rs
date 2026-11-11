@@ -521,8 +521,8 @@ impl SurfaceCalls {
         })))
     }
 
-    /// Waits up to 15 s for `op`'s screenshot to be stored or withheld. A dropped one reads as
-    /// none, so it waits the whole time.
+    /// Waits up to 15 s for `op`'s screenshot to be stored. A dropped job has no image, so it
+    /// waits the whole time.
     async fn screenshot_taken(&self, op: OperationId) {
         let _ = tokio::time::timeout(Duration::from_secs(15), async {
             while matches!(self.store.screenshot(op).await, Ok(ShotRead::None)) {

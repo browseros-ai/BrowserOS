@@ -1,7 +1,7 @@
 //! A reconcile as the app runs it when the browser link reconnects: a fence, a listing of the
 //! open tabs, then `Service::retain_tabs`, with a host changing a tab that opened after the
 //! listing in between, through the routes or through the owner's first input on a control
-//! display. And a lock or flag a host asks for on a tab that closes while the route waits on a
+//! display. A lock can be requested for a tab that closes while the route waits on a
 //! reconcile, or before the route answers.
 
 use crate::display::{self, Display, Open};
@@ -13,8 +13,8 @@ use futures_util::future::BoxFuture;
 use futures_util::{SinkExt, StreamExt};
 use neo_takeover::LockTarget;
 use neo_trace::{
-    Delivery, Effect, OperationId, PrivacyRecord, PrivacyStore, PrivateReason, TraceError,
-    TraceSink,
+    Delivery, Effect, EpochMillis, OperationId, PrivacyRecord, PrivacyStore, PrivateReason,
+    TraceError, TraceSink,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -43,10 +43,6 @@ async fn lock(h: &Harness, tab: i64) -> Result<Value, BoxError> {
     post_ok(h, "/v1/locks", &body).await
 }
 
-async fn make_private(h: &Harness, tab: i64) -> Result<Value, BoxError> {
-    post_ok(h, &format!("/v1/tabs/{tab}/private"), "").await
-}
-
 /// Whether the host reads `lock` as ended.
 async fn released(h: &Harness, lock: &Value) -> Result<bool, BoxError> {
     let id = lock["id"].as_str().ok_or("a lock without an id")?;
@@ -67,19 +63,16 @@ fn spawn_post(h: &Harness, uri: &str, body: &str) -> JoinHandle<Result<Reply, Bo
 }
 
 #[tokio::test]
-async fn a_reconcile_keeps_a_lock_and_flag_a_host_set_on_a_tab_newer_than_its_listing() -> TestResult
-{
+async fn a_reconcile_keeps_a_lock_a_host_took_on_a_tab_newer_than_its_listing() -> TestResult {
     let h = support::harness().await?;
     h.browser.open_tab(5);
     h.browser.open_tab(3);
     let before = lock(&h, 3).await?;
-    make_private(&h, 3).await?;
     h.browser.close_tab(3);
     let fence = h.service.tab_fence();
     let listing = [TabId(5)];
     h.browser.open_tab(77);
     let newer = lock(&h, 77).await?;
-    make_private(&h, 77).await?;
 
     h.service.retain_tabs(&listing, fence).await;
 
@@ -91,16 +84,8 @@ async fn a_reconcile_keeps_a_lock_and_flag_a_host_set_on_a_tab_newer_than_its_li
         !released(&h, &newer).await?,
         "the host reads 77's lock as held"
     );
-    assert!(
-        h.privacy.is_private(TabId(77)).is_some(),
-        "77 stays private"
-    );
     assert!(agent_may_write(&h, 3), "3 closed before the listing");
     assert!(released(&h, &before).await?, "3's lock ended with it");
-    assert!(
-        h.privacy.is_private(TabId(3)).is_none(),
-        "3's flag is forgotten"
-    );
     Ok(())
 }
 
@@ -111,7 +96,6 @@ async fn the_next_reconcile_ends_that_state_when_its_listing_still_lacks_the_tab
     let fence = h.service.tab_fence();
     h.browser.open_tab(77);
     let newer = lock(&h, 77).await?;
-    make_private(&h, 77).await?;
     h.service.retain_tabs(&[TabId(5)], fence).await;
     assert!(!agent_may_write(&h, 77), "the first reconcile keeps 77");
 
@@ -123,7 +107,6 @@ async fn the_next_reconcile_ends_that_state_when_its_listing_still_lacks_the_tab
         "77's stamp is older than this fence, and the listing lacks 77"
     );
     assert!(released(&h, &newer).await?);
-    assert!(h.privacy.is_private(TabId(77)).is_none());
     Ok(())
 }
 
@@ -262,8 +245,7 @@ async fn a_lock_a_host_asks_for_while_a_reconcile_hands_its_tabs_to_the_parts_is
 }
 
 #[tokio::test]
-async fn a_tab_that_closes_while_its_lock_and_flag_wait_on_a_reconcile_gets_neither() -> TestResult
-{
+async fn a_tab_that_closes_while_its_lock_waits_on_a_reconcile_gets_no_lock() -> TestResult {
     use futures_util::FutureExt;
 
     let (open, gate) = watch::channel(false);
@@ -280,7 +262,9 @@ async fn a_tab_that_closes_while_its_lock_and_flag_wait_on_a_reconcile_gets_neit
     .await?;
     h.browser.open_tab(9);
     h.browser.open_tab(77);
-    make_private(&h, 9).await?;
+    h.privacy
+        .make_private(TabId(9), PrivateReason::Host, EpochMillis::now())
+        .await?;
     // 9 closes while no socket is watched, so the reconcile's last part forgets its flag, and
     // the reconcile holds the stamp table until the test lets that delete through.
     h.browser.close_tab(9);
@@ -295,8 +279,7 @@ async fn a_tab_that_closes_while_its_lock_and_flag_wait_on_a_reconcile_gets_neit
     .await??;
 
     let lock = spawn_post(&h, "/v1/locks", r#"{"tabId":77,"ttlSeconds":60}"#);
-    let private = spawn_post(&h, "/v1/tabs/77/private", "");
-    // Time for both requests to reach the stamp table, where they wait.
+    // Time for the lock request to reach the stamp table, where it waits.
     tokio::time::sleep(Duration::from_millis(200)).await;
     h.browser.close_tab(77);
     let mut closed = pin!(h.service.tab_closed(TabId(77)));
@@ -307,52 +290,25 @@ async fn a_tab_that_closes_while_its_lock_and_flag_wait_on_a_reconcile_gets_neit
     open.send_replace(true);
     tokio::time::timeout(Duration::from_secs(10), reconcile).await??;
     let lock = tokio::time::timeout(Duration::from_secs(5), lock).await???;
-    let private = tokio::time::timeout(Duration::from_secs(5), private).await???;
     tokio::time::timeout(Duration::from_secs(5), closed).await?;
 
     assert!(
         agent_may_write(&h, 77),
-        "77 closed while both requests waited, so no lock outlives it"
-    );
-    assert!(
-        h.privacy.is_private(TabId(77)).is_none(),
-        "and no private flag outlives it"
-    );
-    assert!(
-        !h.store.private_tabs().await?.contains_key(&TabId(77)),
-        "not even on disk, where the next tab 77 could inherit it"
+        "77 closed while the request waited, so no lock outlives it"
     );
     lock.assert_error(StatusCode::NOT_FOUND, "tab_not_found");
-    private.assert_error(StatusCode::NOT_FOUND, "tab_not_found");
     Ok(())
 }
 
 #[tokio::test]
-async fn a_tab_that_closes_while_its_lock_and_flag_are_made_keeps_neither() -> TestResult {
-    let (open, gate) = watch::channel(false);
-    let (began, mut commit_began) = watch::channel(false);
-    let h = support::harness_with(move |sink| {
-        Arc::new(HeldStore {
-            store: sink.clone(),
-            tab: TabId(77),
-            held: Held::Commit,
-            began,
-            gate,
-        })
-    })
-    .await?;
+async fn a_tab_that_closes_while_its_lock_is_settling_keeps_no_lock() -> TestResult {
+    let h = support::harness().await?;
     h.browser.open_tab(77);
     // An agent's click on 77 is in flight, so a lock on 77 answers only once the click ends.
     let run = support::start_run(&h.sink, Start::default());
     let click = OperationId::new(run, 1);
     support::op_started(&h.sink, click, Op::write(77, 1));
     let lock = spawn_post(&h, "/v1/locks", r#"{"tabId":77,"ttlSeconds":60}"#);
-    let private = spawn_post(&h, "/v1/tabs/77/private", "");
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        commit_began.wait_for(|began| *began),
-    )
-    .await??;
     tokio::time::timeout(Duration::from_secs(5), async {
         while agent_may_write(&h, 77) {
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -360,28 +316,17 @@ async fn a_tab_that_closes_while_its_lock_and_flag_are_made_keeps_neither() -> T
     })
     .await?;
 
-    // Both changes are in place, and 77 closes before either route answers. The browser link
-    // has not reported the close yet.
+    // The lock is in place and waiting for the in-flight click. The browser link has yet to
+    // report the close, so the route's own recheck must undo the lock.
     h.browser.close_tab(77);
     support::op_ended(&h.sink, click, Delivery::Done, None);
-    open.send_replace(true);
     let lock = tokio::time::timeout(Duration::from_secs(5), lock).await???;
-    let private = tokio::time::timeout(Duration::from_secs(5), private).await???;
 
     assert!(
         agent_may_write(&h, 77),
         "77 was gone when the lock route checked again, so it ended its lock"
     );
-    assert!(
-        h.privacy.is_private(TabId(77)).is_none(),
-        "and the private route forgot its flag"
-    );
-    assert!(
-        !h.store.private_tabs().await?.contains_key(&TabId(77)),
-        "on disk too, where the next tab 77 could inherit it"
-    );
     lock.assert_error(StatusCode::NOT_FOUND, "tab_not_found");
-    private.assert_error(StatusCode::NOT_FOUND, "tab_not_found");
     Ok(())
 }
 
@@ -422,8 +367,7 @@ async fn key_reached_the_screen(h: &Harness, connection: usize) -> TestResult {
     Ok(())
 }
 
-/// The owner's input made `tab` private, and it still is: in memory, on disk, and to a host that
-/// asks for its live view.
+/// The flag used by display coordination survives reconciliation in memory and on disk.
 async fn assert_still_private(h: &Harness, tab: i64) -> TestResult {
     assert_eq!(
         h.privacy.is_private(TabId(tab)).map(|record| record.reason),
@@ -435,9 +379,6 @@ async fn assert_still_private(h: &Harness, tab: i64) -> TestResult {
         h.store.private_tabs().await?.contains_key(&TabId(tab)),
         "the reconcile kept {tab}'s flag, so it never deleted the flag's row either"
     );
-    h.get(&format!("/v1/tabs/{tab}/screencast"))
-        .await?
-        .assert_error(StatusCode::CONFLICT, "page_private");
     Ok(())
 }
 

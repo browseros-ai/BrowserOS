@@ -4,7 +4,6 @@
 use crate::support::{
     EventStream, Op, Sse, Start, TestResult, end_run, harness, op_ended, op_started, start_run,
 };
-use axum::http::StatusCode;
 use neo_trace::{Delivery, OperationId};
 use serde_json::json;
 
@@ -115,22 +114,16 @@ async fn filters_keep_the_events_about_their_task_and_tab() -> TestResult {
     op_started(&h.sink, OperationId::new(b, 1), Op::write(4, 2));
     op_ended(&h.sink, OperationId::new(b, 1), Delivery::Done, None);
     end_run(&h.sink, b, None);
-    h.browser.open_tab(4);
-    assert_eq!(
-        h.post("/v1/tabs/4/private", "").await?.status,
-        StatusCode::OK
-    );
     op_started(&h.sink, OperationId::new(a, 2), Op::write(4, 3));
     op_ended(&h.sink, OperationId::new(a, 2), Delivery::Done, None);
 
-    let everything = all.take(10).await?;
-    assert_eq!(seqs(&everything), (1..=10).collect::<Vec<_>>());
-    assert_eq!(everything[7].kind, "tab.private");
-    // Event 10 matches every filter, so an event a filter let through by mistake would show
+    let everything = all.take(9).await?;
+    assert_eq!(seqs(&everything), (1..=9).collect::<Vec<_>>());
+    // Event 9 matches every filter, so an event a filter let through by mistake would show
     // up among these, and one it dropped by mistake would leave a stream waiting.
-    assert_eq!(seqs(&task.take(5).await?), [1, 2, 3, 9, 10]);
-    assert_eq!(seqs(&tab.take(5).await?), [5, 6, 8, 9, 10]);
-    assert_eq!(seqs(&both.take(2).await?), [9, 10]);
+    assert_eq!(seqs(&task.take(5).await?), [1, 2, 3, 8, 9]);
+    assert_eq!(seqs(&tab.take(4).await?), [5, 6, 8, 9]);
+    assert_eq!(seqs(&both.take(2).await?), [8, 9]);
     Ok(())
 }
 

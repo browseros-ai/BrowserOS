@@ -2,18 +2,18 @@
 //!
 //! When the browser link (re)connects, the app takes a [`TabFence`], lists the open tabs, and
 //! calls [`Service::retain_tabs`](crate::Service::retain_tabs), which ends what the parts keep
-//! about every tab the listing lacks. A host may lock, make private, fit or take over a tab that
-//! opened after the listing. Its request comes over the host socket, so the app cannot order it
+//! about every tab the listing lacks. A host may lock, fit or take over a tab that opened after
+//! the listing. Its request comes over the host socket, so the app cannot order it
 //! against its own listing. Without the fence, the reconcile would end that state as if the tab
 //! had closed.
 //!
 //! ```text
 //!  app    tab_fence ─▶ listing (no tab 77) ───────────────────▶ retain_tabs(listing, fence)
-//!  host                   stamp 77 ─▶ lock 77, make it private      keeps 77 as if listed
+//!  host                   stamp 77 ─▶ lock 77                      keeps 77 as if listed
 //! ```
 //!
-//! The routes that create state keyed by a tab (a lock, a private flag, a fit, a takeover's
-//! start) stamp the tab with the next value of one counter before they act, and a fence is the
+//! The routes that create state keyed by a tab (a lock, a fit, a takeover's start)
+//! stamp the tab with the next value of one counter before they act, and a fence is the
 //! counter's value when read. `retain_tabs` keeps every tab stamped after its fence as if it
 //! were open. The stamp comes before the change, so every change a reconcile can see already
 //! has its stamp in the table.
@@ -41,10 +41,9 @@
 //! A route checks its tab after its stamp, since a check from before the wait says nothing
 //! about the tab once the route acts. The tab can still close between the check and the change,
 //! and its close can end the tab's state before the change lands. That change would outlive its
-//! tab: a lock until its TTL, and a private flag, kept on disk, that a reused tab id could
-//! inherit after a browser restart. So the lock and private routes check again after the change,
-//! and undo it if the browser answers without the tab. A browser that does not answer says
-//! nothing about the tab, and the change stands. A close that comes after that check finds the
+//! tab, for example a lock that would hold until its TTL. The lock route checks again after
+//! the change and undoes it if the browser answers without the tab. If the browser fails to
+//! answer, the change stands. A close that comes after that check finds the
 //! change and ends it. A close forgets the stamp before it ends anything, so it too waits out a
 //! reconcile's parts before it touches a tab's state.
 //!
