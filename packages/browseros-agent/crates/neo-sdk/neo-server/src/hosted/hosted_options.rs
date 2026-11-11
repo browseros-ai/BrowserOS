@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use neo_captcha::config::CaptchaConfig;
 
 use super::HostedError;
-use crate::config::{AppConfig, EnvConfig, LaunchConfig, SecretFiles};
+use crate::config::{AppConfig, EnvConfig, LaunchConfig};
 
 /// The host's launch facts. No process environment is changed.
 #[derive(Clone, Debug, Default)]
@@ -43,7 +43,6 @@ impl HostedOptions {
             browseros_version: self.browseros_version,
         };
         Ok(AppConfig {
-            secret_files: SecretFiles::locate(&env, &launch, &env::current_dir()),
             captcha: CaptchaConfig::from_lookup(lookup),
             env,
             launch,

@@ -65,7 +65,7 @@ use neo_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, host_se
 use neo_takeover::{Front, FrontError, LockTarget, Locks, ScreenSize, Xvnc};
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, PageState, Privacy, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
+    Outcome, PageState, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
     ShotRead, TaskId, TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
 };
 use serde_json::{Value, json};
@@ -198,13 +198,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         WriterConfig::default(),
         Some(shots),
     );
-    let privacy = Privacy::new(Arc::new(sink.clone()), store.private_tabs().await?);
     let viewports = Arc::new(Viewports::default());
     let surface_store = store.clone();
     let service = Service::start(ServiceInputs {
         store,
         sink: sink.clone(),
-        privacy,
         browser: Arc::clone(&browser),
         viewports: Arc::clone(&viewports),
         screenshots: shot_jobs,
