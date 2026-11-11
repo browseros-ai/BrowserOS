@@ -87,6 +87,15 @@ import type {
   WaitForState,
 } from './wire'
 
+/** Tag inputs mirror Playwright; paths are read on Neo's host before entering the renderer. */
+export type ScriptTagOptions = {
+  url?: string
+  path?: string
+  content?: string
+  type?: string
+}
+export type StyleTagOptions = Omit<ScriptTagOptions, 'type'>
+
 export type StrictOption = { strict?: boolean }
 export type ClickOptions = PointerOptions &
   TimeoutOption &
@@ -556,6 +565,14 @@ export class Frame extends EventEmitter {
     return this._content('frame.content')
   }
 
+  addScriptTag(options: ScriptTagOptions = {}): Promise<ElementHandle> {
+    return this._addTag('frame.addScriptTag', 'page.addScriptTag', options)
+  }
+
+  addStyleTag(options: StyleTagOptions = {}): Promise<ElementHandle> {
+    return this._addTag('frame.addStyleTag', 'page.addStyleTag', options)
+  }
+
   setContent(html: string, options?: NavigateOptions): Promise<void> {
     return this._setContent('frame.setContent', html, options)
   }
@@ -982,6 +999,21 @@ export class Frame extends EventEmitter {
     return await invoke(op, this._call(api, 0), input)
   }
 
+  /**
+   * Upstream's `resolveSelector`: the selector Playwright's generator writes for the element
+   * `selector` matches now, from the main frame down through every `<iframe>` on the way.
+   */
+  async _normalize(api: string, selector: string): Promise<string> {
+    const target = await this._locatorBrand(api, selector)
+    const input = { target, selector }
+    const resolved = await invoke(
+      'locator.normalize',
+      this._call(api, 0),
+      input,
+    )
+    return resolved.selector
+  }
+
   async _boundingBox(
     api: string,
     selector: string,
@@ -1096,13 +1128,12 @@ export class Frame extends EventEmitter {
     selector: string | null,
     options: SnapshotOptions = {},
   ): Promise<SnapshotResult> {
-    if (options.boxes)
-      throw unsupportedError(
-        api,
-        'Neo snapshots carry no boxes; use locator.boundingBox()',
-      )
     const mode = options.mode ?? 'default'
-    const shape = pick({ mode, depth: options.depth }, ['mode', 'depth'])
+    const shape = pick({ mode, depth: options.depth, boxes: options.boxes }, [
+      'mode',
+      'depth',
+      'boxes',
+    ])
     const wait = this._wait(api, options)
     if (selector !== null)
       return await this._selectorOp(
@@ -1230,6 +1261,54 @@ export class Frame extends EventEmitter {
       this._call(api, 0),
       await this._frameArgs(api),
     )
+  }
+
+  /** Page delegates here so frame routing, errors and returned node ownership stay identical. */
+  async _addTag(
+    api: string,
+    op: 'page.addScriptTag' | 'page.addStyleTag',
+    options: ScriptTagOptions,
+  ): Promise<ElementHandle> {
+    const keys =
+      op === 'page.addScriptTag'
+        ? (['url', 'path', 'content', 'type'] as const)
+        : (['url', 'path', 'content'] as const)
+    const input = pick(options, keys)
+    for (const key of keys) {
+      const value = input[key]
+      if (value !== undefined && typeof value !== 'string')
+        throw clientError(
+          api,
+          `${key}: expected string, got ${value === null ? 'object' : typeof value}`,
+        )
+    }
+    let handle: ElementHandle | null
+    try {
+      const { value: result, observed } = await invokeObserved(
+        op,
+        this._call(api, 0),
+        {
+          ...(await this._frameArgs(api)),
+          ...input,
+        },
+      )
+      this._page._evaluated(result.frames, observed)
+      handle = this._page._handle(result.element)
+    } catch (error) {
+      // File reads are upstream client work, whose errors carry no API prefix.
+      if (
+        error instanceof Error &&
+        error.message.startsWith(`${api}: `) &&
+        /^(?:E[A-Z0-9]+|UNKNOWN): .*?, (?:open|read) '/.test(
+          error.message.slice(api.length + 2),
+        )
+      )
+        error.message = error.message.slice(api.length + 2)
+      throw error
+    }
+    if (!handle)
+      throw plainError(api, 'The inserted tag did not return an element')
+    return handle
   }
 
   async _setContent(

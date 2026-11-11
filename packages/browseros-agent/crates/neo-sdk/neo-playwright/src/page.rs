@@ -24,6 +24,7 @@
 //!  page.waitForURL ─ wait_for_url: each navigation matched in the sealed world, the load state
 //! ```
 
+mod add_tag;
 pub(crate) mod context_op;
 mod document_op;
 mod document_watch;
@@ -44,8 +45,10 @@ mod page_value;
 mod pdf;
 mod screenshot;
 mod screenshot_geometry;
+mod screenshot_png;
 mod screenshot_preparation;
 mod subtree_load;
+mod viewport_size;
 mod wait_for_navigation;
 mod wait_for_url;
 pub(crate) mod world_call;

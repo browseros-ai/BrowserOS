@@ -1,11 +1,12 @@
 //! What one frame of a page did since a point in time: which documents committed and which load
-//! states each reached, read from the CDP events of the session that hosts it.
+//! states each reached, read from native CDP events. Child navigation follows the logical
+//! frame across hosting sessions without replacing the original event subscription.
 //!
 //! ```text
 //!  DocumentWatch::new ── subscribe ── enable lifecycle events ── send the command (goto, ...)
 //!        │                                                            │
 //!        └── Page.frameNavigated, Page.navigatedWithinDocument, ──────┴─▶ WatchedFrame
-//!            Page.lifecycleEvent (the watched frame on this session)       (states per loader)
+//!            Page.lifecycleEvent (the watched frame)                       (states per loader)
 //! ```
 //!
 //! Chromium answers `Page.navigate` before the new document commits (measured: the reply at
@@ -13,25 +14,37 @@
 //! subscription is taken before the command is sent, so an event that races the reply is never
 //! missed. `Page.setLifecycleEventsEnabled` replays the load states the current document already
 //! reached each time it is called (measured), which is how `waitForLoadState` learns them.
+//! A back-forward-cache restore does not fire those lifecycle events: its navigation event
+//! supplies all reached states for the restored loader instead.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter;
+use std::sync::Arc;
 
 use browseros_cdp::{CdpError, CdpEvent};
-use browseros_core::{BrowserSession, CoreError, FrameId, ProtocolSession, SessionId};
+use browseros_core::{
+    BrowserSession, CdpConnection, CoreError, FrameId, ProtocolSession, SessionId,
+};
+use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::Receiver;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
 use crate::page::LoadState;
 
-/// One op's view of one frame (the main frame, unless `frame.waitForLoadState` names another),
-/// from just before its command to the op's end.
+/// One operation's document history. Most waits observe one session; child goto retains
+/// its original receiver and follows the logical frame across successor sessions.
 pub(crate) struct DocumentWatch {
     /// Taken in [`DocumentWatch::new`], before the op sends anything.
     events: Receiver<CdpEvent>,
+    connection: Arc<dyn CdpConnection>,
+    /// Child goto keeps this same receiver across renderer changes. The containing target
+    /// distinguishes closing the page from retiring an OOPIF's old target during a swap.
+    containing_page: Option<FrameId>,
+    /// A new hosting session must replay states that may have fired before its attachment.
+    lifecycle_pending: bool,
     /// The session that hosts the frame, raw: the op already admitted the page.
     session: ProtocolSession,
     session_id: SessionId,
@@ -79,12 +92,15 @@ struct WatchedFrame {
     /// Failure URL from the current snapshot, including one read after a renderer swap.
     unreachable: Option<String>,
     /// The frame left the watched session: `Page.frameDetached` named it there, either reason
-    /// (`swap`, `remove`), or the session detached. Only [`DocumentWatch::navigated`] acts on
-    /// it.
+    /// (`swap`, `remove`), or the session detached. Navigation callers re-resolve this frame
+    /// before continuing a commit or lifecycle wait.
     left: bool,
     /// A later navigation has started but not committed. Renderer metadata reads can block
     /// behind it; a completed navigation must not wait for that replacement's response.
     pending: bool,
+    /// The current document was restored already loaded. Missing subsequent observer work
+    /// belongs to Neo; the website has no new load events to produce for this document.
+    cache_restore: bool,
 }
 
 /// A document the frame committed.
@@ -146,11 +162,50 @@ impl DocumentWatch {
     ) -> Self {
         Self {
             events: browser.cdp_events(),
+            connection: browser.connection(),
+            containing_page: None,
+            lifecycle_pending: false,
             session,
             session_id,
             frame_id,
             frame: WatchedFrame::default(),
         }
+    }
+
+    /// Follow this child by its stable `FrameId` on every native session. Keeping the original
+    /// receiver preserves commits queued during handoff, including immediate redirects that
+    /// a newly subscribed watch could never recover from the current frame tree.
+    pub(crate) fn follow_frame_events(&mut self, containing_page: FrameId) {
+        self.containing_page = Some(containing_page);
+    }
+
+    /// Subscribe before dispatch: setup on an old child session can lose its reply when that
+    /// target retires. This separate cursor cancels only setup; the original commit cursor stays.
+    pub(crate) fn session_retired(&self) -> BoxFuture<'static, ()> {
+        let mut events = self.connection.events();
+        let session = self.session_id.clone();
+        let frame = self.frame_id.clone();
+        Box::pin(async move {
+            loop {
+                let Ok(event) = events.recv().await else {
+                    return;
+                };
+                let detached = event.method == "Target.detachedFromTarget"
+                    && event.params.get("sessionId").and_then(Value::as_str)
+                        == Some(session.as_str());
+                let moved = event.method == "Page.frameDetached"
+                    && event.session_id.as_ref() == Some(&session)
+                    && event.params.get("frameId").and_then(Value::as_str) == Some(frame.as_str());
+                if detached || moved {
+                    return;
+                }
+            }
+        })
+    }
+
+    /// A cancelled old-host setup must replay on the host selected by the commit instead.
+    pub(crate) fn replay_lifecycle(&mut self) {
+        self.lifecycle_pending = true;
     }
 
     /// The frame's URL as last reported, if the watch saw one.
@@ -161,6 +216,11 @@ impl DocumentWatch {
     /// The document last read or committed on this frame.
     pub(crate) fn loader(&self) -> Option<&str> {
         self.frame.current.as_deref()
+    }
+
+    /// Chromium restored the current document with every load state already reached.
+    pub(crate) fn restored_from_cache(&self) -> bool {
+        self.frame.cache_restore
     }
 
     /// The current endpoint, which a child navigation can replace when its renderer swaps.
@@ -289,11 +349,18 @@ impl DocumentWatch {
     /// meanwhile becomes the one waited on, as upstream resets its fired states on a commit.
     pub(crate) async fn reached(&mut self, state: LoadState) -> Result<(), WatchError> {
         loop {
+            if self.containing_page.is_some() && self.frame.left {
+                return Err(WatchError::Left);
+            }
             if self.frame.has_reached(state) {
                 return Ok(());
             }
             if self.frame.left {
                 return Err(WatchError::Left);
+            }
+            if self.lifecycle_pending {
+                self.lifecycle_pending = false;
+                self.enable_lifecycle().await?;
             }
             self.next().await?;
         }
@@ -303,6 +370,9 @@ impl DocumentWatch {
     async fn next(&mut self) -> Result<(), WatchError> {
         match self.events.recv().await {
             Ok(event) => {
+                if self.containing_page.is_some() && self.followed_event(&event) {
+                    return Ok(());
+                }
                 if event.session_id.as_ref() == Some(&self.session_id) {
                     self.frame.apply(&event, &self.frame_id);
                 } else if event.method == "Target.detachedFromTarget"
@@ -335,6 +405,99 @@ impl DocumentWatch {
         }
     }
 
+    /// A child can commit on its parent's session after an OOPIF disappears. Its `FrameId`,
+    /// not the retired session, correlates the native event; loader ids still select the
+    /// dispatched navigation. Only actual removal or closing its containing page ends it.
+    fn followed_event(&mut self, event: &CdpEvent) -> bool {
+        let names_frame = event
+            .params
+            .get("frameId")
+            .and_then(Value::as_str)
+            .or_else(|| event.params.get("frame")?.get("id")?.as_str())
+            == Some(self.frame_id.as_str());
+        if names_frame && event.method.starts_with("Page.") {
+            if event.method == "Page.frameDetached" {
+                if event.params.get("reason").and_then(Value::as_str) != Some("swap")
+                    || event.session_id.as_ref() == Some(&self.session_id)
+                {
+                    self.frame.left = true;
+                }
+            } else {
+                if event.method == "Page.frameNavigated"
+                    && let Some(session) = &event.session_id
+                {
+                    self.rehost(session.clone());
+                }
+                self.frame.apply(event, &self.frame_id);
+            }
+            return true;
+        }
+        if event.method == "Target.targetDestroyed"
+            && event.params.get("targetId").and_then(Value::as_str)
+                == self.containing_page.as_ref().map(FrameId::as_str)
+        {
+            self.frame.left = true;
+            return true;
+        }
+        if event.method == "Target.detachedFromTarget" {
+            if event.params.get("sessionId").and_then(Value::as_str)
+                == Some(self.session_id.as_str())
+            {
+                self.frame.left = true;
+            }
+            return true;
+        }
+        false
+    }
+
+    fn rehost(&mut self, session: SessionId) {
+        if session != self.session_id {
+            self.session =
+                ProtocolSession::for_session(Arc::clone(&self.connection), session.clone());
+            self.session_id = session;
+            self.lifecycle_pending = true;
+        }
+    }
+
+    /// Adopt the resolved host while retaining the original cursor and loader history. Drain
+    /// handoff events before consulting the snapshot: an immediate redirect must not replace
+    /// an already queued commit. A genuinely newer snapshot settles an interrupted loader;
+    /// the old pre-dispatch document is not a new commit.
+    pub(crate) async fn resume_on(&mut self, session: ProtocolSession) -> Result<(), WatchError> {
+        self.session_id = session
+            .session_id()
+            .cloned()
+            .ok_or(WatchError::FrameDetached)?;
+        self.session = session;
+        self.frame.left = false;
+        self.lifecycle_pending = false;
+        self.enable_page().await?;
+        self.enable_lifecycle().await?;
+        for _ in 0..self.events.len() {
+            match self.events.try_recv() {
+                Ok(event) => {
+                    self.followed_event(&event);
+                }
+                Err(TryRecvError::Lagged(_)) => {}
+                Err(_) => break,
+            }
+        }
+        if self.frame.left {
+            return Ok(());
+        }
+        let current = self.read_frame().await?;
+        if !current.loader_id.is_empty()
+            && self.frame.current.as_deref() != Some(current.loader_id.as_str())
+        {
+            self.frame.commit(Commit {
+                loader: current.loader_id,
+                url: with_fragment(current.url, current.url_fragment.as_deref()),
+                unreachable: current.unreachable_url,
+            });
+        }
+        Ok(())
+    }
+
     /// The watched frame as `Page.getFrameTree` reports it now.
     async fn read_frame(&self) -> Result<FrameFields, WatchError> {
         let tree: FrameTreeReply = decode(
@@ -360,21 +523,17 @@ impl WatchedFrame {
                 }
             }
             "Page.frameNavigated" => {
-                if let Some(FrameNavigated { frame }) = parse(&event.params)
+                if let Some(FrameNavigated { frame, kind }) = parse(&event.params)
                     && frame.id == frame_id.as_str()
                 {
-                    self.commit(Commit {
-                        loader: frame.loader_id,
-                        url: with_fragment(frame.url, frame.url_fragment.as_deref()),
-                        unreachable: frame.unreachable_url,
-                    });
+                    self.commit_event(frame, kind.as_deref() == Some("BackForwardCacheRestore"));
                 }
             }
             // `document.open()` (setContent) keeps the loader but starts the document over:
             // Chromium fires `init`, `DOMContentLoaded` and `load` again under that loader
             // (measured), never `networkIdle`.
             "Page.documentOpened" => {
-                if let Some(FrameNavigated { frame }) = parse(&event.params)
+                if let Some(FrameNavigated { frame, .. }) = parse(&event.params)
                     && frame.id == frame_id.as_str()
                 {
                     self.reopen(frame.loader_id);
@@ -416,7 +575,28 @@ impl WatchedFrame {
         }
     }
 
+    /// A cached document resumes without `DOMContentLoaded`, load or `networkIdle` events.
+    /// Keep these facts under its loader so another document cannot borrow its readiness.
+    fn commit_event(&mut self, frame: FrameFields, restored: bool) {
+        let loader = frame.loader_id;
+        self.commit(Commit {
+            loader: loader.clone(),
+            url: with_fragment(frame.url, frame.url_fragment.as_deref()),
+            unreachable: frame.unreachable_url,
+        });
+        if restored {
+            self.cache_restore = true;
+            self.reached.entry(loader).or_default().extend([
+                LoadState::Commit,
+                LoadState::DomContentLoaded,
+                LoadState::Load,
+                LoadState::NetworkIdle,
+            ]);
+        }
+    }
+
     fn commit(&mut self, commit: Commit) {
+        self.cache_restore = false;
         self.pending = false;
         self.unreachable.clone_from(&commit.unreachable);
         self.reached
@@ -434,6 +614,7 @@ impl WatchedFrame {
 
     /// The frame's document was opened for writing: the same loader, a new document's states.
     fn reopen(&mut self, loader: String) {
+        self.cache_restore = false;
         self.reached
             .insert(loader.clone(), HashSet::from([LoadState::Commit]));
         self.current = Some(loader);
@@ -459,6 +640,8 @@ struct Detached {
 #[derive(Deserialize)]
 struct FrameNavigated {
     frame: FrameFields,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
 }
 
 /// The fields of CDP's `Page.Frame` the crate reads. CDP adds fields over time, so unknown ones
@@ -577,6 +760,31 @@ mod tests {
             url: "https://a.test/#x".to_owned(),
             unreachable: None,
         }
+    }
+
+    #[test]
+    fn cached_restore_reaches_every_state_without_lifecycle_events() {
+        let main = FrameId("M".to_owned());
+        let mut frame = WatchedFrame::default();
+        let mut restored = navigated("M", "cached", None);
+        restored.params["type"] = json!("BackForwardCacheRestore");
+        frame.apply(&restored, &main);
+        assert!(frame.cache_restore);
+        for state in [
+            LoadState::Commit,
+            LoadState::DomContentLoaded,
+            LoadState::Load,
+            LoadState::NetworkIdle,
+        ] {
+            assert!(frame.has_reached(state), "{state}");
+        }
+        frame.apply(&navigated("M", "next", None), &main);
+        assert!(!frame.cache_restore);
+        assert!(!frame.has_reached(LoadState::Load));
+        frame.apply(&restored, &main);
+        frame.reopen("cached".to_owned());
+        assert!(!frame.cache_restore);
+        assert!(!frame.has_reached(LoadState::Load));
     }
 
     #[test]

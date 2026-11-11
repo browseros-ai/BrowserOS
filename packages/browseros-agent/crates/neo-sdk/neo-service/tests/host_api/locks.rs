@@ -5,7 +5,7 @@ use crate::support::{BoxError, EventStream, Harness, Sse, TestResult, harness};
 use axum::http::StatusCode;
 use browseros_core::TabId;
 use neo_takeover::{LockBinding, LockId, LockTarget, LockTtl, Reads, TakeoverId};
-use neo_trace::{Effect, EpochMillis};
+use neo_trace::Effect;
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -264,17 +264,5 @@ async fn a_browser_that_does_not_answer_is_a_503() -> TestResult {
         .await?
         .assert_error(StatusCode::SERVICE_UNAVAILABLE, "browser_unavailable");
     assert!(agent_may(&h, 3, Effect::Write));
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_tab_that_opens_during_control_starts_private() -> TestResult {
-    let h = harness().await?;
-    let display = h.privacy.control_display_opened();
-    h.service.tab_opened(TabId(9), EpochMillis::now()).await?;
-    assert!(h.privacy.is_private(TabId(9)).is_some());
-    drop(display);
-    h.service.tab_opened(TabId(10), EpochMillis::now()).await?;
-    assert!(h.privacy.is_private(TabId(10)).is_none());
     Ok(())
 }

@@ -230,9 +230,14 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
     { op: 'readAll', target: chunk('li'), read: 'innerTexts' },
     { op: 'readAll', target: chunk('li'), read: 'pins' },
   ],
+  selector: [
+    { op: 'selector', target: chunk('internal:role=button') },
+    { op: 'selector', target: { pin: 4 } },
+  ],
   snapshot: [
     { op: 'snapshot', root: 'document', mode: 'ai' },
     { op: 'snapshot', root: chunk('main'), mode: 'default', depth: 3 },
+    { op: 'snapshot', root: 'document', mode: 'default', boxes: true },
   ],
   expect: [
     {
@@ -427,6 +432,10 @@ const REPLY_EXAMPLES: {
         { pin: 7, preview: '<li>Two</li>' },
       ],
     },
+  ],
+  selector: [
+    { kind: 'selector', selector: 'internal:role=button[name="Go"i]' },
+    { kind: 'selector', selector: 'iframe[name="pay"]' },
   ],
   snapshot: [
     {

@@ -3,6 +3,7 @@
 
 mod browser;
 mod display;
+mod downloads;
 mod errors;
 mod events;
 mod fits;
@@ -13,5 +14,6 @@ mod records;
 mod screenshots;
 mod socket;
 mod support;
+mod tabs;
 mod takeovers;
 mod waiting;

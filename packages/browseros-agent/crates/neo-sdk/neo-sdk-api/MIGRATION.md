@@ -68,6 +68,55 @@ three are optional, and the two ids are at most 128 bytes each:
 | — (Xvnc on 127.0.0.1:5900, no auth) | `GET /v1/display?mode=view\|control&followTab={tabId}` or `&followTask={taskId}` | RFB over WebSocket. `view` drops input; `followTab` or `followTask` (not both) replaces zuzu's `follow`/`toFront`; `control` forwards input |
 | — (zuzu's handoff: `frontPage`, `fitOwnerView`, `giveBack`, `steerOwnerTab`) | `POST /v1/takeovers {tabId, viewer?, reads?, ttlSeconds?}` when the owner opens the link, `POST /v1/takeovers/{id}/release` when they are done | The flow composes small parts a host can also use alone: `POST /v1/locks {tabId, reads?, ttlSeconds}`, `POST /v1/tabs/{tabId}/fit` (+ `GET /v1/fits/{id}`, `…/navigate`, `…/restore`), and `/v1/display`. Neo locks the agent out of the tab (`host / owner_has_control`) and fits the page to the owner's screen. `reads: block` is the default; send `allow` to let the agent keep reading the tab. To pause a whole task, stop sending its runs |
 
+## Downloads
+
+zuzu's `neo_download` → `neo_upload` and `import` flows move into the script and onto the run's
+record. A script waits for the file with Playwright's own calls:
+
+```js
+const [download] = await Promise.all([page.waitForEvent('download'), page.getByRef(ref).click()]);
+return { path: await download.path(), filename: download.suggestedFilename() };
+```
+
+- `download.path()` resolves once the browser finished the file and returns where the browser
+  saved it (`/data/downloads/…` in the image, ` (1)` added on a clash). That path is on Neo's
+  disk: a later run uploads it with `locator.setInputFiles(path)`. `download.saveAs(path)` copies
+  it, and `download.failure()` reads `null` or why it failed (`canceled`).
+- `GET /v1/runs/{runId}` lists the run's `downloads[]`: `index`, `url`, `suggestedFilename`,
+  `path`, `size`, `state` (`completed`, `in_progress`, `failed`) and `failure`. A download is
+  the run's once one of its `download` events handed it to the script, whether or not the script
+  asked for the file.
+- `GET /v1/runs/{runId}/downloads/{index}` returns the bytes of a `completed` one
+  (`application/octet-stream`, the suggested name in `Content-Disposition`), on the host socket
+  with the same token. They are a copy Neo took when the run ended, so they are there as soon as
+  the run's reply is, and they go when retention removes the run (7 days). This replaces reading
+  the file through `read_output` parts: `/data` stays `neo 0700`.
+- A download still being written when the run ended is recorded `in_progress` with no bytes.
+  Await `download.path()` before returning when the host needs the file.
+
+## Large results
+
+A `run` reply carries its value inline, at most 256 KiB of JSON. zuzu's `read_output` route for
+bigger outputs (full-page screenshots, PDFs, `DecodeRun`'s fallback) becomes blobs:
+
+- When a returned value would be over the limit, Neo keeps its largest byte values (a `Buffer`
+  or `Uint8Array`, which travel as `{"$neo":"bytes","base64"}`) with the run, largest first until
+  the value fits, and puts `{"$neo":"blob","id":"b0","size":N}` in each one's place. Byte values
+  in a reply that fits stay inline, as before.
+- Read each at `GET /v1/runs/{runId}/blobs/{id}` on the host socket, with the same token
+  (`application/octet-stream`, `size` bytes). The run id is the reply's
+  `_meta["com.browseros.neo/run"].id`. A blob is there as soon as the reply is, and it goes when
+  retention removes the run.
+- Text is never kept as a blob. A value that still does not fit fails `script / result_too_large`,
+  whose message says to return large text as `Buffer.from(text)`.
+- `GET /v1/runs/{runId}` shows the same markers in `result`, and a repeated `requestId` replays
+  them.
+
+```js
+const shot = await page.screenshot({ type: 'png', fullPage: true });
+return { shot };   // {"shot": {"$neo":"blob","id":"b0","size":1505153}} when it is over the limit
+```
+
 ## Error bodies
 
 The body shape is unchanged: `{code, message, requestId}`. The codes are new

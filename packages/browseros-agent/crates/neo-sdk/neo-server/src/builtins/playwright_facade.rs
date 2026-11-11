@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use browseros_core::TargetId;
+use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
+use browseros_core::{TabId, TargetId};
 
-use neo_playwright::{Playwright, PlaywrightHooks};
+use neo_playwright::{Playwright, PlaywrightHooks, Refusal, TypedBy};
 use tokio::sync::OnceCell;
 
 use crate::browser::BrowserLink;
@@ -20,17 +21,18 @@ use crate::dispatch::EventLog;
 /// that comes first builds it itself, through the same cell, so there is still exactly one.
 pub(crate) struct PlaywrightFacade {
     link: Arc<BrowserLink>,
-    /// Handed to the facade once, when it is built.
-    hooks: Arc<dyn PlaywrightHooks>,
+    /// Frozen startup mode, passed through each op's environment. Only hosted BrowserOS
+    /// suppresses console/page-error events; ordinary desktop connections keep their waits.
+    hosted: bool,
     playwright: OnceCell<Arc<Playwright>>,
 }
 
 impl PlaywrightFacade {
     /// The facade over `link`'s session, built in the background on its first connect.
-    pub(crate) fn start(link: Arc<BrowserLink>, hooks: Arc<dyn PlaywrightHooks>) -> Arc<Self> {
+    pub(crate) fn start(link: Arc<BrowserLink>, hosted: bool) -> Arc<Self> {
         let facade = Arc::new(Self {
             link,
-            hooks,
+            hosted,
             playwright: OnceCell::new(),
         });
         // Waits for a first connect that may never come; nothing waits on this task.
@@ -41,13 +43,18 @@ impl PlaywrightFacade {
         facade
     }
 
+    /// The browser's configured startup mode.
+    pub(crate) fn hosted_mode(&self) -> bool {
+        self.hosted
+    }
+
     /// The facade, built here if the background start has not finished. An op runs only
     /// inside a run, and a run starts only once the link connected, so this does not wait on
     /// the browser.
     pub(crate) async fn get(&self) -> &Arc<Playwright> {
         self.playwright
             .get_or_init(|| async {
-                Playwright::new(self.link.linked().await, Arc::clone(&self.hooks))
+                Playwright::new(self.link.linked().await, Arc::new(NoopHooks))
             })
             .await
     }
@@ -62,5 +69,25 @@ impl EventLog for PlaywrightFacade {
         self.playwright
             .get()
             .and_then(|pw| pw.closed_target(target))
+    }
+
+    fn navigated(&self, target: &TargetId) -> Option<u64> {
+        self.playwright
+            .get()
+            .and_then(|pw| pw.navigated_target(target))
+    }
+}
+
+/// Consumes the engine's field notifications without retaining values or tab state. The
+/// facade owns this stateless sink because the current engine contract requires callbacks.
+struct NoopHooks;
+
+impl PlaywrightHooks for NoopHooks {
+    fn field_entered(&self, _tab: TabId, _entry: JournalEntry, _by: TypedBy) {}
+
+    fn values_swept(&self, _tab: TabId, _values: &FieldValues) {}
+
+    fn capture_allowed(&self, _tab: TabId) -> Result<(), Refusal> {
+        Ok(())
     }
 }

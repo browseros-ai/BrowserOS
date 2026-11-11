@@ -93,19 +93,15 @@ export const UNSUPPORTED = {
       'init scripts are not available in Neo; run page.evaluate() after page.goto()',
     addLocatorHandler:
       'locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting',
-    addScriptTag:
-      'adding tags is not available in Neo; change the page with page.evaluate()',
-    addStyleTag:
-      'adding tags is not available in Neo; change the page with page.evaluate()',
     bringToFront:
       'Neo keeps agent tabs in the background; act on the page directly',
     cancelPickLocator: NO_INSPECTOR,
     clearConsoleMessages:
-      'Neo keeps no console history; listen with page.on("console")',
+      'Neo keeps no console history; hosted BrowserOS emits no console events',
     clearPageErrors:
-      'Neo keeps no error history; listen with page.on("pageerror")',
+      'Neo keeps no error history; hosted BrowserOS emits no pageerror events',
     consoleMessages:
-      'Neo keeps no console history; listen with page.on("console") before the page logs',
+      'Neo keeps no console history; hosted BrowserOS emits no console events',
     emulateMedia: 'media emulation is not available in Neo',
     evaluateHandle: NO_HANDLES,
     exposeBinding:
@@ -114,7 +110,7 @@ export const UNSUPPORTED = {
       'pages cannot call back into the script; read state with page.evaluate()',
     hideHighlight: NO_INSPECTOR,
     pageErrors:
-      'Neo keeps no error history; listen with page.on("pageerror") before the page fails',
+      'Neo keeps no error history; hosted BrowserOS emits no pageerror events',
     pause: NO_INSPECTOR,
     pickLocator: NO_INSPECTOR,
     removeLocatorHandler: 'locator handlers are not available in Neo',
@@ -124,7 +120,6 @@ export const UNSUPPORTED = {
     routeFromHAR: NETWORK,
     routeWebSocket: NETWORK,
     setExtraHTTPHeaders: 'network settings are not available in Neo',
-    setViewportSize: 'the hosted viewport is fixed',
     tap: NO_TOUCH,
     unroute: NETWORK,
     unrouteAll: NETWORK,
@@ -160,10 +155,6 @@ export const UNSUPPORTED = {
     webmcp: { hint: 'WebMCP is not available in Neo', kind: 'property' },
   },
   Frame: {
-    addScriptTag:
-      'adding tags is not available in Neo; change the page with frame.evaluate()',
-    addStyleTag:
-      'adding tags is not available in Neo; change the page with frame.evaluate()',
     evaluateHandle: NO_HANDLES,
     frameElement:
       "locate the iframe from its parent instead: page.locator('iframe')",
@@ -175,7 +166,6 @@ export const UNSUPPORTED = {
     evaluateHandle: NO_HANDLES,
     hideHighlight: NO_INSPECTOR,
     highlight: NO_INSPECTOR,
-    normalize: 'not available in Neo; use the locator as built',
     tap: NO_TOUCH,
   },
   FrameLocator: {},

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 #[cfg(feature = "test-support")]
 use std::future;
 use std::future::{Future, IntoFuture};
@@ -12,8 +11,8 @@ use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_trace::{
-    EpochMillis, Privacy, RedactionLimits, Redactor, RetentionPolicy, TraceError, TraceSink,
-    TraceStore, WriterConfig,
+    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, TraceError, TraceSink, TraceStore,
+    WriterConfig,
 };
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
@@ -24,10 +23,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::browser::{BrowserLink, TabRegistry};
-use crate::builtins::{
-    self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor,
-};
-use crate::config::{AppConfig, Defaults, HostedMode, SecretFiles};
+use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
+use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
 use crate::host::{HostApi, HostInputs, TakeoverLock};
 use crate::http::agent_router;
@@ -41,7 +38,7 @@ use crate::test_support::FakeCdp;
 ///
 /// ```text
 ///  start ─ bind the agent port (taken: exit 2) ─ trace store + writer (with the
-///          screenshot queue) + Privacy ─ host socket (with a usable token; bind failure: exit 1)
+///          screenshot queue) ─ host socket (with a usable token; bind failure: exit 1)
 ///        ─ TabRegistry + BrowserLink (connects in the background) ─ PlaywrightFacade (built on
 ///          the link's first connect) ─ CaptchaSolver (with a provider key) ─ Registry
 ///          (built-ins, neo-playwright's ops)
@@ -168,15 +165,11 @@ impl App {
         // once the browser links.
         let (shots, screenshots) = neo_trace::screenshot_queue();
         let trace = neo_trace::spawn_writer(&store, redactor, writer, Some(shots));
-        // neo-service still requires Privacy while its own private-tab API is being removed.
-        // Supply an empty compatibility value: the server never restores persisted flags.
-        let privacy = Privacy::new(Arc::new(trace.clone()), HashMap::new());
         let host = HostApi::bind(
             &config.env.host_api,
             HostInputs {
                 store: store.clone(),
                 sink: trace.clone(),
-                privacy,
                 screenshots,
                 xvnc: config.env.xvnc,
                 cdp_port: config.launch.cdp_port,
@@ -188,9 +181,10 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
-        // The facade keeps the startup config's upload deny list for its whole lifetime.
-        let hooks = Arc::new(PrivacyHooks::new(config.secret_files));
-        let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::clone(&hooks) as _);
+        let playwright = PlaywrightFacade::start(
+            Arc::clone(&browser),
+            matches!(&config.env.hosted_mode, HostedMode::On),
+        );
 
         // One solver for the process: its paid-task budget and page reservations are its own.
         let solver = CaptchaSolver::new(config.captcha.clone()).map(Arc::new);
@@ -417,29 +411,6 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
         warn!(
             "neo.solveCaptcha is off: no readable CAPTCHA provider key ({CAPSOLVER_KEY_FILE_ENV}, {TWOCAPTCHA_KEY_FILE_ENV}); a call fails host / captcha_unavailable"
         );
-    }
-    // setInputFiles' deny list, located before logging started. An entry the crate cannot
-    // resolve makes it refuse every upload from a path, and these lines are the operator's only
-    // word on why.
-    match &config.secret_files {
-        SecretFiles::Named(files) => {
-            info!(?files, "setInputFiles never uploads Neo's own secret files");
-            for file in files {
-                if let Some(error) = file.unresolvable() {
-                    warn!(
-                        kind = ?file.kind,
-                        path = %file.path.display(),
-                        %error,
-                        "Neo cannot resolve one of its secret files, so setInputFiles refuses every upload from a path until it can"
-                    );
-                }
-            }
-        }
-        SecretFiles::Unlocated { missing, why } => warn!(
-            ?missing,
-            why,
-            "Neo cannot place one of its secret files, so setInputFiles uploads no file from Neo's disk; payloads still upload"
-        ),
     }
 }
 

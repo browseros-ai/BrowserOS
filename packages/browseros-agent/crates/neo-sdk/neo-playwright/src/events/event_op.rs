@@ -1,10 +1,18 @@
 //! The event, dialog and download ops, their registration metadata and their handlers.
+//!
+//! The download ops wait in the hub's download table (`download_table.rs`) for the browser to
+//! finish the file, then answer with the path the browser saved it at, or copy it for `saveAs`.
+//! Neo keeps the browser's own download directory, so `download.path()` is a file there, not a
+//! copy of Neo's: the host keeps its own copy with the run's record when the run ends.
 
+use std::path::{self, Path, PathBuf};
 use std::pin::pin;
+use std::{io, slice};
 
 use browseros_core::{CoreError, ProtocolSession};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::fs;
 
 use crate::events::dialog_table::{ClosedBy, Unanswerable};
 use crate::events::event_hub::{now_ms, receives};
@@ -15,10 +23,10 @@ use crate::events::{ListenerKey, PageEvent, PageEventKind, Subscription};
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_output::to_output;
-use crate::op_scope::{OpScope, Sent};
+use crate::op_scope::{Expired, OpScope, Sent};
 use crate::op_spec::{OpSpec, OpTarget, PAGE};
 use crate::target::PageRef;
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{DownloadState, ErrorCode, Playwright, PlaywrightError};
 
 listed_enum! {
     /// Listening, the pump, one-shot waits, held dialogs and finished downloads.
@@ -73,7 +81,7 @@ impl EventOp {
             Self::DownloadSaveAs => OpSpec::write(
                 "download.saveAs",
                 OpTarget::None,
-                "copy a finished download into the run's outputs directory",
+                "wait for a download to finish and copy it to a path on Neo's disk",
             ),
         }
     }
@@ -131,14 +139,28 @@ struct DialogInput {
     prompt_text: Option<String>,
 }
 
-/// `download.path { download }` and `download.saveAs { download, path }`.
+/// `download.path { download }`, behind `download.path()` and `download.failure()`. `download`
+/// is the browser's guid, which the `download` event handed the script.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DownloadInput {
-    #[serde(rename = "download")]
-    _download: String,
-    #[serde(default, rename = "path")]
-    _path: Option<String>,
+struct PathInput {
+    download: String,
+}
+
+/// `download.saveAs { download, path }`. A relative `path` resolves against Neo's working
+/// directory, as Playwright resolves it against the client's.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveAsInput {
+    download: String,
+    path: String,
+}
+
+/// What `download.path` answers: exactly one of the two is set.
+#[derive(Debug, Serialize)]
+struct Finished {
+    path: Option<String>,
+    failure: Option<String>,
 }
 
 /// What the pump returns: the events in log order, and how many records fell off the ring
@@ -166,14 +188,8 @@ pub(crate) async fn invoke(
         EventOp::Wait => wait(pw, scope, args.decode(scope)?).await,
         EventOp::DialogAccept => answer(pw, scope, args.decode(scope)?, Answer::Accept).await,
         EventOp::DialogDismiss => answer(pw, scope, args.decode(scope)?, Answer::Dismiss).await,
-        EventOp::DownloadPath | EventOp::DownloadSaveAs => {
-            let DownloadInput { .. } = args.decode(scope)?;
-            Err(scope.fail(
-                ErrorCode::Unsupported,
-                "Neo does not hand downloaded files to scripts in v1; the download event still \
-                 reports url() and suggestedFilename()",
-            ))
-        }
+        EventOp::DownloadPath => download_path(pw, scope, args.decode(scope)?).await,
+        EventOp::DownloadSaveAs => save_as(pw, scope, args.decode(scope)?).await,
     }
 }
 
@@ -319,6 +335,8 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
         run.events.advance(&read_up_to);
         if !events.is_empty() || lost > 0 {
             events.sort_by_key(|event| event.seq);
+            // After the sort, so a run's download index is the order its script receives them.
+            hand_downloads(pw, scope, &events);
             return to_output(scope, &Pumped { events, lost });
         }
         changed.await;
@@ -332,6 +350,21 @@ async fn wait(
     scope: &OpScope<'_>,
     input: WaitInput,
 ) -> Result<Value, PlaywrightError> {
+    // The native browser cannot produce these in hosted mode. Refuse before installing a
+    // wait lease or consuming its timeout; ordinary listeners remain accepted and silent.
+    if scope.hosted_mode()
+        && input.page.is_some()
+        && matches!(input.event.as_str(), "console" | "pageerror")
+    {
+        return Err(scope.fail(
+            ErrorCode::Unsupported,
+            &format!(
+                "Hosted BrowserOS does not emit '{}' events; page.waitForEvent('{}') is \
+                 unavailable in hosted mode",
+                input.event, input.event
+            ),
+        ));
+    }
     let subscription = subscription(pw, scope, input.page, &input.event).await?;
     let run = scope.run_state();
     pw.events().bind(run);
@@ -345,7 +378,11 @@ async fn wait(
         input.after.unwrap_or(0),
     );
     match scope.within(found).await {
-        Ok(found) => to_output(scope, &found?),
+        Ok(found) => {
+            let found = found?;
+            hand_downloads(pw, scope, slice::from_ref(&found));
+            to_output(scope, &found)
+        }
         Err(_expired) => {
             if let Some(aborted) = scope.aborted_error() {
                 return Err(aborted);
@@ -407,6 +444,132 @@ async fn first_event(
         }
         changed.await;
     }
+}
+
+/// `download.path`: the saved file's path once the browser finished it, or why it never will.
+async fn download_path(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: PathInput,
+) -> Result<Value, PlaywrightError> {
+    let finished = match finished(pw, scope, &input.download).await? {
+        Saved::File(path) => Finished {
+            path: Some(path.to_string_lossy().into_owned()),
+            failure: None,
+        },
+        Saved::Failed(failure) => Finished {
+            path: None,
+            failure: Some(failure),
+        },
+    };
+    to_output(scope, &finished)
+}
+
+/// `download.saveAs`: once the browser finished the file, a copy at `path`, with its parent
+/// directories made as Playwright makes them. A download that failed fails the save with its
+/// failure, as upstream's does.
+async fn save_as(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: SaveAsInput,
+) -> Result<Value, PlaywrightError> {
+    let source = match finished(pw, scope, &input.download).await? {
+        Saved::File(path) => path,
+        Saved::Failed(failure) => return Err(scope.fail(ErrorCode::DownloadFailed, &failure)),
+    };
+    let target = path::absolute(&input.path).map_err(|error| {
+        scope.fail(
+            ErrorCode::InvalidInput,
+            &format!("cannot save the download to \"{}\": {error}", input.path),
+        )
+    })?;
+    let sent = scope.send_effect()?;
+    copy_to(&sent, &source, &target).await.map_err(|error| {
+        // A destination the script chose that cannot hold a file is the script's to fix; any
+        // other failure (a full disk, the browser's file gone) is Neo's.
+        let code = match error.kind() {
+            io::ErrorKind::PermissionDenied
+            | io::ErrorKind::NotADirectory
+            | io::ErrorKind::IsADirectory
+            | io::ErrorKind::ReadOnlyFilesystem
+            | io::ErrorKind::InvalidFilename
+            | io::ErrorKind::InvalidInput => ErrorCode::InvalidInput,
+            _ => ErrorCode::Internal,
+        };
+        scope.fail(
+            code,
+            &format!(
+                "cannot save the download to \"{}\": {error}",
+                target.display()
+            ),
+        )
+    })?;
+    Ok(Value::Null)
+}
+
+/// Adds each download among `events` to the run's downloads, in order: the run keeps it from
+/// here, so its record lists it even if the script never asks for the file.
+fn hand_downloads(pw: &Playwright, scope: &OpScope<'_>, events: &[Delivered]) {
+    let table = pw.events().downloads();
+    for guid in events.iter().filter_map(Delivered::download) {
+        if let Some(download) = table.get(guid) {
+            scope.run_state().downloads.handed(download);
+        }
+    }
+}
+
+/// Where a finished download stands for the ops that read it.
+enum Saved {
+    File(PathBuf),
+    Failed(String),
+}
+
+/// Waits for the download the script's `Download` names to finish. It has no timeout unless the
+/// script gave one (`path()` and `saveAs()` take none); the run's own deadline still stops it.
+async fn finished(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    guid: &str,
+) -> Result<Saved, PlaywrightError> {
+    // The run's own downloads first: the table may have stopped listing one the run holds.
+    let download = scope
+        .run_state()
+        .downloads
+        .find(guid)
+        .or_else(|| pw.events().downloads().get(guid));
+    let Some(download) = download else {
+        return Err(scope.fail(
+            ErrorCode::Unsupported,
+            "Neo does not know this download; use the `Download` a `download` event of this run \
+             handed the script",
+        ));
+    };
+    match scope.within(download.finished()).await {
+        Ok(DownloadState::Completed(path)) => Ok(Saved::File(path)),
+        Ok(DownloadState::Failed(failure)) => Ok(Saved::Failed(failure)),
+        // `finished` resolves only once the state is final.
+        Ok(DownloadState::InProgress) => Err(scope.fail(
+            ErrorCode::Internal,
+            "the download's wait ended while it was still in progress",
+        )),
+        Err(Expired) => Err(scope.timed_out(ErrorCode::WaitTimeout)),
+    }
+}
+
+/// Copies `source` to `target`. A save onto the file itself is already done: copying a file
+/// over itself would empty it.
+async fn copy_to(_sent: &Sent<'_>, source: &Path, target: &Path) -> io::Result<()> {
+    if let (Ok(from), Ok(to)) = (
+        fs::canonicalize(source).await,
+        fs::canonicalize(target).await,
+    ) && from == to
+    {
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    fs::copy(source, target).await.map(drop)
 }
 
 /// Which answer a dialog op gives.

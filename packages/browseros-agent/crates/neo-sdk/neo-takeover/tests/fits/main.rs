@@ -221,6 +221,155 @@ async fn restore_puts_back_the_agents_own_viewport_the_window_and_the_screen() -
 }
 
 #[tokio::test]
+async fn a_busy_viewport_times_out_without_stranding_the_surface_or_claiming_a_fit() -> TestResult {
+    let h = harness(&[3, 4]).await?;
+    let view =
+        BrowserView::unbound(Arc::clone(&h.session), None).with_viewports(Arc::clone(&h.viewports));
+    let pages = h.session.pages.resolve_tab_ids(&[TabId(3)]).await?;
+    let page = pages.get(&TabId(3)).ok_or("the busy tab is open")?;
+    let _busy = view
+        .prepare_playwright_viewport(
+            page.clone(),
+            ViewportRequest::playwright(Size {
+                width: 800,
+                height: 600,
+            })?,
+        )
+        .await?;
+    let failed = tokio::time::timeout(Duration::from_secs(7), h.fits.fit(TabId(3), PHONE)).await?;
+    assert!(
+        matches!(failed, Err(PartError::TimedOut(_))),
+        "a fit must not wait for an unbounded browser acknowledgement"
+    );
+    assert_eq!(
+        h.xvnc.size(),
+        HOME,
+        "a timed-out snapshot never changes the screen"
+    );
+    assert!(
+        !h.browser
+            .changes()
+            .iter()
+            .any(|change| change.starts_with("Browser.activateTab")),
+        "no outdated restore target was committed"
+    );
+    // Tab 3 remains busy while another tab successfully claims and releases the surface.
+    let other = tokio::time::timeout(Duration::from_secs(7), h.fits.fit(TabId(4), PHONE)).await??;
+    h.fits.restore(other.id).await?;
+    assert_eq!(h.xvnc.size(), HOME);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_fit_waits_for_an_inflight_resize_before_saving_what_it_will_restore() -> TestResult {
+    let h = harness(&[3]).await?;
+    h.agent_sets_viewport(
+        3,
+        ViewportRequest::playwright(Size {
+            width: 640,
+            height: 480,
+        })?,
+    )
+    .await?;
+    let view =
+        BrowserView::unbound(Arc::clone(&h.session), None).with_viewports(Arc::clone(&h.viewports));
+    let pages = h.session.pages.resolve_tab_ids(&[TabId(3)]).await?;
+    let page = pages.get(&TabId(3)).ok_or("the script's tab is open")?;
+    let requested = ViewportRequest::playwright(Size {
+        width: 800,
+        height: 600,
+    })?;
+    let change = view
+        .prepare_playwright_viewport(page.clone(), requested)
+        .await?;
+    let reset = "Emulation.setTouchEmulationEnabled";
+    h.browser.hold(reset);
+    let applying = tokio::spawn(change.apply());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while h.browser.held(reset) == 0 {
+        if tokio::time::Instant::now() > deadline {
+            return Err("resize never reached its held acknowledgement".into());
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // A takeover's bounded settle can end while this acknowledged-metrics change still
+    // waits. Its fit must snapshot the configuration after that in-flight change commits.
+    let fits = Arc::clone(&h.fits);
+    let fitting = tokio::spawn(async move { fits.fit(TabId(3), PHONE).await });
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(!fitting.is_finished(), "the fit waits behind the resize");
+    h.browser.let_go(reset);
+    applying.await??;
+    let fit = fitting.await??;
+    h.fits.restore(fit.id).await?;
+    assert_eq!(
+        view.current_viewport(page),
+        Some(requested),
+        "the fit must save the last completed resize, not the configuration seen before waiting"
+    );
+    assert_eq!(
+        h.browser.metrics(3),
+        Metrics {
+            width: 800,
+            height: 600,
+            device_scale: 1.0,
+            touch: false
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_refitted_owner_view_restores_the_scripts_viewport_and_desktop_context() -> TestResult {
+    let h = harness(&[3, 4]).await?;
+    let size = Size {
+        width: 55,
+        height: 5000,
+    };
+    let request = ViewportRequest::playwright(size)?;
+    h.agent_sets_viewport(3, request).await?;
+    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    assert_eq!(h.browser.metrics(3), phone(PHONE));
+    let refit = h.fits.fit(TabId(3), LAPTOP).await?;
+    assert_eq!(
+        refit.id, fit.id,
+        "a refit keeps the original saved viewport"
+    );
+    h.fits.restore(fit.id).await?;
+    assert_eq!(
+        h.browser.metrics(3),
+        Metrics {
+            width: 55,
+            height: 5000,
+            device_scale: 1.0,
+            touch: false
+        }
+    );
+    let view =
+        BrowserView::unbound(Arc::clone(&h.session), None).with_viewports(Arc::clone(&h.viewports));
+    let pages = h
+        .session
+        .pages
+        .resolve_tab_ids(&[TabId(3), TabId(4)])
+        .await?;
+    let page = pages.get(&TabId(3)).ok_or("script's tab is open")?;
+    let other = pages.get(&TabId(4)).ok_or("other tab is open")?;
+    assert_eq!(
+        view.current_viewport(page),
+        Some(request),
+        "restore retains the request profile, not just its dimensions"
+    );
+    assert_eq!(view.playwright_viewport(page), Some(size));
+    assert_eq!(
+        view.playwright_viewport(other),
+        None,
+        "configuration belongs to one tab"
+    );
+    assert_eq!(h.xvnc.size(), HOME);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_desktop_viewer_gets_the_default_viewport_in_a_maximized_window() -> TestResult {
     let h = harness(&[3]).await?;
     let fit = h.fits.fit(TabId(3), LAPTOP).await?;

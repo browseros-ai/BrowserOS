@@ -10,6 +10,10 @@
 //!
 //! Screenshots are served from the operation's stored state: `image/jpeg` when stored, 410
 //! `expired` after retention deletes the file, and 404 when no image was kept.
+//!
+//! A run's downloads and its reply's blobs are served from the files claw-sdk kept beside the
+//! trace when the run ended (`neo_trace::RunOutputs`), streamed. Those are written before the
+//! run's reply, unlike its rows, so these reads need no `wait`: a file not kept is a 404.
 
 use crate::api_error::ApiError;
 use crate::query::Inline;
@@ -17,15 +21,21 @@ use crate::service::ServiceState;
 use crate::wire::Inlined;
 use crate::{query, wire};
 use axum::Json;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, RawQuery, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::HeaderValue;
+use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
+use futures_util::stream;
 use neo_sdk_api as api;
 use neo_trace::{
-    OperationRow, RunDetail, RunId, ShotRead, ShotState, TraceError, TraceRecordEvent, TraceStore,
+    BlobId, KeptFile, OperationRow, RunDetail, RunId, ShotRead, ShotState, TraceError,
+    TraceRecordEvent, TraceStore,
 };
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
@@ -83,6 +93,101 @@ pub(crate) async fn get_screenshot(
             Err(ApiError::not_found("this operation has no screenshot"))
         }
     }
+}
+
+/// How much of a kept file one chunk of its response reads.
+const FILE_CHUNK: usize = 64 * 1024;
+
+/// The characters RFC 8187 lets through unencoded in `filename*` (its `attr-char`).
+const ATTR_CHARS: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'!')
+    .remove(b'#')
+    .remove(b'$')
+    .remove(b'&')
+    .remove(b'+')
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'^')
+    .remove(b'_')
+    .remove(b'`')
+    .remove(b'|')
+    .remove(b'~');
+
+pub(crate) async fn get_download(
+    State(service): State<Arc<ServiceState>>,
+    Path((run, index)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let run = query::run_id(&run)?;
+    let index: u32 = index
+        .parse()
+        .map_err(|_| ApiError::not_found("no download has this index"))?;
+    let outputs = service.store.outputs();
+    let Some(kept) = outputs.open_download(run, index).await? else {
+        return Err(ApiError::not_found(
+            "this run kept no bytes for this download: it has no such index, or the download had \
+             not completed when the run ended (see the run's `downloads`)",
+        ));
+    };
+    let name = outputs
+        .downloads(run)
+        .await?
+        .into_iter()
+        .find(|download| download.index == index)
+        .map(|download| download.suggested_filename);
+    Ok(file_response(kept, &attachment(name.as_deref())))
+}
+
+/// The bytes a run's reply names as `{"$neo":"blob","id":…}` because they did not fit inline.
+pub(crate) async fn get_blob(
+    State(service): State<Arc<ServiceState>>,
+    Path((run, blob)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let run = query::run_id(&run)?;
+    let blob: BlobId = blob
+        .parse()
+        .map_err(|_| ApiError::not_found("no blob has this id"))?;
+    let Some(kept) = service.store.outputs().open_blob(run, blob).await? else {
+        return Err(ApiError::not_found("this run's reply names no such blob"));
+    };
+    Ok(file_response(kept, "attachment"))
+}
+
+/// `Content-Disposition` for a file the host saves, with its name when it has one (RFC 6266).
+fn attachment(name: Option<&str>) -> String {
+    match name.filter(|name| !name.is_empty()) {
+        Some(name) => format!(
+            "attachment; filename*=UTF-8''{}",
+            utf8_percent_encode(name, ATTR_CHARS)
+        ),
+        None => "attachment".to_owned(),
+    }
+}
+
+/// A file a run kept, streamed as `application/octet-stream` in chunks, so a large one never sits
+/// in memory whole.
+fn file_response(kept: KeptFile, disposition: &str) -> Response {
+    let KeptFile { file, size } = kept;
+    let chunks = stream::try_unfold(file, |mut file| async move {
+        let mut chunk = vec![0; FILE_CHUNK];
+        let read = file.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok::<_, std::io::Error>(None);
+        }
+        chunk.truncate(read);
+        Ok(Some((Bytes::from(chunk), file)))
+    });
+    let mut response = Body::from_stream(chunks).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    headers.insert(CONTENT_LENGTH, HeaderValue::from(size));
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Ok(value) = HeaderValue::from_str(disposition) {
+        headers.insert(CONTENT_DISPOSITION, value);
+    }
+    response
 }
 
 pub(crate) async fn get_trace(

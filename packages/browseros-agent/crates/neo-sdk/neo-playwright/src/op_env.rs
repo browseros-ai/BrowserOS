@@ -35,6 +35,13 @@ pub trait OpEnv: Send + Sync {
     /// `RunCtx::slot::<RunState>()`) and drops it with the run.
     fn run_state(&self) -> &Arc<RunState>;
 
+    /// Whether this browser runs in hosted mode. Hosted BrowserOS suppresses console and
+    /// page-error events, so a one-shot wait cannot succeed. Hosts supply their startup mode;
+    /// the library never reads process environment. Existing hosts default to non-hosted.
+    fn hosted_mode(&self) -> bool {
+        false
+    }
+
     /// Re-runs the host's attempt-stage policies (the owner's takeover lock, page privacy),
     /// right before the op's first write to the page, because the owner may have taken over
     /// while the op waited.

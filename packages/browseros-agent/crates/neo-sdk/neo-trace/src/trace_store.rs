@@ -2,7 +2,7 @@
 //!
 //! Reads run on a small pool beside the writer, which WAL allows. Every write goes through the
 //! one writer task ([`spawn_writer`](crate::spawn_writer)), through storage's `TraceBatch`.
-//! That keeps privacy commits ordered with the records around them. Startup recovery and
+//! That keeps screenshot answers ordered with the records around them. Startup recovery and
 //! [`TraceStore::salvage`] use that same write interface before the writer starts.
 //!
 //! Opening first runs the migrator's WAL switch, atomic baseline adoption and version fence,
@@ -16,6 +16,9 @@
 //! queued but not yet written may be gone. Every run becomes `complete`: the screenshot jobs it
 //! was waiting for died with the process.
 //!
+//! A run's kept downloads are files beside the database too (`run_outputs`), written by
+//! claw-sdk when the run ends; [`TraceStore::run`] reads their list from there.
+//!
 //! Screenshots are files beside the database (`screenshot_files`); an operation's `screenshot`
 //! state says whether its file is there. The camera writes a file before its answer reaches the
 //! writer. The retention sweep deletes a run's files before its rows, inside its transaction,
@@ -28,7 +31,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use browseros_core::TabId;
-use sea_orm::sea_query::{Expr, Func, Query, SelectStatement, SimpleExpr};
+use sea_orm::sea_query::{Expr, ExprTrait, Func, Query, SelectStatement, SimpleExpr};
 use sea_orm::sqlx::ConnectOptions;
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous};
 use sea_orm::{
@@ -37,14 +40,14 @@ use sea_orm::{
 };
 use serde_json::Value;
 
+use crate::run_outputs::RunOutputs;
 use crate::screenshot_files::ShotFiles;
-use crate::storage::entities::{operations, private_tabs, run_tabs, runs};
+use crate::storage::entities::{operations, run_tabs, runs};
 use crate::storage::record_rows::{self, RunDetailRow, RunSummaryRow};
 use crate::storage::{TraceBatch, trace_migrator};
 use crate::{
-    EpochMillis, OperationId, OperationRow, Page, PrivacyRecord, PrivateReason, RequestId,
-    RunDetail, RunId, RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId,
-    TraceError, TraceTail, salvage,
+    EpochMillis, OperationId, OperationRow, Page, RequestId, RunDetail, RunId, RunQuery,
+    RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TraceError, TraceTail, salvage,
 };
 
 /// The most screenshot bytes kept on disk (D5): about 7,000 JPEGs of 150 KB.
@@ -54,7 +57,7 @@ const SCREENSHOT_CAP_BYTES: u64 = 1 << 30;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetentionPolicy {
     /// Finished runs older than this are deleted with their operations, their tab links and
-    /// their screenshots: 7 days by default. Private tab flags are never swept.
+    /// their screenshots: 7 days by default.
     pub max_age: Duration,
     /// The most screenshot bytes kept. Past it, the oldest runs' screenshots are deleted first
     /// and read as expired: 1 GiB by default.
@@ -88,6 +91,7 @@ pub struct Swept {
 pub struct TraceStore {
     db: DatabaseConnection,
     files: ShotFiles,
+    outputs: RunOutputs,
 }
 
 impl TraceStore {
@@ -149,6 +153,7 @@ impl TraceStore {
         Ok(Self {
             db,
             files: ShotFiles::beside(path),
+            outputs: RunOutputs::beside(path),
         })
     }
 
@@ -160,25 +165,11 @@ impl TraceStore {
         &self.files
     }
 
-    /// Every private tab, for [`Privacy::new`](crate::Privacy::new) at startup.
-    ///
-    /// # Errors
-    /// When the file cannot be read.
-    pub async fn private_tabs(&self) -> Result<HashMap<TabId, PrivacyRecord>, TraceError> {
-        let rows = private_tabs::Entity::find().all(&self.db).await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                (
-                    TabId(row.tab_id),
-                    PrivacyRecord {
-                        since: EpochMillis::from_millis(row.since),
-                        // Unknown stored reasons remain private rather than failing the startup load.
-                        reason: PrivateReason::parse(&row.reason).unwrap_or(PrivateReason::Host),
-                    },
-                )
-            })
-            .collect())
+    /// The files runs keep beside the trace: claw-sdk writes a run's downloads there when it
+    /// ends, and the host routes read them back.
+    #[must_use]
+    pub fn outputs(&self) -> &RunOutputs {
+        &self.outputs
     }
 
     /// One run with its operations, or `None` when no run has this id.
@@ -211,7 +202,9 @@ impl TraceStore {
             .map(record_rows::operation_row)
             .collect::<Result<Vec<_>, _>>()?;
         // Preserve the existing two independent reads; no new read transaction is introduced.
-        record_rows::run_detail(row, operations).map(Some)
+        let mut detail = record_rows::run_detail(row, operations)?;
+        detail.downloads = self.outputs.downloads(id).await?;
+        Ok(Some(detail))
     }
 
     /// One operation, or `None`.
@@ -489,6 +482,45 @@ impl TraceStore {
     /// When the file cannot be read or the row is corrupt.
     pub async fn task_last_tab(&self, task: &TaskId) -> Result<Option<TabId>, TraceError> {
         Ok(self.task_last_act(task).await?.map(|act| act.tab))
+    }
+
+    /// The distinct tasks whose retained, committed runs touched each requested tab, sorted
+    /// by task id. Untasked runs add no association; retention removes links with their runs.
+    /// This is historical trace data, not an exclusive ownership claim over a live tab id.
+    ///
+    /// # Errors
+    /// When the file cannot be read or a stored task id is corrupt.
+    pub async fn tasks_for_tabs(
+        &self,
+        tabs: &[TabId],
+    ) -> Result<HashMap<TabId, Vec<TaskId>>, TraceError> {
+        if tabs.is_empty() {
+            return Ok(HashMap::new());
+        }
+        // A creator has no target at admission: its tab arrives in page_after at the end.
+        // Match task_last_act's target-first rule so newPage associations work for old traces
+        // as well as new ones, without rewriting stored run/tab links.
+        let tab = Expr::col((operations::Entity, operations::Column::TargetTabId))
+            .if_null(Expr::col((operations::Entity, operations::Column::TabId)));
+        let rows: Vec<(i64, String)> = operations::Entity::find()
+            .select_only()
+            .column_as(tab.clone(), "tab")
+            .column(runs::Column::TaskId)
+            .inner_join(runs::Entity)
+            .filter(tab.is_in(tabs.iter().map(|tab| tab.0)))
+            .filter(runs::Column::TaskId.is_not_null())
+            .distinct()
+            .order_by_asc(runs::Column::TaskId)
+            .into_tuple::<(i64, String)>()
+            .all(&self.db)
+            .await?;
+        let mut tasks: HashMap<TabId, Vec<TaskId>> = HashMap::new();
+        for (tab, task) in rows {
+            let task = TaskId::parse(&task)
+                .map_err(|error| TraceError::Corrupt(format!("invalid stored task id: {error}")))?;
+            tasks.entry(TabId(tab)).or_default().push(task);
+        }
+        Ok(tasks)
     }
 
     /// The summaries of `ids`, oldest first.

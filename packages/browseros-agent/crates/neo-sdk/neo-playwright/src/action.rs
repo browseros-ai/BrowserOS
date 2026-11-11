@@ -51,6 +51,7 @@
 pub(crate) mod action_op;
 mod actionability;
 mod arm_guard;
+mod attempt_log;
 mod element_action;
 mod focus_lease;
 mod form_action;

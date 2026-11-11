@@ -11,10 +11,8 @@ use super::hosted_run::Completion;
 use super::{HostedError, HostedOptions, HostedRun};
 use crate::App;
 use crate::browser::{BrowserLink, TabRegistry};
-use crate::builtins::{
-    self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor,
-};
-use crate::config::Defaults;
+use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
+use crate::config::{Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
 use crate::host::TakeoverLock;
 use crate::run::{RunService, RunServiceParts};
@@ -53,8 +51,10 @@ impl HostedStack {
         let native =
             NativeCapabilities::from_browseros_version(config.launch.browseros_version.as_deref());
         let browser = link(native, Arc::clone(&tabs));
-        let hooks = Arc::new(PrivacyHooks::new(config.secret_files));
-        let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::clone(&hooks) as _);
+        let playwright = PlaywrightFacade::start(
+            Arc::clone(&browser),
+            matches!(&config.env.hosted_mode, HostedMode::On),
+        );
         let solver = CaptchaSolver::new(config.captcha).map(Arc::new);
         let claims = Arc::new(CaptchaClaims::default());
         let mut methods = RegistryBuilder::default();

@@ -12,7 +12,9 @@ use crate::probe::{PageText, ProbeReply, ProbeRequest, ProbeTarget, QueryState, 
 use crate::read::element_read::Visibility;
 use crate::read::element_wait::ElementWait;
 use crate::read::selector_wait::{Returning, SelectorState};
-use crate::read::{element_handle, element_read, element_wait, selector_wait, viewport_box};
+use crate::read::{
+    element_handle, element_read, element_wait, normalize, selector_wait, viewport_box,
+};
 use crate::resolve::{Landed, Resolver};
 use crate::target::{Strictness, Target};
 use crate::{ErrorCode, Playwright, PlaywrightError};
@@ -39,6 +41,7 @@ listed_enum! {
         WaitFor,
         ElementHandle,
         ElementHandles,
+        Normalize,
     }
 }
 
@@ -135,6 +138,11 @@ impl ReadOp {
                 "locator.elementHandles",
                 TARGET,
                 "pin every match as an ElementHandle; also page.$$ and frame.$$",
+            ),
+            Self::Normalize => OpSpec::read(
+                "locator.normalize",
+                TARGET,
+                "the selector Playwright's generator writes for the first match, frames included",
             ),
         }
     }
@@ -306,6 +314,7 @@ pub(crate) async fn invoke(
                 selector_wait::wait_for_selector(pw, scope, target, strict, state, returning).await
             }
         }
+        ReadOp::Normalize => normalize::normalize(pw, scope, args.decode(scope)?).await,
         ReadOp::ElementHandles => {
             let EveryMatchInput { target } = args.decode(scope)?;
             let Target::Locator(target) = &target else {

@@ -1,7 +1,6 @@
 //! The host side as zuzu and the door meet it: the real neo-service behind the real
 //! `host_service` auth on a temp Unix socket, over the fake browser and a real trace store.
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::future::{self, Future};
 use std::path::{Path, PathBuf};
@@ -9,9 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
-use neo_trace::{
-    Effect, OperationId, Privacy, RedactionLimits, Redactor, RunId, TraceStore, WriterConfig,
-};
+use neo_trace::{Effect, OperationId, RedactionLimits, Redactor, RunId, TraceStore, WriterConfig};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -73,7 +70,6 @@ impl Host {
         let redactor = Redactor::new(RedactionLimits::default());
         let (shots, screenshots) = neo_trace::screenshot_queue();
         let sink = neo_trace::spawn_writer(&store, redactor, WriterConfig::default(), Some(shots));
-        let privacy = Privacy::new(Arc::new(sink.clone()), HashMap::new());
         let token_file = match token {
             Some(token) => {
                 let path = dir.path().join("token");
@@ -90,7 +86,6 @@ impl Host {
         let inputs = HostInputs {
             store: store.clone(),
             sink,
-            privacy,
             screenshots,
             xvnc: CLOSED_XVNC,
             // The fake browser has no CDP port, and no test here opens a live view to dial it.

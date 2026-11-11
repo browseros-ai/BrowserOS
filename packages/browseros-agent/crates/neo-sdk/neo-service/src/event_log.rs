@@ -351,7 +351,6 @@ async fn hydrate(store: &TraceStore, event: TraceRecordEvent) -> Option<LogEvent
             operation_event(store, EventKind::OperationEnded, id, task, at).await
         }
         // Flag commits remain internal to takeover and display coordination.
-        TraceRecordEvent::TabPrivate { .. } => return None,
         // It wakes `wait=`; SSE clients read `complete` from the run itself.
         TraceRecordEvent::RunComplete { .. } => return None,
     };

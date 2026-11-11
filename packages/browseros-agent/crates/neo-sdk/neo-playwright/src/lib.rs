@@ -34,6 +34,7 @@
 mod action;
 mod backoff;
 mod call_log;
+mod download_facts;
 mod events;
 mod expect;
 mod input;
@@ -62,6 +63,7 @@ mod test_env;
 mod test_support;
 mod world;
 
+pub use download_facts::{DownloadFacts, DownloadState};
 pub use op::Op;
 pub use op_env::{OpEnv, Refusal};
 pub use op_spec::{Capability, OpLifetime, OpSpec, OpTarget};

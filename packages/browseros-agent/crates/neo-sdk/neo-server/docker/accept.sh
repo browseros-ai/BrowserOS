@@ -2,14 +2,15 @@
 # Acceptance checks for a built Neo SDK image: it boots, drives a real page through `run`, keeps
 # its host contract (README.md), and survives the stops and kills a host puts it through.
 #
-#   accept.sh <image> [--data DIR] [--logs DIR]
+#   accept.sh <image> [--data DIR] [--logs DIR] [--prefix NAME]
 #
-#   --data  bind-mount DIR as /data and leave it there afterwards. Default: a named volume that
-#           is removed with everything else.
-#   --logs  save each container's log there, for CI artifacts.
+#   --data    bind-mount DIR as /data and leave it there afterwards. Default: a named volume that
+#             is removed with everything else.
+#   --logs    save each container's log there, for CI artifacts.
+#   --prefix  name what it creates NAME-<run>-*. Default: neo-sdk-accept.
 #
 # Prints one `PASS|FAIL|SKIP <check> <detail>` line per check and exits 1 if any check failed.
-# Everything it creates is named neo-sdk-accept-<run>-* and removed on exit: the containers, an
+# Everything it creates is named <prefix>-<run>-* and removed on exit: the containers, an
 # --internal Docker network (no route out, no published ports) and the data volume. An image
 # for another architecture than the Docker engine's gets the static identity check only; booting
 # it would run under emulation, which proves nothing about that architecture.
@@ -22,6 +23,13 @@
 #   mcp              smoke_sdk.py; a `run` with the host's _meta fills a page; a repeat replays
 #   host-api         group + token: 200; wrong token: 401; no group, with or without the
 #                    token: EACCES at connect
+#   downloads        a click that downloads from a page on 127.0.0.1: `download.path()` is the
+#                    browser's file, `saveAs()` copies it, the run's record lists it, the host
+#                    reads the same bytes at /v1/runs/{id}/downloads/0, and a second run uploads
+#                    that path with `setInputFiles`; after the restart, still served (persist)
+#   blobs            a 1.5 MB+ full-page PNG and a PDF returned from `run` come back as
+#                    {"$neo":"blob"} markers and read back whole at /v1/runs/{id}/blobs/{id};
+#                    small bytes stay inline; 300 KiB of text is still result_too_large
 #   mcp-remote       9011 is the same MCP over TLS; with NEO_MCP_REMOTE=false (the default) a
 #                    sibling container is cut off on 9010 and 9011; with true it is answered
 #   restart-browser  neo-quit 9110 quits cleanly, the supervisor restarts Neo, a new run passes
@@ -39,11 +47,12 @@ here=$(cd -- "$(dirname -- "$0")" && pwd)
 repo=$(git -C "$here" rev-parse --show-toplevel)
 neo_docker="$repo/packages/browseros/docker/neo"
 
-image="" data_dir="" logs_dir=""
+image="" data_dir="" logs_dir="" name_prefix=neo-sdk-accept
 while [ $# -gt 0 ]; do
   case "$1" in
     --data) data_dir=${2:?--data needs a directory}; shift 2 ;;
     --logs) logs_dir=${2:?--logs needs a directory}; shift 2 ;;
+    --prefix) name_prefix=${2:?--prefix needs a name}; shift 2 ;;
     -h | --help) usage ;;
     -*) echo "accept.sh: unknown option '$1'" >&2; usage ;;
     *) [ -z "$image" ] || usage; image=$1; shift ;;
@@ -53,7 +62,7 @@ done
 docker image inspect "$image" >/dev/null 2>&1 || { echo "accept.sh: no image '$image'" >&2; exit 2; }
 
 run_id="$(date +%s)-$$"
-prefix="neo-sdk-accept-$run_id"
+prefix="$name_prefix-$run_id"
 network="$prefix-net"
 volume="$prefix-data"
 host_gid=2005
@@ -197,7 +206,7 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in boot mcp host-api downloads blobs mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   done
   printf '\n'; printf '%s\n' "${results[@]}"
@@ -260,6 +269,28 @@ if [ "$booted" = 1 ]; then
     result FAIL host-api "good=${good:0:200}; wrong=${wrong:0:120}; no_group=$no_group; agent=$agent"
   fi
 
+  # --- downloads -----------------------------------------------------------------------------
+  # zuzu's neo_download -> neo_upload and `import`, as the host uid with the socket's group.
+  downloaded=$(client "$main" "${as_host[@]}" python3 accept_client.py downloads \
+    http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token 2>&1)
+  download_run=$(jget "$downloaded" 'd["run"]')
+  if [ "$(jget "$downloaded" 'd["ok"]')" = True ]; then
+    result PASS downloads "$(jget "$downloaded" 'd["detail"]')"
+  else
+    result FAIL downloads "$(jget "$downloaded" '"; ".join(d["problems"])' || printf '%s' "${downloaded:0:300}")"
+  fi
+
+  # --- blobs ---------------------------------------------------------------------------------
+  # zuzu's full-page screenshot and PDF, too large for a reply, read back on the host socket.
+  blobbed=$(client "$main" "${as_host[@]}" python3 accept_client.py blobs \
+    http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token 2>&1)
+  blob_run=$(jget "$blobbed" 'd["run"]') blob_id=$(jget "$blobbed" 'd["blob"]')
+  if [ "$(jget "$blobbed" 'd["ok"]')" = True ]; then
+    result PASS blobs "$(jget "$blobbed" 'd["detail"]')"
+  else
+    result FAIL blobs "$(jget "$blobbed" '"; ".join(d["problems"])' || printf '%s' "${blobbed:0:300}")"
+  fi
+
   # --- mcp-remote, loopback-only half ----------------------------------------------------------
   tls=$(docker exec "$main" curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:9011/system/ready)
   main_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$main")
@@ -300,10 +331,13 @@ if [ "$booted" = 1 ]; then
     record=$(host_get "$second" "/v1/runs/$run_id_first")
     replay=$(run_call "$second" "$task" "$request" 2>&1)
     count=$(runs_for "$second" "$request")
-    if [ "$(jget "$record" 'd["status"]')" = 200 ] && [ "$(jget "$replay" 'd["meta"]["id"]')" = "$run_id_first" ] && [ "$count" = 1 ]; then
-      result PASS persist "new container on the same /data: run readable, $request replayed as $run_id_first, 1 run"
+    kept=$(jget "$(host_get "$second" "/v1/runs/${download_run:-none}/downloads/0")" 'd["status"]')
+    kept_blob=$(jget "$(host_get "$second" "/v1/runs/${blob_run:-none}/blobs/${blob_id:-b0}")" 'd["status"]')
+    if [ "$(jget "$record" 'd["status"]')" = 200 ] && [ "$(jget "$replay" 'd["meta"]["id"]')" = "$run_id_first" ] && [ "$count" = 1 ] \
+        && [ "$kept" = 200 ] && [ "$kept_blob" = 200 ]; then
+      result PASS persist "new container on the same /data: run readable, $request replayed as $run_id_first, 1 run, its download and blob still served"
     else
-      result FAIL persist "record=${record:0:120}; replay=${replay:0:160}; runs=$count"
+      result FAIL persist "record=${record:0:120}; replay=${replay:0:160}; runs=$count; download=$kept; blob=$kept_blob"
     fi
   else
     result FAIL persist "second container not healthy: $(docker logs "$second" 2>&1 | tail -3 | tr '\n' ' ')"
@@ -383,7 +417,7 @@ for pid in pids:
     result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
   fi
 else
-  for check in mcp host-api mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads blobs mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi

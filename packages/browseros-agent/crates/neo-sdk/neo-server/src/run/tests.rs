@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use neo_trace::{
-    Delivery, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId, RunEnded, RunId, RunQuery,
-    RunStarted, RunStatus, RunSummary, TaskId, WriterConfig,
+    BlobId, Delivery, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId, RunEnded, RunId,
+    RunQuery, RunStarted, RunStatus, RunSummary, TaskId, WriterConfig,
 };
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -806,6 +806,33 @@ fn a_refused_call_is_recorded_without_its_request_id() -> Result<(), TestError> 
             .run(request("return 1;", meta(Some("call-11"), None)?)?)
             .await;
         assert_eq!(retry.status, ReplyStatus::Ok, "the corrected retry runs");
+        Ok(())
+    })
+}
+
+/// zuzu gap G3: a reply too large to carry its bytes names them, and they are on disk beside
+/// the trace by the time the caller has the reply.
+#[test]
+fn a_reply_over_the_limit_names_blobs_already_kept_with_the_run() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = "return { shot: new Uint8Array(300 * 1024).fill(9) };";
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(code, meta(None, None)?)?)
+            .await;
+        assert_eq!(reply.status, ReplyStatus::Ok, "{reply:?}");
+        assert_eq!(
+            reply.value,
+            json!({ "shot": { "$neo": "blob", "id": "b0", "size": 300 * 1024 } })
+        );
+        let kept = rig
+            .store
+            .outputs()
+            .open_blob(reply.id, BlobId::new(0))
+            .await?
+            .ok_or("the blob is kept before the reply")?;
+        assert_eq!(kept.size, 300 * 1024);
         Ok(())
     })
 }

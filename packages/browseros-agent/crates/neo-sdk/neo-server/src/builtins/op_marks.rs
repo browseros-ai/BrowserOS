@@ -52,14 +52,10 @@ const fn policing(capability: Capability) -> Policing {
         // Captures use the ordinary door rules; this capability needs no separate policy mark
         // and does not hold an otherwise served screenshot or PDF op.
         Capability::Capture => Policing::Ready,
-        // Such a script reads fields no seal masks. The crate's evaluate guard sweeps before and
-        // after every send and masks the answer with what it swept; the door releases a script's
-        // answer only past the rules again, as a read of its tab (`PageScript::MainWorld`).
+        // Main-world scripts pass the door's release recheck as a read of their tab, so a
+        // takeover acquired during evaluation still governs the answer.
         Capability::MainWorld => Policing::Ready,
-        // The crate's upload refuses, before it reads a file, every path into Neo's own secret
-        // files (the host token, the CAPTCHA keys, the trace store and the browser profile),
-        // which `PrivacyHooks::secret_paths` names from config, and every path into `/dev` or
-        // `/proc`. With no list, it uploads no file from Neo's disk.
+        // The engine implements file reads and uploads; the door adds no path policy.
         Capability::HostFiles => Policing::Ready,
         // Not until the takeover lock refuses a move of the front while the owner holds the
         // screen.
@@ -283,6 +279,10 @@ mod tests {
     /// change on either side, the crate's declarations or the door's policing, fails here until
     /// the snapshot is redone on purpose.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one explicit row per capability operation keeps the host contract auditable"
+    )]
     fn claw_sdk_places_every_capability_op() {
         use Capability::{Capture, HostFiles, MainWorld};
         use Placement::{Held, Served};
@@ -310,6 +310,20 @@ mod tests {
                 declared: vec![MainWorld],
                 gated: true,
                 policed: vec![MainWorld],
+                placement: Served,
+            },
+            Row {
+                op: "page.addScriptTag",
+                declared: vec![MainWorld, HostFiles],
+                gated: true,
+                policed: vec![MainWorld, HostFiles],
+                placement: Served,
+            },
+            Row {
+                op: "page.addStyleTag",
+                declared: vec![MainWorld, HostFiles],
+                gated: true,
+                policed: vec![MainWorld, HostFiles],
                 placement: Served,
             },
             Row {
@@ -528,6 +542,18 @@ mod tests {
     /// The BrowserOS cases of the ops that reach past their page's sealed world into the main
     /// world, Neo's files or Neo's screen, where no fake browser shows what a real one does.
     const BROWSEROS_CASES: &[BrowserosCase] = &[
+        BrowserosCase {
+            op: "page.addScriptTag",
+            file: "main_world_browseros.rs",
+            test: "tags_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.addStyleTag",
+            file: "main_world_browseros.rs",
+            test: "tags_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
         BrowserosCase {
             op: "page.evaluate",
             file: "main_world_browseros.rs",

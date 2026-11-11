@@ -50,7 +50,7 @@ pub struct Run {
     /// Neo stopped before the run ended, so its code was never stored.
     #[serde(rename = "codeWithheld", skip_serializing_if = "Option::is_none")]
     pub code_withheld: Option<String>,
-    /// The script's return value, bounded for storage.
+    /// The script's return value, bounded for storage. A byte value the reply could not carry inline is `{\"$neo\":\"blob\",\"id\",\"size\"}` here too; read it at `GET /v1/runs/{runId}/blobs/{blobId}`.
     #[serde(
         rename = "result",
         default,
@@ -65,6 +65,9 @@ pub struct Run {
     pub unknown: Option<Vec<models::UnknownOperation>>,
     #[serde(rename = "operations")]
     pub operations: Vec<models::Operation>,
+    /// The files the run's `download` events handed its script, in the order it first saw each. Recorded when the run ends: absent while it runs, and when it was handed none.
+    #[serde(rename = "downloads", skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<Vec<models::RunDownload>>,
 }
 
 impl Run {
@@ -97,6 +100,7 @@ impl Run {
             result_truncated: None,
             unknown: None,
             operations,
+            downloads: None,
         }
     }
 }

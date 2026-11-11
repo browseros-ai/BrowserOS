@@ -6,11 +6,12 @@ use serde::Deserialize;
 
 /// How far a document has loaded, as Playwright names it in `waitUntil` and
 /// `waitForLoadState`. Each state is reported per document by `Page.lifecycleEvent` (and the
-/// commit by `Page.frameNavigated`), keyed by the document's loader id.
+/// commit by `Page.frameNavigated`), keyed by the document's loader id. A cached restore's
+/// navigation event supplies every state because Chromium does not fire them again.
 ///
 /// Upstream counts `networkidle` itself, from the requests of the frame's whole subtree. Neo
-/// takes Chromium's own `networkIdle` lifecycle event for the main frame (no connections for
-/// 500 ms), so the crate never enables the Network domain.
+/// waits for Chromium's own `networkIdle` lifecycle event in each current subtree document,
+/// then checks the topology stayed stable, without enabling the Network domain.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum LoadState {

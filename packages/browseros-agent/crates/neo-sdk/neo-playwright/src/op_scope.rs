@@ -127,6 +127,11 @@ impl<'env> OpScope<'env> {
         self.env.run_state()
     }
 
+    /// The browser's startup mode, supplied by the host for this operation.
+    pub(crate) fn hosted_mode(&self) -> bool {
+        self.env.hosted_mode()
+    }
+
     /// Carries delivered-close evidence to the host before the operation returns its value.
     pub(crate) fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
         self.run_state().frames.forget(tab);
@@ -183,6 +188,13 @@ impl<'env> OpScope<'env> {
         let session = self
             .view()
             .page_session(info.page_id.clone())
+            .await
+            .map_err(|error| self.core_error(&error))?;
+        // Raw SDK calls bypass core's operation leases. Recover an interrupted earlier
+        // resize here, before any page read can observe its rejected metrics. This path
+        // takes no lease when the viewport is already applied and leaves dialogs usable.
+        self.view()
+            .repair_viewport(&info.page_id, &session)
             .await
             .map_err(|error| self.core_error(&error))?;
         Ok(Some(AdmittedPage {

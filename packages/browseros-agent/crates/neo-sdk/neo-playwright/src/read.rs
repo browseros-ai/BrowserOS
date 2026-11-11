@@ -10,12 +10,14 @@
 //!    ├─ selector_wait   waitFor and waitForSelector: polls until the first match is in a state
 //!    ├─ element_wait    waitForElementState: retries a handle's node until it is in a state
 //!    ├─ element_handle  a pinned match ─ DOM.describeNode ─▶ {"$neo":"element", seq, node}
-//!    └─ every match     count, allTextContents, allInnerTexts: now, without waiting
+//!    ├─ every match     count, allTextContents, allInnerTexts: now, without waiting
+//!    └─ normalize       the generator's selector for the first match, frames included
 //! ```
 
 mod element_handle;
 mod element_read;
 mod element_wait;
+mod normalize;
 pub(crate) mod read_op;
 mod selector_wait;
 mod viewport_box;

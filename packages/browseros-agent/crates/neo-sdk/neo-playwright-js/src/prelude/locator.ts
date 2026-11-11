@@ -524,6 +524,15 @@ export class Locator {
     )
   }
 
+  /** Upstream's: the same element, as the selector Playwright's generator writes for it. */
+  async normalize(): Promise<Locator> {
+    const resolved = await this._frame._normalize(
+      'locator.normalize',
+      this._selector,
+    )
+    return new Locator(this._frame, resolved)
+  }
+
   async all(): Promise<Locator[]> {
     const count = await this._frame._everyMatch(
       'locator.count',

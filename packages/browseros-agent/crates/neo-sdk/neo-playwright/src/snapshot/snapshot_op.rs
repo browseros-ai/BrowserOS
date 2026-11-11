@@ -80,6 +80,9 @@ struct PageInput {
     mode: SnapshotMode,
     #[serde(default)]
     depth: Option<i64>,
+    /// Upstream's `boxes`: every node's box in its own frame's viewport.
+    #[serde(default)]
+    boxes: bool,
 }
 
 /// `locator.ariaSnapshot`.
@@ -91,6 +94,8 @@ struct LocatorInput {
     mode: SnapshotMode,
     #[serde(default)]
     depth: Option<i64>,
+    #[serde(default)]
+    boxes: bool,
 }
 
 /// Runs one snapshot op; its output is `aria_snapshot::SnapshotResult`, `{ json, partial }`.
@@ -127,11 +132,13 @@ async fn page_snapshot(
         scope,
         page: &page,
         mode: input.mode,
+        boxes: input.boxes,
     };
     let request = ProbeRequest::Snapshot {
         root: ProbeTarget::Document,
         mode: input.mode,
         depth: input.depth,
+        boxes: input.boxes,
     };
     let backoff = Backoff::outer(scope.timeout());
     for attempt in 0.. {
@@ -164,6 +171,7 @@ async fn locator_snapshot(
         scope,
         page: &page,
         mode: input.mode,
+        boxes: input.boxes,
     };
     let resolver = Resolver::new(&page, scope, target, input.strict);
     scope.log(format!("waiting for {}", target.display));
@@ -176,6 +184,7 @@ async fn locator_snapshot(
             root: ProbeTarget::Chunk(last),
             mode: input.mode,
             depth: input.depth,
+            boxes: input.boxes,
         };
         let Ok(attempt) = scope.within(resolver.attempt_at(request)).await else {
             return Err(scope.timed_out(ErrorCode::NoMatch));
@@ -201,6 +210,8 @@ struct Snapshotter<'op> {
     scope: &'op OpScope<'op>,
     page: &'op OpPage<'op>,
     mode: SnapshotMode,
+    /// Asked of every frame, as upstream passes its options down to each child frame.
+    boxes: bool,
 }
 
 /// One frame's `snapshot` reply, decoded at the boundary.
@@ -344,6 +355,7 @@ impl Snapshotter<'_> {
             root: ProbeTarget::Document,
             mode: self.mode,
             depth,
+            boxes: self.boxes,
         };
         for _ in 0..2 {
             let SeqLookup::Live { world: parent, .. } = self.page.frames().by_seq(printer.seq)
@@ -458,8 +470,14 @@ mod tests {
             "mode": "default",
         }))?;
         assert_eq!((locator.mode, locator.depth), (SnapshotMode::Default, None));
+        let boxed: PageInput = serde_json::from_value(
+            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "default", "boxes": true }),
+        )?;
+        assert!(
+            boxed.boxes,
+            "upstream's boxes option reaches every frame's probe"
+        );
         for bad in [
-            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "boxes": true }),
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "codegen" }),
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "depth": 1.5 }),
         ] {
