@@ -61,6 +61,13 @@ pub(crate) struct RunServiceParts {
 }
 
 impl RunService {
+    /// The other JS host uses precisely the product's initial tab listing, with the host
+    /// observation that orders it against later replies.
+    #[cfg(feature = "hosted-run")]
+    pub(crate) async fn hosted_open_pages(&self, run: &RunCtx) -> PageFacts {
+        self.open_pages(run).await
+    }
+
     /// The service.
     #[must_use]
     pub(crate) fn new(parts: RunServiceParts) -> Arc<Self> {

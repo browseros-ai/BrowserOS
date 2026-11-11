@@ -79,6 +79,8 @@ name = "browseros-claw-sdk"
 path = "src/main.rs"
 
 [features]
+# The real SDK door hosted by another JavaScript engine; no listeners or QuickJS realm.
+hosted-run = []
 # `neo_server::test_support`: the fake browser behind core's CDP seam. The dev-dependency on this
 # crate below turns it on for every test build, unit and integration; release builds never have
 # it.

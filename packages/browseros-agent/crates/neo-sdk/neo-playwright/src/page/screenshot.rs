@@ -1,10 +1,7 @@
-//! `page.screenshot()`, after the host allows the capture.
+//! `page.screenshot()` through core's capture path.
 //!
 //! The capture goes through core's screenshot path, which serializes captures per session and
-//! hides the agent pointer for the shot. The crate's capture gateway, which also asks the
-//! host's privacy layer (`Playwright::capture_allowed`), runs inside that path, immediately
-//! before `Page.captureScreenshot`, because a page can turn private while the op waits for
-//! admission, the capture lock or the pointer.
+//! hides the agent pointer for the shot.
 
 use browseros_core::screenshot::{ScreenshotCaptureOptions, ScreenshotFormat, Viewport};
 use serde::Deserialize;
@@ -58,14 +55,13 @@ enum ImageType {
     Jpeg,
 }
 
-/// Captures the page as `input` asks, once the host allows it.
+/// Captures the page as `input` asks.
 pub(crate) async fn capture(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: ScreenshotInput,
 ) -> Result<Value, PlaywrightError> {
-    // An op that does not declare `Capture` is refused before its page is admitted or
-    // prepared; `capture_allowed` checks again, with the host, right before the pixels.
+    // Check the op's declared capability before admitting or preparing its page.
     scope.require(Capability::Capture)?;
     if input.target.is_some() {
         return Err(scope.not_built());
@@ -99,18 +95,14 @@ pub(crate) async fn capture(
         }),
     };
     let page = input.page.tab();
-    // Core runs the gateway inside its capture lock, after admission and the pointer hide, with
-    // no await before `Page.captureScreenshot`. Run here instead, the host's verdict would be
-    // stale by the time the pixels are read.
     let shot = scope
         .view()
-        .screenshot_checked(
+        .screenshot(
             scope.admit(pw.browser(), page).await?.core_page.clone(),
             options,
-            || pw.capture_allowed(scope, page),
         )
         .await
-        .map_err(|error| scope.core_error(&error))??;
+        .map_err(|error| scope.core_error(&error))?;
     to_output(scope, &Bytes::from_base64(shot.data))
 }
 
@@ -119,9 +111,8 @@ mod tests {
     use std::error::Error;
     use std::sync::Arc;
 
-    use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
-    use browseros_core::testing::{TestCall, TestConnection};
-    use browseros_core::{BrowserView, TabId};
+    use browseros_core::BrowserView;
+    use browseros_core::testing::TestConnection;
     use neo_trace::ErrorOwner;
     use serde_json::json;
 
@@ -130,81 +121,10 @@ mod tests {
     use crate::target::CallHeader;
     use crate::test_env::{self, TestEnv};
     use crate::test_support::{self, RecordingHooks};
-    use crate::{Op, Playwright, PlaywrightHooks, Refusal, TypedBy};
+    use crate::{Op, Playwright};
 
-    /// Core's pointer hide, the last thing it does before it captures.
-    fn hides_pointer(call: &TestCall) -> bool {
-        call.method == "Runtime.evaluate"
-            && call.params["expression"]
-                .as_str()
-                .is_some_and(|expression| expression.contains("p.hide()"))
-    }
-
-    /// A host whose page turns private once core has hidden the agent pointer, as if the owner
-    /// marked it private while the op waited for the capture.
-    struct PrivateOncePrepared {
-        connection: Arc<TestConnection>,
-    }
-
-    impl PlaywrightHooks for PrivateOncePrepared {
-        fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
-
-        fn values_swept(&self, _page: TabId, _values: &FieldValues) {}
-
-        fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
-            let prepared = self
-                .connection
-                .calls()
-                .is_ok_and(|calls| calls.iter().any(hides_pointer));
-            if prepared {
-                Err(Refusal {
-                    owner: ErrorOwner::Host,
-                    code: "page_private".to_owned(),
-                    message: "page.screenshot: the owner marked this page private".to_owned(),
-                    host_code: None,
-                })
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn tests_that_a_page_turning_private_during_preparation_is_never_captured()
-    -> Result<(), Box<dyn Error>> {
-        let connection = TestConnection::new([]);
-        let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
-        connection.always("Page.captureScreenshot", json!({ "data": "cG5n" }))?;
-        let hooks = PrivateOncePrepared {
-            connection: Arc::clone(&connection),
-        };
-        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(hooks));
-        let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
-        let op = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
-        let error = playwright
-            .invoke(&env, op, json!({ "page": { "$neo": "page", "tab": 7 } }))
-            .await
-            .err()
-            .ok_or("a page that turned private is not captured")?;
-        assert_eq!(
-            (error.owner(), error.code()),
-            (ErrorOwner::Host, "page_private"),
-            "the host's refusal reaches the script unchanged: {error}"
-        );
-        let calls = connection.calls()?;
-        assert!(calls.iter().any(hides_pointer), "core prepared the capture");
-        assert!(
-            calls
-                .iter()
-                .all(|call| call.method != "Page.captureScreenshot"),
-            "no capture is sent once the host refuses: {calls:?}"
-        );
-        Ok(())
-    }
-
-    /// A host applies its pixel rules only to the ops that declare `Capture`, so the capture
-    /// path gives pixels to no other op: `page.screenshot` gets its shot, and an op that does
-    /// not declare `Capture` is refused before one is taken.
+    /// The capture path only serves ops that declare `Capture`; undeclared calls fail before
+    /// the page is admitted or prepared.
     #[tokio::test]
     async fn tests_that_only_an_op_declaring_capture_is_captured() -> Result<(), Box<dyn Error>> {
         let connection = TestConnection::new([]);

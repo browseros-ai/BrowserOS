@@ -1,6 +1,6 @@
 //! Page and context ops on a real browser, through `Playwright::invoke`: `goto` and its load
 //! states, history steps, `waitForLoadState`, the frame tree with out-of-process frames,
-//! captures behind the host's check, the context's tabs, `opener` and `close`.
+//! captures without consulting the host, the context's tabs, `opener` and `close`.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
 //! `PORT_BASE=9371 spikes/eval/browser.sh <profile> &`, then
@@ -18,6 +18,7 @@ mod live_run;
 mod page_server;
 
 use std::future::Future;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use browseros_core::TabId;
@@ -338,42 +339,89 @@ async fn tests_that_frames_lists_out_of_process_frames_under_their_embedders() -
     .await
 }
 
-/// Chromium runs a `javascript:` URL in the current document's main world, outside the
-/// privacy sweep, so `goto` refuses one, however it is spelled, before it is sent.
+/// Chromium executes the script before reporting `ERR_ABORTED`. The op must mark the send
+/// and preserve the browser error: a failed navigation can still have changed the document.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_goto_refuses_a_javascript_url_before_it_is_sent() -> TestResult {
+async fn tests_that_goto_executes_a_javascript_url_before_reporting_the_browser_error() -> TestResult
+{
     with_page(|run, server, page| async move {
         let result = async {
             goto(&run, &page, &server.url("/child.html"), "load").await?;
-            for url in [
-                "javascript:void(document.title = 'ran')",
-                " JavaScript:void(document.title = 'ran')",
-                "java\tscript:void(document.title = 'ran')",
-            ] {
-                run.clear_calls();
-                let error = goto(&run, &page, url, "load")
-                    .await
-                    .err()
-                    .ok_or(format!("{url:?} is refused"))?;
-                assert_eq!(
-                    (error.error_code(), error.owner(), error.answer()),
-                    (
-                        Some(ErrorCode::Unsupported),
-                        ErrorOwner::Neo,
-                        Answer::Definite
-                    ),
-                    "{url:?}: {error}"
-                );
-                assert!(
-                    run.calls().is_empty(),
-                    "{url:?}: nothing was rechecked or sent: {:?}",
-                    run.calls()
-                );
+            let frames = run
+                .invoke("page.frames", json!({ "page": brand(&page) }))
+                .await?;
+            for frame in [Value::Null, frames["frames"][0]["id"].clone()] {
+                for url in [
+                    "javascript:void(document.title = 'ran')",
+                    " JavaScript:void(document.title = 'ran')",
+                    "java\tscript:void(document.title = 'ran')",
+                ] {
+                    run.eval(&page, "document.title = 'before'").await?;
+                    run.clear_calls();
+                    let error = run
+                        .invoke(
+                            "page.goto",
+                            json!({
+                                "page": brand(&page), "frame": frame, "url": url,
+                            }),
+                        )
+                        .await
+                        .err()
+                        .ok_or("Chromium aborts after executing the script")?;
+                    assert_eq!(
+                        error.error_code(),
+                        Some(ErrorCode::NavigationFailed),
+                        "{error}"
+                    );
+                    assert!(
+                        error.message().contains("net::ERR_ABORTED at javascript:"),
+                        "{error}"
+                    );
+                    assert!(
+                        run.calls().contains(&EnvCall::MarkSent),
+                        "the script reached Chromium"
+                    );
+                    assert_eq!(run.eval(&page, "document.title").await?, json!("ran"));
+                }
+            }
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_goto_loads_a_local_file() -> TestResult {
+    with_page(|run, _server, page| async move {
+        let result = async {
+            let file =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/local-navigation.html");
+            let url = url::Url::from_file_path(&file)
+                .map_err(|()| "a local file URL")?
+                .to_string();
+            let frames = run
+                .invoke("page.frames", json!({ "page": brand(&page) }))
+                .await?;
+            for frame in [Value::Null, frames["frames"][0]["id"].clone()] {
+                let reply = run
+                    .invoke(
+                        "page.goto",
+                        json!({
+                            "page": brand(&page), "frame": frame, "url": url,
+                        }),
+                    )
+                    .await?;
+                assert_eq!(reply["url"], json!(url));
+                assert_eq!(reply["response"]["status"], json!(200), "{reply}");
+                assert_eq!(reply["response"]["statusText"], json!("OK"));
+                assert_eq!(reply["response"]["ok"], json!(true));
                 assert_eq!(
                     run.eval(&page, "document.title").await?,
-                    json!("child"),
-                    "{url:?}: its script never ran"
+                    json!("Local navigation")
                 );
             }
             Ok(())
@@ -386,10 +434,16 @@ async fn tests_that_goto_refuses_a_javascript_url_before_it_is_sent() -> TestRes
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_captures_return_bytes_and_stop_when_the_host_refuses() -> TestResult {
+async fn tests_that_captures_return_bytes_without_consulting_the_host() -> TestResult {
     with_page(|run, server, page| async move {
         let result = async {
             goto(&run, &page, &server.url("/child.html"), "load").await?;
+            run.refuse_captures(Refusal {
+                owner: ErrorOwner::Host,
+                code: "unused_capture_hook".to_owned(),
+                message: "captures must not consult the retained host hook".to_owned(),
+                host_code: None,
+            });
             let png = run
                 .invoke("page.screenshot", json!({ "page": brand(&page) }))
                 .await?;
@@ -420,24 +474,6 @@ async fn tests_that_captures_return_bytes_and_stop_when_the_host_refuses() -> Te
             let pdf = run.invoke("page.pdf", json!({ "page": brand(&page) })).await?;
             assert!(base64_of(&pdf)?.starts_with("JVBERi0"), "%PDF- magic");
 
-            run.refuse_captures(Refusal {
-                owner: ErrorOwner::Host,
-                code: "page_private".to_owned(),
-                message: "page.screenshot: the owner marked this page private".to_owned(),
-                host_code: None,
-            });
-            for op in ["page.screenshot", "page.pdf"] {
-                let error = run
-                    .invoke(op, json!({ "page": brand(&page) }))
-                    .await
-                    .err()
-                    .ok_or(format!("{op} must be refused"))?;
-                assert_eq!(
-                    (error.owner(), error.code(), error.answer()),
-                    (ErrorOwner::Host, "page_private", Answer::Definite),
-                    "{op}: the host's refusal reaches the script unchanged"
-                );
-            }
             Ok(())
         }
         .await;
