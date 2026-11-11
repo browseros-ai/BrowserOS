@@ -12,8 +12,6 @@ use neo_server::App;
 use neo_server::hosted::{HostedOptions, HostedRun, HostedRuntime};
 use tokio::runtime::Runtime as TokioRuntime;
 
-use crate::promise::promise;
-
 static EXECUTOR: OnceLock<std::result::Result<TokioRuntime, String>> = OnceLock::new();
 const DEFAULT_TIMEOUT_MS: u32 = 24 * 60 * 60 * 1000;
 
@@ -27,6 +25,7 @@ fn executor() -> Result<&'static TokioRuntime> {
 }
 
 #[napi(object)]
+#[derive(Default)]
 pub struct ConnectOptions {
     pub state_dir: String,
     pub execution_dir: Option<String>,
@@ -40,7 +39,7 @@ pub struct Runtime {
 
 #[napi]
 pub fn connect(env: Env, cdp_port: u16, options: ConnectOptions) -> Result<JsObject> {
-    promise(env, async move {
+    promise::promise(env, async move {
         let runtime = HostedRuntime::connect(
             cdp_port,
             HostedOptions {
@@ -58,6 +57,7 @@ pub fn connect(env: Env, cdp_port: u16, options: ConnectOptions) -> Result<JsObj
 }
 
 #[napi(object)]
+#[derive(Default)]
 pub struct OpenRunOptions {
     pub timeout_ms: Option<u32>,
 }
@@ -70,7 +70,7 @@ impl Runtime {
         let timeout = options
             .and_then(|options| options.timeout_ms)
             .unwrap_or(DEFAULT_TIMEOUT_MS);
-        promise(env, async move {
+        promise::promise(env, async move {
             let run = runtime
                 .open_run(Duration::from_millis(u64::from(timeout)))
                 .await
@@ -82,7 +82,7 @@ impl Runtime {
     #[napi]
     pub fn close(&self, env: Env) -> Result<JsObject> {
         let runtime = Arc::clone(&self.runtime);
-        promise(env, async move {
+        promise::promise(env, async move {
             runtime.close().await.map_err(|error| error.to_string())
         })
     }
@@ -129,7 +129,7 @@ impl Run {
         // This MUST stay outside the future: HostedRun enters its executor and calls
         // Bridge::submit now, before JavaScript can issue its next call or finish the run.
         let answer = self.run.invoke(name, &input_json, &site);
-        promise(env, async move { Ok(answer.await) })
+        promise::promise(env, async move { Ok(answer.await) })
     }
 
     #[napi]
@@ -140,7 +140,7 @@ impl Run {
     #[napi]
     pub fn sleep(&self, env: Env, milliseconds: f64) -> Result<JsObject> {
         let sleep = self.run.sleep(milliseconds);
-        promise(env, async move {
+        promise::promise(env, async move {
             sleep.await;
             Ok(())
         })
@@ -149,7 +149,7 @@ impl Run {
     #[napi]
     pub fn finish(&self, env: Env) -> Result<JsObject> {
         let finished = self.run.finish();
-        promise(env, async move {
+        promise::promise(env, async move {
             finished.await.map_err(|error| error.to_string())
         })
     }
