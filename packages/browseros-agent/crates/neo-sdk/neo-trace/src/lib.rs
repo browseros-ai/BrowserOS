@@ -73,5 +73,5 @@ pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus};
 pub use salvage::{Loss, Recovery, Salvage};
 pub use screenshot_queue::{Shot, ShotAnswer, ShotJob, ShotJobs, ShotQueue, screenshot_queue};
 pub use trace_error::TraceError;
-pub use trace_store::{RetentionPolicy, Swept, TraceStore};
+pub use trace_store::{RetentionPolicy, Swept, TraceStore, is_subscription};
 pub use trace_writer::{TraceRecordEvent, TraceSink, WriterConfig, spawn_writer};
