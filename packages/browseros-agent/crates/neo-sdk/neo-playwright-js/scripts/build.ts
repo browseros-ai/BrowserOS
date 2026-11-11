@@ -20,12 +20,13 @@
  *                                    invokes offline (scripts/wire-examples.ts)
  *
  * `bun scripts/build.ts` writes them, and `--check` fails when a committed copy is stale. The
- * crate embeds the assets with include_str!, so Cargo needs no build step. Use Bun 1.4.2, the
- * repo's packageManager: other versions emit other bytes.
+ * crate embeds the assets with include_str!, so Cargo needs no build step. Use the Bun version
+ * pinned in the repo's engines.bun: other versions emit other bytes.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, relative, resolve, sep } from 'node:path'
 import type { BunPlugin } from 'bun'
+import { engines } from '../../../../package.json'
 import { protocolDocument } from '../src/probe/protocol-examples'
 import { inPageValuesDocument } from './in-page-values'
 import { wireExamplesDocument } from './wire-examples'
@@ -177,6 +178,12 @@ async function mainWorldFunction(): Promise<string> {
 }
 
 export async function buildOutputs(): Promise<Output[]> {
+  // Check the shared entry point so imported builds and CLI builds use the same emitter.
+  // A different Bun can change embedded bytes even when all source files are unchanged.
+  if (Bun.version !== engines.bun)
+    throw new Error(
+      `This build requires Bun ${engines.bun} (package.json engines.bun), but is running Bun ${Bun.version}. Use ~/.npm/_npx/22f2fe8d8bc13000/node_modules/.bin/bun scripts/build.ts (add --check to check committed outputs), or bunx bun@${engines.bun} scripts/build.ts.`,
+    )
   const { tag, commit } = vendoredVersion()
   const [injected, prelude, mainWorld, bindingsController] = await Promise.all([
     bundle('src/probe/index.ts'),
@@ -277,7 +284,7 @@ if (import.meta.main) {
     const stale = await staleOutputs()
     if (stale.length > 0) {
       console.error(
-        `Stale: ${stale.join(', ')}. Run bun run build with Bun 1.4.2 in crates/neo-sdk/neo-playwright-js.`,
+        `Stale: ${stale.join(', ')}. Run bun run build with Bun ${engines.bun} in crates/neo-sdk/neo-playwright-js.`,
       )
       process.exit(1)
     }
