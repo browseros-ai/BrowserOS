@@ -161,6 +161,23 @@ test('tests that the first read gets the one-shot floor and later reads end at t
   )
 })
 
+test('tests that a later read stops at the deadline, without a floor of its own', async () => {
+  let reads = 0
+  const started = performance.now()
+  await assert.rejects(
+    expectLoop({
+      title: () => (++reads === 1 ? 'y' : new Promise(() => {})),
+    }).toHaveTitle('x', { timeout: 300 }),
+    /expectLoop: toHaveTitle/,
+  )
+  const took = performance.now() - started
+  assert.equal(reads, 2)
+  assert.ok(
+    took >= 250 && took < 800,
+    `the second read ends at the deadline: ${took}ms`,
+  )
+})
+
 // Upstream's expect-boolean "with impossible timeout" tests (EX-047, EX-083, EX-084): one check
 // always runs, so a read slower than the timeout still passes.
 test('tests that a read slower than an impossible timeout still passes', async () => {
