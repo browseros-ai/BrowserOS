@@ -1183,9 +1183,7 @@ export class Frame extends EventEmitter {
         api,
         'Neo returns the image instead of writing a file; omit path',
       )
-    const refused = refusedScreenshotOption(options)
-    if (refused !== undefined) throw unsupportedError(api, refused)
-    const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
+    const wire = await screenshotOptions(api, options)
     const { timeout, signal } = this._wait(api, options)
     const page = await this._page._brand(api)
     if (selector === null)
@@ -1400,19 +1398,28 @@ export function frameMatches(
 
 export type ScreenshotOptionsInput = TimeoutOption &
   SignalOption &
-  ScreenshotOptions & {
+  Omit<ScreenshotOptions, 'mask'> & {
     path?: string
     mask?: Locator[]
     maskColor?: string
   }
 
-/** Options that need capture features beyond temporary DOM preparation. */
-export function refusedScreenshotOption(
+/** Locator instances stay in the script realm; only parsed locator brands cross to Rust. */
+export async function screenshotOptions(
+  api: string,
   options: ScreenshotOptionsInput,
-): string | undefined {
-  if (options.mask !== undefined && options.mask.length > 0)
-    return 'Neo cannot mask elements in a screenshot; omit mask'
-  return undefined
+): Promise<ScreenshotOptions> {
+  const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
+  if (options.mask !== undefined) {
+    wire.mask = await Promise.all(
+      options.mask.map((locator) => {
+        if (!(locator instanceof Locator))
+          throw clientError(api, 'mask: expected a Locator')
+        return locator._frame._locatorBrand(api, locator._selector)
+      }),
+    )
+  }
+  return wire
 }
 
 const HELD_VALUE =

@@ -18,8 +18,8 @@ import { type EvaluateOptions, fromPageValue, pageCall } from './evaluation'
 import { inputFiles, withClientErrors } from './files'
 import {
   type ClickOptions,
-  refusedScreenshotOption,
   type ScreenshotOptionsInput,
+  screenshotOptions,
 } from './frame'
 import type { OpName } from './ops.generated'
 import {
@@ -31,7 +31,6 @@ import {
   markHandle,
   POINTER_KEYS,
   pick,
-  SCREENSHOT_KEYS,
   selectOptionValues,
 } from './options'
 import type { Page } from './page'
@@ -45,7 +44,6 @@ import type {
   LocatorBrand,
   OpInputs,
   OpOutputs,
-  ScreenshotOptions,
   Strictness,
 } from './wire'
 
@@ -460,9 +458,7 @@ export class ElementHandle extends EventEmitter {
         api,
         'Neo returns the image instead of writing a file; omit path',
       )
-    const refused = refusedScreenshotOption(options)
-    if (refused !== undefined) throw unsupportedError(api, refused)
-    const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
+    const wire = await screenshotOptions(api, options)
     return await invoke(
       'page.screenshot',
       { api, timeoutMs: timeoutMs(api, this.#timeout(options)) },

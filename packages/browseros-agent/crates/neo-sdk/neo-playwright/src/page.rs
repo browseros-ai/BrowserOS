@@ -45,6 +45,7 @@ mod page_value;
 mod pdf;
 mod screenshot;
 mod screenshot_geometry;
+mod screenshot_masks;
 mod screenshot_png;
 mod screenshot_preparation;
 mod subtree_load;
