@@ -246,8 +246,17 @@ impl FrameWorlds {
         let world = cell
             .get_or_try_init(move || async move {
                 let candidate = self.candidate(&key.frame, main);
-                let Installed { world, retired } = install(candidate).await?;
-                self.lock().adopt(&key, world.seq(), retired);
+                let Installed {
+                    world,
+                    retired,
+                    url,
+                } = install(candidate).await?;
+                let mut inner = self.lock();
+                inner.adopt(&key, world.seq(), retired);
+                if main {
+                    inner.main_installed(url);
+                }
+                drop(inner);
                 Ok(world)
             })
             .await?
@@ -365,10 +374,7 @@ impl WorldsInner {
         let Taken { events, gaps } = taken;
         if gaps != self.seen_gaps {
             self.seen_gaps = gaps;
-            self.main_url = None;
-            if self.main_seq.is_some() {
-                self.main_seq = Some(self.next_seq());
-            }
+            self.lost_track();
         }
         for event in events {
             match event {
@@ -395,7 +401,27 @@ impl WorldsInner {
                         self.next_seq();
                     }
                 }
+                FrameEvent::Lost => self.lost_track(),
             }
+        }
+    }
+
+    /// Some of the tab's events are lost, a commit away from a real page perhaps: the main
+    /// frame's next document takes a new seq, and the URL it is on is learned again.
+    fn lost_track(&mut self) {
+        self.main_url = None;
+        if self.main_seq.is_some() {
+            self.main_seq = Some(self.next_seq());
+        }
+    }
+
+    /// A main document installed with its world at `url`. With no commit seen since the log
+    /// started (a tab loaded before the watcher, or after a gap), that is the page the next
+    /// commit leaves, so a real page there renumbers as upstream's frame, which knows its URL
+    /// from the frame tree.
+    fn main_installed(&mut self, url: String) {
+        if self.main_url.is_none() {
+            self.main_url = Some(url);
         }
     }
 
@@ -503,6 +529,18 @@ mod tests {
         installs: &AtomicU32,
         retired: Option<u32>,
     ) -> Result<SealedWorld, ProbeFailure> {
+        boot(worlds, at, place, installs, retired, "about:blank").await
+    }
+
+    /// Installs into a document at `url`, as its boot reports it.
+    async fn boot(
+        worlds: &FrameWorlds,
+        at: (&str, &str),
+        place: Place,
+        installs: &AtomicU32,
+        retired: Option<u32>,
+        url: &str,
+    ) -> Result<SealedWorld, ProbeFailure> {
         let (session_id, frame) = at;
         worlds
             .world_with(key(session_id, frame), place, |candidate| async move {
@@ -517,6 +555,7 @@ mod tests {
                 Ok(Installed {
                     world,
                     retired: retired.map(FrameSeq),
+                    url: url.to_owned(),
                 })
             })
             .await
@@ -526,6 +565,7 @@ mod tests {
         Installed {
             world,
             retired: None,
+            url: "about:blank".to_owned(),
         }
     }
 
@@ -687,6 +727,35 @@ mod tests {
         Ok(())
     }
 
+    /// A tab loaded before its commits were logged: the page Neo booted in is the one the
+    /// first logged commit leaves, so leaving a real page renumbers, and leaving a blank one
+    /// does not.
+    #[tokio::test]
+    async fn tests_that_the_first_logged_commit_leaves_the_page_the_world_booted_in() -> TestResult
+    {
+        let installs = AtomicU32::new(0);
+        let mut seqs = Vec::new();
+        for booted_in in ["https://old.test/", "about:blank"] {
+            let log = Arc::new(FrameAttachLog::default());
+            let worlds = logged(&log);
+            let main = boot(
+                &worlds,
+                ("S", "main"),
+                Place::Main,
+                &installs,
+                None,
+                booted_in,
+            )
+            .await?;
+            record(&log, [committed("https://new.test/")]);
+            worlds.invalidate(&main);
+            let next = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
+            seqs.push((main.seq().0, next.seq().0));
+        }
+        assert_eq!(seqs, [(0, 1), (0, 0)]);
+        Ok(())
+    }
+
     /// A watcher that fell behind may have missed a commit away from a real page, so the next
     /// main document takes a new seq rather than risk sharing the old one's.
     #[tokio::test]
@@ -696,6 +765,21 @@ mod tests {
         let installs = AtomicU32::new(0);
         let before = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
         log.lost_events();
+        worlds.invalidate(&before);
+        let after = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
+        assert_eq!((before.seq(), after.seq()), (FrameSeq(0), FrameSeq(1)));
+        Ok(())
+    }
+
+    /// Events a full queue had to drop may have held a main commit: the next main document
+    /// takes a new seq.
+    #[tokio::test]
+    async fn tests_that_events_a_full_queue_dropped_move_the_main_frame_on() -> TestResult {
+        let log = Arc::new(FrameAttachLog::default());
+        let worlds = logged(&log);
+        let installs = AtomicU32::new(0);
+        let before = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
+        record(&log, [FrameEvent::Lost]);
         worlds.invalidate(&before);
         let after = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
         assert_eq!((before.seq(), after.seq()), (FrameSeq(0), FrameSeq(1)));

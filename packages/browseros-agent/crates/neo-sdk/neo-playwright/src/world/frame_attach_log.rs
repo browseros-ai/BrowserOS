@@ -42,6 +42,8 @@ pub(crate) enum FrameEvent {
     /// This many frames attached and were removed again while the queue waited. Upstream
     /// spent a seq on each, so the replay spends as many; compaction writes it.
     Skipped(u32),
+    /// Compaction dropped events here, a main commit perhaps, so the replay treats it as a gap.
+    Lost,
 }
 
 /// The tabs' queues, shared by the target watcher (the only writer) and every page's
@@ -100,7 +102,8 @@ impl FrameAttachLog {
 /// Folds every frame that attached and was removed within the queue into a `Skipped` count at
 /// its attach's place, so the replay spends the same seqs in the same order and only frames
 /// still attached keep an entry. A queue still full after that (more live frames than it
-/// holds) drops its oldest entries, which costs those frames their attach order only.
+/// holds) drops its oldest entries and starts with `Lost` instead: those frames lose their
+/// attach order, and the main frame moves on as after a gap, in case a commit was among them.
 fn compact(queue: &mut VecDeque<FrameEvent>) {
     let attached: HashSet<FrameId> = queue
         .iter()
@@ -132,8 +135,13 @@ fn compact(queue: &mut VecDeque<FrameEvent>) {
             kept.push_back(FrameEvent::Skipped(spent));
         }
     }
-    while kept.len() > TAB_CAPACITY {
-        kept.pop_front();
+    if kept.len() > TAB_CAPACITY {
+        while kept.len() >= TAB_CAPACITY {
+            kept.pop_front();
+        }
+        if kept.front() != Some(&FrameEvent::Lost) {
+            kept.push_front(FrameEvent::Lost);
+        }
     }
     *queue = kept;
 }
@@ -207,7 +215,7 @@ mod tests {
             .map(|event| match event {
                 FrameEvent::Skipped(spent) => *spent,
                 FrameEvent::Attached(_) => 1,
-                FrameEvent::Removed(_) | FrameEvent::MainCommitted { .. } => 0,
+                FrameEvent::Removed(_) | FrameEvent::MainCommitted { .. } | FrameEvent::Lost => 0,
             })
             .sum();
         assert_eq!(
@@ -216,5 +224,28 @@ mod tests {
             "every attach spends a seq"
         );
         Ok(())
+    }
+
+    /// More live frames than the queue holds: the oldest go, and a `Lost` marks where.
+    #[test]
+    fn tests_that_a_queue_of_live_frames_drops_its_oldest_behind_a_marker() {
+        let log = FrameAttachLog::default();
+        let tab = TargetId("tab".to_owned());
+        log.record(
+            &tab,
+            FrameEvent::MainCommitted {
+                url: "https://a.test/".to_owned(),
+            },
+        );
+        for n in 0..=TAB_CAPACITY {
+            log.record(&tab, FrameEvent::Attached(frame(&n.to_string())));
+        }
+        let taken = log.take(&tab).events;
+        assert_eq!(taken.len(), TAB_CAPACITY);
+        assert_eq!(taken.first(), Some(&FrameEvent::Lost));
+        assert_eq!(
+            taken.last(),
+            Some(&FrameEvent::Attached(frame(&TAB_CAPACITY.to_string())))
+        );
     }
 }
